@@ -2460,6 +2460,89 @@ function mergeCompletedUserMessageWithOptimisticEntry(
   };
 }
 
+function isOptimisticUserMessageEntry(
+  entry: AppServerThreadEntry
+): entry is AppServerThreadMessageEntry {
+  return (
+    entry.type === "message" &&
+    entry.role === "user" &&
+    entry.id.startsWith("optimistic-")
+  );
+}
+
+function findPromotedOptimisticUserMessageEntry(
+  response: AppServerReadThreadResponse | undefined,
+  message: AppServerThreadMessageEntry
+): AppServerThreadMessageEntry | undefined {
+  return response?.replay.entries.find(
+    (entry): entry is AppServerThreadMessageEntry =>
+      isOptimisticUserMessageEntry(entry) &&
+      messageTextMatchesOptimisticEntry(message, entry)
+  );
+}
+
+function mergeCompletedUserMessageWithPromotedOptimisticEntry(
+  message: AppServerThreadMessageEntry,
+  response: AppServerReadThreadResponse | undefined
+): AppServerThreadMessageEntry {
+  const optimisticEntry = findPromotedOptimisticUserMessageEntry(response, message);
+  if (!optimisticEntry) {
+    return message;
+  }
+
+  const optimisticImageParts = optimisticEntry.parts?.some(
+    (part) => part.type === "image"
+  )
+    ? optimisticEntry.parts
+    : undefined;
+
+  return {
+    ...message,
+    ...(optimisticImageParts ? { parts: optimisticImageParts } : {}),
+    createdAt: optimisticEntry.createdAt ?? message.createdAt,
+  };
+}
+
+function removePromotedOptimisticUserMessage(
+  response: AppServerReadThreadResponse | undefined,
+  completedUserMessage: AppServerThreadMessageEntry
+): AppServerReadThreadResponse | undefined {
+  if (!response) {
+    return response;
+  }
+
+  const optimisticEntry = findPromotedOptimisticUserMessageEntry(
+    response,
+    completedUserMessage
+  );
+  if (!optimisticEntry) {
+    return response;
+  }
+
+  const entries = response.replay.entries.filter(
+    (entry) => entry.id !== optimisticEntry.id
+  );
+  const messages = response.replay.messages.filter(
+    (message) => message.id !== optimisticEntry.id
+  );
+
+  if (
+    entries.length === response.replay.entries.length &&
+    messages.length === response.replay.messages.length
+  ) {
+    return response;
+  }
+
+  return {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries,
+      messages,
+    },
+  };
+}
+
 function appendMessageEntries(
   response: AppServerReadThreadResponse | undefined,
   params: {
@@ -3744,12 +3827,19 @@ export function useThreadSessionState(params: {
             event.notification.params
           );
           if (userMessageEntry) {
-            const completedUserMessageEntry = mergeCompletedUserMessageWithOptimisticEntry(
-              userMessageEntry,
-              current.optimisticEntries
-            );
+            const completedUserMessageEntry =
+              mergeCompletedUserMessageWithPromotedOptimisticEntry(
+                mergeCompletedUserMessageWithOptimisticEntry(
+                  userMessageEntry,
+                  current.optimisticEntries
+                ),
+                current.response
+              );
             const nextResponse = appendMessageEntries(
-              current.response,
+              removePromotedOptimisticUserMessage(
+                current.response,
+                completedUserMessageEntry
+              ),
               {
                 backend: event.backend,
                 threadId: notificationThreadId,
