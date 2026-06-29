@@ -60,6 +60,10 @@ type DirectoriesListProps = {
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
+  onDetachPullRequest?: (
+    thread: NavigationThreadSummary,
+    pr: PrSummary,
+  ) => void;
   onReorderThreadPins?: (orderedThreadKeys: string[]) => Promise<void>;
   onUpdateSubthreadOrder?: (
     parent: NavigationThreadSummary,
@@ -554,6 +558,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               }}
               onOpenContextMenu={props.onOpenThreadContextMenu}
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
+              onDetachPullRequest={props.onDetachPullRequest}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetReaction}
@@ -635,6 +640,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             }}
             onOpenContextMenu={props.onOpenThreadContextMenu}
             onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
+            onDetachPullRequest={props.onDetachPullRequest}
             onPrefetchPullRequests={props.onPrefetchPullRequests}
             onSelectThread={props.onSelectThread}
             onSetReaction={props.onSetReaction}
@@ -993,6 +999,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           }}
                           onOpenContextMenu={props.onOpenThreadContextMenu}
                           onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
+                          onDetachPullRequest={props.onDetachPullRequest}
                           onPrefetchPullRequests={props.onPrefetchPullRequests}
                           onSelectThread={props.onSelectThread}
                           onSetReaction={props.onSetReaction}

@@ -1,9 +1,17 @@
+import { useState } from "react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type { DesktopApi } from "../../../lib/desktop-api";
+import {
+  DetachPullRequestWarning,
+  shouldShowDetachPullRequestWarning,
+} from "../../pr-status/DetachPullRequestWarning";
 import { PrChip } from "../../pr-status/PrChip";
 import { openExternalUrl } from "./context-rail-shared";
 import { RailStatusChip, type RailChipTone } from "./RailStatusChip";
 
 type PullRequestsPanelProps = {
+  desktopApi?: Pick<DesktopApi, "detachThreadPullRequest">;
+  onRefreshNavigation?: () => Promise<void>;
   thread: NavigationThreadSummary;
 };
 
@@ -19,6 +27,7 @@ type CheckState = NonNullable<PrSummary["checkState"]>;
  * status pills (lifecycle, merge conflict, checks), above the title + repo.
  */
 export function PullRequestsPanel(props: PullRequestsPanelProps) {
+  const [pendingDetachPr, setPendingDetachPr] = useState<PrSummary>();
   // Newest first. `PrSummary` carries no creation timestamp, so sort by PR
   // number (monotonic with creation within a repo); for the rare multi-repo
   // thread, group by repo first so the numbers stay comparable.
@@ -26,6 +35,24 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
     const repoOrder = repositoryLabel(left).localeCompare(repositoryLabel(right));
     return repoOrder !== 0 ? repoOrder : right.number - left.number;
   });
+  const detachPr = async (pr: PrSummary): Promise<void> => {
+    if (!props.desktopApi?.detachThreadPullRequest) {
+      return;
+    }
+    await props.desktopApi.detachThreadPullRequest({
+      backend: props.thread.source,
+      threadId: props.thread.id,
+      pr,
+    });
+    await props.onRefreshNavigation?.();
+  };
+  const requestDetachPr = (pr: PrSummary): void => {
+    if (shouldShowDetachPullRequestWarning()) {
+      setPendingDetachPr(pr);
+      return;
+    }
+    void detachPr(pr);
+  };
 
   return (
     <section className="context-panel__section">
@@ -44,6 +71,7 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
                     showRepoPrefix={false}
                     onOpen={openExternalUrl}
                     withStatusPills
+                    onDetach={requestDetachPr}
                   />
                   {lifecycle === "merged" ? (
                     <RailStatusChip tone="merged">Merged</RailStatusChip>
@@ -81,6 +109,17 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
           No pull requests linked to this thread yet.
         </p>
       )}
+      {pendingDetachPr ? (
+        <DetachPullRequestWarning
+          pr={pendingDetachPr}
+          onCancel={() => setPendingDetachPr(undefined)}
+          onConfirm={() => {
+            const pr = pendingDetachPr;
+            setPendingDetachPr(undefined);
+            void detachPr(pr);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

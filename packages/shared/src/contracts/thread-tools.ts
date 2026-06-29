@@ -14,6 +14,7 @@ import type {
 import type { LinkedDirectorySummary } from "./normalized-app-server";
 import type {
   MessagingThreadBindingSummary,
+  PrSummary,
   ThreadAgentMetadata,
 } from "./navigation";
 import type {
@@ -180,11 +181,22 @@ export type ThreadInspectionSummary = {
   fastMode?: boolean;
   gitWorkingState?: ThreadGitWorkingState;
   linkedDirectories: LinkedDirectorySummary[];
+  linkedRepositories?: ThreadLinkedRepositorySummary[];
+  pullRequests?: PrSummary[];
   score?: number;
   confidence?: ThreadSearchConfidenceBand;
   matchReasons?: ThreadSearchMatchReason[];
   messagingBindings?: MessagingThreadBindingSummary[];
   snippets?: ThreadSearchSnippet[];
+};
+
+export type ThreadLinkedRepositorySummary = {
+  /** Canonical parent checkout/repository path for this group. */
+  repositoryPath: string;
+  /** Directory ids whose repository/local checkout path maps to this group. */
+  directoryIds: string[];
+  labels: string[];
+  worktreePaths: string[];
 };
 
 export type ThreadStatusInspectionSummary = ThreadInspectionSummary & {

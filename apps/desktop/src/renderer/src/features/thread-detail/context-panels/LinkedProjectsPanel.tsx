@@ -1,5 +1,7 @@
+import { useState } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { FolderIcon, WorktreeIcon } from "../../../icons";
+import type { DesktopApi } from "../../../lib/desktop-api";
 import { PrChip } from "../../pr-status/PrChip";
 import {
   CopyValueButton,
@@ -11,6 +13,8 @@ import {
 } from "./context-rail-shared";
 
 type LinkedProjectsPanelProps = {
+  desktopApi?: Pick<DesktopApi, "attachDirectoryToThread" | "pickDirectoryFromDisk">;
+  onRefreshNavigation?: () => Promise<void>;
   thread: NavigationThreadSummary;
   showTooltip: ShowRailTooltip;
   hideTooltip: HideRailTooltip;
@@ -23,13 +27,62 @@ type LinkedProjectsPanelProps = {
  * main-process `git status --porcelain` IPC (see TODO below).
  */
 export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
+  const [attachError, setAttachError] = useState<string>();
+  const [attaching, setAttaching] = useState(false);
   const directories = props.thread.linkedDirectories;
   const prs = props.thread.prs ?? [];
   const branch = props.thread.gitBranch;
+  const canAttachDirectory = Boolean(
+    props.desktopApi?.pickDirectoryFromDisk && props.desktopApi.attachDirectoryToThread,
+  );
+  const attachDirectory = async (): Promise<void> => {
+    if (!props.desktopApi?.pickDirectoryFromDisk || !props.desktopApi.attachDirectoryToThread) {
+      return;
+    }
+    setAttachError(undefined);
+    setAttaching(true);
+    try {
+      const picked = await props.desktopApi.pickDirectoryFromDisk();
+      if (picked.canceled) {
+        return;
+      }
+      const attached = await props.desktopApi.attachDirectoryToThread({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        path: picked.path,
+        preferredBackend: props.thread.source,
+      });
+      if (!attached.ok) {
+        setAttachError(attached.message);
+        return;
+      }
+      await props.onRefreshNavigation?.();
+    } finally {
+      setAttaching(false);
+    }
+  };
 
   return (
     <section className="context-panel__section">
-      <h3>Linked projects</h3>
+      <div className="linked-projects__header">
+        <h3>Linked projects</h3>
+        {canAttachDirectory ? (
+          <button
+            className="context-list__action"
+            disabled={attaching}
+            type="button"
+            onClick={() => {
+              void attachDirectory();
+            }}
+          >
+            <FolderIcon size={13} aria-hidden="true" />
+            {attaching ? "Adding" : "Add directory"}
+          </button>
+        ) : null}
+      </div>
+      {attachError ? (
+        <p className="context-empty context-empty--warning">{attachError}</p>
+      ) : null}
       {directories.length > 0 ? (
         <ul className="context-list linked-projects-list">
           {directories.map((directory) => {

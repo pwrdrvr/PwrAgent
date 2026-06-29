@@ -190,6 +190,34 @@ describe("SqliteOverlayStore — thread PRs", () => {
     expect(next.prs).toEqual([]);
   });
 
+  it("keeps detached prs hidden across later refresh writes", async () => {
+    await store.setThreadPullRequests({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: [prPassing, prMerged],
+    });
+
+    const detached = await store.detachThreadPullRequest({
+      backend: "codex",
+      threadId: "thread-1",
+      pr: prPassing,
+    });
+    expect(detached.detachedPrKeys).toEqual([
+      "github.com/pwrdrvr/pwragent#179",
+    ]);
+    expect(detached.prs).toEqual([prMerged]);
+
+    const refreshed = await store.setThreadPullRequests({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: [prPassing, prMerged],
+    });
+    expect(refreshed.detachedPrKeys).toEqual([
+      "github.com/pwrdrvr/pwragent#179",
+    ]);
+    expect(refreshed.prs).toEqual([prMerged]);
+  });
+
   it("persists canonical PR status cache rows across reopen", async () => {
     await store.writePrStatusCacheEntries([
       {

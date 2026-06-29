@@ -18392,6 +18392,8 @@ function toThreadInspectionSummary(
     gitWorkingState: thread.gitWorkingState,
     ...(messagingBindings?.length ? { messagingBindings } : {}),
     linkedDirectories: thread.linkedDirectories,
+    linkedRepositories: summarizeLinkedRepositories(thread.linkedDirectories),
+    ...(overlay?.prs?.length ? { pullRequests: overlay.prs } : {}),
   };
 }
 
@@ -18413,6 +18415,8 @@ function toThreadInspectionSummaryFromSearchResult(
     handoffOrigin: overlay?.handoffOrigin,
     model: result.model,
     linkedDirectories: result.linkedDirectories,
+    linkedRepositories: summarizeLinkedRepositories(result.linkedDirectories),
+    ...(overlay?.prs?.length ? { pullRequests: overlay.prs } : {}),
     ...(messagingBindings?.length ? { messagingBindings } : {}),
     score: result.score,
     confidence: result.confidence,
@@ -18644,7 +18648,64 @@ function toThreadInspectionSearchSummary(
       path: directory.path,
       ...(directory.worktreePath ? { worktreePath: directory.worktreePath } : {}),
     })),
+    ...(thread.linkedRepositories?.length
+      ? {
+          linkedRepositories: thread.linkedRepositories.slice(0, 5).map((repo) => ({
+            repositoryPath: repo.repositoryPath,
+            directoryIds: repo.directoryIds.slice(0, 8),
+            labels: repo.labels.slice(0, 8),
+            worktreePaths: repo.worktreePaths.slice(0, 8),
+          })),
+        }
+      : {}),
+    ...(thread.pullRequests?.length
+      ? {
+          pullRequests: thread.pullRequests.slice(0, 8).map((pr) => ({
+            provider: pr.provider,
+            org: pr.org,
+            repo: pr.repo,
+            number: pr.number,
+            state: pr.state,
+            ...(pr.checkState ? { checkState: pr.checkState } : {}),
+            ...(pr.lifecycleState ? { lifecycleState: pr.lifecycleState } : {}),
+            ...(pr.reviewState ? { reviewState: pr.reviewState } : {}),
+            ...(pr.mergeState ? { mergeState: pr.mergeState } : {}),
+            ...(pr.title ? { title: pr.title } : {}),
+            url: pr.url,
+          })),
+        }
+      : {}),
   };
+}
+
+function summarizeLinkedRepositories(
+  directories: LinkedDirectorySummary[],
+): ThreadInspectionSummary["linkedRepositories"] {
+  if (directories.length === 0) {
+    return undefined;
+  }
+  const byRepositoryPath = new Map<
+    string,
+    NonNullable<ThreadInspectionSummary["linkedRepositories"]>[number]
+  >();
+  for (const directory of directories) {
+    const repositoryPath = directory.path;
+    const current = byRepositoryPath.get(repositoryPath) ?? {
+      repositoryPath,
+      directoryIds: [],
+      labels: [],
+      worktreePaths: [],
+    };
+    current.directoryIds.push(directory.id);
+    if (!current.labels.includes(directory.label)) {
+      current.labels.push(directory.label);
+    }
+    if (directory.worktreePath && !current.worktreePaths.includes(directory.worktreePath)) {
+      current.worktreePaths.push(directory.worktreePath);
+    }
+    byRepositoryPath.set(repositoryPath, current);
+  }
+  return [...byRepositoryPath.values()];
 }
 
 function toMessagingThreadBindingSummary(

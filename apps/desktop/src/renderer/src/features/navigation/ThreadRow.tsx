@@ -64,6 +64,10 @@ type ThreadRowProps = {
    * thread key, respect terminal-state short-circuit on the main side).
    */
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
+  onDetachPullRequest?: (
+    thread: NavigationThreadSummary,
+    pr: PrSummary,
+  ) => void;
   /**
    * Called when the user picks "Unbind" from a per-thread messaging
    * binding chip. Receives the binding id; the parent owns the IPC call
@@ -275,6 +279,11 @@ export function ThreadRow(props: ThreadRowProps) {
                         targetPr,
                         position,
                       )
+                  : undefined
+              }
+              onDetach={
+                props.onDetachPullRequest
+                  ? (targetPr) => props.onDetachPullRequest!(props.thread, targetPr)
                   : undefined
               }
             />

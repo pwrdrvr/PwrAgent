@@ -23,6 +23,8 @@ import {
   type AppServerListSkillsResponse,
   type AppServerListThreadsRequest,
   type AppServerListThreadsResponse,
+  type AttachDirectoryToThreadRequest,
+  type AttachDirectoryToThreadResponse,
   type ThreadSearchRequest,
   type ThreadSearchResponse,
   type PersistThreadUsageActivityRequest,
@@ -40,7 +42,10 @@ import {
   type HandoffThreadWorkspaceResponse,
   type GetGhStatusRequest,
   type GhStatus,
+  type LinkedDirectorySummary,
   type PickDirectoryFromDiskResponse,
+  type DetachThreadPullRequestRequest,
+  type DetachThreadPullRequestResponse,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
   type RefreshThreadPullRequestsRequest,
@@ -137,6 +142,8 @@ import {
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
+  NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
+  NAVIGATION_DETACH_THREAD_PR_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
@@ -1826,6 +1833,29 @@ class DesktopAppServerService {
     }
   }
 
+  async detachThreadPullRequest(
+    request: DetachThreadPullRequestRequest,
+  ): Promise<DetachThreadPullRequestResponse> {
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().detachThreadPullRequest({
+      backend,
+      threadId: request.threadId,
+      pr: request.pr,
+    });
+    const prs = overlay.prs ?? [];
+    await this.publishThreadPullRequestsUpdated({
+      backend,
+      threadId: request.threadId,
+      prs,
+    });
+    return {
+      backend,
+      threadId: request.threadId,
+      detachedPrKeys: overlay.detachedPrKeys ?? [],
+      prs,
+    };
+  }
+
   private async refreshThreadPullRequestsUncached(
     backend: AppServerBackendKind,
     request: RefreshThreadPullRequestsRequest,
@@ -2966,6 +2996,55 @@ class DesktopAppServerService {
     return response;
   }
 
+  async attachDirectoryToThread(
+    request: AttachDirectoryToThreadRequest,
+  ): Promise<AttachDirectoryToThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const registered = await this.registerDirectoryFromDisk({
+      path: request.path,
+      preferredBackend: request.preferredBackend ?? backend,
+    });
+    if (!registered.ok) {
+      return {
+        ok: false,
+        backend,
+        threadId: request.threadId,
+        reason: registered.reason,
+        message: registered.message,
+      };
+    }
+
+    const directory: LinkedDirectorySummary = {
+      id: registered.directoryKey,
+      kind: "local",
+      label: registered.directoryLabel,
+      path: registered.directoryPath,
+    };
+    await this.getOverlayStore().addLinkedDirectory({
+      backend,
+      threadId: request.threadId,
+      directory,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: {
+          reason: "selected-thread",
+          threadIds: [request.threadId],
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      backend,
+      threadId: request.threadId,
+      directory,
+    };
+  }
+
   async analyzeFocusedDiff(
     request: FocusedDiffAnalysisRequest
   ): Promise<FocusedDiffAnalysisResponse> {
@@ -3479,6 +3558,16 @@ export function registerAppServerIpcHandlers(): void {
       });
     },
   );
+  ipcMain.removeHandler(NAVIGATION_DETACH_THREAD_PR_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_DETACH_THREAD_PR_CHANNEL,
+    async (
+      _event,
+      request: DetachThreadPullRequestRequest,
+    ): Promise<DetachThreadPullRequestResponse> => {
+      return await appServerService.detachThreadPullRequest(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
   ipcMain.handle(
     NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
@@ -3590,6 +3679,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.registerDirectoryFromDisk(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
+    async (
+      _event,
+      request: AttachDirectoryToThreadRequest,
+    ): Promise<AttachDirectoryToThreadResponse> => {
+      return await appServerService.attachDirectoryToThread(request);
+    },
+  );
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
@@ -3616,6 +3715,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_DETACH_THREAD_PR_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL);
@@ -3626,6 +3726,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL);
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
   await appServerService.close();

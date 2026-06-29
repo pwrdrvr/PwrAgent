@@ -75,7 +75,7 @@ function descriptionForOperation(
     case "read_thread":
       return "Read a bounded page of another known PwrAgent thread's recent transcript and activity. Use search_threads first when the threadId is unknown.";
     case "get_thread_status":
-      return "Read status and compact metadata for a known PwrAgent thread, including pendingHandoffs when this thread has child handoffs that are still being created and pendingWorkspaceMoves when this thread has same-thread workspace moves in progress.";
+      return "Read status and compact metadata for a known PwrAgent thread, including linked directories, repository groups, pull requests, pendingHandoffs when this thread has child handoffs that are still being created, and pendingWorkspaceMoves when this thread has same-thread workspace moves in progress.";
     case "mutate_thread":
       return "Mutate guarded PwrAgent thread settings such as the PwrAgent thread title, model settings, or execution mode. This does not rename any attached Telegram topic, Discord thread, or other messaging surface.";
   }

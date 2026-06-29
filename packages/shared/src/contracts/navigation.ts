@@ -929,6 +929,51 @@ export type RefreshThreadPullRequestsRequest = {
   directoryPaths: string[];
 };
 
+export type DetachThreadPullRequestRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  pr: Pick<PrSummary, "provider" | "org" | "repo" | "number">;
+};
+
+export type DetachThreadPullRequestResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  detachedPrKeys: string[];
+  prs: PrSummary[];
+};
+
+export type AttachDirectoryToThreadRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Absolute path the user picked from the system dialog. */
+  path: string;
+  /**
+   * Backend the directory's launchpad should default to if the directory has
+   * not already been registered.
+   */
+  preferredBackend?: AppServerBackendKind;
+};
+
+export type AttachDirectoryToThreadFailureReason =
+  | "inaccessible"
+  | "not-a-directory"
+  | "not-a-git-repo";
+
+export type AttachDirectoryToThreadResponse =
+  | {
+      ok: true;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      directory: LinkedDirectorySummary;
+    }
+  | {
+      ok: false;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      reason: AttachDirectoryToThreadFailureReason;
+      message: string;
+    };
+
 export type RefreshThreadPullRequestsResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -1053,6 +1098,12 @@ export type ThreadOverlayState = {
    * sidebar/history purposes; status refreshes replace matching entries.
    */
   prs?: PrSummary[];
+  /**
+   * Normalized PR status keys the user removed from this thread. Refreshes
+   * keep collecting provider state, but these keys stay hidden until a future
+   * explicit re-attach flow exists.
+   */
+  detachedPrKeys?: string[];
   /** Wall-clock ms when `prs` was last refreshed via gh. */
   prsFetchedAt?: number;
   /**

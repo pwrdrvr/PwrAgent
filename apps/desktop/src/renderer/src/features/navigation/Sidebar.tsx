@@ -40,6 +40,10 @@ import {
 } from "../../lib/runtime-identity";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { formatPrimaryAccel } from "../../lib/keyboard-accel";
+import {
+  DetachPullRequestWarning,
+  shouldShowDetachPullRequestWarning,
+} from "../pr-status/DetachPullRequestWarning";
 import { SidebarSearchPopup } from "./SidebarSearchPopup";
 import {
   formatRateLimitLine,
@@ -154,6 +158,10 @@ type SidebarProps = {
    * fresh PR status before they click in.
    */
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
+  onDetachPullRequest?: (
+    thread: NavigationThreadSummary,
+    pr: PrSummary,
+  ) => Promise<void>;
   /**
    * Called when the user unbinds a messaging conversation from a
    * thread via the binding chip. Receives the thread + binding so the
@@ -218,6 +226,13 @@ export function Sidebar(props: SidebarProps) {
         requestedPosition: ThreadContextMenuPosition;
         position?: { x: number; y: number };
         directory: NavigationDirectorySummary;
+      }
+    | undefined
+  >();
+  const [pendingDetachPullRequest, setPendingDetachPullRequest] = useState<
+    | {
+        thread: NavigationThreadSummary;
+        pr: PrSummary;
       }
     | undefined
   >();
@@ -597,6 +612,21 @@ export function Sidebar(props: SidebarProps) {
     void copyText(value);
   };
 
+  const detachPullRequest = (
+    thread: NavigationThreadSummary,
+    pr: PrSummary,
+  ): void => {
+    if (!props.onDetachPullRequest) {
+      return;
+    }
+    setContextMenu(undefined);
+    if (shouldShowDetachPullRequestWarning()) {
+      setPendingDetachPullRequest({ thread, pr });
+      return;
+    }
+    void props.onDetachPullRequest(thread, pr);
+  };
+
   const submitRename = (): void => {
     if (!renameThread) {
       return;
@@ -893,6 +923,7 @@ export function Sidebar(props: SidebarProps) {
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={props.onOpenLaunchpad}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
+              onDetachPullRequest={detachPullRequest}
               onReorderThreadPins={props.onReorderThreadPins}
               onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
               onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
@@ -920,6 +951,7 @@ export function Sidebar(props: SidebarProps) {
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onOpenPullRequestContextMenu={openPullRequestContextMenu}
                 onPrefetchPullRequests={props.onPrefetchPullRequests}
+                onDetachPullRequest={detachPullRequest}
                 onReorderThreadPins={props.onReorderThreadPins}
                 onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
                 onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
@@ -1186,13 +1218,26 @@ export function Sidebar(props: SidebarProps) {
           ) : null}
           <div className="thread-context-menu__section">
             {contextMenuPullRequest ? (
-              <button
-                role="menuitem"
-                type="button"
-                onClick={() => copyFromContextMenu(contextMenuPullRequest.url)}
-              >
-                Copy Pull Request URL
-              </button>
+              <>
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() => copyFromContextMenu(contextMenuPullRequest.url)}
+                >
+                  Copy Pull Request URL
+                </button>
+                {props.onDetachPullRequest ? (
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      detachPullRequest(contextMenu.thread, contextMenuPullRequest)
+                    }
+                  >
+                    Detach Pull Request
+                  </button>
+                ) : null}
+              </>
             ) : null}
             <button
               role="menuitem"
@@ -1230,6 +1275,18 @@ export function Sidebar(props: SidebarProps) {
             ) : null}
           </div>
         </div>
+      ) : null}
+
+      {pendingDetachPullRequest ? (
+        <DetachPullRequestWarning
+          pr={pendingDetachPullRequest.pr}
+          onCancel={() => setPendingDetachPullRequest(undefined)}
+          onConfirm={() => {
+            const pending = pendingDetachPullRequest;
+            setPendingDetachPullRequest(undefined);
+            void props.onDetachPullRequest?.(pending.thread, pending.pr);
+          }}
+        />
       ) : null}
 
       {directoryContextMenu ? (
