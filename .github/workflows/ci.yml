@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
@@ -41,7 +41,7 @@ jobs:
     needs: install-deps
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
@@ -90,7 +90,7 @@ jobs:
     needs: install-deps
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
@@ -109,7 +109,7 @@ jobs:
     needs: install-deps
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
@@ -132,7 +132,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         timeout-minutes: 10
 
       # pwrdrvr/configure-nodejs is POSIX-only, so use a Windows-specific
@@ -174,7 +174,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         timeout-minutes: 10
 
       - name: Setup Node.js and pnpm
@@ -208,7 +208,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
@@ -240,7 +240,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         timeout-minutes: 10
         with:
           fetch-depth: 0
