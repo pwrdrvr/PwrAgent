@@ -253,6 +253,45 @@ describe("DesktopAutomationService", () => {
     );
   });
 
+  it("matchesInboundEvent is a side-effect-free predicate over inbound triggers", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate.",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+    });
+    const event = (text: string, conversationId = "C123") =>
+      ({
+        id: "slack-text",
+        kind: "text" as const,
+        actor: { platformUserId: "U1", isBot: false },
+        channel: {
+          channel: "slack" as const,
+          conversation: { id: conversationId, kind: "channel" as const },
+        },
+        receivedAt: 1,
+        text,
+      });
+
+    expect(service.matchesInboundEvent(event("ERROR api latency"))).toBe(true);
+    // Text filter misses, wrong channel, and non-text events do not match.
+    expect(service.matchesInboundEvent(event("all good"))).toBe(false);
+    expect(service.matchesInboundEvent(event("ERROR", "C999"))).toBe(false);
+    // Predicate must not have created any runs.
+    const [automation] = service.list({ backend: "codex", threadId: "thread-1" })
+      .automations;
+    expect(store.listRunsForAutomation(automation!.id)).toHaveLength(0);
+  });
+
   it("starts inbound-triggered runs from matching messaging events", async () => {
     const service = new DesktopAutomationService({ registry, store });
     await service.create({

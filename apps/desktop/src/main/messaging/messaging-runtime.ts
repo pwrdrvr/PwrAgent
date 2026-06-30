@@ -75,6 +75,7 @@ import {
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
 import {
+  hasActiveInboundPreview,
   inboundEventToPreviewMessage,
   publishInboundPreview,
 } from "./inbound-preview-bus";
@@ -162,6 +163,15 @@ export type DesktopMessagingConfigLoader = (
 export type MessagingAutomationInboundHandler = (
   event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
 ) => Promise<boolean>;
+
+/**
+ * Pure predicate: would any inbound automation's filter match this event? Lets
+ * the runtime keep delivering automation-matched messages even when the
+ * @mention response mode would otherwise drop them. No side effects.
+ */
+export type MessagingAutomationInboundMatcher = (
+  event: MessagingInboundEvent,
+) => boolean;
 
 type RunningMessagingAdapter = {
   adapter: DesktopMessagingAdapter;
@@ -321,6 +331,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       };
       config: DesktopMessagingConfig | DesktopMessagingConfigLoader;
       automationInboundHandler?: MessagingAutomationInboundHandler;
+      automationInboundMatches?: MessagingAutomationInboundMatcher;
     },
   ) {}
 
@@ -917,6 +928,45 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     await run;
   }
 
+  private async shouldDropAmbientSharedMessage(params: {
+    channel: MessagingChannelKind;
+    event: MessagingInboundEvent;
+    store: MessagingStoreLike;
+  }): Promise<boolean> {
+    const { event } = params;
+    if (event.kind !== "text" && event.kind !== "media") {
+      return false;
+    }
+    if (event.botMention || event.channel.conversation.kind === "dm") {
+      return false;
+    }
+    const binding = await params.store.findActiveBindingForChannel(event.channel);
+    if (binding?.targetKind === "thread") {
+      return false;
+    }
+    if (
+      responseModeForChannel(
+        await this.loadConfig(),
+        params.channel,
+        event.channel,
+      ) !== "mention_only"
+    ) {
+      return false;
+    }
+    // @mention-only mode suppresses the bot's NORMAL replies, but it must not
+    // starve features with their own per-message config. Keep delivering a
+    // message when an inbound automation's filter (conversation / sender / text)
+    // matches it, or when an editor is live-previewing trigger candidates — the
+    // controller's own ambient gate still blocks a normal agent reply.
+    if (this.options.automationInboundMatches?.(event)) {
+      return false;
+    }
+    if (hasActiveInboundPreview()) {
+      return false;
+    }
+    return true;
+  }
+
   private async startRunningAdapter(params: {
     adapter: DesktopMessagingAdapter;
     config: DesktopMessagingConfig;
@@ -1019,13 +1069,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           return;
         }
         const authorized = authorization.actorIdSet.has(event.actor.platformUserId);
-        // Do NOT drop ambient (non-@mention) messages here. The "@mention only"
-        // response mode must not starve inbound automations or the live trigger
-        // preview — both run inside controller.handleInboundEvent and have their
-        // own per-trigger config ("automations are allowed to do what they want
-        // to do"). The controller's own ambient gate (handleText / handleMedia)
-        // still suppresses a NORMAL agent reply for these messages, so response
-        // mode is honored without blocking automations.
+        if (
+          authorized &&
+          await this.shouldDropAmbientSharedMessage({
+            channel: adapter.channel,
+            event,
+            store,
+          })
+        ) {
+          return;
+        }
         this.recordActivityFromInbound(adapter.channel, event, authorized);
         try {
           if (!authorized) {
@@ -2095,6 +2148,8 @@ export function getDesktopMessagingRuntime(
       config: config ?? (() => loadDesktopMessagingConfig()),
       automationInboundHandler: (event) =>
         getDesktopAutomationService().handleMessagingInboundEvent(event),
+      automationInboundMatches: (event) =>
+        getDesktopAutomationService().matchesInboundEvent(event),
     });
   }
 

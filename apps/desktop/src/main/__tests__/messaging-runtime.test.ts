@@ -26,6 +26,8 @@ import type {
   DesktopMessagingAdapter,
   DesktopMessagingAdapterFactory,
   DesktopMessagingRuntime,
+  MessagingAutomationInboundHandler,
+  MessagingAutomationInboundMatcher,
 } from "../messaging/messaging-runtime";
 
 const messagingLog = {
@@ -347,11 +349,17 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
-  it("forwards ambient mention-only messages to the automation handler", async () => {
+  async function startMentionOnlyRuntime(options: {
+    automationInboundHandler: MessagingAutomationInboundHandler;
+    automationInboundMatches: MessagingAutomationInboundMatcher;
+  }): Promise<ReturnType<typeof createAdapter>> {
     await prepareRuntimeStore();
+    const { resetInboundPreview } = await import(
+      "../messaging/inbound-preview-bus"
+    );
+    resetInboundPreview();
     const adapter = createAdapter("telegram");
     const bridge = createBackendBridge();
-    const automationInboundHandler = vi.fn(async () => false);
     const { DesktopMessagingRuntime: Runtime } = await import(
       "../messaging/messaging-runtime"
     );
@@ -359,7 +367,8 @@ describe("DesktopMessagingRuntime", () => {
       new Runtime({
         adapterFactory: () => [adapter],
         backendBridge: bridge,
-        automationInboundHandler,
+        automationInboundHandler: options.automationInboundHandler,
+        automationInboundMatches: options.automationInboundMatches,
         config: {
           inputDebounceMs: 0,
           telegram: {
@@ -371,28 +380,56 @@ describe("DesktopMessagingRuntime", () => {
         },
       }),
     );
-
     await runtime.start();
-    // Ambient (no botMention) message from an authorized actor in a shared
-    // channel, with the channel set to @mention-only. The automation handler
-    // must still see it (its own trigger config decides) even though the bot
-    // will not reply normally.
-    await adapter.listener?.({
-      id: "ambient-1",
-      kind: "text",
-      actor: { platformUserId: "user-1" },
-      channel: {
-        channel: "telegram",
-        conversation: { id: "chat-ambient", kind: "channel" },
-      },
-      receivedAt: 1000,
-      text: "ERROR something happened",
+    return adapter;
+  }
+
+  const ambientEvent = {
+    id: "ambient-1",
+    kind: "text" as const,
+    actor: { platformUserId: "user-1" },
+    channel: {
+      channel: "telegram" as const,
+      conversation: { id: "chat-ambient", kind: "channel" as const },
+    },
+    receivedAt: 1000,
+    text: "ERROR something happened",
+  };
+
+  it("delivers @mention-only messages an automation filter matches", async () => {
+    const automationInboundHandler = vi.fn(async () => false);
+    // The automation's own filter matches this ambient (non-@mention) message,
+    // so it must be delivered even though the channel is @mention-only.
+    const automationInboundMatches = vi.fn(() => true);
+    const adapter = await startMentionOnlyRuntime({
+      automationInboundHandler,
+      automationInboundMatches,
     });
+
+    await adapter.listener?.(ambientEvent);
 
     expect(automationInboundHandler).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "text", text: "ERROR something happened" }),
     );
-    // The @mention-only mode still suppresses a normal agent reply.
+    // @mention-only mode still suppresses a normal agent reply.
+    expect(
+      adapter.delivered.some((intent) => intent.kind === "message"),
+    ).toBe(false);
+  });
+
+  it("drops ambient @mention-only messages no automation filter matches", async () => {
+    const automationInboundHandler = vi.fn(async () => false);
+    const automationInboundMatches = vi.fn(() => false);
+    const adapter = await startMentionOnlyRuntime({
+      automationInboundHandler,
+      automationInboundMatches,
+    });
+
+    await adapter.listener?.(ambientEvent);
+
+    // No automation matches and no preview is active: the message is dropped
+    // before the controller, preserving @mention-only behavior for normal chat.
+    expect(automationInboundHandler).not.toHaveBeenCalled();
     expect(
       adapter.delivered.some((intent) => intent.kind === "message"),
     ).toBe(false);

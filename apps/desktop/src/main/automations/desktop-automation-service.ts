@@ -463,6 +463,28 @@ export class DesktopAutomationService {
     return true;
   }
 
+  /**
+   * Pure predicate: would any enabled inbound automation's filter (conversation
+   * / sender / text) match this event? Used by the messaging runtime to decide
+   * whether a message the @mention response mode would otherwise drop must still
+   * be delivered so the automation can run. No side effects — the actual run
+   * happens in {@link handleMessagingInboundEvent}.
+   */
+  matchesInboundEvent(event: MessagingInboundEvent): boolean {
+    if (event.kind !== "text" && event.kind !== "media") {
+      return false;
+    }
+    if (this.options.runtime?.disabled) {
+      return false;
+    }
+    return (
+      matchAutomationInboundEvent({
+        automations: this.options.store.listEnabledInboundAutomations(),
+        event,
+      }).length > 0
+    );
+  }
+
   buildThreadSummaries() {
     return this.options.store.buildThreadSummaries();
   }
