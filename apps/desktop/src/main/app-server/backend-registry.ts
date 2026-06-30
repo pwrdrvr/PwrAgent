@@ -1021,6 +1021,17 @@ function shouldInheritHandoffCodexEnvironmentRuntime(params: {
   );
 }
 
+function linkedDirectoryMatchesCwd(
+  directory: LinkedDirectorySummary,
+  cwd: string,
+): boolean {
+  const resolvedCwd = path.resolve(cwd);
+  return (
+    path.resolve(directory.worktreePath ?? directory.path) === resolvedCwd ||
+    path.resolve(directory.path) === resolvedCwd
+  );
+}
+
 type PendingServerRequest = {
   resolve: (response: SubmitServerRequestRequest["response"]) => void;
   reject: (error: Error) => void;
@@ -15117,6 +15128,7 @@ export class DesktopBackendRegistry {
     const sourceCwd = requestedCwd ?? callerCwd;
     const sourceLinkedDirectory = this.resolveHandoffLinkedDirectory({
       cwd: sourceCwd,
+      fallbackToAnyDirectory: !requestedCwd,
       overlay: sourceOverlay,
       thread: sourceThread,
     });
@@ -15525,6 +15537,7 @@ export class DesktopBackendRegistry {
 
   private resolveHandoffLinkedDirectory(params: {
     cwd?: string;
+    fallbackToAnyDirectory?: boolean;
     overlay?: ThreadOverlayState;
     thread?: Pick<AppServerThreadSummary, "linkedDirectories">;
   }): LinkedDirectorySummary | undefined {
@@ -15533,13 +15546,13 @@ export class DesktopBackendRegistry {
       ...(params.thread?.linkedDirectories ?? []),
     ];
     const cwd = params.cwd?.trim();
+    const matchedDirectory = cwd
+      ? candidates.find((directory) => linkedDirectoryMatchesCwd(directory, cwd))
+      : undefined;
+    if (matchedDirectory || params.fallbackToAnyDirectory === false) {
+      return matchedDirectory;
+    }
     return (
-      (cwd
-        ? candidates.find(
-            (directory) =>
-              directory.worktreePath === cwd || directory.path === cwd,
-          )
-        : undefined) ??
       candidates.find((directory) => directory.kind === "worktree") ??
       candidates.find((directory) => directory.kind === "local") ??
       candidates[0]

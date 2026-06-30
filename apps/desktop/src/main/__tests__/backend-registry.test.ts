@@ -16036,6 +16036,130 @@ script = "printf setup"
     await rm(root, { recursive: true, force: true });
   });
 
+  it("starts project-local handoffs from an explicit cwd instead of a stale parent linked directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-project-local-cwd-"));
+    const parentRepoPath = path.join(root, "parent-project");
+    const targetRepoPath = path.join(root, "target-project");
+    try {
+      for (const repoPath of [parentRepoPath, targetRepoPath]) {
+        await mkdir(repoPath, { recursive: true });
+        try {
+          await git(repoPath, ["init", "-b", "main"]);
+        } catch {
+          await git(repoPath, ["init"]);
+          await git(repoPath, ["checkout", "-b", "main"]);
+        }
+        await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
+        await git(repoPath, ["add", "README.md"]);
+        await git(repoPath, [
+          "-c",
+          "user.name=PwrAgent Tests",
+          "-c",
+          "user.email=tests@pwragent.local",
+          "commit",
+          "-m",
+          "initial",
+        ]);
+      }
+
+      const parentDirectory = {
+        id: expectedDir(parentRepoPath),
+        kind: "local" as const,
+        label: "parent-project",
+        path: expectedDir(parentRepoPath),
+      };
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+        threads: [
+          {
+            id: "ordinary-thread",
+            title: "Parent Thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [parentDirectory],
+            updatedAt: 1000,
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        }),
+        gitDirectoryService: new GitDirectoryService({
+          resolveWorktreeStorage: () => "in-repo",
+        }),
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:ordinary-thread": {
+              backend: "codex",
+              threadId: "ordinary-thread",
+              executionMode: "full-access",
+              extraLinkedDirectories: [parentDirectory],
+            },
+          },
+        }),
+        threadTitleGenerationService: null,
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "ordinary-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId: "call-1",
+          requestId: "call-1",
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: {
+            task: "Investigate issue XYZ from the requested project checkout.",
+            title: "Explicit project local handoff",
+            workspaceMode: "project_local",
+            cwd: targetRepoPath,
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(response).toMatchObject({ success: true });
+      const realParentRepoPath = expectedDir(await realpath(parentRepoPath));
+      const realTargetRepoPath = expectedDir(await realpath(targetRepoPath));
+      expect(codexClient.lastStartThreadParams?.cwd).toBe(realTargetRepoPath);
+      expect(codexClient.lastStartThreadParams?.cwd).not.toBe(realParentRepoPath);
+      const payload = JSON.parse(
+        (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+      );
+      expect(payload.workspace).toMatchObject({
+        mode: "project_local",
+        cwd: realTargetRepoPath,
+        linkedDirectory: {
+          kind: "local",
+          label: "target-project",
+          path: realTargetRepoPath,
+        },
+        git: {
+          kind: "git_local",
+          worktreeCreationAvailable: true,
+        },
+      });
+      expect(payload.workspace.linkedDirectory.path).not.toBe(realParentRepoPath);
+
+      await registry.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("creates new-worktree handoffs from an explicit cwd in another project", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-explicit-cwd-"));
     const scratchPath = path.join(root, "scratch-workspace");
