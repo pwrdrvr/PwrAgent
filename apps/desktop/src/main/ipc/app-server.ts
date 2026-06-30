@@ -538,6 +538,19 @@ function getPrStatusKey(
   return buildPullRequestStatusKey(pr);
 }
 
+function filterDetachedPullRequests(
+  prs: PrSummary[],
+  detachedPrKeys: string[] | undefined,
+): PrSummary[] {
+  if (!detachedPrKeys?.length) {
+    return prs;
+  }
+  const detached = new Set(
+    detachedPrKeys.map((key) => key.trim().toLowerCase()).filter(Boolean),
+  );
+  return prs.filter((pr) => !detached.has(getPrStatusKey(pr)));
+}
+
 function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
   if (left.length !== right.length) {
     return false;
@@ -2044,6 +2057,8 @@ class DesktopAppServerService {
         ? existingPrs
         : [];
     let knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
+    const visibleKnownPrs = (): PrSummary[] =>
+      filterDetachedPullRequests(knownPrs, existing?.detachedPrKeys);
     const statusFetchedAt = lookupEntry?.fetchedAt
       ?? (existingPrs.length > 0 ? existing?.prsFetchedAt : undefined);
     const freshness = pullRequestStatusFreshness(statusFetchedAt, now);
@@ -2064,7 +2079,7 @@ class DesktopAppServerService {
         ghAvailable,
         lookupCacheHit: Boolean(lookupEntry),
         lookupKey,
-        previousPrs: knownPrs,
+        previousPrs: visibleKnownPrs(),
         provider,
         requestKey,
         threadId: request.threadId,
@@ -2078,7 +2093,7 @@ class DesktopAppServerService {
           branch,
           directoryPathCount: request.directoryPaths.length,
           ghAvailable,
-          previousPrs: knownPrs,
+          previousPrs: visibleKnownPrs(),
           provider,
           reason: "gh-unavailable",
           requestKey,
@@ -2090,7 +2105,7 @@ class DesktopAppServerService {
         backend,
         threadId: request.threadId,
         provider,
-        prs: knownPrs,
+        prs: visibleKnownPrs(),
         ...responseFreshness(false),
         ghAvailable: false,
       };
@@ -2134,7 +2149,7 @@ class DesktopAppServerService {
         backend,
         threadId: request.threadId,
         provider,
-        prs: knownPrs,
+        prs: visibleKnownPrs(),
         ghAvailable: true,
         ...responseFreshness(false),
         shortCircuited: true,
@@ -2148,7 +2163,7 @@ class DesktopAppServerService {
           branch,
           directoryPathCount: request.directoryPaths.length,
           ghAvailable: true,
-          previousPrs: knownPrs,
+          previousPrs: visibleKnownPrs(),
           provider,
           reason: !branch ? "missing-branch" : "missing-directory-paths",
           requestKey,
@@ -2160,27 +2175,27 @@ class DesktopAppServerService {
         backend,
         threadId: request.threadId,
         provider,
-        prs: knownPrs,
+        prs: visibleKnownPrs(),
         ...responseFreshness(false),
         ghAvailable: true,
       };
     }
 
-    this.startPullRequestLookupRefresh({
+    const refreshStarted = this.startPullRequestLookupRefresh({
       backend,
       request,
       requestKey,
       lookupKey,
       lookupDirectoryPaths,
-      previousPrs: knownPrs,
+      previousPrs: visibleKnownPrs(),
     });
 
     return {
       backend,
       threadId: request.threadId,
       provider,
-      prs: knownPrs,
-      ...responseFreshness(true),
+      prs: visibleKnownPrs(),
+      ...responseFreshness(refreshStarted),
       ghAvailable: true,
     };
   }
@@ -2292,7 +2307,7 @@ class DesktopAppServerService {
     lookupKey: string;
     lookupDirectoryPaths: string[];
     previousPrs: PrSummary[];
-  }): void {
+  }): boolean {
     const trigger = params.request.trigger ?? "scheduled";
     const provider = normalizePullRequestProvider(params.request.provider);
     const pending = this.pendingPrLookupRefreshes.get(params.lookupKey);
@@ -2311,7 +2326,7 @@ class DesktopAppServerService {
           trigger,
         }));
       }
-      return;
+      return true;
     }
 
     const claim = this.claimPullRequestLookupRefreshKey(
@@ -2343,7 +2358,7 @@ class DesktopAppServerService {
           nextAllowedInMs: claim.nextAllowedInMs,
         });
       }
-      return;
+      return false;
     }
     const refreshKey = claim.refreshKey;
 
@@ -2407,6 +2422,7 @@ class DesktopAppServerService {
         }
       });
     this.pendingPrLookupRefreshes.set(params.lookupKey, promise);
+    return true;
   }
 
   private addPullRequestLookupSubscriber(

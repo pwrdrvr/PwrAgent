@@ -2228,6 +2228,87 @@ describe("app server ipc", () => {
     });
   });
 
+  it("keeps detached PRs hidden when gh is unavailable and lookup cache still has them", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      trigger: "user",
+      branch: "feat/cached-detached-pr",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const lookupKey = buildPrLookupKey({
+      branch: "feat/cached-detached-pr",
+      directoryPaths: ["/repo"],
+    });
+    const previousPr = githubPr({
+      number: 920,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/920",
+    });
+    const detachedPr = githubPr({
+      number: 921,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/921",
+    });
+    const cachedPr = githubPr({
+      number: 922,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/922",
+    });
+    readPrLookupCache.mockResolvedValueOnce({
+      [lookupKey]: {
+        lookupKey,
+        provider: "github.com",
+        branch: "feat/cached-detached-pr",
+        directoryPaths: ["/repo"],
+        fetchedAt: Date.now(),
+        prs: [detachedPr, cachedPr],
+      },
+    });
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      detachedPrKeys: ["github.com/pwrdrvr/pwragent#921"],
+      prs: [previousPr],
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: "old-refresh-key",
+    });
+    isGhAvailable.mockResolvedValueOnce(false);
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      request,
+    );
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      provider: "github.com",
+      ghAvailable: false,
+      prs: [previousPr, cachedPr],
+    });
+    expect(setThreadPullRequests).not.toHaveBeenCalled();
+    expect(publishLocalEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        notification: expect.objectContaining({
+          method: "thread/pullRequests/updated",
+        }),
+      }),
+    );
+  });
+
   it("persists and publishes title-only PR updates", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
@@ -2701,6 +2782,7 @@ describe("app server ipc", () => {
         trigger: "user",
         branch: "fix/open",
         directoryPaths: ["/repo"],
+        includeStatusFreshness: true,
       } satisfies RefreshThreadPullRequestsRequest;
       const requestKey = buildThreadPrRequestKey({
         backend: "codex",
@@ -2731,7 +2813,17 @@ describe("app server ipc", () => {
 
       registerAppServerIpcHandlers();
 
-      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      const firstResponse = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+        {},
+        request,
+      );
+      expect(firstResponse).toMatchObject({
+        backend: "codex",
+        threadId: "thread-1",
+        refreshStarted: true,
+        lastStatusCheckAt: 2_000_000 - 120_000,
+        lastStatusCheckAgeMs: 120_000,
+      });
       await vi.waitFor(() => {
         expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
       });
@@ -2748,7 +2840,17 @@ describe("app server ipc", () => {
       mockAppServerLog.info.mockClear();
 
       vi.setSystemTime(2_000_000 + 9_000);
-      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      const cooldownResponse = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+        {},
+        request,
+      );
+      expect(cooldownResponse).toMatchObject({
+        backend: "codex",
+        threadId: "thread-1",
+        refreshStarted: false,
+        lastStatusCheckAt: 2_000_000,
+        lastStatusCheckAgeMs: 9_000,
+      });
       await Promise.resolve();
       expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
       expect(mockAppServerLog.info).toHaveBeenCalledWith(
