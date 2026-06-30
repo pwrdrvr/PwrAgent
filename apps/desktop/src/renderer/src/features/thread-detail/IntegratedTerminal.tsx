@@ -35,6 +35,7 @@ export function IntegratedTerminal({
   const terminalRef = useRef<Terminal | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
   const pendingInputRef = useRef<string[]>([]);
+  const replayingBufferedOutputRef = useRef(false);
   const [status, setStatus] = useState<string>("Starting shell...");
 
   useLayoutEffect(() => {
@@ -104,6 +105,9 @@ export function IntegratedTerminal({
         };
 
         const dataDisposable = terminal.onData((data) => {
+          if (replayingBufferedOutputRef.current) {
+            return;
+          }
           const sessionId = sessionIdRef.current;
           if (!sessionId) {
             pendingInputRef.current.push(data);
@@ -129,19 +133,28 @@ export function IntegratedTerminal({
             if (disposed) return;
             sessionIdRef.current = response.sessionId;
             setStatus(response.cwd);
+            const finishAttach = () => {
+              if (disposed) return;
+              const pendingInput = pendingInputRef.current.join("");
+              pendingInputRef.current = [];
+              if (pendingInput && desktopApi.writeIntegratedTerminal) {
+                void desktopApi.writeIntegratedTerminal({
+                  sessionId: response.sessionId,
+                  data: pendingInput,
+                });
+              }
+              fitAndResize();
+              terminal.focus();
+            };
             if (response.buffer) {
-              terminal.write(response.buffer);
-            }
-            const pendingInput = pendingInputRef.current.join("");
-            pendingInputRef.current = [];
-            if (pendingInput && desktopApi.writeIntegratedTerminal) {
-              void desktopApi.writeIntegratedTerminal({
-                sessionId: response.sessionId,
-                data: pendingInput,
+              replayingBufferedOutputRef.current = true;
+              terminal.write(response.buffer, () => {
+                replayingBufferedOutputRef.current = false;
+                finishAttach();
               });
+            } else {
+              finishAttach();
             }
-            fitAndResize();
-            terminal.focus();
           })
           .catch((error) => {
             if (disposed) return;
@@ -164,6 +177,7 @@ export function IntegratedTerminal({
       disposed = true;
       sessionIdRef.current = undefined;
       pendingInputRef.current = [];
+      replayingBufferedOutputRef.current = false;
       cleanupTerminal?.();
     };
   }, [cwd, desktopApi, threadKey]);

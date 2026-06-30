@@ -12,7 +12,9 @@ const xtermState = vi.hoisted(() => ({
     focus: ReturnType<typeof vi.fn>;
     handlers: Array<(data: string) => void>;
     emitData: (data: string) => void;
+    write: ReturnType<typeof vi.fn>;
   }>,
+  replayResponses: new Map<string, string>(),
 }));
 
 vi.mock("@xterm/xterm", () => ({
@@ -28,7 +30,13 @@ vi.mock("@xterm/xterm", () => ({
 
     loadAddon = vi.fn();
     open = vi.fn();
-    write = vi.fn();
+    write = vi.fn((data: string, callback?: () => void) => {
+      const response = xtermState.replayResponses.get(data);
+      if (response) {
+        this.emitData(response);
+      }
+      callback?.();
+    });
     dispose = vi.fn();
 
     onData(callback: (data: string) => void) {
@@ -59,6 +67,7 @@ class MockResizeObserver {
 describe("IntegratedTerminal", () => {
   beforeEach(() => {
     xtermState.instances.length = 0;
+    xtermState.replayResponses.clear();
     Object.defineProperty(window, "ResizeObserver", {
       configurable: true,
       value: MockResizeObserver,
@@ -201,6 +210,60 @@ describe("IntegratedTerminal", () => {
       expect(writeIntegratedTerminal).toHaveBeenCalledWith({
         sessionId: "session-1",
         data: "exit\r",
+      });
+    });
+  });
+
+  it("does not send terminal replies from replayed output back to the pty", async () => {
+    xtermState.replayResponses.set(
+      "saved terminal output",
+      "\u001b[>0;276;0c\u001b]10;rgb:cccc/cccc/cccc\u001b\\",
+    );
+    const writeIntegratedTerminal = vi.fn(async () => undefined);
+
+    render(
+      <IntegratedTerminal
+        desktopApi={{
+          createIntegratedTerminal: vi.fn(async () => ({
+            sessionId: "session-1",
+            threadKey: "codex:thread-a",
+            cwd: "/repo/a",
+            shell: "/bin/zsh",
+            buffer: "saved terminal output",
+          })),
+          writeIntegratedTerminal,
+          resizeIntegratedTerminal: vi.fn(async () => undefined),
+          onIntegratedTerminalOutput: vi.fn(() => () => undefined),
+          onIntegratedTerminalExit: vi.fn(() => () => undefined),
+          onIntegratedTerminalError: vi.fn(() => () => undefined),
+        }}
+        threadKey="codex:thread-a"
+        cwd="/repo/a"
+        height={260}
+        onHeightChange={() => undefined}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+    await waitFor(() => {
+      expect(xtermState.instances[0]!.write).toHaveBeenCalled();
+    });
+    expect(xtermState.instances[0]!.write.mock.calls[0]?.[0]).toBe(
+      "saved terminal output",
+    );
+
+    expect(writeIntegratedTerminal).not.toHaveBeenCalled();
+
+    act(() => {
+      xtermState.instances[0]!.emitData("echo still forwards\r");
+    });
+
+    await waitFor(() => {
+      expect(writeIntegratedTerminal).toHaveBeenCalledWith({
+        sessionId: "session-1",
+        data: "echo still forwards\r",
       });
     });
   });
