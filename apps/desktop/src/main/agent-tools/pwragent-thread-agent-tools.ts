@@ -76,6 +76,8 @@ function descriptionForOperation(
       return "Read a bounded page of another known PwrAgent thread's recent transcript and activity. Use search_threads first when the threadId is unknown.";
     case "get_thread_status":
       return "Read status and compact metadata for a known PwrAgent thread, including linked directories, repository groups, pull requests, pendingHandoffs when this thread has child handoffs that are still being created, and pendingWorkspaceMoves when this thread has same-thread workspace moves in progress.";
+    case "add_pull_request_reference":
+      return "Attach a pull request reference to a PwrAgent thread. Use this when a PR was created outside the thread's current working directory or automatic branch-based discovery will not see it. Accepts a full PR/MR URL, a full provider/org/repo/number identity, or a bare number when the thread has exactly one inferable repository.";
     case "mutate_thread":
       return "Mutate guarded PwrAgent thread settings such as the PwrAgent thread title, model settings, or execution mode. This does not rename any attached Telegram topic, Discord thread, or other messaging surface.";
   }
@@ -214,6 +216,47 @@ function inputSchemaForOperation(
             maximum: 20000,
             description:
               "Maximum characters retained in each text-like transcript field. Defaults to 4000.",
+          },
+        },
+      };
+    case "add_pull_request_reference":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["backend", "threadId"],
+        properties: {
+          backend: {
+            type: "string",
+          },
+          threadId: { type: "string" },
+          url: {
+            type: "string",
+            description:
+              "Full PR/MR URL, for example https://github.com/org/repo/pull/123 or https://gitlab.example.com/group/repo/-/merge_requests/123.",
+          },
+          provider: {
+            type: "string",
+            description:
+              "Forge host such as github.com, ghe.example.com, or gitlab.example.com. Required when url is omitted unless it can be inferred from the thread.",
+          },
+          org: {
+            type: "string",
+            description:
+              "Repo owner or group. For nested GitLab groups, use the slash-separated group path.",
+          },
+          repo: {
+            type: "string",
+          },
+          number: {
+            type: "integer",
+            minimum: 1,
+            description:
+              "PR/MR number. May be used alone only when the thread has exactly one inferable repository.",
+          },
+          title: {
+            type: "string",
+            description:
+              "Optional title to display until provider refresh hydrates current status.",
           },
         },
       };

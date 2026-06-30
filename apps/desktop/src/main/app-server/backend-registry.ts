@@ -122,6 +122,7 @@ import {
   type PendingThreadHandoffPhase,
   type PendingThreadHandoffSummary,
   type PendingThreadWorkspaceMoveSummary,
+  type AddPullRequestReferenceToolArgs,
   type ReadThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
@@ -158,6 +159,7 @@ import {
   type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
   type ThreadUsageLineRecord,
+  type PrSummary,
   type WorktreeSnapshotSummary,
   type UpdateDirectoryLaunchpadRequest,
   type UpdateDirectoryLaunchpadResponse,
@@ -170,6 +172,7 @@ import {
   buildThreadIdentityKey,
   isAcpBackendId,
   isAppServerBackendKind,
+  normalizePullRequestProvider,
   DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
   DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
   MAX_THREAD_INSPECTION_SEARCH_LIMIT,
@@ -1072,6 +1075,134 @@ function linkedDirectoriesActiveWorkspaceCoversCwd(params: {
   ].some((directory) =>
     linkedDirectoryActiveWorkspaceCoversCwd(directory, params.cwd),
   );
+}
+
+type PullRequestRepositoryRef = {
+  provider: string;
+  org: string;
+  repo: string;
+  urlBase?: string;
+};
+
+type PullRequestReferenceIdentity = PullRequestRepositoryRef & {
+  number: number;
+  url: string;
+};
+
+function parsePullRequestReferenceUrl(
+  value: string | undefined,
+): PullRequestReferenceIdentity | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return undefined;
+  }
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  const markerIndex = segments.findIndex(
+    (segment) => segment === "pull" || segment === "merge_requests",
+  );
+  if (markerIndex <= 0 || markerIndex >= segments.length - 1) {
+    return undefined;
+  }
+  const number = Number.parseInt(segments[markerIndex + 1] ?? "", 10);
+  if (!Number.isInteger(number) || number <= 0) {
+    return undefined;
+  }
+  const repoIndex = segments[markerIndex - 1] === "-"
+    ? markerIndex - 2
+    : markerIndex - 1;
+  if (repoIndex <= 0) {
+    return undefined;
+  }
+  const org = segments.slice(0, repoIndex).join("/");
+  const repo = segments[repoIndex];
+  if (!org || !repo) {
+    return undefined;
+  }
+  return {
+    provider: normalizePullRequestProvider(parsed.hostname),
+    org,
+    repo,
+    number,
+    url: trimmed,
+    urlBase: `${parsed.protocol}//${parsed.host}`,
+  };
+}
+
+function parseGitRemoteRepositoryUrl(
+  value: string | undefined,
+): PullRequestRepositoryRef | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const sshMatch = /^git@([^:]+):(.+)$/.exec(trimmed);
+  const rawPath = sshMatch ? sshMatch[2] : undefined;
+  const provider = sshMatch?.[1]
+    ? normalizePullRequestProvider(sshMatch[1])
+    : undefined;
+  if (rawPath && provider) {
+    return parseGitRemotePath(provider, rawPath, `https://${provider}`);
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parseGitRemotePath(
+      normalizePullRequestProvider(parsed.hostname),
+      parsed.pathname,
+      `${parsed.protocol}//${parsed.host}`,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function parseGitRemotePath(
+  provider: string,
+  rawPath: string,
+  urlBase: string,
+): PullRequestRepositoryRef | undefined {
+  const segments = rawPath
+    .replace(/^\/+/, "")
+    .replace(/\.git$/i, "")
+    .split("/")
+    .filter(Boolean);
+  if (segments.length < 2) {
+    return undefined;
+  }
+  const repo = segments.at(-1);
+  const org = segments.slice(0, -1).join("/");
+  if (!org || !repo) {
+    return undefined;
+  }
+  return { provider, org, repo, urlBase };
+}
+
+function pullRequestRepositoryKey(ref: PullRequestRepositoryRef): string {
+  return `${normalizePullRequestProvider(ref.provider)}/${ref.org.toLowerCase()}/${ref.repo.toLowerCase()}`;
+}
+
+function buildPullRequestReferenceUrl(ref: PullRequestRepositoryRef & { number: number }): string {
+  const provider = normalizePullRequestProvider(ref.provider);
+  const base = ref.urlBase?.replace(/\/+$/, "") || `https://${provider}`;
+  const encodedPath = [...ref.org.split("/"), ref.repo]
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  const marker = provider.includes("gitlab")
+    ? "-/merge_requests"
+    : "pull";
+  return `${base}/${encodedPath}/${marker}/${ref.number}`;
+}
+
+function normalizePositivePullRequestNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return undefined;
+  }
+  return value;
 }
 
 type PendingServerRequest = {
@@ -16932,6 +17063,10 @@ export class DesktopBackendRegistry {
       return await this.handleReadThreadInspectionRequest(request.args);
     }
 
+    if (request.operation === "add_pull_request_reference") {
+      return await this.handleAddPullRequestReferenceInspectionRequest(request.args);
+    }
+
     if (request.operation === "mutate_thread") {
       return await this.handleMutateThreadInspectionRequest(request.args);
     }
@@ -16943,6 +17078,239 @@ export class DesktopBackendRegistry {
         message: "Unsupported PwrAgent thread inspection operation.",
       },
     };
+  }
+
+  private async handleAddPullRequestReferenceInspectionRequest(
+    args: AddPullRequestReferenceToolArgs,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (!isAppServerBackendKind(args.backend)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "backend must be a known PwrAgent backend.",
+        },
+      };
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "threadId is required.",
+        },
+      };
+    }
+
+    const summary = await this.readThreadInspectionSummaryForMutation({
+      backend: args.backend,
+      threadId,
+    });
+    if (!summary) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: `Thread ${args.backend}:${threadId} was not found.`,
+        },
+      };
+    }
+
+    const resolved = await this.resolvePullRequestReferenceForThread(args, summary);
+    if (!resolved.ok) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: resolved.message,
+        },
+      };
+    }
+
+    const pr: PrSummary = {
+      provider: normalizePullRequestProvider(resolved.ref.provider),
+      org: resolved.ref.org,
+      repo: resolved.ref.repo,
+      number: resolved.ref.number,
+      ...(args.title?.trim() ? { title: args.title.trim() } : {}),
+      state: "pending",
+      checkState: "pending",
+      lifecycleState: "open",
+      reviewState: "ready_for_review",
+      mergeState: "unknown",
+      url: resolved.ref.url,
+    };
+
+    const overlay = await this.overlayStore.addThreadPullRequestReference({
+      backend: args.backend,
+      threadId,
+      pr,
+    });
+    const prs = overlay.prs ?? [];
+    await this.publishLocalEvent({
+      backend: args.backend,
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: {
+          threadId,
+          prs,
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      data: {
+        pullRequestReference: {
+          backend: args.backend,
+          threadId,
+          pr,
+          prs,
+        },
+      },
+    };
+  }
+
+  private async readThreadInspectionSummaryForMutation(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadInspectionSummary | undefined> {
+    const activeThreads = await this.listThreads({
+      backend: params.backend,
+      archived: false,
+      callerReason: "agent-thread-inspection",
+    });
+    let candidateThreads = activeThreads.filter(
+      (thread) => thread.id === params.threadId,
+    );
+    if (candidateThreads.length === 0) {
+      candidateThreads = (
+        await this.listThreads({
+          backend: params.backend,
+          archived: true,
+          callerReason: "agent-thread-inspection:archived",
+        })
+      ).filter((thread) => thread.id === params.threadId);
+    }
+    const [summary] = await this.enrichThreadInspectionSummaries(candidateThreads);
+    return summary;
+  }
+
+  private async resolvePullRequestReferenceForThread(
+    args: AddPullRequestReferenceToolArgs,
+    summary: ThreadInspectionSummary,
+  ): Promise<
+    | { ok: true; ref: PullRequestReferenceIdentity }
+    | { ok: false; message: string }
+  > {
+    const parsedUrl = parsePullRequestReferenceUrl(args.url);
+    const number = normalizePositivePullRequestNumber(args.number)
+      ?? parsedUrl?.number;
+    if (!number) {
+      return {
+        ok: false,
+        message: "number must be a positive integer unless url contains one.",
+      };
+    }
+
+    const provider = args.provider?.trim()
+      ? normalizePullRequestProvider(args.provider)
+      : parsedUrl?.provider;
+    const org = args.org?.trim() || parsedUrl?.org;
+    const repo = args.repo?.trim() || parsedUrl?.repo;
+    if (provider && org && repo) {
+      return {
+        ok: true,
+        ref: {
+          provider,
+          org,
+          repo,
+          number,
+          url: args.url?.trim() || buildPullRequestReferenceUrl({
+            provider,
+            org,
+            repo,
+            number,
+            urlBase: parsedUrl?.urlBase,
+          }),
+          urlBase: parsedUrl?.urlBase,
+        },
+      };
+    }
+
+    if (args.url?.trim() && !parsedUrl) {
+      return {
+        ok: false,
+        message:
+          "url must look like a GitHub/GHE /pull/<number> URL or a GitLab /merge_requests/<number> URL.",
+      };
+    }
+
+    const inferredRepositories = await this.inferPullRequestRepositories(summary);
+    if (inferredRepositories.length !== 1) {
+      return {
+        ok: false,
+        message:
+          inferredRepositories.length === 0
+            ? "provider/org/repo are required because no repository could be inferred from the thread."
+            : "provider/org/repo are required because the thread has multiple inferable repositories.",
+      };
+    }
+    const [inferred] = inferredRepositories;
+    return {
+      ok: true,
+      ref: {
+        ...inferred,
+        number,
+        url: buildPullRequestReferenceUrl({ ...inferred, number }),
+      },
+    };
+  }
+
+  private async inferPullRequestRepositories(
+    summary: ThreadInspectionSummary,
+  ): Promise<PullRequestRepositoryRef[]> {
+    const byKey = new Map<string, PullRequestRepositoryRef>();
+    for (const pr of summary.pullRequests ?? []) {
+      const ref = {
+        provider: normalizePullRequestProvider(pr.provider),
+        org: pr.org,
+        repo: pr.repo,
+        urlBase: parsePullRequestReferenceUrl(pr.url)?.urlBase,
+      };
+      byKey.set(pullRequestRepositoryKey(ref), ref);
+    }
+    await Promise.all(
+      summary.linkedDirectories.map(async (directory) => {
+        const cwd = directory.worktreePath?.trim() || directory.path.trim();
+        if (!cwd) {
+          return;
+        }
+        const ref = await this.readPullRequestRepositoryFromGitRemote(cwd);
+        if (ref) {
+          byKey.set(pullRequestRepositoryKey(ref), ref);
+        }
+      }),
+    );
+    return [...byKey.values()].sort((left, right) =>
+      pullRequestRepositoryKey(left).localeCompare(pullRequestRepositoryKey(right)),
+    );
+  }
+
+  private async readPullRequestRepositoryFromGitRemote(
+    cwd: string,
+  ): Promise<PullRequestRepositoryRef | undefined> {
+    try {
+      const result = await execFile(
+        "git",
+        ["-C", cwd, "config", "--get", "remote.origin.url"],
+        { env: process.env, timeout: 2_000 },
+      );
+      return parseGitRemoteRepositoryUrl(result.stdout);
+    } catch {
+      return undefined;
+    }
   }
 
   private async handleMutateThreadInspectionRequest(

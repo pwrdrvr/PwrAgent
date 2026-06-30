@@ -655,6 +655,40 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    addThreadPullRequestReference: async ({
+      backend,
+      threadId,
+      pr,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      pr: import("@pwragent/shared").PrSummary;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        prs: [
+          ...(current.prs ?? []).filter(
+            (candidate) =>
+              !(
+                candidate.provider.toLowerCase() === pr.provider.toLowerCase() &&
+                candidate.org.toLowerCase() === pr.org.toLowerCase() &&
+                candidate.repo.toLowerCase() === pr.repo.toLowerCase() &&
+                candidate.number === pr.number
+              ),
+          ),
+          pr,
+        ],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     upsertWorktreeSnapshot: async ({
       backend,
       threadId,
@@ -17870,6 +17904,186 @@ script = "printf setup"
       codexClient.listThreadsCalls
         .map((call) => call.params?.archived)
     ).toEqual([false]);
+
+    await registry.close();
+  });
+
+  it("lets an agent attach an explicit PR reference to a thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "target-thread",
+          title: "Cross repo work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 2000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": createAgentOverlay(),
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "add_pull_request_reference",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          url: "https://ghe.example.test/PwrDrvr/AgentKit/pull/456",
+          title: "Cross repo PR",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      pullRequestReference: {
+        backend: "codex",
+        threadId: "target-thread",
+        pr: {
+          provider: "ghe.example.test",
+          org: "PwrDrvr",
+          repo: "AgentKit",
+          number: 456,
+          title: "Cross repo PR",
+          url: "https://ghe.example.test/PwrDrvr/AgentKit/pull/456",
+        },
+        prs: [
+          {
+            provider: "ghe.example.test",
+            org: "PwrDrvr",
+            repo: "AgentKit",
+            number: 456,
+          },
+        ],
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("lets an agent attach a bare PR number when the thread has one PR repo", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "target-thread",
+          title: "Durable PR refs",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 2000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": createAgentOverlay(),
+        "codex:target-thread": {
+          backend: "codex",
+          threadId: "target-thread",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          prs: [
+            {
+              provider: "github.com",
+              org: "pwrdrvr",
+              repo: "PwrAgent",
+              number: 123,
+              title: "Earlier PR",
+              state: "passing",
+              checkState: "passing",
+              lifecycleState: "open",
+              reviewState: "ready_for_review",
+              mergeState: "unknown",
+              url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "add_pull_request_reference",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          number: 789,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.pullRequestReference.pr).toMatchObject({
+      provider: "github.com",
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 789,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/789",
+    });
+    expect(payload.pullRequestReference.prs.map(
+      (pr: { number: number }) => pr.number,
+    )).toEqual([123, 789]);
 
     await registry.close();
   });

@@ -330,6 +330,17 @@ const setThreadPullRequests = vi.fn(async (request: {
   prsFetchedAt: Date.now(),
   prsRefreshKey: request.refreshKey,
 }));
+const addThreadPullRequestReference = vi.fn(async (request: {
+  backend: "codex" | "grok";
+  threadId: string;
+  pr: PrSummary;
+}) => ({
+  backend: request.backend,
+  threadId: request.threadId,
+  executionMode: "default" as const,
+  extraLinkedDirectories: [],
+  prs: [request.pr],
+}));
 const readPrStatusCache = vi.fn(async () => ({}));
 const writePrStatusCacheEntries = vi.fn(async () => undefined);
 const readPrLookupCache = vi.fn(async () => ({}));
@@ -442,6 +453,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     getThreadOverlayStates,
     addLinkedDirectory,
     setThreadPullRequests,
+    addThreadPullRequestReference,
     readPrStatusCache,
     writePrStatusCacheEntries,
     readPrLookupCache,
@@ -530,6 +542,7 @@ describe("app server ipc", () => {
     getThreadOverlayStates.mockReset();
     getThreadOverlayStates.mockResolvedValue({});
     setThreadPullRequests.mockClear();
+    addThreadPullRequestReference.mockClear();
     readPrStatusCache.mockReset();
     readPrStatusCache.mockResolvedValue({});
     writePrStatusCacheEntries.mockClear();

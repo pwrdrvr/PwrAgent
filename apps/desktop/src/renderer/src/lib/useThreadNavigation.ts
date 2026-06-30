@@ -2063,6 +2063,8 @@ export function useThreadNavigation(
   pickAndRegisterDirectory: (
     preferredBackend?: AppServerBackendKind,
   ) => Promise<void>;
+  /** Existing-thread picker: OS dialog -> validate -> attach as an extra linked directory. */
+  pickAndAttachDirectoryToSelectedThread: () => Promise<void>;
   pickDirectoryError?: string;
   pickingDirectory: boolean;
   clearPickDirectoryError: () => void;
@@ -4104,6 +4106,46 @@ export function useThreadNavigation(
     [desktopApi, refresh],
   );
 
+  const pickAndAttachDirectoryToSelectedThread = useCallback(async (): Promise<void> => {
+    if (
+      !desktopApi?.pickDirectoryFromDisk ||
+      !desktopApi.attachDirectoryToThread
+    ) {
+      setPickDirectoryError("Desktop bridge is missing the directory picker.");
+      return;
+    }
+    if (!selectedThread) {
+      setPickDirectoryError("Select a thread before adding a directory.");
+      return;
+    }
+
+    setPickDirectoryError(undefined);
+    setPickingDirectory(true);
+    try {
+      const pick = await desktopApi.pickDirectoryFromDisk();
+      if (pick.canceled) {
+        return;
+      }
+      const result = await desktopApi.attachDirectoryToThread({
+        backend: selectedThread.source,
+        threadId: selectedThread.id,
+        path: pick.path,
+        preferredBackend: selectedThread.source,
+      });
+      if (!result.ok) {
+        setPickDirectoryError(result.message);
+        return;
+      }
+      await refresh(buildThreadIdentityKey(selectedThread.source, selectedThread.id));
+    } catch (error) {
+      setPickDirectoryError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setPickingDirectory(false);
+    }
+  }, [desktopApi, refresh, selectedThread]);
+
   const clearPickDirectoryError = useCallback((): void => {
     setPickDirectoryError(undefined);
   }, []);
@@ -5281,6 +5323,7 @@ export function useThreadNavigation(
     openDirectoryLaunchpad,
     openWorkspaceLaunchpad,
     pickAndRegisterDirectory,
+    pickAndAttachDirectoryToSelectedThread,
     pickDirectoryError,
     pickingDirectory,
     clearPickDirectoryError,

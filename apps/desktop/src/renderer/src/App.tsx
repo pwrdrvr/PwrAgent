@@ -907,6 +907,9 @@ function DesktopAppShell(props: {
     onPickAndRegisterDirectory: () => {
       void navigation.pickAndRegisterDirectory();
     },
+    onPickAndAttachDirectoryToThread: () => {
+      void navigation.pickAndAttachDirectoryToSelectedThread();
+    },
     onClearPickDirectoryError: navigation.clearPickDirectoryError,
     setExecutionModeError: navigation.setThreadExecutionModeError,
     setThreadModelSettingsError: navigation.setThreadModelSettingsError,

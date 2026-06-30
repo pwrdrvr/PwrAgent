@@ -14088,6 +14088,17 @@ textarea,
   cursor: default;
 }
 
+.composer__attach-directory-button {
+  gap: 6px;
+}
+
+.composer__inline-error {
+  max-width: min(320px, 100%);
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .composer__action-button--busy {
   min-width: 54px;
 }

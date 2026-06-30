@@ -1251,6 +1251,40 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async addThreadPullRequestReference(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    pr: PrSummary;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const normalizedPr = normalizePrSummary(params.pr);
+    const prKey = buildPullRequestStatusKey(normalizedPr);
+    const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys).filter(
+      (key) => key !== prKey,
+    );
+    const detachedPrs = mergePrSummariesByStatusKey(
+      undefined,
+      (current.detachedPrs ?? []).filter(
+        (pr) => buildPullRequestStatusKey(pr) !== prKey,
+      ),
+    );
+    const prs = mergePrSummariesByStatusKey(current.prs, [normalizedPr]) ?? [];
+    const nextState: ThreadOverlayState = {
+      ...current,
+      detachedPrKeys,
+      detachedPrs,
+      prs,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async readPrStatusCache(): Promise<Record<string, PrStatusCacheEntry>> {
     const rows = this.stateDb.raw
       .prepare(
@@ -2636,6 +2670,7 @@ export type OverlayStoreLike = Pick<
   | "readAllDirectoryOverlays"
   | "setThreadPullRequests"
   | "detachThreadPullRequest"
+  | "addThreadPullRequestReference"
   | "readPrStatusCache"
   | "writePrStatusCacheEntries"
   | "readPrLookupCache"

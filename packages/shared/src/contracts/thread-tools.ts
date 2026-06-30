@@ -43,6 +43,7 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "search_threads",
   "read_thread",
   "get_thread_status",
+  "add_pull_request_reference",
   "mutate_thread",
 ] as const;
 
@@ -139,6 +140,35 @@ export type MutateThreadToolArgs = {
    * Validate and report the requested mutations without applying them.
    */
   dryRun?: boolean;
+};
+
+export type AddPullRequestReferenceToolArgs = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /**
+   * Full PR/MR URL. Supports GitHub/GHE `/pull/<number>` and GitLab
+   * `/merge_requests/<number>` URL shapes.
+   */
+  url?: string;
+  /** Forge host, e.g. github.com, ghe.example.com, gitlab.example.com. */
+  provider?: string;
+  /** Repo owner or group. For nested GitLab groups, use the slash-separated group path. */
+  org?: string;
+  repo?: string;
+  /**
+   * PR/MR number. If provider/org/repo are omitted, the implementation may
+   * infer them when the thread has exactly one primary/linked repo.
+   */
+  number?: number;
+  /** Optional title to show until the next provider refresh can hydrate status. */
+  title?: string;
+};
+
+export type AddPullRequestReferenceResult = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  pr: PrSummary;
+  prs: PrSummary[];
 };
 
 export type ThreadMutationField =
@@ -354,6 +384,7 @@ export type PwrAgentThreadInspectionToolArgsByOperation = {
   search_threads: SearchThreadsToolArgs;
   read_thread: ReadThreadToolArgs;
   get_thread_status: GetThreadStatusToolArgs;
+  add_pull_request_reference: AddPullRequestReferenceToolArgs;
   mutate_thread: MutateThreadToolArgs;
 };
 
@@ -395,6 +426,9 @@ export type PwrAgentThreadInspectionResponse =
           }
         | {
             thread: ThreadStatusInspectionSummary;
+          }
+        | {
+            pullRequestReference: AddPullRequestReferenceResult;
           }
         | {
             mutation: ThreadMutationResult;
