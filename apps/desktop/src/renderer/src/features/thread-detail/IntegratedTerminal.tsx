@@ -106,6 +106,10 @@ export function IntegratedTerminal({
 
         const dataDisposable = terminal.onData((data) => {
           if (replayingBufferedOutputRef.current) {
+            if (isReplayGeneratedTerminalReply(data)) {
+              return;
+            }
+            pendingInputRef.current.push(data);
             return;
           }
           const sessionId = sessionIdRef.current;
@@ -309,3 +313,17 @@ function clampTerminalHeight(value: number): number {
     Math.max(TERMINAL_MIN_HEIGHT, Math.round(value)),
   );
 }
+
+function isReplayGeneratedTerminalReply(data: string): boolean {
+  return REPLAY_GENERATED_TERMINAL_REPLY_PATTERN.test(data);
+}
+
+const replayGeneratedTerminalReplyToken =
+  "(?:\\x1b\\[(?:\\?[0-9;]*|>[0-9;]*|[0-9;]*)c)" +
+  "|(?:\\x1b\\[[0-9]+;[0-9]+R)" +
+  "|(?:\\x1b\\[\\??[0-9;]+;[0-9]+\\$y)" +
+  "|(?:\\x1b\\](?:1[012]|4;[0-9]+);rgb:[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}(?:\\x07|\\x1b\\\\))";
+
+const REPLAY_GENERATED_TERMINAL_REPLY_PATTERN = new RegExp(
+  `^(?:${replayGeneratedTerminalReplyToken})+$`,
+);
