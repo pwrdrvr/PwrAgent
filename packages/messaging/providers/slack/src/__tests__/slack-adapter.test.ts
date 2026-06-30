@@ -48,6 +48,7 @@ function conversationKey(channel: MessagingChannelRef): string {
 }
 
 function fakeApi(spies: {
+  assistantStatuses?: Array<{ channelId: string; status: string; threadTs: string }>;
   conversations?: Record<string, string>;
   deleted?: Array<{ channel: string; ts: string }>;
   posted?: unknown[];
@@ -62,6 +63,9 @@ function fakeApi(spies: {
       team: "PwrDrvr",
       team_id: "T012ABCDEF0",
     }),
+    setAssistantThreadStatus: async (params) => {
+      spies.assistantStatuses?.push(params);
+    },
     conversationsInfo: async (params) => ({
       id: params.channel,
       name: spies.conversations?.[params.channel],
@@ -133,6 +137,115 @@ describe("SlackAdapter", () => {
     expect(adapter.capabilityProfile.actions?.maxActions).toBe(25);
     expect(adapter.capabilityProfile.actions?.supportsLayoutHints).toBe(true);
     expect(adapter.capabilityProfile.text.markdownDialect).toBe("slack-mrkdwn");
+  });
+
+  it("signals Slack Assistant thread status for active typing activity", async () => {
+    const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ assistantStatuses }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(adapter.deliver({
+      id: "activity-1",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1,
+      leaseMs: 10_000,
+      state: "active",
+      targetSurface: {
+        channel: "slack",
+        id: "binding-1",
+        state: {
+          opaque: {
+            channelId: "C012ABCDEF0",
+            threadTs: "1712023030.000000",
+          },
+        },
+      },
+    })).resolves.toMatchObject({
+      channel: "slack",
+      deliveredAt: 1_700_000_000_000,
+      outcome: "signaled",
+    });
+
+    expect(assistantStatuses).toEqual([{
+      channelId: "C012ABCDEF0",
+      status: "is working on your request...",
+      threadTs: "1712023030.000000",
+    }]);
+  });
+
+  it("clears Slack Assistant thread status for idle typing activity", async () => {
+    const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ assistantStatuses }),
+      socketClient: fakeSocket(),
+    });
+
+    await expect(adapter.deliver({
+      id: "activity-2",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1,
+      state: "idle",
+      targetSurface: {
+        channel: "slack",
+        id: "binding-1",
+        state: {
+          opaque: {
+            channelId: "C012ABCDEF0",
+            ts: "1712023030.000000",
+          },
+        },
+      },
+    })).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "signaled",
+    });
+
+    expect(assistantStatuses).toEqual([{
+      channelId: "C012ABCDEF0",
+      status: "",
+      threadTs: "1712023030.000000",
+    }]);
+  });
+
+  it("discards Slack typing activity when no thread timestamp is available", async () => {
+    const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ assistantStatuses }),
+      socketClient: fakeSocket(),
+    });
+
+    await expect(adapter.deliver({
+      id: "activity-3",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1,
+      state: "active",
+      targetSurface: {
+        channel: "slack",
+        id: "binding-1",
+        state: {
+          opaque: {
+            channelId: "C012ABCDEF0",
+          },
+        },
+      },
+    })).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "discarded",
+    });
+
+    expect(assistantStatuses).toEqual([]);
   });
 
   it("returns structured rate-limit feedback when Slack rejects a send", async () => {

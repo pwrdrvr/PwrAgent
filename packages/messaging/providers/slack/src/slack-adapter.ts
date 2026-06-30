@@ -63,6 +63,12 @@ export type SlackProviderLogger = {
 };
 
 export type SlackApi = {
+  setAssistantThreadStatus?(params: {
+    channelId: string;
+    loadingMessages?: string[];
+    status: string;
+    threadTs: string;
+  }): Promise<void>;
   authTest(): Promise<SlackAuthTestResult>;
   conversationsInfo?(params: { channel: string }): Promise<SlackConversationInfo | undefined>;
   conversationsReplies?(params: {
@@ -404,14 +410,10 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
-    const deliveredAt = this.now();
     if (intent.kind === "activity") {
-      return {
-        outcome: "discarded",
-        channel: this.channel,
-        deliveredAt,
-      };
+      return await this.deliverActivity(intent);
     }
+    const deliveredAt = this.now();
     if (intent.kind === "dismiss") {
       return await this.deliverDismiss(intent);
     }
@@ -612,6 +614,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     });
     const routingState = this.routingStateForChannel(channel, {
       teamId: ids.teamId,
+      ts: ids.ts,
     });
     const rawText = event.text ?? "";
     const strippedText = stripBotMention(rawText, this.botUserId);
@@ -776,6 +779,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     });
     const routingState = this.routingStateForChannel(channel, {
       teamId: ids.teamId,
+      ...(body.thread_ts ? { ts: ids.ts } : {}),
     });
     if (!this.authorizeInbound({
       actor,
@@ -1420,6 +1424,48 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
   }
 
+  private async deliverActivity(
+    intent: MessagingSurfaceIntent & { kind: "activity" },
+  ): Promise<MessagingDeliveryResult> {
+    if (intent.activity !== "typing") {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "unsupported",
+      };
+    }
+
+    const target = this.resolveTarget(intent);
+    const threadTs = target?.threadTs ?? target?.ts;
+    if (!target || !threadTs || !this.api.setAssistantThreadStatus) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
+    }
+
+    try {
+      await this.api.setAssistantThreadStatus({
+        channelId: target.channelId,
+        status: intent.state === "active" ? "is working on your request..." : "",
+        threadTs,
+      });
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "signaled",
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: error instanceof Error ? error.message : String(error),
+        outcome: "failed",
+      };
+    }
+  }
+
   private isDuplicateMessageEvent(
     event: SlackMessageEvent,
     ids: { channelId: string; teamId?: string; ts: string; userId: string },
@@ -1477,6 +1523,27 @@ export function createSlackApi(botToken: string): SlackApi {
   return {
     async authTest() {
       return (await client.auth.test()) as SlackAuthTestResult;
+    },
+    async setAssistantThreadStatus(params) {
+      const assistant = client.assistant as unknown as {
+        threads?: {
+          setStatus(input: {
+            channel_id: string;
+            loading_messages?: string[];
+            status: string;
+            thread_ts: string;
+          }): Promise<unknown>;
+        };
+      };
+      if (!assistant.threads?.setStatus) {
+        throw new Error("Slack assistant.threads.setStatus is unavailable");
+      }
+      await assistant.threads.setStatus({
+        channel_id: params.channelId,
+        ...(params.loadingMessages ? { loading_messages: params.loadingMessages } : {}),
+        status: params.status,
+        thread_ts: params.threadTs,
+      });
     },
     async conversationsInfo(params) {
       const response = await client.conversations.info(params);
