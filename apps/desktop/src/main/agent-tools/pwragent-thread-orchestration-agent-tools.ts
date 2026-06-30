@@ -99,7 +99,7 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "handoff_task":
-      return "Create and start a new PwrAgent Agent thread for a delegated task. Use this when the user asks to hand off or delegate work to a new thread. Omitted settings inherit from the invoking Agent turn. Clean new-thread handoff is the default; use seedMode=fork only when the user asks to fork this thread. Workspace-backed handoffs default to workspaceMode=new_worktree. Use groupingMode=subthread for related follow-up work, backports, or forward-ports that should stay grouped under the current thread; combine it with workspaceMode=new_worktree and branchName=<existing base ref> such as origin/main when the related work should start from another branch. Use workspaceMode=same_workspace only when the user explicitly asks to share the caller's exact workspace. Use workspaceMode=project_local only when the delegated thread should run in the project's primary checkout instead of a managed worktree. Handoff startup can take several minutes while a worktree or Codex environment is prepared; if this call appears slow or uncertain, do not call handoff_task again. Use search_threads or get_thread_status and inspect pendingHandoffs until a threadId appears or the handoff reports failed.";
+      return "Create and start a new PwrAgent Agent thread for a delegated task. Use this when the user asks to hand off or delegate work to a new thread. Omitted settings inherit from the invoking Agent turn. Clean new-thread handoff is the default; use seedMode=fork only when the user asks to fork this thread. Workspace-backed handoffs default to workspaceMode=new_worktree. Use cwd=<source project/repo path> when the delegated thread should be created in a different project than the current thread. Use groupingMode=subthread for related follow-up work, backports, or forward-ports that should stay grouped under the current thread; combine it with workspaceMode=new_worktree and branchName=<existing base ref> such as origin/main when the related work should start from another branch. Use workspaceMode=same_workspace only when the user explicitly asks to share the caller's exact workspace. Use workspaceMode=project_local only when the delegated thread should run in the project's primary checkout instead of a managed worktree. Handoff startup can take several minutes while a worktree or Codex environment is prepared; if this call appears slow or uncertain, do not call handoff_task again. Use search_threads or get_thread_status and inspect pendingHandoffs until a threadId appears or the handoff reports failed.";
     case "move_thread_workspace":
       return "Move the current PwrAgent thread runtime workspace after the invoking turn reaches a terminal boundary. Use this when the user asks to continue this same thread from an isolated worktree instead of creating a child handoff thread. The operation is path-keyed: pass sourcePath when the thread has multiple linked directories or when the intended workspace is not obvious. The tool returns a pending workspaceMoveId and stop-and-wait guidance; after the current turn ends, PwrAgent performs the move, updates future-turn cwd metadata, and starts a same-thread continuation with the result. Do not keep editing after a successful call in the invoking turn; wait for the continuation or inspect get_thread_status pendingWorkspaceMoves.";
     case "send_message_to_thread":
@@ -148,7 +148,12 @@ function inputSchemaForOperation(
             type: "string",
             enum: HANDOFF_TASK_WORKSPACE_MODES,
             description:
-              "`new_worktree` requests an isolated Git worktree and is the default for workspace-backed handoffs; set branchName to an existing base ref such as `origin/master` when the user asks for a specific source branch. `same_workspace` shares the caller's exact cwd and is valid only with groupingMode=subthread. `project_local` uses the project's primary/local checkout. `none` allows a no-workspace thread. `same` is a legacy alias for `same_workspace`.",
+              "`new_worktree` requests an isolated Git worktree and is the default for workspace-backed handoffs; set branchName to an existing base ref such as `origin/master` when the user asks for a specific source branch. `same_workspace` shares the selected cwd and is valid only with groupingMode=subthread. `project_local` uses the selected project's primary/local checkout. `none` allows a no-workspace thread. `same` is a legacy alias for `same_workspace`.",
+          },
+          cwd: {
+            type: "string",
+            description:
+              "Optional source project/repo directory for workspace-backed handoffs. Use this when creating the thread in another project; omitted means use the invoking thread's current workspace.",
           },
           messagingAttachment: {
             type: "string",
@@ -317,6 +322,7 @@ function normalizeHandoffTaskArgs(
           ) as HandoffTaskWorkspaceMode,
         }
       : {}),
+    ...(readTrimmedString(args.cwd) ? { cwd: readTrimmedString(args.cwd) } : {}),
     ...(readChoice(
       args.messagingAttachment,
       HANDOFF_TASK_MESSAGING_ATTACHMENT_MODES,

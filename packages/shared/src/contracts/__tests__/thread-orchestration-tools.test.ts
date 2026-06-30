@@ -40,6 +40,7 @@ describe("thread orchestration tool contracts", () => {
       seedMode: "fork",
       groupingMode: "subthread",
       workspaceMode: "new_worktree",
+      cwd: "/Users/test/OtherRepo",
       messagingAttachment: "new_child",
       fastMode: true,
     } satisfies HandoffTaskToolArgs;
@@ -48,6 +49,7 @@ describe("thread orchestration tool contracts", () => {
       seedMode: "fork",
       groupingMode: "subthread",
       workspaceMode: "new_worktree",
+      cwd: "/Users/test/OtherRepo",
       messagingAttachment: "new_child",
     });
   });

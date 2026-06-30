@@ -16036,6 +16036,270 @@ script = "printf setup"
     await rm(root, { recursive: true, force: true });
   });
 
+  it("creates new-worktree handoffs from an explicit cwd in another project", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-explicit-cwd-"));
+    const scratchPath = path.join(root, "scratch-workspace");
+    const repoPath = path.join(root, "other-project");
+    try {
+      await mkdir(scratchPath, { recursive: true });
+      await mkdir(repoPath, { recursive: true });
+      try {
+        await git(repoPath, ["init", "-b", "main"]);
+      } catch {
+        await git(repoPath, ["init"]);
+        await git(repoPath, ["checkout", "-b", "main"]);
+      }
+      await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
+      await git(repoPath, ["add", "README.md"]);
+      await git(repoPath, [
+        "-c",
+        "user.name=PwrAgent Tests",
+        "-c",
+        "user.email=tests@pwragent.local",
+        "commit",
+        "-m",
+        "initial",
+      ]);
+      await git(repoPath, ["branch", "develop"]);
+
+      const scratchDirectory = {
+        id: expectedDir(scratchPath),
+        kind: "local" as const,
+        label: "scratch-workspace",
+        path: expectedDir(scratchPath),
+      };
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+        threads: [
+          {
+            id: "ordinary-thread",
+            title: "Parent Thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [scratchDirectory],
+            updatedAt: 1000,
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        }),
+        gitDirectoryService: new GitDirectoryService({
+          resolveWorktreeStorage: () => "in-repo",
+        }),
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:ordinary-thread": {
+              backend: "codex",
+              threadId: "ordinary-thread",
+              executionMode: "full-access",
+              codexEnvironmentRuntime: {
+                environmentId: "parent-env",
+                environmentName: "Parent Env",
+                executionTarget: "local",
+                cwd: scratchPath,
+                setupStatus: "completed",
+              },
+              extraLinkedDirectories: [scratchDirectory],
+            },
+          },
+        }),
+        threadTitleGenerationService: null,
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "ordinary-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId: "call-1",
+          requestId: "call-1",
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: {
+            task: "Investigate the export failure in the other project.",
+            title: "Other project export failure",
+            workspaceMode: "new_worktree",
+            cwd: repoPath,
+            branchName: "develop",
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(response).toMatchObject({ success: true });
+      expect(codexClient.lastStartThreadParams?.cwd).toEqual(
+        expect.stringContaining(expectedDir(path.join(repoPath, ".worktrees"))),
+      );
+      expect(codexClient.lastStartThreadParams?.cwd).not.toContain(
+        expectedDir(scratchPath),
+      );
+      expect(codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toBeUndefined();
+      const payload = JSON.parse(
+        (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+      );
+      expect(payload.workspace).toMatchObject({
+        mode: "new_worktree",
+        cwd: codexClient.lastStartThreadParams?.cwd,
+        branch: "HEAD",
+        linkedDirectory: {
+          kind: "worktree",
+          label: "other-project",
+          path: expectedDir(await realpath(repoPath)),
+          worktreePath: codexClient.lastStartThreadParams?.cwd,
+        },
+        git: {
+          kind: "git_worktree",
+          worktreeCreationAvailable: true,
+        },
+      });
+      expect(payload.inheritedSettings).not.toHaveProperty(
+        "codexEnvironmentRuntime",
+      );
+
+      await registry.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not inherit a project Codex environment runtime for no-workspace handoffs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-none-env-"));
+    const repoPath = path.join(root, "search-compare");
+    const scratchPath = path.join(root, "profiles", "sstk", "projects", "2026-06-30-c2acd2");
+    try {
+      await mkdir(repoPath, { recursive: true });
+      try {
+        await git(repoPath, ["init", "-b", "main"]);
+      } catch {
+        await git(repoPath, ["init"]);
+        await git(repoPath, ["checkout", "-b", "main"]);
+      }
+      await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
+      await git(repoPath, ["add", "README.md"]);
+      await git(repoPath, [
+        "-c",
+        "user.name=PwrAgent Tests",
+        "-c",
+        "user.email=tests@pwragent.local",
+        "commit",
+        "-m",
+        "initial",
+      ]);
+
+      const sourceRuntime: CodexThreadEnvironmentRuntime = {
+        environmentId: "environment",
+        environmentName: "search-compare",
+        executionTarget: "local",
+        cwd: repoPath,
+        setupStatus: "completed",
+        setupCommand: "pnpm install",
+      };
+      const linkedDirectory = {
+        id: expectedDir(repoPath),
+        kind: "local" as const,
+        label: "search-compare",
+        path: expectedDir(repoPath),
+      };
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+        threads: [
+          {
+            id: "ordinary-thread",
+            title: "Parent Thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [linkedDirectory],
+            updatedAt: 1000,
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        createScratchProjectDirectory: async () => scratchPath,
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        }),
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:ordinary-thread": {
+              backend: "codex",
+              threadId: "ordinary-thread",
+              executionMode: "full-access",
+              codexEnvironmentRuntime: sourceRuntime,
+              extraLinkedDirectories: [linkedDirectory],
+            },
+          },
+        }),
+        threadTitleGenerationService: null,
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "ordinary-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId: "call-1",
+          requestId: "call-1",
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: {
+            task: "Use /Users/huntharo/GIPHY/giphy-services from the prompt only.",
+            title: "Prompt-only target",
+            workspaceMode: "none",
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(response).toMatchObject({ success: true });
+      expect(codexClient.lastStartThreadParams).toMatchObject({
+        cwd: scratchPath,
+      });
+      expect(codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toBeUndefined();
+      const payload = JSON.parse(
+        (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+      );
+      expect(payload.workspace).toMatchObject({
+        mode: "none",
+        cwd: scratchPath,
+        git: {
+          kind: "non_git",
+          worktreeCreationAvailable: false,
+        },
+      });
+      expect(payload.inheritedSettings).not.toHaveProperty(
+        "codexEnvironmentRuntime",
+      );
+
+      await registry.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects new-worktree handoffs when workspace preparation falls back to the source cwd", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-fallback-"));
     try {

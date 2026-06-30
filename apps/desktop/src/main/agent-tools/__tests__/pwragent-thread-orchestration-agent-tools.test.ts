@@ -27,6 +27,9 @@ describe("pwragent thread orchestration agent tools", () => {
             workspaceMode: expect.objectContaining({
               enum: ["same", "same_workspace", "project_local", "new_worktree", "none"],
             }),
+            cwd: expect.objectContaining({
+              description: expect.stringContaining("another project"),
+            }),
             branchName: expect.objectContaining({
               description: expect.stringContaining("existing base branch/ref"),
             }),
@@ -236,6 +239,7 @@ describe("pwragent thread orchestration agent tools", () => {
           seedMode: "fork",
           groupingMode: "subthread",
           workspaceMode: "same_workspace",
+          cwd: " /Users/test/OtherRepo ",
           messagingAttachment: "auto",
         },
       },
@@ -254,6 +258,7 @@ describe("pwragent thread orchestration agent tools", () => {
         seedMode: "fork",
         groupingMode: "subthread",
         workspaceMode: "same_workspace",
+        cwd: "/Users/test/OtherRepo",
         messagingAttachment: "auto",
       },
     });

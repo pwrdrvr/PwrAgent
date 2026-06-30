@@ -2,6 +2,7 @@ import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { DynamicToolSpec as CodexDynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
@@ -980,6 +981,44 @@ async function readCurrentGitBranch(sourcePath: string): Promise<string | undefi
   );
   const branch = result.stdout.trim();
   return branch || undefined;
+}
+
+function normalizeHandoffTaskCwd(cwd: string | undefined): string | undefined {
+  const trimmed = cwd?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed === "~") {
+    return os.homedir();
+  }
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return path.join(os.homedir(), trimmed.slice(2));
+  }
+  return trimmed;
+}
+
+function sameResolvedPath(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
+  if (!left?.trim() || !right?.trim()) {
+    return false;
+  }
+  return path.resolve(left) === path.resolve(right);
+}
+
+function shouldInheritHandoffCodexEnvironmentRuntime(params: {
+  callerCwd?: string;
+  requestedCwd?: string;
+  workspaceMode: HandoffTaskWorkspaceMode;
+}): boolean {
+  if (params.workspaceMode === "none") {
+    return false;
+  }
+  return (
+    !params.requestedCwd ||
+    sameResolvedPath(params.requestedCwd, params.callerCwd)
+  );
 }
 
 type PendingServerRequest = {
@@ -15069,11 +15108,13 @@ export class DesktopBackendRegistry {
       callerReason: "agent-handoff",
       threadId: sourceThreadId,
     });
-    const sourceCwd = await this.resolveThreadEnvironmentCwd(
+    const callerCwd = await this.resolveThreadEnvironmentCwd(
       sourceBackend,
       sourceThreadId,
       sourceOverlay,
     );
+    const requestedCwd = normalizeHandoffTaskCwd(request.args.cwd);
+    const sourceCwd = requestedCwd ?? callerCwd;
     const sourceLinkedDirectory = this.resolveHandoffLinkedDirectory({
       cwd: sourceCwd,
       overlay: sourceOverlay,
@@ -15134,7 +15175,13 @@ export class DesktopBackendRegistry {
       fastMode: request.args.fastMode ?? sourceOverlay.fastMode,
       approvalPolicy: request.args.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.args.sandbox ?? modeSettings.sandbox,
-      codexEnvironmentRuntime: sourceOverlay.codexEnvironmentRuntime,
+      codexEnvironmentRuntime: shouldInheritHandoffCodexEnvironmentRuntime({
+        callerCwd,
+        requestedCwd,
+        workspaceMode,
+      })
+        ? sourceOverlay.codexEnvironmentRuntime
+        : undefined,
     };
     const agent = {
       name: title,

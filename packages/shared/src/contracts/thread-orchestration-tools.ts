@@ -84,6 +84,11 @@ export type HandoffTaskToolArgs = {
   seedMode?: HandoffTaskSeedMode;
   groupingMode?: HandoffTaskGroupingMode;
   workspaceMode?: HandoffTaskWorkspaceMode;
+  /**
+   * Optional source project/repository directory for workspace-backed handoffs.
+   * When omitted, the invoking thread's current workspace is used.
+   */
+  cwd?: string;
   messagingAttachment?: HandoffTaskMessagingAttachmentMode;
   backend?: AppServerBackendKind;
   model?: string;
