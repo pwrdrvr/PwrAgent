@@ -441,11 +441,13 @@ function buildReviewBranchOptions(params: {
   thread?: NavigationThreadSummary;
 }): string[] {
   const candidates = [
+    params.directory?.gitStatus?.defaultBranch,
+    params.directory?.gitStatus?.upstreamBranch?.replace(/^origin\//, ""),
+    ...(params.directory?.gitStatus?.baseBranches ?? []),
     "main",
     params.thread?.gitBranch,
     params.thread?.observedGitBranch,
     params.directory?.gitStatus?.currentBranch,
-    params.directory?.gitStatus?.upstreamBranch?.replace(/^origin\//, ""),
     ...(params.directory?.gitStatus?.branches ?? []),
   ];
   const options = new Set<string>();
@@ -476,6 +478,7 @@ function createReviewConfig(params: {
     branch: buildReviewBranchOptions(params)[0] ?? "main",
     commit: "",
     customInstructions: "",
+    target: "baseBranch",
   };
 }
 
@@ -1502,6 +1505,7 @@ export function Composer(props: ComposerProps) {
   const inputRef = useRef<ComposerInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
+  const reviewBranchInputRef = useRef<HTMLInputElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
   const confirmedActiveTurnIdRef = useRef<string | undefined>(undefined);
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
@@ -2453,6 +2457,14 @@ export function Composer(props: ComposerProps) {
   );
 
   useEffect(() => {
+    if (!isReviewComposerOpen || reviewConfig?.target !== "baseBranch") {
+      return;
+    }
+    reviewBranchInputRef.current?.focus();
+    reviewBranchInputRef.current?.select();
+  }, [isReviewComposerOpen, reviewConfig?.target]);
+
+  useEffect(() => {
     if (!supportsReview && reviewConfig) {
       setReviewConfig(undefined);
     }
@@ -3202,6 +3214,14 @@ export function Composer(props: ComposerProps) {
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
+  const submitConfiguredReviewComposer = async (): Promise<void> => {
+    const configuredReviewCommand = buildConfiguredReviewCommand(reviewConfig);
+    if (!configuredReviewCommand) {
+      return;
+    }
+    await submitReviewCommand(configuredReviewCommand);
+  };
+
   const buildTurnPayload = (
     textDraft: string,
     attachments: ComposerImageAttachment[],
@@ -3644,19 +3664,14 @@ export function Composer(props: ComposerProps) {
 
     if (reviewCommand) {
       if (isBareReviewCommand) {
-        const nextReviewConfig =
+        setReviewConfig(
           reviewConfig ??
-          createReviewConfig({
-            directory: props.directory,
-            thread: props.thread,
-          });
-        const configuredReviewCommand = buildConfiguredReviewCommand(nextReviewConfig);
-        if (!configuredReviewCommand) {
-          setReviewConfig(nextReviewConfig);
-          setSendError(undefined);
-          return;
-        }
-        await submitReviewCommand(configuredReviewCommand);
+            createReviewConfig({
+              directory: props.directory,
+              thread: props.thread,
+            })
+        );
+        setSendError(undefined);
         return;
       }
 
@@ -5140,7 +5155,11 @@ export function Composer(props: ComposerProps) {
         data-composer-implementation="tiptap-wysiwyg-markdown-chips"
         onSubmit={(event) => {
           event.preventDefault();
-          void submitTurn();
+          if (isReviewComposerOpen) {
+            void submitConfiguredReviewComposer();
+          } else {
+            void submitTurn();
+          }
         }}
       >
         {/* Issue #240: removed the visible "Reply" / "New thread" /
@@ -5378,6 +5397,7 @@ export function Composer(props: ComposerProps) {
               <label className="composer__review-field">
                 <span>Base branch</span>
                 <input
+                  ref={reviewBranchInputRef}
                   className="composer__review-input"
                   list="composer-review-branches"
                   value={reviewConfig.branch}
@@ -5461,12 +5481,7 @@ export function Composer(props: ComposerProps) {
                 className="composer__primary-action"
                 disabled={!buildConfiguredReviewCommand(reviewConfig)}
                 onClick={() => {
-                  const configuredReviewCommand =
-                    buildConfiguredReviewCommand(reviewConfig);
-                  if (!configuredReviewCommand) {
-                    return;
-                  }
-                  void submitReviewCommand(configuredReviewCommand);
+                  void submitConfiguredReviewComposer();
                 }}
               >
                 Start review

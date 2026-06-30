@@ -4876,19 +4876,26 @@ describe("Composer", () => {
 
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Reply")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Base branch/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Base branch")).toHaveFocus();
+    });
     expect(startReview).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: /Base branch/i }));
-    fireEvent.change(screen.getByLabelText("Base branch"), {
-      target: { value: "release" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    const form = reviewTarget.closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
 
     await waitFor(() => {
       expect(startReview).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
-        target: { type: "baseBranch", branch: "release" },
+        target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
       });
     });
