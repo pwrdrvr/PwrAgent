@@ -29,7 +29,7 @@ type LinkedProjectsPanelProps = {
 export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
   const [attachError, setAttachError] = useState<string>();
   const [attaching, setAttaching] = useState(false);
-  const directories = props.thread.linkedDirectories;
+  const directories = dedupeLinkedProjectDirectories(props.thread.linkedDirectories);
   const prs = props.thread.prs ?? [];
   const branch = props.thread.gitBranch;
   const canAttachDirectory = Boolean(
@@ -161,4 +161,28 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
       ) : null}
     </section>
   );
+}
+
+function dedupeLinkedProjectDirectories(
+  directories: NavigationThreadSummary["linkedDirectories"],
+): NavigationThreadSummary["linkedDirectories"] {
+  const seen = new Set<string>();
+  const deduped: NavigationThreadSummary["linkedDirectories"] = [];
+  for (const directory of directories) {
+    const key = [
+      directory.kind,
+      normalizeLinkedProjectPath(directory.path),
+      normalizeLinkedProjectPath(directory.worktreePath ?? ""),
+    ].join("\0");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(directory);
+  }
+  return deduped;
+}
+
+function normalizeLinkedProjectPath(value: string): string {
+  return value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
 }

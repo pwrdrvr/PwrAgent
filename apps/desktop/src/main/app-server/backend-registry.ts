@@ -852,6 +852,31 @@ function normalizeLinkedDirectoryKind(
   return directory;
 }
 
+function linkedDirectoryIdentityKey(directory: LinkedDirectorySummary): string {
+  const normalized = normalizeLinkedDirectoryKind(directory);
+  const repositoryPath = path.resolve(normalized.path);
+  const worktreePath = normalized.worktreePath?.trim()
+    ? path.resolve(normalized.worktreePath)
+    : "";
+  return `${normalized.kind}:${repositoryPath}:${worktreePath}`;
+}
+
+function dedupeLinkedDirectoriesByNormalizedIdentity(
+  directories: LinkedDirectorySummary[],
+): LinkedDirectorySummary[] {
+  const seen = new Set<string>();
+  const deduped: LinkedDirectorySummary[] = [];
+  for (const directory of directories) {
+    const key = linkedDirectoryIdentityKey(directory);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(directory);
+  }
+  return deduped;
+}
+
 function pendingStartedThreadMatchesFilter(
   thread: AppServerThreadSummary,
   filter: string | undefined,
@@ -5873,7 +5898,7 @@ export class DesktopBackendRegistry {
         return {
           ...thread,
           executionMode,
-          linkedDirectories,
+          linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(linkedDirectories),
           codexEnvironmentOptions,
         };
       }),
@@ -7387,9 +7412,13 @@ export class DesktopBackendRegistry {
         ...modelSettings,
         acpRuntime,
         codexEnvironmentRuntime,
-        linkedDirectories: (
-          resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd)
-        ).map(normalizeLinkedDirectoryKind),
+        linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+          (
+            resolvedLinkedDirectories?.length
+              ? resolvedLinkedDirectories
+              : buildLocalLinkedDirectory(cwd)
+          ).map(normalizeLinkedDirectoryKind),
+        ),
         gitBranch,
       },
     );
@@ -7637,7 +7666,9 @@ export class DesktopBackendRegistry {
         ...(forkedCodexEnvironmentRuntime
           ? { codexEnvironmentRuntime: forkedCodexEnvironmentRuntime }
           : {}),
-        linkedDirectories: linkedDirectories.map(normalizeLinkedDirectoryKind),
+        linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+          linkedDirectories.map(normalizeLinkedDirectoryKind),
+        ),
         gitBranch,
       });
 
@@ -11835,6 +11866,9 @@ export class DesktopBackendRegistry {
           reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
           serviceTier: overlay?.serviceTier ?? thread.serviceTier,
           fastMode: overlay?.fastMode ?? thread.fastMode,
+          linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+            thread.linkedDirectories,
+          ),
           codexEnvironmentOptions,
         };
       }),
@@ -18768,6 +18802,9 @@ function toThreadInspectionSummary(
   overlay: ThreadOverlayState | undefined,
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
+  const linkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity(
+    thread.linkedDirectories,
+  );
   return {
     backend: thread.source,
     threadId: thread.id,
@@ -18786,8 +18823,8 @@ function toThreadInspectionSummary(
     fastMode: thread.fastMode,
     gitWorkingState: thread.gitWorkingState,
     ...(messagingBindings?.length ? { messagingBindings } : {}),
-    linkedDirectories: thread.linkedDirectories,
-    linkedRepositories: summarizeLinkedRepositories(thread.linkedDirectories),
+    linkedDirectories,
+    linkedRepositories: summarizeLinkedRepositories(linkedDirectories),
     ...(overlay?.prs?.length ? { pullRequests: overlay.prs } : {}),
   };
 }
@@ -18797,6 +18834,9 @@ function toThreadInspectionSummaryFromSearchResult(
   overlay: ThreadOverlayState | undefined,
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
+  const linkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity(
+    result.linkedDirectories,
+  );
   return {
     backend: result.backend,
     threadId: result.threadId,
@@ -18809,8 +18849,8 @@ function toThreadInspectionSummaryFromSearchResult(
     agent: overlay?.agent,
     handoffOrigin: overlay?.handoffOrigin,
     model: result.model,
-    linkedDirectories: result.linkedDirectories,
-    linkedRepositories: summarizeLinkedRepositories(result.linkedDirectories),
+    linkedDirectories,
+    linkedRepositories: summarizeLinkedRepositories(linkedDirectories),
     ...(overlay?.prs?.length ? { pullRequests: overlay.prs } : {}),
     ...(messagingBindings?.length ? { messagingBindings } : {}),
     score: result.score,

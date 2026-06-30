@@ -1632,6 +1632,45 @@ describe("ThreadContextPanel", () => {
     );
   });
 
+  it("deduplicates identical linked projects while preserving distinct worktrees", () => {
+    renderPanel({
+      activeTab: "projects",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        linkedDirectories: [
+          {
+            id: "repo-dir",
+            kind: "worktree",
+            label: "PwrAgent",
+            path: "/Users/huntharo/github/PwrAgent",
+            worktreePath:
+              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+          },
+          {
+            id: "repo-dir-duplicate",
+            kind: "worktree",
+            label: "PwrAgent",
+            path: "/Users/huntharo/github/PwrAgent",
+            worktreePath:
+              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+          },
+          {
+            id: "repo-dir-other-worktree",
+            kind: "worktree",
+            label: "PwrAgent Other",
+            path: "/Users/huntharo/github/PwrAgent",
+            worktreePath:
+              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-other",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getAllByLabelText("Path for PwrAgent")).toHaveLength(1);
+    expect(screen.getByLabelText("Path for PwrAgent Other")).toBeInTheDocument();
+  });
+
   it("shows regular and Spark rate limits together on the Provider status tab", () => {
     renderPanel({ activeTab: "providers", pinned: true });
 

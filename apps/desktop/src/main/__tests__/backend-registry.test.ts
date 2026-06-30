@@ -6104,6 +6104,71 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("deduplicates identical linked directories in thread summaries", async () => {
+    const repoPath = "/Users/huntharo/projects/PwrAgent";
+    const firstWorktreePath = "/Users/huntharo/.codex/worktrees/wt1/PwrAgent";
+    const secondWorktreePath = "/Users/huntharo/.codex/worktrees/wt2/PwrAgent";
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Transient duplicate",
+          titleSource: "explicit",
+          source: "codex",
+          projectKey: firstWorktreePath,
+          createdAt: 1_000,
+          updatedAt: 1_000,
+          linkedDirectories: [
+            {
+              id: "repo-dir",
+              label: "PwrAgent",
+              path: expectedDir(repoPath),
+              worktreePath: expectedDir(firstWorktreePath),
+              kind: "worktree",
+            },
+            {
+              id: "repo-dir-duplicate",
+              label: "PwrAgent",
+              path: expectedDir(repoPath),
+              worktreePath: expectedDir(firstWorktreePath),
+              kind: "worktree",
+            },
+            {
+              id: "repo-dir-second-worktree",
+              label: "PwrAgent other",
+              path: expectedDir(repoPath),
+              worktreePath: expectedDir(secondWorktreePath),
+              kind: "worktree",
+            },
+          ],
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const threads = await registry.listThreads({
+      backend: "codex",
+      callerReason: "thread-list",
+    });
+
+    expect(threads[0]?.linkedDirectories).toEqual([
+      expect.objectContaining({
+        path: expectedDir(repoPath),
+        worktreePath: expectedDir(firstWorktreePath),
+      }),
+      expect.objectContaining({
+        path: expectedDir(repoPath),
+        worktreePath: expectedDir(secondWorktreePath),
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("backfills Codex worktree parent directories so directory view shows one project", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const worktree1 = "/Users/huntharo/.codex/worktrees/wt1/ProjectA";
