@@ -7,9 +7,10 @@ const todoListSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
 async function openThreadByTitle(
   fixturePath: string,
-  threadTitle: string
+  threadTitle: string,
+  env?: Record<string, string | undefined>
 ) {
-  const app = await launchElectronApp({ fixturePath });
+  const app = await launchElectronApp({ fixturePath, env });
 
   await app.window.getByRole("button", { name: new RegExp(threadTitle, "i") }).first().click();
   await expect(
@@ -58,7 +59,8 @@ test("renders the Grok task plan contract with mixed step states", async () => {
       todoListSpecDir,
       "fixtures/grok-todo-list/replay.fixture.json"
     ),
-    "Grok to-do list replay"
+    "Grok to-do list replay",
+    { PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK: "1" }
   );
 
   try {
