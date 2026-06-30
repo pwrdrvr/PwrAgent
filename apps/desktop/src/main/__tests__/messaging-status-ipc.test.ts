@@ -14,6 +14,7 @@ const runtimeMock = vi.hoisted(() => ({
 }));
 const settingsServiceMock = vi.hoisted(() => ({
   readSettings: vi.fn(),
+  resolveSlackBotTokenSync: vi.fn(),
   writeConfigPatch: vi.fn(async () => ({ configPath: "/tmp/pwragent-config.toml" })),
 }));
 const pairingStoreMock = vi.hoisted(() => ({
@@ -48,6 +49,9 @@ const leaseCoordinatorMock = vi.hoisted(() => ({
   shutdown: vi.fn(async (runtime: typeof runtimeMock) => {
     await runtime.stop();
   }),
+}));
+const slackProviderMock = vi.hoisted(() => ({
+  resolveContact: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -107,6 +111,8 @@ vi.mock("../messaging-activity-window", () => ({
   showMessagingActivityWindow: vi.fn(),
 }));
 
+vi.mock("@pwragent/messaging-provider-slack", () => slackProviderMock);
+
 describe("messaging status ipc", () => {
   beforeEach(() => {
     handlers.clear();
@@ -122,6 +128,7 @@ describe("messaging status ipc", () => {
     runtimeMock.onPlatformStatus.mockClear();
     runtimeMock.stop.mockClear();
     settingsServiceMock.readSettings.mockReset();
+    settingsServiceMock.resolveSlackBotTokenSync.mockReset();
     settingsServiceMock.writeConfigPatch.mockClear();
     settingsServiceMock.writeConfigPatch.mockResolvedValue({
       configPath: "/tmp/pwragent-config.toml",
@@ -134,6 +141,7 @@ describe("messaging status ipc", () => {
     leaseCoordinatorMock.applyLatestConfig.mockClear();
     leaseCoordinatorMock.disableForSession.mockClear();
     leaseCoordinatorMock.shutdown.mockClear();
+    slackProviderMock.resolveContact.mockReset();
   });
 
   it("loads startup eligibility diagnostics when enabling messaging at runtime", async () => {
@@ -271,6 +279,60 @@ describe("messaging status ipc", () => {
         line: {
           authorizedRooms: [
             { id: "R0123456789abcdef0123456789abcdef", displayName: "LINE room" },
+          ],
+        },
+      },
+    });
+  });
+
+  it("resolves Slack workspace pairing labels from the team lookup", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const entry = {
+      id: "pairing-slack-workspace",
+      platform: "slack",
+      instanceId: "default",
+      scope: "bucket",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U012ABCDEF0", displayName: "Harold" },
+      observedChat: {
+        id: "C012ABCDEF0",
+        kind: "channel",
+        title: "hi",
+        bucketId: "T025C2NKT",
+      },
+    };
+    const consumed = { ...entry, status: "consumed" };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.resolveSlackBotTokenSync.mockReturnValue("xoxb-token");
+    slackProviderMock.resolveContact.mockResolvedValue({
+      status: "ok",
+      id: "T025C2NKT",
+      displayName: "Giphy",
+      detail: "workspace",
+    });
+    pairingStoreMock.markStatus.mockReturnValue(consumed);
+
+    registerMessagingStatusIpcHandlers();
+
+    await expect(
+      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id }),
+    ).resolves.toMatchObject({ added: true, entry: consumed });
+
+    expect(slackProviderMock.resolveContact).toHaveBeenCalledWith(
+      { botToken: "xoxb-token" },
+      { id: "T025C2NKT", kind: "workspace" },
+    );
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedWorkspaces: [
+            { id: "T025C2NKT", displayName: "Giphy" },
           ],
         },
       },
@@ -437,6 +499,18 @@ function feishuSettingsSnapshot() {
         authorizedUserIds: { value: [], source: "default" },
         authorizedChats: { value: [], source: "default" },
         authorizedTenants: { value: [], source: "default" },
+      },
+    },
+  };
+}
+
+function slackSettingsSnapshot() {
+  return {
+    messaging: {
+      slack: {
+        authorizedUserIds: { value: [], source: "default" },
+        authorizedWorkspaces: { value: [], source: "default" },
+        authorizedChannels: { value: [], source: "default" },
       },
     },
   };

@@ -156,6 +156,7 @@ describe("desktop settings contracts", () => {
         },
         telegram: {
           enabled: { value: true, source: "config" },
+          responseMode: { value: "every_message", source: "default" },
           streamingResponses: { value: true, source: "config" },
           botToken: {
             configured: true,
@@ -210,6 +211,7 @@ describe("desktop settings contracts", () => {
         },
         slack: {
           enabled: { value: false, source: "default" },
+          responseMode: { value: "mention_only", source: "default" },
           streamingResponses: { value: false, source: "default" },
           botToken: {
             configured: false,
@@ -232,6 +234,7 @@ describe("desktop settings contracts", () => {
           registerSlashCommands: { value: false, source: "default" },
           authorizedUserIds: { value: [], source: "default" },
           authorizedWorkspaces: { value: [], source: "default" },
+          authorizedChannels: { value: [], source: "default" },
         },
         feishu: {
           enabled: { value: false, source: "default" },

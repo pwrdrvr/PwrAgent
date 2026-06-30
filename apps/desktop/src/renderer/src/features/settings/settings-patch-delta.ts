@@ -32,6 +32,9 @@ export function buildTelegramPatchDelta(
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
   }
+  if (snapshot.responseMode.value !== candidate.responseMode.value) {
+    patch.responseMode = candidate.responseMode.value;
+  }
   if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }
@@ -159,6 +162,9 @@ export function buildSlackPatchDelta(
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
   }
+  if (snapshot.responseMode.value !== candidate.responseMode.value) {
+    patch.responseMode = candidate.responseMode.value;
+  }
   if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }
@@ -191,6 +197,14 @@ export function buildSlackPatchDelta(
     )
   ) {
     patch.authorizedWorkspaces = candidate.authorizedWorkspaces.value;
+  }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.authorizedChannels.value,
+      candidate.authorizedChannels.value,
+    )
+  ) {
+    patch.authorizedChannels = candidate.authorizedChannels.value;
   }
 
   return Object.keys(patch).length === 0 ? undefined : patch;
@@ -319,7 +333,8 @@ function authorizedContactArrayEqual(
       a[i]?.id !== b[i]?.id ||
       a[i]?.displayName !== b[i]?.displayName ||
       a[i]?.fullAccessWarningOverride !== b[i]?.fullAccessWarningOverride ||
-      a[i]?.fullAccessWarningDismissed !== b[i]?.fullAccessWarningDismissed
+      a[i]?.fullAccessWarningDismissed !== b[i]?.fullAccessWarningDismissed ||
+      a[i]?.responseMode !== b[i]?.responseMode
     ) {
       return false;
     }

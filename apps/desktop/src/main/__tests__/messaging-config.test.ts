@@ -75,6 +75,7 @@ describe("desktop messaging config", () => {
       "botToken",
       "channel",
       "enabled",
+      "responseMode",
       "streamingResponses",
     ]);
     expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.discord).sort()).toEqual([
@@ -110,6 +111,7 @@ describe("desktop messaging config", () => {
       "enabled",
       "inboundMode",
       "registerSlashCommands",
+      "responseMode",
       "signingSecret",
       "slashCommandPrefix",
       "streamingResponses",
@@ -183,6 +185,8 @@ describe("desktop messaging config", () => {
         authorization: {
           authorizedActorIds: ["user-1", "user-2"],
           authorizedConversationIds: ["-1001", "-1002"],
+          conversationResponseModes: [],
+          responseMode: undefined,
         },
       });
   });
@@ -238,6 +242,7 @@ describe("desktop messaging config", () => {
         channel: "telegram",
         enabled: true,
         botToken: "tg-token",
+        responseMode: "every_message",
         streamingResponses: false,
         authorizedActorIds: [
           { id: "user-1", displayName: "" },
@@ -475,6 +480,7 @@ describe("desktop messaging config", () => {
         channel: "telegram",
         enabled: true,
         botToken: "settings-telegram-token",
+        responseMode: "every_message",
         streamingResponses: true,
         authorizedActorIds: [{ id: "111111111", displayName: "" }],
         authorizedSupergroupIds: [],

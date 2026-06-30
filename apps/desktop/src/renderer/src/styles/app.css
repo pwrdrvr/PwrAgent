@@ -5939,9 +5939,19 @@ textarea,
     auto;
 }
 
+.settings-authorized-list__row--with-response-mode {
+  grid-template-columns:
+    minmax(140px, 1fr)
+    minmax(140px, 1fr)
+    minmax(128px, 0.7fr)
+    auto
+    auto;
+}
+
 .settings-authorized-list__id,
 .settings-authorized-list__name,
-.settings-authorized-list__warning {
+.settings-authorized-list__warning,
+.settings-authorized-list__response-mode {
   min-width: 0;
 }
 

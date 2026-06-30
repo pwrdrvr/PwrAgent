@@ -1,6 +1,9 @@
+import type { MessagingResponseMode } from "@pwragent/messaging-interface";
+
 export type SlackAuthorizedContact = {
   id: string;
   displayName: string;
+  responseMode?: MessagingResponseMode;
 };
 
 export type SlackInboundMode = "socket" | "events";
@@ -15,6 +18,7 @@ export type SlackMessagingConfig = {
   enabled?: boolean;
   inboundMode?: SlackInboundMode;
   registerSlashCommands?: boolean;
+  responseMode?: MessagingResponseMode;
   signingSecret?: string;
   slashCommandPrefix?: string;
   streamingResponses?: boolean;

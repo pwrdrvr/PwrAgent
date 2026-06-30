@@ -107,7 +107,10 @@ export type DesktopAuthorizedContact = {
   displayName: string;
   fullAccessWarningDismissed?: boolean;
   fullAccessWarningOverride?: DesktopMessagingFullAccessWarningUserPolicy;
+  responseMode?: DesktopMessagingResponseMode;
 };
+
+export type DesktopMessagingResponseMode = "every_message" | "mention_only";
 
 export type DesktopMessagingFullAccessWarningGlobalPolicy =
   | "always"
@@ -133,6 +136,7 @@ export type DesktopMessagingContactLookupKind =
   | "supergroup"
   | "guild"
   | "workspace"
+  | "channel"
   | "chat"
   | "tenant"
   | "group"
@@ -543,6 +547,7 @@ export type DesktopSettingsSnapshot = {
     attachments: DesktopMessagingAttachmentSettingsSnapshot;
     telegram: {
       enabled: DesktopSettingsValue<boolean>;
+      responseMode: DesktopSettingsValue<DesktopMessagingResponseMode>;
       streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
@@ -571,6 +576,7 @@ export type DesktopSettingsSnapshot = {
     };
     slack: {
       enabled: DesktopSettingsValue<boolean>;
+      responseMode: DesktopSettingsValue<DesktopMessagingResponseMode>;
       streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
       appToken: DesktopSettingsSecretState;
@@ -581,6 +587,7 @@ export type DesktopSettingsSnapshot = {
       registerSlashCommands: DesktopSettingsValue<boolean>;
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
       authorizedWorkspaces: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+      authorizedChannels: DesktopSettingsValue<DesktopAuthorizedContact[]>;
     };
     feishu: {
       enabled: DesktopSettingsValue<boolean>;
@@ -754,6 +761,7 @@ export type DesktopSettingsConfigPatch = {
     };
     telegram?: {
       enabled?: boolean;
+      responseMode?: DesktopMessagingResponseMode;
       streamingResponses?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];
       authorizedSupergroups?: DesktopAuthorizedContact[];
@@ -778,6 +786,7 @@ export type DesktopSettingsConfigPatch = {
     };
     slack?: {
       enabled?: boolean;
+      responseMode?: DesktopMessagingResponseMode;
       streamingResponses?: boolean;
       workspaceUrl?: string;
       inboundMode?: "socket" | "events";
@@ -785,6 +794,7 @@ export type DesktopSettingsConfigPatch = {
       registerSlashCommands?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];
       authorizedWorkspaces?: DesktopAuthorizedContact[];
+      authorizedChannels?: DesktopAuthorizedContact[];
     };
     feishu?: {
       enabled?: boolean;

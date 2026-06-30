@@ -15,7 +15,11 @@ export async function resolveContact(
   if (!config.botToken) {
     return { status: "unset", id: request.id };
   }
-  if (request.kind !== "user" && request.kind !== "workspace") {
+  if (
+    request.kind !== "user"
+    && request.kind !== "workspace"
+    && request.kind !== "channel"
+  ) {
     return {
       status: "unsupported",
       id: request.id,
@@ -40,6 +44,25 @@ export async function resolveContact(
         id: request.id,
         displayName: sanitizeOptionalContactLabel(auth.team) ?? request.id,
         detail: "workspace",
+      };
+    }
+
+    if (request.kind === "channel") {
+      const conversation = await api.conversationsInfo?.({ channel: request.id });
+      if (!conversation) {
+        return {
+          status: "not_found",
+          id: request.id,
+          errorMessage:
+            "Slack channel was not found or conversations.info is unavailable.",
+        };
+      }
+      return {
+        status: "ok",
+        id: request.id,
+        displayName:
+          sanitizeOptionalContactLabel(conversation.name) ?? request.id,
+        detail: "channel",
       };
     }
 

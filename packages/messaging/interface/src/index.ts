@@ -312,7 +312,16 @@ export type MessagingActorIdentity = {
 export type MessagingAdapterAuthorizationUpdate = {
   authorizedActorIds: readonly string[];
   authorizedConversationIds?: readonly string[];
+  conversationResponseModes?: readonly MessagingConversationResponseMode[];
+  responseMode?: MessagingResponseMode;
   authorizedWorkspaceIds?: readonly string[];
+};
+
+export type MessagingResponseMode = "every_message" | "mention_only";
+
+export type MessagingConversationResponseMode = {
+  conversationId: string;
+  responseMode: MessagingResponseMode;
 };
 
 export type MessagingAdapterRenderingPreferencesUpdate = {
@@ -1053,6 +1062,12 @@ export type MessagingInboundBaseEvent = {
   actor: MessagingActorIdentity;
   channel: MessagingChannelRef;
   receivedAt: number;
+  /**
+   * True when the original platform message explicitly addressed the bot via
+   * a textual @mention. Slash commands and button callbacks are already
+   * explicit event kinds and do not need this marker.
+   */
+  botMention?: boolean;
   routingState?: MessagingAdapterState;
 };
 
@@ -1730,7 +1745,8 @@ export type MessagingContactLookupKind =
   | "user"
   | "supergroup"
   | "guild"
-  | "workspace";
+  | "workspace"
+  | "channel";
 
 export type MessagingContactLookupRequest = {
   id: string;

@@ -15,6 +15,7 @@ type Mattermost = DesktopSettingsSnapshot["messaging"]["mattermost"];
 function telegramSnapshot(overrides: Partial<Telegram> = {}): Telegram {
   return {
     enabled: { value: false, source: "default" },
+    responseMode: { value: "every_message", source: "default" },
     streamingResponses: { value: false, source: "default" },
     botToken: { configured: false, source: "unset", writable: true },
     authorizedUserIds: { value: [], source: "default" },
