@@ -295,6 +295,7 @@ export class SlackAdapter implements SlackProviderAdapter {
   private botAccount: string | undefined;
   private botAccountDetail: string | undefined;
   private botUserId: string | undefined;
+  private assistantThreadStatusDisabled = false;
   private conversationInfoLookupDisabled = false;
   private threadInfoLookupDisabled = false;
   private userInfoLookupDisabled = false;
@@ -1437,7 +1438,12 @@ export class SlackAdapter implements SlackProviderAdapter {
 
     const target = this.resolveTarget(intent);
     const threadTs = target?.threadTs ?? target?.ts;
-    if (!target || !threadTs || !this.api.setAssistantThreadStatus) {
+    if (
+      !target
+      || !threadTs
+      || !this.api.setAssistantThreadStatus
+      || this.assistantThreadStatusDisabled
+    ) {
       return {
         channel: this.channel,
         deliveredAt: this.now(),
@@ -1457,6 +1463,18 @@ export class SlackAdapter implements SlackProviderAdapter {
         outcome: "signaled",
       };
     } catch (error) {
+      if (isSlackAssistantThreadStatusUnsupportedError(error)) {
+        this.assistantThreadStatusDisabled = true;
+        this.logger.warn?.("slack assistant thread status unavailable", {
+          reason: slackErrorReason(error),
+          requiredScope: "chat:write or assistant:write",
+        });
+        return {
+          channel: this.channel,
+          deliveredAt: this.now(),
+          outcome: "discarded",
+        };
+      }
       return {
         channel: this.channel,
         deliveredAt: this.now(),
@@ -1788,6 +1806,23 @@ function retryAfterMsFromError(error: unknown): number | undefined {
   return status === 429 ? 1_000 : undefined;
 }
 
+function isSlackAssistantThreadStatusUnsupportedError(error: unknown): boolean {
+  const reason = slackErrorReason(error).toLowerCase();
+  return reason.includes("missing_scope")
+    || reason.includes("not_assistant")
+    || reason.includes("assistant_not")
+    || reason.includes("not an assistant")
+    || reason.includes("method_not_supported")
+    || reason.includes("unsupported");
+}
+
+function slackErrorReason(error: unknown): string {
+  const dataError = readNestedStringProperty(error, "data", "error");
+  const dataNeeded = readNestedStringProperty(error, "data", "needed");
+  const message = error instanceof Error ? error.message : String(error);
+  return [dataError, dataNeeded, message].filter(Boolean).join(" ");
+}
+
 function readNumberProperty(value: unknown, key: string): number | undefined {
   if (!value || typeof value !== "object" || !(key in value)) {
     return undefined;
@@ -1796,6 +1831,22 @@ function readNumberProperty(value: unknown, key: string): number | undefined {
   return typeof property === "number" && Number.isFinite(property)
     ? property
     : undefined;
+}
+
+function readNestedStringProperty(
+  value: unknown,
+  parentKey: string,
+  childKey: string,
+): string | undefined {
+  if (!value || typeof value !== "object" || !(parentKey in value)) {
+    return undefined;
+  }
+  const parent = (value as Record<string, unknown>)[parentKey];
+  if (!parent || typeof parent !== "object" || !(childKey in parent)) {
+    return undefined;
+  }
+  const property = (parent as Record<string, unknown>)[childKey];
+  return typeof property === "string" ? property : undefined;
 }
 
 function safeEqual(left: string, right: string): boolean {
