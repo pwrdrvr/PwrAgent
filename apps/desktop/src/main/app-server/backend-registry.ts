@@ -1,7 +1,7 @@
 import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -35,6 +35,7 @@ import {
   type AppServerThreadActivityEntry,
   type AppServerThreadEntry,
   type AppServerThreadMessage,
+  type AppServerToolRequestUserInputResponse,
   type AppServerThreadReplay,
   type AppServerThreadStatus,
   type AppServerThreadSummary,
@@ -548,6 +549,7 @@ type BackendClient = {
 };
 
 type BackendRegistryForkThreadRequest = ForkThreadRequest & {
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
   onCodexEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
@@ -1046,18 +1048,20 @@ function directoryContainsPath(
   );
 }
 
-function linkedDirectoryCoversCwd(
+const HANDOFF_CWD_TRUST_QUESTION_ID = "trust_directory";
+const HANDOFF_CWD_TRUST_APPROVE_LABEL = "Trust directory (Recommended)";
+
+function linkedDirectoryActiveWorkspaceCoversCwd(
   directory: LinkedDirectorySummary,
   cwd: string,
 ): boolean {
   const resolvedCwd = path.resolve(cwd);
-  return (
-    directoryContainsPath(directory.worktreePath, resolvedCwd) ||
-    directoryContainsPath(directory.path, resolvedCwd)
-  );
+  const activeDirectoryPath =
+    directory.kind === "worktree" ? directory.worktreePath : directory.path;
+  return directoryContainsPath(activeDirectoryPath, resolvedCwd);
 }
 
-function linkedDirectoriesCoverCwd(params: {
+function linkedDirectoriesActiveWorkspaceCoversCwd(params: {
   cwd: string;
   overlay?: ThreadOverlayState;
   thread?: Pick<AppServerThreadSummary, "linkedDirectories">;
@@ -1065,7 +1069,9 @@ function linkedDirectoriesCoverCwd(params: {
   return [
     ...(params.overlay?.extraLinkedDirectories ?? []),
     ...(params.thread?.linkedDirectories ?? []),
-  ].some((directory) => linkedDirectoryCoversCwd(directory, params.cwd));
+  ].some((directory) =>
+    linkedDirectoryActiveWorkspaceCoversCwd(directory, params.cwd),
+  );
 }
 
 type PendingServerRequest = {
@@ -7419,6 +7425,9 @@ export class DesktopBackendRegistry {
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
     try {
       try {
+        const sourceRuntime = Object.hasOwn(request, "codexEnvironmentRuntime")
+          ? request.codexEnvironmentRuntime
+          : sourceOverlay?.codexEnvironmentRuntime;
         forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
           cwd,
           onSetupProgress: request.onCodexEnvironmentSetupProgress
@@ -7431,7 +7440,7 @@ export class DesktopBackendRegistry {
                 });
               }
             : undefined,
-          sourceRuntime: sourceOverlay?.codexEnvironmentRuntime,
+          sourceRuntime,
           workMode: preparedWorkspace.workMode,
         });
       } catch (error) {
@@ -9465,6 +9474,121 @@ export class DesktopBackendRegistry {
       turnId: params.turnId,
       requestId: params.requestId,
     };
+  }
+
+  private async requestHandoffCwdTrustConfirmation(params: {
+    backend: AppServerBackendKind;
+    cwd: string;
+    handoffId: string;
+    threadId: string;
+    turnId?: string;
+    itemId?: string;
+  }): Promise<boolean> {
+    const normalizedCwd = toDirectoryId(path.resolve(params.cwd));
+    const requestId = `${params.handoffId}:cwd-trust`;
+    const key = buildPendingRequestKey({
+      backend: params.backend,
+      threadId: params.threadId,
+      requestId,
+    });
+
+    const response = await new Promise<SubmitServerRequestRequest["response"]>(
+      (resolve, reject) => {
+        this.pendingServerRequests.set(key, { resolve, reject });
+
+        void this.emit({
+          backend: params.backend,
+          notification: {
+            method: "item/tool/requestUserInput",
+            params: {
+              threadId: params.threadId,
+              ...(params.turnId ? { turnId: params.turnId } : {}),
+              ...(params.itemId ? { itemId: params.itemId } : {}),
+              requestId,
+              questions: [
+                {
+                  id: HANDOFF_CWD_TRUST_QUESTION_ID,
+                  header: "Trust directory",
+                  question: `Trust ${normalizedCwd} and allow Default Access agent threads to read, write, and delete files in it?`,
+                  isOther: false,
+                  isSecret: false,
+                  options: [
+                    {
+                      label: HANDOFF_CWD_TRUST_APPROVE_LABEL,
+                      description:
+                        "Trust this directory for future Default Access agent work.",
+                    },
+                    {
+                      label: "Cancel handoff",
+                      description:
+                        "Do not add this directory or start the handoff.",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        }).catch((error) => {
+          backendRegistryLog.error(
+            "failed to publish handoff cwd trust request; keeping request pending",
+            {
+              backend: params.backend,
+              cwd: normalizedCwd,
+              error: error instanceof Error ? error.message : String(error),
+              requestId,
+              threadId: params.threadId,
+              turnId: params.turnId,
+            },
+          );
+        });
+      },
+    );
+
+    const answers = (response as AppServerToolRequestUserInputResponse)?.answers?.[
+      HANDOFF_CWD_TRUST_QUESTION_ID
+    ]?.answers;
+    return Array.isArray(answers)
+      ? answers.includes(HANDOFF_CWD_TRUST_APPROVE_LABEL)
+      : false;
+  }
+
+  private async directoryLaunchpadCoversCwd(cwd: string): Promise<boolean> {
+    const resolvedCwd = await realpath(cwd).catch(() => path.resolve(cwd));
+    const launchpads = await this.overlayStore.listDirectoryLaunchpads();
+    for (const launchpad of launchpads) {
+      if (launchpad.directoryKind !== "directory" || !launchpad.directoryPath) {
+        continue;
+      }
+      const launchpadPath = await realpath(launchpad.directoryPath).catch(() =>
+        path.resolve(launchpad.directoryPath!),
+      );
+      if (directoryContainsPath(launchpadPath, resolvedCwd)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private async ensureHandoffTrustedDirectoryLaunchpad(params: {
+    cwd: string;
+    preferredBackend: AppServerBackendKind;
+    parentThreadId: string;
+    parentThreadTitle?: string;
+  }): Promise<void> {
+    const directoryPath = toDirectoryId(
+      await realpath(params.cwd).catch(() => path.resolve(params.cwd)),
+    );
+    await this.ensureDirectoryLaunchpad({
+      directoryKey: `directory:${directoryPath}`,
+      directoryKind: "directory",
+      directoryLabel: path.basename(directoryPath) || directoryPath,
+      directoryPath,
+      currentBranch: await readCurrentGitBranch(directoryPath).catch(() => undefined),
+      parentThreadId: params.parentThreadId,
+      parentThreadTitle: params.parentThreadTitle,
+      preferredBackend: params.preferredBackend,
+      registeredAt: Date.now(),
+    });
   }
 
   async ensureDirectoryLaunchpad(
@@ -15184,21 +15308,42 @@ export class DesktopBackendRegistry {
 
     if (
       workspaceMode !== "none" &&
+      workspaceMode !== "new_worktree" &&
       requestedCwd &&
-      !linkedDirectoriesCoverCwd({
+      !linkedDirectoriesActiveWorkspaceCoversCwd({
         cwd: requestedCwd,
         overlay: sourceOverlay,
         thread: sourceThread,
       }) &&
       executionMode !== "full-access" &&
-      request.args.cwdAccessConfirmed !== true
+      !(await this.directoryLaunchpadCoversCwd(requestedCwd))
     ) {
       const normalizedCwd = toDirectoryId(path.resolve(requestedCwd));
-      const message = `Creating a Default Access handoff from ${normalizedCwd} would add that directory to the thread's write scope. Ask the operator to confirm this exact path, then retry with cwdAccessConfirmed=true.`;
-      this.failPendingThreadHandoff(handoffId, new Error(message));
-      return threadOrchestrationFailure("requires_confirmation", message, {
-        cwd: normalizedCwd,
-        confirmationArgument: "cwdAccessConfirmed",
+      this.updatePendingThreadHandoff(handoffId, {
+        phase: "awaiting_input",
+        message:
+          "Waiting for the operator to confirm the requested directory may be used for Default Access handoffs.",
+      });
+      const confirmed = await this.requestHandoffCwdTrustConfirmation({
+        backend,
+        cwd: requestedCwd,
+        handoffId,
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+        itemId: request.context.callId,
+      });
+      if (!confirmed) {
+        const message = `The operator did not approve adding ${normalizedCwd} to the Default Access write scope.`;
+        this.failPendingThreadHandoff(handoffId, new Error(message));
+        return threadOrchestrationFailure("forbidden", message, {
+          cwd: normalizedCwd,
+        });
+      }
+      await this.ensureHandoffTrustedDirectoryLaunchpad({
+        cwd: requestedCwd,
+        preferredBackend: backend,
+        parentThreadId: sourceThreadId,
+        parentThreadTitle: sourceThread?.title,
       });
     }
 
@@ -15321,6 +15466,7 @@ export class DesktopBackendRegistry {
           fastMode: inheritedSettings.fastMode,
           approvalPolicy: inheritedSettings.approvalPolicy,
           sandbox: inheritedSettings.sandbox,
+          codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
         });
         threadId = forked.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });

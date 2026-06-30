@@ -42,7 +42,6 @@ describe("thread orchestration tool contracts", () => {
       groupingMode: "subthread",
       workspaceMode: "new_worktree",
       cwd: "/Users/test/OtherRepo",
-      cwdAccessConfirmed: true,
       messagingAttachment: "new_child",
       fastMode: true,
     } satisfies HandoffTaskToolArgs;
@@ -52,7 +51,6 @@ describe("thread orchestration tool contracts", () => {
       groupingMode: "subthread",
       workspaceMode: "new_worktree",
       cwd: "/Users/test/OtherRepo",
-      cwdAccessConfirmed: true,
       messagingAttachment: "new_child",
     });
   });

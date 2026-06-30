@@ -30,9 +30,6 @@ describe("pwragent thread orchestration agent tools", () => {
             cwd: expect.objectContaining({
               description: expect.stringContaining("another project"),
             }),
-            cwdAccessConfirmed: expect.objectContaining({
-              description: expect.stringContaining("Default Access write scope"),
-            }),
             branchName: expect.objectContaining({
               description: expect.stringContaining("existing base branch/ref"),
             }),
@@ -243,7 +240,6 @@ describe("pwragent thread orchestration agent tools", () => {
           groupingMode: "subthread",
           workspaceMode: "same_workspace",
           cwd: " /Users/test/OtherRepo ",
-          cwdAccessConfirmed: true,
           messagingAttachment: "auto",
         },
       },
@@ -263,7 +259,6 @@ describe("pwragent thread orchestration agent tools", () => {
         groupingMode: "subthread",
         workspaceMode: "same_workspace",
         cwd: "/Users/test/OtherRepo",
-        cwdAccessConfirmed: true,
         messagingAttachment: "auto",
       },
     });
