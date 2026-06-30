@@ -5274,6 +5274,8 @@ export class DesktopBackendRegistry {
       ...params,
       enrichDirectories:
         params.enrichDirectories ?? shouldEnrichThreadDirectories(params.callerReason),
+      agentCoreGrokEnabled:
+        params.backend === undefined ? resolveAgentCoreGrokEnabled() : undefined,
     };
     const cacheKey = this.buildThreadListCacheKey(normalizedParams);
     const now = Date.now();
@@ -5365,6 +5367,7 @@ export class DesktopBackendRegistry {
   }
 
   private async readThreadList(params: {
+    agentCoreGrokEnabled?: boolean;
     archived?: boolean;
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
@@ -5447,13 +5450,15 @@ export class DesktopBackendRegistry {
         maxPages: params.maxPages,
         skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
       }),
-      this.listThreads({
-        backend: "grok",
-        archived: params.archived,
-        callerReason: params.callerReason,
-        enrichDirectories: params.enrichDirectories,
-        filter: params.filter,
-      }).catch(() => []),
+      params.agentCoreGrokEnabled === true
+        ? this.listThreads({
+            backend: "grok",
+            archived: params.archived,
+            callerReason: params.callerReason,
+            enrichDirectories: params.enrichDirectories,
+            filter: params.filter,
+          }).catch(() => [])
+        : Promise.resolve([]),
       this.listAllInstalledAcpThreads(params.filter, params.archived),
     ]);
 
@@ -10771,6 +10776,7 @@ export class DesktopBackendRegistry {
   }
 
   private buildThreadListCacheKey(params: {
+    agentCoreGrokEnabled?: boolean;
     archived?: boolean;
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
@@ -10789,6 +10795,8 @@ export class DesktopBackendRegistry {
         : shouldBackfillCodexDirectoryRelationships(params.callerReason);
 
     return JSON.stringify({
+      agentCoreGrokEnabled:
+        params.backend === undefined ? params.agentCoreGrokEnabled === true : undefined,
       archived: params.archived === true,
       backend: params.backend ?? "all",
       codexDirectoryBackfill,
@@ -10803,6 +10811,7 @@ export class DesktopBackendRegistry {
 
   private findReusableThreadListCache(
     params: {
+      agentCoreGrokEnabled?: boolean;
       archived?: boolean;
       backend?: AppServerBackendKind;
       callerReason?: ThreadListCallerReason;

@@ -1649,6 +1649,124 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("does not list Grok threads while AgentCore-Grok is disabled", async () => {
+    const previous = process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+    process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = "0";
+    const grokClient = new MockBackendClient({
+      listThreadsError: new Error("Grok API key is not set"),
+      threads: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    try {
+      await expect(registry.listThreads()).resolves.toEqual([]);
+
+      expect(grokClient.listThreadsCallCount).toBe(0);
+    } finally {
+      await registry.close();
+      if (previous === undefined) {
+        delete process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+      } else {
+        process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = previous;
+      }
+    }
+  });
+
+  it("does not reuse a disabled AgentCore-Grok aggregate thread cache after enabling", async () => {
+    const previous = process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+    process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = "0";
+    const grokClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-grok",
+          title: "Grok thread",
+          titleSource: "explicit",
+          source: "grok",
+          linkedDirectories: [],
+          updatedAt: 2_000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    try {
+      await expect(registry.listThreads()).resolves.toEqual([]);
+      expect(grokClient.listThreadsCallCount).toBe(0);
+
+      process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = "1";
+
+      await expect(registry.listThreads()).resolves.toEqual([
+        expect.objectContaining({
+          id: "thread-grok",
+          source: "grok",
+        }),
+      ]);
+      expect(grokClient.listThreadsCallCount).toBe(1);
+    } finally {
+      await registry.close();
+      if (previous === undefined) {
+        delete process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+      } else {
+        process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = previous;
+      }
+    }
+  });
+
+  it("does not reuse an enabled AgentCore-Grok aggregate thread cache after disabling", async () => {
+    const previous = process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+    process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = "1";
+    const grokClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-grok",
+          title: "Grok thread",
+          titleSource: "explicit",
+          source: "grok",
+          linkedDirectories: [],
+          updatedAt: 2_000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    try {
+      await expect(registry.listThreads()).resolves.toEqual([
+        expect.objectContaining({
+          id: "thread-grok",
+          source: "grok",
+        }),
+      ]);
+      expect(grokClient.listThreadsCallCount).toBe(1);
+
+      process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = "0";
+
+      await expect(registry.listThreads()).resolves.toEqual([]);
+      expect(grokClient.listThreadsCallCount).toBe(1);
+    } finally {
+      await registry.close();
+      if (previous === undefined) {
+        delete process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
+      } else {
+        process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = previous;
+      }
+    }
+  });
+
   it("returns ACP provider commands from session metadata", async () => {
     const session: AcpSessionMetadata = {
       backendId: "acp:kimi",
