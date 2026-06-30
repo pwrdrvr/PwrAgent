@@ -324,6 +324,7 @@ type ReviewConfigState = {
   branch: string;
   commit: string;
   customInstructions: string;
+  showBranchPicker?: boolean;
   target?: ReviewTargetChoice;
 };
 
@@ -462,19 +463,14 @@ function buildReviewBranchOptions(params: {
       currentBranches.has(value.slice("origin/".length))
     );
   };
-  const preferredBaseBranches = (params.directory?.gitStatus?.baseBranches ?? []).filter(
-    (branch) => !isCurrentBranch(branch),
-  );
   const upstreamBranch = params.directory?.gitStatus?.upstreamBranch?.replace(
     /^origin\//,
     "",
   );
   const candidates = [
-    ...preferredBaseBranches,
-    !isCurrentBranch(params.directory?.gitStatus?.defaultBranch)
-      ? params.directory?.gitStatus?.defaultBranch
-      : undefined,
-    !isCurrentBranch(upstreamBranch) ? upstreamBranch : undefined,
+    ...(params.directory?.gitStatus?.baseBranches ?? []),
+    params.directory?.gitStatus?.defaultBranch,
+    upstreamBranch,
     "main",
     params.thread?.gitBranch,
     params.thread?.observedGitBranch,
@@ -484,7 +480,7 @@ function buildReviewBranchOptions(params: {
   const options = new Set<string>();
   for (const candidate of candidates) {
     const value = candidate?.trim();
-    if (value) {
+    if (value && !isCurrentBranch(value)) {
       options.add(value);
     }
   }
@@ -1536,7 +1532,6 @@ export function Composer(props: ComposerProps) {
   const inputRef = useRef<ComposerInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
-  const reviewBranchInputRef = useRef<HTMLInputElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
   const confirmedActiveTurnIdRef = useRef<string | undefined>(undefined);
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
@@ -2486,14 +2481,6 @@ export function Composer(props: ComposerProps) {
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && isBareReviewCommand
   );
-
-  useEffect(() => {
-    if (!isReviewComposerOpen || reviewConfig?.target !== "baseBranch") {
-      return;
-    }
-    reviewBranchInputRef.current?.focus();
-    reviewBranchInputRef.current?.select();
-  }, [isReviewComposerOpen, reviewConfig?.target]);
 
   useEffect(() => {
     if (!supportsReview && reviewConfig) {
@@ -5413,6 +5400,7 @@ export function Composer(props: ComposerProps) {
                           directory: props.directory,
                           thread: props.thread,
                         })),
+                      showBranchPicker: option.target === "baseBranch",
                       target: option.target,
                     }));
                     setSendError(undefined);
@@ -5424,11 +5412,10 @@ export function Composer(props: ComposerProps) {
               ))}
             </div>
 
-            {reviewConfig?.target === "baseBranch" ? (
+            {reviewConfig?.target === "baseBranch" && reviewConfig.showBranchPicker ? (
               <label className="composer__review-field">
                 <span>Base branch</span>
                 <input
-                  ref={reviewBranchInputRef}
                   className="composer__review-input"
                   list="composer-review-branches"
                   value={reviewConfig.branch}
@@ -5440,6 +5427,7 @@ export function Composer(props: ComposerProps) {
                           thread: props.thread,
                         })),
                       branch: event.target.value,
+                      showBranchPicker: true,
                       target: "baseBranch",
                     }));
                     setSendError(undefined);

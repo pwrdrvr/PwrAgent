@@ -4880,10 +4880,7 @@ describe("Composer", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
-    await waitFor(() => {
-      expect(screen.getByLabelText("Base branch")).toHaveFocus();
-    });
+    expect(screen.queryByLabelText("Base branch")).not.toBeInTheDocument();
     expect(startReview).not.toHaveBeenCalled();
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
@@ -4896,6 +4893,61 @@ describe("Composer", () => {
         backend: "codex",
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("shows the base branch override only after the base branch card is explicitly clicked", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.queryByLabelText("Base branch")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Base branch/i }));
+    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    fireEvent.change(screen.getByLabelText("Base branch"), {
+      target: { value: "release" },
+    });
+
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    const form = reviewTarget.closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "release" },
         delivery: "inline",
       });
     });
@@ -4954,7 +5006,7 @@ describe("Composer", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+    expect(screen.queryByLabelText("Base branch")).not.toBeInTheDocument();
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     const form = reviewTarget.closest("form");
@@ -4966,6 +5018,80 @@ describe("Composer", () => {
         backend: "codex",
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "origin/main" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("falls back to main when only self branches are reported as review base options", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "fix/review-base-default-submit",
+            defaultBranch: "fix/review-base-default-submit",
+            upstreamBranch: "origin/fix/review-base-default-submit",
+            branches: ["fix/review-base-default-submit"],
+            baseBranches: [
+              "fix/review-base-default-submit",
+              "origin/fix/review-base-default-submit",
+            ],
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "fix/review-base-default-submit",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByRole("button", { name: /Base branch/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByLabelText("Base branch")).not.toBeInTheDocument();
+
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    const form = reviewTarget.closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
       });
     });
