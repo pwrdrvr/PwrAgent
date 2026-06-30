@@ -18326,7 +18326,7 @@ script = "printf setup"
       path: expectedDir("/repo/agent-kit"),
     };
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/list"] },
+      initializeResult: { methods: ["thread/list", "turn/start"] },
       threads: [
         {
           id: "agent-thread",
@@ -18406,6 +18406,32 @@ script = "printf setup"
       threadId: "agent-thread",
     });
     expect(overlay?.extraLinkedDirectories).toEqual([]);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "agent-thread",
+      input: [{ type: "text", text: "Continue in the remaining project." }],
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "agent-thread",
+      cwd: expectedDir("/repo/pwragent-wt"),
+    });
 
     await registry.close();
   });
