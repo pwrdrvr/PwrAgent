@@ -2573,6 +2573,80 @@ describe("app server ipc", () => {
     });
   });
 
+  it("refreshes retained detached PRs by URL when the current branch lookup is empty", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "codex/fix-reel-upload-button-swift",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = buildThreadPrRequestKey({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "codex/fix-reel-upload-button-swift",
+      directoryPaths: ["/repo"],
+    });
+    const detachedPr = githubPr({
+      number: 255,
+      org: "Giphy",
+      repo: "GifGrabber",
+      title: "[codex] Fix upload button after reel switching",
+      state: "passing",
+      url: "https://github.com/Giphy/GifGrabber/pull/255",
+    });
+    const mergedDetachedPr = githubPr({
+      ...detachedPr,
+      state: "passing",
+      lifecycleState: "merged",
+      commitShas: ["c".repeat(40)],
+    });
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      detachedPrKeys: ["github.com/giphy/gifgrabber#255"],
+      detachedPrs: [detachedPr],
+      prs: [],
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: requestKey,
+    });
+    detectPullRequestsForThread.mockResolvedValueOnce([]);
+    fetchPullRequestByUrl.mockResolvedValueOnce(mergedDetachedPr);
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      request,
+    );
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      provider: "github.com",
+      ghAvailable: true,
+      prs: [],
+    });
+    await vi.waitFor(() => {
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
+        cwd: "/repo",
+        url: "https://github.com/Giphy/GifGrabber/pull/255",
+      });
+    });
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        prs: [mergedDetachedPr],
+        fetchedAt: expect.any(Number),
+        refreshKey: requestKey,
+      });
+    });
+  });
+
   it("does not publish PR update events when retained PR status is unchanged", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
@@ -3567,6 +3641,68 @@ describe("app server ipc", () => {
         fetchedAt,
       );
     }
+  });
+
+  it("includes overlay attached directories in PR status tool default paths", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const cachedPr = githubPr({
+      number: 945,
+      org: "pwrdrvr",
+      repo: "agent-kit",
+      title: "Attached repo PR",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/agent-kit/pull/945",
+    });
+
+    listThreads.mockResolvedValue([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        gitBranch: "feat/status-tool",
+        linkedDirectories: [],
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [
+        {
+          id: "directory:/repo/agent-kit",
+          kind: "worktree",
+          label: "agent-kit",
+          path: "/repo/agent-kit",
+          worktreePath: "/repo/agent-kit-wt",
+        },
+      ],
+      prs: [cachedPr],
+      prsFetchedAt: Date.now() - 45_000,
+    });
+
+    registerAppServerIpcHandlers();
+    const handler = setThreadPullRequestStatusToolHandler.mock.calls.at(-1)?.[0];
+    expect(handler).toBeTypeOf("function");
+
+    const response = await handler?.({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        pullRequestStatus: {
+          backend: "codex",
+          threadId: "thread-1",
+          prs: [cachedPr],
+          branch: "feat/status-tool",
+          directoryPaths: ["/repo/agent-kit-wt"],
+        },
+      },
+    });
   });
 
   it("refreshes a thread's working state after the agent finishes a turn", async () => {

@@ -1980,6 +1980,10 @@ class DesktopAppServerService {
       };
     }
 
+    const overlay = await this.getOverlayStore().getThreadOverlayState({
+      backend: args.backend,
+      threadId,
+    });
     const branch = args.branch?.trim()
       || thread.observedGitBranch?.trim()
       || thread.gitBranch?.trim()
@@ -1987,12 +1991,13 @@ class DesktopAppServerService {
     const directoryPaths = normalizePrLookupDirectoryPaths(
       args.directoryPaths?.length
         ? args.directoryPaths
-        : resolveThreadPullRequestDirectoryPaths(thread),
+        : resolveThreadPullRequestDirectoryPaths({
+            linkedDirectories: [
+              ...(thread.linkedDirectories ?? []),
+              ...(overlay?.extraLinkedDirectories ?? []),
+            ],
+          }),
     );
-    const overlay = await this.getOverlayStore().getThreadOverlayState({
-      backend: args.backend,
-      threadId,
-    });
     const lookupDirectoryPaths = directoryPaths.length > 0
       ? directoryPaths
       : (overlay?.prs?.length ? [os.homedir()] : []);
@@ -2059,7 +2064,10 @@ class DesktopAppServerService {
     });
     await this.loadPrStatusRegistry();
     await this.loadPrLookupRegistry();
-    const persistedPrs = existing?.prs ?? [];
+    const persistedPrs = this.mergePrHistory(
+      existing?.prs ?? [],
+      existing?.detachedPrs ?? [],
+    );
     this.rememberPrStatuses(persistedPrs, existing?.prsFetchedAt ?? 0);
     const existingPrs = this.canonicalizePrs(persistedPrs);
     const branch = request.branch.trim();
@@ -2215,7 +2223,7 @@ class DesktopAppServerService {
       requestKey,
       lookupKey,
       lookupDirectoryPaths,
-      previousPrs: visibleKnownPrs(),
+      previousPrs: knownPrs,
     });
 
     return {

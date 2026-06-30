@@ -1688,6 +1688,7 @@ describe("ThreadContextPanel", () => {
       pinned: true,
       thread: {
         ...baseThread,
+        projectKey: "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
         linkedDirectories: [
           {
             id: "primary-dir",
@@ -1725,6 +1726,48 @@ describe("ThreadContextPanel", () => {
     });
     await waitFor(() => {
       expect(onRefreshNavigation).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("allows detaching the only linked project on a directory-less thread", async () => {
+    const detachDirectoryFromThread = vi.fn(async () => ({
+      ok: true as const,
+      backend: "codex" as const,
+      threadId: "thread-1",
+      directories: [],
+    }));
+    renderPanel({
+      activeTab: "projects",
+      desktopApi: {
+        detachDirectoryFromThread,
+      },
+      pinned: true,
+      thread: {
+        ...baseThread,
+        linkedDirectories: [
+          {
+            id: "agent-kit-dir",
+            kind: "local",
+            label: "agent-kit",
+            path: "/Users/huntharo/github/agent-kit",
+          },
+        ],
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Detach" }));
+
+    await waitFor(() => {
+      expect(detachDirectoryFromThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        directory: {
+          id: "agent-kit-dir",
+          kind: "local",
+          label: "agent-kit",
+          path: "/Users/huntharo/github/agent-kit",
+        },
+      });
     });
   });
 
