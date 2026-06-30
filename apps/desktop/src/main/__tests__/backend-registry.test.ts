@@ -16265,7 +16265,9 @@ script = "printf setup"
 
       expect(response).toMatchObject({ success: true });
       const handoffCwd = expectedDir(codexClient.lastStartThreadParams?.cwd ?? "");
-      expect(handoffCwd).toContain(expectedDir(path.join(repoPath, ".worktrees")));
+      expect(handoffCwd).toContain(
+        expectedDir(await realpath(path.join(repoPath, ".worktrees"))),
+      );
       expect(handoffCwd).not.toContain(expectedDir(scratchPath));
       expect(codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toBeUndefined();
       const payload = JSON.parse(
