@@ -14993,23 +14993,36 @@ export class DesktopBackendRegistry {
     if (prepared.workMode !== "worktree" || !prepared.cwd?.trim()) {
       throw new Error("PwrAgent could not allocate a managed worktree.");
     }
-    const [directory] = buildWorktreeLinkedDirectory({
-      repositoryPath: prepared.repositoryPath ?? repositoryPath,
-      worktreePath: prepared.cwd,
-      label: path.basename(prepared.repositoryPath ?? repositoryPath) || repositoryPath,
-    });
-    if (!directory) {
-      throw new Error("failed to build worktree linked directory metadata.");
+    try {
+      const [directory] = buildWorktreeLinkedDirectory({
+        repositoryPath: prepared.repositoryPath ?? repositoryPath,
+        worktreePath: prepared.cwd,
+        label: path.basename(prepared.repositoryPath ?? repositoryPath) || repositoryPath,
+      });
+      if (!directory) {
+        throw new Error("failed to build worktree linked directory metadata.");
+      }
+      await this.recordCodexWorktreeOwnerThread({
+        backend: params.backend,
+        threadId: params.sourceThreadId,
+        worktreePath: prepared.cwd,
+      });
+      return {
+        directory,
+        rollback: prepared.rollback,
+      };
+    } catch (error) {
+      await prepared.rollback?.().catch((rollbackError) => {
+        backendRegistryLog.warn("attach_thread_directory worktree rollback failed", {
+          error:
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : String(rollbackError),
+          threadId: params.sourceThreadId,
+        });
+      });
+      throw error;
     }
-    await this.recordCodexWorktreeOwnerThread({
-      backend: params.backend,
-      threadId: params.sourceThreadId,
-      worktreePath: prepared.cwd,
-    });
-    return {
-      directory,
-      rollback: prepared.rollback,
-    };
   }
 
   private async detachThreadDirectory(
@@ -17557,6 +17570,13 @@ export class DesktopBackendRegistry {
     | { ok: false; message: string }
   > {
     const parsedUrl = parsePullRequestReferenceUrl(args.url);
+    if (args.url?.trim() && !parsedUrl) {
+      return {
+        ok: false,
+        message:
+          "url must look like a GitHub/GHE /pull/<number> URL or a GitLab /merge_requests/<number> URL.",
+      };
+    }
     const number = normalizePositivePullRequestNumber(args.number)
       ?? parsedUrl?.number;
     if (!number) {
@@ -17588,14 +17608,6 @@ export class DesktopBackendRegistry {
           }),
           urlBase: parsedUrl?.urlBase,
         },
-      };
-    }
-
-    if (args.url?.trim() && !parsedUrl) {
-      return {
-        ok: false,
-        message:
-          "url must look like a GitHub/GHE /pull/<number> URL or a GitLab /merge_requests/<number> URL.",
       };
     }
 

@@ -18318,6 +18318,99 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("rolls back a managed worktree when owner recording fails", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": createAgentOverlay(),
+      },
+    });
+    const rollback = vi.fn(async () => undefined);
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: "/worktrees/agent-kit",
+      repositoryPath: "/repo/agent-kit",
+      rollback,
+      workMode: "worktree" as const,
+    }));
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => undefined);
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread,
+        resolvePrimaryWorkspacePath: vi.fn(async () => "/repo/agent-kit"),
+      } as never,
+      overlayStore,
+    });
+    vi.spyOn(
+      registry as unknown as {
+        recordCodexWorktreeOwnerThread: (params: {
+          backend: "codex" | "grok" | `acp:${string}`;
+          threadId: string;
+          worktreePath?: string;
+        }) => Promise<void>;
+      },
+      "recordCodexWorktreeOwnerThread",
+    ).mockRejectedValueOnce(new Error("state db unavailable"));
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "attach_thread_directory",
+        arguments: {
+          path: "/repo/agent-kit",
+          workspaceMode: "new_worktree",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "internal_error",
+              message: "state db unavailable",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    expect(rollback).toHaveBeenCalledTimes(1);
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "agent-thread",
+    });
+    expect(overlay?.extraLinkedDirectories).toEqual([]);
+
+    await registry.close();
+  });
+
   it("lets an agent detach a secondary directory from the current thread", async () => {
     const secondaryDirectory = {
       id: expectedDir("/repo/agent-kit"),
@@ -18668,6 +18761,91 @@ script = "printf setup"
         ],
       },
     });
+
+    await registry.close();
+  });
+
+  it("rejects explicit PR references with malformed URLs", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "target-thread",
+          title: "Cross repo work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 2000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": createAgentOverlay(),
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "attach_thread_pull_request",
+        arguments: {
+          backend: "codex",
+          threadId: "target-thread",
+          provider: "github.com",
+          org: "pwrdrvr",
+          repo: "PwrAgent",
+          number: 904,
+          url: "not a pull request URL",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "invalid_arguments",
+              message:
+                "url must look like a GitHub/GHE /pull/<number> URL or a GitLab /merge_requests/<number> URL.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "target-thread",
+    });
+    expect(overlay?.prs).toBeUndefined();
 
     await registry.close();
   });
