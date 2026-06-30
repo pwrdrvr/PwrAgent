@@ -479,6 +479,28 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async removeLinkedDirectory(params: {
+    backend: ThreadOverlayState["backend"];
+    directory: LinkedDirectorySummary;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      extraLinkedDirectories: current.extraLinkedDirectories.filter(
+        (directory) => !linkedDirectoriesEquivalent(directory, params.directory),
+      ),
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async replaceWorkspaceLinkedDirectory(params: {
     backend: ThreadOverlayState["backend"];
     directory: LinkedDirectorySummary;
@@ -2647,6 +2669,7 @@ export type OverlayStoreLike = Pick<
   | "reconcileNavigationSnapshot"
   | "markThreadSeen"
   | "addLinkedDirectory"
+  | "removeLinkedDirectory"
   | "replaceWorkspaceLinkedDirectory"
   | "getThreadExecutionMode"
   | "getThreadOverlayState"

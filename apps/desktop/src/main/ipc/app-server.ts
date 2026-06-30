@@ -25,6 +25,8 @@ import {
   type AppServerListThreadsResponse,
   type AttachDirectoryToThreadRequest,
   type AttachDirectoryToThreadResponse,
+  type DetachDirectoryFromThreadRequest,
+  type DetachDirectoryFromThreadResponse,
   type CheckThreadPullRequestStatusToolArgs,
   type ThreadSearchRequest,
   type ThreadSearchResponse,
@@ -146,6 +148,7 @@ import {
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
+  NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
@@ -448,6 +451,31 @@ function normalizePrLookupDirectoryPaths(directoryPaths: string[]): string[] {
 
 function toLinkedDirectoryPathId(value: string): string {
   return path.resolve(value).replace(/\\/g, "/");
+}
+
+function normalizeLinkedDirectoryPathForMatch(
+  value: string | undefined,
+): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? path.resolve(trimmed).replace(/\\/g, "/") : undefined;
+}
+
+function linkedDirectoriesMatchForDetach(
+  left: Pick<LinkedDirectorySummary, "id" | "kind" | "path" | "worktreePath">,
+  right: Pick<LinkedDirectorySummary, "id" | "kind" | "path" | "worktreePath">,
+): boolean {
+  if (left.id === right.id) {
+    return true;
+  }
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  return (
+    normalizeLinkedDirectoryPathForMatch(left.path) ===
+      normalizeLinkedDirectoryPathForMatch(right.path) &&
+    normalizeLinkedDirectoryPathForMatch(left.worktreePath) ===
+      normalizeLinkedDirectoryPathForMatch(right.worktreePath)
+  );
 }
 
 function getPullRequestLookupKey(
@@ -3232,6 +3260,54 @@ class DesktopAppServerService {
     };
   }
 
+  async detachDirectoryFromThread(
+    request: DetachDirectoryFromThreadRequest,
+  ): Promise<DetachDirectoryFromThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().getThreadOverlayState({
+      backend,
+      threadId: request.threadId,
+    });
+    const currentDirectories = overlay?.extraLinkedDirectories ?? [];
+    const matched = currentDirectories.find((directory) =>
+      linkedDirectoriesMatchForDetach(directory, request.directory),
+    );
+    if (!matched) {
+      return {
+        ok: false,
+        backend,
+        threadId: request.threadId,
+        reason: "primary-directory",
+        message:
+          "Only secondary directories attached to this thread can be detached.",
+      };
+    }
+
+    const next = await this.getOverlayStore().removeLinkedDirectory({
+      backend,
+      threadId: request.threadId,
+      directory: matched,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: {
+          reason: "selected-thread",
+          threadIds: [request.threadId],
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      backend,
+      threadId: request.threadId,
+      directories: next.extraLinkedDirectories,
+    };
+  }
+
   async analyzeFocusedDiff(
     request: FocusedDiffAnalysisRequest
   ): Promise<FocusedDiffAnalysisResponse> {
@@ -3879,6 +3955,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.attachDirectoryToThread(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
+    async (
+      _event,
+      request: DetachDirectoryFromThreadRequest,
+    ): Promise<DetachDirectoryFromThreadResponse> => {
+      return await appServerService.detachDirectoryFromThread(request);
+    },
+  );
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
@@ -3917,6 +4003,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL);
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(undefined);

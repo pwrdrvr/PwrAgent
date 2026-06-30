@@ -976,6 +976,35 @@ export type AttachDirectoryToThreadResponse =
       message: string;
     };
 
+export type DetachDirectoryFromThreadFailureReason =
+  | "not-found"
+  | "primary-directory"
+  | "not-attached";
+
+export type DetachDirectoryFromThreadRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  directory: Pick<
+    LinkedDirectorySummary,
+    "id" | "kind" | "label" | "path" | "worktreePath"
+  >;
+};
+
+export type DetachDirectoryFromThreadResponse =
+  | {
+      ok: true;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      directories: LinkedDirectorySummary[];
+    }
+  | {
+      ok: false;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      reason: DetachDirectoryFromThreadFailureReason;
+      message: string;
+    };
+
 export type RefreshThreadPullRequestsResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

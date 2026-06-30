@@ -1,9 +1,13 @@
 import type {
+  AttachThreadDirectoryToolArgs,
+  AttachThreadDirectoryWorkspaceMode,
+  AttachThreadDirectoryWorktreeBranchMode,
   HandoffTaskGroupingMode,
   HandoffTaskMessagingAttachmentMode,
   HandoffTaskSeedMode,
   HandoffTaskToolArgs,
   HandoffTaskWorkspaceMode,
+  DetachThreadDirectoryToolArgs,
   MoveThreadWorkspaceToolArgs,
   PwrAgentThreadOrchestrationOperationName,
   PwrAgentThreadOrchestrationRequest,
@@ -11,6 +15,8 @@ import type {
   SendMessageToThreadToolArgs,
 } from "@pwragent/shared";
 import {
+  ATTACH_THREAD_DIRECTORY_WORKSPACE_MODES,
+  ATTACH_THREAD_DIRECTORY_WORKTREE_BRANCH_MODES,
   DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY,
   HANDOFF_TASK_GROUPING_MODES,
   HANDOFF_TASK_MESSAGING_ATTACHMENT_MODES,
@@ -100,6 +106,10 @@ function descriptionForOperation(
   switch (operation) {
     case "handoff_task":
       return "Create and start a new PwrAgent Agent thread for a delegated task. Use this when the user asks to hand off or delegate work to a new thread. Omitted settings inherit from the invoking Agent turn. Clean new-thread handoff is the default; use seedMode=fork only when the user asks to fork this thread. Workspace-backed handoffs default to workspaceMode=new_worktree. Use cwd=<source project/repo path> when the delegated thread should be created in a different project than the current thread. In Default Access, an explicit cwd that is not already trusted will trigger an operator confirmation before PwrAgent uses that directory for handoff workspaces. Use groupingMode=subthread for related follow-up work, backports, or forward-ports that should stay grouped under the current thread; combine it with workspaceMode=new_worktree and branchName=<existing base ref> such as origin/main when the related work should start from another branch. Use workspaceMode=same_workspace only when the user explicitly asks to share the caller's exact workspace. Use workspaceMode=project_local only when the delegated thread should run in the project's primary checkout instead of a managed worktree. Handoff startup can take several minutes while a worktree or Codex environment is prepared; if this call appears slow or uncertain, do not call handoff_task again. Use search_threads or get_thread_status and inspect pendingHandoffs until a threadId appears or the handoff reports failed.";
+    case "attach_thread_directory":
+      return "Attach an additional Git directory to the current PwrAgent thread. Use this for cross-project work when the user asks to link another repo or create a secondary worktree for another repo. Omitted backend targets the invoking thread. workspaceMode=local attaches the repository directory itself; workspaceMode=new_worktree asks PwrAgent to allocate and attach a managed worktree for the provided repository path. This does not change the thread's primary cwd; use detach_thread_directory separately if a temporary local reference should be removed.";
+    case "detach_thread_directory":
+      return "Detach a secondary linked directory from the current PwrAgent thread. Use this only for user-requested cleanup of extra directory references. The primary provider/runtime cwd cannot be detached. Pass directoryId when known, or path/worktreePath from get_thread_status linked directory metadata.";
     case "move_thread_workspace":
       return "Move the current PwrAgent thread runtime workspace after the invoking turn reaches a terminal boundary. Use this when the user asks to continue this same thread from an isolated worktree instead of creating a child handoff thread. The operation is path-keyed: pass sourcePath when the thread has multiple linked directories or when the intended workspace is not obvious. The tool returns a pending workspaceMoveId and stop-and-wait guidance; after the current turn ends, PwrAgent performs the move, updates future-turn cwd metadata, and starts a same-thread continuation with the result. Do not keep editing after a successful call in the invoking turn; wait for the continuation or inspect get_thread_status pendingWorkspaceMoves.";
     case "send_message_to_thread":
@@ -111,6 +121,65 @@ function inputSchemaForOperation(
   operation: PwrAgentThreadOrchestrationOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "attach_thread_directory":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["path"],
+        properties: {
+          backend: {
+            type: "string",
+            description:
+              "Optional backend override. Omitted defaults to the invoking thread backend; the first implementation supports the current thread only.",
+          },
+          path: {
+            type: "string",
+            description:
+              "Repository/local checkout path to attach, or to use as the parent repo for a new worktree.",
+          },
+          workspaceMode: {
+            type: "string",
+            enum: ATTACH_THREAD_DIRECTORY_WORKSPACE_MODES,
+            description:
+              "`local` attaches the repository directory itself and is the default. `new_worktree` asks PwrAgent to allocate a managed worktree for that repository and attach it.",
+          },
+          branchName: {
+            type: "string",
+            description:
+              "Optional existing base branch/ref for workspaceMode=new_worktree, for example `origin/main`. This is not a new feature branch name.",
+          },
+          worktreeBranchMode: {
+            type: "string",
+            enum: ATTACH_THREAD_DIRECTORY_WORKTREE_BRANCH_MODES,
+            description:
+              "Whether the allocated worktree should be checked out on an attached branch or as a detached HEAD. Defaults to detached.",
+          },
+        },
+      };
+    case "detach_thread_directory":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          backend: {
+            type: "string",
+            description:
+              "Optional backend override. Omitted defaults to the invoking thread backend; the first implementation supports the current thread only.",
+          },
+          directoryId: {
+            type: "string",
+            description: "Exact linked-directory id to detach when known.",
+          },
+          path: {
+            type: "string",
+            description: "Repository/local checkout path to detach.",
+          },
+          worktreePath: {
+            type: "string",
+            description: "Managed worktree path to detach.",
+          },
+        },
+      };
     case "handoff_task":
       return {
         type: "object",
@@ -256,11 +325,17 @@ function normalizeArgsForOperation(
   operation: PwrAgentThreadOrchestrationOperationName,
   args: Record<string, unknown>,
 ):
+  | AttachThreadDirectoryToolArgs
+  | DetachThreadDirectoryToolArgs
   | HandoffTaskToolArgs
   | MoveThreadWorkspaceToolArgs
   | SendMessageToThreadToolArgs
   | undefined {
   switch (operation) {
+    case "attach_thread_directory":
+      return normalizeAttachThreadDirectoryArgs(args);
+    case "detach_thread_directory":
+      return normalizeDetachThreadDirectoryArgs(args);
     case "handoff_task":
       return normalizeHandoffTaskArgs(args);
     case "move_thread_workspace":
@@ -274,6 +349,10 @@ function invalidArgumentsMessageForOperation(
   operation: PwrAgentThreadOrchestrationOperationName,
 ): string {
   switch (operation) {
+    case "attach_thread_directory":
+      return "attach_thread_directory requires a non-empty path and accepts only known workspaceMode/worktreeBranchMode values.";
+    case "detach_thread_directory":
+      return "detach_thread_directory requires at least one of directoryId, path, or worktreePath, and all provided string fields must be non-empty.";
     case "handoff_task":
       return "handoff_task requires a non-empty task string.";
     case "move_thread_workspace":
@@ -281,6 +360,91 @@ function invalidArgumentsMessageForOperation(
     case "send_message_to_thread":
       return "send_message_to_thread requires non-empty backend, threadId, and prompt strings.";
   }
+}
+
+function normalizeAttachThreadDirectoryArgs(
+  args: Record<string, unknown>,
+): AttachThreadDirectoryToolArgs | undefined {
+  const directoryPath = readTrimmedString(args.path);
+  if (!directoryPath) {
+    return undefined;
+  }
+  const workspaceMode =
+    args.workspaceMode === undefined
+      ? undefined
+      : readChoice(args.workspaceMode, ATTACH_THREAD_DIRECTORY_WORKSPACE_MODES);
+  if (args.workspaceMode !== undefined && !workspaceMode) {
+    return undefined;
+  }
+  const worktreeBranchMode =
+    args.worktreeBranchMode === undefined
+      ? undefined
+      : readChoice(
+          args.worktreeBranchMode,
+          ATTACH_THREAD_DIRECTORY_WORKTREE_BRANCH_MODES,
+        );
+  if (args.worktreeBranchMode !== undefined && !worktreeBranchMode) {
+    return undefined;
+  }
+
+  const optionalStringFields = ["backend", "branchName"] as const;
+  for (const field of optionalStringFields) {
+    if (Object.hasOwn(args, field) && !readTrimmedString(args[field])) {
+      return undefined;
+    }
+  }
+
+  const backend = readTrimmedString(args.backend);
+  const branchName = readTrimmedString(args.branchName);
+  return {
+    path: directoryPath,
+    ...(backend
+      ? { backend: backend as AttachThreadDirectoryToolArgs["backend"] }
+      : {}),
+    ...(workspaceMode
+      ? { workspaceMode: workspaceMode as AttachThreadDirectoryWorkspaceMode }
+      : {}),
+    ...(branchName ? { branchName } : {}),
+    ...(worktreeBranchMode
+      ? {
+          worktreeBranchMode:
+            worktreeBranchMode as AttachThreadDirectoryWorktreeBranchMode,
+        }
+      : {}),
+  };
+}
+
+function normalizeDetachThreadDirectoryArgs(
+  args: Record<string, unknown>,
+): DetachThreadDirectoryToolArgs | undefined {
+  const optionalStringFields = [
+    "backend",
+    "directoryId",
+    "path",
+    "worktreePath",
+  ] as const;
+  for (const field of optionalStringFields) {
+    if (Object.hasOwn(args, field) && !readTrimmedString(args[field])) {
+      return undefined;
+    }
+  }
+
+  const backend = readTrimmedString(args.backend);
+  const directoryId = readTrimmedString(args.directoryId);
+  const directoryPath = readTrimmedString(args.path);
+  const worktreePath = readTrimmedString(args.worktreePath);
+  if (!directoryId && !directoryPath && !worktreePath) {
+    return undefined;
+  }
+
+  return {
+    ...(backend
+      ? { backend: backend as DetachThreadDirectoryToolArgs["backend"] }
+      : {}),
+    ...(directoryId ? { directoryId } : {}),
+    ...(directoryPath ? { path: directoryPath } : {}),
+    ...(worktreePath ? { worktreePath } : {}),
+  };
 }
 
 function normalizeHandoffTaskArgs(

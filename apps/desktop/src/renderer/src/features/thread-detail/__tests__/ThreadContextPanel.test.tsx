@@ -1671,6 +1671,63 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByLabelText("Path for PwrAgent Other")).toBeInTheDocument();
   });
 
+  it("detaches a secondary linked project from the Linked Projects tab", async () => {
+    const detachDirectoryFromThread = vi.fn(async () => ({
+      ok: true as const,
+      backend: "codex" as const,
+      threadId: "thread-1",
+      directories: [],
+    }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
+    renderPanel({
+      activeTab: "projects",
+      desktopApi: {
+        detachDirectoryFromThread,
+      },
+      onRefreshNavigation,
+      pinned: true,
+      thread: {
+        ...baseThread,
+        linkedDirectories: [
+          {
+            id: "primary-dir",
+            kind: "worktree",
+            label: "PwrAgent",
+            path: "/Users/huntharo/github/PwrAgent",
+            worktreePath:
+              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+          },
+          {
+            id: "agent-kit-dir",
+            kind: "local",
+            label: "agent-kit",
+            path: "/Users/huntharo/github/agent-kit",
+          },
+        ],
+      },
+    });
+
+    const detachButtons = screen.getAllByRole("button", { name: "Detach" });
+    expect(detachButtons).toHaveLength(1);
+    fireEvent.click(detachButtons[0]!);
+
+    await waitFor(() => {
+      expect(detachDirectoryFromThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        directory: {
+          id: "agent-kit-dir",
+          kind: "local",
+          label: "agent-kit",
+          path: "/Users/huntharo/github/agent-kit",
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(onRefreshNavigation).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("shows regular and Spark rate limits together on the Provider status tab", () => {
     renderPanel({ activeTab: "providers", pinned: true });
 

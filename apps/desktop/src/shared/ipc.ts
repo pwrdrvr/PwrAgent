@@ -93,6 +93,8 @@ export const NAVIGATION_DETACH_THREAD_PR_CHANNEL =
   "navigation:detach-thread-pr";
 export const NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL =
   "navigation:attach-directory-to-thread";
+export const NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL =
+  "navigation:detach-directory-from-thread";
 export const NAVIGATION_GET_GH_STATUS_CHANNEL =
   "navigation:get-gh-status";
 export const NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL =

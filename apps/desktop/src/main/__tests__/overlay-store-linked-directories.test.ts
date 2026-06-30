@@ -53,4 +53,30 @@ describe("SqliteOverlayStore — linked directories", () => {
       },
     ]);
   });
+
+  it("removes same-path local directories even when their IDs use different shapes", async () => {
+    await store.addLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: "/repo/app",
+        kind: "local",
+        label: "app",
+        path: "/repo/app",
+      },
+    });
+
+    const overlay = await store.removeLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: "directory:/repo/app",
+        kind: "local",
+        label: "app",
+        path: "/repo/app",
+      },
+    });
+
+    expect(overlay.extraLinkedDirectories).toEqual([]);
+  });
 });

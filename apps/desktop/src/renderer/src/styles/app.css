@@ -12685,6 +12685,14 @@ textarea,
   gap: 8px;
 }
 
+.linked-project__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
 .linked-project__facts {
   display: grid;
   grid-template-columns: auto 1fr;

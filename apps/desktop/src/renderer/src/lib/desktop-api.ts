@@ -36,6 +36,8 @@ import type {
   AppServerListThreadsResponse,
   AttachDirectoryToThreadRequest,
   AttachDirectoryToThreadResponse,
+  DetachDirectoryFromThreadRequest,
+  DetachDirectoryFromThreadResponse,
   ThreadSearchRequest,
   ThreadSearchResponse,
   FocusedDiffAnalysisRequest,
@@ -655,6 +657,9 @@ export type DesktopApi = {
   attachDirectoryToThread?: (
     request: AttachDirectoryToThreadRequest,
   ) => Promise<AttachDirectoryToThreadResponse>;
+  detachDirectoryFromThread?: (
+    request: DetachDirectoryFromThreadRequest,
+  ) => Promise<DetachDirectoryFromThreadResponse>;
   normalizeImageForUpload?: (
     request: ImageUploadFallbackRequest
   ) => Promise<ImageUploadFallbackResponse>;

@@ -122,8 +122,12 @@ import {
   type PendingThreadHandoffPhase,
   type PendingThreadHandoffSummary,
   type PendingThreadWorkspaceMoveSummary,
+  type AttachThreadDirectoryResult,
+  type AttachThreadDirectoryToolArgs,
+  type AttachThreadDirectoryWorkspaceMode,
   type AttachThreadPullRequestToolArgs,
   type CheckThreadPullRequestStatusToolArgs,
+  type DetachThreadDirectoryToolArgs,
   type ReadThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
@@ -667,6 +671,35 @@ function buildWorktreeLinkedDirectory(params: {
       worktreePath: toDirectoryId(worktreePath),
     },
   ];
+}
+
+function normalizeLinkedDirectoryPathForMatch(
+  value: string | undefined,
+): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? toDirectoryId(path.resolve(normalized)) : undefined;
+}
+
+function linkedDirectoryMatchesDetachArgs(
+  directory: LinkedDirectorySummary,
+  args: DetachThreadDirectoryToolArgs,
+): boolean {
+  if (args.directoryId?.trim() && directory.id === args.directoryId.trim()) {
+    return true;
+  }
+  const requestedPath = normalizeLinkedDirectoryPathForMatch(args.path);
+  if (
+    requestedPath &&
+    normalizeLinkedDirectoryPathForMatch(directory.path) === requestedPath
+  ) {
+    return true;
+  }
+  const requestedWorktreePath = normalizeLinkedDirectoryPathForMatch(args.worktreePath);
+  return Boolean(
+    requestedWorktreePath &&
+      normalizeLinkedDirectoryPathForMatch(directory.worktreePath) ===
+        requestedWorktreePath,
+  );
 }
 
 function isLikelyToolManagedWorktreePath(projectKey: string | undefined): boolean {
@@ -14603,6 +14636,12 @@ export class DesktopBackendRegistry {
   private async handleThreadOrchestrationRequest(
     request: PwrAgentThreadOrchestrationRequest,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
+    if (request.operation === "attach_thread_directory") {
+      return await this.attachThreadDirectory(request);
+    }
+    if (request.operation === "detach_thread_directory") {
+      return await this.detachThreadDirectory(request);
+    }
     if (request.operation === "handoff_task") {
       return await this.handoffTaskToThread(request);
     }
@@ -14808,6 +14847,242 @@ export class DesktopBackendRegistry {
       updatedAt: move.updatedAt,
       message: move.message ?? "Workspace move is pending.",
       ...(move.error ? { error: move.error } : {}),
+    };
+  }
+
+  private async attachThreadDirectory(
+    request: PwrAgentThreadOrchestrationRequest<"attach_thread_directory">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const sourceBackend = request.context.backend;
+    const sourceThreadId = request.context.threadId;
+    const sourceTurnId = request.context.turnId?.trim();
+    if (
+      !sourceTurnId ||
+      !this.isLiveDynamicToolCall(sourceBackend, {
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+      })
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Directory attachment tools must be invoked from a live turn.",
+      );
+    }
+    const backend = request.args.backend ?? sourceBackend;
+    if (!isAppServerBackendKind(backend)) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "backend must be a known PwrAgent backend.",
+      );
+    }
+    if (backend !== sourceBackend) {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        "Directory attachment currently supports only the invoking thread backend.",
+      );
+    }
+
+    const sourcePath = request.args.path.trim();
+    const workspaceMode: AttachThreadDirectoryWorkspaceMode =
+      request.args.workspaceMode ?? "local";
+    let rollback: (() => Promise<void>) | undefined;
+    try {
+      const directory =
+        workspaceMode === "new_worktree"
+          ? await this.createAttachedWorktreeDirectory({
+              backend,
+              args: request.args,
+              sourceThreadId,
+            }).then((result) => {
+              rollback = result.rollback;
+              return result.directory;
+            })
+          : await this.createAttachedLocalDirectory(sourcePath);
+
+      const overlay = await this.overlayStore.addLinkedDirectory({
+        backend,
+        threadId: sourceThreadId,
+        directory,
+      });
+      rollback = undefined;
+      await this.publishLocalEvent({
+        backend,
+        notification: {
+          method: "navigation/threadDirectories/updated",
+          params: {
+            reason: "selected-thread",
+            threadIds: [sourceThreadId],
+          },
+        },
+      });
+
+      const branchSource = directory.worktreePath ?? directory.path;
+      const branch = branchSource
+        ? await readCurrentGitBranch(branchSource).catch(() => undefined)
+        : undefined;
+      return {
+        ok: true,
+        data: {
+          backend,
+          threadId: sourceThreadId,
+          directory: overlay.extraLinkedDirectories.find(
+            (current) => current.id === directory.id,
+          ) ?? directory,
+          workspaceMode,
+          ...(branch ? { branch } : {}),
+          message:
+            workspaceMode === "new_worktree"
+              ? "Attached a managed worktree directory to this thread."
+              : "Attached a secondary directory to this thread.",
+        } satisfies AttachThreadDirectoryResult,
+      };
+    } catch (error) {
+      await rollback?.().catch((rollbackError) => {
+        backendRegistryLog.warn("attach_thread_directory rollback failed", {
+          error:
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : String(rollbackError),
+          threadId: sourceThreadId,
+        });
+      });
+      return threadOrchestrationFailure(
+        "internal_error",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async createAttachedLocalDirectory(
+    directoryPath: string,
+  ): Promise<LinkedDirectorySummary> {
+    const primaryPath = await this.gitDirectoryService.resolvePrimaryWorkspacePath(
+      directoryPath,
+    );
+    if (!primaryPath) {
+      throw new Error("path must be inside a Git repository.");
+    }
+    const [directory] = buildLocalLinkedDirectory(primaryPath);
+    if (!directory) {
+      throw new Error("failed to build linked directory metadata.");
+    }
+    return directory;
+  }
+
+  private async createAttachedWorktreeDirectory(params: {
+    backend: AppServerBackendKind;
+    args: AttachThreadDirectoryToolArgs;
+    sourceThreadId: string;
+  }): Promise<{
+    directory: LinkedDirectorySummary;
+    rollback?: () => Promise<void>;
+  }> {
+    const sourcePath = params.args.path.trim();
+    const repositoryPath =
+      (await this.gitDirectoryService.resolvePrimaryWorkspacePath(sourcePath)) ??
+      sourcePath;
+    const prepared = await this.gitDirectoryService.prepareLaunchpadWorkspace({
+      backend: params.backend,
+      branchName: params.args.branchName,
+      directoryKind: "directory",
+      directoryLabel: path.basename(repositoryPath) || repositoryPath,
+      directoryPath: repositoryPath,
+      workMode: "worktree",
+      worktreeBranchMode: params.args.worktreeBranchMode ?? "detached",
+    });
+    if (prepared.workMode !== "worktree" || !prepared.cwd?.trim()) {
+      throw new Error("PwrAgent could not allocate a managed worktree.");
+    }
+    const [directory] = buildWorktreeLinkedDirectory({
+      repositoryPath: prepared.repositoryPath ?? repositoryPath,
+      worktreePath: prepared.cwd,
+      label: path.basename(prepared.repositoryPath ?? repositoryPath) || repositoryPath,
+    });
+    if (!directory) {
+      throw new Error("failed to build worktree linked directory metadata.");
+    }
+    await this.recordCodexWorktreeOwnerThread({
+      backend: params.backend,
+      threadId: params.sourceThreadId,
+      worktreePath: prepared.cwd,
+    });
+    return {
+      directory,
+      rollback: prepared.rollback,
+    };
+  }
+
+  private async detachThreadDirectory(
+    request: PwrAgentThreadOrchestrationRequest<"detach_thread_directory">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const sourceBackend = request.context.backend;
+    const sourceThreadId = request.context.threadId;
+    const sourceTurnId = request.context.turnId?.trim();
+    if (
+      !sourceTurnId ||
+      !this.isLiveDynamicToolCall(sourceBackend, {
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+      })
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Directory detachment tools must be invoked from a live turn.",
+      );
+    }
+    const backend = request.args.backend ?? sourceBackend;
+    if (!isAppServerBackendKind(backend)) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "backend must be a known PwrAgent backend.",
+      );
+    }
+    if (backend !== sourceBackend) {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        "Directory detachment currently supports only the invoking thread backend.",
+      );
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend,
+      threadId: sourceThreadId,
+    });
+    const matched = overlay?.extraLinkedDirectories.find((directory) =>
+      linkedDirectoryMatchesDetachArgs(directory, request.args),
+    );
+    if (!matched) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Only secondary directories attached to this thread can be detached.",
+      );
+    }
+
+    const next = await this.overlayStore.removeLinkedDirectory({
+      backend,
+      threadId: sourceThreadId,
+      directory: matched,
+    });
+    await this.publishLocalEvent({
+      backend,
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: {
+          reason: "selected-thread",
+          threadIds: [sourceThreadId],
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      data: {
+        backend,
+        threadId: sourceThreadId,
+        detachedDirectory: matched,
+        directories: next.extraLinkedDirectories,
+        message: "Detached a secondary directory from this thread.",
+      },
     };
   }
 

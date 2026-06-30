@@ -13,7 +13,10 @@ import {
 } from "./context-rail-shared";
 
 type LinkedProjectsPanelProps = {
-  desktopApi?: Pick<DesktopApi, "attachDirectoryToThread" | "pickDirectoryFromDisk">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "attachDirectoryToThread" | "detachDirectoryFromThread" | "pickDirectoryFromDisk"
+  >;
   onRefreshNavigation?: () => Promise<void>;
   thread: NavigationThreadSummary;
   showTooltip: ShowRailTooltip;
@@ -29,6 +32,8 @@ type LinkedProjectsPanelProps = {
 export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
   const [attachError, setAttachError] = useState<string>();
   const [attaching, setAttaching] = useState(false);
+  const [detachError, setDetachError] = useState<string>();
+  const [detachingDirectoryId, setDetachingDirectoryId] = useState<string>();
   const directories = dedupeLinkedProjectDirectories(props.thread.linkedDirectories);
   const prs = props.thread.prs ?? [];
   const branch = props.thread.gitBranch;
@@ -40,6 +45,7 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
       return;
     }
     setAttachError(undefined);
+    setDetachError(undefined);
     setAttaching(true);
     try {
       const picked = await props.desktopApi.pickDirectoryFromDisk();
@@ -59,6 +65,30 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
       await props.onRefreshNavigation?.();
     } finally {
       setAttaching(false);
+    }
+  };
+  const detachDirectory = async (
+    directory: NavigationThreadSummary["linkedDirectories"][number],
+  ): Promise<void> => {
+    if (!props.desktopApi?.detachDirectoryFromThread) {
+      return;
+    }
+    setAttachError(undefined);
+    setDetachError(undefined);
+    setDetachingDirectoryId(directory.id);
+    try {
+      const detached = await props.desktopApi.detachDirectoryFromThread({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        directory,
+      });
+      if (!detached.ok) {
+        setDetachError(detached.message);
+        return;
+      }
+      await props.onRefreshNavigation?.();
+    } finally {
+      setDetachingDirectoryId(undefined);
     }
   };
 
@@ -83,35 +113,56 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
       {attachError ? (
         <p className="context-empty context-empty--warning">{attachError}</p>
       ) : null}
+      {detachError ? (
+        <p className="context-empty context-empty--warning">{detachError}</p>
+      ) : null}
       {directories.length > 0 ? (
         <ul className="context-list linked-projects-list">
-          {directories.map((directory) => {
+          {directories.map((directory, index) => {
             const worktreePath = directory.worktreePath ?? directory.path;
+            const canDetachDirectory = Boolean(
+              index > 0 && props.desktopApi?.detachDirectoryFromThread,
+            );
+            const detaching = detachingDirectoryId === directory.id;
             return (
               <li key={directory.id} className="linked-project">
-                <div className="context-list__label">
-                  <CopyValueButton
-                    label={`Copy path for ${directory.label}`}
-                    value={worktreePath}
-                    onBlur={props.hideTooltip}
-                    onCopy={handleCopyPath}
-                    onShowTooltip={props.showTooltip}
-                  />
-                  <TooltipValue
-                    label={`Path for ${directory.label}`}
-                    value={worktreePath}
-                    onBlur={props.hideTooltip}
-                    onShowTooltip={props.showTooltip}
-                  >
-                    <span aria-hidden="true" className="context-list__icon">
-                      {directory.kind === "worktree" ? (
-                        <WorktreeIcon size={14} />
-                      ) : (
-                        <FolderIcon size={14} />
-                      )}
-                    </span>
-                    {directory.label}
-                  </TooltipValue>
+                <div className="linked-project__heading">
+                  <div className="context-list__label">
+                    <CopyValueButton
+                      label={`Copy path for ${directory.label}`}
+                      value={worktreePath}
+                      onBlur={props.hideTooltip}
+                      onCopy={handleCopyPath}
+                      onShowTooltip={props.showTooltip}
+                    />
+                    <TooltipValue
+                      label={`Path for ${directory.label}`}
+                      value={worktreePath}
+                      onBlur={props.hideTooltip}
+                      onShowTooltip={props.showTooltip}
+                    >
+                      <span aria-hidden="true" className="context-list__icon">
+                        {directory.kind === "worktree" ? (
+                          <WorktreeIcon size={14} />
+                        ) : (
+                          <FolderIcon size={14} />
+                        )}
+                      </span>
+                      {directory.label}
+                    </TooltipValue>
+                  </div>
+                  {canDetachDirectory ? (
+                    <button
+                      className="context-list__action context-list__action--danger"
+                      disabled={detaching}
+                      type="button"
+                      onClick={() => {
+                        void detachDirectory(directory);
+                      }}
+                    >
+                      {detaching ? "Detaching" : "Detach"}
+                    </button>
+                  ) : null}
                 </div>
                 <dl className="linked-project__facts">
                   <div>

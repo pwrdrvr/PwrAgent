@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ATTACH_THREAD_DIRECTORY_WORKSPACE_MODES,
   DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY,
   PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES,
   PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES,
+  type AttachThreadDirectoryResult,
+  type AttachThreadDirectoryToolArgs,
+  type DetachThreadDirectoryResult,
+  type DetachThreadDirectoryToolArgs,
   type HandoffTaskResult,
   type HandoffTaskToolArgs,
   type MoveThreadWorkspaceResult,
@@ -14,6 +19,8 @@ import {
 describe("thread orchestration tool contracts", () => {
   it("defines the handoff task operation", () => {
     expect(PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES).toEqual([
+      "attach_thread_directory",
+      "detach_thread_directory",
       "handoff_task",
       "move_thread_workspace",
       "send_message_to_thread",
@@ -53,6 +60,47 @@ describe("thread orchestration tool contracts", () => {
       cwd: "/Users/test/OtherRepo",
       messagingAttachment: "new_child",
     });
+  });
+
+  it("models attach and detach directory operations", () => {
+    expect(ATTACH_THREAD_DIRECTORY_WORKSPACE_MODES).toEqual([
+      "local",
+      "new_worktree",
+    ]);
+
+    const attachArgs = {
+      path: "/repo/agent-kit",
+      workspaceMode: "new_worktree",
+      branchName: "origin/main",
+      worktreeBranchMode: "detached",
+    } satisfies AttachThreadDirectoryToolArgs;
+    const attachResult: AttachThreadDirectoryResult = {
+      backend: "codex",
+      threadId: "thread-1",
+      workspaceMode: attachArgs.workspaceMode,
+      directory: {
+        id: "/repo/agent-kit",
+        kind: "worktree",
+        label: "agent-kit",
+        path: attachArgs.path,
+        worktreePath: "/worktrees/agent-kit",
+      },
+      message: "Attached a managed worktree directory to this thread.",
+    };
+    const detachArgs = {
+      worktreePath: "/worktrees/agent-kit",
+    } satisfies DetachThreadDirectoryToolArgs;
+    const detachResult: DetachThreadDirectoryResult = {
+      backend: "codex",
+      threadId: "thread-1",
+      detachedDirectory: attachResult.directory,
+      directories: [],
+      message: "Detached a secondary directory from this thread.",
+    };
+
+    expect(JSON.parse(JSON.stringify(attachResult))).toEqual(attachResult);
+    expect(JSON.parse(JSON.stringify(detachArgs))).toEqual(detachArgs);
+    expect(JSON.parse(JSON.stringify(detachResult))).toEqual(detachResult);
   });
 
   it("keeps handoff origin serializable and separate from parent grouping", () => {

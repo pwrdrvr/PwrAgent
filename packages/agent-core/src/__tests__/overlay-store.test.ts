@@ -129,6 +129,45 @@ describe("OverlayStore", () => {
     ]);
   });
 
+  it("adds and removes linked directories using path-compatible identities", async () => {
+    const store = await createStore();
+
+    await store.addLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: "/repo/app",
+        kind: "local",
+        label: "app",
+        path: "/repo/app",
+      },
+    });
+    let overlay = await store.addLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: "directory:/repo/app",
+        kind: "local",
+        label: "app",
+        path: "/repo/app",
+      },
+    });
+    expect(overlay.extraLinkedDirectories).toHaveLength(1);
+    expect(overlay.extraLinkedDirectories[0]?.id).toBe("directory:/repo/app");
+
+    overlay = await store.removeLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: "/different-id",
+        kind: "local",
+        label: "app",
+        path: "/repo/app",
+      },
+    });
+    expect(overlay.extraLinkedDirectories).toEqual([]);
+  });
+
   it("replaces the active workspace linked directory while preserving unrelated links", async () => {
     const store = await createStore();
 

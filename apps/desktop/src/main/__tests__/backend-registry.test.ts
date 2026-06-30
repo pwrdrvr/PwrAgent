@@ -655,6 +655,31 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    removeLinkedDirectory: async ({
+      backend,
+      threadId,
+      directory,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      directory: ThreadOverlayState["extraLinkedDirectories"][number];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        extraLinkedDirectories: current.extraLinkedDirectories.filter(
+          (candidate) => candidate.id !== directory.id,
+        ),
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     addThreadPullRequestReference: async ({
       backend,
       threadId,
@@ -18189,6 +18214,243 @@ script = "printf setup"
         repositoryPath: "/repo/pwragent",
       }),
     ]);
+
+    await registry.close();
+  });
+
+  it("lets an agent attach a managed worktree directory to the current thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": createAgentOverlay(),
+      },
+    });
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: "/worktrees/agent-kit",
+      repositoryPath: "/repo/agent-kit",
+      rollback: vi.fn(async () => undefined),
+      workMode: "worktree" as const,
+    }));
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => undefined);
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread,
+        resolvePrimaryWorkspacePath: vi.fn(async () => "/repo/agent-kit"),
+      } as never,
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "attach_thread_directory",
+        arguments: {
+          path: "/repo/agent-kit",
+          workspaceMode: "new_worktree",
+          branchName: "origin/main",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    expect(prepareLaunchpadWorkspace).toHaveBeenCalledWith({
+      backend: "codex",
+      branchName: "origin/main",
+      directoryKind: "directory",
+      directoryLabel: "agent-kit",
+      directoryPath: "/repo/agent-kit",
+      workMode: "worktree",
+      worktreeBranchMode: "detached",
+    });
+    expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
+      threadId: "agent-thread",
+      worktreePath: "/worktrees/agent-kit",
+    });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      backend: "codex",
+      threadId: "agent-thread",
+      workspaceMode: "new_worktree",
+      directory: {
+        kind: "worktree",
+        label: "agent-kit",
+        path: expectedDir("/repo/agent-kit"),
+        worktreePath: expectedDir("/worktrees/agent-kit"),
+      },
+    });
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "agent-thread",
+    });
+    expect(overlay?.extraLinkedDirectories).toEqual([
+      expect.objectContaining({
+        kind: "worktree",
+        path: expectedDir("/repo/agent-kit"),
+        worktreePath: expectedDir("/worktrees/agent-kit"),
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("lets an agent detach a secondary directory from the current thread", async () => {
+    const secondaryDirectory = {
+      id: expectedDir("/repo/agent-kit"),
+      kind: "local" as const,
+      label: "agent-kit",
+      path: expectedDir("/repo/agent-kit"),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": {
+          ...createAgentOverlay(),
+          extraLinkedDirectories: [secondaryDirectory],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "detach_thread_directory",
+        arguments: {
+          path: "/repo/agent-kit",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      backend: "codex",
+      threadId: "agent-thread",
+      detachedDirectory: {
+        label: "agent-kit",
+        path: expectedDir("/repo/agent-kit"),
+      },
+      directories: [],
+    });
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "agent-thread",
+    });
+    expect(overlay?.extraLinkedDirectories).toEqual([]);
+
+    await registry.close();
+  });
+
+  it("rejects detaching the primary runtime directory through the dynamic tool", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "detach_thread_directory",
+        arguments: {
+          path: "/repo/pwragent",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "forbidden",
+              message:
+                "Only secondary directories attached to this thread can be detached.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
 
     await registry.close();
   });

@@ -12,6 +12,40 @@ describe("pwragent thread orchestration agent tools", () => {
     expect(router.buildDynamicToolSpecs()).toEqual([
       expect.objectContaining({
         namespace: "pwragent",
+        name: "attach_thread_directory",
+        description: expect.stringContaining("secondary worktree"),
+        deferLoading: false,
+        inputSchema: expect.objectContaining({
+          required: ["path"],
+          properties: expect.objectContaining({
+            workspaceMode: expect.objectContaining({
+              enum: ["local", "new_worktree"],
+            }),
+            worktreeBranchMode: expect.objectContaining({
+              enum: ["attached", "detached"],
+            }),
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        namespace: "pwragent",
+        name: "detach_thread_directory",
+        description: expect.stringContaining("primary provider/runtime cwd"),
+        deferLoading: false,
+        inputSchema: expect.objectContaining({
+          additionalProperties: false,
+          properties: expect.objectContaining({
+            directoryId: expect.objectContaining({
+              description: expect.stringContaining("linked-directory id"),
+            }),
+            worktreePath: expect.objectContaining({
+              description: expect.stringContaining("worktree path"),
+            }),
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        namespace: "pwragent",
         name: "handoff_task",
         description: expect.stringContaining("backports"),
         deferLoading: false,
@@ -177,6 +211,79 @@ describe("pwragent thread orchestration agent tools", () => {
           tool: "move_thread_workspace",
           arguments: {
             sourcePath: "  ",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("validates attach_thread_directory before dispatch", async () => {
+    const handler = vi.fn();
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+
+    await expect(
+      router.handleDynamicToolCall({
+        backend: "codex",
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: "pwragent",
+          tool: "attach_thread_directory",
+          arguments: {
+            path: "  ",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    await expect(
+      router.handleDynamicToolCall({
+        backend: "codex",
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-2",
+          namespace: "pwragent",
+          tool: "attach_thread_directory",
+          arguments: {
+            path: "/repo/app",
+            workspaceMode: "same_workspace",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("validates detach_thread_directory before dispatch", async () => {
+    const handler = vi.fn();
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+
+    await expect(
+      router.handleDynamicToolCall({
+        backend: "codex",
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: "pwragent",
+          tool: "detach_thread_directory",
+          arguments: {},
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    await expect(
+      router.handleDynamicToolCall({
+        backend: "codex",
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-2",
+          namespace: "pwragent",
+          tool: "detach_thread_directory",
+          arguments: {
+            path: "  ",
           },
         },
       }),
@@ -365,6 +472,113 @@ describe("pwragent thread orchestration agent tools", () => {
         repositoryPath: "/repo/app",
         sourcePath: "/repo/app",
         leaveLocalBranch: "main",
+      },
+    });
+  });
+
+  it("normalizes attach_thread_directory args and dispatches with caller context", async () => {
+    const handler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        backend: "codex" as const,
+        threadId: "thread-1",
+        workspaceMode: "new_worktree" as const,
+        directory: {
+          id: "/repo/app",
+          kind: "worktree" as const,
+          label: "app",
+          path: "/repo/app",
+          worktreePath: "/worktrees/app",
+        },
+        message: "Attached a managed worktree directory to this thread.",
+      },
+    }));
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+
+    await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: "pwragent",
+        tool: "attach_thread_directory",
+        arguments: {
+          backend: " codex ",
+          path: " /repo/app ",
+          workspaceMode: "new_worktree",
+          branchName: " origin/main ",
+          worktreeBranchMode: "attached",
+        },
+      },
+    });
+
+    expect(handler).toHaveBeenCalledWith({
+      operation: "attach_thread_directory",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        callId: "call-1",
+        turnId: "turn-1",
+      },
+      args: {
+        backend: "codex",
+        path: "/repo/app",
+        workspaceMode: "new_worktree",
+        branchName: "origin/main",
+        worktreeBranchMode: "attached",
+      },
+    });
+  });
+
+  it("normalizes detach_thread_directory args and dispatches with caller context", async () => {
+    const handler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        backend: "codex" as const,
+        threadId: "thread-1",
+        detachedDirectory: {
+          id: "/repo/app",
+          kind: "local" as const,
+          label: "app",
+          path: "/repo/app",
+        },
+        directories: [],
+        message: "Detached a secondary directory from this thread.",
+      },
+    }));
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+
+    await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: "pwragent",
+        tool: "detach_thread_directory",
+        arguments: {
+          backend: " codex ",
+          directoryId: " directory:/repo/app ",
+          path: " /repo/app ",
+          worktreePath: " /worktrees/app ",
+        },
+      },
+    });
+
+    expect(handler).toHaveBeenCalledWith({
+      operation: "detach_thread_directory",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        callId: "call-1",
+        turnId: "turn-1",
+      },
+      args: {
+        backend: "codex",
+        directoryId: "directory:/repo/app",
+        path: "/repo/app",
+        worktreePath: "/worktrees/app",
       },
     });
   });
