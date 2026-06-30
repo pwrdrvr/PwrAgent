@@ -276,6 +276,7 @@ describe("GrokThreadTitleGenerator", () => {
       status: "ok",
       object: { title: "Thread naming" },
       cachedTokens: 8,
+      model: DEFAULT_GROK_THREAD_TITLE_MODEL,
     });
 
     expect(client.generateObject).toHaveBeenCalledWith(
