@@ -16264,25 +16264,22 @@ script = "printf setup"
       } as AppServerPendingRequestNotification);
 
       expect(response).toMatchObject({ success: true });
-      expect(codexClient.lastStartThreadParams?.cwd).toEqual(
-        expect.stringContaining(expectedDir(path.join(repoPath, ".worktrees"))),
-      );
-      expect(codexClient.lastStartThreadParams?.cwd).not.toContain(
-        expectedDir(scratchPath),
-      );
+      const handoffCwd = expectedDir(codexClient.lastStartThreadParams?.cwd ?? "");
+      expect(handoffCwd).toContain(expectedDir(path.join(repoPath, ".worktrees")));
+      expect(handoffCwd).not.toContain(expectedDir(scratchPath));
       expect(codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toBeUndefined();
       const payload = JSON.parse(
         (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
       );
       expect(payload.workspace).toMatchObject({
         mode: "new_worktree",
-        cwd: codexClient.lastStartThreadParams?.cwd,
+        cwd: handoffCwd,
         branch: "HEAD",
         linkedDirectory: {
           kind: "worktree",
           label: "other-project",
           path: expectedDir(await realpath(repoPath)),
-          worktreePath: codexClient.lastStartThreadParams?.cwd,
+          worktreePath: handoffCwd,
         },
         git: {
           kind: "git_worktree",
@@ -16408,7 +16405,7 @@ script = "printf setup"
       );
       expect(payload.workspace).toMatchObject({
         mode: "none",
-        cwd: scratchPath,
+        cwd: expectedDir(scratchPath),
         git: {
           kind: "non_git",
           worktreeCreationAvailable: false,
