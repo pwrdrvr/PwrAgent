@@ -917,29 +917,6 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     await run;
   }
 
-  private async shouldDropAmbientSharedMessage(params: {
-    channel: MessagingChannelKind;
-    event: MessagingInboundEvent;
-    store: MessagingStoreLike;
-  }): Promise<boolean> {
-    const { event } = params;
-    if (event.kind !== "text" && event.kind !== "media") {
-      return false;
-    }
-    if (event.botMention || event.channel.conversation.kind === "dm") {
-      return false;
-    }
-    const binding = await params.store.findActiveBindingForChannel(event.channel);
-    if (binding?.targetKind === "thread") {
-      return false;
-    }
-    return responseModeForChannel(
-      await this.loadConfig(),
-      params.channel,
-      event.channel,
-    ) === "mention_only";
-  }
-
   private async startRunningAdapter(params: {
     adapter: DesktopMessagingAdapter;
     config: DesktopMessagingConfig;
@@ -1042,16 +1019,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           return;
         }
         const authorized = authorization.actorIdSet.has(event.actor.platformUserId);
-        if (
-          authorized &&
-          await this.shouldDropAmbientSharedMessage({
-            channel: adapter.channel,
-            event,
-            store,
-          })
-        ) {
-          return;
-        }
+        // Do NOT drop ambient (non-@mention) messages here. The "@mention only"
+        // response mode must not starve inbound automations or the live trigger
+        // preview — both run inside controller.handleInboundEvent and have their
+        // own per-trigger config ("automations are allowed to do what they want
+        // to do"). The controller's own ambient gate (handleText / handleMedia)
+        // still suppresses a NORMAL agent reply for these messages, so response
+        // mode is honored without blocking automations.
         this.recordActivityFromInbound(adapter.channel, event, authorized);
         try {
           if (!authorized) {

@@ -347,6 +347,57 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it("forwards ambient mention-only messages to the automation handler", async () => {
+    await prepareRuntimeStore();
+    const adapter = createAdapter("telegram");
+    const bridge = createBackendBridge();
+    const automationInboundHandler = vi.fn(async () => false);
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = trackRuntime(
+      new Runtime({
+        adapterFactory: () => [adapter],
+        backendBridge: bridge,
+        automationInboundHandler,
+        config: {
+          inputDebounceMs: 0,
+          telegram: {
+            channel: "telegram",
+            botToken: "telegram-token",
+            authorizedActorIds: [{ id: "user-1", displayName: "" }],
+            responseMode: "mention_only",
+          },
+        },
+      }),
+    );
+
+    await runtime.start();
+    // Ambient (no botMention) message from an authorized actor in a shared
+    // channel, with the channel set to @mention-only. The automation handler
+    // must still see it (its own trigger config decides) even though the bot
+    // will not reply normally.
+    await adapter.listener?.({
+      id: "ambient-1",
+      kind: "text",
+      actor: { platformUserId: "user-1" },
+      channel: {
+        channel: "telegram",
+        conversation: { id: "chat-ambient", kind: "channel" },
+      },
+      receivedAt: 1000,
+      text: "ERROR something happened",
+    });
+
+    expect(automationInboundHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "text", text: "ERROR something happened" }),
+    );
+    // The @mention-only mode still suppresses a normal agent reply.
+    expect(
+      adapter.delivered.some((intent) => intent.kind === "message"),
+    ).toBe(false);
+  });
+
   it("logs inbound controller failures without rejecting the adapter listener", async () => {
     const { runtime, adapter, bridge } = await createRuntimeHarness();
     vi.mocked(bridge.getNavigationSnapshot).mockRejectedValueOnce(
