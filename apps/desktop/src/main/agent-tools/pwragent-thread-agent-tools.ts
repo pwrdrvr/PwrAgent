@@ -75,7 +75,7 @@ function descriptionForOperation(
     case "read_thread":
       return "Read a bounded page of another known PwrAgent thread's recent transcript and activity. Use search_threads first when the threadId is unknown.";
     case "get_thread_status":
-      return "Read status and compact metadata for a known PwrAgent thread, including linked directories, repository groups, pull requests, pendingHandoffs when this thread has child handoffs that are still being created, and pendingWorkspaceMoves when this thread has same-thread workspace moves in progress.";
+      return "Read status and compact metadata for a PwrAgent thread, including linked directories, repository groups, pull requests, pendingHandoffs when this thread has child handoffs that are still being created, and pendingWorkspaceMoves when this thread has same-thread workspace moves in progress. Omit backend and threadId to inspect the current thread; use this for questions like which directories or projects this thread is attached to.";
     case "attach_thread_pull_request":
       return "Attach a pull request reference to a PwrAgent thread. Use this when a PR was created outside the thread's current working directory or automatic branch-based discovery will not see it. Accepts a full PR/MR URL, a full provider/org/repo/number identity, or a bare number when the thread has exactly one inferable repository.";
     case "check_thread_pull_request_status":
@@ -167,12 +167,17 @@ function inputSchemaForOperation(
       return {
         type: "object",
         additionalProperties: false,
-        required: ["backend", "threadId"],
         properties: {
           backend: {
             type: "string",
+            description:
+              "Backend that owns the thread. Defaults to the invoking thread's backend.",
           },
-          threadId: { type: "string" },
+          threadId: {
+            type: "string",
+            description:
+              "Thread id to inspect. Defaults to the invoking PwrAgent thread id.",
+          },
         },
       };
     case "read_thread":

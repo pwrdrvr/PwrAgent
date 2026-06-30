@@ -89,8 +89,14 @@ export type SearchThreadsToolArgs = {
 };
 
 export type GetThreadStatusToolArgs = {
-  backend: AppServerBackendKind;
-  threadId: ThreadIdentifier;
+  /**
+   * Defaults to the invoking PwrAgent thread's backend when omitted.
+   */
+  backend?: AppServerBackendKind;
+  /**
+   * Defaults to the invoking PwrAgent thread id when omitted.
+   */
+  threadId?: ThreadIdentifier;
 };
 
 export type ReadThreadToolArgs = {

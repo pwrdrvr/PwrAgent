@@ -17029,7 +17029,8 @@ export class DesktopBackendRegistry {
     }
 
     if (request.operation === "get_thread_status") {
-      if (!isAppServerBackendKind(request.args.backend)) {
+      const backend = request.args.backend ?? request.context.backend;
+      if (!isAppServerBackendKind(backend)) {
         return {
           ok: false,
           error: {
@@ -17038,7 +17039,7 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      const threadId = request.args.threadId?.trim();
+      const threadId = request.args.threadId?.trim() || request.context.threadId;
       if (!threadId) {
         return {
           ok: false,
@@ -17049,7 +17050,7 @@ export class DesktopBackendRegistry {
         };
       }
       const activeThreads = await this.listThreads({
-        backend: request.args.backend,
+        backend,
         archived: false,
         callerReason: "agent-thread-inspection",
       });
@@ -17057,7 +17058,7 @@ export class DesktopBackendRegistry {
       if (candidateThreads.length === 0) {
         candidateThreads = (
           await this.listThreads({
-            backend: request.args.backend,
+            backend,
             archived: true,
             callerReason: "agent-thread-inspection:archived",
           })
@@ -17069,27 +17070,27 @@ export class DesktopBackendRegistry {
           ok: false,
           error: {
             code: "not_found",
-            message: `Thread ${request.args.backend}:${threadId} was not found.`,
+            message: `Thread ${backend}:${threadId} was not found.`,
           },
         };
       }
       const status = await this.readThread({
-        backend: request.args.backend,
+        backend,
         includeTurns: false,
         limit: 0,
         threadId,
       })
         .then((response) => response.threadStatus ?? response.replay.threadStatus)
         .catch((): AppServerThreadStatus | undefined => undefined);
-      const queueKey = buildThreadIdentityKey(request.args.backend, threadId);
+      const queueKey = buildThreadIdentityKey(backend, threadId);
       const queued = this.getQueuedExecutionModesSnapshot()[queueKey];
       const pendingHandoffs = this.getPendingThreadHandoffsForInspection({
-        backend: request.args.backend,
+        backend,
         sourceThreadId: threadId,
       });
       const pendingWorkspaceMoves =
         this.getPendingThreadWorkspaceMovesForInspection({
-          backend: request.args.backend,
+          backend,
           sourceThreadId: threadId,
         });
       return {
@@ -18803,7 +18804,10 @@ function toThreadInspectionSummary(
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
   const linkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity(
-    thread.linkedDirectories,
+    [
+      ...(overlay?.extraLinkedDirectories ?? []),
+      ...thread.linkedDirectories,
+    ],
   );
   return {
     backend: thread.source,
@@ -18835,7 +18839,10 @@ function toThreadInspectionSummaryFromSearchResult(
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
   const linkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity(
-    result.linkedDirectories,
+    [
+      ...(overlay?.extraLinkedDirectories ?? []),
+      ...result.linkedDirectories,
+    ],
   );
   return {
     backend: result.backend,

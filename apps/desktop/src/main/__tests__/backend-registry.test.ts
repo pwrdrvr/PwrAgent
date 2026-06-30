@@ -5599,6 +5599,20 @@ script = "echo setup"
         ?.filter((tool) => tool.name === "create_monitor_delegation")
         .map((tool) => tool.name),
     ).toEqual(["create_monitor_delegation"]);
+    const getThreadStatusTool = (
+      codexClient.lastStartThreadParams?.dynamicTools as Array<{
+        description?: string;
+        inputSchema?: {
+          required?: string[];
+        };
+        name: string;
+        namespace: string;
+      }> | undefined
+    )?.find((tool) => tool.name === "get_thread_status");
+    expect(getThreadStatusTool?.description).toContain(
+      "Omit backend and threadId to inspect the current thread",
+    );
+    expect(getThreadStatusTool?.inputSchema?.required ?? []).toEqual([]);
     await expect(
       overlayStore.getThreadOverlayState({
         backend: "codex",
@@ -17785,6 +17799,103 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("includes overlay-attached directories in Agent thread search results", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-1",
+          title: "Sit tight",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: "directory:/repo/pwragent",
+              kind: "local",
+              label: "PwrAgent",
+              path: "/repo/pwragent",
+            },
+          ],
+          updatedAt: 2000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [
+              {
+                id: "directory:/repo/agent-kit",
+                kind: "local",
+                label: "agent-kit",
+                path: "/repo/agent-kit",
+              },
+            ],
+          },
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "search_threads",
+        arguments: {},
+      },
+    } as AppServerPendingRequestNotification);
+
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.threads[0].linkedDirectories).toEqual([
+      expect.objectContaining({
+        label: "agent-kit",
+        path: "/repo/agent-kit",
+      }),
+      expect.objectContaining({
+        label: "PwrAgent",
+        path: "/repo/pwragent",
+      }),
+    ]);
+    expect(payload.threads[0].linkedRepositories).toEqual([
+      expect.objectContaining({
+        labels: ["agent-kit"],
+        repositoryPath: "/repo/agent-kit",
+      }),
+      expect.objectContaining({
+        labels: ["PwrAgent"],
+        repositoryPath: "/repo/pwragent",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("matches thread search alternatives without an exact phrase", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
@@ -17969,6 +18080,115 @@ script = "printf setup"
       codexClient.listThreadsCalls
         .map((call) => call.params?.archived)
     ).toEqual([false]);
+
+    await registry.close();
+  });
+
+  it("defaults get_thread_status to the invoking thread and returns attached directories", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read"] },
+      threads: [
+        {
+          id: "agent-thread",
+          title: "Sit tight",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: "directory:/repo/pwragent",
+              kind: "local",
+              label: "PwrAgent",
+              path: "/repo/pwragent",
+            },
+          ],
+          updatedAt: 2000,
+        },
+      ],
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": {
+            ...createAgentOverlay(),
+            extraLinkedDirectories: [
+              {
+                id: "directory:/repo/agent-kit",
+                kind: "local",
+                label: "agent-kit",
+                path: "/repo/agent-kit",
+              },
+            ],
+          },
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "get_thread_status",
+        arguments: {},
+      },
+    } as AppServerPendingRequestNotification);
+
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.thread).toMatchObject({
+      backend: "codex",
+      threadId: "agent-thread",
+      title: "Sit tight",
+      status: "idle",
+    });
+    expect(payload.thread.linkedDirectories).toEqual([
+      expect.objectContaining({
+        label: "agent-kit",
+        path: "/repo/agent-kit",
+      }),
+      expect.objectContaining({
+        label: "PwrAgent",
+        path: "/repo/pwragent",
+      }),
+    ]);
+    expect(payload.thread.linkedRepositories).toEqual([
+      expect.objectContaining({
+        labels: ["agent-kit"],
+        repositoryPath: "/repo/agent-kit",
+      }),
+      expect.objectContaining({
+        labels: ["PwrAgent"],
+        repositoryPath: "/repo/pwragent",
+      }),
+    ]);
 
     await registry.close();
   });
