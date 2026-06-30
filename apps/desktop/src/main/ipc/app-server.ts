@@ -25,6 +25,7 @@ import {
   type AppServerListThreadsResponse,
   type AttachDirectoryToThreadRequest,
   type AttachDirectoryToThreadResponse,
+  type CheckThreadPullRequestStatusToolArgs,
   type ThreadSearchRequest,
   type ThreadSearchResponse,
   type PersistThreadUsageActivityRequest,
@@ -104,10 +105,12 @@ import {
   type UpdateDirectoryLaunchpadResponse,
   type UpdateSubthreadOrderRequest,
   type UpdateSubthreadOrderResponse,
+  type PwrAgentThreadInspectionResponse,
 } from "@pwragent/shared";
 import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  isAppServerBackendKind,
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
@@ -652,6 +655,22 @@ function userPrRefreshLogPayload(params: {
     requestKey: params.requestKey,
     threadId: params.threadId,
     trigger: params.trigger,
+  };
+}
+
+function pullRequestStatusFreshness(
+  fetchedAt: number | undefined,
+  now: number,
+): Pick<
+  RefreshThreadPullRequestsResponse,
+  "lastStatusCheckAt" | "lastStatusCheckAgeMs"
+> {
+  if (!fetchedAt || fetchedAt <= 0) {
+    return {};
+  }
+  return {
+    lastStatusCheckAt: fetchedAt,
+    lastStatusCheckAgeMs: Math.max(0, now - fetchedAt),
   };
 }
 
@@ -1878,6 +1897,88 @@ class DesktopAppServerService {
     }
   }
 
+  async checkThreadPullRequestStatusForTool(
+    args: CheckThreadPullRequestStatusToolArgs,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (!isAppServerBackendKind(args.backend)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "backend must be a known PwrAgent backend.",
+        },
+      };
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "threadId is required.",
+        },
+      };
+    }
+
+    const activeThreads = await this.listThreads({ backend: args.backend });
+    let thread = activeThreads.threads.find((candidate) => candidate.id === threadId);
+    if (!thread) {
+      const archivedThreads = await this.listThreads({
+        backend: args.backend,
+        archived: true,
+      });
+      thread = archivedThreads.threads.find((candidate) => candidate.id === threadId);
+    }
+    if (!thread) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: `Thread ${args.backend}:${threadId} was not found.`,
+        },
+      };
+    }
+
+    const branch = args.branch?.trim()
+      || thread.observedGitBranch?.trim()
+      || thread.gitBranch?.trim()
+      || "HEAD";
+    const directoryPaths = normalizePrLookupDirectoryPaths(
+      args.directoryPaths?.length
+        ? args.directoryPaths
+        : resolveThreadPullRequestDirectoryPaths(thread),
+    );
+    const overlay = await this.getOverlayStore().getThreadOverlayState({
+      backend: args.backend,
+      threadId,
+    });
+    const lookupDirectoryPaths = directoryPaths.length > 0
+      ? directoryPaths
+      : (overlay?.prs?.length ? [os.homedir()] : []);
+    const requestedAt = Date.now();
+    const response = await this.refreshThreadPullRequests({
+      backend: args.backend,
+      threadId,
+      provider: args.provider,
+      trigger: "user",
+      branch,
+      directoryPaths: lookupDirectoryPaths,
+      includeStatusFreshness: true,
+    });
+
+    return {
+      ok: true,
+      data: {
+        pullRequestStatus: {
+          ...response,
+          requestedAt,
+          branch,
+          directoryPaths: lookupDirectoryPaths,
+        },
+      },
+    };
+  }
+
   async detachThreadPullRequest(
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse> {
@@ -1907,33 +2008,9 @@ class DesktopAppServerService {
     request: RefreshThreadPullRequestsRequest,
     requestKey: string,
   ): Promise<RefreshThreadPullRequestsResponse> {
+    const now = Date.now();
     const provider = normalizePullRequestProvider(request.provider);
     const trigger = request.trigger ?? "scheduled";
-    const fetcher = this.getPrFetcher();
-    const ghAvailable = await fetcher.isGhAvailable();
-    if (!ghAvailable) {
-      if (trigger === "user") {
-        logDebug("threadPullRequestsRefresh:skipped", userPrRefreshLogPayload({
-          backend,
-          branch: request.branch.trim(),
-          directoryPathCount: request.directoryPaths.length,
-          ghAvailable,
-          provider,
-          reason: "gh-unavailable",
-          requestKey,
-          threadId: request.threadId,
-          trigger,
-        }));
-      }
-      return {
-        backend,
-        threadId: request.threadId,
-        provider,
-        prs: [],
-        ghAvailable: false,
-      };
-    }
-
     const overlay = this.getOverlayStore();
     const existing = await overlay.getThreadOverlayState({
       backend,
@@ -1967,6 +2044,17 @@ class DesktopAppServerService {
         ? existingPrs
         : [];
     let knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
+    const statusFetchedAt = lookupEntry?.fetchedAt
+      ?? (existingPrs.length > 0 ? existing?.prsFetchedAt : undefined);
+    const freshness = pullRequestStatusFreshness(statusFetchedAt, now);
+    const responseFreshness = request.includeStatusFreshness === true
+      ? (refreshStarted: boolean) => ({
+          ...freshness,
+          refreshStarted,
+        })
+      : () => ({});
+    const fetcher = this.getPrFetcher();
+    const ghAvailable = await fetcher.isGhAvailable();
     if (trigger === "user") {
       logDebug("threadPullRequestsRefresh:requested", userPrRefreshLogPayload({
         backend,
@@ -1982,6 +2070,30 @@ class DesktopAppServerService {
         threadId: request.threadId,
         trigger,
       }));
+    }
+    if (!ghAvailable) {
+      if (trigger === "user") {
+        logDebug("threadPullRequestsRefresh:skipped", userPrRefreshLogPayload({
+          backend,
+          branch,
+          directoryPathCount: request.directoryPaths.length,
+          ghAvailable,
+          previousPrs: knownPrs,
+          provider,
+          reason: "gh-unavailable",
+          requestKey,
+          threadId: request.threadId,
+          trigger,
+        }));
+      }
+      return {
+        backend,
+        threadId: request.threadId,
+        provider,
+        prs: knownPrs,
+        ...responseFreshness(false),
+        ghAvailable: false,
+      };
     }
     if (lookupEntry && lookupEntry.fetchedAt > 0) {
       knownPrs = await this.persistPullRequestLookupHit({
@@ -2024,6 +2136,7 @@ class DesktopAppServerService {
         provider,
         prs: knownPrs,
         ghAvailable: true,
+        ...responseFreshness(false),
         shortCircuited: true,
       };
     }
@@ -2048,6 +2161,7 @@ class DesktopAppServerService {
         threadId: request.threadId,
         provider,
         prs: knownPrs,
+        ...responseFreshness(false),
         ghAvailable: true,
       };
     }
@@ -2066,6 +2180,7 @@ class DesktopAppServerService {
       threadId: request.threadId,
       provider,
       prs: knownPrs,
+      ...responseFreshness(true),
       ghAvailable: true,
     };
   }
@@ -3236,7 +3351,7 @@ function isFreshWorktreeWorkingStateCacheEntry(
 }
 
 function resolveThreadPullRequestDirectoryPaths(
-  thread: NavigationSnapshot["threads"][number],
+  thread: Pick<AppServerThreadSummary, "linkedDirectories">,
 ): string[] {
   const seen = new Set<string>();
   const paths: string[] = [];
@@ -3281,6 +3396,9 @@ export function registerAppServerIpcHandlers(): void {
   unsubscribeWorkingStateEvents = getDesktopBackendRegistry().onEvent((event) => {
     appServerService.handleAgentEventForWorkingState(event);
   });
+  getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
+    async (args) => await appServerService.checkThreadPullRequestStatusForTool(args),
+  );
 
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.handle(
@@ -3785,6 +3903,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL);
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
+  getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(undefined);
   await appServerService.close();
 }
 

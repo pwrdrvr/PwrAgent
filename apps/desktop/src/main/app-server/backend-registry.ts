@@ -122,7 +122,8 @@ import {
   type PendingThreadHandoffPhase,
   type PendingThreadHandoffSummary,
   type PendingThreadWorkspaceMoveSummary,
-  type AddPullRequestReferenceToolArgs,
+  type AttachThreadPullRequestToolArgs,
+  type CheckThreadPullRequestStatusToolArgs,
   type ReadThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
@@ -1211,6 +1212,10 @@ type PendingServerRequest = {
 };
 
 type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle">;
+
+type ThreadPullRequestStatusToolHandler = (
+  args: CheckThreadPullRequestStatusToolArgs,
+) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
 
 type ThreadTitleGenerationLogStatus =
   | ThreadTitleGenerationResult["status"]
@@ -4692,6 +4697,9 @@ export class DesktopBackendRegistry {
     async (request) => await this.handleThreadInspectionRequest(request);
   private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
     async (request) => await this.handleThreadOrchestrationRequest(request);
+  private threadPullRequestStatusToolHandler:
+    | ThreadPullRequestStatusToolHandler
+    | undefined;
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
@@ -5184,6 +5192,12 @@ export class DesktopBackendRegistry {
     handler: PwrAgentAppManagementHandler | null | undefined,
   ): void {
     this.appManagementHandler = handler ?? undefined;
+  }
+
+  setThreadPullRequestStatusToolHandler(
+    handler: ThreadPullRequestStatusToolHandler | null | undefined,
+  ): void {
+    this.threadPullRequestStatusToolHandler = handler ?? undefined;
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
@@ -17063,8 +17077,21 @@ export class DesktopBackendRegistry {
       return await this.handleReadThreadInspectionRequest(request.args);
     }
 
-    if (request.operation === "add_pull_request_reference") {
-      return await this.handleAddPullRequestReferenceInspectionRequest(request.args);
+    if (request.operation === "attach_thread_pull_request") {
+      return await this.handleAttachThreadPullRequestInspectionRequest(request.args);
+    }
+
+    if (request.operation === "check_thread_pull_request_status") {
+      if (!this.threadPullRequestStatusToolHandler) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message: "Pull request status checks are not available.",
+          },
+        };
+      }
+      return await this.threadPullRequestStatusToolHandler(request.args);
     }
 
     if (request.operation === "mutate_thread") {
@@ -17080,8 +17107,8 @@ export class DesktopBackendRegistry {
     };
   }
 
-  private async handleAddPullRequestReferenceInspectionRequest(
-    args: AddPullRequestReferenceToolArgs,
+  private async handleAttachThreadPullRequestInspectionRequest(
+    args: AttachThreadPullRequestToolArgs,
   ): Promise<PwrAgentThreadInspectionResponse> {
     if (!isAppServerBackendKind(args.backend)) {
       return {
@@ -17198,7 +17225,7 @@ export class DesktopBackendRegistry {
   }
 
   private async resolvePullRequestReferenceForThread(
-    args: AddPullRequestReferenceToolArgs,
+    args: AttachThreadPullRequestToolArgs,
     summary: ThreadInspectionSummary,
   ): Promise<
     | { ok: true; ref: PullRequestReferenceIdentity }

@@ -76,8 +76,10 @@ function descriptionForOperation(
       return "Read a bounded page of another known PwrAgent thread's recent transcript and activity. Use search_threads first when the threadId is unknown.";
     case "get_thread_status":
       return "Read status and compact metadata for a known PwrAgent thread, including linked directories, repository groups, pull requests, pendingHandoffs when this thread has child handoffs that are still being created, and pendingWorkspaceMoves when this thread has same-thread workspace moves in progress.";
-    case "add_pull_request_reference":
+    case "attach_thread_pull_request":
       return "Attach a pull request reference to a PwrAgent thread. Use this when a PR was created outside the thread's current working directory or automatic branch-based discovery will not see it. Accepts a full PR/MR URL, a full provider/org/repo/number identity, or a bare number when the thread has exactly one inferable repository.";
+    case "check_thread_pull_request_status":
+      return "Run a user-invoked pull request status check for a thread using PwrAgent's provider integration instead of shelling out. Returns cached PR status immediately with freshness metadata, and starts a provider refresh when possible.";
     case "mutate_thread":
       return "Mutate guarded PwrAgent thread settings such as the PwrAgent thread title, model settings, or execution mode. This does not rename any attached Telegram topic, Discord thread, or other messaging surface.";
   }
@@ -219,7 +221,7 @@ function inputSchemaForOperation(
           },
         },
       };
-    case "add_pull_request_reference":
+    case "attach_thread_pull_request":
       return {
         type: "object",
         additionalProperties: false,
@@ -257,6 +259,34 @@ function inputSchemaForOperation(
             type: "string",
             description:
               "Optional title to display until provider refresh hydrates current status.",
+          },
+        },
+      };
+    case "check_thread_pull_request_status":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["backend", "threadId"],
+        properties: {
+          backend: {
+            type: "string",
+          },
+          threadId: { type: "string" },
+          provider: {
+            type: "string",
+            description:
+              "Forge host such as github.com or a GitHub Enterprise host. Defaults to github.com.",
+          },
+          branch: {
+            type: "string",
+            description:
+              "Optional branch override. Defaults to the thread's observed/expected branch or HEAD.",
+          },
+          directoryPaths: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Optional cwd list for provider lookups. Defaults to the thread's linked directories.",
           },
         },
       };

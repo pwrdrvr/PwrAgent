@@ -927,6 +927,8 @@ export type RefreshThreadPullRequestsRequest = {
    * re-walk the snapshot.
    */
   directoryPaths: string[];
+  /** Include status freshness metadata in the response. Used by agent tools. */
+  includeStatusFreshness?: boolean;
 };
 
 export type DetachThreadPullRequestRequest = {
@@ -979,6 +981,15 @@ export type RefreshThreadPullRequestsResponse = {
   threadId: ThreadIdentifier;
   provider: PullRequestProvider;
   prs: PrSummary[];
+  /**
+   * Wall-clock ms for the provider/cache check that produced the returned
+   * statuses. Undefined means no successful provider check has been recorded.
+   */
+  lastStatusCheckAt?: number;
+  /** Milliseconds elapsed since `lastStatusCheckAt`, computed by main. */
+  lastStatusCheckAgeMs?: number;
+  /** True when main accepted this request and started a provider refresh. */
+  refreshStarted?: boolean;
   /** True when the host doesn't have `gh` installed; degrade silently. */
   ghAvailable: boolean;
   /**

@@ -247,6 +247,7 @@ function emitRegistryEvent(event: unknown): void {
   }
 }
 const publishLocalEvent = vi.fn(async () => undefined);
+const setThreadPullRequestStatusToolHandler = vi.fn();
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
   directoryKey: string;
   directoryKind: string;
@@ -487,6 +488,7 @@ vi.mock("../app-server/backend-registry", () => ({
     resolveEditCommitStates,
     onEvent,
     publishLocalEvent,
+    setThreadPullRequestStatusToolHandler,
     ensureDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
   }),
@@ -533,6 +535,7 @@ describe("app server ipc", () => {
     onEvent.mockClear();
     registryEventListeners.length = 0;
     publishLocalEvent.mockClear();
+    setThreadPullRequestStatusToolHandler.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
     registerDirectoryFromDiskService.mockClear();
@@ -3387,6 +3390,81 @@ describe("app server ipc", () => {
         },
       );
     });
+  });
+
+  it("registers a user-invoked PR status tool handler with freshness metadata", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const fetchedAt = Date.now() - 45_000;
+    const cachedPr = githubPr({
+      number: 944,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Cached PR",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/944",
+    });
+
+    listThreads.mockResolvedValue([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        gitBranch: "feat/status-tool",
+        linkedDirectories: [
+          {
+            id: "directory:/repo",
+            kind: "worktree",
+            label: "Repo",
+            path: "/repo",
+            worktreePath: "/repo/wt",
+          },
+        ],
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [cachedPr],
+      prsFetchedAt: fetchedAt,
+    });
+
+    registerAppServerIpcHandlers();
+    const handler = setThreadPullRequestStatusToolHandler.mock.calls.at(-1)?.[0];
+    expect(handler).toBeTypeOf("function");
+
+    const response = await handler?.({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        pullRequestStatus: {
+          backend: "codex",
+          threadId: "thread-1",
+          provider: "github.com",
+          prs: [cachedPr],
+          ghAvailable: true,
+          refreshStarted: true,
+          lastStatusCheckAt: fetchedAt,
+          branch: "feat/status-tool",
+          directoryPaths: ["/repo/wt"],
+        },
+      },
+    });
+    if (response?.ok && "pullRequestStatus" in response.data) {
+      expect(response.data.pullRequestStatus.lastStatusCheckAgeMs).toBeGreaterThanOrEqual(
+        45_000,
+      );
+      expect(response.data.pullRequestStatus.requestedAt).toBeGreaterThanOrEqual(
+        fetchedAt,
+      );
+    }
   });
 
   it("refreshes a thread's working state after the agent finishes a turn", async () => {
