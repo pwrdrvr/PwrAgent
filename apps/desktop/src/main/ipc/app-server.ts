@@ -478,6 +478,21 @@ function linkedDirectoriesMatchForDetach(
   );
 }
 
+function countDistinctLinkedDirectories(
+  directories: LinkedDirectorySummary[],
+): number {
+  const seen = new Set<string>();
+  for (const directory of directories) {
+    const key = [
+      directory.kind,
+      normalizeLinkedDirectoryPathForMatch(directory.path),
+      normalizeLinkedDirectoryPathForMatch(directory.worktreePath),
+    ].join("\0");
+    seen.add(key);
+  }
+  return seen.size;
+}
+
 function getPullRequestLookupKey(
   request: Pick<
     RefreshThreadPullRequestsRequest,
@@ -3288,6 +3303,25 @@ class DesktopAppServerService {
         reason: "primary-directory",
         message:
           "Only secondary directories attached to this thread can be detached.",
+      };
+    }
+    const fullThread = await this.listThreads({ backend })
+      .then((response) =>
+        response.threads.find((thread) => thread.id === request.threadId),
+      )
+      .catch(() => undefined);
+    const totalLinkedDirectories = countDistinctLinkedDirectories([
+      ...(fullThread?.linkedDirectories ?? []),
+      ...currentDirectories,
+    ]);
+    if (totalLinkedDirectories <= 1) {
+      return {
+        ok: false,
+        backend,
+        threadId: request.threadId,
+        reason: "last-directory",
+        message:
+          "Cannot detach the last linked directory from a thread.",
       };
     }
 

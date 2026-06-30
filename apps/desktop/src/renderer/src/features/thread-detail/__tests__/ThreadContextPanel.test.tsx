@@ -1729,7 +1729,7 @@ describe("ThreadContextPanel", () => {
     });
   });
 
-  it("allows detaching the only linked project on a directory-less thread", async () => {
+  it("does not allow detaching the only linked project on a directory-less thread", () => {
     const detachDirectoryFromThread = vi.fn(async () => ({
       ok: true as const,
       backend: "codex" as const,
@@ -1755,20 +1755,8 @@ describe("ThreadContextPanel", () => {
       },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Detach" }));
-
-    await waitFor(() => {
-      expect(detachDirectoryFromThread).toHaveBeenCalledWith({
-        backend: "codex",
-        threadId: "thread-1",
-        directory: {
-          id: "agent-kit-dir",
-          kind: "local",
-          label: "agent-kit",
-          path: "/Users/huntharo/github/agent-kit",
-        },
-      });
-    });
+    expect(screen.queryByRole("button", { name: "Detach" })).not.toBeInTheDocument();
+    expect(detachDirectoryFromThread).not.toHaveBeenCalled();
   });
 
   it("shows regular and Spark rate limits together on the Provider status tab", () => {

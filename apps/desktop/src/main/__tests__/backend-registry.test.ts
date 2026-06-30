@@ -18327,6 +18327,24 @@ script = "printf setup"
     };
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "agent-thread",
+          title: "Cross repo work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: expectedDir("/repo/pwragent"),
+              kind: "worktree",
+              label: "PwrAgent",
+              path: expectedDir("/repo/pwragent"),
+              worktreePath: expectedDir("/repo/pwragent-wt"),
+            },
+          ],
+          updatedAt: 2000,
+        },
+      ],
     });
     const overlayStore = createOverlayStoreMock({
       overlays: {
@@ -18388,6 +18406,93 @@ script = "printf setup"
       threadId: "agent-thread",
     });
     expect(overlay?.extraLinkedDirectories).toEqual([]);
+
+    await registry.close();
+  });
+
+  it("rejects detaching the last linked directory through the dynamic tool", async () => {
+    const onlyDirectory = {
+      id: expectedDir("/repo/agent-kit"),
+      kind: "local" as const,
+      label: "agent-kit",
+      path: expectedDir("/repo/agent-kit"),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "agent-thread",
+          title: "Directory-less work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 2000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": {
+          ...createAgentOverlay(),
+          extraLinkedDirectories: [onlyDirectory],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "detach_thread_directory",
+        arguments: {
+          path: "/repo/agent-kit",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify(
+            {
+              code: "forbidden",
+              message: "Cannot detach the last linked directory from a thread.",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "agent-thread",
+    });
+    expect(overlay?.extraLinkedDirectories).toEqual([onlyDirectory]);
 
     await registry.close();
   });

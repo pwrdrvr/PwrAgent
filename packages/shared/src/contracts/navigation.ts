@@ -979,6 +979,7 @@ export type AttachDirectoryToThreadResponse =
 export type DetachDirectoryFromThreadFailureReason =
   | "not-found"
   | "primary-directory"
+  | "last-directory"
   | "not-attached";
 
 export type DetachDirectoryFromThreadRequest = {

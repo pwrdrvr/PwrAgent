@@ -317,6 +317,16 @@ const addLinkedDirectory = vi.fn(async (request: {
   executionMode: "default" as const,
   extraLinkedDirectories: [request.directory],
 }));
+const removeLinkedDirectory = vi.fn(async (request: {
+  backend: "codex" | "grok";
+  threadId: string;
+  directory: unknown;
+}) => ({
+  backend: request.backend,
+  threadId: request.threadId,
+  executionMode: "default" as const,
+  extraLinkedDirectories: [],
+}));
 const setThreadPullRequests = vi.fn(async (request: {
   backend: "codex" | "grok";
   threadId: string;
@@ -453,6 +463,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     getThreadOverlayState,
     getThreadOverlayStates,
     addLinkedDirectory,
+    removeLinkedDirectory,
     setThreadPullRequests,
     addThreadPullRequestReference,
     readPrStatusCache,
@@ -540,6 +551,7 @@ describe("app server ipc", () => {
     markThreadSeen.mockClear();
     registerDirectoryFromDiskService.mockClear();
     addLinkedDirectory.mockClear();
+    removeLinkedDirectory.mockClear();
     getThreadOverlayState.mockReset();
     getThreadOverlayState.mockResolvedValue(undefined);
     getThreadOverlayStates.mockReset();
@@ -4151,6 +4163,116 @@ describe("app server ipc", () => {
         label: path.basename(directoryPath),
         path: directoryPathId,
       },
+    });
+  });
+
+  it("detaches a secondary directory while preserving the primary linked directory", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL } =
+      await import("../../shared/ipc");
+    const primaryDirectory = {
+      id: "/repo/pwragent",
+      kind: "worktree" as const,
+      label: "PwrAgent",
+      path: "/repo/pwragent",
+      worktreePath: "/repo/pwragent-wt",
+    };
+    const secondaryDirectory = {
+      id: "/repo/agent-kit",
+      kind: "local" as const,
+      label: "agent-kit",
+      path: "/repo/agent-kit",
+    };
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [primaryDirectory, secondaryDirectory],
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [secondaryDirectory],
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(
+      NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
+    )?.(
+      {},
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        directory: secondaryDirectory,
+      },
+    );
+
+    expect(removeLinkedDirectory).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: secondaryDirectory,
+    });
+    expect(response).toEqual({
+      ok: true,
+      backend: "codex",
+      threadId: "thread-1",
+      directories: [],
+    });
+  });
+
+  it("rejects detaching the last linked directory", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL } =
+      await import("../../shared/ipc");
+    const onlyDirectory = {
+      id: "/repo/agent-kit",
+      kind: "local" as const,
+      label: "agent-kit",
+      path: "/repo/agent-kit",
+    };
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [onlyDirectory],
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [onlyDirectory],
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(
+      NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
+    )?.(
+      {},
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        directory: onlyDirectory,
+      },
+    );
+
+    expect(removeLinkedDirectory).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      ok: false,
+      backend: "codex",
+      threadId: "thread-1",
+      reason: "last-directory",
+      message: "Cannot detach the last linked directory from a thread.",
     });
   });
 });

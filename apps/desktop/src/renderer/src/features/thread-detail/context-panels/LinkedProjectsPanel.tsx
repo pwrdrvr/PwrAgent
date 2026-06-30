@@ -122,6 +122,7 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
             const worktreePath = directory.worktreePath ?? directory.path;
             const canDetachDirectory = Boolean(
               props.desktopApi?.detachDirectoryFromThread
+                && directories.length > 1
                 && (index > 0 || !props.thread.projectKey?.trim()),
             );
             const detaching = detachingDirectoryId === directory.id;

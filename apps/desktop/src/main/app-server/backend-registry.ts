@@ -15057,6 +15057,21 @@ export class DesktopBackendRegistry {
         "Only secondary directories attached to this thread can be detached.",
       );
     }
+    const sourceThread = await this.findThreadForWorkspaceHandoff({
+      backend,
+      callerReason: "agent-thread-directory-detach",
+      threadId: sourceThreadId,
+    });
+    const totalLinkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity([
+      ...(sourceThread?.linkedDirectories ?? []),
+      ...(overlay?.extraLinkedDirectories ?? []),
+    ]).length;
+    if (totalLinkedDirectories <= 1) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Cannot detach the last linked directory from a thread.",
+      );
+    }
 
     const next = await this.overlayStore.removeLinkedDirectory({
       backend,
