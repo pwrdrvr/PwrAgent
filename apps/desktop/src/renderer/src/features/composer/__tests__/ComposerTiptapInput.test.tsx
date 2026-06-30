@@ -1,9 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useState } from "react";
+import { createRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerTiptapInput } from "../ComposerTiptapInput";
-import type { ComposerSkillToken } from "../ComposerInputTypes";
+import type { ComposerInputHandle, ComposerSkillToken } from "../ComposerInputTypes";
 
 afterEach(() => {
   cleanup();
@@ -885,6 +885,51 @@ describe("ComposerTiptapInput", () => {
     expect(container.querySelector("strong")).toHaveTextContent("this bold word");
     expect(container.querySelector("em")).toHaveTextContent("this italic");
     expect(container.querySelector("code")).toHaveTextContent("inline code");
+  });
+
+  it("serializes marked trailing spaces outside delimiters before plain text", async () => {
+    const boldText = "Allow detaching the only attached project - ";
+    const plainText =
+      "Wait... No.. we don't want to allow detaching the only directory.";
+    const inputRef = createRef<ComposerInputHandle>();
+
+    render(
+      <ComposerTiptapInput
+        ref={inputRef}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                {
+                  type: "text",
+                  text: boldText,
+                  marks: [{ type: "bold" }],
+                },
+                {
+                  type: "text",
+                  text: plainText,
+                },
+              ],
+            },
+          ],
+        }}
+        onChange={() => undefined}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value={`${boldText}${plainText}`}
+      />,
+    );
+
+    await screen.findByRole("textbox", { name: "Reply" });
+
+    expect(inputRef.current?.value).toBe(
+      `**Allow detaching the only attached project -** ${plainText}`,
+    );
   });
 
   it("pressing ArrowRight at the end of a bold run exits the mark with a plain space", async () => {

@@ -822,14 +822,125 @@ function getMarkdownMarkDelimiters(
   );
 }
 
+function getMarkdownTextSerialization(node: ProseMirrorNode): {
+  core: string;
+  leading: string;
+  prefix: string;
+  serialized: string;
+  suffix: string;
+  trailing: string;
+  usesDelimiters: boolean;
+} {
+  const text = node.text ?? "";
+  const delimiters = getMarkdownMarkDelimiters(node);
+  if (!delimiters.prefix || !text) {
+    return {
+      core: text,
+      leading: "",
+      prefix: "",
+      serialized: text,
+      suffix: "",
+      trailing: "",
+      usesDelimiters: false,
+    };
+  }
+
+  const leading = text.match(/^\s+/)?.[0] ?? "";
+  const remaining = text.slice(leading.length);
+  const trailing = remaining.match(/\s+$/)?.[0] ?? "";
+  const core = remaining.slice(0, remaining.length - trailing.length);
+
+  if (!core) {
+    return {
+      core: text,
+      leading: "",
+      prefix: "",
+      serialized: text,
+      suffix: "",
+      trailing: "",
+      usesDelimiters: false,
+    };
+  }
+
+  return {
+    core,
+    leading,
+    prefix: delimiters.prefix,
+    serialized: `${leading}${delimiters.prefix}${core}${delimiters.suffix}${trailing}`,
+    suffix: delimiters.suffix,
+    trailing,
+    usesDelimiters: true,
+  };
+}
+
+function getMarkdownDraftOffsetAtTextOffset(
+  node: ProseMirrorNode,
+  textOffset: number,
+): number {
+  const textLength = node.text?.length ?? 0;
+  const offset = Math.max(0, Math.min(textLength, textOffset));
+  const parts = getMarkdownTextSerialization(node);
+  if (!parts.usesDelimiters) {
+    return offset;
+  }
+
+  const coreStart = parts.leading.length;
+  const coreEnd = coreStart + parts.core.length;
+  if (offset < coreStart) {
+    return offset;
+  }
+  if (offset <= coreEnd) {
+    return parts.leading.length + parts.prefix.length + (offset - coreStart);
+  }
+  return (
+    parts.leading.length +
+    parts.prefix.length +
+    parts.core.length +
+    parts.suffix.length +
+    (offset - coreEnd)
+  );
+}
+
+function getTextOffsetAtMarkdownDraftOffset(
+  node: ProseMirrorNode,
+  draftOffset: number,
+): number {
+  const parts = getMarkdownTextSerialization(node);
+  if (!parts.usesDelimiters) {
+    return Math.max(0, Math.min(node.text?.length ?? 0, draftOffset));
+  }
+
+  if (draftOffset <= parts.leading.length) {
+    return Math.max(0, draftOffset);
+  }
+
+  const markedStart = parts.leading.length;
+  const markedEnd =
+    markedStart + parts.prefix.length + parts.core.length + parts.suffix.length;
+  if (draftOffset <= markedEnd) {
+    return (
+      parts.leading.length +
+      Math.max(
+        0,
+        Math.min(parts.core.length, draftOffset - markedStart - parts.prefix.length),
+      )
+    );
+  }
+
+  return (
+    parts.leading.length +
+    parts.core.length +
+    Math.max(0, Math.min(parts.trailing.length, draftOffset - markedEnd))
+  );
+}
+
 function appendMarkdownInlineContent(
   node: ProseMirrorNode,
   state: TiptapReadState,
 ): void {
   node.forEach((child) => {
     if (child.isText) {
-      const delimiters = getMarkdownMarkDelimiters(child);
-      state.value += `${delimiters.prefix}${child.text ?? ""}${delimiters.suffix}`;
+      state.value += getMarkdownTextSerialization(child).serialized;
       return;
     }
 
@@ -1365,21 +1476,24 @@ function getDraftIndexAtPosition(
     if (node.isText) {
       const text = node.text ?? "";
       const end = pos + text.length;
-      const delimiters =
-        mode === "markdown"
-          ? getMarkdownMarkDelimiters(node)
-          : { prefix: "", suffix: "" };
       if (position < end) {
-        index += delimiters.prefix.length + Math.max(0, position - pos);
+        const textOffset = Math.max(0, position - pos);
+        index += mode === "markdown"
+          ? getMarkdownDraftOffsetAtTextOffset(node, textOffset)
+          : textOffset;
         found = true;
         return false;
       }
       if (position === end) {
-        index += delimiters.prefix.length + text.length + delimiters.suffix.length;
+        index += mode === "markdown"
+          ? getMarkdownTextSerialization(node).serialized.length
+          : text.length;
         found = true;
         return false;
       }
-      index += delimiters.prefix.length + text.length + delimiters.suffix.length;
+      index += mode === "markdown"
+        ? getMarkdownTextSerialization(node).serialized.length
+        : text.length;
       return false;
     }
 
@@ -1459,14 +1573,13 @@ function getPositionAtDraftIndex(
 
     if (node.isText) {
       const textLength = node.text?.length ?? 0;
-      const delimiters =
-        mode === "markdown"
-          ? getMarkdownMarkDelimiters(node)
-          : { prefix: "", suffix: "" };
-      const totalLength =
-        delimiters.prefix.length + textLength + delimiters.suffix.length;
+      const totalLength = mode === "markdown"
+        ? getMarkdownTextSerialization(node).serialized.length
+        : textLength;
       if (draftIndex <= index + totalLength) {
-        const textIndex = draftIndex - index - delimiters.prefix.length;
+        const textIndex = mode === "markdown"
+          ? getTextOffsetAtMarkdownDraftOffset(node, draftIndex - index)
+          : draftIndex - index;
         position = pos + Math.max(0, Math.min(textLength, textIndex));
         found = true;
         return false;
