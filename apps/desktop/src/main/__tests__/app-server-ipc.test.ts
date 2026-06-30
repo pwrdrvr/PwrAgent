@@ -3323,6 +3323,59 @@ describe("app server ipc", () => {
     });
   });
 
+  it("passes detached merged PR commit SHAs into working-state probes", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const mergedPrSha = "b".repeat(40);
+    const detachedPr = githubPr({
+      number: 807,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Detached merged PR",
+      state: "passing",
+      lifecycleState: "merged",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/807",
+      commitShas: [mergedPrSha],
+    });
+
+    getThreadOverlayStates.mockResolvedValue({
+      "thread-1": {
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        detachedPrKeys: ["github.com/pwrdrvr/pwragent#807"],
+        detachedPrs: [detachedPr],
+      },
+    });
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [],
+        updatedAt: 2000,
+        prs: [],
+      },
+    ] as never);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    await vi.waitFor(() => {
+      expect(readWorktreeWorkingStateEntries).toHaveBeenCalledWith(
+        ["/repo/wt"],
+        {
+          acceptedPushedCommitShasByWorktreePath: {
+            "/repo/wt": [mergedPrSha],
+          },
+        },
+      );
+    });
+  });
+
   it("refreshes a thread's working state after the agent finishes a turn", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");

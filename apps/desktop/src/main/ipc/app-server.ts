@@ -1106,7 +1106,13 @@ class DesktopAppServerService {
     await this.loadThreadGitWorkingStateCache();
     this.rememberThreadWorktreePaths(canonicalSnapshot.threads);
     this.rememberThreadPrRefreshContexts(canonicalSnapshot.threads);
-    this.rememberMergedPrCommitShas(canonicalSnapshot.threads);
+    const detachedPrsByThreadKey = await this.readDetachedPrsByThreadKey(
+      canonicalSnapshot.threads,
+    );
+    this.rememberMergedPrCommitShas(
+      canonicalSnapshot.threads,
+      detachedPrsByThreadKey,
+    );
     const threadsWithWorkingState = canonicalSnapshot.threads.map((thread) =>
       this.applyCachedWorktreeWorkingState(thread),
     );
@@ -1226,15 +1232,50 @@ class DesktopAppServerService {
     }
   }
 
+  private async readDetachedPrsByThreadKey(
+    threads: NavigationSnapshot["threads"],
+  ): Promise<Map<string, PrSummary[]>> {
+    const threadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
+    for (const thread of threads) {
+      const threadIds = threadIdsByBackend.get(thread.source) ?? new Set<string>();
+      threadIds.add(thread.id);
+      threadIdsByBackend.set(thread.source, threadIds);
+    }
+
+    const detachedPrsByThreadKey = new Map<string, PrSummary[]>();
+    await Promise.all(
+      [...threadIdsByBackend.entries()].map(async ([backend, threadIds]) => {
+        const overlays = await this.getOverlayStore().getThreadOverlayStates({
+          backend,
+          threadIds: [...threadIds],
+        });
+        for (const [threadId, overlay] of Object.entries(overlays)) {
+          if (overlay?.detachedPrs?.length) {
+            detachedPrsByThreadKey.set(
+              buildThreadIdentityKey(backend, threadId),
+              overlay.detachedPrs,
+            );
+          }
+        }
+      }),
+    );
+    return detachedPrsByThreadKey;
+  }
+
   private rememberMergedPrCommitShas(
     threads: NavigationSnapshot["threads"],
+    detachedPrsByThreadKey: Map<string, PrSummary[]> = new Map(),
   ): void {
     for (const thread of threads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       this.rememberMergedPrCommitShasForThread({
         backend: thread.source,
         threadId: thread.id,
         worktreePath: thread.projectKey,
-        prs: thread.prs ?? [],
+        prs: [
+          ...(thread.prs ?? []),
+          ...(detachedPrsByThreadKey.get(threadKey) ?? []),
+        ],
       });
     }
   }
@@ -1851,6 +1892,7 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
       prs,
+      detachedPrs: overlay.detachedPrs ?? [],
     });
     return {
       backend,
@@ -2305,6 +2347,7 @@ class DesktopAppServerService {
             backend: subscriber.backend,
             threadId: subscriber.threadId,
             prs: persistedPrs,
+            detachedPrs: updated.detachedPrs ?? [],
           });
         }
       }),
@@ -2343,6 +2386,7 @@ class DesktopAppServerService {
         backend: params.backend,
         threadId: params.request.threadId,
         prs: persistedPrs,
+        detachedPrs: updated.detachedPrs ?? [],
       });
     }
     return persistedPrs;
@@ -2549,8 +2593,12 @@ class DesktopAppServerService {
     backend: AppServerBackendKind;
     threadId: string;
     prs: PrSummary[];
+    detachedPrs?: PrSummary[];
   }): Promise<void> {
-    const worktreePath = this.rememberMergedPrCommitShasForThread(params);
+    const worktreePath = this.rememberMergedPrCommitShasForThread({
+      ...params,
+      prs: [...params.prs, ...(params.detachedPrs ?? [])],
+    });
     if (worktreePath) {
       getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
       void this.loadThreadGitWorkingStateCache().then(() => {

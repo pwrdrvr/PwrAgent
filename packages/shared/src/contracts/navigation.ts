@@ -1104,6 +1104,12 @@ export type ThreadOverlayState = {
    * explicit re-attach flow exists.
    */
   detachedPrKeys?: string[];
+  /**
+   * Detached PR summaries retained for non-UI bookkeeping. These PRs stay
+   * hidden from `prs`, but merged commit SHAs still need to classify local
+   * worktree commits after a remote PR branch is deleted.
+   */
+  detachedPrs?: PrSummary[];
   /** Wall-clock ms when `prs` was last refreshed via gh. */
   prsFetchedAt?: number;
   /**

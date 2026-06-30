@@ -112,6 +112,36 @@ function filterDetachedPrs(prs: PrSummary[], detachedPrKeys: string[]): PrSummar
   return prs.filter((pr) => !detached.has(buildPullRequestStatusKey(pr)));
 }
 
+function collectDetachedPrs(
+  prs: PrSummary[],
+  detachedPrKeys: string[],
+): PrSummary[] {
+  if (detachedPrKeys.length === 0) {
+    return [];
+  }
+  const detached = new Set(detachedPrKeys);
+  return prs.filter((pr) => detached.has(buildPullRequestStatusKey(pr)));
+}
+
+function mergePrSummariesByStatusKey(
+  existingPrs: PrSummary[] | undefined,
+  nextPrs: PrSummary[],
+): PrSummary[] | undefined {
+  const byKey = new Map<string, PrSummary>();
+  for (const pr of existingPrs ?? []) {
+    const normalized = normalizePrSummary(pr);
+    byKey.set(buildPullRequestStatusKey(normalized), normalized);
+  }
+  for (const pr of nextPrs) {
+    const normalized = normalizePrSummary(pr);
+    byKey.set(buildPullRequestStatusKey(normalized), normalized);
+  }
+  const merged = [...byKey.values()].sort((left, right) =>
+    buildPullRequestStatusKey(left).localeCompare(buildPullRequestStatusKey(right)),
+  );
+  return merged.length > 0 ? merged : undefined;
+}
+
 function normalizeCommitShas(commitShas: string[] | undefined): string[] | undefined {
   const normalized = [
     ...new Set(
@@ -1172,9 +1202,14 @@ export class SqliteOverlayStore {
       extraLinkedDirectories: [],
     };
     const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys);
+    const detachedPrs = mergePrSummariesByStatusKey(
+      current.detachedPrs,
+      collectDetachedPrs(params.prs, detachedPrKeys),
+    );
     const nextState: ThreadOverlayState = {
       ...current,
       detachedPrKeys,
+      detachedPrs,
       prs: filterDetachedPrs(params.prs, detachedPrKeys).map(normalizePrSummary),
       prsFetchedAt: params.fetchedAt ?? Date.now(),
       prsRefreshKey: params.refreshKey,
@@ -1201,12 +1236,16 @@ export class SqliteOverlayStore {
         buildPullRequestStatusKey(params.pr),
       ]),
     ].sort((left, right) => left.localeCompare(right));
+    const currentPrs = (current.prs ?? []).map(normalizePrSummary);
+    const detachedPrs = mergePrSummariesByStatusKey(
+      current.detachedPrs,
+      collectDetachedPrs(currentPrs, nextDetachedKeys),
+    );
     const nextState: ThreadOverlayState = {
       ...current,
       detachedPrKeys: nextDetachedKeys,
-      prs: filterDetachedPrs(current.prs ?? [], nextDetachedKeys).map(
-        normalizePrSummary,
-      ),
+      detachedPrs,
+      prs: filterDetachedPrs(currentPrs, nextDetachedKeys),
     };
     this.putThread(threadKey, nextState);
     return nextState;
