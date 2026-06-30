@@ -48,6 +48,8 @@ function conversationKey(channel: MessagingChannelRef): string {
 }
 
 function fakeApi(spies: {
+  assistantStatusError?: Error;
+  assistantStatuses?: Array<{ channelId: string; status: string; threadTs: string }>;
   conversations?: Record<string, string>;
   deleted?: Array<{ channel: string; ts: string }>;
   posted?: unknown[];
@@ -62,6 +64,12 @@ function fakeApi(spies: {
       team: "PwrDrvr",
       team_id: "T012ABCDEF0",
     }),
+    setAssistantThreadStatus: async (params) => {
+      if (spies.assistantStatusError) {
+        throw spies.assistantStatusError;
+      }
+      spies.assistantStatuses?.push(params);
+    },
     conversationsInfo: async (params) => ({
       id: params.channel,
       name: spies.conversations?.[params.channel],
@@ -133,6 +141,181 @@ describe("SlackAdapter", () => {
     expect(adapter.capabilityProfile.actions?.maxActions).toBe(25);
     expect(adapter.capabilityProfile.actions?.supportsLayoutHints).toBe(true);
     expect(adapter.capabilityProfile.text.markdownDialect).toBe("slack-mrkdwn");
+  });
+
+  it("signals Slack Assistant thread status for active typing activity", async () => {
+    const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ assistantStatuses }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(adapter.deliver({
+      id: "activity-1",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1,
+      leaseMs: 10_000,
+      state: "active",
+      targetSurface: {
+        channel: "slack",
+        id: "binding-1",
+        state: {
+          opaque: {
+            channelId: "C012ABCDEF0",
+            threadTs: "1712023030.000000",
+          },
+        },
+      },
+    })).resolves.toMatchObject({
+      channel: "slack",
+      deliveredAt: 1_700_000_000_000,
+      outcome: "signaled",
+    });
+
+    expect(assistantStatuses).toEqual([{
+      channelId: "C012ABCDEF0",
+      status: "is working on your request...",
+      threadTs: "1712023030.000000",
+    }]);
+  });
+
+  it("clears Slack Assistant thread status for idle typing activity", async () => {
+    const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ assistantStatuses }),
+      socketClient: fakeSocket(),
+    });
+
+    await expect(adapter.deliver({
+      id: "activity-2",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1,
+      state: "idle",
+      targetSurface: {
+        channel: "slack",
+        id: "binding-1",
+        state: {
+          opaque: {
+            channelId: "C012ABCDEF0",
+            ts: "1712023030.000000",
+          },
+        },
+      },
+    })).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "signaled",
+    });
+
+    expect(assistantStatuses).toEqual([{
+      channelId: "C012ABCDEF0",
+      status: "",
+      threadTs: "1712023030.000000",
+    }]);
+  });
+
+  it("discards Slack typing activity when no thread timestamp is available", async () => {
+    const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ assistantStatuses }),
+      socketClient: fakeSocket(),
+    });
+
+    await expect(adapter.deliver({
+      id: "activity-3",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1,
+      state: "active",
+      targetSurface: {
+        channel: "slack",
+        id: "binding-1",
+        state: {
+          opaque: {
+            channelId: "C012ABCDEF0",
+          },
+        },
+      },
+    })).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "discarded",
+    });
+
+    expect(assistantStatuses).toEqual([]);
+  });
+
+  it("disables Slack Assistant status after unsupported scope errors", async () => {
+    let attempts = 0;
+    const missingScopeError = Object.assign(
+      new Error("An API error occurred: missing_scope"),
+      {
+        data: {
+          error: "missing_scope",
+          needed: "chat:write",
+        },
+      },
+    );
+    const api = fakeApi({});
+    api.setAssistantThreadStatus = async () => {
+      attempts += 1;
+      throw missingScopeError;
+    };
+    const warnings: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+      logger: {
+        warn: (_message, data) => {
+          warnings.push(data);
+        },
+      },
+    });
+    const activity = {
+      id: "activity-unsupported",
+      kind: "activity" as const,
+      activity: "typing" as const,
+      createdAt: 1,
+      state: "active" as const,
+      targetSurface: {
+        channel: "slack" as const,
+        id: "binding-1",
+        state: {
+          opaque: {
+            channelId: "C012ABCDEF0",
+            threadTs: "1712023030.000000",
+          },
+        },
+      },
+    };
+
+    await expect(adapter.deliver(activity)).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "discarded",
+    });
+    await expect(adapter.deliver({
+      ...activity,
+      id: "activity-after-disable",
+    })).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "discarded",
+    });
+
+    expect(attempts).toBe(1);
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        requiredScope: "chat:write or assistant:write",
+      }),
+    ]);
   });
 
   it("returns structured rate-limit feedback when Slack rejects a send", async () => {
