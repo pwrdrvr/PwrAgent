@@ -6044,6 +6044,21 @@ describe("CodexAppServerClient", () => {
 
     transport!.emitInbound({
       jsonrpc: "2.0",
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-title-helper",
+        turnId: "turn-title-helper",
+        tokenUsage: {
+          inputTokens: 100,
+          cachedInputTokens: 20,
+          outputTokens: 10,
+          totalTokens: 110,
+        },
+      },
+    });
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
       method: "turn/completed",
       params: {
         threadId: "thread-title-helper",
@@ -6065,6 +6080,17 @@ describe("CodexAppServerClient", () => {
       status: "ok",
       object: {
         title: "Add animated leopard tea button",
+      },
+      helperThreadId: "thread-title-helper",
+      helperTurnId: "turn-title-helper",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      serviceTier: "priority",
+      tokenUsage: {
+        inputTokens: 100,
+        cachedInputTokens: 20,
+        outputTokens: 10,
+        totalTokens: 110,
       },
     });
     expect(forwardedNotifications).toEqual([]);
@@ -6184,6 +6210,11 @@ describe("CodexAppServerClient", () => {
       object: {
         title: "Animated jaguar tea button",
       },
+      helperThreadId: "thread-title-helper",
+      helperTurnId: "turn-title-helper",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      serviceTier: "priority",
     });
 
     await client.close();
@@ -6245,6 +6276,11 @@ describe("CodexAppServerClient", () => {
       object: {
         title: "Early helper title",
       },
+      helperThreadId: "thread-title-helper",
+      helperTurnId: "turn-title-helper",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      serviceTier: "priority",
     });
 
     await client.close();

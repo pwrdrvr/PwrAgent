@@ -38,6 +38,12 @@ export type ThreadTitleAdapterResult =
       status: "ok";
       object: unknown;
       cachedTokens?: number;
+      helperThreadId?: string;
+      helperTurnId?: string;
+      model?: string;
+      reasoningEffort?: string;
+      serviceTier?: string;
+      tokenUsage?: unknown;
     }
   | {
       status: "unavailable" | "failed";
@@ -53,6 +59,12 @@ export type ThreadTitleGenerationResult =
       status: "generated";
       title: string;
       cachedTokens?: number;
+      helperThreadId?: string;
+      helperTurnId?: string;
+      model?: string;
+      reasoningEffort?: string;
+      serviceTier?: string;
+      tokenUsage?: unknown;
     }
   | {
       status: "unavailable" | "invalid" | "failed";
@@ -127,7 +139,13 @@ export class ThreadTitleGenerationService {
     return {
       status: "generated",
       title: normalized.title,
-      cachedTokens: result.cachedTokens,
+      ...(result.cachedTokens !== undefined ? { cachedTokens: result.cachedTokens } : {}),
+      ...(result.helperThreadId ? { helperThreadId: result.helperThreadId } : {}),
+      ...(result.helperTurnId ? { helperTurnId: result.helperTurnId } : {}),
+      ...(result.model ? { model: result.model } : {}),
+      ...(result.reasoningEffort ? { reasoningEffort: result.reasoningEffort } : {}),
+      ...(result.serviceTier ? { serviceTier: result.serviceTier } : {}),
+      ...(result.tokenUsage !== undefined ? { tokenUsage: result.tokenUsage } : {}),
     };
   }
 }
@@ -176,6 +194,7 @@ export class GrokThreadTitleGenerator implements ThreadTitleGenerator {
       status: "ok",
       object: result.response.object,
       cachedTokens: result.response.cachedTokens,
+      model: this.model,
     };
   }
 }

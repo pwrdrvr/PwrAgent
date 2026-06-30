@@ -430,6 +430,22 @@ function buildHelperTurnKey(threadId: string, turnId: string): string {
   return `${threadId}:${turnId}`;
 }
 
+function readHelperTokenUsage(params: unknown): unknown {
+  const record = asRecord(params);
+  if (!record) {
+    return undefined;
+  }
+  const turn = asRecord(record.turn);
+  return (
+    record.tokenUsage ??
+    record.token_usage ??
+    record.usage ??
+    turn?.tokenUsage ??
+    turn?.token_usage ??
+    turn?.usage
+  );
+}
+
 function extractTurnIdFromNotificationParams(params: unknown): string | undefined {
   const directTurnId = readStringFromRecord(params, "turnId");
   if (directTurnId) {
@@ -5276,6 +5292,7 @@ type HelperTurnResult =
   | {
       status: "ok";
       object: unknown;
+      tokenUsage?: unknown;
     }
   | {
       status: "failed";
@@ -5313,13 +5330,14 @@ export class CodexAppServerClient {
   private readonly helperTurnWaiters = new Map<
     string,
     {
-      resolve: (object: unknown) => void;
+      resolve: (result: Extract<HelperTurnResult, { status: "ok" }>) => void;
       reject: (error: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
   >();
   private readonly completedHelperTurnResults = new Map<string, HelperTurnResult>();
   private readonly helperTurnTitleObjects = new Map<string, unknown>();
+  private readonly helperTurnTokenUsage = new Map<string, unknown>();
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
@@ -5429,6 +5447,7 @@ export class CodexAppServerClient {
     this.helperThreadIds.clear();
     this.completedHelperTurnResults.clear();
     this.helperTurnTitleObjects.clear();
+    this.helperTurnTokenUsage.clear();
     await this.connection.close();
   }
 
@@ -5564,7 +5583,8 @@ export class CodexAppServerClient {
     if (
       method !== "item/completed" &&
       method !== "turn/completed" &&
-      method !== "turn/failed"
+      method !== "turn/failed" &&
+      method !== "thread/tokenUsage/updated"
     ) {
       return;
     }
@@ -5576,6 +5596,13 @@ export class CodexAppServerClient {
     }
 
     const key = buildHelperTurnKey(threadId, turnId);
+    if (method === "thread/tokenUsage/updated") {
+      const tokenUsage = readHelperTokenUsage(notification.params);
+      if (tokenUsage !== undefined) {
+        this.helperTurnTokenUsage.set(key, tokenUsage);
+      }
+      return;
+    }
     if (method === "item/completed") {
       const object = extractGeneratedTitleObject(notification.params);
       if (object) {
@@ -5588,6 +5615,7 @@ export class CodexAppServerClient {
     if (method === "turn/failed") {
       const error = new Error("codex_title_turn_failed");
       this.helperTurnTitleObjects.delete(key);
+      this.helperTurnTokenUsage.delete(key);
       if (!waiter) {
         this.completedHelperTurnResults.set(key, {
           status: "failed",
@@ -5604,7 +5632,10 @@ export class CodexAppServerClient {
     const object =
       extractGeneratedTitleObject(notification.params) ??
       this.helperTurnTitleObjects.get(key);
+    const tokenUsage =
+      readHelperTokenUsage(notification.params) ?? this.helperTurnTokenUsage.get(key);
     this.helperTurnTitleObjects.delete(key);
+    this.helperTurnTokenUsage.delete(key);
     if (!object) {
       const error = new Error("codex_title_turn_completed_without_title");
       if (!waiter) {
@@ -5624,20 +5655,25 @@ export class CodexAppServerClient {
       this.completedHelperTurnResults.set(key, {
         status: "ok",
         object,
+        ...(tokenUsage !== undefined ? { tokenUsage } : {}),
       });
       return;
     }
 
     clearTimeout(waiter.timer);
     this.helperTurnWaiters.delete(key);
-    waiter.resolve(object);
+    waiter.resolve({
+      status: "ok",
+      object,
+      ...(tokenUsage !== undefined ? { tokenUsage } : {}),
+    });
   }
 
   private waitForHelperTurnTitle(params: {
     threadId: string;
     turnId: string;
     timeoutMs: number;
-  }): Promise<unknown> {
+  }): Promise<Extract<HelperTurnResult, { status: "ok" }>> {
     const key = buildHelperTurnKey(params.threadId, params.turnId);
     const completed = this.completedHelperTurnResults.get(key);
     if (completed) {
@@ -5645,7 +5681,7 @@ export class CodexAppServerClient {
       if (completed.status === "failed") {
         return Promise.reject(completed.error);
       }
-      return Promise.resolve(completed.object);
+      return Promise.resolve(completed);
     }
 
     return new Promise((resolve, reject) => {
@@ -6243,9 +6279,17 @@ export class CodexAppServerClient {
       });
       const immediateObject = extractGeneratedTitleObject(turnStartResult);
       if (immediateObject) {
+        const immediateTurnId = extractTurnIdFromValue(turnStartResult);
+        const tokenUsage = readHelperTokenUsage(turnStartResult);
         return {
           status: "ok",
           object: immediateObject,
+          helperThreadId,
+          ...(immediateTurnId ? { helperTurnId: immediateTurnId } : {}),
+          model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+          reasoningEffort: "low",
+          serviceTier: "priority",
+          ...(tokenUsage !== undefined ? { tokenUsage } : {}),
         };
       }
 
@@ -6257,13 +6301,22 @@ export class CodexAppServerClient {
         };
       }
 
+      const helperResult = await this.waitForHelperTurnTitle({
+        threadId: helperThreadId,
+        turnId,
+        timeoutMs,
+      });
       return {
         status: "ok",
-        object: await this.waitForHelperTurnTitle({
-          threadId: helperThreadId,
-          turnId,
-          timeoutMs,
-        }),
+        object: helperResult.object,
+        helperThreadId,
+        helperTurnId: turnId,
+        model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+        reasoningEffort: "low",
+        serviceTier: "priority",
+        ...(helperResult.tokenUsage !== undefined
+          ? { tokenUsage: helperResult.tokenUsage }
+          : {}),
       };
     } catch (error) {
       return {

@@ -455,6 +455,57 @@ describe("ThreadContextPanel", () => {
     expect(modal.getByText("Codex native spawnAgent")).toBeInTheDocument();
   });
 
+  it("labels system title helper usage separately from monitor usage", () => {
+    renderPanel({
+      activeTab: "subagents",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "system:title-helper:codex:thread-title-helper-parent",
+            task: "Name this thread",
+            status: "success",
+            createdAt: 2000,
+            completedAt: 3000,
+            updatedAt: 2500,
+            agentName: "PwrAgent",
+            lastMessage: "Generated title: Readable thread title",
+            monitorThreadId: "title-helper-thread",
+            monitorTurnId: "title-helper-turn",
+            preferredModel: "gpt-5.4-mini",
+            preferredReasoningEffort: "low",
+            monitorUsage: {
+              summary: "80 uncached in · 20 cached · 10 out",
+              tokenUsage: {
+                inputTokens: 100,
+                cachedInputTokens: 20,
+                uncachedInputTokens: 80,
+                outputTokens: 10,
+                totalTokens: 110,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(
+      screen.getByText("System usage: 80 uncached in · 20 cached · 10 out"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("PwrAgent")).toBeInTheDocument();
+    expect(screen.getByText("Spawned by PwrAgent system helper.")).toBeInTheDocument();
+    expect(screen.getByText("Generated title: Readable thread title")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Monitor usage: 80 uncached in · 20 cached · 10 out"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    const modal = within(screen.getByRole("dialog"));
+    expect(modal.getByText("Source")).toBeInTheDocument();
+    expect(modal.getByText("PwrAgent system helper")).toBeInTheDocument();
+  });
+
   it("does not duplicate the Codex native source line while running", () => {
     renderPanel({
       activeTab: "subagents",

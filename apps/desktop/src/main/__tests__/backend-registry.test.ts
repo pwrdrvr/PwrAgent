@@ -51,6 +51,17 @@ import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
 
+const mainLoggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
+
+vi.mock("../log", () => ({
+  getMainLogger: vi.fn(() => mainLoggerMock),
+}));
+
 const localAcpDiscoveryMock = vi.hoisted(() => ({
   discoverLocalAcpAgentRecords: vi.fn(
     async () => [] as AcpInstalledAgentRecord[],
@@ -995,6 +1006,7 @@ class MockBackendClient {
       listThreadsDelay?: Promise<unknown>;
       archivedThreads?: AppServerThreadSummary[];
       startThreadResult?: { threadId: string };
+      startTurnDelay?: Promise<unknown>;
       startTurnError?: Error;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
@@ -1196,6 +1208,7 @@ class MockBackendClient {
     dynamicTools?: unknown;
   }): Promise<{ threadId: string; turnId: string }> {
     this.startTurnCallCount += 1;
+    await this.options.startTurnDelay;
     if (this.options.startTurnError) {
       throw this.options.startTurnError;
     }
@@ -10871,6 +10884,229 @@ command = "pnpm dev"
     expect(codexClient.lastRenameThreadParams).toEqual({
       threadId: "thread-title",
       name: "Leopard tea button",
+    });
+
+    await registry.close();
+  });
+
+  it("logs Codex title generation failures to the main log", async () => {
+    mainLoggerMock.warn.mockClear();
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "failed" as const,
+        reason: "codex_title_helper_failed",
+      })),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-title-failure",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-title-failure",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() =>
+      mainLoggerMock.warn.mock.calls.some(
+        ([message]) => message === "threadTitleGeneration",
+      ),
+    );
+
+    expect(mainLoggerMock.warn).toHaveBeenCalledWith(
+      "threadTitleGeneration",
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-title-failure",
+        status: "failed",
+        reason: "codex_title_helper_failed",
+      }),
+    );
+
+    await registry.close();
+  });
+
+  it("schedules Codex title generation from lifecycle events while turn/start is still pending", async () => {
+    const startTurnDelay = createDeferred<void>();
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Lifecycle title",
+      })),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      startTurnDelay: startTurnDelay.promise,
+      threads: [
+        {
+          id: "thread-lifecycle-title",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: titleService,
+    });
+
+    const startTurnPromise = registry.startTurn({
+      backend: "codex",
+      threadId: "thread-lifecycle-title",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() => codexClient.startTurnCallCount === 1);
+
+    await (
+      registry as unknown as { emit(event: AgentEvent): Promise<void> }
+    ).emit({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-lifecycle-title",
+          status: { type: "active" },
+        },
+      },
+    });
+    await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
+
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: "codex",
+      userPrompt: "Make button",
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-lifecycle-title",
+      name: "Lifecycle title",
+    });
+
+    startTurnDelay.resolve();
+    await expect(startTurnPromise).resolves.toEqual({
+      backend: "codex",
+      threadId: "thread-lifecycle-title",
+      turnId: "turn-1",
+    });
+    expect(titleService.generateTitle).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
+  it("persists the Codex title helper as a system sub-agent with usage", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Readable thread title",
+        helperThreadId: "title-helper-thread",
+        helperTurnId: "title-helper-turn",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        serviceTier: "priority",
+        tokenUsage: {
+          inputTokens: 100,
+          cachedInputTokens: 20,
+          outputTokens: 10,
+          totalTokens: 110,
+        },
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-title-helper-parent",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-title-helper-parent",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() => upsertSubAgentSpy.mock.calls.length > 0);
+
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-title-helper-parent",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-title-helper-parent",
+        task: "Name this thread",
+        status: "success",
+        agentName: "PwrAgent",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        monitorThreadId: "title-helper-thread",
+        monitorTurnId: "title-helper-turn",
+        lastMessage: "Generated title: Readable thread title",
+        outcome: "success",
+        monitorUsage: expect.objectContaining({
+          model: "gpt-5.4-mini",
+          serviceTier: "priority",
+          tokenUsage: {
+            inputTokens: 100,
+            cachedInputTokens: 20,
+            uncachedInputTokens: 80,
+            outputTokens: 10,
+            reasoningOutputTokens: 0,
+            totalTokens: 110,
+          },
+        }),
+      }),
+    });
+    expect(upsertUsageLineSpy).toHaveBeenCalledWith({
+      line: expect.objectContaining({
+        backend: "codex",
+        source: "monitor",
+        sourceItemId: "system:title-helper:codex:thread-title-helper-parent",
+        scope: "monitor",
+        parentThreadId: "thread-title-helper-parent",
+        threadId: "title-helper-thread",
+        turnId: "title-helper-turn",
+        model: "gpt-5.4-mini",
+        serviceTier: "priority",
+        inputTokens: 100,
+        cachedInputTokens: 20,
+        uncachedInputTokens: 80,
+        outputTokens: 10,
+        totalTokens: 110,
+      }),
     });
 
     await registry.close();
