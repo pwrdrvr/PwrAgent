@@ -29,6 +29,7 @@ describe("thread orchestration tool contracts", () => {
       "unsupported_workspace",
       "unsupported_operation",
       "ambiguous_workspace",
+      "requires_confirmation",
       "turn_start_failed",
       "internal_error",
     ]);
@@ -41,6 +42,7 @@ describe("thread orchestration tool contracts", () => {
       groupingMode: "subthread",
       workspaceMode: "new_worktree",
       cwd: "/Users/test/OtherRepo",
+      cwdAccessConfirmed: true,
       messagingAttachment: "new_child",
       fastMode: true,
     } satisfies HandoffTaskToolArgs;
@@ -50,6 +52,7 @@ describe("thread orchestration tool contracts", () => {
       groupingMode: "subthread",
       workspaceMode: "new_worktree",
       cwd: "/Users/test/OtherRepo",
+      cwdAccessConfirmed: true,
       messagingAttachment: "new_child",
     });
   });

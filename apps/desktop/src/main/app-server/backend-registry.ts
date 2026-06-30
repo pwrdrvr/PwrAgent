@@ -1032,6 +1032,42 @@ function linkedDirectoryMatchesCwd(
   );
 }
 
+function directoryContainsPath(
+  directoryPath: string | undefined,
+  targetPath: string,
+): boolean {
+  if (!directoryPath?.trim()) {
+    return false;
+  }
+  const relative = path.relative(path.resolve(directoryPath), targetPath);
+  return (
+    relative === "" ||
+    (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function linkedDirectoryCoversCwd(
+  directory: LinkedDirectorySummary,
+  cwd: string,
+): boolean {
+  const resolvedCwd = path.resolve(cwd);
+  return (
+    directoryContainsPath(directory.worktreePath, resolvedCwd) ||
+    directoryContainsPath(directory.path, resolvedCwd)
+  );
+}
+
+function linkedDirectoriesCoverCwd(params: {
+  cwd: string;
+  overlay?: ThreadOverlayState;
+  thread?: Pick<AppServerThreadSummary, "linkedDirectories">;
+}): boolean {
+  return [
+    ...(params.overlay?.extraLinkedDirectories ?? []),
+    ...(params.thread?.linkedDirectories ?? []),
+  ].some((directory) => linkedDirectoryCoversCwd(directory, params.cwd));
+}
+
 type PendingServerRequest = {
   resolve: (response: SubmitServerRequestRequest["response"]) => void;
   reject: (error: Error) => void;
@@ -15137,6 +15173,34 @@ export class DesktopBackendRegistry {
       linkedDirectory: sourceLinkedDirectory,
       mode: "same_workspace",
     });
+    const executionMode =
+      request.args.executionMode ??
+      this.activeCodexTurnModes.get(
+        buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
+      ) ??
+      sourceOverlay.executionMode ??
+      (await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId));
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+
+    if (
+      workspaceMode !== "none" &&
+      requestedCwd &&
+      !linkedDirectoriesCoverCwd({
+        cwd: requestedCwd,
+        overlay: sourceOverlay,
+        thread: sourceThread,
+      }) &&
+      executionMode !== "full-access" &&
+      request.args.cwdAccessConfirmed !== true
+    ) {
+      const normalizedCwd = toDirectoryId(path.resolve(requestedCwd));
+      const message = `Creating a Default Access handoff from ${normalizedCwd} would add that directory to the thread's write scope. Ask the operator to confirm this exact path, then retry with cwdAccessConfirmed=true.`;
+      this.failPendingThreadHandoff(handoffId, new Error(message));
+      return threadOrchestrationFailure("requires_confirmation", message, {
+        cwd: normalizedCwd,
+        confirmationArgument: "cwdAccessConfirmed",
+      });
+    }
 
     if (workspaceMode !== "none" && !sourceCwd?.trim()) {
       this.failPendingThreadHandoff(
@@ -15169,14 +15233,6 @@ export class DesktopBackendRegistry {
       );
     }
 
-    const executionMode =
-      request.args.executionMode ??
-      this.activeCodexTurnModes.get(
-        buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
-      ) ??
-      sourceOverlay.executionMode ??
-      (await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId));
-    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const inheritedSettings: HandoffTaskInheritedSettings = {
       backend,
       executionMode,

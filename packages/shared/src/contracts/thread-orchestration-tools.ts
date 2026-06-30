@@ -27,6 +27,7 @@ export const PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES = [
   "unsupported_workspace",
   "unsupported_operation",
   "ambiguous_workspace",
+  "requires_confirmation",
   "turn_start_failed",
   "internal_error",
 ] as const;
@@ -89,6 +90,11 @@ export type HandoffTaskToolArgs = {
    * When omitted, the invoking thread's current workspace is used.
    */
   cwd?: string;
+  /**
+   * True only after the operator explicitly confirmed that a new, previously
+   * unlinked cwd may be added to the Default Access write scope.
+   */
+  cwdAccessConfirmed?: boolean;
   messagingAttachment?: HandoffTaskMessagingAttachmentMode;
   backend?: AppServerBackendKind;
   model?: string;
