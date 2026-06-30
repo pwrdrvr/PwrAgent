@@ -285,16 +285,16 @@ describe("messaging status ipc", () => {
     });
   });
 
-  it("resolves Slack workspace pairing labels from the team lookup", async () => {
+  it("approves Slack observed pairing into the requested allowlist", async () => {
     const { registerMessagingStatusIpcHandlers } = await import(
       "../ipc/messaging-status"
     );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     const entry = {
-      id: "pairing-slack-workspace",
+      id: "pairing-slack-channel",
       platform: "slack",
       instanceId: "default",
-      scope: "bucket",
+      scope: "observed",
       status: "observed",
       generatedAt: 1_000,
       expiresAt: 2_000,
@@ -309,30 +309,43 @@ describe("messaging status ipc", () => {
     const consumed = { ...entry, status: "consumed" };
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
     settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
-    settingsServiceMock.resolveSlackBotTokenSync.mockReturnValue("xoxb-token");
-    slackProviderMock.resolveContact.mockResolvedValue({
-      status: "ok",
-      id: "T025C2NKT",
-      displayName: "Giphy",
-      detail: "workspace",
-    });
     pairingStoreMock.markStatus.mockReturnValue(consumed);
 
     registerMessagingStatusIpcHandlers();
 
     await expect(
-      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id }),
+      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+        {},
+        { entryId: entry.id, target: "conversation" },
+      ),
     ).resolves.toMatchObject({ added: true, entry: consumed });
 
-    expect(slackProviderMock.resolveContact).toHaveBeenCalledWith(
-      { botToken: "xoxb-token" },
-      { id: "T025C2NKT", kind: "workspace" },
-    );
+    expect(slackProviderMock.resolveContact).not.toHaveBeenCalled();
     expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
       messaging: {
         slack: {
-          authorizedWorkspaces: [
-            { id: "T025C2NKT", displayName: "Giphy" },
+          authorizedChannels: [
+            { id: "C012ABCDEF0", displayName: "hi" },
+          ],
+        },
+      },
+    });
+
+    settingsServiceMock.writeConfigPatch.mockClear();
+    pairingStoreMock.markStatus.mockReturnValue(consumed);
+
+    await expect(
+      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+        {},
+        { entryId: entry.id, target: "actor" },
+      ),
+    ).resolves.toMatchObject({ added: true, entry: consumed });
+
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedUserIds: [
+            { id: "U012ABCDEF0", displayName: "Harold" },
           ],
         },
       },

@@ -23,6 +23,7 @@ import {
   validateTelegramGroupChatId,
   validateTelegramPositiveId,
   type DesktopAuthorizedContact,
+  type DesktopMessagingAuthorizationMode,
   type DesktopMessagingImageProfile,
   type DesktopMessagingResponseMode,
   type DesktopMessagingContactLookupKind,
@@ -34,6 +35,7 @@ import {
   type DesktopMessagingFullAccessWarningGlobalPolicy,
   type DesktopMessagingFullAccessWarningUserPolicy,
   type MessagingChannelKind,
+  type MessagingPairingApprovalTarget,
   type MessagingPairingEntry,
   type MessagingPairingScope,
   type MessagingToolUpdateMode,
@@ -838,23 +840,6 @@ export function MessagingSettings(props: {
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
           />
-          <SegmentedField
-            disabled={props.saving}
-            label="Respond to"
-            sub="In authorized Slack channels, choose whether regular chat reaches PwrAgent or only @mentions do. DMs and slash commands still work."
-            options={RESPONSE_MODE_OPTIONS}
-            source={sourceBadge(slack.responseMode)}
-            value={slack.responseMode.value}
-            onChange={(responseMode) => {
-              void props.onSaveSlack({
-                ...slack,
-                responseMode: {
-                  ...slack.responseMode,
-                  value: responseMode,
-                },
-              });
-            }}
-          />
           <ToggleField
             checked={slack.streamingResponses.value}
             disabled={props.saving}
@@ -935,9 +920,9 @@ export function MessagingSettings(props: {
               "slack",
               "workspace",
             )}
-            label="Authorized Workspace / Team IDs"
-            sub="Slack team IDs allowed for shared channel access. Authorizing a workspace allows any channel or group DM in that workspace where the bot is present."
-            help="Slack team/workspace IDs start with T, e.g. T012ABCDEF0. These are not channel IDs."
+            label="Authorized Team IDs"
+            sub="Broad allowlist for Slack teams. Add a Team ID only when every channel or group DM in that team where the bot is present should be approved."
+            help="Slack team IDs start with T, e.g. T012ABCDEF0. These are not channel IDs, and the Workspace URL is only display text."
             source={optionalListSourceBadge(slack.authorizedWorkspaces)}
             validateEntry={validateSlackWorkspaceIdEntry}
             value={slack.authorizedWorkspaces.value}
@@ -951,6 +936,40 @@ export function MessagingSettings(props: {
               });
             }}
           />
+          <SegmentedField
+            disabled={props.saving}
+            label="Team access default"
+            sub="Choose whether Slack events must come from Authorized Team IDs. Team IDs are mainly useful for restricting Slack Connect and other shared-channel traffic."
+            options={TEAM_AUTHORIZATION_MODE_OPTIONS}
+            source={sourceBadge(slack.teamAuthorizationMode)}
+            value={slack.teamAuthorizationMode.value}
+            onChange={(teamAuthorizationMode) => {
+              void props.onSaveSlack({
+                ...slack,
+                teamAuthorizationMode: {
+                  ...slack.teamAuthorizationMode,
+                  value: teamAuthorizationMode,
+                },
+              });
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Channel access default"
+            sub="Choose whether Slack messages must come from Authorized Channels. Require listed channels is the safest default."
+            options={CHANNEL_AUTHORIZATION_MODE_OPTIONS}
+            source={sourceBadge(slack.channelAuthorizationMode)}
+            value={slack.channelAuthorizationMode.value}
+            onChange={(channelAuthorizationMode) => {
+              void props.onSaveSlack({
+                ...slack,
+                channelAuthorizationMode: {
+                  ...slack.channelAuthorizationMode,
+                  value: channelAuthorizationMode,
+                },
+              });
+            }}
+          />
           <AuthorizedListField
             disabled={props.saving}
             lookup={contactLookup(
@@ -959,8 +978,8 @@ export function MessagingSettings(props: {
               "channel",
             )}
             label="Authorized Channels"
-            sub="Slack channel, private channel, DM, or group DM IDs allowed even when the whole workspace is not authorized."
-            help="Slack conversation IDs start with C, G, or D, e.g. C012ABCDEF0. Add a row here to give one channel a different Respond to mode than the workspace default."
+            sub="Slack channel, private channel, DM, or group DM IDs approved individually."
+            help="Slack conversation IDs start with C, G, or D, e.g. C012ABCDEF0. Use Channel pairing to add one from chat, or add a row here to override that channel's response mode."
             source={optionalListSourceBadge(slack.authorizedChannels)}
             validateEntry={validateSlackChannelIdEntry}
             value={slack.authorizedChannels.value}
@@ -971,6 +990,23 @@ export function MessagingSettings(props: {
                 authorizedChannels: {
                   ...slack.authorizedChannels,
                   value: authorizedChannels,
+                },
+              });
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Channel response default"
+            sub="Default response behavior after a Slack message passes the team and channel access checks."
+            options={RESPONSE_MODE_OPTIONS}
+            source={sourceBadge(slack.responseMode)}
+            value={slack.responseMode.value}
+            onChange={(responseMode) => {
+              void props.onSaveSlack({
+                ...slack,
+                responseMode: {
+                  ...slack.responseMode,
+                  value: responseMode,
                 },
               });
             }}
@@ -1444,13 +1480,29 @@ const RESPONSE_MODE_OPTIONS: Array<{
   { label: "Every message", value: "every_message" },
 ];
 
+const TEAM_AUTHORIZATION_MODE_OPTIONS: Array<{
+  label: string;
+  value: DesktopMessagingAuthorizationMode;
+}> = [
+  { label: "Require listed teams", value: "approved_only" },
+  { label: "Any team", value: "allow_all" },
+];
+
+const CHANNEL_AUTHORIZATION_MODE_OPTIONS: Array<{
+  label: string;
+  value: DesktopMessagingAuthorizationMode;
+}> = [
+  { label: "Require listed channels", value: "approved_only" },
+  { label: "Any channel", value: "allow_all" },
+];
+
 const FULL_ACCESS_WARNING_POLICY_OPTIONS: Array<{
   label: string;
   value: DesktopMessagingFullAccessWarningGlobalPolicy;
 }> = [
-  { label: "Dismissable", value: "dismissable" },
-  { label: "Always", value: "always" },
-  { label: "Off", value: "never" },
+  { label: "Warn, can dismiss", value: "dismissable" },
+  { label: "Always warn", value: "always" },
+  { label: "Never warn", value: "never" },
 ];
 
 const FULL_ACCESS_WARNING_USER_POLICY_OPTIONS: Array<{
@@ -1458,9 +1510,9 @@ const FULL_ACCESS_WARNING_USER_POLICY_OPTIONS: Array<{
   value: DesktopMessagingFullAccessWarningUserPolicy;
 }> = [
   { label: "Default", value: "default" },
-  { label: "Yes - Always", value: "always" },
-  { label: "Yes - Dismissable", value: "dismissable" },
-  { label: "No", value: "never" },
+  { label: "Always warn", value: "always" },
+  { label: "Warn, can dismiss", value: "dismissable" },
+  { label: "Never warn", value: "never" },
 ];
 
 const SLACK_INBOUND_MODE_OPTIONS: Array<{
@@ -1712,6 +1764,15 @@ function PairingTokenField(props: {
     setGeneratedMessage(undefined, undefined);
   };
 
+  const observedEntries = entries.filter((entry) => entry.status === "observed");
+  const scopeOptions = props.scopeOptions ?? defaultPairingScopeOptions(props.platform);
+  const availableScopeOptions = props.supportsBucket
+    ? scopeOptions
+    : scopeOptions.filter((option) => option.value !== "bucket");
+  const selectedScope = availableScopeOptions.some((option) => option.value === scope)
+    ? scope
+    : (availableScopeOptions[0]?.value ?? scope);
+
   const generate = async () => {
     if (!props.desktopApi?.generateMessagingPairingToken) return;
     setBusyId("generate");
@@ -1719,7 +1780,7 @@ function PairingTokenField(props: {
     try {
       const result = await props.desktopApi.generateMessagingPairingToken({
         platform: props.platform,
-        scope,
+        scope: selectedScope,
       });
       setGeneratedMessage(result.message, result.entry.id);
       await refresh();
@@ -1733,6 +1794,7 @@ function PairingTokenField(props: {
   const decide = async (
     entry: MessagingPairingEntry,
     decision: "approve" | "reject",
+    target?: MessagingPairingApprovalTarget,
   ) => {
     setBusyId(entry.id);
     setError(undefined);
@@ -1740,6 +1802,7 @@ function PairingTokenField(props: {
       if (decision === "approve") {
         const result = await props.desktopApi?.approveMessagingPairing?.({
           entryId: entry.id,
+          ...(target ? { target } : {}),
         });
         if (result?.entry.id === messageEntryId) {
           setGeneratedMessage(undefined, undefined);
@@ -1771,41 +1834,37 @@ function PairingTokenField(props: {
     }
   };
 
-  const observedEntries = entries.filter((entry) => entry.status === "observed");
-  const scopeOptions = props.scopeOptions ?? defaultPairingScopeOptions(props.platform);
-  const availableScopeOptions = props.supportsBucket
-    ? scopeOptions
-    : scopeOptions.filter((option) => option.value !== "bucket");
-
   return (
     <SettingsField
       label="Pairing"
-      sub="Generate a short-lived code to approve a user or group from chat."
+      sub={pairingFieldDescription(props.platform)}
       error={error}
       control={
         <div className="settings-pairing">
           <div className="settings-pairing__controls">
-            <div
-              aria-label={`${platformLabel(props.platform)} pairing target`}
-              className="settings-segmented settings-pairing__scope"
-              role="radiogroup"
-            >
-              {availableScopeOptions.map((option) => (
-                <button
-                  key={option.value}
-                  aria-checked={scope === option.value}
-                  className={`settings-segmented__button${
-                    scope === option.value ? " is-active" : ""
-                  }`}
-                  disabled={props.disabled}
-                  role="radio"
-                  type="button"
-                  onClick={() => selectScope(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
+            {availableScopeOptions.length > 1 ? (
+              <div
+                aria-label={`${platformLabel(props.platform)} pairing target`}
+                className="settings-segmented settings-pairing__scope"
+                role="radiogroup"
+              >
+                {availableScopeOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    aria-checked={selectedScope === option.value}
+                    className={`settings-segmented__button${
+                      selectedScope === option.value ? " is-active" : ""
+                    }`}
+                    disabled={props.disabled}
+                    role="radio"
+                    type="button"
+                    onClick={() => selectScope(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <button
               className="button button--secondary"
               disabled={
@@ -1843,14 +1902,17 @@ function PairingTokenField(props: {
                       {pairingEntryDetails(entry).join(" | ")}
                     </span>
                   </div>
-                  <button
-                    className="button button--secondary"
-                    disabled={busyId === entry.id}
-                    type="button"
-                    onClick={() => void decide(entry, "approve")}
-                  >
-                    Approve
-                  </button>
+                  {pairingApprovalActions(entry).map((action) => (
+                    <button
+                      className="button button--secondary"
+                      disabled={busyId === entry.id}
+                      key={action.label}
+                      type="button"
+                      onClick={() => void decide(entry, "approve", action.target)}
+                    >
+                      {action.label}
+                    </button>
+                  ))}
                   <button
                     className="button button--ghost"
                     disabled={busyId === entry.id}
@@ -1890,9 +1952,7 @@ function defaultPairingScopeOptions(platform: MessagingChannelKind): PairingScop
   }
   if (platform === "slack") {
     return [
-      { label: "User via DM", value: "user_dm" },
-      { label: "User via channel", value: "user_in_group" },
-      { label: "Workspace", value: "bucket" },
+      { label: "Pair from Slack", value: "observed" },
     ];
   }
   if (platform === "line") {
@@ -1909,11 +1969,26 @@ function defaultPairingScopeOptions(platform: MessagingChannelKind): PairingScop
   ];
 }
 
+function pairingFieldDescription(platform: MessagingChannelKind): ReactNode {
+  if (platform === "slack") {
+    return "Generate a short-lived code. Send it in a Slack DM or channel, then approve the observed user or channel.";
+  }
+  return "Generate a short-lived code to approve a user or group from chat.";
+}
+
 function platformLabel(platform: MessagingChannelKind): string {
   return platform.charAt(0).toUpperCase() + platform.slice(1);
 }
 
 function pairingEntryLabel(entry: MessagingPairingEntry): string {
+  if (entry.platform === "slack" && entry.scope === "observed") {
+    const actor =
+      entry.observedActor?.displayName
+      ?? entry.observedActor?.username
+      ?? entry.observedActor?.id
+      ?? "User";
+    return `${actor} sent a pairing request`;
+  }
   if (entry.scope === "bucket") {
     return `${entry.observedChat?.title ?? entry.observedChat?.id ?? "Chat"} wants group access`;
   }
@@ -1923,6 +1998,22 @@ function pairingEntryLabel(entry: MessagingPairingEntry): string {
     ?? entry.observedActor?.id
     ?? "User";
   return `${actor} wants access`;
+}
+
+function pairingApprovalActions(entry: MessagingPairingEntry): Array<{
+  label: string;
+  target?: MessagingPairingApprovalTarget;
+}> {
+  if (entry.platform !== "slack" || entry.scope !== "observed") {
+    return [{ label: "Approve" }];
+  }
+  const actions: Array<{ label: string; target: MessagingPairingApprovalTarget }> = [
+    { label: "Approve user", target: "actor" },
+  ];
+  if (entry.observedChat?.kind !== "dm") {
+    actions.push({ label: "Approve channel", target: "conversation" });
+  }
+  return actions;
 }
 
 function pairingEntryDetails(entry: MessagingPairingEntry): string[] {
@@ -2134,6 +2225,8 @@ function AuthorizedListField(props: {
                 (entry) => entry.index === index,
               );
               const lookup = lookupState[index];
+              const fullAccessWarningSelectId = `${inputId}-full-access-warning-${index}`;
+              const responseModeSelectId = `${inputId}-response-mode-${index}`;
               const canLookup =
                 Boolean(props.lookup)
                 && normalized.id.length > 0
@@ -2196,70 +2289,90 @@ function AuthorizedListField(props: {
                     }
                   />
                   {props.fullAccessWarningPolicy ? (
-                    <select
-                      aria-label={`${props.label} Full Access warning ${index + 1}`}
-                      className="settings-input settings-authorized-list__warning"
-                      disabled={props.disabled}
-                      value={row.fullAccessWarningOverride ?? "default"}
-                      onBlur={() => {
-                        const nextRows = rows.map((current, rowIndex) =>
-                          rowIndex === index
-                            ? normalizeAuthorizedContactRow(current)
-                            : current,
-                        );
-                        setRows(nextRows);
-                        saveIfValid(nextRows);
-                      }}
-                      onChange={(event) =>
-                        updateRow(index, {
-                          fullAccessWarningOverride: event.currentTarget
-                            .value as DesktopMessagingFullAccessWarningUserPolicy,
-                          fullAccessWarningDismissed:
-                            event.currentTarget.value === "default"
-                              ? row.fullAccessWarningDismissed
-                              : false,
-                        })
-                      }
-                    >
-                      {FULL_ACCESS_WARNING_USER_POLICY_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="settings-authorized-list__policy">
+                      <label
+                        className="settings-authorized-list__policy-label"
+                        htmlFor={fullAccessWarningSelectId}
+                      >
+                        Full Access warning
+                      </label>
+                      <select
+                        aria-label={`${props.label} Full Access warning ${index + 1}`}
+                        className="settings-input settings-authorized-list__warning"
+                        disabled={props.disabled}
+                        id={fullAccessWarningSelectId}
+                        title="Controls whether this user sees the Full Access warning before escalation."
+                        value={row.fullAccessWarningOverride ?? "default"}
+                        onBlur={() => {
+                          const nextRows = rows.map((current, rowIndex) =>
+                            rowIndex === index
+                              ? normalizeAuthorizedContactRow(current)
+                              : current,
+                          );
+                          setRows(nextRows);
+                          saveIfValid(nextRows);
+                        }}
+                        onChange={(event) =>
+                          updateRow(index, {
+                            fullAccessWarningOverride: event.currentTarget
+                              .value as DesktopMessagingFullAccessWarningUserPolicy,
+                            fullAccessWarningDismissed:
+                              event.currentTarget.value === "default"
+                                ? row.fullAccessWarningDismissed
+                                : false,
+                          })
+                        }
+                      >
+                        {FULL_ACCESS_WARNING_USER_POLICY_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   ) : null}
                   {props.responseModePolicy ? (
-                    <select
-                      aria-label={`${props.label} response mode ${index + 1}`}
-                      className="settings-input settings-authorized-list__response-mode"
-                      disabled={props.disabled}
-                      value={row.responseMode ?? ""}
-                      onBlur={() => {
-                        const nextRows = rows.map((current, rowIndex) =>
-                          rowIndex === index
-                            ? normalizeAuthorizedContactRow(current)
-                            : current,
-                        );
-                        setRows(nextRows);
-                        saveIfValid(nextRows);
-                      }}
-                      onChange={(event) =>
-                        updateRow(index, {
-                          responseMode:
-                            event.currentTarget.value === ""
-                              ? undefined
-                              : event.currentTarget
-                                .value as DesktopMessagingResponseMode,
-                        })
-                      }
-                    >
-                      <option value="">Default</option>
-                      {RESPONSE_MODE_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="settings-authorized-list__policy">
+                      <label
+                        className="settings-authorized-list__policy-label"
+                        htmlFor={responseModeSelectId}
+                      >
+                        Response mode
+                      </label>
+                      <select
+                        aria-label={`${props.label} response mode ${index + 1}`}
+                        className="settings-input settings-authorized-list__response-mode"
+                        disabled={props.disabled}
+                        id={responseModeSelectId}
+                        title="Overrides whether this channel responds to every message or only @ mentions."
+                        value={row.responseMode ?? ""}
+                        onBlur={() => {
+                          const nextRows = rows.map((current, rowIndex) =>
+                            rowIndex === index
+                              ? normalizeAuthorizedContactRow(current)
+                              : current,
+                          );
+                          setRows(nextRows);
+                          saveIfValid(nextRows);
+                        }}
+                        onChange={(event) =>
+                          updateRow(index, {
+                            responseMode:
+                              event.currentTarget.value === ""
+                                ? undefined
+                                : event.currentTarget
+                                  .value as DesktopMessagingResponseMode,
+                          })
+                        }
+                      >
+                        <option value="">Default</option>
+                        {RESPONSE_MODE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   ) : null}
                   <button
                     aria-label={`Lookup ${props.label} row ${index + 1}`}

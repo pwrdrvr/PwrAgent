@@ -293,7 +293,7 @@ export type SetMessagingEnabledResponse = {
   };
 };
 
-export type MessagingPairingScope = "user_dm" | "bucket" | "user_in_group";
+export type MessagingPairingScope = "user_dm" | "bucket" | "user_in_group" | "observed";
 
 export type MessagingPairingStatus =
   | "pending"
@@ -356,8 +356,11 @@ export type ListMessagingPairingRequestsResponse = {
   entries: MessagingPairingEntry[];
 };
 
+export type MessagingPairingApprovalTarget = "actor" | "conversation";
+
 export type ApproveMessagingPairingRequest = {
   entryId: string;
+  target?: MessagingPairingApprovalTarget;
 };
 
 export type ApproveMessagingPairingResponse = {

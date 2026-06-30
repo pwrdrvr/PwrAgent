@@ -12,6 +12,7 @@ import type {
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
+  MessagingPairingApprovalTarget,
   MessagingPairingEntry,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
@@ -30,7 +31,6 @@ import { getMainLogger } from "../log";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import { showMessagingActivityWindow } from "../messaging-activity-window";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import { getRuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease";
 import { subscribersForChannel } from "../window-channels";
@@ -97,16 +97,17 @@ function markPairingRejected(entryId: string): MessagingPairingEntry | undefined
   });
 }
 
-async function buildPairingApprovalPatch(
+function buildPairingApprovalPatch(
   entry: MessagingPairingEntry,
   snapshot: DesktopSettingsSnapshot,
-  service: DesktopSettingsService,
-): Promise<{ added: boolean; patch: DesktopSettingsConfigPatch }> {
+  target?: MessagingPairingApprovalTarget,
+): { added: boolean; patch: DesktopSettingsConfigPatch } {
   if (entry.status !== "observed" || !entry.observedActor || !entry.observedChat) {
     throw new Error("Pairing request has not been observed yet.");
   }
 
-  const contact = await contactForPairing(entry, service);
+  const approvalTarget = entry.platform === "slack" ? target : undefined;
+  const contact = contactForPairing(entry, approvalTarget);
   const merge = (
     current: DesktopAuthorizedContact[],
   ): { added: boolean; contacts: DesktopAuthorizedContact[] } => {
@@ -156,11 +157,14 @@ async function buildPairingApprovalPatch(
       };
     }
     case "slack": {
-      if (entry.scope === "bucket") {
-        const merged = merge(snapshot.messaging.slack.authorizedWorkspaces.value);
+      if (approvalTarget === "conversation" || (!approvalTarget && entry.scope === "bucket")) {
+        if (entry.observedChat.kind === "dm") {
+          throw new Error("Slack channel approval requires a channel or group DM.");
+        }
+        const merged = merge(snapshot.messaging.slack.authorizedChannels.value);
         return {
           added: merged.added,
-          patch: { messaging: { slack: { authorizedWorkspaces: merged.contacts } } },
+          patch: { messaging: { slack: { authorizedChannels: merged.contacts } } },
         };
       }
       const merged = merge(snapshot.messaging.slack.authorizedUserIds.value);
@@ -248,26 +252,21 @@ async function buildPairingApprovalPatch(
   }
 }
 
-async function contactForPairing(
+function contactForPairing(
   entry: MessagingPairingEntry,
-  service: DesktopSettingsService,
-): Promise<DesktopAuthorizedContact> {
+  target?: MessagingPairingApprovalTarget,
+): DesktopAuthorizedContact {
   if (!entry.observedActor || !entry.observedChat) {
     throw new Error("Pairing request is missing observed identity.");
   }
-  if (entry.scope === "bucket") {
-    const id = entry.observedChat.bucketId ?? entry.observedChat.parentId ?? entry.observedChat.id;
+  if (target === "conversation" || (!target && entry.scope === "bucket")) {
     if (entry.platform === "slack") {
-      const displayName = await resolveSlackWorkspaceDisplayName(service, id);
       return {
-        id,
-        displayName:
-          displayName
-          ?? entry.observedChat.parentTitle
-          ?? entry.observedChat.title
-          ?? "",
+        id: entry.observedChat.id,
+        displayName: entry.observedChat.title ?? entry.observedChat.parentTitle ?? "",
       };
     }
+    const id = entry.observedChat.bucketId ?? entry.observedChat.parentId ?? entry.observedChat.id;
     return {
       id,
       displayName: entry.observedChat.title ?? entry.observedChat.parentTitle ?? "",
@@ -279,30 +278,6 @@ async function contactForPairing(
       entry.observedActor.displayName
       ?? (entry.observedActor.username ? `@${entry.observedActor.username}` : ""),
   };
-}
-
-async function resolveSlackWorkspaceDisplayName(
-  service: DesktopSettingsService,
-  id: string,
-): Promise<string | undefined> {
-  const botToken = service.resolveSlackBotTokenSync();
-  if (!botToken) return undefined;
-  try {
-    const provider = await import("@pwragent/messaging-provider-slack");
-    const result = await provider.resolveContact(
-      { botToken },
-      { id, kind: "workspace" },
-    );
-    if (result.status === "ok" && result.displayName) {
-      return result.displayName;
-    }
-  } catch (error) {
-    log.warn("slack workspace pairing lookup failed", {
-      workspaceId: id,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-  return undefined;
 }
 
 function recordPairingActivity(entry: MessagingPairingEntry, summary: string): void {
@@ -415,10 +390,10 @@ export function registerMessagingStatusIpcHandlers(): void {
       const pairing = runtime.listPairingRequests({ includeResolved: true }).entries
         .find((entry) => entry.id === request.entryId);
       if (!pairing) throw new Error("Pairing request not found.");
-      const approval = await buildPairingApprovalPatch(
+      const approval = buildPairingApprovalPatch(
         pairing,
         await service.readSettings(),
-        service,
+        request.target,
       );
       const next = await service.writeConfigPatch(approval.patch);
       await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(

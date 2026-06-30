@@ -2165,6 +2165,8 @@ function pairingScopeFailure(
   entry: MessagingPairingEntry,
   event: MessagingInboundEvent,
 ): string | undefined {
+  if (entry.scope === "observed") return undefined;
+
   const isDm = event.channel.conversation.kind === "dm";
   if (entry.scope === "user_dm" && !isDm) {
     return "token was generated for a DM but was pasted in a group/channel";

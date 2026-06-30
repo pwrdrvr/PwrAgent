@@ -248,6 +248,7 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     authorizedConversationIds: "authorization",
     authorizedTeamIds: "authorization",
     botToken: "connection",
+    channelAuthorizationMode: "authorization",
     channel: "irrelevant",
     enabled: "connection",
     inboundMode: "connection",
@@ -256,6 +257,7 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     signingSecret: "connection",
     slashCommandPrefix: "connection",
     streamingResponses: "rendering",
+    teamAuthorizationMode: "authorization",
     workspaceUrl: "connection",
   },
   feishu: {
@@ -620,7 +622,17 @@ export function loadDesktopMessagingConfig(
               env,
               SLACK_STREAMING_RESPONSES_ENV,
             ).value ?? false,
+            channelAuthorizationMode: slackAuthorizationModeFromLists({
+              authorizedConversationCount: 0,
+              authorizedTeamCount: slackAuthorizedWorkspaces.length,
+              kind: "channel",
+            }),
             responseMode: "mention_only",
+            teamAuthorizationMode: slackAuthorizationModeFromLists({
+              authorizedConversationCount: 0,
+              authorizedTeamCount: slackAuthorizedWorkspaces.length,
+              kind: "team",
+            }),
             authorizedActorIds: slackAuthorizedActorIds,
             authorizedTeamIds: slackAuthorizedWorkspaces,
           },
@@ -751,6 +763,22 @@ export async function loadDesktopMessagingConfigFromSettings(
   const slackAuthorizedConversationIds =
     envConfig.slack?.authorizedConversationIds
     ?? snapshot.messaging.slack.authorizedChannels.value;
+  const slackWorkspaceAllowlistFromEnv =
+    readEnv(env, SLACK_AUTHORIZED_WORKSPACES_ENV) !== undefined;
+  const slackTeamAuthorizationMode = slackWorkspaceAllowlistFromEnv
+    ? slackAuthorizationModeFromLists({
+      authorizedConversationCount: slackAuthorizedConversationIds.length,
+      authorizedTeamCount: slackAuthorizedTeamIds.length,
+      kind: "team",
+    })
+    : snapshot.messaging.slack.teamAuthorizationMode.value;
+  const slackChannelAuthorizationMode = slackWorkspaceAllowlistFromEnv
+    ? slackAuthorizationModeFromLists({
+      authorizedConversationCount: slackAuthorizedConversationIds.length,
+      authorizedTeamCount: slackAuthorizedTeamIds.length,
+      kind: "channel",
+    })
+    : snapshot.messaging.slack.channelAuthorizationMode.value;
   const feishuAuthorizedActorIds =
     envConfig.feishu?.authorizedActorIds
     ?? snapshot.messaging.feishu.authorizedUserIds.value;
@@ -1002,7 +1030,9 @@ export async function loadDesktopMessagingConfigFromSettings(
               : {}),
             registerSlashCommands: slackRegisterSlashCommands,
             streamingResponses: snapshot.messaging.slack.streamingResponses.value,
+            channelAuthorizationMode: slackChannelAuthorizationMode,
             responseMode: snapshot.messaging.slack.responseMode.value,
+            teamAuthorizationMode: slackTeamAuthorizationMode,
             authorizedActorIds: slackAuthorizedActorIds,
             authorizedTeamIds: slackAuthorizedTeamIds,
             authorizedConversationIds: slackAuthorizedConversationIds,
@@ -1414,11 +1444,13 @@ function authorizationUpdateForChannelConfig(
       return {
         authorizedActorIds: contactIds(config.slack?.authorizedActorIds),
         authorizedConversationIds: contactIds(config.slack?.authorizedConversationIds),
+        conversationAuthorizationMode: config.slack?.channelAuthorizationMode,
         conversationResponseModes: conversationResponseModes(
           config.slack?.authorizedConversationIds,
         ),
         responseMode: config.slack?.responseMode,
         authorizedWorkspaceIds: contactIds(config.slack?.authorizedTeamIds),
+        workspaceAuthorizationMode: config.slack?.teamAuthorizationMode,
       };
     case "feishu":
       return {
@@ -1484,6 +1516,21 @@ function conversationResponseModes(
       ? [{ conversationId: contact.id, responseMode: contact.responseMode }]
       : [],
   ) ?? [];
+}
+
+function slackAuthorizationModeFromLists(params: {
+  authorizedConversationCount: number;
+  authorizedTeamCount: number;
+  kind: "channel" | "team";
+}): "approved_only" | "allow_all" {
+  if (params.kind === "team") {
+    return params.authorizedTeamCount > 0 ? "approved_only" : "allow_all";
+  }
+  return params.authorizedConversationCount > 0
+    ? "approved_only"
+    : params.authorizedTeamCount > 0
+      ? "allow_all"
+      : "approved_only";
 }
 
 function stableMessagingConfigStringify(value: unknown): string {

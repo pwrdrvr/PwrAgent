@@ -517,6 +517,8 @@ describe("App", () => {
           signingSecret: { configured: false, source: "unset", writable: true },
           workspaceUrl: { value: "", source: "default" },
           inboundMode: { value: "socket", source: "default" },
+          teamAuthorizationMode: { value: "allow_all", source: "default" },
+          channelAuthorizationMode: { value: "approved_only", source: "default" },
           slashCommandPrefix: { value: "pwragent_", source: "default" },
           registerSlashCommands: { value: false, source: "default" },
           authorizedUserIds: { value: [], source: "default" },

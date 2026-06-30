@@ -341,6 +341,12 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (update.responseMode !== undefined) {
       this.config.responseMode = update.responseMode;
     }
+    if (update.conversationAuthorizationMode !== undefined) {
+      this.config.channelAuthorizationMode = update.conversationAuthorizationMode;
+    }
+    if (update.workspaceAuthorizationMode !== undefined) {
+      this.config.teamAuthorizationMode = update.workspaceAuthorizationMode;
+    }
     this.config.authorizedActorIds = slackContactsFromIds(
       update.authorizedActorIds,
       this.config.authorizedActorIds,
@@ -1180,13 +1186,15 @@ export class SlackAdapter implements SlackProviderAdapter {
 
     const allowedConversations = this.config.authorizedConversationIds?.map((item) => item.id)
       ?? [];
-    if (allowedConversations.includes(params.channel.conversation.id)) {
-      return true;
-    }
-
     const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id)
       ?? [];
-    if (params.teamId !== undefined && allowedTeams.includes(params.teamId)) {
+
+    const teamAllowed = slackTeamAuthorizationMode(this.config) === "allow_all"
+      || (params.teamId !== undefined && allowedTeams.includes(params.teamId));
+    const conversationAllowed = slackChannelAuthorizationMode(this.config) === "allow_all"
+      || allowedConversations.includes(params.channel.conversation.id);
+
+    if (teamAllowed && conversationAllowed) {
       return true;
     }
 
@@ -1731,6 +1739,24 @@ function slackContactsFromIds(
 ): { id: string; displayName: string; responseMode?: MessagingResponseMode }[] {
   const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
   return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
+}
+
+function slackTeamAuthorizationMode(
+  config: SlackMessagingConfig,
+): "approved_only" | "allow_all" {
+  return config.teamAuthorizationMode
+    ?? ((config.authorizedTeamIds?.length ?? 0) > 0 ? "approved_only" : "allow_all");
+}
+
+function slackChannelAuthorizationMode(
+  config: SlackMessagingConfig,
+): "approved_only" | "allow_all" {
+  return config.channelAuthorizationMode
+    ?? ((config.authorizedConversationIds?.length ?? 0) > 0
+      ? "approved_only"
+      : (config.authorizedTeamIds?.length ?? 0) > 0
+        ? "allow_all"
+        : "approved_only");
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {

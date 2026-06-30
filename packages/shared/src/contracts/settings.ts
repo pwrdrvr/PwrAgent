@@ -111,6 +111,7 @@ export type DesktopAuthorizedContact = {
 };
 
 export type DesktopMessagingResponseMode = "every_message" | "mention_only";
+export type DesktopMessagingAuthorizationMode = "approved_only" | "allow_all";
 
 export type DesktopMessagingFullAccessWarningGlobalPolicy =
   | "always"
@@ -583,6 +584,8 @@ export type DesktopSettingsSnapshot = {
       signingSecret: DesktopSettingsSecretState;
       workspaceUrl: DesktopSettingsValue<string>;
       inboundMode: DesktopSettingsValue<"socket" | "events">;
+      teamAuthorizationMode: DesktopSettingsValue<DesktopMessagingAuthorizationMode>;
+      channelAuthorizationMode: DesktopSettingsValue<DesktopMessagingAuthorizationMode>;
       slashCommandPrefix: DesktopSettingsValue<string>;
       registerSlashCommands: DesktopSettingsValue<boolean>;
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
@@ -790,6 +793,8 @@ export type DesktopSettingsConfigPatch = {
       streamingResponses?: boolean;
       workspaceUrl?: string;
       inboundMode?: "socket" | "events";
+      teamAuthorizationMode?: DesktopMessagingAuthorizationMode;
+      channelAuthorizationMode?: DesktopMessagingAuthorizationMode;
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];

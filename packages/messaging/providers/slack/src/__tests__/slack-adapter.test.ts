@@ -1185,6 +1185,51 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("requires both authorized team and channel when both Slack gates are restricted", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedConversationIds: [{ id: "C012ABCDEF0", displayName: "dev" }],
+        authorizedTeamIds: [{ id: "TAPPROVED", displayName: "Approved" }],
+        channelAuthorizationMode: "approved_only",
+        teamAuthorizationMode: "approved_only",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "TEXTERNAL",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "blocked shared channel chatter",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({
+        reason: "unauthorized-conversation",
+      }),
+    ]);
+  });
+
   it("routes Block Kit callbacks from DMs back to the original DM handle", async () => {
     const socket = fakeSocket();
     const store = fakeStore();

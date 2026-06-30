@@ -312,12 +312,15 @@ export type MessagingActorIdentity = {
 export type MessagingAdapterAuthorizationUpdate = {
   authorizedActorIds: readonly string[];
   authorizedConversationIds?: readonly string[];
+  conversationAuthorizationMode?: MessagingAuthorizationMode;
   conversationResponseModes?: readonly MessagingConversationResponseMode[];
   responseMode?: MessagingResponseMode;
   authorizedWorkspaceIds?: readonly string[];
+  workspaceAuthorizationMode?: MessagingAuthorizationMode;
 };
 
 export type MessagingResponseMode = "every_message" | "mention_only";
+export type MessagingAuthorizationMode = "approved_only" | "allow_all";
 
 export type MessagingConversationResponseMode = {
   conversationId: string;

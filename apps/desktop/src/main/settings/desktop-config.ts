@@ -11,6 +11,7 @@ import type {
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
   DesktopMessagingAcknowledgment,
+  DesktopMessagingAuthorizationMode,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingFullAccessWarningUserPolicy,
   DesktopMessagingImageProfile,
@@ -168,6 +169,8 @@ export type DesktopSettingsConfig = {
       streamingResponses?: boolean;
       workspaceUrl?: string;
       inboundMode?: "socket" | "events";
+      teamAuthorizationMode?: DesktopMessagingAuthorizationMode;
+      channelAuthorizationMode?: DesktopMessagingAuthorizationMode;
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: AuthorizedContactConfig[];
@@ -1013,6 +1016,18 @@ export function desktopSettingsPatchToEdits(
   if (slack?.inboundMode !== undefined) {
     set(["messaging", "slack", "inbound_mode"], slack.inboundMode);
   }
+  if (slack?.teamAuthorizationMode !== undefined) {
+    set(
+      ["messaging", "slack", "team_authorization_mode"],
+      slack.teamAuthorizationMode,
+    );
+  }
+  if (slack?.channelAuthorizationMode !== undefined) {
+    set(
+      ["messaging", "slack", "channel_authorization_mode"],
+      slack.channelAuthorizationMode,
+    );
+  }
   if (slack?.slashCommandPrefix !== undefined) {
     set(["messaging", "slack", "slash_command_prefix"], slack.slashCommandPrefix);
   }
@@ -1392,6 +1407,12 @@ function normalizeDesktopConfig(
         streamingResponses: readBoolean(slack?.streaming_responses),
         workspaceUrl: readString(slack?.workspace_url),
         inboundMode: readSlackInboundMode(slack?.inbound_mode),
+        teamAuthorizationMode: readMessagingAuthorizationMode(
+          slack?.team_authorization_mode,
+        ),
+        channelAuthorizationMode: readMessagingAuthorizationMode(
+          slack?.channel_authorization_mode,
+        ),
         slashCommandPrefix: readString(slack?.slash_command_prefix),
         registerSlashCommands: readBoolean(slack?.register_slash_commands),
         authorizedUserIds: readAuthorizedContacts(
@@ -1860,6 +1881,12 @@ function readSlackInboundMode(
   value: TomlScalar | undefined,
 ): "socket" | "events" | undefined {
   return value === "socket" || value === "events" ? value : undefined;
+}
+
+function readMessagingAuthorizationMode(
+  value: TomlScalar | undefined,
+): DesktopMessagingAuthorizationMode | undefined {
+  return value === "approved_only" || value === "allow_all" ? value : undefined;
 }
 
 function readFeishuInboundMode(

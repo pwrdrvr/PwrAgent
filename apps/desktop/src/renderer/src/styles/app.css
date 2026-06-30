@@ -5978,9 +5978,27 @@ textarea,
 
 .settings-authorized-list__id,
 .settings-authorized-list__name,
+.settings-authorized-list__policy,
 .settings-authorized-list__warning,
 .settings-authorized-list__response-mode {
   min-width: 0;
+}
+
+.settings-authorized-list__policy {
+  display: grid;
+  gap: 3px;
+}
+
+.settings-authorized-list__policy-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.settings-authorized-list__warning,
+.settings-authorized-list__response-mode {
+  width: 100%;
 }
 
 .settings-authorized-list__remove,

@@ -23,6 +23,7 @@ import {
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
   SLACK_APP_TOKEN_ENV,
+  SLACK_AUTHORIZED_WORKSPACES_ENV,
   SLACK_BOT_TOKEN_ENV,
   SLACK_INBOUND_MODE_ENV,
   normalizeMattermostUrl,
@@ -108,6 +109,7 @@ describe("desktop messaging config", () => {
       "authorizedTeamIds",
       "botToken",
       "channel",
+      "channelAuthorizationMode",
       "enabled",
       "inboundMode",
       "registerSlashCommands",
@@ -115,6 +117,7 @@ describe("desktop messaging config", () => {
       "signingSecret",
       "slashCommandPrefix",
       "streamingResponses",
+      "teamAuthorizationMode",
       "workspaceUrl",
     ]);
     expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.feishu).sort()).toEqual([
@@ -307,8 +310,37 @@ describe("desktop messaging config", () => {
       botToken: "settings-slack-bot-token",
       appToken: "settings-slack-app-token",
       inboundMode: "socket",
+      channelAuthorizationMode: "approved_only",
+      teamAuthorizationMode: "allow_all",
       authorizedActorIds: [],
       authorizedTeamIds: [],
+    });
+  });
+
+  it("preserves env Slack workspace allowlists in the settings-backed loader", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "", "utf8");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {
+      [SLACK_BOT_TOKEN_ENV]: "env-slack-bot-token",
+      [SLACK_APP_TOKEN_ENV]: "env-slack-app-token",
+      [SLACK_AUTHORIZED_WORKSPACES_ENV]: "T012ABCDEF0",
+    });
+
+    expect(config.slack).toMatchObject({
+      channel: "slack",
+      enabled: true,
+      botToken: "env-slack-bot-token",
+      appToken: "env-slack-app-token",
+      authorizedTeamIds: [{ id: "T012ABCDEF0", displayName: "" }],
+      teamAuthorizationMode: "approved_only",
+      channelAuthorizationMode: "allow_all",
     });
   });
 
@@ -350,6 +382,8 @@ describe("desktop messaging config", () => {
       botToken: "xoxb-token",
       appToken: "xapp-token",
       inboundMode: "socket",
+      channelAuthorizationMode: "approved_only",
+      teamAuthorizationMode: "allow_all",
       authorizedActorIds: [],
       authorizedTeamIds: [],
     });

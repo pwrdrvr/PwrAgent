@@ -17,6 +17,7 @@ import type {
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
   MessagingChannelKind,
+  MessagingPairingApprovalTarget,
   MessagingPairingScope,
   SettingsCredentialTestKind,
   SettingsCredentialTestResult,
@@ -3908,12 +3909,12 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
     pairingTitle: "Pair a Slack conversation",
     pairingOptions: [
       {
-        scope: "user_dm",
-        label: "Pair your DMs with the bot",
+        scope: "observed",
+        label: "Pair from Slack",
         help: (
           <>
-            Open a DM with the bot in Slack and post the pairing message
-            below.
+            Send the pairing message in a Slack DM or channel. PwrAgent will
+            show what it saw so you can approve the user or the channel.
           </>
         ),
       },
@@ -4547,6 +4548,9 @@ function PairingBlock(props: {
   const [observedChatLabel, setObservedChatLabel] = useState<string | undefined>(
     undefined,
   );
+  const [observedChatKind, setObservedChatKind] = useState<string | undefined>(
+    undefined,
+  );
   const [approving, setApproving] = useState(false);
   // Pairings approved during this wizard session, in order. Rendered
   // as a compact summary once at least one pairing has been approved.
@@ -4577,17 +4581,21 @@ function PairingBlock(props: {
         setObservedChatLabel(
           event.entry.observedChat?.title ?? event.entry.observedChat?.id,
         );
+        setObservedChatKind(event.entry.observedChat?.kind);
       }
     });
   }, [props.desktopApi, props.platform]);
 
-  const approve = async (): Promise<void> => {
+  const approve = async (target?: MessagingPairingApprovalTarget): Promise<void> => {
     const id = entryIdRef.current;
     if (!id || approving || !props.desktopApi?.approveMessagingPairing) return;
     setApproving(true);
     setError(undefined);
     try {
-      await props.desktopApi.approveMessagingPairing({ entryId: id });
+      await props.desktopApi.approveMessagingPairing({
+        entryId: id,
+        ...(target ? { target } : {}),
+      });
       setResolution("approved");
       setPaired((prev) => [
         ...prev,
@@ -4605,6 +4613,7 @@ function PairingBlock(props: {
       setEntryId(undefined);
       setObservedActorLabel(undefined);
       setObservedChatLabel(undefined);
+      setObservedChatKind(undefined);
       setResolution(undefined);
       setPairingAnother(false);
     } catch (caught) {
@@ -4624,6 +4633,7 @@ function PairingBlock(props: {
     setResolution(undefined);
     setObservedActorLabel(undefined);
     setObservedChatLabel(undefined);
+    setObservedChatKind(undefined);
     setError(undefined);
     setPairingAnother(true);
   };
@@ -4666,6 +4676,9 @@ function PairingBlock(props: {
     setEntryId(undefined);
     setResolution(undefined);
     setError(undefined);
+    setObservedActorLabel(undefined);
+    setObservedChatLabel(undefined);
+    setObservedChatKind(undefined);
   };
 
   // Active-flow gate: when the operator hasn't approved anything
@@ -4794,14 +4807,37 @@ function PairingBlock(props: {
                   . Approve to finish pairing.
                 </span>
               </div>
-              <button
-                type="button"
-                className="onboarding-wizard__btn onboarding-wizard__btn--primary"
-                disabled={approving || !props.desktopApi?.approveMessagingPairing}
-                onClick={() => void approve()}
-              >
-                {approving ? "Approving…" : "Approve"}
-              </button>
+              {props.platform === "slack" && scope === "observed" ? (
+                <>
+                  <button
+                    type="button"
+                    className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+                    disabled={approving || !props.desktopApi?.approveMessagingPairing}
+                    onClick={() => void approve("actor")}
+                  >
+                    {approving ? "Approving…" : "Approve user"}
+                  </button>
+                  {observedChatKind !== "dm" ? (
+                    <button
+                      type="button"
+                      className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+                      disabled={approving || !props.desktopApi?.approveMessagingPairing}
+                      onClick={() => void approve("conversation")}
+                    >
+                      Approve channel
+                    </button>
+                  ) : null}
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+                  disabled={approving || !props.desktopApi?.approveMessagingPairing}
+                  onClick={() => void approve()}
+                >
+                  {approving ? "Approving…" : "Approve"}
+                </button>
+              )}
             </div>
           ) : null}
         </>
@@ -4834,6 +4870,9 @@ function labelForPairingScope(
   scope: MessagingPairingScope,
 ): string {
   if (scope === "user_dm") return "DM";
+  if (scope === "observed") {
+    return platform === "slack" ? "Slack pairing" : "Observed";
+  }
   switch (platform) {
     case "telegram":
       return "Supergroup";

@@ -10,6 +10,7 @@ import type {
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
+  DesktopMessagingAuthorizationMode,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingImageProfile,
   DesktopMessagingResponseMode,
@@ -473,6 +474,22 @@ export class DesktopSettingsService {
     const feishuTenantRegion = this.resolveFeishuTenantRegion(
       config.messaging?.feishu?.tenantRegion,
     );
+    const slackAuthorizedWorkspaces = this.resolveList(
+      config.messaging?.slack?.authorizedWorkspaces,
+      SLACK_AUTHORIZED_WORKSPACES_ENV,
+    );
+    const slackAuthorizedChannels = this.resolveConfigList(
+      config.messaging?.slack?.authorizedChannels,
+    );
+    const slackTeamAuthorizationMode = this.resolveSlackTeamAuthorizationMode(
+      config.messaging?.slack?.teamAuthorizationMode,
+      slackAuthorizedWorkspaces.value,
+    );
+    const slackChannelAuthorizationMode = this.resolveSlackChannelAuthorizationMode(
+      config.messaging?.slack?.channelAuthorizationMode,
+      slackAuthorizedWorkspaces.value,
+      slackAuthorizedChannels.value,
+    );
 
     return {
       fetchedAt: this.now(),
@@ -784,6 +801,8 @@ export class DesktopSettingsService {
           inboundMode: this.resolveSlackInboundMode(
             config.messaging?.slack?.inboundMode,
           ),
+          teamAuthorizationMode: slackTeamAuthorizationMode,
+          channelAuthorizationMode: slackChannelAuthorizationMode,
           slashCommandPrefix: this.resolveStringWithDefault(
             config.messaging?.slack?.slashCommandPrefix,
             "pwragent_",
@@ -798,13 +817,8 @@ export class DesktopSettingsService {
             config.messaging?.slack?.authorizedUserIds,
             SLACK_AUTHORIZED_USER_IDS_ENV,
           ),
-          authorizedWorkspaces: this.resolveList(
-            config.messaging?.slack?.authorizedWorkspaces,
-            SLACK_AUTHORIZED_WORKSPACES_ENV,
-          ),
-          authorizedChannels: this.resolveConfigList(
-            config.messaging?.slack?.authorizedChannels,
-          ),
+          authorizedWorkspaces: slackAuthorizedWorkspaces,
+          authorizedChannels: slackAuthorizedChannels,
         },
         feishu: {
           enabled: this.resolveBoolean(
@@ -1862,6 +1876,33 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopMessagingResponseMode> {
     return {
       value: configValue ?? defaultValue,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveSlackTeamAuthorizationMode(
+    configValue: DesktopMessagingAuthorizationMode | undefined,
+    authorizedWorkspaces: DesktopAuthorizedContact[],
+  ): DesktopSettingsValue<DesktopMessagingAuthorizationMode> {
+    return {
+      value: configValue ?? (authorizedWorkspaces.length > 0
+        ? "approved_only"
+        : "allow_all"),
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveSlackChannelAuthorizationMode(
+    configValue: DesktopMessagingAuthorizationMode | undefined,
+    authorizedWorkspaces: DesktopAuthorizedContact[],
+    authorizedChannels: DesktopAuthorizedContact[],
+  ): DesktopSettingsValue<DesktopMessagingAuthorizationMode> {
+    return {
+      value: configValue ?? (authorizedChannels.length > 0
+        ? "approved_only"
+        : authorizedWorkspaces.length > 0
+          ? "allow_all"
+          : "approved_only"),
       source: configValue === undefined ? "default" : "config",
     };
   }
