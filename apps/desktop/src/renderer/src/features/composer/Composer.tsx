@@ -440,10 +440,41 @@ function buildReviewBranchOptions(params: {
   directory?: NavigationDirectorySummary;
   thread?: NavigationThreadSummary;
 }): string[] {
+  const currentBranches = new Set(
+    [
+      params.thread?.gitBranch,
+      params.thread?.observedGitBranch,
+      params.directory?.gitStatus?.currentBranch,
+    ]
+      .map((branch) => branch?.trim())
+      .filter((branch): branch is string => Boolean(branch)),
+  );
+  const isCurrentBranch = (candidate?: string): boolean => {
+    const value = candidate?.trim();
+    if (!value) {
+      return false;
+    }
+    if (currentBranches.has(value)) {
+      return true;
+    }
+    return (
+      value.startsWith("origin/") &&
+      currentBranches.has(value.slice("origin/".length))
+    );
+  };
+  const preferredBaseBranches = (params.directory?.gitStatus?.baseBranches ?? []).filter(
+    (branch) => !isCurrentBranch(branch),
+  );
+  const upstreamBranch = params.directory?.gitStatus?.upstreamBranch?.replace(
+    /^origin\//,
+    "",
+  );
   const candidates = [
-    params.directory?.gitStatus?.defaultBranch,
-    params.directory?.gitStatus?.upstreamBranch?.replace(/^origin\//, ""),
-    ...(params.directory?.gitStatus?.baseBranches ?? []),
+    ...preferredBaseBranches,
+    !isCurrentBranch(params.directory?.gitStatus?.defaultBranch)
+      ? params.directory?.gitStatus?.defaultBranch
+      : undefined,
+    !isCurrentBranch(upstreamBranch) ? upstreamBranch : undefined,
     "main",
     params.thread?.gitBranch,
     params.thread?.observedGitBranch,
