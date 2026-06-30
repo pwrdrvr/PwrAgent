@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { buildDirectorySummaries } from "../domain/directory-navigation";
 import {
+  buildNavigationSnapshot,
   buildNavigationSnapshotHash,
   materializeNavigationThreads,
 } from "../domain/navigation-state";
@@ -1242,6 +1243,56 @@ describe("buildDirectorySummaries", () => {
     // The repo row (a real checkout) wins over the worktree row.
     expect(rowsWithThread[0]?.key).toBe("directory:/Users/huntharo/pwrdrvr/PwrAgnt");
   });
+
+  it("keeps a worktree thread homed under its provider directory when another repo is attached", () => {
+    const snapshot = buildNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 1_000,
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [
+            {
+              id: "directory:/Users/huntharo/pwrdrvr/agent-kit",
+              label: "agent-kit",
+              path: "/Users/huntharo/pwrdrvr/agent-kit",
+              kind: "local",
+            },
+          ],
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [
+        buildThread({
+          projectKey: "/Users/huntharo/.codex/worktrees/mr03ibdv/PwrAgnt",
+          linkedDirectories: [
+            {
+              id: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              worktreePath: "/Users/huntharo/.codex/worktrees/mr03ibdv/PwrAgnt",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ],
+      unchanged: false,
+    });
+
+    const rowsWithThread = snapshot.directories.filter((directory) =>
+      directory.threadKeys.includes("codex:thread-1"),
+    );
+    expect(rowsWithThread).toHaveLength(1);
+    expect(rowsWithThread[0]).toEqual(
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+        label: "PwrAgent",
+      }),
+    );
+  });
 });
 
 describe("materializeNavigationThreads", () => {
@@ -1333,6 +1384,46 @@ describe("materializeNavigationThreads", () => {
         worktreePath: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
         kind: "worktree",
       },
+    ]);
+  });
+
+  it("keeps provider directories before user-attached extra directories", () => {
+    const [thread] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [
+            {
+              id: "directory:/Users/huntharo/pwrdrvr/agent-kit",
+              label: "agent-kit",
+              path: "/Users/huntharo/pwrdrvr/agent-kit",
+              kind: "local",
+            },
+          ],
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [
+        buildThread({
+          linkedDirectories: [
+            {
+              id: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              worktreePath: "/Users/huntharo/.codex/worktrees/mr03ibdv/PwrAgnt",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(thread?.linkedDirectories.map((directory) => directory.label)).toEqual([
+      "PwrAgent",
+      "agent-kit",
     ]);
   });
 });

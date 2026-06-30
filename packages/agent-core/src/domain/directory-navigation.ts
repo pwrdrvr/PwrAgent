@@ -279,8 +279,9 @@ function normalizeDirectoryDescriptor(
 //   1. A stable repo/local/workspace row over an ephemeral tool-managed
 //      worktree row, so the thread groups under its project (the main checkout)
 //      rather than a throwaway worktree folder.
-//   2. Deterministic tiebreak by key, so the choice is stable across snapshots,
-//      backends, and platforms (no flicker between rows on re-render).
+//   2. Existing linked-directory order, so provider/home metadata keeps
+//      precedence over user-attached secondary directories until true
+//      multi-homed directory listings are implemented.
 function pickHomeDirectory(
   descriptors: DirectoryDescriptor[],
 ): DirectoryDescriptor | undefined {
@@ -288,18 +289,22 @@ function pickHomeDirectory(
     return descriptors[0];
   }
 
-  return [...descriptors].sort((left, right) => {
-    const leftIsWorktree = left.path
-      ? isToolManagedWorktreePath(left.path)
-      : false;
-    const rightIsWorktree = right.path
-      ? isToolManagedWorktreePath(right.path)
-      : false;
-    if (leftIsWorktree !== rightIsWorktree) {
-      return leftIsWorktree ? 1 : -1;
-    }
-    return left.key.localeCompare(right.key);
-  })[0];
+  return descriptors
+    .map((descriptor, index) => ({ descriptor, index }))
+    .sort((left, right) => {
+      const leftDescriptor = left.descriptor;
+      const rightDescriptor = right.descriptor;
+      const leftIsWorktree = leftDescriptor.path
+        ? isToolManagedWorktreePath(leftDescriptor.path)
+        : false;
+      const rightIsWorktree = rightDescriptor.path
+        ? isToolManagedWorktreePath(rightDescriptor.path)
+        : false;
+      if (leftIsWorktree !== rightIsWorktree) {
+        return leftIsWorktree ? 1 : -1;
+      }
+      return left.index - right.index;
+    })[0]?.descriptor;
 }
 
 function ensureSummary(
