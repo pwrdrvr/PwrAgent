@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.0-beta.40 - 2026-06-29
+
+- Workspace Moves - Added same-thread workspace moves so agents can move the current thread into a linked worktree and continue there without creating a child handoff thread.
+- Agent Coordination - Exposed pending workspace moves to thread inspection tools, deduped duplicate move requests, and kept queued turns behind the move continuation.
+- Composer Paste - Fixed HTML-only pastes inside active code blocks and blockquotes so SQL and other multi-line content stays inside the current block.
+- Thread State - Fixed idle thread refresh races that could detach an active review turn and leave the renderer stuck thinking after the review completed.
+- Thread List Refresh - Pauses long-idle navigation polling after 30 minutes without activity and reduces repetitive diagnostics to debug logs.
+- Composer State - Replaces promoted optimistic user-message placeholders when the matching real Codex item arrives, avoiding duplicate-looking prompts while preserving true repeated submissions.
+
 ## v1.0.0-beta.39 - 2026-06-28
 
 - Workspace Handoffs - Improved handoff creation visibility so pending child-thread setup is surfaced before slow worktree or environment setup completes, reducing duplicate handoffs.
