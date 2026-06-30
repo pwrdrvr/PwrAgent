@@ -1088,6 +1088,13 @@ export class AutomationStore {
       schedule: payload.schedule,
       triggers: payload.triggers,
     });
+    if (Array.isArray(payload.triggers) && triggers.length === 0) {
+      this.noteAutomationLoadIssue(
+        row,
+        "This automation was created by a newer version of PwrAgent.",
+      );
+      return undefined;
+    }
     const schedule = scheduleFromTriggers(triggers);
     if (schedule && !isUnderstoodSchedule(schedule)) {
       // A schedule using a kind a newer build introduced cannot be run safely.
@@ -1263,7 +1270,7 @@ function isSupportedAutomationTrigger(
 ): trigger is AutomationTriggerDefinition {
   if (!trigger || typeof trigger !== "object") return false;
   if (trigger.kind === "schedule") {
-    return Boolean(trigger.schedule);
+    return isUnderstoodSchedule(trigger.schedule);
   }
   if (trigger.kind === "inbound_message") {
     return Boolean(
