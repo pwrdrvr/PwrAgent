@@ -1,14 +1,19 @@
 import type {
   AppServerThreadPlanEntry,
   DesktopApplicationsSnapshot,
+  MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type TranscriptPlanProps = {
   applications?: DesktopApplicationsSnapshot;
-  desktopApi?: Pick<DesktopApi, "openApplication">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+  >;
   entry: AppServerThreadPlanEntry;
+  fileViewerContext?: MarkdownFileViewerContext;
 };
 
 function formatPlanSummary(completedCount: number, totalCount: number): string {
@@ -76,6 +81,7 @@ export function TranscriptPlan(props: TranscriptPlanProps) {
           applications={props.applications}
           className="transcript-plan__markdown"
           desktopApi={props.desktopApi}
+          fileViewerContext={props.fileViewerContext}
           text={props.entry.markdown}
         />
       ) : null}

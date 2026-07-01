@@ -2,6 +2,7 @@ import type {
   AppServerReviewFinding,
   AppServerThreadReviewEntry,
   DesktopApplicationsSnapshot,
+  MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
@@ -11,8 +12,12 @@ import { ThreadMarkdown } from "./ThreadMarkdown";
 type TranscriptReviewProps = {
   applications?: DesktopApplicationsSnapshot;
   directoryPaths?: string[];
-  desktopApi?: Pick<DesktopApi, "openApplication">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+  >;
   entry: AppServerThreadReviewEntry;
+  fileViewerContext?: MarkdownFileViewerContext;
 };
 
 function formatConfidence(value: number | undefined): string | undefined {
@@ -186,6 +191,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
               applications={props.applications}
               className="transcript-review__body"
               desktopApi={props.desktopApi}
+              fileViewerContext={props.fileViewerContext}
               text={body}
             />
           ) : null}
@@ -245,6 +251,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                   applications={props.applications}
                   className="transcript-review__finding-body"
                   desktopApi={props.desktopApi}
+                  fileViewerContext={props.fileViewerContext}
                   text={finding.body}
                 />
                 <div className="transcript-review__location">

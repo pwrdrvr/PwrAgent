@@ -4,6 +4,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadImagePart,
   DesktopApplicationsSnapshot,
+  MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptActivity } from "./TranscriptActivity";
@@ -17,9 +18,13 @@ type TranscriptWorkPhaseGroupProps = {
   applications?: DesktopApplicationsSnapshot;
   collapsible: boolean;
   directoryPaths?: string[];
-  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+  >;
   entries: AppServerThreadEntry[];
   expanded: boolean;
+  fileViewerContext?: MarkdownFileViewerContext;
   label: string;
   skills: AppServerSkillSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
@@ -66,6 +71,7 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
               directoryPaths: props.directoryPaths,
               desktopApi: props.desktopApi,
               entry,
+              fileViewerContext: props.fileViewerContext,
               onOpenImage: props.onOpenImage,
               skills: props.skills,
             })
@@ -108,8 +114,12 @@ function TranscriptWorkPhaseGroupLabel(props: {
 function renderEntry(params: {
   applications?: DesktopApplicationsSnapshot;
   directoryPaths?: string[];
-  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+  >;
   entry: AppServerThreadEntry;
+  fileViewerContext?: MarkdownFileViewerContext;
   skills: AppServerSkillSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
 }) {
@@ -120,6 +130,7 @@ function renderEntry(params: {
       applications={params.applications}
       desktopApi={params.desktopApi}
       entry={entry}
+      fileViewerContext={params.fileViewerContext}
       skills={params.skills}
     />
   ) : entry.type === "plan" ? (
@@ -128,6 +139,7 @@ function renderEntry(params: {
       applications={params.applications}
       desktopApi={params.desktopApi}
       entry={entry}
+      fileViewerContext={params.fileViewerContext}
     />
   ) : entry.type === "review" ? (
     <TranscriptReview
@@ -136,12 +148,14 @@ function renderEntry(params: {
       directoryPaths={params.directoryPaths}
       desktopApi={params.desktopApi}
       entry={entry}
+      fileViewerContext={params.fileViewerContext}
     />
   ) : (
     <TranscriptMessage
       key={entry.id}
       applications={params.applications}
       desktopApi={params.desktopApi}
+      fileViewerContext={params.fileViewerContext}
       message={entry}
       skills={params.skills}
       onOpenImage={params.onOpenImage}

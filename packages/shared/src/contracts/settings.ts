@@ -1201,6 +1201,55 @@ export type OpenPathResponse = {
   error?: string;
 };
 
+export type ReadMarkdownFileRequest = {
+  path: string;
+};
+
+export type ReadMarkdownFileResponse = {
+  path: string;
+  content?: string;
+  error?: string;
+};
+
+export type MarkdownFileViewerFile = {
+  path: string;
+  label: string;
+  line?: number;
+  column?: number;
+};
+
+export type MarkdownFileViewerContext = {
+  key: string;
+  title: string;
+  threadTitle?: string;
+  projectPath?: string;
+};
+
+export type OpenMarkdownFileViewerRequest = {
+  context: MarkdownFileViewerContext;
+  file: MarkdownFileViewerFile;
+  editorApplication?: DesktopApplicationDiscoveryCandidate;
+};
+
+export type OpenMarkdownFileViewerResponse = {
+  opened: true;
+};
+
+export type MarkdownFileViewerSnapshot = {
+  context: MarkdownFileViewerContext;
+  files: MarkdownFileViewerFile[];
+  selectedPath: string;
+  editorApplication?: DesktopApplicationDiscoveryCandidate;
+};
+
+export type ReadMarkdownFileViewerSnapshotRequest = {
+  contextKey: string;
+};
+
+export type ReadMarkdownFileViewerSnapshotResponse = {
+  snapshot?: MarkdownFileViewerSnapshot;
+};
+
 export function isDesktopChatReplyComposer(
   value: string,
 ): value is DesktopChatReplyComposer {

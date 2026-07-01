@@ -13,6 +13,7 @@ import {
   MattermostIcon,
   NewThreadIcon,
   PinIcon,
+  PopoutIcon,
   SettingsIcon,
   SmileyIcon,
   TelegramIcon,
@@ -40,6 +41,7 @@ const ALL_ICONS = [
   ["ChevronLeftIcon", ChevronLeftIcon],
   ["ChevronRightIcon", ChevronRightIcon],
   ["PinIcon", PinIcon],
+  ["PopoutIcon", PopoutIcon],
 ] as const;
 
 describe("icon library", () => {

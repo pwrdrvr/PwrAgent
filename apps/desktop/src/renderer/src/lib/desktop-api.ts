@@ -191,8 +191,14 @@ import type {
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  OpenMarkdownFileViewerRequest,
+  OpenMarkdownFileViewerResponse,
   OpenPathRequest,
   OpenPathResponse,
+  ReadMarkdownFileRequest,
+  ReadMarkdownFileResponse,
+  ReadMarkdownFileViewerSnapshotRequest,
+  ReadMarkdownFileViewerSnapshotResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
   ReadDesktopSettingsRequest,
@@ -516,6 +522,18 @@ export type DesktopApi = {
   ) => Promise<OpenDesktopApplicationResponse>;
   openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   revealPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
+  readMarkdownFile?: (
+    request: ReadMarkdownFileRequest
+  ) => Promise<ReadMarkdownFileResponse>;
+  openMarkdownFileViewer?: (
+    request: OpenMarkdownFileViewerRequest
+  ) => Promise<OpenMarkdownFileViewerResponse>;
+  readMarkdownFileViewerSnapshot?: (
+    request: ReadMarkdownFileViewerSnapshotRequest
+  ) => Promise<ReadMarkdownFileViewerSnapshotResponse>;
+  onMarkdownFileViewerSnapshotChanged?: (
+    callback: (snapshot: ReadMarkdownFileViewerSnapshotResponse) => void
+  ) => () => void;
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;
