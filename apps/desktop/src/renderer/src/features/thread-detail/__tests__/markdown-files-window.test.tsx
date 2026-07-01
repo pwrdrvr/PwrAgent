@@ -41,11 +41,13 @@ describe("MarkdownFilesWindow", () => {
     const readMarkdownFileViewerSnapshot = vi.fn(async () => snapshotResponse);
     const readMarkdownFile = vi.fn(async () => ({
       path: "/repo/PwrAgent/docs/plan.md",
-      content: "# Plan\n\nShip it.",
+      content: "# Plan\n\nShip it. See [source](/repo/PwrAgent/src/foo.ts:12).",
     }));
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
 
     (window as Window & { pwragent?: DesktopApi }).pwragent = {
       onMarkdownFileViewerSnapshotChanged: () => () => undefined,
+      openApplication,
       readMarkdownFile,
       readMarkdownFileViewerSnapshot,
     };
@@ -63,6 +65,18 @@ describe("MarkdownFilesWindow", () => {
       });
       expect(readMarkdownFile).toHaveBeenCalledWith({
         path: "/repo/PwrAgent/docs/plan.md",
+      });
+    });
+
+    screen.getByRole("link", { name: "source" }).click();
+
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenCalledWith({
+        applicationId: "vscode",
+        kind: "editor",
+        targetPath: "/repo/PwrAgent/src/foo.ts",
+        targetLine: 12,
+        targetColumn: undefined,
       });
     });
   });

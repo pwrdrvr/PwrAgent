@@ -18,7 +18,7 @@ import ReactMarkdown, { type Components, type UrlTransform } from "react-markdow
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AppIcon } from "../../components/AppIcon";
-import { CloseIcon, ProjectsIcon } from "../../icons";
+import { CloseIcon, PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { repairNestedLanguageFences } from "../../lib/markdown-fences";
 import { SkillChip } from "../composer/SkillChip";
@@ -561,7 +561,7 @@ function MarkdownDocumentModal(props: {
                     });
                 }}
               >
-                <ProjectsIcon size={16} aria-hidden="true" />
+                <PopoutIcon size={16} aria-hidden="true" />
               </button>
             ) : null}
             <button

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
+  DesktopApplicationsSnapshot,
   MarkdownFileViewerFile,
   MarkdownFileViewerSnapshot,
 } from "@pwragent/shared";
@@ -20,6 +21,10 @@ export function MarkdownFilesWindow() {
   const selectedFile = snapshot?.files.find(
     (file) => file.path === snapshot.selectedPath,
   ) ?? snapshot?.files[0];
+  const markdownApplications = useMemo(
+    () => applicationsSnapshotForEditor(snapshot),
+    [snapshot],
+  );
   const [loadState, setLoadState] = useState<LoadState>({ status: "idle" });
 
   useEffect(() => {
@@ -228,6 +233,7 @@ export function MarkdownFilesWindow() {
               ) : null}
               {loadState.status === "loaded" ? (
                 <ThreadMarkdown
+                  applications={markdownApplications}
                   className="markdown-files-window__markdown"
                   desktopApi={desktopApi}
                   fileViewerContext={snapshot?.context}
@@ -260,4 +266,32 @@ function relativeFilePath(filePath: string, projectPath: string | undefined): st
   return filePath === projectPath || filePath.startsWith(`${projectPath}/`)
     ? filePath.slice(projectPath.length).replace(/^\//, "") || filePath
     : filePath;
+}
+
+function applicationsSnapshotForEditor(
+  snapshot: MarkdownFileViewerSnapshot | undefined,
+): DesktopApplicationsSnapshot | undefined {
+  if (!snapshot?.editorApplication) {
+    return undefined;
+  }
+
+  return {
+    editors: [snapshot.editorApplication],
+    terminals: [],
+    preferredEditorId: {
+      value: snapshot.editorApplication.id,
+      source: "config",
+    },
+    preferredTerminalId: {
+      value: "",
+      source: "default",
+    },
+    gh: {
+      path: { value: "", source: "default" },
+      discovery: { candidates: [] },
+    },
+    git: {
+      discovery: { candidates: [] },
+    },
+  };
 }
