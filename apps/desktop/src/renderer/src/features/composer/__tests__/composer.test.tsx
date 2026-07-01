@@ -4887,6 +4887,23 @@ describe("Composer", () => {
       "aria-pressed",
       "true",
     );
+    expect(baseBranchTarget).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("button", { name: /Current changes/i })).toHaveAttribute(
+      "tabindex",
+      "-1",
+    );
+    expect(screen.getByRole("button", { name: /Review one commit by SHA/i })).toHaveAttribute(
+      "tabindex",
+      "-1",
+    );
+    expect(screen.getByRole("button", { name: /Review using custom instructions/i })).toHaveAttribute(
+      "tabindex",
+      "-1",
+    );
+    expect(screen.getByLabelText("Base branch")).not.toHaveAttribute(
+      "tabindex",
+      "-1",
+    );
     await waitFor(() => {
       expect(baseBranchTarget).toHaveFocus();
     });
@@ -4956,6 +4973,11 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: /Current changes/i })).toHaveAttribute(
       "aria-pressed",
       "true",
+    );
+    expect(baseBranchTarget).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("button", { name: /Current changes/i })).toHaveAttribute(
+      "tabindex",
+      "0",
     );
 
     fireEvent.keyDown(screen.getByRole("button", { name: /Current changes/i }), {

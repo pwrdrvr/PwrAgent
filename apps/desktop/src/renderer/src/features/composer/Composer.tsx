@@ -5801,6 +5801,7 @@ export function Composer(props: ComposerProps) {
                   type="button"
                   aria-pressed={reviewConfig?.target === option.target}
                   className={`composer__review-option${reviewConfig?.target === option.target ? " is-active" : ""}`}
+                  tabIndex={reviewConfig?.target === option.target ? 0 : -1}
                   onClick={() => {
                     selectReviewTarget(option.target, {
                       focusDetail:
