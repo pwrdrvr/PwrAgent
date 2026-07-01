@@ -151,8 +151,14 @@ export type MutateThreadToolArgs = {
 };
 
 export type AttachThreadPullRequestToolArgs = {
-  backend: AppServerBackendKind;
-  threadId: ThreadIdentifier;
+  /**
+   * Defaults to the invoking PwrAgent thread's backend when omitted.
+   */
+  backend?: AppServerBackendKind;
+  /**
+   * Defaults to the invoking PwrAgent thread id when omitted.
+   */
+  threadId?: ThreadIdentifier;
   /**
    * Full PR/MR URL. Supports GitHub/GHE `/pull/<number>` and GitLab
    * `/merge_requests/<number>` URL shapes.
@@ -180,8 +186,14 @@ export type AttachThreadPullRequestResult = {
 };
 
 export type CheckThreadPullRequestStatusToolArgs = {
-  backend: AppServerBackendKind;
-  threadId: ThreadIdentifier;
+  /**
+   * Defaults to the invoking PwrAgent thread's backend when omitted.
+   */
+  backend?: AppServerBackendKind;
+  /**
+   * Defaults to the invoking PwrAgent thread id when omitted.
+   */
+  threadId?: ThreadIdentifier;
   /** Forge host for this lookup. Defaults to github.com when omitted. */
   provider?: string;
   /** Optional branch override. Defaults to the thread's observed/expected branch or HEAD. */

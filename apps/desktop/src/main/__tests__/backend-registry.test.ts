@@ -5638,6 +5638,34 @@ script = "echo setup"
       "Omit backend and threadId to inspect the current thread",
     );
     expect(getThreadStatusTool?.inputSchema?.required ?? []).toEqual([]);
+    const attachPullRequestTool = (
+      codexClient.lastStartThreadParams?.dynamicTools as Array<{
+        description?: string;
+        inputSchema?: {
+          required?: string[];
+        };
+        name: string;
+        namespace: string;
+      }> | undefined
+    )?.find((tool) => tool.name === "attach_thread_pull_request");
+    expect(attachPullRequestTool?.description).toContain(
+      "Omit backend and threadId to attach to the current thread",
+    );
+    expect(attachPullRequestTool?.inputSchema?.required ?? []).toEqual([]);
+    const checkPullRequestStatusTool = (
+      codexClient.lastStartThreadParams?.dynamicTools as Array<{
+        description?: string;
+        inputSchema?: {
+          required?: string[];
+        };
+        name: string;
+        namespace: string;
+      }> | undefined
+    )?.find((tool) => tool.name === "check_thread_pull_request_status");
+    expect(checkPullRequestStatusTool?.description).toContain(
+      "Omit backend and threadId to check the current thread",
+    );
+    expect(checkPullRequestStatusTool?.inputSchema?.required ?? []).toEqual([]);
     await expect(
       overlayStore.getThreadOverlayState({
         backend: "codex",
@@ -18765,6 +18793,90 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("defaults PR reference attachment to the invoking thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "agent-thread",
+          title: "Current work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 2000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": createAgentOverlay(),
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "attach_thread_pull_request",
+        arguments: {
+          url: "https://github.com/pwrdrvr/PwrAgent/pull/904",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.pullRequestReference).toMatchObject({
+      backend: "codex",
+      threadId: "agent-thread",
+      pr: {
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 904,
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/904",
+      },
+    });
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "agent-thread",
+    });
+    expect(overlay?.prs).toEqual([
+      expect.objectContaining({
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 904,
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("rejects explicit PR references with malformed URLs", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
@@ -18963,8 +19075,8 @@ script = "printf setup"
       ok: true,
       data: {
         pullRequestStatus: {
-          backend: args.backend,
-          threadId: args.threadId,
+          backend: args.backend ?? "codex",
+          threadId: args.threadId ?? "target-thread",
           provider: args.provider ?? "github.com",
           prs: [],
           ghAvailable: true,
@@ -19023,6 +19135,83 @@ script = "printf setup"
         branch: "feature/pr",
         directoryPaths: ["/repo"],
       },
+    });
+
+    await registry.close();
+  });
+
+  it("defaults user-invoked PR status checks to the invoking thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+        },
+      }),
+    });
+    const handler = vi.fn(async (args) => ({
+      ok: true as const,
+      data: {
+        pullRequestStatus: {
+          backend: args.backend ?? "codex",
+          threadId: args.threadId ?? "agent-thread",
+          provider: args.provider ?? "github.com",
+          prs: [],
+          ghAvailable: true,
+          refreshStarted: false,
+          requestedAt: 1_250,
+          branch: args.branch ?? "HEAD",
+          directoryPaths: args.directoryPaths ?? [],
+        },
+      },
+    }));
+    registry.setThreadPullRequestStatusToolHandler(handler);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "check_thread_pull_request_status",
+        arguments: {
+          branch: "feature/pr",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(handler).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "agent-thread",
+      branch: "feature/pr",
+    });
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.pullRequestStatus).toMatchObject({
+      backend: "codex",
+      threadId: "agent-thread",
+      branch: "feature/pr",
     });
 
     await registry.close();

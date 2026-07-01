@@ -1956,7 +1956,7 @@ class DesktopAppServerService {
   async checkThreadPullRequestStatusForTool(
     args: CheckThreadPullRequestStatusToolArgs,
   ): Promise<PwrAgentThreadInspectionResponse> {
-    if (!isAppServerBackendKind(args.backend)) {
+    if (!args.backend || !isAppServerBackendKind(args.backend)) {
       return {
         ok: false,
         error: {

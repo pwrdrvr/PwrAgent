@@ -17416,7 +17416,11 @@ export class DesktopBackendRegistry {
     }
 
     if (request.operation === "attach_thread_pull_request") {
-      return await this.handleAttachThreadPullRequestInspectionRequest(request.args);
+      return await this.handleAttachThreadPullRequestInspectionRequest({
+        ...request.args,
+        backend: request.args.backend ?? request.context.backend,
+        threadId: request.args.threadId ?? request.context.threadId,
+      });
     }
 
     if (request.operation === "check_thread_pull_request_status") {
@@ -17429,7 +17433,11 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      return await this.threadPullRequestStatusToolHandler(request.args);
+      return await this.threadPullRequestStatusToolHandler({
+        ...request.args,
+        backend: request.args.backend ?? request.context.backend,
+        threadId: request.args.threadId ?? request.context.threadId,
+      });
     }
 
     if (request.operation === "mutate_thread") {
@@ -17448,7 +17456,7 @@ export class DesktopBackendRegistry {
   private async handleAttachThreadPullRequestInspectionRequest(
     args: AttachThreadPullRequestToolArgs,
   ): Promise<PwrAgentThreadInspectionResponse> {
-    if (!isAppServerBackendKind(args.backend)) {
+    if (!args.backend || !isAppServerBackendKind(args.backend)) {
       return {
         ok: false,
         error: {
