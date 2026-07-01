@@ -115,6 +115,10 @@ const MessagingActivityWindow = lazy(async () => ({
   default: (await import("./features/messaging-activity/MessagingActivityWindow"))
     .MessagingActivityWindow,
 }));
+const MarkdownFilesWindow = lazy(async () => ({
+  default: (await import("./features/thread-detail/MarkdownFilesWindow"))
+    .MarkdownFilesWindow,
+}));
 
 /**
  * Routes recognized by `chooseRoot` below. The Messaging Activity
@@ -147,6 +151,10 @@ const routes: Array<{
   {
     match: (hash) => hash === "logs",
     render: () => <LogsWindow />,
+  },
+  {
+    match: (hash) => hash.startsWith("files/"),
+    render: () => <MarkdownFilesWindow />,
   },
 ];
 

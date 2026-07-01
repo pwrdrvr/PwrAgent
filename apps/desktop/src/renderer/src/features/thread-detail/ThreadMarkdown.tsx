@@ -1,11 +1,24 @@
 import type {
   AppServerSkillSummary,
   DesktopApplicationsSnapshot,
+  MarkdownFileViewerContext,
 } from "@pwragent/shared";
-import { memo, useCallback, useMemo, type MouseEvent, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { AppIcon } from "../../components/AppIcon";
+import { CloseIcon, ProjectsIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { repairNestedLanguageFences } from "../../lib/markdown-fences";
 import { SkillChip } from "../composer/SkillChip";
@@ -15,14 +28,32 @@ import { TranscriptCopyButton } from "./TranscriptCopyButton";
 type ThreadMarkdownProps = {
   applications?: DesktopApplicationsSnapshot;
   className?: string;
-  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+  >;
+  fileViewerContext?: MarkdownFileViewerContext;
   skills?: AppServerSkillSummary[];
   text: string;
   variant?: "message" | "summary";
 };
 
+type EditorApplication = DesktopApplicationsSnapshot["editors"][number];
+
+type LocalFileTarget = {
+  path: string;
+  line?: number;
+  column?: number;
+};
+
+type MarkdownViewerTarget = LocalFileTarget & {
+  label: string;
+};
+
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
   const markdownText = useMemo(() => repairNestedLanguageFences(props.text), [props.text]);
+  const [markdownViewerTarget, setMarkdownViewerTarget] =
+    useState<MarkdownViewerTarget>();
   const editorApplication = useMemo(
     () =>
       props.applications?.editors.find(
@@ -44,14 +75,12 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     [props.skills]
   );
 
-  const openLocalFileLink = useCallback(
-    (event: MouseEvent<HTMLAnchorElement>, href: string): void => {
-      const target = localFileTargetFromHref(href);
-      if (!target || !editorApplication || !props.desktopApi?.openApplication) {
-        return;
+  const openLocalFileInEditor = useCallback(
+    (target: LocalFileTarget): boolean => {
+      if (!editorApplication || !props.desktopApi?.openApplication) {
+        return false;
       }
 
-      event.preventDefault();
       void props.desktopApi
         .openApplication({
           applicationId: editorApplication.id,
@@ -63,14 +92,42 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         .catch((error: unknown) => {
           console.error("Failed to open transcript file link", error);
         });
+      return true;
     },
     [editorApplication, props.desktopApi]
+  );
+
+  const openLocalFileLink = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>, href: string, label: string): void => {
+      const target = localFileTargetFromHref(href);
+      if (!target) {
+        return;
+      }
+
+      if (isMarkdownFilePath(target.path) && props.desktopApi?.readMarkdownFile) {
+        event.preventDefault();
+        setMarkdownViewerTarget({
+          ...target,
+          label: label || fileNameFromPath(target.path),
+        });
+        return;
+      }
+
+      if (openLocalFileInEditor(target)) {
+        event.preventDefault();
+      }
+    },
+    [openLocalFileInEditor, props.desktopApi]
   );
 
   const components = useMemo<Components>(
     () => ({
       a(anchorProps) {
         const href = typeof anchorProps.href === "string" ? anchorProps.href : "";
+        const localTarget = localFileTargetFromHref(href);
+        const isLocalMarkdownFile = Boolean(
+          localTarget && isMarkdownFilePath(localTarget.path)
+        );
         const skillPath = normalizeSkillPath(href);
         const label = extractTextContent(anchorProps.children).trim();
         const source = sourceForNode(markdownText, anchorProps.node);
@@ -95,20 +152,51 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           return <>{anchorProps.children}</>;
         }
 
-        return (
+        const link = (
           <a
             className="transcript-message__link"
             href={href || undefined}
             onClick={(event) => {
-              openLocalFileLink(event, href);
+              openLocalFileLink(event, href, label);
             }}
             rel="noopener noreferrer"
             target="_blank"
-            title={href || undefined}
+            title={isLocalMarkdownFile ? "Open in PwrAgent" : href || undefined}
           >
             {anchorProps.children}
           </a>
         );
+
+        if (isLocalMarkdownFile && localTarget) {
+          return (
+            <span className="thread-markdown__file-link">
+              {link}
+              {editorApplication && props.desktopApi?.openApplication ? (
+                <button
+                  type="button"
+                  className="thread-markdown__editor-link"
+                  aria-label={openFileInEditorLabel(
+                    label || fileNameFromPath(localTarget.path),
+                    editorApplication.name,
+                  )}
+                  title={openFileInEditorTitle(editorApplication.name)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openLocalFileInEditor(localTarget);
+                  }}
+                >
+                  <AppIcon
+                    application={editorApplication}
+                    className="thread-markdown__editor-link-icon"
+                    size={13}
+                  />
+                </button>
+              ) : null}
+            </span>
+          );
+        }
+
+        return link;
       },
       blockquote(blockquoteProps) {
         const copyText = normalizeBlockquoteCopyText(
@@ -250,7 +338,14 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         return <ul className="transcript-message__list">{listProps.children}</ul>;
       },
     }),
-    [markdownText, openLocalFileLink, skillsByPath]
+    [
+      editorApplication,
+      markdownText,
+      openLocalFileInEditor,
+      openLocalFileLink,
+      props.desktopApi,
+      skillsByPath,
+    ]
   );
 
   return (
@@ -270,11 +365,243 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       >
         {markdownText}
       </ReactMarkdown>
+      {markdownViewerTarget ? (
+        <MarkdownDocumentModal
+          applications={props.applications}
+          desktopApi={props.desktopApi}
+          editorApplication={editorApplication}
+          fileViewerContext={props.fileViewerContext}
+          onClose={() => setMarkdownViewerTarget(undefined)}
+          onOpenInEditor={openLocalFileInEditor}
+          skills={props.skills}
+          target={markdownViewerTarget}
+        />
+      ) : null}
     </div>
   );
 });
 
 ThreadMarkdown.displayName = "ThreadMarkdown";
+
+function MarkdownDocumentModal(props: {
+  applications?: DesktopApplicationsSnapshot;
+  desktopApi?: Pick<
+    DesktopApi,
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+  >;
+  editorApplication?: EditorApplication;
+  fileViewerContext?: MarkdownFileViewerContext;
+  onClose: () => void;
+  onOpenInEditor: (target: LocalFileTarget) => boolean;
+  skills?: AppServerSkillSummary[];
+  target: MarkdownViewerTarget;
+}) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [loadState, setLoadState] = useState<
+    | { status: "loading" }
+    | { status: "loaded"; content: string }
+    | { status: "error"; error: string }
+  >({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadState({ status: "loading" });
+
+    const readMarkdownFile = props.desktopApi?.readMarkdownFile;
+    if (!readMarkdownFile) {
+      setLoadState({
+        status: "error",
+        error: "Markdown preview is unavailable.",
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void readMarkdownFile({ path: props.target.path })
+      .then((response) => {
+        if (cancelled) return;
+        if (response.error || response.content === undefined) {
+          setLoadState({
+            status: "error",
+            error: response.error ?? "Markdown file could not be read.",
+          });
+          return;
+        }
+
+        setLoadState({ status: "loaded", content: response.content });
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setLoadState({
+          status: "error",
+          error: error instanceof Error ? error.message : "Markdown file could not be read.",
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [props.desktopApi, props.target.path]);
+
+  useEffect(() => {
+    const restoreFocus = document.activeElement as HTMLElement | null;
+    const focusables = (): HTMLElement[] =>
+      Array.from(
+        contentRef.current?.querySelectorAll<HTMLElement>(
+          'button, a[href], [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => !element.hasAttribute("disabled"));
+
+    focusables()[0]?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        props.onClose();
+        return;
+      }
+
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const items = focusables();
+      if (items.length === 0) {
+        return;
+      }
+
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      if (!contentRef.current?.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      restoreFocus?.focus?.();
+    };
+  }, [props.onClose]);
+
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      className="markdown-document-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Markdown document: ${props.target.label}`}
+      onClick={props.onClose}
+    >
+      <div
+        ref={contentRef}
+        className="markdown-document-modal__content"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="markdown-document-modal__head">
+          <div className="markdown-document-modal__title-wrap">
+            <h2 className="markdown-document-modal__title">{props.target.label}</h2>
+            <p className="markdown-document-modal__path">{props.target.path}</p>
+          </div>
+          <div className="markdown-document-modal__actions">
+            {props.editorApplication ? (
+              <button
+                type="button"
+                className="markdown-document-modal__icon-button"
+                aria-label={openFileInEditorLabel(
+                  props.target.label,
+                  props.editorApplication.name,
+                )}
+                title={openFileInEditorTitle(props.editorApplication.name)}
+                onClick={() => {
+                  props.onOpenInEditor(props.target);
+                }}
+              >
+                <AppIcon
+                  application={props.editorApplication}
+                  className="markdown-document-modal__app-icon"
+                  size={16}
+                />
+              </button>
+            ) : null}
+            {props.desktopApi?.openMarkdownFileViewer ? (
+              <button
+                type="button"
+                className="markdown-document-modal__icon-button"
+                aria-label="Open in detached files window"
+                title="Open in detached files window"
+                onClick={() => {
+                  const context = props.fileViewerContext ??
+                    fallbackFileViewerContext(props.target.path);
+                  void props.desktopApi
+                    ?.openMarkdownFileViewer?.({
+                      context,
+                      editorApplication: props.editorApplication,
+                      file: {
+                        path: props.target.path,
+                        label: props.target.label,
+                        line: props.target.line,
+                        column: props.target.column,
+                      },
+                    })
+                    .catch((error: unknown) => {
+                      console.error("Failed to open markdown file viewer", error);
+                    });
+                }}
+              >
+                <ProjectsIcon size={16} aria-hidden="true" />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="markdown-document-modal__icon-button"
+              aria-label="Close"
+              title="Close"
+              onClick={props.onClose}
+            >
+              <CloseIcon size={18} aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+
+        <div className="markdown-document-modal__body">
+          {loadState.status === "loading" ? (
+            <p className="markdown-document-modal__status">Loading document...</p>
+          ) : null}
+          {loadState.status === "error" ? (
+            <p className="markdown-document-modal__status markdown-document-modal__status--error">
+              {loadState.error}
+            </p>
+          ) : null}
+          {loadState.status === "loaded" ? (
+            <ThreadMarkdown
+              applications={props.applications}
+              className="markdown-document-modal__markdown"
+              desktopApi={props.desktopApi}
+              fileViewerContext={props.fileViewerContext}
+              skills={props.skills}
+              text={loadState.content}
+              variant="summary"
+            />
+          ) : null}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
 
 const normalizeMarkdownUrl: UrlTransform = (url) => {
   const trimmed = url.trim();
@@ -378,7 +705,7 @@ function normalizeSkillPath(href: string): string | undefined {
 
 function localFileTargetFromHref(
   href: string
-): { path: string; line?: number; column?: number } | undefined {
+): LocalFileTarget | undefined {
   if (href.startsWith("file://")) {
     return splitFileLineSuffix(decodeURIComponent(href.replace(/^file:\/\//, "")));
   }
@@ -388,6 +715,31 @@ function localFileTargetFromHref(
   }
 
   return undefined;
+}
+
+function isMarkdownFilePath(filePath: string): boolean {
+  return /\.(?:md|markdown)$/i.test(filePath);
+}
+
+function fileNameFromPath(filePath: string): string {
+  return filePath.split("/").filter(Boolean).pop() ?? filePath;
+}
+
+function openFileInEditorTitle(editorName: string): string {
+  return `Open file in ${editorName}`;
+}
+
+function openFileInEditorLabel(fileLabel: string, editorName: string): string {
+  return `${openFileInEditorTitle(editorName)}: ${fileLabel}`;
+}
+
+function fallbackFileViewerContext(filePath: string): MarkdownFileViewerContext {
+  const directory = filePath.slice(0, Math.max(0, filePath.lastIndexOf("/"))) || filePath;
+  return {
+    key: `files:${directory}`,
+    title: "Files",
+    projectPath: directory,
+  };
 }
 
 function denormalizeMarkdownUrl(url: string): string {

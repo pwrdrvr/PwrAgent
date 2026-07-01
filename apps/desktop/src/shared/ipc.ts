@@ -273,6 +273,12 @@ export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
 export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";
 export const PATH_REVEAL_CHANNEL = "path:reveal";
+export const MARKDOWN_FILE_READ_CHANNEL = "markdown-file:read";
+export const MARKDOWN_FILE_VIEWER_OPEN_CHANNEL = "markdown-file-viewer:open";
+export const MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL =
+  "markdown-file-viewer:read-snapshot";
+export const MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL =
+  "markdown-file-viewer:snapshot-changed";
 export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
   "integrated-terminal:create";
 export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";

@@ -176,8 +176,14 @@ import type {
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  OpenMarkdownFileViewerRequest,
+  OpenMarkdownFileViewerResponse,
   OpenPathRequest,
   OpenPathResponse,
+  ReadMarkdownFileRequest,
+  ReadMarkdownFileResponse,
+  ReadMarkdownFileViewerSnapshotRequest,
+  ReadMarkdownFileViewerSnapshotResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
   ReadDesktopSettingsRequest,
@@ -296,6 +302,10 @@ import {
   APP_SERVER_READ_THREAD_CHANNEL,
   APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
+  MARKDOWN_FILE_READ_CHANNEL,
+  MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
+  MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
+  MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
@@ -757,6 +767,30 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(PATH_OPEN_CHANNEL, request),
   revealPath: async (request: OpenPathRequest): Promise<OpenPathResponse> =>
     await ipcRenderer.invoke(PATH_REVEAL_CHANNEL, request),
+  readMarkdownFile: async (
+    request: ReadMarkdownFileRequest,
+  ): Promise<ReadMarkdownFileResponse> =>
+    await ipcRenderer.invoke(MARKDOWN_FILE_READ_CHANNEL, request),
+  openMarkdownFileViewer: async (
+    request: OpenMarkdownFileViewerRequest,
+  ): Promise<OpenMarkdownFileViewerResponse> =>
+    await ipcRenderer.invoke(MARKDOWN_FILE_VIEWER_OPEN_CHANNEL, request),
+  readMarkdownFileViewerSnapshot: async (
+    request: ReadMarkdownFileViewerSnapshotRequest,
+  ): Promise<ReadMarkdownFileViewerSnapshotResponse> =>
+    await ipcRenderer.invoke(MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL, request),
+  onMarkdownFileViewerSnapshotChanged: (
+    callback: (snapshot: Readonly<ReadMarkdownFileViewerSnapshotResponse>) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: ReadMarkdownFileViewerSnapshotResponse,
+    ) => callback(payload);
+    ipcRenderer.on(MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL, listener);
+    };
+  },
   createIntegratedTerminal: async (
     request: IntegratedTerminalCreateRequest,
   ): Promise<IntegratedTerminalCreateResponse> =>

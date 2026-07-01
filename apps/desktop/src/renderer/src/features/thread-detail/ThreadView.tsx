@@ -30,6 +30,7 @@ import type {
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   HandoffThreadWorkspaceRequest,
+  MarkdownFileViewerContext,
   MessagingChannelKind,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -1079,6 +1080,23 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadKey = selectedThread
     ? `${selectedThread.source}:${selectedThread.id}`
     : undefined;
+  const fileViewerContext = useMemo<MarkdownFileViewerContext | undefined>(() => {
+    if (!selectedThread || !selectedThreadKey) {
+      return undefined;
+    }
+
+    const projectPath =
+      selectedThread.projectKey ??
+      selectedThread.linkedDirectories[0]?.worktreePath ??
+      selectedThread.linkedDirectories[0]?.path;
+
+    return {
+      key: selectedThreadKey,
+      title: `Files - ${selectedThread.title}`,
+      threadTitle: selectedThread.title,
+      ...(projectPath ? { projectPath } : {}),
+    };
+  }, [selectedThread, selectedThreadKey]);
   const selectedThreadTerminalOpen = selectedThreadKey
     ? terminalOpenByThread[selectedThreadKey] === true
     : false;
@@ -2508,6 +2526,7 @@ export function ThreadView(props: ThreadViewProps) {
               directoryPaths={threadDirectoryPaths(selectedThread!)}
               desktopApi={props.desktopApi}
               error={props.transcriptError}
+              fileViewerContext={fileViewerContext}
               loading={props.loading}
               loadingMore={props.loadingMore}
               pagination={props.transcriptPagination}

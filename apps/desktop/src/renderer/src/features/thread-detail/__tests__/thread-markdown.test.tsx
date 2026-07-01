@@ -51,6 +51,10 @@ describe("ThreadMarkdown", () => {
       "href",
       "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
     );
+    expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
+      "title",
+      "Open in PwrAgent"
+    );
   });
 
   it("opens local file links in the configured editor", async () => {
@@ -102,6 +106,103 @@ describe("ThreadMarkdown", () => {
         targetPath: "/repo/PwrAgent/AGENTS.md",
         targetLine: 17,
         targetColumn: undefined,
+      });
+    });
+  });
+
+  it("opens markdown file links in a document modal and keeps the editor icon separate", async () => {
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+    const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
+    const readMarkdownFile = vi.fn(async (request: { path: string }) => ({
+      path: request.path,
+      content: "# AGENTS\n\nUse the repo guidance.",
+    }));
+
+    render(
+      <ThreadMarkdown
+        applications={{
+          editors: [
+            {
+              id: "zed",
+              kind: "editor",
+              name: "Zed",
+              source: "application",
+              appPath: "/Applications/Zed.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "zed", source: "config" },
+          preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+          git: {
+            discovery: { candidates: [] },
+          },
+        }}
+        desktopApi={{ openApplication, openMarkdownFileViewer, readMarkdownFile }}
+        fileViewerContext={{
+          key: "codex:thread-1",
+          title: "Files - Thread title",
+          threadTitle: "Thread title",
+          projectPath: "/repo/PwrAgent",
+        }}
+        text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md:17)."}
+      />
+    );
+
+    expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
+      "title",
+      "Open in PwrAgent"
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open file in Zed: AGENTS.md" })
+    );
+
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenCalledWith({
+        applicationId: "zed",
+        kind: "editor",
+        targetPath: "/repo/PwrAgent/AGENTS.md",
+        targetLine: 17,
+        targetColumn: undefined,
+      });
+    });
+
+    openApplication.mockClear();
+    fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
+
+    expect(await screen.findByRole("dialog", { name: "Markdown document: AGENTS.md" }))
+      .toBeInTheDocument();
+    expect(readMarkdownFile).toHaveBeenCalledWith({
+      path: "/repo/PwrAgent/AGENTS.md",
+    });
+    expect(screen.getByRole("heading", { name: "AGENTS" })).toBeInTheDocument();
+    expect(openApplication).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in detached files window" }));
+
+    await waitFor(() => {
+      expect(openMarkdownFileViewer).toHaveBeenCalledWith({
+        context: {
+          key: "codex:thread-1",
+          title: "Files - Thread title",
+          threadTitle: "Thread title",
+          projectPath: "/repo/PwrAgent",
+        },
+        editorApplication: expect.objectContaining({
+          id: "zed",
+          name: "Zed",
+        }),
+        file: {
+          path: "/repo/PwrAgent/AGENTS.md",
+          label: "AGENTS.md",
+          line: 17,
+          column: undefined,
+        },
       });
     });
   });

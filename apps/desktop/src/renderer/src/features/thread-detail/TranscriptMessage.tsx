@@ -5,6 +5,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerThreadMessagePart,
+  MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptImage } from "./TranscriptImage";
@@ -13,7 +14,11 @@ import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
 type TranscriptMessageProps = {
   applications?: DesktopApplicationsSnapshot;
-  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+  >;
+  fileViewerContext?: MarkdownFileViewerContext;
   message: AppServerThreadMessageEntry;
   skills: AppServerSkillSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
@@ -76,6 +81,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
               index,
               applications: props.applications,
               desktopApi: props.desktopApi,
+              fileViewerContext: props.fileViewerContext,
               onOpenImage: props.onOpenImage,
               skills: props.skills,
             })}
@@ -303,7 +309,11 @@ function appendTextSegment(segments: MessagePartSegment[], text: string): void {
 
 function renderMessageSegment(params: {
   applications?: DesktopApplicationsSnapshot;
-  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+  >;
+  fileViewerContext?: MarkdownFileViewerContext;
   segment: MessagePartSegment;
   index: number;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
@@ -333,6 +343,7 @@ function renderMessageSegment(params: {
       applications={params.applications}
       className="transcript-message__text-block"
       desktopApi={params.desktopApi}
+      fileViewerContext={params.fileViewerContext}
       skills={params.skills}
       text={params.segment.type === "table" ? params.segment.text : params.segment.part.text}
     />

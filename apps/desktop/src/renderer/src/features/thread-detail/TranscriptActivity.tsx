@@ -3,6 +3,7 @@ import type {
   AppServerSkillSummary,
   AppServerThreadActivityEntry,
   DesktopApplicationsSnapshot,
+  MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
@@ -12,8 +13,12 @@ import { TranscriptDiff } from "./TranscriptDiff";
 
 type TranscriptActivityProps = {
   applications?: DesktopApplicationsSnapshot;
-  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+  >;
   entry: AppServerThreadActivityEntry;
+  fileViewerContext?: MarkdownFileViewerContext;
   skills?: AppServerSkillSummary[];
 };
 
@@ -104,6 +109,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                   applications={props.applications}
                   className="transcript-activity__detail-markdown"
                   desktopApi={props.desktopApi}
+                  fileViewerContext={props.fileViewerContext}
                   skills={props.skills}
                   text={markdown}
                   variant="summary"

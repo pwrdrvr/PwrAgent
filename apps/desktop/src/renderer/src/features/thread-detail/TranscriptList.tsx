@@ -26,6 +26,7 @@ import type {
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadTurnFailure,
+  MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import {
   buildPendingRequestActions,
@@ -69,7 +70,12 @@ type TranscriptListProps = {
   applications?: DesktopApplicationsSnapshot;
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "listAutomationCards" | "onAgentEvent"
+    | "copyText"
+    | "openApplication"
+    | "openMarkdownFileViewer"
+    | "readMarkdownFile"
+    | "listAutomationCards"
+    | "onAgentEvent"
   >;
   directoryPaths?: string[];
   entries: AppServerThreadEntry[];
@@ -94,6 +100,7 @@ type TranscriptListProps = {
   restoredViewport?: TranscriptViewport;
   reglueRequestKey?: number;
   threadId?: string;
+  fileViewerContext?: MarkdownFileViewerContext;
   skills?: AppServerSkillSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   onViewportChange?: (viewport?: TranscriptViewport) => void;
@@ -1152,6 +1159,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   desktopApi={props.desktopApi}
                   entries={item.entries}
                   expanded={expandedCommentaryGroupIds.has(item.id)}
+                  fileViewerContext={props.fileViewerContext}
                   label={item.label}
                   skills={skills}
                   onOpenImage={props.onOpenImage}
@@ -1164,6 +1172,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   applications={props.applications}
                   desktopApi={props.desktopApi}
                   entry={item.entry}
+                  fileViewerContext={props.fileViewerContext}
                   skills={skills}
                 />
               ) : item.entry.type === "plan" ? (
@@ -1171,6 +1180,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   applications={props.applications}
                   desktopApi={props.desktopApi}
                   entry={item.entry}
+                  fileViewerContext={props.fileViewerContext}
                 />
               ) : item.entry.type === "review" ? (
                 <TranscriptReview
@@ -1178,12 +1188,14 @@ export function TranscriptList(props: TranscriptListProps) {
                   directoryPaths={props.directoryPaths}
                   desktopApi={props.desktopApi}
                   entry={item.entry}
+                  fileViewerContext={props.fileViewerContext}
                 />
               ) : (
                 <TranscriptMessage
                   applications={props.applications}
                   desktopApi={props.desktopApi}
                   message={item.entry}
+                  fileViewerContext={props.fileViewerContext}
                   skills={skills}
                   onOpenImage={props.onOpenImage}
                 />

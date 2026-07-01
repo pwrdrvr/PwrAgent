@@ -36,12 +36,14 @@ export const WINDOW_KIND_MESSAGING_ACTIVITY = "messaging-activity" as const;
 export const WINDOW_KIND_CHANGELOG = "changelog" as const;
 export const WINDOW_KIND_LICENSE_DOCUMENT = "license-document" as const;
 export const WINDOW_KIND_APP_LOGS = "app-logs" as const;
+export const WINDOW_KIND_MARKDOWN_FILES = "markdown-files" as const;
 export type WindowKind =
   | typeof WINDOW_KIND_MAIN
   | typeof WINDOW_KIND_MESSAGING_ACTIVITY
   | typeof WINDOW_KIND_CHANGELOG
   | typeof WINDOW_KIND_LICENSE_DOCUMENT
-  | typeof WINDOW_KIND_APP_LOGS;
+  | typeof WINDOW_KIND_APP_LOGS
+  | typeof WINDOW_KIND_MARKDOWN_FILES;
 
 interface Entry {
   kind: WindowKind;
