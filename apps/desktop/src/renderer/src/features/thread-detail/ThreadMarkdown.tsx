@@ -51,7 +51,10 @@ type MarkdownViewerTarget = LocalFileTarget & {
 };
 
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
-  const markdownText = useMemo(() => repairNestedLanguageFences(props.text), [props.text]);
+  const markdownText = useMemo(
+    () => protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
+    [props.text]
+  );
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
   const editorApplication = useMemo(
@@ -252,6 +255,9 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       },
       h6(headingProps) {
         return <h6 className="transcript-message__heading">{headingProps.children}</h6>;
+      },
+      hr() {
+        return <hr className="transcript-message__rule" />;
       },
       img(imageProps) {
         const altText = typeof imageProps.alt === "string" ? imageProps.alt : "";
@@ -601,6 +607,43 @@ function MarkdownDocumentModal(props: {
     </div>,
     document.body,
   );
+}
+
+function protectComposerHyphenListItems(markdown: string): string {
+  const lines = markdown.split("\n");
+  let fence: { marker: "`" | "~"; length: number } | undefined;
+
+  return lines
+    .map((line) => {
+      const fenceLine = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
+      if (fenceLine) {
+        const sequence = fenceLine[1] ?? "";
+        const marker = sequence[0] as "`" | "~";
+        const trailing = fenceLine[2] ?? "";
+        if (!fence) {
+          fence = { marker, length: sequence.length };
+        } else if (
+          marker === fence.marker &&
+          sequence.length >= fence.length &&
+          trailing.trim() === ""
+        ) {
+          fence = undefined;
+        }
+        return line;
+      }
+
+      if (fence) {
+        return line;
+      }
+
+      const hyphenOnlyListItem = line.match(/^(\s{0,3})-\s+(-+)(\s*)$/);
+      if (!hyphenOnlyListItem || (hyphenOnlyListItem[2]?.length ?? 0) < 2) {
+        return line;
+      }
+
+      return `${hyphenOnlyListItem[1]}- \\${hyphenOnlyListItem[2]}${hyphenOnlyListItem[3]}`;
+    })
+    .join("\n");
 }
 
 const normalizeMarkdownUrl: UrlTransform = (url) => {

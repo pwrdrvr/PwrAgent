@@ -336,6 +336,48 @@ describe("ThreadMarkdown", () => {
     expect(container).toHaveTextContent("Built by xAI.");
   });
 
+  it("renders thematic breaks between separate lists", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={[
+          "- One",
+          "- Two",
+          "---",
+          "- Second List - One",
+          "- Second List - Two",
+          "---",
+          "- Third List - One",
+          "- Third List - Two",
+        ].join("\n")}
+      />
+    );
+
+    expect(container.querySelectorAll("hr.transcript-message__rule")).toHaveLength(2);
+    expect(container.querySelectorAll("ul.transcript-message__list")).toHaveLength(3);
+    expect(screen.getByText("Second List - One")).toBeInTheDocument();
+  });
+
+  it("keeps composer-style hyphen-only bullet items visible", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={[
+          "- One",
+          "- Two",
+          "- --",
+          "- Three",
+          "- Four",
+          "- --",
+          "- Five",
+          "- Six",
+        ].join("\n")}
+      />
+    );
+
+    expect(container.querySelector("hr")).toBeNull();
+    expect(container.querySelectorAll("ul.transcript-message__list")).toHaveLength(1);
+    expect(screen.getAllByText("--")).toHaveLength(2);
+  });
+
   it("renders html-looking transcript text literally", () => {
     const { container } = render(
       <ThreadMarkdown
@@ -374,6 +416,28 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelector("pre strong")).toBeNull();
     expect(container.querySelector("pre .skill-chip")).toBeNull();
     expect(container.querySelector("pre img")).toBeNull();
+  });
+
+  it("does not escape hyphen-only lines after shorter nested code fences", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={[
+          "````md",
+          "```ts",
+          "const marker = true;",
+          "```",
+          "- --",
+          "````",
+        ].join("\n")}
+      />
+    );
+
+    const codeBlock = container.querySelector("pre code");
+    expect(codeBlock).not.toBeNull();
+    expect(codeBlock?.textContent).toContain("```ts");
+    expect(codeBlock?.textContent).toContain("- --");
+    expect(codeBlock?.textContent).not.toContain("- \\--");
+    expect(container.querySelector("hr")).toBeNull();
   });
 
   it("keeps malformed handoff messages grouped when they contain language fences", () => {

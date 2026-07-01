@@ -887,6 +887,117 @@ describe("ComposerTiptapInput", () => {
     expect(container.querySelector("code")).toHaveTextContent("inline code");
   });
 
+  it("round-trips thematic breaks as markdown horizontal rules", async () => {
+    const original = [
+      "- One",
+      "- Two",
+      "---",
+      "- Second List - One",
+      "- Second List - Two",
+    ].join("\n");
+    const inputRef = createRef<ComposerInputHandle>();
+    const { container } = render(
+      <ComposerTiptapInput
+        ref={inputRef}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={() => undefined}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value={original}
+      />,
+    );
+
+    await screen.findByRole("textbox", { name: "Reply" });
+
+    expect(container.querySelector("hr")).toBeInTheDocument();
+    expect(inputRef.current?.value).toBe(
+      [
+        "- One",
+        "- Two",
+        "",
+        "---",
+        "",
+        "- Second List - One",
+        "- Second List - Two",
+      ].join("\n"),
+    );
+  });
+
+  it("serializes restored horizontalRule editor nodes instead of dropping them", async () => {
+    const inputRef = createRef<ComposerInputHandle>();
+
+    render(
+      <ComposerTiptapInput
+        ref={inputRef}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "bulletList",
+              content: [
+                {
+                  type: "listItem",
+                  content: [{ type: "paragraph", content: [{ type: "text", text: "One" }] }],
+                },
+              ],
+            },
+            { type: "horizontalRule" },
+            {
+              type: "bulletList",
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "Second List - One" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }}
+        onChange={() => undefined}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value={"- One\n\n---\n\n- Second List - One"}
+      />,
+    );
+
+    await screen.findByRole("textbox", { name: "Reply" });
+
+    expect(inputRef.current?.value).toBe("- One\n\n---\n\n- Second List - One");
+  });
+
+  it("keeps hyphen-only bullet items as list text", async () => {
+    const original = ["- One", "- Two", "- --", "- Three"].join("\n");
+    const inputRef = createRef<ComposerInputHandle>();
+    const { container } = render(
+      <ComposerTiptapInput
+        ref={inputRef}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={() => undefined}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value={original}
+      />,
+    );
+
+    await screen.findByRole("textbox", { name: "Reply" });
+
+    expect(container.querySelector("hr")).toBeNull();
+    expect(container.querySelectorAll("li")).toHaveLength(4);
+    expect(inputRef.current?.value).toBe(original);
+  });
+
   it("serializes marked trailing spaces outside delimiters before plain text", async () => {
     const boldText = "Allow detaching the only attached project - ";
     const plainText =
