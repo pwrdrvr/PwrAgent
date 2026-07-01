@@ -433,6 +433,40 @@ describe("ThreadRow chip flow", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("dismisses the PR tooltip before opening the PR in the browser", () => {
+    const onOpenPullRequest = vi.fn();
+    renderRow({
+      onOpenPullRequest,
+      thread: {
+        ...baseThread,
+        prs: [
+          {
+            provider: "github.com",
+            number: 123,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "Retain thread pull request history",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+          },
+        ],
+      },
+    });
+
+    const prChip = screen.getByRole("button", {
+      name: /Open pwrdrvr\/PwrAgent#123/,
+    });
+    fireEvent.mouseEnter(prChip);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    fireEvent.click(prChip);
+
+    expect(onOpenPullRequest).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/pull/123",
+    );
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
   it("dismisses the PR tooltip when the thread list scrolls", () => {
     const { container } = renderRow({
       thread: {
