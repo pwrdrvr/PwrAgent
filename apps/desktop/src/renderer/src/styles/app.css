@@ -12315,6 +12315,10 @@ textarea,
   background: transparent;
 }
 
+.integrated-terminal[hidden] {
+  display: none;
+}
+
 .integrated-terminal__resize-handle {
   flex: 0 0 10px;
   min-height: 10px;
