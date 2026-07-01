@@ -8402,6 +8402,13 @@ textarea,
   font-weight: 650;
 }
 
+.transcript-message__rule {
+  width: 100%;
+  height: 1px;
+  border: 0;
+  background: var(--border-subtle);
+}
+
 .thread-header__summary .transcript-message__heading {
   font-size: 14px;
   line-height: 1.45;

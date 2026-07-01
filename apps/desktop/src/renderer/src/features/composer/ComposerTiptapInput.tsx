@@ -291,9 +291,14 @@ function matchMarkdownBulletListItem(line: string): RegExpMatchArray | null {
   return line.match(/^\s{0,3}[-*]\s+(.+)$/);
 }
 
+function isMarkdownThematicBreak(line: string): boolean {
+  return /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line);
+}
+
 function isMarkdownBlockStart(line: string): boolean {
   return (
     parseBacktickFenceLine(line) !== undefined ||
+    isMarkdownThematicBreak(line) ||
     matchMarkdownOrderedListItem(line) !== null ||
     matchMarkdownBulletListItem(line) !== null
   );
@@ -386,6 +391,7 @@ function isHtmlStructuredBlockElement(element: HTMLElement): boolean {
   return (
     isHtmlListElement(element) ||
     tagName === "blockquote" ||
+    tagName === "hr" ||
     tagName === "pre" ||
     tagName === "p" ||
     tagName === "div" ||
@@ -523,6 +529,10 @@ function parseHtmlStructuredBlockElement(element: HTMLElement): JSONContent[] {
         content: content.length > 0 ? content : undefined,
       },
     ];
+  }
+
+  if (tagName === "hr") {
+    return [{ type: "horizontalRule" }];
   }
 
   if (tagName === "pre") {
@@ -676,6 +686,12 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
           ? [{ type: "text", text: codeLines.join("\n") }]
           : undefined,
       });
+      continue;
+    }
+
+    if (isMarkdownThematicBreak(line)) {
+      content.push({ type: "horizontalRule" });
+      index += 1;
       continue;
     }
 
@@ -1003,6 +1019,11 @@ function appendMarkdownBlock(
     return;
   }
 
+  if (node.type.name === "horizontalRule") {
+    state.value += "---";
+    return;
+  }
+
   if (node.type.name === "bulletList") {
     node.forEach((child, _offset, listIndex) => {
       if (listIndex > 0) {
@@ -1244,6 +1265,9 @@ function htmlNodeToPlainText(node: Node): string {
   if (tagName === "br") {
     return "\n";
   }
+  if (tagName === "hr") {
+    return "\n---\n";
+  }
   if (tagName === "pre") {
     return node.textContent ?? "";
   }
@@ -1445,6 +1469,16 @@ function getDraftIndexAtPosition(
       if (childIndex > 0) {
         index += mode === "markdown" ? 2 : 1;
       }
+      if (mode === "markdown" && node.type.name === "horizontalRule") {
+        const nodeEnd = pos + node.nodeSize;
+        if (position <= nodeEnd) {
+          index += Math.min(3, Math.max(0, position - pos));
+          found = true;
+          return false;
+        }
+        index += 3;
+        return false;
+      }
       if (mode === "markdown" && node.type.name === "codeBlock") {
         const codeBlock = getCodeBlockMarkdownParts(node);
         const nodeEnd = pos + node.nodeSize;
@@ -1555,6 +1589,15 @@ function getPositionAtDraftIndex(
           return false;
         }
         index += codeBlock.totalLength;
+        return false;
+      }
+      if (mode === "markdown" && node.type.name === "horizontalRule") {
+        if (draftIndex <= index + 3) {
+          position = pos + node.nodeSize;
+          found = true;
+          return false;
+        }
+        index += 3;
         return false;
       }
     }
