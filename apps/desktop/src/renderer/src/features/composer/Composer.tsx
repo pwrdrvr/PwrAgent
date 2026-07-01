@@ -468,6 +468,17 @@ function buildReviewBranchOptions(params: {
     /^origin\//,
     "",
   );
+  const baseBranches = params.directory?.gitStatus?.baseBranches ?? [];
+  const knownBranches = new Set(
+    [
+      ...baseBranches,
+      ...(params.directory?.gitStatus?.branches ?? []),
+      params.directory?.gitStatus?.defaultBranch,
+      upstreamBranch,
+    ]
+      .map((branch) => branch?.trim())
+      .filter((branch): branch is string => Boolean(branch)),
+  );
   const options = new Set<string>();
   const push = (
     candidate?: string,
@@ -481,11 +492,28 @@ function buildReviewBranchOptions(params: {
       options.add(value);
     }
   };
-  for (const candidate of params.directory?.gitStatus?.baseBranches ?? []) {
+  const pushIfKnown = (candidate?: string): void => {
+    const value = candidate?.trim();
+    if (value && knownBranches.has(value)) {
+      push(value);
+    }
+  };
+  const pushPreferredDefault = (candidate?: string): void => {
+    const value = candidate?.trim().replace(/^origin\//, "");
+    if (!value) {
+      return;
+    }
+    pushIfKnown(`origin/${value}`);
+    pushIfKnown(value);
+  };
+
+  pushPreferredDefault(params.directory?.gitStatus?.defaultBranch);
+  pushPreferredDefault("main");
+  pushPreferredDefault("master");
+  pushIfKnown(upstreamBranch);
+  for (const candidate of baseBranches) {
     push(candidate);
   }
-  push(params.directory?.gitStatus?.defaultBranch);
-  push(upstreamBranch);
   push("main", { allowCurrent: true });
   push(params.thread?.gitBranch);
   push(params.thread?.observedGitBranch);
@@ -1537,6 +1565,7 @@ function ReviewCommitPicker(props: {
   const [activeIndex, setActiveIndex] = useState(0);
   const inputId = useId();
   const listboxId = useId();
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
   const nowMs = Date.now();
   const query = props.value.trim().toLowerCase();
@@ -1553,10 +1582,28 @@ function ReviewCommitPicker(props: {
   }, [props.options, query]);
 
   useEffect(() => {
-    if (open) {
-      setActiveIndex(0);
+    setActiveIndex(0);
+  }, [query]);
+
+  useEffect(() => {
+    setActiveIndex((current) =>
+      visibleOptions.length === 0
+        ? 0
+        : Math.min(current, visibleOptions.length - 1),
+    );
+  }, [visibleOptions.length]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
     }
-  }, [open, query]);
+    const option = optionRefs.current[activeIndex];
+    if (typeof option?.scrollIntoView === "function") {
+      option.scrollIntoView({
+        block: "nearest",
+      });
+    }
+  }, [activeIndex, open]);
 
   const commit = (option: NavigationGitCommitSummary): void => {
     props.onChange(option.sha);
@@ -1571,9 +1618,10 @@ function ReviewCommitPicker(props: {
         return;
       }
       event.preventDefault();
+      const wasOpen = open;
       setOpen(true);
       setActiveIndex((current) =>
-        Math.min(visibleOptions.length - 1, current + 1),
+        wasOpen ? Math.min(visibleOptions.length - 1, current + 1) : 0,
       );
       return;
     }
@@ -1582,8 +1630,12 @@ function ReviewCommitPicker(props: {
         return;
       }
       event.preventDefault();
+      const wasOpen = open;
       setOpen(true);
       setActiveIndex((current) => Math.max(0, current - 1));
+      if (!wasOpen) {
+        setActiveIndex(visibleOptions.length - 1);
+      }
       return;
     }
     if (event.key === "Enter" && open) {
@@ -1595,17 +1647,25 @@ function ReviewCommitPicker(props: {
       return;
     }
     if (event.key === "Escape") {
-      setOpen(false);
+      if (shouldShowMenu) {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+      }
     }
   };
 
   const shouldShowMenu = open && visibleOptions.length > 0;
+  const activeOptionId = shouldShowMenu
+    ? `${listboxId}-option-${activeIndex}`
+    : undefined;
 
   return (
     <div className="review-commit-picker" ref={ref}>
       <label htmlFor={inputId}>Commit SHA</label>
       <input
         aria-autocomplete="list"
+        aria-activedescendant={activeOptionId}
         aria-controls={shouldShowMenu ? listboxId : undefined}
         aria-expanded={shouldShowMenu}
         aria-haspopup="listbox"
@@ -1618,8 +1678,14 @@ function ReviewCommitPicker(props: {
           props.onChange(event.target.value);
           setOpen(true);
         }}
-        onClick={() => setOpen(true)}
-        onFocus={() => setOpen(true)}
+        onClick={() => {
+          setActiveIndex(0);
+          setOpen(visibleOptions.length > 0);
+        }}
+        onFocus={() => {
+          setActiveIndex(0);
+          setOpen(visibleOptions.length > 0);
+        }}
         onKeyDown={handleKeyDown}
       />
       {shouldShowMenu ? (
@@ -1644,8 +1710,13 @@ function ReviewCommitPicker(props: {
                 ]
                   .filter(Boolean)
                   .join(" ")}
+                id={`${listboxId}-option-${index}`}
                 key={option.sha}
+                ref={(element) => {
+                  optionRefs.current[index] = element;
+                }}
                 role="option"
+                tabIndex={-1}
                 type="button"
                 onClick={() => commit(option)}
                 onMouseEnter={() => setActiveIndex(index)}

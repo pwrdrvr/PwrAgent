@@ -5171,6 +5171,68 @@ describe("Composer", () => {
     });
   });
 
+  it("prefers origin main over unrelated recent local branches for review base", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "fix/review-base-default-submit",
+            defaultBranch: "fix/review-base-default-submit",
+            branches: [
+              "fix/desktop-terminal-replay-responses",
+              "fix/review-base-default-submit",
+              "main",
+            ],
+            baseBranches: [
+              "fix/desktop-terminal-replay-responses",
+              "fix/review-base-default-submit",
+              "origin/fix/review-base-default-submit",
+              "origin/main",
+              "main",
+            ],
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "fix/review-base-default-submit",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+  });
+
   it("suggests recent commits for commit reviews and caps the list at twenty", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
@@ -5233,6 +5295,19 @@ describe("Composer", () => {
     });
 
     expect(screen.getAllByRole("option")).toHaveLength(20);
+    expect(screen.getAllByRole("option").map((option) => option.getAttribute("tabindex"))).toEqual(
+      Array.from({ length: 20 }, () => "-1"),
+    );
+    expect(screen.getByRole("option", { name: /c00 Commit subject 0/i })).toHaveClass(
+      "is-active",
+    );
+    fireEvent.keyDown(commitInput, { key: "ArrowDown" });
+    expect(screen.getByRole("option", { name: /c00 Commit subject 0/i })).not.toHaveClass(
+      "is-active",
+    );
+    expect(screen.getByRole("option", { name: /c01 Commit subject 1/i })).toHaveClass(
+      "is-active",
+    );
     fireEvent.click(screen.getByRole("option", { name: /c03 Commit subject 3/i }));
     expect(commitInput).toHaveValue(recentCommits[3]!.sha);
 
@@ -5246,6 +5321,70 @@ describe("Composer", () => {
         delivery: "inline",
       });
     });
+  });
+
+  it("closes commit suggestions with Escape before cancelling the review prompt", async () => {
+    const recentCommits = Array.from({ length: 2 }, (_, index) => ({
+      sha: `${index.toString(16).padStart(40, "0")}`,
+      shortSha: `c${index}`,
+      committedAt: Math.floor(Date.now() / 1000) - index * 60,
+      subject: `Commit subject ${index}`,
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "feature/review",
+            defaultBranch: "main",
+            branches: ["feature/review", "main"],
+            recentCommits,
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+    fireEvent.click(screen.getByRole("button", { name: /Review one commit by SHA/i }));
+    const commitInput = await screen.findByRole("combobox", {
+      name: "Commit SHA",
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("listbox", { name: "Recent commits" })).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(commitInput, { key: "Escape" });
+
+    expect(screen.queryByRole("listbox", { name: "Recent commits" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+
+    fireEvent.keyDown(commitInput, { key: "Escape" });
+    expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
   });
 
   it("still accepts a pasted raw commit SHA", async () => {
