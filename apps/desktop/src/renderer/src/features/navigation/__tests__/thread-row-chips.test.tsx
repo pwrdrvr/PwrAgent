@@ -467,6 +467,43 @@ describe("ThreadRow chip flow", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("removes PR chip focus before opening the browser so refocus cannot restore its tooltip", () => {
+    const onOpenPullRequest = vi.fn();
+    renderRow({
+      onOpenPullRequest,
+      thread: {
+        ...baseThread,
+        prs: [
+          {
+            provider: "github.com",
+            number: 123,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "Retain thread pull request history",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+          },
+        ],
+      },
+    });
+
+    const prChip = screen.getByRole("button", {
+      name: /Open pwrdrvr\/PwrAgent#123/,
+    });
+    prChip.focus();
+    fireEvent.focus(prChip);
+    expect(prChip).toHaveFocus();
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    fireEvent.click(prChip);
+
+    expect(onOpenPullRequest).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/pull/123",
+    );
+    expect(prChip).not.toHaveFocus();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
   it("dismisses the PR tooltip when the thread list scrolls", () => {
     const { container } = renderRow({
       thread: {
