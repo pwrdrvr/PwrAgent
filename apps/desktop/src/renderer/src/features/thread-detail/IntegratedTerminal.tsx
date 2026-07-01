@@ -342,7 +342,8 @@ function isReplayGeneratedTerminalReply(data: string): boolean {
 
 const replayGeneratedTerminalReplyToken =
   "(?:\\x1b\\[(?:\\?[0-9;]*|>[0-9;]*|[0-9;]*)c)" +
-  "|(?:\\x1b\\[[0-9]+;[0-9]+R)" +
+  "|(?:\\x1b\\[0n)" +
+  "|(?:\\x1b\\[\\??[0-9]+;[0-9]+R)" +
   "|(?:\\x1b\\[\\??[0-9;]+;[0-9]+\\$y)" +
   "|(?:\\x1b\\](?:1[012]|4;[0-9]+);rgb:[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}(?:\\x07|\\x1b\\\\))";
 

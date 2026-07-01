@@ -228,6 +228,9 @@ describe("IntegratedTerminal", () => {
   it("does not send terminal replies from replayed output back to the pty", async () => {
     xtermState.replayDataEvents.set("saved terminal output", [
       "\u001b[>0;276;0c\u001b]10;rgb:cccc/cccc/cccc\u001b\\",
+      "\u001b[0n",
+      "\u001b[12;34R",
+      "\u001b[?12;34R",
     ]);
     const writeIntegratedTerminal = vi.fn(async () => undefined);
 
