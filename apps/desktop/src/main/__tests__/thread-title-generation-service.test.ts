@@ -57,6 +57,26 @@ describe("ThreadTitleGenerationService", () => {
     );
   });
 
+  it("uses the Codex title generator for ACP backends without their own generator", async () => {
+    const codexGenerator = makeGenerator({ title: "Favorite cereal" });
+    const service = new ThreadTitleGenerationService({
+      generators: { codex: codexGenerator },
+    });
+
+    await expect(
+      service.generateTitle({
+        backend: "acp:kimi",
+        userPrompt:
+          "We're testing something here... just tell me your favorite cereal.",
+      })
+    ).resolves.toEqual({
+      status: "generated",
+      title: "Favorite cereal",
+      cachedTokens: 12,
+    });
+    expect(codexGenerator.generateTitle).toHaveBeenCalledOnce();
+  });
+
   it("preserves recognized issue and PR references", async () => {
     const service = new ThreadTitleGenerationService({
       generators: {

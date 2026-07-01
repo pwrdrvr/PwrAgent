@@ -11595,6 +11595,109 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("applies generated title helper names to ACP prompt-derived fallback sessions", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const prompt =
+      "We're testing something here... just tell me your favorite cereal.";
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "kimi-session-1",
+        title: "We're testing something here... just tell me your favorite cereal",
+        titleSource: "fallback",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Favorite cereal",
+        helperThreadId: "title-helper-thread",
+        helperTurnId: "title-helper-turn",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        serviceTier: "priority",
+        tokenUsage: {
+          inputTokens: 100,
+          cachedInputTokens: 20,
+          outputTokens: 10,
+          totalTokens: 110,
+        },
+      })),
+    };
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async () => sessions[0]!),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      startPrompt: vi.fn(() => ({
+        sessionId: "kimi-session-1",
+        turnId: "turn-1",
+      })),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord(acpBackendId)]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      input: [{ type: "text", text: prompt }],
+    });
+    await waitForCondition(() => sessions[0]?.title === "Favorite cereal");
+
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      userPrompt: prompt,
+    });
+    expect(sessions[0]).toMatchObject({
+      title: "Favorite cereal",
+      titleSource: "derived",
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:acp:kimi:kimi-session-1",
+        task: "Name this thread",
+        status: "success",
+        agentName: "PwrAgent",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        monitorThreadId: "title-helper-thread",
+        monitorTurnId: "title-helper-turn",
+        lastMessage: "Generated title: Favorite cereal",
+        outcome: "success",
+      }),
+    });
+
+    await registry.close();
+  });
+
   it("does not replace an existing ACP prompt-derived fallback title with a later prompt", async () => {
     const acpBackendId = "acp:qwen" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [

@@ -1,4 +1,4 @@
-import type { AppServerBackendKind } from "@pwragent/shared";
+import { isAcpBackendId, type AppServerBackendKind } from "@pwragent/shared";
 import {
   XaiEphemeralObjectCaller,
   type XaiObjectClientLike,
@@ -109,7 +109,9 @@ export class ThreadTitleGenerationService {
       };
     }
 
-    const generator = this.generators[params.backend];
+    const generator =
+      this.generators[params.backend] ??
+      (isAcpBackendId(params.backend) ? this.generators.codex : undefined);
     if (!generator) {
       return {
         status: "unavailable",
