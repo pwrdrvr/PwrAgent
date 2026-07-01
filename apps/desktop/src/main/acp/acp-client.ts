@@ -513,7 +513,7 @@ export class AcpAgentClient {
       );
       return {
         text:
-          suppression.finalTextChunks.join("\n").trim() ||
+          suppression.finalTextChunks.join("").trim() ||
           suppression.fallbackOutputText?.trim() ||
           "",
       };

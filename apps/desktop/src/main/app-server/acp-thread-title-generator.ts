@@ -79,7 +79,12 @@ function parseAcpTitleObject(text: string): unknown {
     return {};
   }
 
-  const parsed = tryParseJson(trimmed) ?? tryParseJson(extractJsonObject(trimmed));
+  const jsonObject = extractJsonObject(trimmed);
+  const parsed =
+    tryParseJson(trimmed) ??
+    tryParseJson(escapeNewlinesInsideJsonStrings(trimmed)) ??
+    tryParseJson(jsonObject) ??
+    tryParseJson(escapeNewlinesInsideJsonStrings(jsonObject));
   if (parsed) {
     return parsed;
   }
@@ -110,6 +115,36 @@ function tryParseJson(text: string): unknown | undefined {
   } catch {
     return undefined;
   }
+}
+
+function escapeNewlinesInsideJsonStrings(text: string): string {
+  let escaped = "";
+  let inString = false;
+  let escapedPrevious = false;
+
+  for (const char of text) {
+    if (inString && (char === "\n" || char === "\r")) {
+      if (!escaped.endsWith(" ")) {
+        escaped += " ";
+      }
+      escapedPrevious = false;
+      continue;
+    }
+    escaped += char;
+    if (escapedPrevious) {
+      escapedPrevious = false;
+      continue;
+    }
+    if (char === "\\") {
+      escapedPrevious = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+    }
+  }
+
+  return escaped;
 }
 
 function resolveAcpTitleModel(
