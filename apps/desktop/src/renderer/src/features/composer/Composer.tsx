@@ -1537,6 +1537,7 @@ export function Composer(props: ComposerProps) {
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
   const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const reviewOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const skillListboxId = useId();
   const slashListboxId = useId();
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
@@ -2483,6 +2484,17 @@ export function Composer(props: ComposerProps) {
   );
 
   useEffect(() => {
+    if (!isReviewComposerOpen || reviewConfig?.showBranchPicker) {
+      return;
+    }
+    const target = reviewConfig?.target ?? "baseBranch";
+    const optionIndex = REVIEW_TARGET_OPTIONS.findIndex(
+      (option) => option.target === target,
+    );
+    reviewOptionRefs.current[optionIndex === -1 ? 0 : optionIndex]?.focus();
+  }, [isReviewComposerOpen, reviewConfig?.showBranchPicker, reviewConfig?.target]);
+
+  useEffect(() => {
     if (!supportsReview && reviewConfig) {
       setReviewConfig(undefined);
     }
@@ -3238,6 +3250,53 @@ export function Composer(props: ComposerProps) {
       return;
     }
     await submitReviewCommand(configuredReviewCommand);
+  };
+
+  const focusReviewOption = (index: number): void => {
+    requestAnimationFrame(() => {
+      reviewOptionRefs.current[index]?.focus();
+    });
+  };
+
+  const selectReviewTarget = (
+    target: ReviewTargetChoice,
+    options?: { showBranchPicker?: boolean },
+  ): void => {
+    setReviewConfig((current) => ({
+      ...(current ??
+        createReviewConfig({
+          directory: props.directory,
+          thread: props.thread,
+        })),
+      showBranchPicker: options?.showBranchPicker,
+      target,
+    }));
+    setSendError(undefined);
+  };
+
+  const handleReviewOptionKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ): void => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      void submitConfiguredReviewComposer();
+      return;
+    }
+    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const nextIndex =
+      (index + direction + REVIEW_TARGET_OPTIONS.length) %
+      REVIEW_TARGET_OPTIONS.length;
+    selectReviewTarget(REVIEW_TARGET_OPTIONS[nextIndex]!.target, {
+      showBranchPicker: false,
+    });
+    focusReviewOption(nextIndex);
   };
 
   const buildTurnPayload = (
@@ -5387,24 +5446,21 @@ export function Composer(props: ComposerProps) {
           <fieldset className="composer__review-config" aria-label="Review target">
             <legend>Review target</legend>
             <div className="composer__review-options">
-              {REVIEW_TARGET_OPTIONS.map((option) => (
+              {REVIEW_TARGET_OPTIONS.map((option, index) => (
                 <button
                   key={option.target}
+                  ref={(element) => {
+                    reviewOptionRefs.current[index] = element;
+                  }}
                   type="button"
                   aria-pressed={reviewConfig?.target === option.target}
                   className={`composer__review-option${reviewConfig?.target === option.target ? " is-active" : ""}`}
                   onClick={() => {
-                    setReviewConfig((current) => ({
-                      ...(current ??
-                        createReviewConfig({
-                          directory: props.directory,
-                          thread: props.thread,
-                        })),
+                    selectReviewTarget(option.target, {
                       showBranchPicker: option.target === "baseBranch",
-                      target: option.target,
-                    }));
-                    setSendError(undefined);
+                    });
                   }}
+                  onKeyDown={(event) => handleReviewOptionKeyDown(event, index)}
                 >
                   <span>{option.label}</span>
                   <small>{option.description}</small>

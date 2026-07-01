@@ -4880,19 +4880,83 @@ describe("Composer", () => {
       "aria-pressed",
       "true",
     );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Base branch/i })).toHaveFocus();
+    });
     expect(screen.queryByLabelText("Base branch")).not.toBeInTheDocument();
     expect(startReview).not.toHaveBeenCalled();
 
-    const reviewTarget = screen.getByRole("group", { name: "Review target" });
-    const form = reviewTarget.closest("form");
-    expect(form).not.toBeNull();
-    fireEvent.submit(form!);
+    fireEvent.keyDown(screen.getByRole("button", { name: /Base branch/i }), {
+      key: "Enter",
+    });
 
     await waitFor(() => {
       expect(startReview).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("moves review target focus with arrow keys and submits the focused target with Enter", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Base branch/i })).toHaveFocus();
+    });
+
+    fireEvent.keyDown(screen.getByRole("button", { name: /Base branch/i }), {
+      key: "ArrowRight",
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Current changes/i })).toHaveFocus();
+    });
+    expect(screen.getByRole("button", { name: /Current changes/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    fireEvent.keyDown(screen.getByRole("button", { name: /Current changes/i }), {
+      key: "Enter",
+    });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "uncommittedChanges" },
         delivery: "inline",
       });
     });
