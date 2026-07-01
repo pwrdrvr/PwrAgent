@@ -864,8 +864,41 @@ describe("StateDb", () => {
     stateDb.close();
 
     const dbPath = path.join(tempDir, "legacy-thread-search-fts-state.db");
-    const raw = openRawDb(dbPath);
-    raw.exec(`
+    createLegacyThreadSearchFtsDb(dbPath, 22);
+
+    stateDb = StateDb.open(dbPath);
+
+    expect(columnNames("thread_search_fts")).toContain("thread_id");
+    expect(
+      new ThreadSearchStore(stateDb)
+        .search({ query: "7f2f4bd1-8e7b-4d3b-92e5", limit: 10 })
+        .map((result) => result.threadId),
+    ).toEqual(["7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84"]);
+  });
+
+  it("repairs stale thread search FTS tables even at current user_version", () => {
+    stateDb.close();
+
+    const dbPath = path.join(tempDir, "current-version-stale-thread-search-fts.db");
+    createLegacyThreadSearchFtsDb(dbPath, CURRENT_STATE_DB_USER_VERSION);
+
+    stateDb = StateDb.open(dbPath);
+
+    expect(columnNames("thread_search_fts")).toContain("thread_id");
+    expect(
+      new ThreadSearchStore(stateDb)
+        .search({ query: "7f2f4bd1-8e7b-4d3b-92e5", limit: 10 })
+        .map((result) => result.threadId),
+    ).toEqual(["7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84"]);
+  });
+});
+
+function createLegacyThreadSearchFtsDb(
+  dbPath: string,
+  userVersion: number,
+): void {
+  const raw = openRawDb(dbPath);
+  raw.exec(`
       PRAGMA user_version = 22;
       CREATE TABLE thread_search_documents (
         identity_key            TEXT PRIMARY KEY,
@@ -921,18 +954,9 @@ describe("StateDb", () => {
         1000
       );
     `);
-    raw.close();
-
-    stateDb = StateDb.open(dbPath);
-
-    expect(columnNames("thread_search_fts")).toContain("thread_id");
-    expect(
-      new ThreadSearchStore(stateDb)
-        .search({ query: "7f2f4bd1-8e7b-4d3b-92e5", limit: 10 })
-        .map((result) => result.threadId),
-    ).toEqual(["7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84"]);
-  });
-});
+  raw.pragma(`user_version = ${userVersion}`);
+  raw.close();
+}
 
 function openRawDb(dbPath: string): BetterSqlite3.Database {
   const nativeBinding = getNativeBinding();

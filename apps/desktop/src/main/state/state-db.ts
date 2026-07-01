@@ -962,6 +962,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(THREAD_SEARCH_SCHEMA);
     db.exec(PR_STATUS_CACHE_SCHEMA);
     db.exec(PR_LOOKUP_CACHE_SCHEMA);
+    ensureThreadSearchFtsThreadIdColumn(db);
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);
     ensureThreadUsagePricingCumulativeColumns(db);
