@@ -17,6 +17,7 @@ type IntegratedTerminalProps = {
   threadKey: string;
   cwd?: string;
   height: number;
+  visible?: boolean;
   onHeightChange: (height: number) => void;
   onClose: () => void;
   onExit: () => void;
@@ -27,6 +28,7 @@ export function IntegratedTerminal({
   threadKey,
   cwd,
   height,
+  visible = true,
   onHeightChange,
   onClose,
   onExit,
@@ -35,7 +37,14 @@ export function IntegratedTerminal({
   const terminalRef = useRef<Terminal | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
   const pendingInputRef = useRef<string[]>([]);
+  const replayingBufferedOutputRef = useRef(false);
+  const fitAndResizeRef = useRef<() => void>(() => undefined);
+  const visibleRef = useRef(visible);
   const [status, setStatus] = useState<string>("Starting shell...");
+
+  useEffect(() => {
+    visibleRef.current = visible;
+  }, [visible]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -92,6 +101,7 @@ export function IntegratedTerminal({
         terminalRef.current = terminal;
 
         const fitAndResize = () => {
+          if (!visibleRef.current) return;
           if (disposed || !desktopApi.resizeIntegratedTerminal) return;
           fitAddon.fit();
           const sessionId = sessionIdRef.current;
@@ -102,8 +112,16 @@ export function IntegratedTerminal({
             rows: terminal.rows,
           });
         };
+        fitAndResizeRef.current = fitAndResize;
 
         const dataDisposable = terminal.onData((data) => {
+          if (replayingBufferedOutputRef.current) {
+            if (isReplayGeneratedTerminalReply(data)) {
+              return;
+            }
+            pendingInputRef.current.push(data);
+            return;
+          }
           const sessionId = sessionIdRef.current;
           if (!sessionId) {
             pendingInputRef.current.push(data);
@@ -129,19 +147,30 @@ export function IntegratedTerminal({
             if (disposed) return;
             sessionIdRef.current = response.sessionId;
             setStatus(response.cwd);
+            const finishAttach = () => {
+              if (disposed) return;
+              const pendingInput = pendingInputRef.current.join("");
+              pendingInputRef.current = [];
+              if (pendingInput && desktopApi.writeIntegratedTerminal) {
+                void desktopApi.writeIntegratedTerminal({
+                  sessionId: response.sessionId,
+                  data: pendingInput,
+                });
+              }
+              fitAndResize();
+              if (visibleRef.current) {
+                terminal.focus();
+              }
+            };
             if (response.buffer) {
-              terminal.write(response.buffer);
-            }
-            const pendingInput = pendingInputRef.current.join("");
-            pendingInputRef.current = [];
-            if (pendingInput && desktopApi.writeIntegratedTerminal) {
-              void desktopApi.writeIntegratedTerminal({
-                sessionId: response.sessionId,
-                data: pendingInput,
+              replayingBufferedOutputRef.current = true;
+              terminal.write(response.buffer, () => {
+                replayingBufferedOutputRef.current = false;
+                finishAttach();
               });
+            } else {
+              finishAttach();
             }
-            fitAndResize();
-            terminal.focus();
           })
           .catch((error) => {
             if (disposed) return;
@@ -164,9 +193,19 @@ export function IntegratedTerminal({
       disposed = true;
       sessionIdRef.current = undefined;
       pendingInputRef.current = [];
+      replayingBufferedOutputRef.current = false;
+      fitAndResizeRef.current = () => undefined;
       cleanupTerminal?.();
     };
   }, [cwd, desktopApi, threadKey]);
+
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+    fitAndResizeRef.current();
+    terminalRef.current?.focus();
+  }, [height, visible]);
 
   const resizeBy = (delta: number) => {
     onHeightChange(clampTerminalHeight(height + delta));
@@ -236,6 +275,7 @@ export function IntegratedTerminal({
     <section
       className="integrated-terminal"
       aria-label="Integrated terminal"
+      hidden={!visible}
       style={
         {
           "--integrated-terminal-height": `${clampTerminalHeight(height)}px`,
@@ -295,3 +335,18 @@ function clampTerminalHeight(value: number): number {
     Math.max(TERMINAL_MIN_HEIGHT, Math.round(value)),
   );
 }
+
+function isReplayGeneratedTerminalReply(data: string): boolean {
+  return REPLAY_GENERATED_TERMINAL_REPLY_PATTERN.test(data);
+}
+
+const replayGeneratedTerminalReplyToken =
+  "(?:\\x1b\\[(?:\\?[0-9;]*|>[0-9;]*|[0-9;]*)c)" +
+  "|(?:\\x1b\\[0n)" +
+  "|(?:\\x1b\\[\\??[0-9]+;[0-9]+R)" +
+  "|(?:\\x1b\\[\\??[0-9;]+;[0-9]+\\$y)" +
+  "|(?:\\x1b\\](?:1[012]|4;[0-9]+);rgb:[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}(?:\\x07|\\x1b\\\\))";
+
+const REPLAY_GENERATED_TERMINAL_REPLY_PATTERN = new RegExp(
+  `^(?:${replayGeneratedTerminalReplyToken})+$`,
+);

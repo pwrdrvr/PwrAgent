@@ -54,7 +54,7 @@ test("keeps a per-thread integrated terminal alive while hidden", async () => {
       'node -e "setTimeout(() => console.log(\'PWRAGENT_TERMINAL_HIDDEN_DONE\'), 500)"',
     );
     await app.window.getByRole("button", { name: "Hide integrated terminal" }).click();
-    await expect(app.window.getByLabel("Integrated terminal", { exact: true })).toHaveCount(0);
+    await expect(app.window.getByLabel("Integrated terminal", { exact: true })).toBeHidden();
 
     await app.window.getByRole("button", { name: "Open integrated terminal" }).click();
 
