@@ -18439,6 +18439,62 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("keeps future turns in the primary cwd when a secondary directory is attached", async () => {
+    const secondaryDirectory = {
+      id: expectedDir("/repo/agent-kit"),
+      kind: "local" as const,
+      label: "agent-kit",
+      path: expectedDir("/repo/agent-kit"),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "agent-thread",
+          title: "Cross repo work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: expectedDir("/repo/pwragent"),
+              kind: "worktree",
+              label: "PwrAgent",
+              path: expectedDir("/repo/pwragent"),
+              worktreePath: expectedDir("/repo/pwragent-wt"),
+            },
+          ],
+          updatedAt: 2000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": {
+            ...createAgentOverlay(),
+            extraLinkedDirectories: [secondaryDirectory],
+          },
+        },
+      }),
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "agent-thread",
+      input: [{ type: "text", text: "Continue in the primary project." }],
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "agent-thread",
+      cwd: expectedDir("/repo/pwragent-wt"),
+    });
+
+    await registry.close();
+  });
+
   it("lets an agent detach a secondary directory from the current thread", async () => {
     const secondaryDirectory = {
       id: expectedDir("/repo/agent-kit"),

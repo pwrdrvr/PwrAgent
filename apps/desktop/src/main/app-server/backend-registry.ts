@@ -578,13 +578,57 @@ function resolveThreadWorkspaceCwd(
   overlayDirectories: AppServerThreadSummary["linkedDirectories"] = [],
 ): string | undefined {
   if (!thread) {
-    return undefined;
+    return resolveLinkedDirectoryWorkspaceCwd(overlayDirectories);
   }
 
-  return resolveLinkedDirectoryWorkspaceCwd([
-    ...overlayDirectories,
-    ...thread.linkedDirectories,
-  ]) ?? thread.projectKey;
+  const overlayHandoffDirectory = overlayDirectories.find(isHandoffDirectory);
+  if (overlayHandoffDirectory) {
+    return overlayHandoffDirectory.worktreePath ?? overlayHandoffDirectory.path;
+  }
+
+  const providerDirectories = thread.linkedDirectories.filter(
+    (directory) =>
+      !overlayDirectories.some((overlayDirectory) =>
+        linkedDirectoriesHaveSameWorkspaceIdentity(directory, overlayDirectory),
+      ),
+  );
+
+  return (
+    resolveLinkedDirectoryWorkspaceCwd(providerDirectories) ??
+    resolveLinkedDirectoryWorkspaceCwd(thread.linkedDirectories) ??
+    resolveLinkedDirectoryWorkspaceCwd(overlayDirectories) ??
+    thread.projectKey
+  );
+}
+
+function linkedDirectoriesHaveSameWorkspaceIdentity(
+  left: LinkedDirectorySummary,
+  right: LinkedDirectorySummary,
+): boolean {
+  if (left.id === right.id) {
+    return true;
+  }
+
+  const leftPath = normalizeLinkedDirectoryIdentityPath(left.path);
+  const rightPath = normalizeLinkedDirectoryIdentityPath(right.path);
+  const leftWorktreePath = normalizeLinkedDirectoryIdentityPath(left.worktreePath);
+  const rightWorktreePath = normalizeLinkedDirectoryIdentityPath(right.worktreePath);
+  if (leftPath && rightPath && leftPath === rightPath) {
+    return leftWorktreePath === rightWorktreePath;
+  }
+
+  return Boolean(
+    leftWorktreePath &&
+      rightWorktreePath &&
+      leftWorktreePath === rightWorktreePath,
+  );
+}
+
+function normalizeLinkedDirectoryIdentityPath(
+  value: string | undefined,
+): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? toDirectoryId(path.resolve(normalized)) : undefined;
 }
 
 function resolveLinkedDirectoryWorkspaceCwd(
@@ -13526,19 +13570,17 @@ export class DesktopBackendRegistry {
     threadId: string,
     overlay?: ThreadOverlayState,
   ): Promise<string | undefined> {
-    const overlayCwd = resolveLinkedDirectoryWorkspaceCwd(
-      overlay?.extraLinkedDirectories,
-    );
-    if (overlayCwd?.trim()) {
-      return overlayCwd.trim();
-    }
-
     const pendingThread = this.pendingStartedThreads.get(
       buildThreadIdentityKey(backend, threadId),
     );
-    const pendingCwd = resolveThreadWorkspaceCwd(pendingThread);
-    if (pendingCwd?.trim()) {
-      return pendingCwd.trim();
+    if (pendingThread) {
+      const pendingCwd = resolveThreadWorkspaceCwd(
+        pendingThread,
+        overlay?.extraLinkedDirectories,
+      );
+      if (pendingCwd?.trim()) {
+        return pendingCwd.trim();
+      }
     }
 
     const thread = await this.findThreadForWorkspaceHandoff({
@@ -13546,7 +13588,16 @@ export class DesktopBackendRegistry {
       callerReason: "turn-cwd",
       threadId,
     });
-    return resolveThreadWorkspaceCwd(thread)?.trim() || undefined;
+    const threadCwd = resolveThreadWorkspaceCwd(
+      thread,
+      overlay?.extraLinkedDirectories,
+    );
+    if (threadCwd?.trim()) {
+      return threadCwd.trim();
+    }
+
+    return resolveLinkedDirectoryWorkspaceCwd(overlay?.extraLinkedDirectories)?.trim() ||
+      undefined;
   }
 
   private async recordCodexWorktreeOwnerThread(params: {
