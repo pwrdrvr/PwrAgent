@@ -66,6 +66,7 @@ export function PrChip(props: PrChipProps) {
   ): void => {
     event.preventDefault();
     event.stopPropagation();
+    tooltipController.hide();
     props.onOpen(pr.url);
   };
 
@@ -85,6 +86,7 @@ export function PrChip(props: PrChipProps) {
           }
           event.preventDefault();
           event.stopPropagation();
+          tooltipController.hide();
           const rect = event.currentTarget.getBoundingClientRect();
           props.onOpenContextMenu(pr, {
             x: event.clientX,
