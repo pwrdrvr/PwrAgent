@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type {
   DesktopApplicationsSnapshot,
   MarkdownFileViewerFile,
@@ -24,6 +24,10 @@ export function MarkdownFilesWindow() {
   const markdownApplications = useMemo(
     () => applicationsSnapshotForEditor(snapshot),
     [snapshot],
+  );
+  const breadcrumbParts = useMemo(
+    () => markdownFilesBreadcrumbParts(snapshot?.context),
+    [snapshot?.context],
   );
   const [loadState, setLoadState] = useState<LoadState>({ status: "idle" });
 
@@ -139,14 +143,28 @@ export function MarkdownFilesWindow() {
           <p className="activity-titlebar__brand">
             Pwr<span className="activity-titlebar__brand-accent">Agent</span>
           </p>
-          <div className="activity-titlebar__breadcrumb">
-            <span className="activity-titlebar__eyebrow">Thread</span>
-            <span aria-hidden="true" className="activity-titlebar__separator">
-              ›
-            </span>
-            <span className="activity-titlebar__current">
-              {snapshot?.context.title ?? "Files"}
-            </span>
+          <div
+            className="activity-titlebar__breadcrumb"
+            aria-label={breadcrumbParts.join(" > ")}
+          >
+            {breadcrumbParts.map((part, index) => (
+              <Fragment key={`${part}:${index}`}>
+                {index > 0 ? (
+                  <span aria-hidden="true" className="activity-titlebar__separator">
+                    ›
+                  </span>
+                ) : null}
+                <span
+                  className={
+                    index === breadcrumbParts.length - 1
+                      ? "activity-titlebar__current"
+                      : "activity-titlebar__crumb"
+                  }
+                >
+                  {part}
+                </span>
+              </Fragment>
+            ))}
           </div>
           <div className="activity-titlebar__spacer" />
         </header>
@@ -266,6 +284,23 @@ function relativeFilePath(filePath: string, projectPath: string | undefined): st
   return filePath === projectPath || filePath.startsWith(`${projectPath}/`)
     ? filePath.slice(projectPath.length).replace(/^\//, "") || filePath
     : filePath;
+}
+
+function markdownFilesBreadcrumbParts(
+  context: MarkdownFileViewerSnapshot["context"] | undefined,
+): string[] {
+  const projectLabel = projectLabelFromPath(context?.projectPath);
+  const threadTitle = context?.threadTitle?.trim();
+
+  const parts = [projectLabel, threadTitle, "Files"].filter(
+    (part): part is string => Boolean(part),
+  );
+  return parts.length > 0 ? parts : ["Files"];
+}
+
+function projectLabelFromPath(projectPath: string | undefined): string | undefined {
+  const label = projectPath?.split(/[\\/]/).filter(Boolean).at(-1)?.trim();
+  return label || undefined;
 }
 
 function applicationsSnapshotForEditor(
