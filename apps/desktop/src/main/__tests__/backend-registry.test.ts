@@ -10784,6 +10784,50 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("does not generate a Codex title when startTurn fails before lifecycle confirmation", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Should not apply",
+      })),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      startTurnError: new Error("codex start failed"),
+      threads: [
+        {
+          id: "thread-start-failed-title",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: titleService,
+    });
+
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-start-failed-title",
+        input: [{ type: "text", text: "Make button" }],
+      }),
+    ).rejects.toThrow("codex start failed");
+    await flushAsync();
+
+    expect(titleService.generateTitle).not.toHaveBeenCalled();
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("reports in-progress quit threads across Codex active, queued, and ACP active turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -11108,6 +11152,79 @@ command = "pnpm dev"
         totalTokens: 110,
       }),
     });
+
+    await registry.close();
+  });
+
+  it("logs title helper sub-agent persistence failures without retrying the same write", async () => {
+    mainLoggerMock.warn.mockClear();
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Readable thread title",
+        helperThreadId: "title-helper-thread",
+        helperTurnId: "title-helper-turn",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        serviceTier: "priority",
+        tokenUsage: {
+          inputTokens: 100,
+          cachedInputTokens: 20,
+          outputTokens: 10,
+          totalTokens: 110,
+        },
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi
+      .spyOn(overlayStore, "upsertThreadSubAgent")
+      .mockRejectedValue(new Error("overlay write failed"));
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-title-helper-persist-failure",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-title-helper-persist-failure",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() =>
+      mainLoggerMock.warn.mock.calls.some(
+        ([message]) => message === "threadTitleHelperSubAgentPersistence",
+      ),
+    );
+
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-title-helper-persist-failure",
+      name: "Readable thread title",
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledTimes(1);
+    expect(mainLoggerMock.warn).toHaveBeenCalledWith(
+      "threadTitleHelperSubAgentPersistence",
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-title-helper-persist-failure",
+        status: "success",
+        persistenceError: "overlay write failed",
+      }),
+    );
 
     await registry.close();
   });

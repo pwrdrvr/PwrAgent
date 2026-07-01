@@ -7769,10 +7769,7 @@ export class DesktopBackendRegistry {
       if (reserveCodexStart) {
         this.reservedCodexStartThreadIds.delete(params.threadId);
       }
-      this.schedulePendingThreadTitleGenerationFromLifecycle({
-        backend: params.backend,
-        threadId: params.threadId,
-      });
+      this.pendingTitleGenerationInputs.delete(titleGenerationKey);
       throw error;
     }
     this.activeCodexTurnModes.delete(
@@ -13789,7 +13786,7 @@ export class DesktopBackendRegistry {
           result?.reason ?? "title_generation_unavailable"
         );
         if (result?.status === "failed" || result?.status === "invalid") {
-          await this.persistTitleHelperSubAgent({
+          await this.safePersistTitleHelperSubAgent({
             backend: params.backend,
             threadId: params.threadId,
             status: "failed",
@@ -13839,7 +13836,7 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
         title: result.title,
       });
-      await this.persistTitleHelperSubAgent({
+      await this.safePersistTitleHelperSubAgent({
         backend: params.backend,
         threadId: params.threadId,
         result,
@@ -13850,7 +13847,7 @@ export class DesktopBackendRegistry {
       });
     } catch (error) {
       if (generatedResult) {
-        await this.persistTitleHelperSubAgent({
+        await this.safePersistTitleHelperSubAgent({
           backend: params.backend,
           threadId: params.threadId,
           result: generatedResult,
@@ -13868,6 +13865,26 @@ export class DesktopBackendRegistry {
       if (pending?.token === params.token) {
         this.pendingTitleGenerations.delete(params.key);
       }
+    }
+  }
+
+  private async safePersistTitleHelperSubAgent(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+    status: "success" | "failed";
+    reason?: string;
+  }): Promise<void> {
+    try {
+      await this.persistTitleHelperSubAgent(params);
+    } catch (error) {
+      backendRegistryLog.warn("threadTitleHelperSubAgentPersistence", {
+        backend: params.backend,
+        threadId: params.threadId,
+        status: params.status,
+        reason: params.reason ?? null,
+        persistenceError: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
