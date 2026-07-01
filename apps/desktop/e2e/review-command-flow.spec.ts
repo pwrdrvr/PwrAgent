@@ -38,8 +38,8 @@ test("review command asks for target and preserves transcript order", async () =
       .poll(async () => await app.getLastStartReview())
       .toBeUndefined();
 
-    await reviewTarget.getByRole("button", { name: /Base branch/ }).click();
-    await reviewTarget.getByLabel("Base branch").fill("main");
+    await reviewTarget.getByRole("button", { name: "Base branch", exact: true }).click();
+    await reviewTarget.getByRole("option", { name: "main" }).click();
     await reviewTarget.getByRole("button", { name: "Start review" }).click();
 
     await expect
