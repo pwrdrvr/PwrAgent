@@ -89,10 +89,20 @@ export function formatDurationMs(
   if (ms < 1_000) return `${Math.round(ms)}ms`;
   const totalSeconds = Math.round(ms / 1_000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
-  const minutes = Math.floor(totalSeconds / 60);
-  if (options?.coarseAfterMinute) return `${minutes}m`;
-  const remainder = totalSeconds % 60;
-  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (totalMinutes < 60) {
+    if (options?.coarseAfterMinute) return `${totalMinutes}m`;
+    return seconds ? `${totalMinutes}m ${seconds}s` : `${totalMinutes}m`;
+  }
+  const totalHours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (totalHours < 24) {
+    return minutes ? `${totalHours}h ${minutes}m` : `${totalHours}h`;
+  }
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  return hours ? `${days}d ${hours}h` : `${days}d`;
 }
 
 export function formatRunningDurationMs(ms?: number): string {
