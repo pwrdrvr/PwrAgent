@@ -412,6 +412,8 @@ const REVIEW_TARGET_OPTIONS: Array<{
   },
 ];
 
+const REVIEW_PREFERRED_BASE_BRANCHES = ["main", "master", "develop", "trunk"];
+
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
   return (
@@ -507,14 +509,24 @@ function buildReviewBranchOptions(params: {
     pushIfKnown(value);
   };
 
-  pushPreferredDefault(params.directory?.gitStatus?.defaultBranch);
-  pushPreferredDefault("main");
-  pushPreferredDefault("master");
+  const reportedDefaultBranch = params.directory?.gitStatus?.defaultBranch
+    ?.trim()
+    .replace(/^origin\//, "");
+  if (
+    reportedDefaultBranch &&
+    REVIEW_PREFERRED_BASE_BRANCHES.includes(reportedDefaultBranch)
+  ) {
+    pushPreferredDefault(reportedDefaultBranch);
+  }
+  for (const branch of REVIEW_PREFERRED_BASE_BRANCHES) {
+    pushPreferredDefault(branch);
+  }
+  push("main", { allowCurrent: true });
   pushIfKnown(upstreamBranch);
   for (const candidate of baseBranches) {
     push(candidate);
   }
-  push("main", { allowCurrent: true });
+  pushPreferredDefault(params.directory?.gitStatus?.defaultBranch);
   push(params.thread?.gitBranch);
   push(params.thread?.observedGitBranch);
   push(params.directory?.gitStatus?.currentBranch);

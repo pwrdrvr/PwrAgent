@@ -5233,6 +5233,58 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
   });
 
+  it("falls back to main before unrelated directory branches for review base", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "fix/pr-chip-tooltip-dismiss",
+            defaultBranch: "fix/pr-chip-tooltip-dismiss",
+            branches: ["fix/pr-chip-tooltip-dismiss"],
+            baseBranches: ["fix/pr-chip-tooltip-dismiss"],
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Msg - Control response scope",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "feat/messaging-response-mode",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+  });
+
   it("suggests recent commits for commit reviews and caps the list at twenty", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
