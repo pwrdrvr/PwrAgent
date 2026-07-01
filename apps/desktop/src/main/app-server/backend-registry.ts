@@ -15308,7 +15308,6 @@ export class DesktopBackendRegistry {
 
     if (
       workspaceMode !== "none" &&
-      workspaceMode !== "new_worktree" &&
       requestedCwd &&
       !linkedDirectoriesActiveWorkspaceCoversCwd({
         cwd: requestedCwd,
