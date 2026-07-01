@@ -222,6 +222,87 @@ describe("AcpAgentClient", () => {
     expect(sessionUpdates).toEqual([]);
   });
 
+  it("ignores thought chunks while capturing control prompt output", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const controlPrompt = client.sendControlPrompt({
+      sessionId: session.sessionId,
+      prompt: "name this thread",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_thought_chunk",
+      content: {
+        type: "text",
+        text: "The user wants a concise title. I should return JSON.",
+      },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: '{ "title": "Favorite cereal" }' },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      kind: "turn_finished",
+      outputText: '{ "title": "Favorite cereal" }',
+    });
+    promptResponse.resolve({ stopReason: "end_turn" });
+
+    await expect(controlPrompt).resolves.toEqual({
+      text: '{ "title": "Favorite cereal" }',
+    });
+    expect(client.readReplay("session-1").messages).toEqual([]);
+  });
+
+  it("uses turn-finished output for suppressed control prompts without message chunks", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:qwen",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const controlPrompt = client.sendControlPrompt({
+      sessionId: session.sessionId,
+      prompt: "name this thread",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Thinking out loud." },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      kind: "turn_finished",
+      outputText: '{ "title": "Favorite cereal" }',
+    });
+    promptResponse.resolve({ stopReason: "end_turn" });
+
+    await expect(controlPrompt).resolves.toEqual({
+      text: '{ "title": "Favorite cereal" }',
+    });
+    expect(client.readReplay("session-1").messages).toEqual([]);
+  });
+
   it("passes configured MCP servers when an ACP session id is known", async () => {
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({

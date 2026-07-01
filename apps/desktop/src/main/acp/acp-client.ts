@@ -102,6 +102,11 @@ type AcpSessionLoadState = {
   suppressTranscriptReplay: boolean;
 };
 
+type AcpSuppressedControlPrompt = {
+  fallbackOutputText?: string;
+  finalTextChunks: string[];
+};
+
 type AcpHydratedSessionHistory = {
   isComplete: boolean;
 };
@@ -152,7 +157,7 @@ export class AcpAgentClient {
   private readonly loadedSessionCwds = new Map<string, string | undefined>();
   private readonly suppressedControlPromptSessions = new Map<
     string,
-    { textChunks: string[] }
+    AcpSuppressedControlPrompt
   >();
   private readonly loadingSessions = new Map<string, AcpSessionLoadState>();
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
@@ -495,7 +500,7 @@ export class AcpAgentClient {
     prompt: string;
   }): Promise<{ text: string }> {
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
-    const suppression = { textChunks: [] };
+    const suppression: AcpSuppressedControlPrompt = { finalTextChunks: [] };
     this.suppressedControlPromptSessions.set(protocolSessionId, suppression);
     try {
       await this.options.transport.request(
@@ -506,7 +511,12 @@ export class AcpAgentClient {
         },
         ACP_PROMPT_REQUEST_TIMEOUT_MS,
       );
-      return { text: suppression.textChunks.join("\n").trim() };
+      return {
+        text:
+          suppression.finalTextChunks.join("\n").trim() ||
+          suppression.fallbackOutputText?.trim() ||
+          "",
+      };
     } finally {
       this.suppressedControlPromptSessions.delete(protocolSessionId);
     }
@@ -619,9 +629,20 @@ export class AcpAgentClient {
     const suppressedControlPrompt =
       this.suppressedControlPromptSessions.get(protocolSessionId);
     if (suppressedControlPrompt) {
-      const text = readUpdateText(update);
-      if (text) {
-        suppressedControlPrompt.textChunks.push(text);
+      const updateKind = readUpdateKind(update);
+      if (updateKind === "agent_message_chunk") {
+        const text = readUpdateText(update);
+        if (text) {
+          suppressedControlPrompt.finalTextChunks.push(text);
+        }
+      } else if (
+        updateKind === "turn_finished" &&
+        suppressedControlPrompt.finalTextChunks.length === 0
+      ) {
+        const text = readUpdateText(update);
+        if (text) {
+          suppressedControlPrompt.fallbackOutputText = text;
+        }
       }
       return;
     }
