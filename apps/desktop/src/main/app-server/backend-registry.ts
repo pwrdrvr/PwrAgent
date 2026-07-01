@@ -292,6 +292,7 @@ import {
   type ThreadTitleGenerator,
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
+import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
@@ -4765,6 +4766,16 @@ export class DesktopBackendRegistry {
                       })
                     : undefined,
                 },
+                generatorResolver: (backend) =>
+                  isAcpBackendId(backend)
+                    ? new AcpThreadTitleGenerator({
+                        backend,
+                        getClient: (acpBackend) =>
+                          this.acpBackend.getClient(acpBackend),
+                        getSession: (acpBackend, threadId) =>
+                          this.acpBackend.getSession(acpBackend, threadId),
+                      })
+                    : undefined,
               }));
     this.threadInspectionSearchService =
       options && "threadSearchService" in options
@@ -7614,17 +7625,21 @@ export class DesktopBackendRegistry {
           params.backend,
           params.threadId,
         );
-        const result = await this.startAcpTurn({
-          backend: params.backend,
-          threadId: params.threadId,
-          input: params.input,
-        });
-        this.scheduleThreadTitleGeneration({
-          backend: params.backend,
-          threadId: result.threadId,
-          input: params.input,
-        });
-        return result;
+        const titleGenerationKey = buildTitleGenerationKey(
+          params.backend,
+          params.threadId,
+        );
+        this.pendingTitleGenerationInputs.set(titleGenerationKey, params.input);
+        try {
+          return await this.startAcpTurn({
+            backend: params.backend,
+            threadId: params.threadId,
+            input: params.input,
+          });
+        } catch (error) {
+          this.pendingTitleGenerationInputs.delete(titleGenerationKey);
+          throw error;
+        }
       } finally {
         this.reservedAcpStartThreadKeys.delete(reservationKey);
       }
@@ -7814,12 +7829,14 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       turnId: result.turnId,
     });
-    this.pendingTitleGenerationInputs.delete(titleGenerationKey);
-    this.scheduleThreadTitleGeneration({
-      backend: params.backend,
-      threadId: result.threadId,
-      input: params.input,
-    });
+    if (!isAcpBackendId(params.backend)) {
+      this.pendingTitleGenerationInputs.delete(titleGenerationKey);
+      this.scheduleThreadTitleGeneration({
+        backend: params.backend,
+        threadId: result.threadId,
+        input: params.input,
+      });
+    }
 
     return response;
   }
@@ -13777,6 +13794,7 @@ export class DesktopBackendRegistry {
       });
       const result = await this.threadTitleGenerationService?.generateTitle({
         backend: params.backend,
+        threadId: params.threadId,
         userPrompt: params.prompt,
       });
       if (!result || result.status !== "generated") {
@@ -17689,10 +17707,12 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromStartedNotification(notification);
-      this.schedulePendingThreadTitleGenerationFromLifecycle({
-        backend: event.backend,
-        threadId: notification.params.threadId,
-      });
+      if (!isAcpBackendId(event.backend)) {
+        this.schedulePendingThreadTitleGenerationFromLifecycle({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+        });
+      }
       this.activeTurnKeys.add(
         buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
       );
@@ -17821,6 +17841,16 @@ export class DesktopBackendRegistry {
           event.backend,
           notification.params.threadId,
         );
+        if (event.notification.method === "turn/completed") {
+          this.schedulePendingThreadTitleGenerationFromLifecycle({
+            backend: event.backend,
+            threadId: notification.params.threadId,
+          });
+        } else {
+          this.pendingTitleGenerationInputs.delete(
+            buildTitleGenerationKey(event.backend, notification.params.threadId),
+          );
+        }
       }
       void this.threadTurnQueue.releaseThread({
         backend: event.backend,

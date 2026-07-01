@@ -11,6 +11,7 @@ import {
 import type {
   AcpBackendId,
   AgentEvent,
+  AppServerBackendKind,
   AppServerNotification,
   AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
@@ -1602,6 +1603,31 @@ function createKimiAcpRegistry(options?: {
     sessions,
     startPrompt,
   };
+}
+
+async function emitCompletedTurn(
+  registry: DesktopBackendRegistry,
+  backend: AppServerBackendKind,
+  threadId: string,
+  turnId = "turn-1",
+): Promise<void> {
+  await (
+    registry as unknown as { emit(event: AgentEvent): Promise<void> }
+  ).emit({
+    backend,
+    notification: {
+      method: "turn/completed",
+      params: {
+        threadId,
+        turnId,
+        turn: {
+          id: turnId,
+          status: "completed",
+          output: [],
+        },
+      },
+    },
+  });
 }
 
 describe("DesktopBackendRegistry", () => {
@@ -4264,7 +4290,10 @@ script = "echo setup"
       },
     });
     await vi.waitFor(() => {
-      expect(sendControlPrompt).toHaveBeenCalledTimes(1);
+      expect(sendControlPrompt).toHaveBeenCalledWith({
+        sessionId: "kimi-session-1",
+        prompt: "/yolo",
+      });
       expect(sessions[0]?.executionMode).toBe("full-access");
     });
 
@@ -10923,6 +10952,7 @@ command = "pnpm dev"
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
+      threadId: "thread-title",
       userPrompt: "Make button",
     });
     expect(codexClient.lastRenameThreadParams).toEqual({
@@ -11039,6 +11069,7 @@ command = "pnpm dev"
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
+      threadId: "thread-lifecycle-title",
       userPrompt: "Make button",
     });
     expect(codexClient.lastRenameThreadParams).toEqual({
@@ -11361,6 +11392,7 @@ command = "pnpm dev"
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
+      threadId: "forked-thread-title",
       userPrompt: "Improve the sidebar followup",
     });
     expect(codexClient.lastRenameThreadParams).toEqual({
@@ -11410,6 +11442,7 @@ command = "pnpm dev"
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
+      threadId: "thread-title",
       userPrompt: prompt,
     });
     expect(codexClient.lastRenameThreadParams).toEqual({
@@ -11460,6 +11493,7 @@ command = "pnpm dev"
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
+      threadId: "thread-title",
       userPrompt: prompt,
     });
     expect(codexClient.lastRenameThreadParams).toEqual({
@@ -11507,6 +11541,7 @@ command = "pnpm dev"
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "grok",
+      threadId: "thread-title",
       userPrompt: "Issue 123 rename",
     });
     expect(grokClient.lastRenameThreadParams).toEqual({
@@ -11581,10 +11616,12 @@ command = "pnpm dev"
       threadId: "qwen-session-1",
       input: [{ type: "text", text: "Does this project build?" }],
     });
+    await emitCompletedTurn(registry, acpBackendId, "qwen-session-1");
     await waitForCondition(() => sessions[0]?.title === "Does this project build?");
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: acpBackendId,
+      threadId: "qwen-session-1",
       userPrompt: "Does this project build?",
     });
     expect(sessions[0]).toMatchObject({
@@ -11609,26 +11646,18 @@ command = "pnpm dev"
         createdAt: 1000,
         updatedAt: 1000,
         executionMode: "default",
+        acpRuntime: {
+          configValues: {
+            model: "kimi-k2-0711-preview",
+          },
+          updatedAt: 1000,
+        },
         status: "idle",
       },
     ];
-    const titleService = {
-      generateTitle: vi.fn(async () => ({
-        status: "generated" as const,
-        title: "Favorite cereal",
-        helperThreadId: "title-helper-thread",
-        helperTurnId: "title-helper-turn",
-        model: "gpt-5.4-mini",
-        reasoningEffort: "low",
-        serviceTier: "priority",
-        tokenUsage: {
-          inputTokens: 100,
-          cachedInputTokens: 20,
-          outputTokens: 10,
-          totalTokens: 110,
-        },
-      })),
-    };
+    const sendControlPrompt = vi.fn(async () => ({
+      text: '{ "title": "Favorite cereal" }',
+    }));
     const acpClient = {
       initialize: vi.fn(async () => undefined),
       dispose: vi.fn(),
@@ -11641,6 +11670,7 @@ command = "pnpm dev"
         sessionId: "kimi-session-1",
         turnId: "turn-1",
       })),
+      sendControlPrompt,
       readReplay: vi.fn((): AppServerThreadReplay => ({
         entries: [],
         messages: [],
@@ -11660,7 +11690,6 @@ command = "pnpm dev"
       acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord(acpBackendId)]),
       acpSessionStore: createAcpSessionStoreMock(sessions),
       createAcpClient: () => acpClient,
-      threadTitleGenerationService: titleService,
     });
 
     await registry.startTurn({
@@ -11668,11 +11697,12 @@ command = "pnpm dev"
       threadId: "kimi-session-1",
       input: [{ type: "text", text: prompt }],
     });
+    await emitCompletedTurn(registry, acpBackendId, "kimi-session-1");
     await waitForCondition(() => sessions[0]?.title === "Favorite cereal");
 
-    expect(titleService.generateTitle).toHaveBeenCalledWith({
-      backend: acpBackendId,
-      userPrompt: prompt,
+    expect(sendControlPrompt).toHaveBeenCalledWith({
+      sessionId: "kimi-session-1",
+      prompt: expect.stringContaining(prompt),
     });
     expect(sessions[0]).toMatchObject({
       title: "Favorite cereal",
@@ -11686,10 +11716,7 @@ command = "pnpm dev"
         task: "Name this thread",
         status: "success",
         agentName: "PwrAgent",
-        preferredModel: "gpt-5.4-mini",
-        preferredReasoningEffort: "low",
-        monitorThreadId: "title-helper-thread",
-        monitorTurnId: "title-helper-turn",
+        preferredModel: "kimi-k2-0711-preview",
         lastMessage: "Generated title: Favorite cereal",
         outcome: "success",
       }),
@@ -11762,6 +11789,7 @@ command = "pnpm dev"
       threadId: "qwen-session-1",
       input: [{ type: "text", text: "what time is it?" }],
     });
+    await emitCompletedTurn(registry, acpBackendId, "qwen-session-1");
     await flushAsync();
     await flushAsync();
 

@@ -1,4 +1,4 @@
-import { isAcpBackendId, type AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind } from "@pwragent/shared";
 import {
   XaiEphemeralObjectCaller,
   type XaiObjectClientLike,
@@ -26,10 +26,12 @@ const THREAD_TITLE_RESPONSE_SCHEMA = {
 } as const;
 
 export type ThreadTitleAdapterParams = {
+  backend?: AppServerBackendKind;
   prompt: string;
   promptVersion: string;
   schema: Record<string, unknown>;
   schemaName: string;
+  threadId?: string;
   timeoutMs: number;
 };
 
@@ -73,6 +75,7 @@ export type ThreadTitleGenerationResult =
 
 export type ThreadTitleGenerationServiceOptions = {
   generators?: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
+  generatorResolver?: (backend: AppServerBackendKind) => ThreadTitleGenerator | undefined;
   timeoutMs?: number;
 };
 
@@ -87,6 +90,7 @@ export type GrokThreadTitleGeneratorOptions = {
 
 export class ThreadTitleGenerationService {
   private readonly generators: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
+  private readonly generatorResolver?: (backend: AppServerBackendKind) => ThreadTitleGenerator | undefined;
   private readonly timeoutMs: number;
 
   constructor(options: ThreadTitleGenerationServiceOptions = {}) {
@@ -94,11 +98,13 @@ export class ThreadTitleGenerationService {
       grok: new GrokThreadTitleGenerator({ timeoutMs: options.timeoutMs }),
       ...options.generators,
     };
+    this.generatorResolver = options.generatorResolver;
     this.timeoutMs = options.timeoutMs ?? THREAD_TITLE_TIMEOUT_MS;
   }
 
   async generateTitle(params: {
     backend: AppServerBackendKind;
+    threadId?: string;
     userPrompt: string;
   }): Promise<ThreadTitleGenerationResult> {
     const userPrompt = params.userPrompt.trim();
@@ -110,8 +116,7 @@ export class ThreadTitleGenerationService {
     }
 
     const generator =
-      this.generators[params.backend] ??
-      (isAcpBackendId(params.backend) ? this.generators.codex : undefined);
+      this.generators[params.backend] ?? this.generatorResolver?.(params.backend);
     if (!generator) {
       return {
         status: "unavailable",
@@ -120,10 +125,12 @@ export class ThreadTitleGenerationService {
     }
 
     const result = await generator.generateTitle({
+      backend: params.backend,
       prompt: buildThreadTitlePrompt(userPrompt),
       promptVersion: THREAD_TITLE_PROMPT_VERSION,
       schema: THREAD_TITLE_RESPONSE_SCHEMA,
       schemaName: "thread_title",
+      threadId: params.threadId,
       timeoutMs: this.timeoutMs,
     });
     if (result.status !== "ok") {
