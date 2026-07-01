@@ -4,6 +4,7 @@ import {
   type DragEvent,
   type FormEvent as ReactFormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type Ref,
   useEffect,
   useId,
   useLayoutEffect,
@@ -29,6 +30,7 @@ import type {
   DesktopChatReplyComposer,
   HandoffThreadWorkspaceRequest,
   NavigationDirectorySummary,
+  NavigationGitCommitSummary,
   NavigationLaunchpadDraft,
   NavigationLaunchpadImageAttachment,
   NavigationThreadSummary,
@@ -410,6 +412,8 @@ const REVIEW_TARGET_OPTIONS: Array<{
   },
 ];
 
+const REVIEW_PREFERRED_BASE_BRANCHES = ["main", "master", "develop", "trunk"];
+
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
   return (
@@ -440,22 +444,132 @@ function buildReviewBranchOptions(params: {
   directory?: NavigationDirectorySummary;
   thread?: NavigationThreadSummary;
 }): string[] {
-  const candidates = [
-    "main",
-    params.thread?.gitBranch,
-    params.thread?.observedGitBranch,
-    params.directory?.gitStatus?.currentBranch,
-    params.directory?.gitStatus?.upstreamBranch?.replace(/^origin\//, ""),
-    ...(params.directory?.gitStatus?.branches ?? []),
-  ];
-  const options = new Set<string>();
-  for (const candidate of candidates) {
+  const currentBranches = new Set(
+    [
+      params.thread?.gitBranch,
+      params.thread?.observedGitBranch,
+      params.directory?.gitStatus?.currentBranch,
+    ]
+      .map((branch) => branch?.trim())
+      .filter((branch): branch is string => Boolean(branch)),
+  );
+  const isCurrentBranch = (candidate?: string): boolean => {
     const value = candidate?.trim();
-    if (value) {
+    if (!value) {
+      return false;
+    }
+    if (currentBranches.has(value)) {
+      return true;
+    }
+    return (
+      value.startsWith("origin/") &&
+      currentBranches.has(value.slice("origin/".length))
+    );
+  };
+  const upstreamBranch = params.directory?.gitStatus?.upstreamBranch?.replace(
+    /^origin\//,
+    "",
+  );
+  const baseBranches = params.directory?.gitStatus?.baseBranches ?? [];
+  const knownBranches = new Set(
+    [
+      ...baseBranches,
+      ...(params.directory?.gitStatus?.branches ?? []),
+      params.directory?.gitStatus?.defaultBranch,
+      upstreamBranch,
+    ]
+      .map((branch) => branch?.trim())
+      .filter((branch): branch is string => Boolean(branch)),
+  );
+  const options = new Set<string>();
+  const push = (
+    candidate?: string,
+    optionsForCandidate?: { allowCurrent?: boolean },
+  ): void => {
+    const value = candidate?.trim();
+    if (
+      value &&
+      (optionsForCandidate?.allowCurrent || !isCurrentBranch(value))
+    ) {
       options.add(value);
     }
+  };
+  const pushIfKnown = (candidate?: string): void => {
+    const value = candidate?.trim();
+    if (value && knownBranches.has(value)) {
+      push(value);
+    }
+  };
+  const pushPreferredDefault = (candidate?: string): void => {
+    const value = candidate?.trim().replace(/^origin\//, "");
+    if (!value) {
+      return;
+    }
+    pushIfKnown(`origin/${value}`);
+    pushIfKnown(value);
+  };
+
+  const reportedDefaultBranch = params.directory?.gitStatus?.defaultBranch
+    ?.trim()
+    .replace(/^origin\//, "");
+  if (
+    reportedDefaultBranch &&
+    REVIEW_PREFERRED_BASE_BRANCHES.includes(reportedDefaultBranch)
+  ) {
+    pushPreferredDefault(reportedDefaultBranch);
+  }
+  for (const branch of REVIEW_PREFERRED_BASE_BRANCHES) {
+    pushPreferredDefault(branch);
+  }
+  push("main", { allowCurrent: true });
+  pushIfKnown(upstreamBranch);
+  for (const candidate of baseBranches) {
+    push(candidate);
+  }
+  pushPreferredDefault(params.directory?.gitStatus?.defaultBranch);
+  push(params.thread?.gitBranch);
+  push(params.thread?.observedGitBranch);
+  push(params.directory?.gitStatus?.currentBranch);
+  for (const candidate of params.directory?.gitStatus?.branches ?? []) {
+    push(candidate);
   }
   return [...options];
+}
+
+function buildReviewBranchPickerOptions(params: {
+  directory?: NavigationDirectorySummary;
+  thread?: NavigationThreadSummary;
+}): LaunchpadBranchOption[] {
+  const details =
+    params.directory?.gitStatus?.baseBranchDetails ??
+    params.directory?.gitStatus?.branchDetails ??
+    [];
+  const detailByName = new Map(details.map((detail) => [detail.name, detail]));
+  const currentBranch = normalizeSelectableLaunchpadBranch(
+    params.directory?.gitStatus?.currentBranch ??
+      params.thread?.gitBranch ??
+      params.thread?.observedGitBranch,
+  );
+  const defaultBranch = normalizeSelectableLaunchpadBranch(
+    params.directory?.gitStatus?.defaultBranch,
+  );
+
+  return buildReviewBranchOptions(params).map((name) => {
+    const detail = detailByName.get(name);
+    return {
+      name,
+      lastCommitAt: detail?.lastCommitAt,
+      inUse: detail?.inUse,
+      current: currentBranch ? name === currentBranch : false,
+      isDefault: defaultBranch ? name === defaultBranch : false,
+    };
+  });
+}
+
+function buildReviewCommitOptions(
+  directory?: NavigationDirectorySummary,
+): NavigationGitCommitSummary[] {
+  return (directory?.gitStatus?.recentCommits ?? []).slice(0, 20);
 }
 
 function getLaunchpadDirectoryKeyFromScope(scopeKey: string): string | undefined {
@@ -476,6 +590,7 @@ function createReviewConfig(params: {
     branch: buildReviewBranchOptions(params)[0] ?? "main",
     commit: "",
     customInstructions: "",
+    target: "baseBranch",
   };
 }
 
@@ -1169,6 +1284,7 @@ type LaunchpadBranchOption = {
  */
 function BranchPicker(props: {
   ariaLabel: string;
+  className?: string;
   disabled?: boolean;
   id?: string;
   onChange: (value: string) => void;
@@ -1356,7 +1472,13 @@ function BranchPicker(props: {
 
   return (
     <div
-      className="composer-dropdown composer-dropdown--compact composer-dropdown--branch branch-picker"
+      className={[
+        "composer-dropdown composer-dropdown--compact composer-dropdown--branch branch-picker",
+        open ? "composer-dropdown--open" : "",
+        props.className ?? "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       ref={ref}
     >
       <button
@@ -1445,6 +1567,405 @@ function BranchPicker(props: {
   );
 }
 
+function ReviewBranchPicker(props: {
+  ariaLabel: string;
+  onChange: (value: string) => void;
+  options: LaunchpadBranchOption[];
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [filterText, setFilterText] = useState("");
+  const inputId = useId();
+  const listboxId = useId();
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  const nowMs = Date.now();
+  const query = filterText.trim().toLowerCase();
+  const visibleOptions = useMemo(() => {
+    if (!query) {
+      return props.options;
+    }
+    return props.options.filter((option) =>
+      option.name.toLowerCase().includes(query),
+    );
+  }, [props.options, query]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [filterText]);
+
+  useEffect(() => {
+    setActiveIndex((current) =>
+      visibleOptions.length === 0
+        ? 0
+        : Math.min(current, visibleOptions.length - 1),
+    );
+  }, [visibleOptions.length]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    const option = optionRefs.current[activeIndex];
+    if (typeof option?.scrollIntoView === "function") {
+      option.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeIndex, open]);
+
+  const commit = (name: string): void => {
+    props.onChange(name);
+    setFilterText("");
+    setOpen(false);
+  };
+
+  const handleKeyDown = (
+    event: ReactKeyboardEvent<HTMLInputElement>,
+  ): void => {
+    if (event.key === "ArrowDown") {
+      if (visibleOptions.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      const wasOpen = open;
+      setOpen(true);
+      setActiveIndex((current) =>
+        wasOpen ? Math.min(visibleOptions.length - 1, current + 1) : 0,
+      );
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      if (visibleOptions.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      const wasOpen = open;
+      setOpen(true);
+      setActiveIndex((current) => Math.max(0, current - 1));
+      if (!wasOpen) {
+        setActiveIndex(visibleOptions.length - 1);
+      }
+      return;
+    }
+    if (event.key === "Enter" && open) {
+      const option = visibleOptions[activeIndex];
+      if (option) {
+        event.preventDefault();
+        commit(option.name);
+      }
+      return;
+    }
+    if (event.key === "Escape" && open && visibleOptions.length > 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+    }
+  };
+
+  const shouldShowMenu = open && visibleOptions.length > 0;
+  const activeOptionId = shouldShowMenu
+    ? `${listboxId}-option-${activeIndex}`
+    : undefined;
+
+  return (
+    <div className="review-branch-picker" ref={ref}>
+      <input
+        aria-activedescendant={activeOptionId}
+        aria-autocomplete="list"
+        aria-controls={shouldShowMenu ? listboxId : undefined}
+        aria-expanded={shouldShowMenu}
+        aria-haspopup="listbox"
+        aria-label={props.ariaLabel}
+        className="composer__review-input"
+        id={inputId}
+        role="combobox"
+        value={props.value}
+        onChange={(event) => {
+          props.onChange(event.target.value);
+          setFilterText(event.target.value);
+          setOpen(true);
+        }}
+        onClick={() => {
+          setFilterText("");
+          setOpen(props.options.length > 0);
+        }}
+        onFocus={() => {
+          setFilterText("");
+          setOpen(props.options.length > 0);
+        }}
+        onKeyDown={handleKeyDown}
+      />
+      {shouldShowMenu ? (
+        <div
+          aria-label={props.ariaLabel}
+          className="branch-picker__menu review-branch-picker__menu"
+          id={listboxId}
+          role="listbox"
+        >
+          <div className="branch-picker__list">
+            {visibleOptions.map((option, index) => {
+              const isSelected = option.name === props.value.trim();
+              const relativeTime = formatBranchRelativeTime(
+                option.lastCommitAt,
+                nowMs,
+              );
+              return (
+                <button
+                  aria-label={option.name}
+                  aria-selected={isSelected}
+                  className={[
+                    "branch-picker__option",
+                    index === activeIndex ? "is-active" : "",
+                    isSelected ? "is-selected" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  id={`${listboxId}-option-${index}`}
+                  key={option.name}
+                  ref={(element) => {
+                    optionRefs.current[index] = element;
+                  }}
+                  role="option"
+                  tabIndex={-1}
+                  type="button"
+                  onClick={() => commit(option.name)}
+                  onMouseEnter={() => setActiveIndex(index)}
+                >
+                  <span aria-hidden="true" className="branch-picker__option-check">
+                    {isSelected ? "✓" : ""}
+                  </span>
+                  <span aria-hidden="true" className="branch-picker__option-icon">
+                    <BranchIcon size={12} />
+                  </span>
+                  <span className="branch-picker__option-name">{option.name}</span>
+                  {option.current ? (
+                    <span
+                      aria-hidden="true"
+                      className="branch-picker__badge branch-picker__badge--current"
+                    >
+                      Current
+                    </span>
+                  ) : null}
+                  {option.isDefault ? (
+                    <span
+                      aria-hidden="true"
+                      className="branch-picker__badge branch-picker__badge--default"
+                    >
+                      Default
+                    </span>
+                  ) : null}
+                  {option.inUse ? (
+                    <span
+                      aria-hidden="true"
+                      className="branch-picker__badge branch-picker__badge--in-use"
+                    >
+                      In use
+                    </span>
+                  ) : null}
+                  {relativeTime ? (
+                    <span aria-hidden="true" className="branch-picker__option-time">
+                      {relativeTime}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ReviewCommitPicker(props: {
+  inputRef?: Ref<HTMLInputElement>;
+  onChange: (value: string) => void;
+  options: NavigationGitCommitSummary[];
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const inputId = useId();
+  const listboxId = useId();
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  const nowMs = Date.now();
+  const query = props.value.trim().toLowerCase();
+  const visibleOptions = useMemo(() => {
+    if (!query) {
+      return props.options.slice(0, 20);
+    }
+    return props.options
+      .filter((option) => {
+        const haystack = `${option.sha} ${option.shortSha} ${option.subject}`.toLowerCase();
+        return haystack.includes(query);
+      })
+      .slice(0, 20);
+  }, [props.options, query]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [query]);
+
+  useEffect(() => {
+    setActiveIndex((current) =>
+      visibleOptions.length === 0
+        ? 0
+        : Math.min(current, visibleOptions.length - 1),
+    );
+  }, [visibleOptions.length]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    const option = optionRefs.current[activeIndex];
+    if (typeof option?.scrollIntoView === "function") {
+      option.scrollIntoView({
+        block: "nearest",
+      });
+    }
+  }, [activeIndex, open]);
+
+  const commit = (option: NavigationGitCommitSummary): void => {
+    props.onChange(option.sha);
+    setOpen(false);
+  };
+
+  const handleKeyDown = (
+    event: ReactKeyboardEvent<HTMLInputElement>,
+  ): void => {
+    if (event.key === "ArrowDown") {
+      if (visibleOptions.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      const wasOpen = open;
+      setOpen(true);
+      setActiveIndex((current) =>
+        wasOpen ? Math.min(visibleOptions.length - 1, current + 1) : 0,
+      );
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      if (visibleOptions.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      const wasOpen = open;
+      setOpen(true);
+      setActiveIndex((current) => Math.max(0, current - 1));
+      if (!wasOpen) {
+        setActiveIndex(visibleOptions.length - 1);
+      }
+      return;
+    }
+    if (event.key === "Enter" && open) {
+      const option = visibleOptions[activeIndex];
+      if (option) {
+        event.preventDefault();
+        commit(option);
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      if (shouldShowMenu) {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+      }
+    }
+  };
+
+  const shouldShowMenu = open && visibleOptions.length > 0;
+  const activeOptionId = shouldShowMenu
+    ? `${listboxId}-option-${activeIndex}`
+    : undefined;
+
+  return (
+    <div className="review-commit-picker" ref={ref}>
+      <label htmlFor={inputId}>Commit SHA</label>
+      <input
+        aria-autocomplete="list"
+        aria-activedescendant={activeOptionId}
+        aria-controls={shouldShowMenu ? listboxId : undefined}
+        aria-expanded={shouldShowMenu}
+        aria-haspopup="listbox"
+        className="composer__review-input"
+        id={inputId}
+        ref={props.inputRef}
+        role="combobox"
+        value={props.value}
+        onChange={(event) => {
+          props.onChange(event.target.value);
+          setOpen(true);
+        }}
+        onClick={() => {
+          setActiveIndex(0);
+          setOpen(visibleOptions.length > 0);
+        }}
+        onFocus={() => {
+          setActiveIndex(0);
+          setOpen(visibleOptions.length > 0);
+        }}
+        onKeyDown={handleKeyDown}
+      />
+      {shouldShowMenu ? (
+        <div
+          aria-label="Recent commits"
+          className="review-commit-picker__menu"
+          id={listboxId}
+          role="listbox"
+        >
+          {visibleOptions.map((option, index) => {
+            const relativeTime = formatBranchRelativeTime(
+              option.committedAt,
+              nowMs,
+            );
+            return (
+              <button
+                aria-label={`${option.shortSha} ${option.subject}`}
+                aria-selected={option.sha === props.value.trim()}
+                className={[
+                  "review-commit-picker__option",
+                  index === activeIndex ? "is-active" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                id={`${listboxId}-option-${index}`}
+                key={option.sha}
+                ref={(element) => {
+                  optionRefs.current[index] = element;
+                }}
+                role="option"
+                tabIndex={-1}
+                type="button"
+                onClick={() => commit(option)}
+                onMouseEnter={() => setActiveIndex(index)}
+              >
+                <span className="review-commit-picker__sha">
+                  {option.shortSha}
+                </span>
+                <span className="review-commit-picker__subject">
+                  {option.subject || "Untitled commit"}
+                </span>
+                {relativeTime ? (
+                  <span
+                    aria-hidden="true"
+                    className="review-commit-picker__time"
+                  >
+                    {relativeTime}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ComposerApplicationButton(props: {
   application: DesktopApplicationDiscoveryCandidate;
   label: string;
@@ -1507,6 +2028,9 @@ export function Composer(props: ComposerProps) {
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
   const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const reviewOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const reviewCommitInputRef = useRef<HTMLInputElement | null>(null);
+  const reviewCustomTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const skillListboxId = useId();
   const slashListboxId = useId();
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
@@ -2439,18 +2963,34 @@ export function Composer(props: ComposerProps) {
     autocompleteListboxId && autocompleteKind
       ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
       : undefined;
-  const reviewBranchOptions = useMemo(
-    () => buildReviewBranchOptions({
-      directory: props.directory,
-      thread: props.thread,
-    }),
-    [props.directory, props.thread]
+  const reviewBranchPickerOptions = useMemo(
+    () =>
+      buildReviewBranchPickerOptions({
+        directory: props.directory,
+        thread: props.thread,
+      }),
+    [props.directory, props.thread],
+  );
+  const reviewCommitOptions = useMemo(
+    () => buildReviewCommitOptions(props.directory),
+    [props.directory],
   );
   const isBareReviewCommand = draft.trim() === "/review";
   const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && isBareReviewCommand
   );
+
+  useEffect(() => {
+    if (!isReviewComposerOpen) {
+      return;
+    }
+    const target = reviewConfig?.target ?? "baseBranch";
+    const optionIndex = REVIEW_TARGET_OPTIONS.findIndex(
+      (option) => option.target === target,
+    );
+    reviewOptionRefs.current[optionIndex === -1 ? 0 : optionIndex]?.focus();
+  }, [isReviewComposerOpen, reviewConfig?.target]);
 
   useEffect(() => {
     if (!supportsReview && reviewConfig) {
@@ -3202,6 +3742,115 @@ export function Composer(props: ComposerProps) {
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
+  const submitConfiguredReviewComposer = async (): Promise<void> => {
+    await submitReviewConfig(reviewConfig);
+  };
+
+  const submitReviewConfig = async (
+    config: ReviewConfigState | undefined,
+  ): Promise<void> => {
+    const configuredReviewCommand = buildConfiguredReviewCommand(config);
+    if (!configuredReviewCommand) {
+      return;
+    }
+    await submitReviewCommand(configuredReviewCommand);
+  };
+
+  const focusReviewOption = (index: number): void => {
+    requestAnimationFrame(() => {
+      reviewOptionRefs.current[index]?.focus();
+    });
+  };
+
+  const focusReviewDetail = (target: ReviewTargetChoice): void => {
+    requestAnimationFrame(() => {
+      if (target === "commit") {
+        reviewCommitInputRef.current?.focus();
+      } else if (target === "custom") {
+        reviewCustomTextareaRef.current?.focus();
+      }
+    });
+  };
+
+  const getReviewConfigWithTarget = (
+    target: ReviewTargetChoice,
+  ): ReviewConfigState => ({
+    ...(reviewConfig ??
+      createReviewConfig({
+        directory: props.directory,
+        thread: props.thread,
+      })),
+    target,
+  });
+
+  const selectReviewTarget = (
+    target: ReviewTargetChoice,
+    options?: { focusDetail?: boolean },
+  ): void => {
+    setReviewConfig((current) => ({
+      ...(current ??
+        createReviewConfig({
+          directory: props.directory,
+          thread: props.thread,
+        })),
+      target,
+    }));
+    setSendError(undefined);
+    if (options?.focusDetail) {
+      focusReviewDetail(target);
+    }
+  };
+
+  const submitFocusedReviewTarget = (
+    target: ReviewTargetChoice,
+  ): void => {
+    const nextConfig = getReviewConfigWithTarget(target);
+    setReviewConfig(nextConfig);
+    setSendError(undefined);
+    if (
+      (target === "commit" && !nextConfig.commit.trim()) ||
+      (target === "custom" && !nextConfig.customInstructions.trim())
+    ) {
+      focusReviewDetail(target);
+      return;
+    }
+    void submitReviewConfig(nextConfig);
+  };
+
+  const handleReviewConfigKeyDown = (
+    event: ReactKeyboardEvent<HTMLFieldSetElement>,
+  ): void => {
+    if (event.key !== "Escape") {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    exitReviewComposer();
+  };
+
+  const handleReviewOptionKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ): void => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      submitFocusedReviewTarget(REVIEW_TARGET_OPTIONS[index]!.target);
+      return;
+    }
+    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const nextIndex =
+      (index + direction + REVIEW_TARGET_OPTIONS.length) %
+      REVIEW_TARGET_OPTIONS.length;
+    selectReviewTarget(REVIEW_TARGET_OPTIONS[nextIndex]!.target);
+    focusReviewOption(nextIndex);
+  };
+
   const buildTurnPayload = (
     textDraft: string,
     attachments: ComposerImageAttachment[],
@@ -3644,19 +4293,14 @@ export function Composer(props: ComposerProps) {
 
     if (reviewCommand) {
       if (isBareReviewCommand) {
-        const nextReviewConfig =
+        setReviewConfig(
           reviewConfig ??
-          createReviewConfig({
-            directory: props.directory,
-            thread: props.thread,
-          });
-        const configuredReviewCommand = buildConfiguredReviewCommand(nextReviewConfig);
-        if (!configuredReviewCommand) {
-          setReviewConfig(nextReviewConfig);
-          setSendError(undefined);
-          return;
-        }
-        await submitReviewCommand(configuredReviewCommand);
+            createReviewConfig({
+              directory: props.directory,
+              thread: props.thread,
+            })
+        );
+        setSendError(undefined);
         return;
       }
 
@@ -5140,7 +5784,11 @@ export function Composer(props: ComposerProps) {
         data-composer-implementation="tiptap-wysiwyg-markdown-chips"
         onSubmit={(event) => {
           event.preventDefault();
-          void submitTurn();
+          if (isReviewComposerOpen) {
+            void submitConfiguredReviewComposer();
+          } else {
+            void submitTurn();
+          }
         }}
       >
         {/* Issue #240: removed the visible "Reply" / "New thread" /
@@ -5347,26 +5995,30 @@ export function Composer(props: ComposerProps) {
 
       <div className="composer__input-wrap" ref={inputWrapRef}>
         {isReviewComposerOpen ? (
-          <fieldset className="composer__review-config" aria-label="Review target">
+          <fieldset
+            className="composer__review-config"
+            aria-label="Review target"
+            onKeyDown={handleReviewConfigKeyDown}
+          >
             <legend>Review target</legend>
             <div className="composer__review-options">
-              {REVIEW_TARGET_OPTIONS.map((option) => (
+              {REVIEW_TARGET_OPTIONS.map((option, index) => (
                 <button
                   key={option.target}
+                  ref={(element) => {
+                    reviewOptionRefs.current[index] = element;
+                  }}
                   type="button"
                   aria-pressed={reviewConfig?.target === option.target}
                   className={`composer__review-option${reviewConfig?.target === option.target ? " is-active" : ""}`}
+                  tabIndex={reviewConfig?.target === option.target ? 0 : -1}
                   onClick={() => {
-                    setReviewConfig((current) => ({
-                      ...(current ??
-                        createReviewConfig({
-                          directory: props.directory,
-                          thread: props.thread,
-                        })),
-                      target: option.target,
-                    }));
-                    setSendError(undefined);
+                    selectReviewTarget(option.target, {
+                      focusDetail:
+                        option.target === "commit" || option.target === "custom",
+                    });
                   }}
+                  onKeyDown={(event) => handleReviewOptionKeyDown(event, index)}
                 >
                   <span>{option.label}</span>
                   <small>{option.description}</small>
@@ -5375,55 +6027,48 @@ export function Composer(props: ComposerProps) {
             </div>
 
             {reviewConfig?.target === "baseBranch" ? (
-              <label className="composer__review-field">
+              <div className="composer__review-field">
                 <span>Base branch</span>
-                <input
-                  className="composer__review-input"
-                  list="composer-review-branches"
+                <ReviewBranchPicker
+                  ariaLabel="Base branch"
+                  options={reviewBranchPickerOptions}
                   value={reviewConfig.branch}
-                  onChange={(event) => {
+                  onChange={(branch) => {
                     setReviewConfig((current) => ({
                       ...(current ??
                         createReviewConfig({
                           directory: props.directory,
                           thread: props.thread,
                         })),
-                      branch: event.target.value,
+                      branch,
                       target: "baseBranch",
                     }));
                     setSendError(undefined);
                   }}
                 />
-                {reviewBranchOptions.length > 0 ? (
-                  <datalist id="composer-review-branches">
-                    {reviewBranchOptions.map((branch) => (
-                      <option key={branch} value={branch} />
-                    ))}
-                  </datalist>
-                ) : null}
-              </label>
+              </div>
             ) : null}
 
             {reviewConfig?.target === "commit" ? (
-              <label className="composer__review-field">
-                <span>Commit SHA</span>
-                <input
-                  className="composer__review-input"
+              <div className="composer__review-field">
+                <ReviewCommitPicker
+                  inputRef={reviewCommitInputRef}
+                  options={reviewCommitOptions}
                   value={reviewConfig.commit}
-                  onChange={(event) => {
+                  onChange={(commit) => {
                     setReviewConfig((current) => ({
                       ...(current ??
                         createReviewConfig({
                           directory: props.directory,
                           thread: props.thread,
                         })),
-                      commit: event.target.value,
+                      commit,
                       target: "commit",
                     }));
                     setSendError(undefined);
                   }}
                 />
-              </label>
+              </div>
             ) : null}
 
             {reviewConfig?.target === "custom" ? (
@@ -5431,6 +6076,7 @@ export function Composer(props: ComposerProps) {
                 <span>Instructions</span>
                 <textarea
                   className="composer__review-input composer__review-input--textarea"
+                  ref={reviewCustomTextareaRef}
                   value={reviewConfig.customInstructions}
                   onChange={(event) => {
                     setReviewConfig((current) => ({
@@ -5461,12 +6107,7 @@ export function Composer(props: ComposerProps) {
                 className="composer__primary-action"
                 disabled={!buildConfiguredReviewCommand(reviewConfig)}
                 onClick={() => {
-                  const configuredReviewCommand =
-                    buildConfiguredReviewCommand(reviewConfig);
-                  if (!configuredReviewCommand) {
-                    return;
-                  }
-                  void submitReviewCommand(configuredReviewCommand);
+                  void submitConfiguredReviewComposer();
                 }}
               >
                 Start review
