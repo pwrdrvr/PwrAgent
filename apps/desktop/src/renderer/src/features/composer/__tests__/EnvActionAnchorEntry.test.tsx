@@ -487,10 +487,21 @@ describe("formatDurationMs", () => {
     expect(formatDurationMs(120_000)).toBe("2m");
   });
 
-  it("formats hour-plus durations with the minute portion only", () => {
-    expect(formatDurationMs(60 * 60_000)).toBe("60m");
-    expect(formatDurationMs(60 * 60_000 + 5_000)).toBe("60m 5s");
-    expect(formatDurationMs(2 * 60 * 60_000)).toBe("120m");
+  it("formats hour-plus durations with hour and minute units", () => {
+    expect(formatDurationMs(60 * 60_000)).toBe("1h");
+    expect(formatDurationMs(60 * 60_000 + 5_000)).toBe("1h");
+    expect(formatDurationMs(2 * 60 * 60_000)).toBe("2h");
+    expect(formatDurationMs(17 * 60 * 60_000 + 18 * 60_000 + 24_000)).toBe(
+      "17h 18m",
+    );
+  });
+
+  it("formats day-plus durations with day and hour units", () => {
+    expect(formatDurationMs(24 * 60 * 60_000)).toBe("1d");
+    expect(formatDurationMs(25 * 60 * 60_000 + 17 * 60_000)).toBe("1d 1h");
+    expect(formatDurationMs(3 * 24 * 60 * 60_000 + 4 * 60 * 60_000)).toBe(
+      "3d 4h",
+    );
   });
 
   describe("coarseAfterMinute", () => {
@@ -501,7 +512,10 @@ describe("formatDurationMs", () => {
       expect(formatDurationMs(118_000, { coarseAfterMinute: true })).toBe("1m");
       expect(formatDurationMs(119_499, { coarseAfterMinute: true })).toBe("1m");
       expect(formatDurationMs(119_500, { coarseAfterMinute: true })).toBe("2m");
-      expect(formatDurationMs(6 * 60_000 + 23_000, { coarseAfterMinute: true })).toBe("6m");
+      expect(formatDurationMs(6 * 60_000 + 23_000, { coarseAfterMinute: true }))
+        .toBe("6m");
+      expect(formatDurationMs(66 * 60_000 + 23_000, { coarseAfterMinute: true }))
+        .toBe("1h 6m");
     });
 
     it("does not affect sub-minute formatting", () => {
@@ -542,5 +556,12 @@ describe("formatRunningDurationMs", () => {
     expect(formatRunningDurationMs(119_999)).toBe("1m 59s");
     expect(formatRunningDurationMs(323_000)).toBe("5m 23s");
     expect(formatRunningDurationMs(6 * 60_000 + 23_000)).toBe("6m 23s");
+  });
+
+  it("formats hour- and day-plus live elapsed values with larger units", () => {
+    expect(formatRunningDurationMs(60 * 60_000)).toBe("1h");
+    expect(formatRunningDurationMs(17 * 60 * 60_000 + 18 * 60_000 + 24_000))
+      .toBe("17h 18m");
+    expect(formatRunningDurationMs(26 * 60 * 60_000 + 12_000)).toBe("1d 2h");
   });
 });
