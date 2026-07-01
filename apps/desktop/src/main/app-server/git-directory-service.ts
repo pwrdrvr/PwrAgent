@@ -11,6 +11,7 @@ import type {
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
   NavigationGitBranchDetail,
+  NavigationGitCommitSummary,
   NavigationLaunchpadDraft,
 } from "@pwragent/shared";
 import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
@@ -344,6 +345,33 @@ function parseGitBaseBranchDetails(
   return details;
 }
 
+function parseGitCommitSummaries(output: string): NavigationGitCommitSummary[] {
+  const commits: NavigationGitCommitSummary[] = [];
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (!line.trim()) {
+      continue;
+    }
+    const [sha = "", shortSha = "", committedAtRaw = "", subject = ""] =
+      line.split("\x1f");
+    const fullSha = sha.trim();
+    const abbreviatedSha = shortSha.trim();
+    if (!fullSha || !abbreviatedSha) {
+      continue;
+    }
+    const committedAtValue = Number.parseInt(committedAtRaw.trim(), 10);
+    commits.push({
+      sha: fullSha,
+      shortSha: abbreviatedSha,
+      committedAt: Number.isFinite(committedAtValue)
+        ? committedAtValue
+        : undefined,
+      subject: subject.trim(),
+    });
+  }
+  return commits;
+}
+
 /**
  * Upper bound on how many branches we enrich, hold in the navigation
  * snapshot, and persist to the directory git-status cache. Repos can have
@@ -353,6 +381,7 @@ function parseGitBaseBranchDetails(
  * nothing past this many branches is retained or written to disk.
  */
 export const MAX_TRACKED_BRANCHES = 100;
+export const MAX_TRACKED_COMMITS = 20;
 
 /**
  * Keeps the most recently touched `limit` branches, always retaining the
@@ -694,8 +723,14 @@ export class GitDirectoryService {
       return undefined;
     }
 
-    const [rawCurrentBranch, branchesOutput, baseBranchesOutput, remoteHead, worktreeList] =
-      await Promise.all([
+    const [
+      rawCurrentBranch,
+      branchesOutput,
+      baseBranchesOutput,
+      remoteHead,
+      worktreeList,
+      recentCommitsOutput,
+    ] = await Promise.all([
         runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
           () => "",
         ),
@@ -728,6 +763,15 @@ export class GitDirectoryService {
         runGit(repoRoot, ["worktree", "list", "--porcelain"], gitEnv).catch(
           () => "",
         ),
+        runGit(
+          repoRoot,
+          [
+            "log",
+            `--max-count=${MAX_TRACKED_COMMITS}`,
+            "--format=%H%x1f%h%x1f%ct%x1f%s",
+          ],
+          gitEnv,
+        ).catch(() => ""),
       ]);
     const currentBranch =
       rawCurrentBranch.trim() === "HEAD" ? "" : rawCurrentBranch.trim();
@@ -743,6 +787,10 @@ export class GitDirectoryService {
     ).catch(() => "");
     const parsedBranchDetailsAll = parseGitBranchDetails(branchesOutput);
     const parsedBaseBranchDetailsAll = parseGitBaseBranchDetails(baseBranchesOutput);
+    const recentCommits = parseGitCommitSummaries(recentCommitsOutput).slice(
+      0,
+      MAX_TRACKED_COMMITS,
+    );
     // Resolve the default branch against the FULL list so a rarely-committed
     // `main` is still found, then cap everything we hold/persist downstream.
     const defaultBranch = resolveDefaultBranch({
@@ -783,6 +831,7 @@ export class GitDirectoryService {
         baseBranches,
         branchDetails: buildBranchDetails(),
         baseBranchDetails: buildBaseBranchDetails(),
+        recentCommits,
         handoffBranches: branches,
         syncState: "untracked",
       };
@@ -803,6 +852,7 @@ export class GitDirectoryService {
         baseBranches,
         branchDetails: buildBranchDetails(),
         baseBranchDetails: buildBaseBranchDetails(),
+        recentCommits,
         handoffBranches,
         syncState: "untracked",
       };
@@ -837,6 +887,7 @@ export class GitDirectoryService {
       baseBranches,
       branchDetails: buildBranchDetails(),
       baseBranchDetails: buildBaseBranchDetails(),
+      recentCommits,
       handoffBranches,
       syncState,
     };

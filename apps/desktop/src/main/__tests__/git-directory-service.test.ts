@@ -13,6 +13,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GitDirectoryService,
+  MAX_TRACKED_COMMITS,
   MAX_TRACKED_BRANCHES,
   capRecentBranchDetails,
   computeWorktreePath,
@@ -266,6 +267,31 @@ describe("GitDirectoryService", () => {
     expect(detailNames.indexOf("recent")).toBeLessThan(
       detailNames.indexOf("older"),
     );
+    expect(status?.recentCommits?.[0]).toMatchObject({
+      subject: "Seed fixture repo",
+    });
+  });
+
+  it("reports at most the newest recent commits for the current branch", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    for (let index = 0; index < MAX_TRACKED_COMMITS + 5; index += 1) {
+      execFileSync(
+        "git",
+        ["-C", repoDir, "commit", "--allow-empty", "-m", `Commit ${index}`],
+        { stdio: "ignore" },
+      );
+    }
+    const service = new GitDirectoryService();
+
+    const status = await service.readDirectoryStatus({ path: repoDir });
+
+    expect(status?.recentCommits).toHaveLength(MAX_TRACKED_COMMITS);
+    expect(status?.recentCommits?.[0]).toMatchObject({
+      shortSha: expect.any(String),
+      subject: `Commit ${MAX_TRACKED_COMMITS + 4}`,
+    });
+    expect(status?.recentCommits?.at(-1)?.subject).toBe("Commit 5");
   });
 
   it("reports remote-tracking refs as worktree base branch candidates", async () => {

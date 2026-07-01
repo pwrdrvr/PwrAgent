@@ -491,6 +491,14 @@ export type NavigationGitBranchDetail = {
   inUse?: boolean;
 };
 
+export type NavigationGitCommitSummary = {
+  sha: string;
+  shortSha: string;
+  /** Commit time in unix seconds. */
+  committedAt?: number;
+  subject: string;
+};
+
 export type NavigationDirectoryGitStatus = {
   currentBranch?: string;
   defaultBranch?: string;
@@ -502,6 +510,8 @@ export type NavigationDirectoryGitStatus = {
   /** Candidate refs for creating a new worktree base. Includes local branches and remote-tracking refs. */
   baseBranches?: string[];
   baseBranchDetails?: NavigationGitBranchDetail[];
+  /** Most recent commits on the checked-out branch, newest first. */
+  recentCommits?: NavigationGitCommitSummary[];
   handoffBranches?: string[];
   syncState?:
     | "in-sync"

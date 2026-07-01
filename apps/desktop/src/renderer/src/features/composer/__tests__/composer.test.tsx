@@ -4972,6 +4972,138 @@ describe("Composer", () => {
     });
   });
 
+  it("submits the focused review target when keyboard focus moves without changing selection", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    const currentChangesTarget = screen.getByRole("button", {
+      name: /Current changes/i,
+    });
+    currentChangesTarget.focus();
+    expect(currentChangesTarget).toHaveFocus();
+    expect(currentChangesTarget).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.keyDown(currentChangesTarget, {
+      key: "Enter",
+    });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "uncommittedChanges" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("cancels the bare review target prompt with Escape from cards and fields", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    const { rerender } = render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+    fireEvent.keyDown(
+      screen.getByRole("button", {
+        name: /Compare this branch with a base branch/i,
+      }),
+      { key: "Escape" },
+    );
+    expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reply")).toHaveFocus();
+    });
+
+    rerender(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+    fireEvent.click(screen.getByRole("button", { name: /Review one commit by SHA/i }));
+    const commitInput = await screen.findByRole("combobox", {
+      name: "Commit SHA",
+    });
+    await waitFor(() => {
+      expect(commitInput).toHaveFocus();
+    });
+    fireEvent.keyDown(commitInput, { key: "Escape" });
+    expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+  });
+
   it("uses the branch picker to override the selected base branch", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
@@ -5034,6 +5166,134 @@ describe("Composer", () => {
         backend: "codex",
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "release" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("suggests recent commits for commit reviews and caps the list at twenty", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const recentCommits = Array.from({ length: 25 }, (_, index) => ({
+      sha: `${index.toString(16).padStart(40, "0")}`,
+      shortSha: `c${index.toString().padStart(2, "0")}`,
+      committedAt: Math.floor(Date.now() / 1000) - index * 60,
+      subject: `Commit subject ${index}`,
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "feature/review",
+            defaultBranch: "main",
+            branches: ["feature/review", "main"],
+            recentCommits,
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+    fireEvent.click(screen.getByRole("button", { name: /Review one commit by SHA/i }));
+    const commitInput = await screen.findByRole("combobox", {
+      name: "Commit SHA",
+    });
+    await waitFor(() => {
+      expect(commitInput).toHaveFocus();
+    });
+
+    expect(screen.getAllByRole("option")).toHaveLength(20);
+    fireEvent.click(screen.getByRole("option", { name: /c03 Commit subject 3/i }));
+    expect(commitInput).toHaveValue(recentCommits[3]!.sha);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "commit", sha: recentCommits[3]!.sha, title: null },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("still accepts a pasted raw commit SHA", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+    fireEvent.click(screen.getByRole("button", { name: /Review one commit by SHA/i }));
+    const commitInput = await screen.findByRole("combobox", {
+      name: "Commit SHA",
+    });
+    fireEvent.change(commitInput, {
+      target: { value: "abc123def456" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "commit", sha: "abc123def456", title: null },
         delivery: "inline",
       });
     });
