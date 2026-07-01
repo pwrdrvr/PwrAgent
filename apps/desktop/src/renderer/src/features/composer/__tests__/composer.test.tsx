@@ -4662,7 +4662,11 @@ describe("Composer", () => {
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
 
     rerender(<Composer {...baseProps} activeTurnId="turn-1" />);
-    fireEvent.click(screen.getByRole("button", { name: /Base branch/i }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Compare this branch with a base branch/i,
+      }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
     expect(startReview).not.toHaveBeenCalled();
@@ -4876,17 +4880,20 @@ describe("Composer", () => {
 
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Reply")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Base branch/i })).toHaveAttribute(
+    const baseBranchTarget = screen.getByRole("button", {
+      name: /Compare this branch with a base branch/i,
+    });
+    expect(baseBranchTarget).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Base branch/i })).toHaveFocus();
+      expect(baseBranchTarget).toHaveFocus();
     });
-    expect(screen.queryByLabelText("Base branch")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
     expect(startReview).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(screen.getByRole("button", { name: /Base branch/i }), {
+    fireEvent.keyDown(baseBranchTarget, {
       key: "Enter",
     });
 
@@ -4932,11 +4939,14 @@ describe("Composer", () => {
       target: { value: "/review" },
     });
     await clickButton("Send");
+    const baseBranchTarget = screen.getByRole("button", {
+      name: /Compare this branch with a base branch/i,
+    });
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Base branch/i })).toHaveFocus();
+      expect(baseBranchTarget).toHaveFocus();
     });
 
-    fireEvent.keyDown(screen.getByRole("button", { name: /Base branch/i }), {
+    fireEvent.keyDown(baseBranchTarget, {
       key: "ArrowRight",
     });
 
@@ -4962,7 +4972,7 @@ describe("Composer", () => {
     });
   });
 
-  it("shows the base branch override only after the base branch card is explicitly clicked", async () => {
+  it("uses the branch picker to override the selected base branch", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -4975,6 +4985,21 @@ describe("Composer", () => {
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startReview,
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "feature/review",
+            defaultBranch: "main",
+            branches: ["feature/review", "release", "main"],
+            baseBranches: ["main", "release"],
+            syncState: "untracked",
+          },
         }}
         disabled={false}
         skills={[]}
@@ -4995,12 +5020,9 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.queryByLabelText("Base branch")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Base branch/i }));
     expect(screen.getByLabelText("Base branch")).toHaveValue("main");
-    fireEvent.change(screen.getByLabelText("Base branch"), {
-      target: { value: "release" },
-    });
+    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByRole("option", { name: "release" }));
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     const form = reviewTarget.closest("form");
@@ -5066,11 +5088,15 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByRole("button", { name: /Base branch/i })).toHaveAttribute(
+    expect(
+      screen.getByRole("button", {
+        name: /Compare this branch with a base branch/i,
+      }),
+    ).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    expect(screen.queryByLabelText("Base branch")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     const form = reviewTarget.closest("form");
@@ -5140,11 +5166,15 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByRole("button", { name: /Base branch/i })).toHaveAttribute(
+    expect(
+      screen.getByRole("button", {
+        name: /Compare this branch with a base branch/i,
+      }),
+    ).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    expect(screen.queryByLabelText("Base branch")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     const form = reviewTarget.closest("form");

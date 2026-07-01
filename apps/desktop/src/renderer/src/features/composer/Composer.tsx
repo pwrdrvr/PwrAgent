@@ -324,7 +324,6 @@ type ReviewConfigState = {
   branch: string;
   commit: string;
   customInstructions: string;
-  showBranchPicker?: boolean;
   target?: ReviewTargetChoice;
 };
 
@@ -467,24 +466,62 @@ function buildReviewBranchOptions(params: {
     /^origin\//,
     "",
   );
-  const candidates = [
-    ...(params.directory?.gitStatus?.baseBranches ?? []),
-    params.directory?.gitStatus?.defaultBranch,
-    upstreamBranch,
-    "main",
-    params.thread?.gitBranch,
-    params.thread?.observedGitBranch,
-    params.directory?.gitStatus?.currentBranch,
-    ...(params.directory?.gitStatus?.branches ?? []),
-  ];
   const options = new Set<string>();
-  for (const candidate of candidates) {
+  const push = (
+    candidate?: string,
+    optionsForCandidate?: { allowCurrent?: boolean },
+  ): void => {
     const value = candidate?.trim();
-    if (value && !isCurrentBranch(value)) {
+    if (
+      value &&
+      (optionsForCandidate?.allowCurrent || !isCurrentBranch(value))
+    ) {
       options.add(value);
     }
+  };
+  for (const candidate of params.directory?.gitStatus?.baseBranches ?? []) {
+    push(candidate);
+  }
+  push(params.directory?.gitStatus?.defaultBranch);
+  push(upstreamBranch);
+  push("main", { allowCurrent: true });
+  push(params.thread?.gitBranch);
+  push(params.thread?.observedGitBranch);
+  push(params.directory?.gitStatus?.currentBranch);
+  for (const candidate of params.directory?.gitStatus?.branches ?? []) {
+    push(candidate);
   }
   return [...options];
+}
+
+function buildReviewBranchPickerOptions(params: {
+  directory?: NavigationDirectorySummary;
+  thread?: NavigationThreadSummary;
+}): LaunchpadBranchOption[] {
+  const details =
+    params.directory?.gitStatus?.baseBranchDetails ??
+    params.directory?.gitStatus?.branchDetails ??
+    [];
+  const detailByName = new Map(details.map((detail) => [detail.name, detail]));
+  const currentBranch = normalizeSelectableLaunchpadBranch(
+    params.directory?.gitStatus?.currentBranch ??
+      params.thread?.gitBranch ??
+      params.thread?.observedGitBranch,
+  );
+  const defaultBranch = normalizeSelectableLaunchpadBranch(
+    params.directory?.gitStatus?.defaultBranch,
+  );
+
+  return buildReviewBranchOptions(params).map((name) => {
+    const detail = detailByName.get(name);
+    return {
+      name,
+      lastCommitAt: detail?.lastCommitAt,
+      inUse: detail?.inUse,
+      current: currentBranch ? name === currentBranch : false,
+      isDefault: defaultBranch ? name === defaultBranch : false,
+    };
+  });
 }
 
 function getLaunchpadDirectoryKeyFromScope(scopeKey: string): string | undefined {
@@ -2470,12 +2507,13 @@ export function Composer(props: ComposerProps) {
     autocompleteListboxId && autocompleteKind
       ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
       : undefined;
-  const reviewBranchOptions = useMemo(
-    () => buildReviewBranchOptions({
-      directory: props.directory,
-      thread: props.thread,
-    }),
-    [props.directory, props.thread]
+  const reviewBranchPickerOptions = useMemo(
+    () =>
+      buildReviewBranchPickerOptions({
+        directory: props.directory,
+        thread: props.thread,
+      }),
+    [props.directory, props.thread],
   );
   const isBareReviewCommand = draft.trim() === "/review";
   const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
@@ -2484,7 +2522,7 @@ export function Composer(props: ComposerProps) {
   );
 
   useEffect(() => {
-    if (!isReviewComposerOpen || reviewConfig?.showBranchPicker) {
+    if (!isReviewComposerOpen) {
       return;
     }
     const target = reviewConfig?.target ?? "baseBranch";
@@ -2492,7 +2530,7 @@ export function Composer(props: ComposerProps) {
       (option) => option.target === target,
     );
     reviewOptionRefs.current[optionIndex === -1 ? 0 : optionIndex]?.focus();
-  }, [isReviewComposerOpen, reviewConfig?.showBranchPicker, reviewConfig?.target]);
+  }, [isReviewComposerOpen, reviewConfig?.target]);
 
   useEffect(() => {
     if (!supportsReview && reviewConfig) {
@@ -3260,7 +3298,6 @@ export function Composer(props: ComposerProps) {
 
   const selectReviewTarget = (
     target: ReviewTargetChoice,
-    options?: { showBranchPicker?: boolean },
   ): void => {
     setReviewConfig((current) => ({
       ...(current ??
@@ -3268,7 +3305,6 @@ export function Composer(props: ComposerProps) {
           directory: props.directory,
           thread: props.thread,
         })),
-      showBranchPicker: options?.showBranchPicker,
       target,
     }));
     setSendError(undefined);
@@ -3293,9 +3329,7 @@ export function Composer(props: ComposerProps) {
     const nextIndex =
       (index + direction + REVIEW_TARGET_OPTIONS.length) %
       REVIEW_TARGET_OPTIONS.length;
-    selectReviewTarget(REVIEW_TARGET_OPTIONS[nextIndex]!.target, {
-      showBranchPicker: false,
-    });
+    selectReviewTarget(REVIEW_TARGET_OPTIONS[nextIndex]!.target);
     focusReviewOption(nextIndex);
   };
 
@@ -5456,9 +5490,7 @@ export function Composer(props: ComposerProps) {
                   aria-pressed={reviewConfig?.target === option.target}
                   className={`composer__review-option${reviewConfig?.target === option.target ? " is-active" : ""}`}
                   onClick={() => {
-                    selectReviewTarget(option.target, {
-                      showBranchPicker: option.target === "baseBranch",
-                    });
+                    selectReviewTarget(option.target);
                   }}
                   onKeyDown={(event) => handleReviewOptionKeyDown(event, index)}
                 >
@@ -5468,35 +5500,27 @@ export function Composer(props: ComposerProps) {
               ))}
             </div>
 
-            {reviewConfig?.target === "baseBranch" && reviewConfig.showBranchPicker ? (
-              <label className="composer__review-field">
+            {reviewConfig?.target === "baseBranch" ? (
+              <div className="composer__review-field">
                 <span>Base branch</span>
-                <input
-                  className="composer__review-input"
-                  list="composer-review-branches"
+                <BranchPicker
+                  ariaLabel="Base branch"
+                  options={reviewBranchPickerOptions}
                   value={reviewConfig.branch}
-                  onChange={(event) => {
+                  onChange={(branch) => {
                     setReviewConfig((current) => ({
                       ...(current ??
                         createReviewConfig({
                           directory: props.directory,
                           thread: props.thread,
                         })),
-                      branch: event.target.value,
-                      showBranchPicker: true,
+                      branch,
                       target: "baseBranch",
                     }));
                     setSendError(undefined);
                   }}
                 />
-                {reviewBranchOptions.length > 0 ? (
-                  <datalist id="composer-review-branches">
-                    {reviewBranchOptions.map((branch) => (
-                      <option key={branch} value={branch} />
-                    ))}
-                  </datalist>
-                ) : null}
-              </label>
+              </div>
             ) : null}
 
             {reviewConfig?.target === "commit" ? (
