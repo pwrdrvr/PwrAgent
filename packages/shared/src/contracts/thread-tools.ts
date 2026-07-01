@@ -199,6 +199,7 @@ export type PendingThreadHandoffStatus = "starting" | "completed" | "failed";
 
 export type PendingThreadHandoffPhase =
   | "resolving_source"
+  | "awaiting_input"
   | "preparing_workspace"
   | "starting_thread"
   | "starting_turn"

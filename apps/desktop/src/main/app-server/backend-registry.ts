@@ -1,7 +1,8 @@
 import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { DynamicToolSpec as CodexDynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
@@ -34,6 +35,7 @@ import {
   type AppServerThreadActivityEntry,
   type AppServerThreadEntry,
   type AppServerThreadMessage,
+  type AppServerToolRequestUserInputResponse,
   type AppServerThreadReplay,
   type AppServerThreadStatus,
   type AppServerThreadSummary,
@@ -547,6 +549,7 @@ type BackendClient = {
 };
 
 type BackendRegistryForkThreadRequest = ForkThreadRequest & {
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
   onCodexEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
@@ -980,6 +983,95 @@ async function readCurrentGitBranch(sourcePath: string): Promise<string | undefi
   );
   const branch = result.stdout.trim();
   return branch || undefined;
+}
+
+function normalizeHandoffTaskCwd(cwd: string | undefined): string | undefined {
+  const trimmed = cwd?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed === "~") {
+    return os.homedir();
+  }
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return path.join(os.homedir(), trimmed.slice(2));
+  }
+  return trimmed;
+}
+
+function sameResolvedPath(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
+  if (!left?.trim() || !right?.trim()) {
+    return false;
+  }
+  return path.resolve(left) === path.resolve(right);
+}
+
+function shouldInheritHandoffCodexEnvironmentRuntime(params: {
+  callerCwd?: string;
+  requestedCwd?: string;
+  workspaceMode: HandoffTaskWorkspaceMode;
+}): boolean {
+  if (params.workspaceMode === "none") {
+    return false;
+  }
+  return (
+    !params.requestedCwd ||
+    sameResolvedPath(params.requestedCwd, params.callerCwd)
+  );
+}
+
+function linkedDirectoryMatchesCwd(
+  directory: LinkedDirectorySummary,
+  cwd: string,
+): boolean {
+  const resolvedCwd = path.resolve(cwd);
+  return (
+    path.resolve(directory.worktreePath ?? directory.path) === resolvedCwd ||
+    path.resolve(directory.path) === resolvedCwd
+  );
+}
+
+function directoryContainsPath(
+  directoryPath: string | undefined,
+  targetPath: string,
+): boolean {
+  if (!directoryPath?.trim()) {
+    return false;
+  }
+  const relative = path.relative(path.resolve(directoryPath), targetPath);
+  return (
+    relative === "" ||
+    (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+const HANDOFF_CWD_TRUST_QUESTION_ID = "trust_directory";
+const HANDOFF_CWD_TRUST_APPROVE_LABEL = "Trust directory (Recommended)";
+
+function linkedDirectoryActiveWorkspaceCoversCwd(
+  directory: LinkedDirectorySummary,
+  cwd: string,
+): boolean {
+  const resolvedCwd = path.resolve(cwd);
+  const activeDirectoryPath =
+    directory.kind === "worktree" ? directory.worktreePath : directory.path;
+  return directoryContainsPath(activeDirectoryPath, resolvedCwd);
+}
+
+function linkedDirectoriesActiveWorkspaceCoversCwd(params: {
+  cwd: string;
+  overlay?: ThreadOverlayState;
+  thread?: Pick<AppServerThreadSummary, "linkedDirectories">;
+}): boolean {
+  return [
+    ...(params.overlay?.extraLinkedDirectories ?? []),
+    ...(params.thread?.linkedDirectories ?? []),
+  ].some((directory) =>
+    linkedDirectoryActiveWorkspaceCoversCwd(directory, params.cwd),
+  );
 }
 
 type PendingServerRequest = {
@@ -7338,6 +7430,9 @@ export class DesktopBackendRegistry {
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
     try {
       try {
+        const sourceRuntime = Object.hasOwn(request, "codexEnvironmentRuntime")
+          ? request.codexEnvironmentRuntime
+          : sourceOverlay?.codexEnvironmentRuntime;
         forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
           cwd,
           onSetupProgress: request.onCodexEnvironmentSetupProgress
@@ -7350,7 +7445,7 @@ export class DesktopBackendRegistry {
                 });
               }
             : undefined,
-          sourceRuntime: sourceOverlay?.codexEnvironmentRuntime,
+          sourceRuntime,
           workMode: preparedWorkspace.workMode,
         });
       } catch (error) {
@@ -9384,6 +9479,121 @@ export class DesktopBackendRegistry {
       turnId: params.turnId,
       requestId: params.requestId,
     };
+  }
+
+  private async requestHandoffCwdTrustConfirmation(params: {
+    backend: AppServerBackendKind;
+    cwd: string;
+    handoffId: string;
+    threadId: string;
+    turnId?: string;
+    itemId?: string;
+  }): Promise<boolean> {
+    const normalizedCwd = toDirectoryId(path.resolve(params.cwd));
+    const requestId = `${params.handoffId}:cwd-trust`;
+    const key = buildPendingRequestKey({
+      backend: params.backend,
+      threadId: params.threadId,
+      requestId,
+    });
+
+    const response = await new Promise<SubmitServerRequestRequest["response"]>(
+      (resolve, reject) => {
+        this.pendingServerRequests.set(key, { resolve, reject });
+
+        void this.emit({
+          backend: params.backend,
+          notification: {
+            method: "item/tool/requestUserInput",
+            params: {
+              threadId: params.threadId,
+              ...(params.turnId ? { turnId: params.turnId } : {}),
+              ...(params.itemId ? { itemId: params.itemId } : {}),
+              requestId,
+              questions: [
+                {
+                  id: HANDOFF_CWD_TRUST_QUESTION_ID,
+                  header: "Trust directory",
+                  question: `Trust ${normalizedCwd} and allow Default Access agent threads to read, write, and delete files in it?`,
+                  isOther: false,
+                  isSecret: false,
+                  options: [
+                    {
+                      label: HANDOFF_CWD_TRUST_APPROVE_LABEL,
+                      description:
+                        "Trust this directory for future Default Access agent work.",
+                    },
+                    {
+                      label: "Cancel handoff",
+                      description:
+                        "Do not add this directory or start the handoff.",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        }).catch((error) => {
+          backendRegistryLog.error(
+            "failed to publish handoff cwd trust request; keeping request pending",
+            {
+              backend: params.backend,
+              cwd: normalizedCwd,
+              error: error instanceof Error ? error.message : String(error),
+              requestId,
+              threadId: params.threadId,
+              turnId: params.turnId,
+            },
+          );
+        });
+      },
+    );
+
+    const answers = (response as AppServerToolRequestUserInputResponse)?.answers?.[
+      HANDOFF_CWD_TRUST_QUESTION_ID
+    ]?.answers;
+    return Array.isArray(answers)
+      ? answers.includes(HANDOFF_CWD_TRUST_APPROVE_LABEL)
+      : false;
+  }
+
+  private async directoryLaunchpadCoversCwd(cwd: string): Promise<boolean> {
+    const resolvedCwd = await realpath(cwd).catch(() => path.resolve(cwd));
+    const launchpads = await this.overlayStore.listDirectoryLaunchpads();
+    for (const launchpad of launchpads) {
+      if (launchpad.directoryKind !== "directory" || !launchpad.directoryPath) {
+        continue;
+      }
+      const launchpadPath = await realpath(launchpad.directoryPath).catch(() =>
+        path.resolve(launchpad.directoryPath!),
+      );
+      if (directoryContainsPath(launchpadPath, resolvedCwd)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private async ensureHandoffTrustedDirectoryLaunchpad(params: {
+    cwd: string;
+    preferredBackend: AppServerBackendKind;
+    parentThreadId: string;
+    parentThreadTitle?: string;
+  }): Promise<void> {
+    const directoryPath = toDirectoryId(
+      await realpath(params.cwd).catch(() => path.resolve(params.cwd)),
+    );
+    await this.ensureDirectoryLaunchpad({
+      directoryKey: `directory:${directoryPath}`,
+      directoryKind: "directory",
+      directoryLabel: path.basename(directoryPath) || directoryPath,
+      directoryPath,
+      currentBranch: await readCurrentGitBranch(directoryPath).catch(() => undefined),
+      parentThreadId: params.parentThreadId,
+      parentThreadTitle: params.parentThreadTitle,
+      preferredBackend: params.preferredBackend,
+      registeredAt: Date.now(),
+    });
   }
 
   async ensureDirectoryLaunchpad(
@@ -15078,13 +15288,16 @@ export class DesktopBackendRegistry {
       callerReason: "agent-handoff",
       threadId: sourceThreadId,
     });
-    const sourceCwd = await this.resolveThreadEnvironmentCwd(
+    const callerCwd = await this.resolveThreadEnvironmentCwd(
       sourceBackend,
       sourceThreadId,
       sourceOverlay,
     );
+    const requestedCwd = normalizeHandoffTaskCwd(request.args.cwd);
+    const sourceCwd = requestedCwd ?? callerCwd;
     const sourceLinkedDirectory = this.resolveHandoffLinkedDirectory({
       cwd: sourceCwd,
+      fallbackToAnyDirectory: !requestedCwd,
       overlay: sourceOverlay,
       thread: sourceThread,
     });
@@ -15093,6 +15306,54 @@ export class DesktopBackendRegistry {
       linkedDirectory: sourceLinkedDirectory,
       mode: "same_workspace",
     });
+    const executionMode =
+      request.args.executionMode ??
+      this.activeCodexTurnModes.get(
+        buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
+      ) ??
+      sourceOverlay.executionMode ??
+      (await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId));
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+
+    if (
+      workspaceMode !== "none" &&
+      requestedCwd &&
+      !linkedDirectoriesActiveWorkspaceCoversCwd({
+        cwd: requestedCwd,
+        overlay: sourceOverlay,
+        thread: sourceThread,
+      }) &&
+      executionMode !== "full-access" &&
+      !(await this.directoryLaunchpadCoversCwd(requestedCwd))
+    ) {
+      const normalizedCwd = toDirectoryId(path.resolve(requestedCwd));
+      this.updatePendingThreadHandoff(handoffId, {
+        phase: "awaiting_input",
+        message:
+          "Waiting for the operator to confirm the requested directory may be used for Default Access handoffs.",
+      });
+      const confirmed = await this.requestHandoffCwdTrustConfirmation({
+        backend,
+        cwd: requestedCwd,
+        handoffId,
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+        itemId: request.context.callId,
+      });
+      if (!confirmed) {
+        const message = `The operator did not approve adding ${normalizedCwd} to the Default Access write scope.`;
+        this.failPendingThreadHandoff(handoffId, new Error(message));
+        return threadOrchestrationFailure("forbidden", message, {
+          cwd: normalizedCwd,
+        });
+      }
+      await this.ensureHandoffTrustedDirectoryLaunchpad({
+        cwd: requestedCwd,
+        preferredBackend: backend,
+        parentThreadId: sourceThreadId,
+        parentThreadTitle: sourceThread?.title,
+      });
+    }
 
     if (workspaceMode !== "none" && !sourceCwd?.trim()) {
       this.failPendingThreadHandoff(
@@ -15125,14 +15386,6 @@ export class DesktopBackendRegistry {
       );
     }
 
-    const executionMode =
-      request.args.executionMode ??
-      this.activeCodexTurnModes.get(
-        buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
-      ) ??
-      sourceOverlay.executionMode ??
-      (await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId));
-    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const inheritedSettings: HandoffTaskInheritedSettings = {
       backend,
       executionMode,
@@ -15143,7 +15396,13 @@ export class DesktopBackendRegistry {
       fastMode: request.args.fastMode ?? sourceOverlay.fastMode,
       approvalPolicy: request.args.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.args.sandbox ?? modeSettings.sandbox,
-      codexEnvironmentRuntime: sourceOverlay.codexEnvironmentRuntime,
+      codexEnvironmentRuntime: shouldInheritHandoffCodexEnvironmentRuntime({
+        callerCwd,
+        requestedCwd,
+        workspaceMode,
+      })
+        ? sourceOverlay.codexEnvironmentRuntime
+        : undefined,
     };
     const agent = {
       name: title,
@@ -15215,6 +15474,7 @@ export class DesktopBackendRegistry {
           fastMode: inheritedSettings.fastMode,
           approvalPolicy: inheritedSettings.approvalPolicy,
           sandbox: inheritedSettings.sandbox,
+          codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
         });
         threadId = forked.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });
@@ -15487,6 +15747,7 @@ export class DesktopBackendRegistry {
 
   private resolveHandoffLinkedDirectory(params: {
     cwd?: string;
+    fallbackToAnyDirectory?: boolean;
     overlay?: ThreadOverlayState;
     thread?: Pick<AppServerThreadSummary, "linkedDirectories">;
   }): LinkedDirectorySummary | undefined {
@@ -15495,13 +15756,13 @@ export class DesktopBackendRegistry {
       ...(params.thread?.linkedDirectories ?? []),
     ];
     const cwd = params.cwd?.trim();
+    const matchedDirectory = cwd
+      ? candidates.find((directory) => linkedDirectoryMatchesCwd(directory, cwd))
+      : undefined;
+    if (matchedDirectory || params.fallbackToAnyDirectory === false) {
+      return matchedDirectory;
+    }
     return (
-      (cwd
-        ? candidates.find(
-            (directory) =>
-              directory.worktreePath === cwd || directory.path === cwd,
-          )
-        : undefined) ??
       candidates.find((directory) => directory.kind === "worktree") ??
       candidates.find((directory) => directory.kind === "local") ??
       candidates[0]

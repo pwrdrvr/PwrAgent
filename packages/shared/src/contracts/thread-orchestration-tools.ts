@@ -27,6 +27,7 @@ export const PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES = [
   "unsupported_workspace",
   "unsupported_operation",
   "ambiguous_workspace",
+  "requires_confirmation",
   "turn_start_failed",
   "internal_error",
 ] as const;
@@ -84,6 +85,11 @@ export type HandoffTaskToolArgs = {
   seedMode?: HandoffTaskSeedMode;
   groupingMode?: HandoffTaskGroupingMode;
   workspaceMode?: HandoffTaskWorkspaceMode;
+  /**
+   * Optional source project/repository directory for workspace-backed handoffs.
+   * When omitted, the invoking thread's current workspace is used.
+   */
+  cwd?: string;
   messagingAttachment?: HandoffTaskMessagingAttachmentMode;
   backend?: AppServerBackendKind;
   model?: string;
