@@ -21,6 +21,7 @@ vi.mock("../IntegratedTerminal", () => ({
     threadKey: string;
     cwd?: string;
     height: number;
+    visible?: boolean;
     onClose: () => void;
     onExit: () => void;
   }) => (
@@ -29,6 +30,7 @@ vi.mock("../IntegratedTerminal", () => ({
       data-cwd={props.cwd ?? ""}
       data-height={props.height}
       data-thread-key={props.threadKey}
+      hidden={props.visible === false}
     >
       <button type="button" title="Close terminal" onClick={props.onClose}>
         Close terminal
@@ -395,7 +397,7 @@ describe("ThreadView", () => {
       transcriptEntries: [],
     };
 
-    const { rerender } = render(
+    const { container, rerender } = render(
       <ThreadView {...commonProps} selectedThread={firstThread} />,
     );
 
@@ -416,7 +418,10 @@ describe("ThreadView", () => {
 
     rerender(<ThreadView {...commonProps} selectedThread={secondThread} />);
 
-    expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Integrated terminal")).not.toBeVisible();
+    expect(
+      container.querySelector('[aria-label="Integrated terminal"]'),
+    ).toHaveAttribute("hidden");
     expect(closeIntegratedTerminal).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Open integrated terminal" })).toHaveAttribute(
       "aria-pressed",
@@ -436,7 +441,10 @@ describe("ThreadView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Hide integrated terminal" }));
 
-    expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Integrated terminal")).not.toBeVisible();
+    expect(
+      container.querySelector('[aria-label="Integrated terminal"]'),
+    ).toHaveAttribute("hidden");
     expect(closeIntegratedTerminal).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));

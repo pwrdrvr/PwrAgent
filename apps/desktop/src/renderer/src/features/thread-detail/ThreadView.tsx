@@ -101,6 +101,11 @@ type LaunchpadEnvironmentSetupProgress = {
   status: "starting" | "running" | "completed" | "failed";
 };
 
+type RetainedIntegratedTerminal = {
+  threadKey: string;
+  cwd?: string;
+};
+
 const LazyIntegratedTerminal = lazy(async () => {
   const module = await import("./IntegratedTerminal");
   return { default: module.IntegratedTerminal };
@@ -949,6 +954,9 @@ export function ThreadView(props: ThreadViewProps) {
   const [terminalHeightByThread, setTerminalHeightByThread] = useState<
     Record<string, number>
   >({});
+  const [retainedTerminalByThread, setRetainedTerminalByThread] = useState<
+    Record<string, RetainedIntegratedTerminal>
+  >({});
   const [launchpadMaterializeError, setLaunchpadMaterializeError] =
     useState<string>();
   const [setupFailureDismissedThreadKeys, setSetupFailureDismissedThreadKeys] =
@@ -1085,40 +1093,56 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadTerminalCwd = selectedThread
     ? resolveThreadTerminalCwd(selectedThread)
     : undefined;
-  const selectedThreadTerminalHeight = selectedThreadKey
-    ? terminalHeightByThread[selectedThreadKey] ?? 260
-    : 260;
   const toggleSelectedThreadTerminal = useCallback(() => {
     if (!selectedThreadKey) return;
+    const isOpening = terminalOpenByThread[selectedThreadKey] !== true;
+    if (isOpening) {
+      setRetainedTerminalByThread((current) => ({
+        ...current,
+        [selectedThreadKey]: {
+          threadKey: selectedThreadKey,
+          cwd: selectedThreadTerminalCwd,
+        },
+      }));
+    }
     setTerminalOpenByThread((current) => ({
       ...current,
       [selectedThreadKey]: current[selectedThreadKey] !== true,
     }));
-  }, [selectedThreadKey]);
-  const closeSelectedThreadTerminal = useCallback(() => {
-    if (!selectedThreadKey) return;
+  }, [selectedThreadKey, selectedThreadTerminalCwd, terminalOpenByThread]);
+  const hideTerminalByThread = useCallback((threadKey: string) => {
     setTerminalOpenByThread((current) => ({
       ...current,
-      [selectedThreadKey]: false,
+      [threadKey]: false,
     }));
-    void props.desktopApi?.closeIntegratedTerminal?.({
-      threadKey: selectedThreadKey,
+  }, []);
+  const removeRetainedTerminalByThread = useCallback((threadKey: string) => {
+    setRetainedTerminalByThread((current) => {
+      if (!(threadKey in current)) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[threadKey];
+      return next;
     });
-  }, [props.desktopApi, selectedThreadKey]);
-  const handleSelectedThreadTerminalExit = useCallback(() => {
-    if (!selectedThreadKey) return;
-    setTerminalOpenByThread((current) => ({
-      ...current,
-      [selectedThreadKey]: false,
-    }));
-  }, [selectedThreadKey]);
-  const setSelectedThreadTerminalHeight = useCallback((height: number) => {
-    if (!selectedThreadKey) return;
+  }, []);
+  const closeTerminalByThread = useCallback((threadKey: string) => {
+    hideTerminalByThread(threadKey);
+    removeRetainedTerminalByThread(threadKey);
+    void props.desktopApi?.closeIntegratedTerminal?.({
+      threadKey,
+    });
+  }, [hideTerminalByThread, props.desktopApi, removeRetainedTerminalByThread]);
+  const handleTerminalExitByThread = useCallback((threadKey: string) => {
+    hideTerminalByThread(threadKey);
+    removeRetainedTerminalByThread(threadKey);
+  }, [hideTerminalByThread, removeRetainedTerminalByThread]);
+  const setTerminalHeightForThread = useCallback((threadKey: string, height: number) => {
     setTerminalHeightByThread((current) => ({
       ...current,
-      [selectedThreadKey]: height,
+      [threadKey]: height,
     }));
-  }, [selectedThreadKey]);
+  }, []);
   const suppressBranchDriftDialogRef = useRef(
     props.suppressBranchDriftDialog ?? false
   );
@@ -2634,19 +2658,31 @@ export function ThreadView(props: ThreadViewProps) {
             updatingExecutionMode={props.updatingExecutionMode}
           />
 
-          {selectedThreadTerminalOpen && selectedThreadKey ? (
-            <Suspense fallback={null}>
-              <LazyIntegratedTerminal
-                desktopApi={props.desktopApi}
-                threadKey={selectedThreadKey}
-                cwd={selectedThreadTerminalCwd}
-                height={selectedThreadTerminalHeight}
-                onHeightChange={setSelectedThreadTerminalHeight}
-                onClose={closeSelectedThreadTerminal}
-                onExit={handleSelectedThreadTerminalExit}
-              />
-            </Suspense>
-          ) : null}
+          {Object.values(retainedTerminalByThread).map((terminal) => {
+            const terminalVisible =
+              terminal.threadKey === selectedThreadKey &&
+              terminalOpenByThread[terminal.threadKey] === true;
+            return (
+              <Suspense key={terminal.threadKey} fallback={null}>
+                <LazyIntegratedTerminal
+                  desktopApi={props.desktopApi}
+                  threadKey={terminal.threadKey}
+                  cwd={terminal.cwd}
+                  height={terminalHeightByThread[terminal.threadKey] ?? 260}
+                  visible={terminalVisible}
+                  onHeightChange={(height) => {
+                    setTerminalHeightForThread(terminal.threadKey, height);
+                  }}
+                  onClose={() => {
+                    closeTerminalByThread(terminal.threadKey);
+                  }}
+                  onExit={() => {
+                    handleTerminalExitByThread(terminal.threadKey);
+                  }}
+                />
+              </Suspense>
+            );
+          })}
         </div>
 
         <ThreadContextPanel

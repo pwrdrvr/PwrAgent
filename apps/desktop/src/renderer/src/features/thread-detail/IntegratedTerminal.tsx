@@ -17,6 +17,7 @@ type IntegratedTerminalProps = {
   threadKey: string;
   cwd?: string;
   height: number;
+  visible?: boolean;
   onHeightChange: (height: number) => void;
   onClose: () => void;
   onExit: () => void;
@@ -27,6 +28,7 @@ export function IntegratedTerminal({
   threadKey,
   cwd,
   height,
+  visible = true,
   onHeightChange,
   onClose,
   onExit,
@@ -36,7 +38,13 @@ export function IntegratedTerminal({
   const sessionIdRef = useRef<string | undefined>(undefined);
   const pendingInputRef = useRef<string[]>([]);
   const replayingBufferedOutputRef = useRef(false);
+  const fitAndResizeRef = useRef<() => void>(() => undefined);
+  const visibleRef = useRef(visible);
   const [status, setStatus] = useState<string>("Starting shell...");
+
+  useEffect(() => {
+    visibleRef.current = visible;
+  }, [visible]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -93,6 +101,7 @@ export function IntegratedTerminal({
         terminalRef.current = terminal;
 
         const fitAndResize = () => {
+          if (!visibleRef.current) return;
           if (disposed || !desktopApi.resizeIntegratedTerminal) return;
           fitAddon.fit();
           const sessionId = sessionIdRef.current;
@@ -103,6 +112,7 @@ export function IntegratedTerminal({
             rows: terminal.rows,
           });
         };
+        fitAndResizeRef.current = fitAndResize;
 
         const dataDisposable = terminal.onData((data) => {
           if (replayingBufferedOutputRef.current) {
@@ -148,7 +158,9 @@ export function IntegratedTerminal({
                 });
               }
               fitAndResize();
-              terminal.focus();
+              if (visibleRef.current) {
+                terminal.focus();
+              }
             };
             if (response.buffer) {
               replayingBufferedOutputRef.current = true;
@@ -182,9 +194,18 @@ export function IntegratedTerminal({
       sessionIdRef.current = undefined;
       pendingInputRef.current = [];
       replayingBufferedOutputRef.current = false;
+      fitAndResizeRef.current = () => undefined;
       cleanupTerminal?.();
     };
   }, [cwd, desktopApi, threadKey]);
+
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+    fitAndResizeRef.current();
+    terminalRef.current?.focus();
+  }, [height, visible]);
 
   const resizeBy = (delta: number) => {
     onHeightChange(clampTerminalHeight(height + delta));
@@ -254,6 +275,7 @@ export function IntegratedTerminal({
     <section
       className="integrated-terminal"
       aria-label="Integrated terminal"
+      hidden={!visible}
       style={
         {
           "--integrated-terminal-height": `${clampTerminalHeight(height)}px`,
