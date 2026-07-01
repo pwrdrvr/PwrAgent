@@ -47,7 +47,10 @@ import { parseAutomationOutputDecision } from "./automation-output-decision.js";
 import { HeadlessAutomationRunner } from "./automation-runner.js";
 import { AutomationScheduler } from "./automation-scheduler.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
-import { matchAutomationInboundEvent } from "./automation-trigger-matcher.js";
+import {
+  anyAutomationInboundMatch,
+  matchAutomationInboundEvent,
+} from "./automation-trigger-matcher.js";
 import { mergeTranscriptEvents } from "./transcript-merge.js";
 
 const automationServiceLog = getMainLogger("pwragent:automations");
@@ -439,14 +442,8 @@ export class DesktopAutomationService {
   }
 
   async handleMessagingInboundEvent(event: MessagingInboundEvent): Promise<boolean> {
-    if (event.kind !== "text" && event.kind !== "media") {
-      return false;
-    }
-    if (this.options.runtime?.disabled) {
-      return false;
-    }
     const matches = matchAutomationInboundEvent({
-      automations: this.options.store.listEnabledInboundAutomations(),
+      automations: this.enabledInboundAutomations(),
       event,
     });
     if (matches.length === 0) {
@@ -468,21 +465,28 @@ export class DesktopAutomationService {
    * / sender / text) match this event? Used by the messaging runtime to decide
    * whether a message the @mention response mode would otherwise drop must still
    * be delivered so the automation can run. No side effects — the actual run
-   * happens in {@link handleMessagingInboundEvent}.
+   * happens in {@link handleMessagingInboundEvent}, which shares the same
+   * candidate set via {@link enabledInboundAutomations} so the two cannot drift.
    */
   matchesInboundEvent(event: MessagingInboundEvent): boolean {
-    if (event.kind !== "text" && event.kind !== "media") {
-      return false;
-    }
+    return anyAutomationInboundMatch({
+      automations: this.enabledInboundAutomations(),
+      event,
+    });
+  }
+
+  /**
+   * The candidate set for inbound matching: enabled automations that carry an
+   * inbound trigger, or none when automations are disabled at runtime. Kept as a
+   * single source of truth so the delivery-gate predicate (matchesInboundEvent)
+   * and the run path (handleMessagingInboundEvent) always agree. The per-event
+   * kind guard lives in the matcher functions.
+   */
+  private enabledInboundAutomations(): AutomationRecord[] {
     if (this.options.runtime?.disabled) {
-      return false;
+      return [];
     }
-    return (
-      matchAutomationInboundEvent({
-        automations: this.options.store.listEnabledInboundAutomations(),
-        event,
-      }).length > 0
-    );
+    return this.options.store.listEnabledInboundAutomations();
   }
 
   buildThreadSummaries() {

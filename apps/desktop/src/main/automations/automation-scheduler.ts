@@ -176,17 +176,19 @@ export class AutomationScheduler {
       return undefined;
     }
     const active = this.options.store.findActiveRunForAutomation(params.automation.id);
-
-    // drop_missed + busy lane records a visible skipped run but starts no
-    // headless turn, so it must NOT consume a rate-limit token.
-    if (active && params.automation.backlogPolicy === "drop_missed") {
-      const dropped = this.options.store.createRun({
+    const createInboundRun = () =>
+      this.options.store.createRun({
         automationId: params.automation.id,
         trigger: "inbound_message",
         scheduledWindows: [],
         source: params.source,
         now,
       });
+
+    // drop_missed + busy lane records a visible skipped run but starts no
+    // headless turn, so it must NOT consume a rate-limit token.
+    if (active && params.automation.backlogPolicy === "drop_missed") {
+      const dropped = createInboundRun();
       if (dropped) {
         this.options.store.markRunTerminal({
           runId: dropped.id,
@@ -209,13 +211,7 @@ export class AutomationScheduler {
       return undefined;
     }
 
-    const run = this.options.store.createRun({
-      automationId: params.automation.id,
-      trigger: "inbound_message",
-      scheduledWindows: [],
-      source: params.source,
-      now,
-    });
+    const run = createInboundRun();
     if (!run) return undefined;
 
     if (active) {

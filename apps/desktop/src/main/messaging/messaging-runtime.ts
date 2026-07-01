@@ -955,13 +955,15 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
     // @mention-only mode suppresses the bot's NORMAL replies, but it must not
     // starve features with their own per-message config. Keep delivering a
-    // message when an inbound automation's filter (conversation / sender / text)
-    // matches it, or when an editor is live-previewing trigger candidates — the
-    // controller's own ambient gate still blocks a normal agent reply.
-    if (this.options.automationInboundMatches?.(event)) {
+    // message when an editor is live-previewing trigger candidates, or when an
+    // inbound automation's filter (conversation / sender / text) matches it —
+    // the controller's own ambient gate still blocks a normal agent reply.
+    // Check the O(1) preview flag before the automation matcher, which runs a
+    // per-message query.
+    if (hasActiveInboundPreview()) {
       return false;
     }
-    if (hasActiveInboundPreview()) {
+    if (this.options.automationInboundMatches?.(event)) {
       return false;
     }
     return true;

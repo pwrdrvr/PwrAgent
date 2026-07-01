@@ -40,6 +40,29 @@ export function matchAutomationInboundEvent(params: {
   return matches;
 }
 
+/**
+ * Existence-only variant of {@link matchAutomationInboundEvent}: returns true on
+ * the first matching trigger without building the (potentially 4k-bounded) run
+ * source metadata. Used on the @mention-only ambient hot path, where the runtime
+ * only needs a boolean to decide whether to deliver the message.
+ */
+export function anyAutomationInboundMatch(params: {
+  automations: AutomationRecord[];
+  event: MessagingInboundEvent;
+}): boolean {
+  if (params.event.kind !== "text" && params.event.kind !== "media") {
+    return false;
+  }
+  for (const automation of params.automations) {
+    if (automation.status !== "enabled") continue;
+    for (const trigger of automation.triggers) {
+      if (trigger.kind !== "inbound_message") continue;
+      if (matchesInboundTrigger(trigger, params.event)) return true;
+    }
+  }
+  return false;
+}
+
 function matchesInboundTrigger(
   trigger: AutomationInboundMessageTriggerDefinition,
   event: Extract<MessagingInboundEvent, { kind: "text" | "media" }>,
