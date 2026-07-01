@@ -67,6 +67,7 @@ export function PrChip(props: PrChipProps) {
     event.preventDefault();
     event.stopPropagation();
     tooltipController.hide();
+    event.currentTarget.blur();
     props.onOpen(pr.url);
   };
 
