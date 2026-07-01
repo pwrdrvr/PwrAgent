@@ -9741,6 +9741,8 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId?: string;
     itemId?: string;
+    cancelLabel?: string;
+    cancelDescription?: string;
   }): Promise<boolean> {
     const normalizedCwd = toDirectoryId(path.resolve(params.cwd));
     const requestId = `${params.handoffId}:cwd-trust`;
@@ -9777,8 +9779,9 @@ export class DesktopBackendRegistry {
                         "Trust this directory for future Default Access agent work.",
                     },
                     {
-                      label: "Cancel handoff",
+                      label: params.cancelLabel ?? "Cancel handoff",
                       description:
+                        params.cancelDescription ??
                         "Do not add this directory or start the handoff.",
                     },
                   ],
@@ -9847,6 +9850,62 @@ export class DesktopBackendRegistry {
       preferredBackend: params.preferredBackend,
       registeredAt: Date.now(),
     });
+  }
+
+  private async ensureThreadDirectoryAttachmentTrusted(params: {
+    backend: AppServerBackendKind;
+    cwd: string;
+    executionMode: ThreadExecutionMode;
+    sourceOverlay?: ThreadOverlayState;
+    sourceThread?: AppServerThreadSummary;
+    sourceThreadId: string;
+    sourceTurnId: string;
+    callId?: string;
+  }): Promise<PwrAgentThreadOrchestrationResponse | undefined> {
+    if (
+      params.executionMode === "full-access" ||
+      linkedDirectoriesActiveWorkspaceCoversCwd({
+        cwd: params.cwd,
+        overlay: params.sourceOverlay,
+        thread: params.sourceThread,
+      }) ||
+      (await this.directoryLaunchpadCoversCwd(params.cwd))
+    ) {
+      return undefined;
+    }
+
+    const normalizedCwd = toDirectoryId(path.resolve(params.cwd));
+    const confirmed = await this.requestHandoffCwdTrustConfirmation({
+      backend: params.backend,
+      cwd: params.cwd,
+      handoffId: [
+        "attach-directory",
+        params.backend,
+        params.sourceThreadId,
+        params.sourceTurnId,
+        params.callId?.trim() || randomUUID(),
+      ].join(":"),
+      threadId: params.sourceThreadId,
+      turnId: params.sourceTurnId,
+      itemId: params.callId,
+      cancelLabel: "Cancel attachment",
+      cancelDescription: "Do not add this directory to the thread.",
+    });
+    if (!confirmed) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        `The operator did not approve adding ${normalizedCwd} to the Default Access write scope.`,
+        { cwd: normalizedCwd },
+      );
+    }
+
+    await this.ensureHandoffTrustedDirectoryLaunchpad({
+      cwd: params.cwd,
+      preferredBackend: params.backend,
+      parentThreadId: params.sourceThreadId,
+      parentThreadTitle: params.sourceThread?.title,
+    });
+    return undefined;
   }
 
   async ensureDirectoryLaunchpad(
@@ -14938,17 +14997,56 @@ export class DesktopBackendRegistry {
       request.args.workspaceMode ?? "local";
     let rollback: (() => Promise<void>) | undefined;
     try {
+      const sourceOverlay =
+        (await this.overlayStore.getThreadOverlayState({
+          backend,
+          threadId: sourceThreadId,
+        })) ?? undefined;
+      const sourceThread = await this.findThreadForWorkspaceHandoff({
+        backend,
+        callerReason: "attach-thread-directory",
+        threadId: sourceThreadId,
+      });
+      const executionMode =
+        this.activeCodexTurnModes.get(
+          buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
+        ) ??
+        sourceOverlay?.executionMode ??
+        (backend === "codex"
+          ? await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId)
+          : "default");
+      const primaryPath =
+        await this.gitDirectoryService.resolvePrimaryWorkspacePath(sourcePath);
+      if (workspaceMode === "local" && !primaryPath) {
+        throw new Error("path must be inside a Git repository.");
+      }
+      const repositoryPath = primaryPath ?? sourcePath;
+      const trustFailure = await this.ensureThreadDirectoryAttachmentTrusted({
+        backend,
+        cwd: repositoryPath,
+        executionMode,
+        sourceOverlay,
+        sourceThread,
+        sourceThreadId,
+        sourceTurnId,
+        callId: request.context.callId,
+      });
+      if (trustFailure) {
+        return trustFailure;
+      }
+
       const directory =
         workspaceMode === "new_worktree"
           ? await this.createAttachedWorktreeDirectory({
               backend,
               args: request.args,
+              repositoryPath,
               sourceThreadId,
             }).then((result) => {
               rollback = result.rollback;
               return result.directory;
             })
-          : await this.createAttachedLocalDirectory(sourcePath);
+          : await this.createAttachedLocalDirectory(repositoryPath);
 
       const overlay = await this.overlayStore.addLinkedDirectory({
         backend,
@@ -15023,6 +15121,7 @@ export class DesktopBackendRegistry {
   private async createAttachedWorktreeDirectory(params: {
     backend: AppServerBackendKind;
     args: AttachThreadDirectoryToolArgs;
+    repositoryPath?: string;
     sourceThreadId: string;
   }): Promise<{
     directory: LinkedDirectorySummary;
@@ -15030,6 +15129,7 @@ export class DesktopBackendRegistry {
   }> {
     const sourcePath = params.args.path.trim();
     const repositoryPath =
+      params.repositoryPath ??
       (await this.gitDirectoryService.resolvePrimaryWorkspacePath(sourcePath)) ??
       sourcePath;
     const prepared = await this.gitDirectoryService.prepareLaunchpadWorkspace({

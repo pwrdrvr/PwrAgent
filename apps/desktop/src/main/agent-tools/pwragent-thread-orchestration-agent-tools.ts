@@ -107,7 +107,7 @@ function descriptionForOperation(
     case "handoff_task":
       return "Create and start a new PwrAgent Agent thread for a delegated task. Use this when the user asks to hand off or delegate work to a new thread. Omitted settings inherit from the invoking Agent turn. Clean new-thread handoff is the default; use seedMode=fork only when the user asks to fork this thread. Workspace-backed handoffs default to workspaceMode=new_worktree. Use cwd=<source project/repo path> when the delegated thread should be created in a different project than the current thread. In Default Access, an explicit cwd that is not already trusted will trigger an operator confirmation before PwrAgent uses that directory for handoff workspaces. Use groupingMode=subthread for related follow-up work, backports, or forward-ports that should stay grouped under the current thread; combine it with workspaceMode=new_worktree and branchName=<existing base ref> such as origin/main when the related work should start from another branch. Use workspaceMode=same_workspace only when the user explicitly asks to share the caller's exact workspace. Use workspaceMode=project_local only when the delegated thread should run in the project's primary checkout instead of a managed worktree. Handoff startup can take several minutes while a worktree or Codex environment is prepared; if this call appears slow or uncertain, do not call handoff_task again. Use search_threads or get_thread_status and inspect pendingHandoffs until a threadId appears or the handoff reports failed.";
     case "attach_thread_directory":
-      return "Attach an additional Git directory to the current PwrAgent thread. Use this for cross-project work when the user asks to link another repo or create a secondary worktree for another repo. Omitted backend targets the invoking thread. workspaceMode=local attaches the repository directory itself; workspaceMode=new_worktree asks PwrAgent to allocate and attach a managed worktree for the provided repository path. This does not change the thread's primary cwd; use detach_thread_directory separately if a temporary local reference should be removed.";
+      return "Attach an additional Git directory to the current PwrAgent thread. Use this for cross-project work when the user asks to link another repo or create a secondary worktree for another repo. Omitted backend targets the invoking thread. workspaceMode=local attaches the repository directory itself; workspaceMode=new_worktree asks PwrAgent to allocate and attach a managed worktree for the provided repository path. In Default Access, an untrusted path triggers operator confirmation before it can grant agent read/write/delete scope or allocate a managed worktree. This does not change the thread's primary cwd; use detach_thread_directory separately if a temporary local reference should be removed.";
     case "detach_thread_directory":
       return "Detach a secondary linked directory from the current PwrAgent thread. Use this only for user-requested cleanup of extra directory references. The primary provider/runtime cwd cannot be detached. Pass directoryId when known, or path/worktreePath from get_thread_status linked directory metadata.";
     case "move_thread_workspace":
@@ -135,13 +135,13 @@ function inputSchemaForOperation(
           path: {
             type: "string",
             description:
-              "Repository/local checkout path to attach, or to use as the parent repo for a new worktree.",
+              "Repository/local checkout path to attach, or to use as the parent repo for a new worktree. In Default Access, untrusted paths require operator confirmation first.",
           },
           workspaceMode: {
             type: "string",
             enum: ATTACH_THREAD_DIRECTORY_WORKSPACE_MODES,
             description:
-              "`local` attaches the repository directory itself and is the default. `new_worktree` asks PwrAgent to allocate a managed worktree for that repository and attach it.",
+              "`local` attaches the repository directory itself and is the default. `new_worktree` asks PwrAgent to allocate a managed worktree for that repository and attach it after the source repo path is trusted.",
           },
           branchName: {
             type: "string",

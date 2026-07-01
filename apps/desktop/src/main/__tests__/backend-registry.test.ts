@@ -18252,7 +18252,10 @@ script = "printf setup"
     });
     const overlayStore = createOverlayStoreMock({
       overlays: {
-        "codex:agent-thread": createAgentOverlay(),
+        "codex:agent-thread": {
+          ...createAgentOverlay(),
+          executionMode: "full-access",
+        },
       },
     });
     const prepareLaunchpadWorkspace = vi.fn(async () => ({
@@ -18346,13 +18349,135 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("rolls back a managed worktree when owner recording fails", async () => {
+  it("requires confirmation before attaching an untrusted directory in Default Access", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
     });
     const overlayStore = createOverlayStoreMock({
       overlays: {
         "codex:agent-thread": createAgentOverlay(),
+      },
+    });
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: "/worktrees/agent-kit",
+      repositoryPath: "/repo/agent-kit",
+      rollback: vi.fn(async () => undefined),
+      workMode: "worktree" as const,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        resolvePrimaryWorkspacePath: vi.fn(async () => "/repo/agent-kit"),
+      } as never,
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    const responsePromise = codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "attach_thread_directory",
+        arguments: {
+          path: "/repo/agent-kit",
+          workspaceMode: "new_worktree",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    await vi.waitFor(() => {
+      expect(
+        events.find(
+          (event) =>
+            event.notification.method === "item/tool/requestUserInput" &&
+            event.notification.params.threadId === "agent-thread",
+        ),
+      ).toBeDefined();
+    });
+    expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+    const inputRequest = events.find(
+      (event): event is AgentEvent & {
+        notification: Extract<
+          AppServerNotification,
+          { method: "item/tool/requestUserInput" }
+        >;
+      } =>
+        event.notification.method === "item/tool/requestUserInput" &&
+        event.notification.params.threadId === "agent-thread",
+    )!.notification;
+    expect(inputRequest.params.questions).toEqual([
+      expect.objectContaining({
+        id: "trust_directory",
+        question: expect.stringContaining(expectedDir("/repo/agent-kit")),
+      }),
+    ]);
+    await registry.submitServerRequest({
+      backend: "codex",
+      threadId: "agent-thread",
+      turnId: "turn-1",
+      requestId: inputRequest.params.requestId,
+      response: {
+        answers: {
+          trust_directory: {
+            answers: ["Cancel attachment"],
+          },
+        },
+      },
+    });
+
+    const response = await responsePromise;
+
+    expect(response).toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.stringContaining("forbidden"),
+        },
+      ],
+    });
+    expect(prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "agent-thread",
+    });
+    expect(overlay?.extraLinkedDirectories).toEqual([]);
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("rolls back a managed worktree when owner recording fails", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": {
+          ...createAgentOverlay(),
+          executionMode: "full-access",
+        },
       },
     });
     const rollback = vi.fn(async () => undefined);

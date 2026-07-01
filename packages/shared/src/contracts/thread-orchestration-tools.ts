@@ -156,11 +156,16 @@ export type AttachThreadDirectoryToolArgs = {
    * The first implementation supports current-thread attachment only.
    */
   backend?: AppServerBackendKind;
-  /** Repository/local checkout path to attach, or to use as the parent repo for a new worktree. */
+  /**
+   * Repository/local checkout path to attach, or to use as the parent repo for a
+   * new worktree. In Default Access, untrusted paths require operator
+   * confirmation before they grant agent read/write/delete scope.
+   */
   path: string;
   /**
    * `local` attaches the repository directory itself. `new_worktree` asks
-   * PwrAgent to allocate a managed worktree for that repository and attach it.
+   * PwrAgent to allocate a managed worktree for that repository and attach it
+   * after the source repo path is trusted.
    */
   workspaceMode?: AttachThreadDirectoryWorkspaceMode;
   /**
