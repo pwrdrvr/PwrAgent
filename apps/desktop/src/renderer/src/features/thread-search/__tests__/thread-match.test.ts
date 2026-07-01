@@ -111,13 +111,15 @@ describe("mergePrNumberMatches", () => {
 
 describe("threadMatchesQuery", () => {
   const t = thread({
+    id: "7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84",
     title: "Messaging bug",
     gitBranch: "fix/messaging",
     prs: [pr(779)],
     linkedDirectories: [{ id: "d", label: "PwrAgent", path: "/x", kind: "local" }],
   });
 
-  it("matches title, branch, PR number (with or without #), and directory", () => {
+  it("matches id, title, branch, PR number (with or without #), and directory", () => {
+    expect(threadMatchesQuery(t, "7f2f4bd1-8e7b")).toBe(true);
     expect(threadMatchesQuery(t, "messaging")).toBe(true);
     expect(threadMatchesQuery(t, "fix/")).toBe(true);
     expect(threadMatchesQuery(t, "779")).toBe(true);

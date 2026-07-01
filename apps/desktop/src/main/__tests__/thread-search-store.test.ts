@@ -65,6 +65,22 @@ describe("ThreadSearchStore", () => {
     expect(results[0]?.snippets[0]?.scope).toBe("projection");
   });
 
+  it("searches by thread id", () => {
+    store.upsertThread(
+      threadSummary({
+        id: "7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84",
+        title: "Release notes",
+        summary: "Prepared release copy",
+      }),
+    );
+
+    expect(
+      store
+        .search({ query: "7f2f4bd1-8e7b-4d3b-92e5", limit: 10 })
+        .map((result) => result.threadId),
+    ).toEqual(["7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84"]);
+  });
+
   it("falls back to recent projection rows for filter-only searches", () => {
     store.upsertThread(
       threadSummary({ id: "old", title: "Old", updatedAt: 1_000 }),

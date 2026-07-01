@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 22;
+export const CURRENT_STATE_DB_USER_VERSION = 23;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -451,6 +451,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS thread_search_fts USING fts5(
   git_origin_url,
   model,
   backend,
+  thread_id,
   tokenize = "unicode61 remove_diacritics 2 tokenchars '-_./:'"
 );
 `;
@@ -803,6 +804,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 22) {
       db.transaction(() => {
         repairOpenAiThreadUsagePricing(db);
+        db.pragma("user_version = 22");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 23) {
+      db.transaction(() => {
+        ensureThreadSearchFtsThreadIdColumn(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1205,6 +1212,104 @@ function ensureThreadUsagePricingCumulativeColumns(db: BetterSqlite3.Database): 
   }
 }
 
+function ensureThreadSearchFtsThreadIdColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_search_documents")) {
+    db.exec(THREAD_SEARCH_SCHEMA);
+    return;
+  }
+  if (
+    tableExists(db, "thread_search_fts") &&
+    tableColumnExists(db, "thread_search_fts", "thread_id")
+  ) {
+    return;
+  }
+
+  db.exec("DROP TABLE IF EXISTS thread_search_fts");
+  db.exec(THREAD_SEARCH_SCHEMA);
+
+  const rows = db
+    .prepare(
+      `SELECT
+         identity_key,
+         backend,
+         thread_id,
+         title,
+         summary,
+         project_key,
+         git_branch,
+         git_origin_url,
+         model,
+         linked_directories_json
+       FROM thread_search_documents`,
+    )
+    .all() as Array<{
+    backend: string;
+    git_branch: string | null;
+    git_origin_url: string | null;
+    identity_key: string;
+    linked_directories_json: string;
+    model: string | null;
+    project_key: string | null;
+    summary: string | null;
+    thread_id: string;
+    title: string;
+  }>;
+  const insert = db.prepare(
+    `INSERT INTO thread_search_fts (
+       identity_key, title, summary, project_key, directory_labels,
+       directory_paths, git_branch, git_origin_url, model, backend, thread_id
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  for (const row of rows) {
+    const directories = parseThreadSearchLinkedDirectories(
+      row.linked_directories_json,
+    );
+    insert.run(
+      row.identity_key,
+      row.title,
+      row.summary ?? "",
+      row.project_key ?? "",
+      directories.map((directory) => directory.label).join(" "),
+      directories
+        .flatMap((directory) => [directory.path, directory.worktreePath].filter(Boolean))
+        .join(" "),
+      row.git_branch ?? "",
+      row.git_origin_url ?? "",
+      row.model ?? "",
+      row.backend,
+      row.thread_id,
+    );
+  }
+}
+
+function parseThreadSearchLinkedDirectories(value: string): Array<{
+  label?: string;
+  path?: string;
+  worktreePath?: string;
+}> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter(
+        (entry): entry is Record<string, unknown> =>
+          Boolean(entry) && typeof entry === "object",
+      )
+      .map((entry) => ({
+        ...(typeof entry.label === "string" ? { label: entry.label } : {}),
+        ...(typeof entry.path === "string" ? { path: entry.path } : {}),
+        ...(typeof entry.worktreePath === "string"
+          ? { worktreePath: entry.worktreePath }
+          : {}),
+      }));
+  } catch {
+    return [];
+  }
+}
+
 function repairThreadUsageLineCreatedAt(db: BetterSqlite3.Database): void {
   if (
     !tableExists(db, "thread_usage_lines") ||
@@ -1538,6 +1643,7 @@ function tableColumnExists(
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "thread_pricing_summaries"
+    | "thread_search_fts"
     | "thread_usage_lines",
   columnName: string,
 ): boolean {
@@ -1552,6 +1658,7 @@ function readTableInfo(
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "thread_pricing_summaries"
+    | "thread_search_fts"
     | "thread_usage_lines",
 ): Array<{ name: string }> {
   switch (tableName) {
@@ -1569,6 +1676,10 @@ function readTableInfo(
       }>;
     case "thread_pricing_summaries":
       return db.prepare("PRAGMA table_info(thread_pricing_summaries)").all() as Array<{
+        name: string;
+      }>;
+    case "thread_search_fts":
+      return db.prepare("PRAGMA table_info(thread_search_fts)").all() as Array<{
         name: string;
       }>;
     case "thread_usage_lines":

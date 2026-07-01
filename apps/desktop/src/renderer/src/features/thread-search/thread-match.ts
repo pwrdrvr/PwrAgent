@@ -102,6 +102,9 @@ export function threadMatchesQuery(
   if (thread.title.toLowerCase().includes(needle)) {
     return true;
   }
+  if (thread.id.toLowerCase().includes(needle)) {
+    return true;
+  }
   if ((thread.gitBranch ?? "").toLowerCase().includes(needle)) {
     return true;
   }

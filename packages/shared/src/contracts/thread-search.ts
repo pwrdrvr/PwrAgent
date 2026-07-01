@@ -53,6 +53,7 @@ export const THREAD_SEARCH_MATCH_REASON_KINDS = [
   "directory_match",
   "path_match",
   "branch_match",
+  "thread_id_match",
   "backend_match",
   "model_match",
   "pr_number_match",

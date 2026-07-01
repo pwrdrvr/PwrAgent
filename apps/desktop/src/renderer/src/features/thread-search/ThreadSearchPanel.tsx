@@ -96,6 +96,7 @@ const MATCH_REASON_LABELS: Record<ThreadSearchMatchReasonKind, string> = {
   directory_match: "Directory match",
   path_match: "Path match",
   branch_match: "Branch match",
+  thread_id_match: "Thread ID match",
   backend_match: "Backend match",
   model_match: "Model match",
   pr_number_match: "PR match",

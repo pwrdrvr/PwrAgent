@@ -11,6 +11,7 @@ import {
   STATE_DB_WAL_AUTOCHECKPOINT_PAGES,
   StateDb,
 } from "../state/state-db";
+import { ThreadSearchStore } from "../thread-search/thread-search-store";
 
 let stateDb: StateDb;
 let tempDir: string;
@@ -858,6 +859,79 @@ describe("StateDb", () => {
       CURRENT_STATE_DB_USER_VERSION,
     );
   });
+
+  it("migrates thread search FTS rows to include thread ids", () => {
+    stateDb.close();
+
+    const dbPath = path.join(tempDir, "legacy-thread-search-fts-state.db");
+    const raw = openRawDb(dbPath);
+    raw.exec(`
+      PRAGMA user_version = 22;
+      CREATE TABLE thread_search_documents (
+        identity_key            TEXT PRIMARY KEY,
+        backend                 TEXT NOT NULL,
+        thread_id               TEXT NOT NULL,
+        title                   TEXT NOT NULL,
+        title_source            TEXT,
+        summary                 TEXT,
+        project_key             TEXT,
+        created_at              INTEGER,
+        updated_at              INTEGER,
+        archived_at             INTEGER,
+        git_branch              TEXT,
+        git_origin_url          TEXT,
+        model                   TEXT,
+        linked_directories_json TEXT NOT NULL,
+        display_json            TEXT NOT NULL,
+        indexed_at              INTEGER NOT NULL
+      );
+      CREATE VIRTUAL TABLE thread_search_fts USING fts5(
+        identity_key UNINDEXED,
+        title,
+        summary,
+        project_key,
+        directory_labels,
+        directory_paths,
+        git_branch,
+        git_origin_url,
+        model,
+        backend,
+        tokenize = "unicode61 remove_diacritics 2 tokenchars '-_./:'"
+      );
+      INSERT INTO thread_search_documents (
+        identity_key, backend, thread_id, title, title_source, summary,
+        project_key, created_at, updated_at, archived_at, git_branch,
+        git_origin_url, model, linked_directories_json, display_json, indexed_at
+      ) VALUES (
+        'codex:7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84',
+        'codex',
+        '7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84',
+        'Release notes',
+        'derived',
+        'Prepared release copy',
+        'PwrAgent',
+        1000,
+        1000,
+        NULL,
+        'feat/release',
+        NULL,
+        'gpt-5.5',
+        '[{"id":"dir-1","label":"PwrAgent","path":"/repo/PwrAgent","kind":"local"}]',
+        '{}',
+        1000
+      );
+    `);
+    raw.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    expect(columnNames("thread_search_fts")).toContain("thread_id");
+    expect(
+      new ThreadSearchStore(stateDb)
+        .search({ query: "7f2f4bd1-8e7b-4d3b-92e5", limit: 10 })
+        .map((result) => result.threadId),
+    ).toEqual(["7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84"]);
+  });
 });
 
 function openRawDb(dbPath: string): BetterSqlite3.Database {
@@ -884,6 +958,7 @@ function columnNames(
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "thread_pricing_summaries"
+    | "thread_search_fts"
     | "thread_usage_lines",
 ): string[] {
   const rows = readTableInfo(tableName);
@@ -915,6 +990,7 @@ function readTableInfo(
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "thread_pricing_summaries"
+    | "thread_search_fts"
     | "thread_usage_lines",
 ): Array<{ name: string }> {
   switch (tableName) {
@@ -929,6 +1005,10 @@ function readTableInfo(
     case "thread_pricing_summaries":
       return stateDb.raw
         .prepare("PRAGMA table_info(thread_pricing_summaries)")
+        .all() as Array<{ name: string }>;
+    case "thread_search_fts":
+      return stateDb.raw
+        .prepare("PRAGMA table_info(thread_search_fts)")
         .all() as Array<{ name: string }>;
     case "thread_usage_lines":
       return stateDb.raw
