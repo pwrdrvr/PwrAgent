@@ -13522,6 +13522,26 @@ textarea,
   max-width: calc(100vw - 32px);
 }
 
+.review-branch-picker {
+  position: relative;
+  width: min(100%, 640px);
+  max-width: 100%;
+}
+
+.review-branch-picker .composer__review-input {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.review-branch-picker__menu {
+  right: auto;
+  left: 0;
+  z-index: 45;
+  min-width: min(100%, 420px);
+  width: min(640px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+}
+
 .branch-picker__list {
   display: flex;
   flex-direction: column;
