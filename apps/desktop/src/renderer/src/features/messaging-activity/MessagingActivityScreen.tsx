@@ -1,10 +1,18 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import type {
   MessagingActivityEntry,
   MessagingActivityKind,
 } from "@pwragent/shared";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { ChevronRightIcon } from "../../icons";
 import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
@@ -29,6 +37,13 @@ const KIND_TONE: Record<MessagingActivityKind, "ok" | "warning" | "error" | "mut
   binding: "ok",
   diagnostic: "warning",
 };
+/** Which pane, if any, is collapsed to header-only. */
+type CollapsedPane = "top" | "bottom" | null;
+
+const MIN_SPLIT = 0.15;
+const MAX_SPLIT = 0.85;
+const DEFAULT_SPLIT = 0.62;
+
 /**
  * Read-only view of the recent messaging activity log: routed inbound,
  * rejected inbound (unauthorized senders), ignored inbound (post-revoke),
@@ -37,25 +52,26 @@ const KIND_TONE: Record<MessagingActivityKind, "ok" | "warning" | "error" | "mut
  *
  * Polls every 5s while open. The renderer doesn't subscribe to a push
  * event because the activity log writes are best-effort and a dropped
- * tick is fine (we'll catch up on the next poll).
+ * tick is fine (we'll catch up on the next poll). No manual Refresh
+ * control — the 5s poll keeps the two panes current on its own.
+ *
+ * The body is two panes — "Bound activity" and "Attention" — split by a
+ * draggable divider; each pane header is a collapse toggle so the other
+ * pane can take the full height.
  */
 export function MessagingActivityScreen(props: { desktopApi?: DesktopApi }) {
   const desktopApi = props.desktopApi;
   const [entries, setEntries] = useState<MessagingActivityEntry[]>([]);
   const [error, setError] = useState<string | undefined>(undefined);
-  const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!desktopApi?.listMessagingActivity) return;
-    setLoading(true);
     setError(undefined);
     try {
       const result = await desktopApi.listMessagingActivity({ limit: 200 });
       setEntries(result.entries);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setLoading(false);
     }
   }, [desktopApi]);
 
@@ -69,79 +85,137 @@ export function MessagingActivityScreen(props: { desktopApi?: DesktopApi }) {
 
   const groups = groupByKind(entries);
 
-  return (
-    <section className="messaging-activity" aria-label="Messaging activity">
-      {/* Pinned header card — eyebrow + title + helper paragraph + Refresh. */}
-      <section
-        className="settings-panel messaging-activity__head"
-        aria-labelledby="messaging-activity-title"
-      >
-        <div className="settings-panel__header">
-          <div>
-            <p className="eyebrow">Messaging</p>
-            <h2 id="messaging-activity-title">Activity</h2>
-          </div>
-          <button
-            className="button button--secondary"
-            disabled={loading || !desktopApi?.listMessagingActivity}
-            type="button"
-            onClick={() => void refresh()}
-          >
-            {loading ? "Loading…" : "Refresh"}
-          </button>
-        </div>
-        <p className="settings-panel__hint">
-          Last {entries.length} events across all configured messaging platforms.
-          Capped per-platform with FIFO eviction; older history is not retained.
-        </p>
-        {error ? (
-          <p className="settings-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-      </section>
+  // Split between the two panes. `splitFraction` is the top pane's share of
+  // the container height when neither pane is collapsed; the divider drags it.
+  // Collapsing a pane pins it to header height and lets the other fill.
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [splitFraction, setSplitFraction] = useState(DEFAULT_SPLIT);
+  const [collapsed, setCollapsed] = useState<CollapsedPane>(null);
 
-      {/* Primary list — fills available height with internal scroll. */}
+  const toggleCollapse = useCallback((pane: Exclude<CollapsedPane, null>) => {
+    setCollapsed((current) => (current === pane ? null : pane));
+  }, []);
+
+  const startDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const container = containerRef.current;
+    if (!container) return;
+    event.preventDefault();
+    const rect = container.getBoundingClientRect();
+    const onMove = (move: PointerEvent) => {
+      if (rect.height <= 0) return;
+      const fraction = (move.clientY - rect.top) / rect.height;
+      setSplitFraction(Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, fraction)));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = "row-resize";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, []);
+
+  return (
+    <section
+      className="messaging-activity"
+      aria-label="Messaging activity"
+      ref={containerRef}
+    >
+      {error ? (
+        <p className="settings-error messaging-activity__error" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      {/* Primary list. */}
       <ActivitySection
-        className="messaging-activity__main"
+        className="messaging-activity__pane messaging-activity__pane--top"
+        style={paneStyleFor("top", collapsed, splitFraction)}
         title="Bound activity"
         emptyLabel="No bound conversations have sent messages recently."
         kinds={["binding", "inbound-routed", "outbound"]}
         groups={groups}
+        collapsed={collapsed === "top"}
+        onToggleCollapse={() => toggleCollapse("top")}
       />
 
-      {/* Secondary list — capped at ~5 rows tall; internal scroll if longer.
-          Stays pinned to the bottom of the pane. */}
+      {/* Draggable divider — only meaningful when both panes are open. */}
+      {collapsed === null ? (
+        <div
+          className="messaging-activity__divider"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize sections"
+          onPointerDown={startDrag}
+        >
+          <span className="messaging-activity__divider-grip" aria-hidden="true" />
+        </div>
+      ) : null}
+
+      {/* Secondary list — rejections, pairing, delivery diagnostics. */}
       <ActivitySection
-        className="messaging-activity__aside"
+        className="messaging-activity__pane messaging-activity__pane--bottom"
+        style={paneStyleFor("bottom", collapsed, splitFraction)}
         title="Attention"
         emptyLabel="No rejected messages, pairing attempts, or delivery diagnostics."
         kinds={["diagnostic", "inbound-rejected", "inbound-ignored", "pairing"]}
         groups={groups}
+        collapsed={collapsed === "bottom"}
+        onToggleCollapse={() => toggleCollapse("bottom")}
       />
     </section>
   );
 }
 
+/**
+ * Flex sizing for one pane given the collapse state:
+ * - this pane collapsed → header height only (`flex: 0 0 auto`).
+ * - the other pane collapsed → fill the remaining space.
+ * - neither collapsed → share the container by `splitFraction`.
+ */
+function paneStyleFor(
+  pane: Exclude<CollapsedPane, null>,
+  collapsed: CollapsedPane,
+  splitFraction: number,
+): CSSProperties {
+  if (collapsed === pane) return { flex: "0 0 auto" };
+  if (collapsed !== null) return { flexGrow: 1, flexBasis: 0, minHeight: 0 };
+  const grow = pane === "top" ? splitFraction : 1 - splitFraction;
+  return { flexGrow: grow, flexBasis: 0, minHeight: 0 };
+}
+
 function ActivitySection(props: {
   className?: string;
+  style?: CSSProperties;
   title: string;
   emptyLabel: string;
   kinds: MessagingActivityKind[];
   groups: Record<MessagingActivityKind, MessagingActivityEntry[]>;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
 }) {
   const entries = props.kinds.flatMap((kind) => props.groups[kind] ?? []);
   entries.sort((left, right) => right.createdAt - left.createdAt);
   const className = `settings-panel${props.className ? ` ${props.className}` : ""}`;
   return (
-    <section className={className} aria-label={props.title}>
-      <div className="settings-panel__header">
-        <div>
-          <p className="eyebrow">Messaging</p>
-          <h2>{props.title}</h2>
-        </div>
-      </div>
-      {entries.length === 0 ? (
+    <section className={className} style={props.style} aria-label={props.title}>
+      <button
+        type="button"
+        className="messaging-activity-pane__header"
+        aria-expanded={!props.collapsed}
+        onClick={props.onToggleCollapse}
+      >
+        <ChevronRightIcon
+          size={14}
+          className={`messaging-activity-pane__chevron${
+            props.collapsed ? "" : " messaging-activity-pane__chevron--open"
+          }`}
+        />
+        <h2>{props.title}</h2>
+        <span className="messaging-activity-pane__count">{entries.length}</span>
+      </button>
+      {props.collapsed ? null : entries.length === 0 ? (
         <p className="settings-empty messaging-activity-empty">{props.emptyLabel}</p>
       ) : (
         <ul className="messaging-activity-list">
