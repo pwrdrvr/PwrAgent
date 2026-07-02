@@ -679,6 +679,15 @@ export class SlackAdapter implements SlackProviderAdapter {
       channelId: ids.channelId,
       channelType: event.channel_type,
     });
+
+    // In a group DM the bot only answers when explicitly @mentioned. A message
+    // that doesn't mention the bot isn't addressed to it, so ignore it silently
+    // *before* authorization — otherwise an ordinary group-DM message from a
+    // non-authorized participant would be logged as a scary "rejected" event
+    // even though it was never meant for the bot. Slash commands and pairing
+    // are explicit invocations and are exempt.
+    if (isGroupDm && !isMention && !command && !isPairingMessage) return;
+
     if (!this.authorizeInbound({
       actor,
       channel,
@@ -688,11 +697,6 @@ export class SlackAdapter implements SlackProviderAdapter {
       routingState,
       teamId: ids.teamId,
     })) return;
-
-    // In a group DM the bot only answers when explicitly @mentioned, so it
-    // doesn't chime in on every message in a multi-person conversation. Slash
-    // commands and pairing messages are explicit invocations and are exempt.
-    if (isGroupDm && !isMention && !command && !isPairingMessage) return;
 
     if (event.files?.length) {
       await this.listener({

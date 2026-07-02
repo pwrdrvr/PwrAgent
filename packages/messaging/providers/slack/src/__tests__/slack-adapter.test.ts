@@ -1235,6 +1235,47 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("ignores (does not reject) a non-mention group DM message from a non-authorized participant", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedTeamIds: [],
+        groupDmAccessMode: "authorized_users",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    // A non-authorized participant chatting in the group DM (mentioning another
+    // human, not the bot) must be ignored silently — no scary "rejected" event.
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "G012ABCDEF0",
+        channel_type: "mpim",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U999UNKNOWN0",
+        text: "<@U777HUMAN00> did you see this?",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([]);
+  });
+
   it("allows DMs from authorized actors when the authorized workspace list is empty", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
