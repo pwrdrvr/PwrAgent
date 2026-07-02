@@ -81,6 +81,7 @@ import type {
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
 import {
+  evictStaleStreamAnchors,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   messagingQuestionnaireAnswerComplete,
   normalizeMessagingQuestionnaireIntent,
@@ -3120,6 +3121,10 @@ export class MessagingController {
           text: delta.delta,
         };
     this.assistantStreamBuffers.set(bufferKey, buffer);
+    // Bound the buffer map: a turn whose late deltas arrive after its terminal
+    // flush re-creates an entry that no later terminal event clears. Cap it so
+    // those orphans are reclaimed rather than accumulating for the process life.
+    evictStaleStreamAnchors(this.assistantStreamBuffers);
 
     // Streaming off: keep accumulating deltas (the terminal flush still needs
     // the buffered text — e.g. ACP turns whose only output arrives as deltas)
