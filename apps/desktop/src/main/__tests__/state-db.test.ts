@@ -892,17 +892,15 @@ describe("StateDb", () => {
     ).toEqual(["7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84"]);
   });
 
-  it("advances stale thread search FTS tables from intervening user versions", () => {
+  it("repairs stale thread search FTS tables without downgrading newer versions", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "intervening-version-thread-search-fts.db");
+    const dbPath = path.join(tempDir, "newer-version-thread-search-fts.db");
     createLegacyThreadSearchFtsDb(dbPath, 24);
 
     stateDb = StateDb.open(dbPath);
 
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
-      CURRENT_STATE_DB_USER_VERSION,
-    );
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(24);
     expect(columnNames("thread_search_fts")).toContain("thread_id");
   });
 });
