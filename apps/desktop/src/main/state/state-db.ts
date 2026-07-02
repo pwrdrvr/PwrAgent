@@ -1272,9 +1272,19 @@ function ensureThreadSearchFtsThreadIdColumn(db: BetterSqlite3.Database): void {
       row.git_origin_url ?? "",
       row.model ?? "",
       row.backend,
-      row.thread_id,
+      buildThreadSearchFtsThreadIdText(row.thread_id),
     );
   }
+}
+
+function buildThreadSearchFtsThreadIdText(threadId: string): string {
+  const variants = new Set([threadId]);
+  for (const match of threadId.matchAll(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+  )) {
+    variants.add(match[0]);
+  }
+  return [...variants].join(" ");
 }
 
 function parseThreadSearchLinkedDirectories(value: string): Array<{

@@ -81,6 +81,26 @@ describe("ThreadSearchStore", () => {
     ).toEqual(["7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84"]);
   });
 
+  it("searches by prefixed ACP thread ids and their embedded UUIDs", () => {
+    store.upsertThread(
+      threadSummary({
+        id: "session_e31f5e66-7410-4235-aa19-3bbb63ee8c3d",
+        title: "Kimi session",
+      }),
+    );
+
+    expect(
+      store
+        .search({ query: "session_e31f5e66", limit: 10 })
+        .map((result) => result.threadId),
+    ).toEqual(["session_e31f5e66-7410-4235-aa19-3bbb63ee8c3d"]);
+    expect(
+      store
+        .search({ query: "e31f5e66", limit: 10 })
+        .map((result) => result.threadId),
+    ).toEqual(["session_e31f5e66-7410-4235-aa19-3bbb63ee8c3d"]);
+  });
+
   it("falls back to recent projection rows for filter-only searches", () => {
     store.upsertThread(
       threadSummary({ id: "old", title: "Old", updatedAt: 1_000 }),

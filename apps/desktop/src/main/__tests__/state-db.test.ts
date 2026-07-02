@@ -874,6 +874,11 @@ describe("StateDb", () => {
         .search({ query: "7f2f4bd1-8e7b-4d3b-92e5", limit: 10 })
         .map((result) => result.threadId),
     ).toEqual(["7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84"]);
+    expect(
+      new ThreadSearchStore(stateDb)
+        .search({ query: "e31f5e66", limit: 10 })
+        .map((result) => result.threadId),
+    ).toEqual(["session_e31f5e66-7410-4235-aa19-3bbb63ee8c3d"]);
   });
 
   it("repairs stale thread search FTS tables even at current user_version", () => {
@@ -952,6 +957,23 @@ function createLegacyThreadSearchFtsDb(
         'codex',
         '7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84',
         'Release notes',
+        'derived',
+        'Prepared release copy',
+        'PwrAgent',
+        1000,
+        1000,
+        NULL,
+        'feat/release',
+        NULL,
+        'gpt-5.5',
+        '[{"id":"dir-1","label":"PwrAgent","path":"/repo/PwrAgent","kind":"local"}]',
+        '{}',
+        1000
+      ), (
+        'codex:session_e31f5e66-7410-4235-aa19-3bbb63ee8c3d',
+        'codex',
+        'session_e31f5e66-7410-4235-aa19-3bbb63ee8c3d',
+        'Kimi session',
         'derived',
         'Prepared release copy',
         'PwrAgent',

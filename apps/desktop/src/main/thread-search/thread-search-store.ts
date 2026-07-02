@@ -130,7 +130,7 @@ export class ThreadSearchStore {
           thread.gitOriginUrl ?? "",
           thread.model ?? "",
           thread.source,
-          thread.id,
+          buildThreadIdSearchText(thread.id),
         );
     });
 
@@ -282,6 +282,16 @@ function queryMatchesIdentifier(query: string | undefined, identifier: string): 
   return needle !== undefined && needle.length > 0
     ? identifier.toLowerCase().includes(needle)
     : false;
+}
+
+function buildThreadIdSearchText(threadId: string): string {
+  const variants = new Set([threadId]);
+  for (const match of threadId.matchAll(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+  )) {
+    variants.add(match[0]);
+  }
+  return [...variants].join(" ");
 }
 
 function buildFilterWhereClause(filters: ThreadSearchFilters | undefined): {
