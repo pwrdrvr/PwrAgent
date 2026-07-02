@@ -6,6 +6,7 @@ import {
   type MessagingCallbackHandleRecord,
   type MessagingInboundEvent,
   type MessagingRejectedInboundEvent,
+  type MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { LineAdapter, verifyLineSignature, type LineApi } from "../line-adapter.ts";
 import type { LineMessagingConfig } from "../line-config.ts";

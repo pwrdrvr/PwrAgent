@@ -30,6 +30,7 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
+  evictStaleStreamAnchors,
   looksLikePairingAttempt,
   layoutMessagingActionRows,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
@@ -1064,6 +1065,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           }
           anchor.text = chunkText;
           firstOutcome ??= "updated";
+          // Record every real API call (edit, including a "not modified" no-op
+          // Telegram still processed) so the per-chat rate limiter doesn't
+          // undercount when a long response spans several messages this tick.
+          this.recordStreamRateLimitDelivery({
+            chatId: anchor.chatId,
+            messageId: anchor.messageId,
+            messageThreadId: anchor.messageThreadId,
+          });
         } else {
           const message = await this.bot.api.sendMessage({
             chat_id: target.chatId,
@@ -1079,6 +1088,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
             text: chunkText,
           };
           firstOutcome ??= "presented";
+          this.recordStreamRateLimitDelivery({
+            chatId: target.chatId,
+            messageId: message.message_id,
+            messageThreadId: target.messageThreadId,
+          });
         }
       }
       const head = anchors[0]!;
@@ -1091,11 +1105,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         this.streamSurfaces.delete(intent.stream.key);
       } else {
         this.streamSurfaces.set(intent.stream.key, anchors);
+        evictStaleStreamAnchors(this.streamSurfaces);
       }
       this.options.logger?.debug(
         `telegram stream update final=${intent.stream.isFinal} sequence=${intent.stream.sequence} chunks=${chunks.length} target=${this.compactTypingTarget(surfaceTarget)} stream=${intent.stream.key}`,
       );
-      this.recordStreamRateLimitDelivery(surfaceTarget);
       return {
         channel: this.channel,
         deliveredAt: this.now(),

@@ -14,6 +14,7 @@ import type {
   MessagingAdapterDiagnosticEvent,
   MessagingInboundEvent,
   MessagingRejectedInboundEvent,
+  MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 
 const baseConfig = {

@@ -34,6 +34,7 @@ import type {
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
 import {
+  evictStaleStreamAnchors,
   extractMessagingPairingToken,
   splitTextForDelivery,
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
@@ -1114,6 +1115,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         this.streamSurfaces.delete(intent.stream.key);
       } else {
         this.streamSurfaces.set(intent.stream.key, anchors);
+        evictStaleStreamAnchors(this.streamSurfaces);
       }
       const head = anchors[0]!;
       return {

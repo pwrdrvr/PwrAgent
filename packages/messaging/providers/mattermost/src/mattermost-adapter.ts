@@ -37,6 +37,7 @@ import type {
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
 import {
+  evictStaleStreamAnchors,
   extractMessagingPairingToken,
   splitTextForDelivery,
 } from "@pwragent/messaging-interface";
@@ -2178,6 +2179,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         this.streamSurfaces.delete(streamKey);
       } else {
         this.streamSurfaces.set(streamKey, anchors);
+        evictStaleStreamAnchors(this.streamSurfaces);
       }
       const head = anchors[0]!;
       return {

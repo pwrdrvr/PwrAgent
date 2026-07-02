@@ -21,6 +21,7 @@ export {
   splitTextForDelivery,
   type MessageTextMeasure,
 } from "./text-splitting";
+export { evictStaleStreamAnchors } from "./stream-anchors";
 // Re-export shared messaging primitives so consumers can pick either
 // import path without seeing two parallel declarations.
 export {

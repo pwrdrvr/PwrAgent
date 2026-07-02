@@ -167,6 +167,7 @@ import {
   formatPermissionsActionDisplayLabel,
   formatPermissionsLineDisplayLabel,
   handoffRequestFromValue,
+  messagingStreamingResponsesEnabled,
   messagingToolUpdateModeChoices,
   nextMessagingStreamingResponseMode,
   resolveMessagingStreamingResponseMode,
@@ -3092,8 +3093,10 @@ export class MessagingController {
   private isStreamingResponsesEnabledForBinding(
     binding: MessagingBindingRecord,
   ): boolean {
-    const mode = binding.preferences?.streamingResponses ?? "inherit";
-    return mode === "inherit" ? this.streamingResponsesDefault : mode === "enabled";
+    return messagingStreamingResponsesEnabled(
+      resolveMessagingStreamingResponseMode(binding),
+      this.streamingResponsesDefault,
+    );
   }
 
   private async deliverAssistantStreamUpdate(
@@ -12540,10 +12543,10 @@ function newThreadOptionsForSession(
     supportsFast,
     supportsModel: models.length > 0,
     supportsReasoning,
-    streamingResponses:
-      streamingMode === "inherit"
-        ? streamingResponsesDefault
-        : streamingMode === "enabled",
+    streamingResponses: messagingStreamingResponsesEnabled(
+      streamingMode,
+      streamingResponsesDefault,
+    ),
     workMode,
   };
 }
@@ -13250,6 +13253,19 @@ function isAutomationRunOutputDecision(
   return kind === "post_card" || kind === "quiet" || kind === "parse_failed";
 }
 
+/**
+ * True for a mid-stream (non-final) `agentMessage` completion — a phased item
+ * whose phase is neither `final` nor `final_answer` (e.g. Codex `commentary`).
+ * These are suppressed on messaging so a turn posts one answer, not a message
+ * per intermediate phase.
+ *
+ * Assumption: a backend marks its user-facing answer with the `final` /
+ * `final_answer` phase (or no phase). If a future backend used a different phase
+ * string for its terminal text, this would treat it as intermediate — but the
+ * answer would still reach messaging via the `turn/completed` output text (see
+ * {@link assistantTextForBackendEvent}), so nothing is lost, only slightly
+ * delayed to turn end. Widen the allowlist here if that assumption changes.
+ */
 function isNonFinalAssistantTextForBackendEvent(event: AgentEvent): boolean {
   if (event.notification.method !== "item/completed") {
     return false;

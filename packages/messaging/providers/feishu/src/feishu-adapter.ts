@@ -34,6 +34,7 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
+  evictStaleStreamAnchors,
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   splitTextForDelivery,
@@ -832,6 +833,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         this.streamSurfaces.delete(streamKey);
       } else {
         this.streamSurfaces.set(streamKey, anchors);
+        evictStaleStreamAnchors(this.streamSurfaces);
       }
       return {
         outcome: firstOutcome ?? "updated",

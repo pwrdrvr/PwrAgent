@@ -35,6 +35,7 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
+  evictStaleStreamAnchors,
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
 } from "@pwragent/messaging-interface";
@@ -686,6 +687,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         this.streamSurfaces.delete(intent.stream.key);
       } else {
         this.streamSurfaces.set(intent.stream.key, anchors);
+        evictStaleStreamAnchors(this.streamSurfaces);
       }
       const head = anchors[0]!;
       return {
