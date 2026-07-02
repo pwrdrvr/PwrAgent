@@ -138,6 +138,29 @@ describe("ThreadRow chip flow", () => {
     expect(bindingChip?.textContent).not.toContain("sl");
   });
 
+  it("labels a Slack group DM (mpim) as a Group DM, not a channel", () => {
+    const groupDmBinding: MessagingThreadBindingSummary = {
+      ...telegramBinding,
+      bindingId: "binding-slack-gdm",
+      platform: "slack",
+      conversationKind: "channel",
+      conversationTitle: "mpdm-hhunt--pankaj--pwragent_hhunt-1",
+    };
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        messagingBindings: [groupDmBinding],
+        reactions: [],
+      },
+    });
+    const bindingChip = container.querySelector(".thread-row__chip--binding");
+    expect(bindingChip?.textContent).toContain("Group DM");
+    expect(bindingChip?.textContent).not.toContain("Channel");
+    const ariaLabel = bindingChip?.getAttribute("aria-label") ?? "";
+    expect(ariaLabel).toContain("Type: Group DM");
+    expect(ariaLabel).toContain("hhunt, pankaj, pwragent_hhunt");
+  });
+
   it("renders Feishu / Lark binding chips with the Lark icon", () => {
     const feishuBinding: MessagingThreadBindingSummary = {
       ...telegramBinding,
