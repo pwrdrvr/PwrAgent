@@ -862,7 +862,7 @@ export function MessagingSettings(props: {
               "user",
             )}
             label="Authorized User IDs"
-            sub="Slack user IDs that count as authorized users below."
+            sub="Slack user IDs that count as authorized users below. An authorized user can also reach the bot in a group DM (the bot replies when @mentioned there)."
             help="Slack user IDs start with U or W, e.g. U012ABCDEF0. Rejected Slack messages show the user ID in Messaging Activity."
             source={optionalListSourceBadge(slack.authorizedUserIds)}
             validateEntry={validateSlackUserIdEntry}
@@ -881,7 +881,7 @@ export function MessagingSettings(props: {
           <SegmentedField
             disabled={props.saving}
             label="DM access"
-            sub="Who may DM the bot directly. Authorized users only is the safest default; the team and channel gates below do not apply to DMs."
+            sub="Who may DM the bot directly. Authorized users only is the safest default; the team and channel gates below do not apply to DMs. Group DMs are always authorized-users-only (with an @mention); No DMs turns off group DMs too."
             options={DM_ACCESS_MODE_OPTIONS}
             source={sourceBadge(slack.dmAccessMode)}
             value={slack.dmAccessMode.value}

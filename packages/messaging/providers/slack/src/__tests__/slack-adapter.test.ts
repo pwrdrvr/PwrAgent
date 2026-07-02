@@ -1542,6 +1542,75 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("routes group DM Block Kit callbacks for an authorized user despite restricted gates", async () => {
+    const socket = fakeSocket();
+    const store = fakeStore();
+    const spies: { posted: unknown[] } = { posted: [] };
+    // Lock the team/channel gates and leave the allowlists empty: a group DM
+    // must still work for an authorized user (callbacks, not just messages).
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedTeamIds: [],
+        teamAuthorizationMode: "approved_only",
+        channelAuthorizationMode: "approved_only",
+      },
+      callbackHandleStore: store,
+      api: fakeApi(spies),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const delivered: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      delivered.push(event);
+    });
+
+    await adapter.deliver({
+      id: "resume-prompt-gdm",
+      kind: "status",
+      createdAt: 1,
+      status: "waiting",
+      text: "Resume?",
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        channel: {
+          channel: "slack",
+          conversation: { id: "C0BETJEH87L", kind: "channel" },
+        },
+        occurredAt: 1,
+      },
+      actions: [{ id: "resume", label: "Resume", style: "primary" }],
+    });
+    const posted = spies.posted[0] as {
+      blocks: Array<{
+        elements?: Array<{ action_id?: string; value?: string }>;
+      }>;
+    };
+    const button = posted.blocks.flatMap((block) => block.elements ?? [])[0]!;
+
+    await socket.emitEvent("interactive", {
+      ack: async () => undefined,
+      body: {
+        type: "block_actions",
+        user: { id: "U012ABCDEF0", username: "alice" },
+        team: { id: "T012ABCDEF0" },
+        channel: { id: "C0BETJEH87L", name: "mpdm-hhunt--pankaj--pwragent_hhunt-1" },
+        message: { ts: "1712023032.123456" },
+        actions: [button],
+      },
+    });
+
+    expect(delivered).toEqual([
+      expect.objectContaining({
+        kind: "callback",
+        actionId: "resume",
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({ id: "C0BETJEH87L" }),
+        }),
+      }),
+    ]);
+  });
+
   it("resolves callback buttons after restart when no Slack signing secret is configured", async () => {
     const { signingSecret: _signingSecret, ...config } = baseConfig;
     const store = fakeStore();

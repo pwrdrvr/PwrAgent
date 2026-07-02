@@ -666,7 +666,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       : parseCommand(text);
     const kind = command ? "command" : event.files?.length ? "media" : "text";
 
-    const isGroupDm = event.channel_type === "mpim";
+    const isGroupDm = isSlackGroupDm({ channelType: event.channel_type });
     if (!this.authorizeInbound({
       actor,
       channel,
@@ -770,6 +770,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       actor,
       channel,
       kind: "callback",
+      isGroupDm: isSlackGroupDm({ channelName: body.channel?.name }),
       routingState,
       teamId: ids.teamId,
     })) {
@@ -835,6 +836,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       actor,
       channel,
       kind: "command",
+      isGroupDm: isSlackGroupDm({ channelName: body.channel_name }),
       routingState,
       teamId: ids.teamId,
     })) {
@@ -1219,10 +1221,13 @@ export class SlackAdapter implements SlackProviderAdapter {
 
     // Group DMs (multi-person IMs) are driven by the authorized-user list, not
     // the team/channel gates — a Slack "team" is the workspace, not a group
-    // DM. If an authorized user messages the bot in a group DM, it may respond;
-    // the caller additionally requires an @mention there. Unauthorized senders
-    // are rejected regardless of who else is in the group DM.
+    // DM. An authorized user in a group DM may interact (the caller additionally
+    // requires an @mention for messages); unauthorized senders are rejected
+    // regardless of who else is in the group DM. "No DMs" disables group DMs too.
     if (params.isGroupDm) {
+      if (slackDmAccessMode(this.config) === "none") {
+        return reject("unauthorized-conversation");
+      }
       if (!actorAuthorized) return reject("unauthorized-actor");
       return true;
     }
@@ -1809,6 +1814,20 @@ function slackChannelUserAccessMode(
   config: SlackMessagingConfig,
 ): MessagingChannelUserAccessMode {
   return config.channelUserAccessMode ?? SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT;
+}
+
+/**
+ * Detect a Slack multi-person DM (mpim / "group DM"). Message events carry
+ * `channel_type: "mpim"`; interactive (block action) and slash payloads carry
+ * only a channel name, but Slack always names group DMs `mpdm-…`. Both signals
+ * are checked so every inbound path (message, callback, slash) agrees.
+ */
+function isSlackGroupDm(params: {
+  channelType?: string;
+  channelName?: string;
+}): boolean {
+  if (params.channelType === "mpim") return true;
+  return params.channelName?.startsWith("mpdm") ?? false;
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
