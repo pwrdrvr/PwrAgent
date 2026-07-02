@@ -4554,6 +4554,9 @@ function PairingBlock(props: {
   const [observedChatBucketId, setObservedChatBucketId] = useState<
     string | undefined
   >(undefined);
+  const [approvedTargets, setApprovedTargets] = useState<
+    MessagingPairingApprovalTarget[]
+  >([]);
   const [approving, setApproving] = useState(false);
   // Pairings approved during this wizard session, in order. Rendered
   // as a compact summary once at least one pairing has been approved.
@@ -4586,10 +4589,36 @@ function PairingBlock(props: {
         );
         setObservedChatKind(event.entry.observedChat?.kind);
         setObservedChatBucketId(event.entry.observedChat?.bucketId);
+        setApprovedTargets(event.entry.approvedTargets ?? []);
       }
     });
   }, [props.desktopApi, props.platform]);
 
+  // Move the just-resolved pairing into the compact "paired" summary and
+  // clear the active pairing-token surface. The "Pair another" button
+  // (rendered when `paired.length > 0`) re-arms the flow.
+  const finalizePaired = (id: string): void => {
+    setPaired((prev) => [
+      ...prev,
+      {
+        entryId: id,
+        scope,
+        actor: observedActorLabel,
+        chat: observedChatLabel,
+      },
+    ]);
+    setMessage(undefined);
+    setEntryId(undefined);
+    setObservedActorLabel(undefined);
+    setObservedChatLabel(undefined);
+    setObservedChatKind(undefined);
+    setObservedChatBucketId(undefined);
+    setApprovedTargets([]);
+    setResolution(undefined);
+    setPairingAnother(false);
+  };
+
+  // Generic single-shot approve for non-Slack platforms.
   const approve = async (target?: MessagingPairingApprovalTarget): Promise<void> => {
     const id = entryIdRef.current;
     if (!id || approving || !props.desktopApi?.approveMessagingPairing) return;
@@ -4600,27 +4629,70 @@ function PairingBlock(props: {
         entryId: id,
         ...(target ? { target } : {}),
       });
-      setResolution("approved");
-      setPaired((prev) => [
-        ...prev,
-        {
+      finalizePaired(id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  // Which approval targets apply to the observed Slack request.
+  const applicableApprovalTargets = (): MessagingPairingApprovalTarget[] => {
+    const targets: MessagingPairingApprovalTarget[] = ["actor"];
+    if (observedChatKind !== "dm") targets.push("conversation");
+    if (observedChatBucketId) targets.push("team");
+    return targets;
+  };
+
+  // Approve a single facet (user / channel / team) while keeping the
+  // request open so the operator can approve the others too.
+  const approveTarget = async (
+    target: MessagingPairingApprovalTarget,
+  ): Promise<void> => {
+    const id = entryIdRef.current;
+    if (!id || approving || !props.desktopApi?.approveMessagingPairing) return;
+    setApproving(true);
+    setError(undefined);
+    try {
+      await props.desktopApi.approveMessagingPairing({
+        entryId: id,
+        target,
+        consume: false,
+      });
+      setApprovedTargets((prev) =>
+        prev.includes(target) ? prev : [...prev, target],
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  // Approve every remaining applicable facet, consume the request, and
+  // move it into the paired summary. Also used as the "Done" action once
+  // everything has been approved individually.
+  const finishPairing = async (): Promise<void> => {
+    const id = entryIdRef.current;
+    if (!id || approving || !props.desktopApi?.approveMessagingPairing) return;
+    const remaining = applicableApprovalTargets().filter(
+      (target) => !approvedTargets.includes(target),
+    );
+    const sequence: MessagingPairingApprovalTarget[] =
+      remaining.length > 0 ? remaining : ["actor"];
+    setApproving(true);
+    setError(undefined);
+    try {
+      for (let index = 0; index < sequence.length; index += 1) {
+        const isLast = index === sequence.length - 1;
+        await props.desktopApi.approveMessagingPairing({
           entryId: id,
-          scope,
-          actor: observedActorLabel,
-          chat: observedChatLabel,
-        },
-      ]);
-      // Clear the pairing-token surface — the approved entry is now
-      // captured in `paired`. The "Pair another" button (rendered
-      // below when `paired.length > 0`) re-arms the flow.
-      setMessage(undefined);
-      setEntryId(undefined);
-      setObservedActorLabel(undefined);
-      setObservedChatLabel(undefined);
-      setObservedChatKind(undefined);
-      setObservedChatBucketId(undefined);
-      setResolution(undefined);
-      setPairingAnother(false);
+          target: sequence[index],
+          ...(isLast ? {} : { consume: false }),
+        });
+      }
+      finalizePaired(id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -4640,6 +4712,7 @@ function PairingBlock(props: {
     setObservedChatLabel(undefined);
     setObservedChatKind(undefined);
     setObservedChatBucketId(undefined);
+    setApprovedTargets([]);
     setError(undefined);
     setPairingAnother(true);
   };
@@ -4815,36 +4888,65 @@ function PairingBlock(props: {
                 </span>
               </div>
               {props.platform === "slack" && scope === "observed" ? (
-                <>
-                  <button
-                    type="button"
-                    className="onboarding-wizard__btn onboarding-wizard__btn--primary"
-                    disabled={approving || !props.desktopApi?.approveMessagingPairing}
-                    onClick={() => void approve("actor")}
-                  >
-                    {approving ? "Approving…" : "Approve user"}
-                  </button>
-                  {observedChatKind !== "dm" ? (
-                    <button
-                      type="button"
-                      className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-                      disabled={approving || !props.desktopApi?.approveMessagingPairing}
-                      onClick={() => void approve("conversation")}
-                    >
-                      Approve channel
-                    </button>
-                  ) : null}
-                  {observedChatBucketId ? (
-                    <button
-                      type="button"
-                      className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-                      disabled={approving || !props.desktopApi?.approveMessagingPairing}
-                      onClick={() => void approve("team")}
-                    >
-                      Approve team
-                    </button>
-                  ) : null}
-                </>
+                (() => {
+                  const targets = applicableApprovalTargets();
+                  const labels: Record<
+                    MessagingPairingApprovalTarget,
+                    { approve: string; approved: string }
+                  > = {
+                    actor: { approve: "Approve user", approved: "User approved" },
+                    conversation: {
+                      approve: "Approve channel",
+                      approved: "Channel approved",
+                    },
+                    team: { approve: "Approve team", approved: "Team approved" },
+                  };
+                  const allApproved = targets.every((target) =>
+                    approvedTargets.includes(target),
+                  );
+                  return (
+                    <>
+                      {targets.map((target) =>
+                        approvedTargets.includes(target) ? (
+                          <span
+                            key={target}
+                            className="onboarding-wizard__field-pill is-ok"
+                          >
+                            ✓ {labels[target].approved}
+                          </span>
+                        ) : (
+                          <button
+                            key={target}
+                            type="button"
+                            className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+                            disabled={
+                              approving || !props.desktopApi?.approveMessagingPairing
+                            }
+                            onClick={() => void approveTarget(target)}
+                          >
+                            {labels[target].approve}
+                          </button>
+                        ),
+                      )}
+                      <button
+                        type="button"
+                        className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+                        disabled={
+                          approving || !props.desktopApi?.approveMessagingPairing
+                        }
+                        onClick={() => void finishPairing()}
+                      >
+                        {approving
+                          ? "Approving…"
+                          : allApproved
+                            ? "Done"
+                            : targets.length > 1
+                              ? "Approve all"
+                              : "Approve"}
+                      </button>
+                    </>
+                  );
+                })()
               ) : (
                 <button
                   type="button"
