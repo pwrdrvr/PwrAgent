@@ -3,6 +3,7 @@ import type {
   NavigationThreadSummary,
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
+import { formatBackendLabel } from "../../../lib/backend-label";
 import { useSubAgents } from "./useSubAgents";
 import { formatTimestamp } from "./context-rail-shared";
 import {
@@ -38,6 +39,7 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
           {subAgents.map((subAgent) => {
             const tone = subAgentTone(subAgent.status);
             const originSentence = subAgentOriginSentence(subAgent);
+            const backend = subAgent.backend ?? props.thread.source;
             const latestMessage =
               subAgent.lastMessage && subAgent.lastMessage !== originSentence
                 ? subAgent.lastMessage
@@ -59,9 +61,16 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                 <p className="rail-card__title" title={subAgent.task}>
                   {subAgent.task}
                 </p>
-                {subAgent.preferredModel ? (
-                  <p className="rail-card__model">{subAgent.preferredModel}</p>
-                ) : null}
+                <p className="rail-card__runtime">
+                  <span className="rail-card__provider-chip">
+                    {formatBackendLabel(backend)}
+                  </span>
+                  {subAgent.preferredModel ? (
+                    <span className="rail-card__model">
+                      {subAgent.preferredModel}
+                    </span>
+                  ) : null}
+                </p>
                 <p className="rail-card__times">
                   <span className="rail-card__time-label">Started</span>{" "}
                   {formatTimestamp(subAgent.createdAt)}

@@ -11753,6 +11753,8 @@ command = "pnpm dev"
         task: "Name this thread",
         status: "running",
         agentName: "PwrAgent",
+        backend: acpBackendId,
+        preferredModel: "kimi-k2-0711-preview",
         lastMessage: "Generating a title.",
       }),
     });
@@ -11764,6 +11766,7 @@ command = "pnpm dev"
         task: "Name this thread",
         status: "success",
         agentName: "PwrAgent",
+        backend: acpBackendId,
         preferredModel: "kimi-k2-0711-preview",
         monitorThreadId: "kimi-title-helper",
         lastMessage: "Generated title: Favorite cereal",

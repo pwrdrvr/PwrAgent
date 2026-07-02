@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { ThreadSubAgentSummary } from "@pwragent/shared";
+import { formatBackendLabel } from "../../../lib/backend-label";
 import { formatTimestamp } from "./context-rail-shared";
 import {
   formatSubAgentUsageEstimates,
@@ -82,6 +83,7 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const tone = subAgentTone(subAgent.status);
   const usage = subAgent.monitorUsage;
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
+  const backendLabel = subAgent.backend ? formatBackendLabel(subAgent.backend) : undefined;
   const usageEstimates = usage
     ? formatSubAgentUsageEstimates({
         displayOptions: props.pricingDisplayOptions,
@@ -137,6 +139,12 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
             <div>
               <dt>Source</dt>
               <dd>{originLabel}</dd>
+            </div>
+          ) : null}
+          {backendLabel ? (
+            <div>
+              <dt>Provider</dt>
+              <dd>{backendLabel}</dd>
             </div>
           ) : null}
           {model ? (

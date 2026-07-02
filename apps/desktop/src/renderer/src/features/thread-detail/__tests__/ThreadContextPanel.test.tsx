@@ -228,6 +228,7 @@ describe("ThreadContextPanel", () => {
             status: "running",
             createdAt: 2000,
             updatedAt: 2500,
+            backend: "codex",
             agentName: "Poincare",
             preferredModel: "gpt-5.4-mini",
             monitorThreadId: "monitor-thread-2",
@@ -265,6 +266,9 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Watch CI until it completes.")).toBeInTheDocument();
     expect(screen.getByText("Poincare")).toBeInTheDocument();
     expect(screen.getByText("Running")).toBeInTheDocument();
+    const firstCard = within(screen.getAllByRole("listitem")[0]!);
+    expect(firstCard.getByText("OpenAI")).toBeInTheDocument();
+    expect(firstCard.getByText("gpt-5.4-mini")).toBeInTheDocument();
     expect(screen.getByText("Lint is still running.")).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -293,6 +297,8 @@ describe("ThreadContextPanel", () => {
     expect(modal.getByText("Latest message")).toBeInTheDocument();
     expect(modal.getByText("Name")).toBeInTheDocument();
     expect(modal.getByText("Poincare")).toBeInTheDocument();
+    expect(modal.getByText("Provider")).toBeInTheDocument();
+    expect(modal.getByText("OpenAI")).toBeInTheDocument();
     expect(modal.getByText("Lint is still running.")).toBeInTheDocument();
     expect(modal.getByText("Tokens & pricing")).toBeInTheDocument();
     expect(modal.getByText("gpt-5.4-mini")).toBeInTheDocument();

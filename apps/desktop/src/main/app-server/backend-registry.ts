@@ -12461,6 +12461,7 @@ export class DesktopBackendRegistry {
       status,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      backend: "codex",
       monitorThreadId: params.receiverThreadId,
       ...(params.call.parentTurnId
         ? { monitorTurnId: params.call.parentTurnId }
@@ -12726,6 +12727,7 @@ export class DesktopBackendRegistry {
         (record.monitorThreadId ? "running" : "pending"),
       createdAt: record.createdAt,
       updatedAt: patch.updatedAt ?? Date.now(),
+      backend: record.backend,
       preferredModel: record.preferredModel,
       preferredReasoningEffort: record.preferredReasoningEffort,
       ...(record.monitorThreadId ? { monitorThreadId: record.monitorThreadId } : {}),
@@ -12797,6 +12799,7 @@ export class DesktopBackendRegistry {
       status: patch.status ?? existing?.status ?? "running",
       createdAt: record.createdAt,
       updatedAt: patch.updatedAt ?? Date.now(),
+      backend: record.backend,
       monitorThreadId: record.reviewThreadId,
       monitorTurnId: record.turnId,
       ...(patch.lastMessage ?? existing?.lastMessage
@@ -13829,10 +13832,15 @@ export class DesktopBackendRegistry {
       }
 
       if (isAcpBackendId(params.backend)) {
+        const titleHelperRuntime = this.resolveTitleHelperRuntime(params);
         await this.safePersistTitleHelperSubAgent({
           backend: params.backend,
           threadId: params.threadId,
           status: "running",
+          ...(titleHelperRuntime.model ? { model: titleHelperRuntime.model } : {}),
+          ...(titleHelperRuntime.reasoningEffort
+            ? { reasoningEffort: titleHelperRuntime.reasoningEffort }
+            : {}),
           reason: "Generating a title.",
         });
       }
@@ -13948,6 +13956,8 @@ export class DesktopBackendRegistry {
     threadId: string;
     result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
     status: "pending" | "running" | "success" | "failed" | "cancelled";
+    model?: string;
+    reasoningEffort?: string;
     reason?: string;
   }): Promise<void> {
     try {
@@ -13968,6 +13978,8 @@ export class DesktopBackendRegistry {
     threadId: string;
     result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
     status: "running" | "success" | "failed" | "cancelled";
+    model?: string;
+    reasoningEffort?: string;
     reason?: string;
   }): Promise<void> {
     try {
@@ -14022,6 +14034,8 @@ export class DesktopBackendRegistry {
     threadId: string;
     result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
     status: "pending" | "running" | "success" | "failed" | "cancelled";
+    model?: string;
+    reasoningEffort?: string;
     reason?: string;
   }): Promise<void> {
     const now = Date.now();
@@ -14040,6 +14054,12 @@ export class DesktopBackendRegistry {
           tokenUsage: params.result.tokenUsage,
         })
       : undefined;
+    const preferredModel =
+      params.result?.model ?? params.model ?? existing?.preferredModel;
+    const preferredReasoningEffort =
+      params.result?.reasoningEffort ??
+      params.reasoningEffort ??
+      existing?.preferredReasoningEffort;
     const terminal =
       params.status === "success" ||
       params.status === "failed" ||
@@ -14058,10 +14078,11 @@ export class DesktopBackendRegistry {
       status: params.status,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      backend: params.backend,
       agentName: "PwrAgent",
-      ...(params.result?.model ? { preferredModel: params.result.model } : {}),
-      ...(params.result?.reasoningEffort
-        ? { preferredReasoningEffort: params.result.reasoningEffort }
+      ...(preferredModel ? { preferredModel } : {}),
+      ...(preferredReasoningEffort
+        ? { preferredReasoningEffort }
         : {}),
       ...(params.result?.helperThreadId
         ? { monitorThreadId: params.result.helperThreadId }
@@ -14126,6 +14147,31 @@ export class DesktopBackendRegistry {
         threadId: line.parentThreadId ?? line.threadId,
       });
     }
+  }
+
+  private resolveTitleHelperRuntime(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): { model?: string; reasoningEffort?: string } {
+    if (!isAcpBackendId(params.backend)) {
+      return {};
+    }
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
+    const model =
+      session?.acpRuntime?.currentModelId ??
+      (typeof session?.acpRuntime?.configValues?.model === "string"
+        ? session.acpRuntime.configValues.model
+        : undefined);
+    const reasoningEffort =
+      typeof session?.acpRuntime?.configValues?.reasoningEffort === "string"
+        ? session.acpRuntime.configValues.reasoningEffort
+        : typeof session?.acpRuntime?.configValues?.reasoning_effort === "string"
+          ? session.acpRuntime.configValues.reasoning_effort
+          : undefined;
+    return {
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    };
   }
 
   private async applyGeneratedThreadTitle(params: {
