@@ -17736,8 +17736,34 @@ export class DesktopBackendRegistry {
           "url must look like a GitHub/GHE /pull/<number> URL or a GitLab /merge_requests/<number> URL.",
       };
     }
-    const number = normalizePositivePullRequestNumber(args.number)
-      ?? parsedUrl?.number;
+    const explicitNumber = normalizePositivePullRequestNumber(args.number);
+    const explicitProvider = args.provider?.trim()
+      ? normalizePullRequestProvider(args.provider)
+      : undefined;
+    const explicitOrg = args.org?.trim();
+    const explicitRepo = args.repo?.trim();
+    if (parsedUrl) {
+      const conflicts = [
+        explicitNumber !== undefined && explicitNumber !== parsedUrl.number
+          ? "number"
+          : undefined,
+        explicitProvider && explicitProvider !== parsedUrl.provider
+          ? "provider"
+          : undefined,
+        explicitOrg && explicitOrg !== parsedUrl.org ? "org" : undefined,
+        explicitRepo && explicitRepo !== parsedUrl.repo ? "repo" : undefined,
+      ].filter((field): field is string => Boolean(field));
+      if (conflicts.length > 0) {
+        return {
+          ok: false,
+          message: `url conflicts with explicit ${conflicts.join(
+            "/",
+          )}. Provide matching PR identity fields or omit the conflicting fields.`,
+        };
+      }
+    }
+
+    const number = explicitNumber ?? parsedUrl?.number;
     if (!number) {
       return {
         ok: false,
@@ -17745,11 +17771,9 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const provider = args.provider?.trim()
-      ? normalizePullRequestProvider(args.provider)
-      : parsedUrl?.provider;
-    const org = args.org?.trim() || parsedUrl?.org;
-    const repo = args.repo?.trim() || parsedUrl?.repo;
+    const provider = explicitProvider ?? parsedUrl?.provider;
+    const org = explicitOrg || parsedUrl?.org;
+    const repo = explicitRepo || parsedUrl?.repo;
     if (provider && org && repo) {
       return {
         ok: true,

@@ -19,6 +19,7 @@ import type {
   AppServerThreadSummary,
   AppServerReviewTarget,
   AppServerTurnInputItem,
+  AttachThreadPullRequestToolArgs,
   BackendAccountSummary,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
@@ -19134,6 +19135,98 @@ script = "printf setup"
         },
       ],
     });
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "target-thread",
+    });
+    expect(overlay?.prs).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("rejects explicit PR references whose URL conflicts with identity fields", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "target-thread",
+          title: "Cross repo work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 2000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": createAgentOverlay(),
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const cases: Array<{
+      conflict: string;
+      args: Partial<AttachThreadPullRequestToolArgs>;
+    }> = [
+      { conflict: "number", args: { number: 905 } },
+      { conflict: "provider", args: { provider: "ghe.example.test" } },
+      { conflict: "org", args: { org: "other-org" } },
+      { conflict: "repo", args: { repo: "OtherRepo" } },
+    ];
+    for (const [index, testCase] of cases.entries()) {
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          callId: `call-${index + 1}`,
+          requestId: `call-${index + 1}`,
+          namespace: "pwragent",
+          tool: "attach_thread_pull_request",
+          arguments: {
+            backend: "codex",
+            threadId: "target-thread",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/904",
+            ...testCase.args,
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(response).toEqual({
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: JSON.stringify(
+              {
+                code: "invalid_arguments",
+                message: `url conflicts with explicit ${testCase.conflict}. Provide matching PR identity fields or omit the conflicting fields.`,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      });
+    }
     const overlay = await overlayStore.getThreadOverlayState({
       backend: "codex",
       threadId: "target-thread",
