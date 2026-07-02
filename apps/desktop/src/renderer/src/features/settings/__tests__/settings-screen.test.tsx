@@ -1991,14 +1991,18 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "Generate" })[0]!);
     expect(await screen.findByText(pairingMessage)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
 
+    // Generating auto-copies the code (bridge fails, browser clipboard wins)
+    // and the button flips to "Copied".
     await waitFor(() => {
       expect(bridgeCopy).toHaveBeenCalledWith(pairingMessage);
     });
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(pairingMessage);
     });
+    expect(
+      await screen.findByRole("button", { name: "Copied" }),
+    ).toBeInTheDocument();
   });
 
   it("clears a generated pairing message after the token is observed", async () => {

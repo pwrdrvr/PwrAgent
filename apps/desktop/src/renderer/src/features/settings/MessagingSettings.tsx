@@ -1827,6 +1827,17 @@ function PairingTokenField(props: {
   const [entries, setEntries] = useState<MessagingPairingEntry[]>([]);
   const [busyId, setBusyId] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    },
+    [],
+  );
 
   const setGeneratedMessage = useCallback(
     (nextMessage: string | undefined, nextEntryId: string | undefined) => {
@@ -1880,6 +1891,10 @@ function PairingTokenField(props: {
         scope: selectedScope,
       });
       setGeneratedMessage(result.message, result.entry.id);
+      // Auto-copy the freshly generated code so the operator can paste it
+      // straight into chat; best-effort, so a clipboard failure here is
+      // silent and the Copy button remains as a manual fallback.
+      await copyMessage(result.message, { silent: true });
       await refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -1957,13 +1972,22 @@ function PairingTokenField(props: {
     }
   };
 
-  const copyMessage = async () => {
-    if (!message) return;
-    setError(undefined);
+  const copyMessage = async (
+    text?: string,
+    options?: { silent?: boolean },
+  ) => {
+    const value = text ?? message;
+    if (!value) return;
+    if (!options?.silent) setError(undefined);
     try {
-      await copyText(message, props.desktopApi);
+      await copyText(value, props.desktopApi);
+      setCopied(true);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (!options?.silent) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
     }
   };
 
@@ -2019,7 +2043,7 @@ function PairingTokenField(props: {
                 type="button"
                 onClick={() => void copyMessage()}
               >
-                Copy
+                {copied ? "Copied" : "Copy"}
               </button>
             </div>
           ) : null}

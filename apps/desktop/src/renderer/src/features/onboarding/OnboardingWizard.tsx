@@ -4536,6 +4536,16 @@ function PairingBlock(props: {
   const [entryId, setEntryId] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    },
+    [],
+  );
   const [resolution, setResolution] = useState<"observed" | "approved" | undefined>(
     undefined,
   );
@@ -4729,6 +4739,9 @@ function PairingBlock(props: {
       });
       setMessage(result.message);
       setEntryId(result.entry.id);
+      // Auto-copy the freshly generated code so the operator can paste it
+      // straight into chat; best-effort.
+      await copy(result.message);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -4736,10 +4749,14 @@ function PairingBlock(props: {
     }
   };
 
-  const copy = async (): Promise<void> => {
-    if (!message) return;
+  const copy = async (text?: string): Promise<void> => {
+    const value = text ?? message;
+    if (!value) return;
     try {
-      await navigator.clipboard.writeText(message);
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
     } catch {
       // best effort — user can still select the text in the input
     }
@@ -4856,7 +4873,7 @@ function PairingBlock(props: {
                 className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
                 onClick={() => void copy()}
               >
-                Copy
+                {copied ? "Copied" : "Copy"}
               </button>
             </div>
           ) : !message ? (
