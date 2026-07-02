@@ -353,12 +353,15 @@ async function resolveSlackWorkspaceName(
 
 /** Resolve `promise`, or `undefined` if it takes longer than `ms`. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
-  return Promise.race([
-    promise,
-    new Promise<undefined>((resolve) => {
-      setTimeout(() => resolve(undefined), ms);
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms);
+  });
+  // Clear the timer once either side settles so the fast path doesn't keep a
+  // 2s timer (and this closure) alive after `promise` already resolved.
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 /**
