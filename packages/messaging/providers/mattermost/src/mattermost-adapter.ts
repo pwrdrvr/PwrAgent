@@ -676,7 +676,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       kind: rootId ? "thread" : "channel",
       label: rootId ? "Mattermost thread" : "Mattermost channel",
       ...(rootId ? { parentId: channelId } : {}),
-      budget: { limit: 1, intervalMs: 1_000, reserved: 0 },
+      // Budget deliveries per channel/thread over a sliding minute so a single
+      // agent turn's normal burst is admitted instead of tripping slow mode on
+      // the 2nd send. Mirrors Discord/Slack channels (30/min, 5 reserved for
+      // the final answer).
+      budget: { limit: 30, intervalMs: 60_000, reserved: 5 },
     };
   }
 

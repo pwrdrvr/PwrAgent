@@ -197,6 +197,86 @@ describe("MessagingDeliveryBudget", () => {
     });
   });
 
+  it("admits a normal Slack turn burst without slow mode but throttles at the minute total", () => {
+    let now = 1_000;
+    const budget = new MessagingDeliveryBudget({ now: () => now });
+    // The Slack channel budget shape produced by rateLimitScopeForTarget.
+    const scope: MessagingDeliveryScope = {
+      platform: "slack",
+      id: "slack:channel:C012ABCDEF0",
+      kind: "channel",
+      budget: { limit: 30, intervalMs: 60_000, reserved: 5 },
+    };
+
+    // A single agent turn's burst: status update, streaming partial, then the
+    // final assistant message — all within ~1s. None should trip slow mode.
+    expect(budget.admit({ scope, priority: "routine_status" })).toMatchObject({
+      outcome: "admitted",
+      slowMode: false,
+    });
+    now = 1_200;
+    expect(budget.admit({ scope, priority: "stream_partial" })).toMatchObject({
+      outcome: "admitted",
+      slowMode: false,
+    });
+    now = 1_400;
+    expect(budget.admit({ scope, priority: "final_turn" })).toMatchObject({
+      outcome: "admitted",
+      slowMode: false,
+    });
+    expect(budget.isScopeInSlowMode(scope)).toBe(false);
+
+    // Fill the non-reserved capacity (25 = limit 30 - reserved 5) with chatter.
+    for (let sent = 3; sent < 25; sent += 1) {
+      now += 100;
+      expect(budget.admit({ scope, priority: "routine_status" })).toMatchObject({
+        outcome: "admitted",
+      });
+    }
+
+    // Chatter beyond the non-reserved capacity is dropped and arms slow mode,
+    // but the reserved slots still admit the final answer.
+    now += 100;
+    expect(budget.admit({ scope, priority: "routine_status" })).toMatchObject({
+      outcome: "dropped",
+      reason: "budget-exhausted",
+    });
+    expect(budget.admit({ scope, priority: "final_turn" })).toMatchObject({
+      outcome: "admitted",
+    });
+  });
+
+  it("defers to the next window, not the slow-mode floor, when capacity frees sooner", () => {
+    let now = 1_000;
+    const budget = new MessagingDeliveryBudget({ now: () => now });
+    // A short 1s window frees capacity well before the 5s slow-mode floor.
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:group:short-window",
+      kind: "group",
+      budget: { limit: 1, intervalMs: 1_000, reserved: 0 },
+    };
+
+    expect(budget.admit({ scope, priority: "routine_status" })).toMatchObject({
+      outcome: "admitted",
+    });
+
+    // Deferred retry points at the next window (2_000 = oldest 1_000 + 1_000),
+    // even though slow mode is armed for the full 5s floor.
+    expect(budget.admit({ scope, priority: "final_turn" })).toEqual({
+      outcome: "deferred",
+      reason: "budget-exhausted",
+      retryAt: 2_000,
+      slowMode: true,
+    });
+
+    // Slow mode still holds until the 5s floor (1_000 + 5_000).
+    now = 4_999;
+    expect(budget.isScopeInSlowMode(scope)).toBe(true);
+    now = 6_001;
+    expect(budget.isScopeInSlowMode(scope)).toBe(false);
+  });
+
   it("keeps independent scopes from throttling each other", () => {
     const budget = new MessagingDeliveryBudget({ now: () => 1_000 });
     const first = testScope({ id: "telegram:group:1", limit: 1, reserved: 0 });
