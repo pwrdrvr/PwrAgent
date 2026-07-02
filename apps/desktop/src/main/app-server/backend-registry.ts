@@ -13940,19 +13940,27 @@ export class DesktopBackendRegistry {
         generatedTitle: truncateLogValue(result.title),
       });
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       if (generatedResult) {
         await this.safePersistTitleHelperSubAgent({
           backend: params.backend,
           threadId: params.threadId,
           result: generatedResult,
           status: "failed",
-          reason: error instanceof Error ? error.message : String(error),
+          reason,
+        });
+      } else {
+        await this.safePersistExistingTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "failed",
+          reason,
         });
       }
       this.logThreadTitleGeneration(
         "failed",
         params,
-        error instanceof Error ? error.message : String(error)
+        reason
       );
     } finally {
       const pending = this.pendingTitleGenerations.get(params.key);

@@ -11335,6 +11335,77 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("marks the title helper sub-agent failed when title generation throws", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => {
+        throw new Error("title helper unavailable");
+      }),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-title-helper-throws",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-title-helper-throws",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() =>
+      upsertSubAgentSpy.mock.calls.some(
+        ([call]) => call.subAgent.status === "failed",
+      ),
+    );
+
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-title-helper-throws",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-title-helper-throws",
+        status: "running",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        lastMessage: "Generating a title.",
+      }),
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-title-helper-throws",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-title-helper-throws",
+        status: "failed",
+        outcome: "failure",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        lastMessage: "Title generation failed: title helper unavailable",
+        completionSource: expect.objectContaining({
+          terminalStatus: "failed",
+        }),
+      }),
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("steers Codex turns through the single client and surfaces its error", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },
