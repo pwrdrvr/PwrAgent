@@ -16,6 +16,7 @@ import type {
   DesktopMessagingResponseMode,
   DesktopMessagingSlackChannelUserAccessMode,
   DesktopMessagingSlackDmAccessMode,
+  DesktopMessagingSlackGroupDmAccessMode,
   DesktopOnboardingCompletedSource,
   DesktopOnboardingSnapshot,
   DesktopSettingsConfigPatch,
@@ -44,6 +45,7 @@ import {
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
   SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
   SLACK_DM_ACCESS_MODE_DEFAULT,
+  SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
   SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
 } from "@pwragent/messaging-interface";
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
@@ -498,6 +500,9 @@ export class DesktopSettingsService {
     const slackDmAccessMode = this.resolveSlackDmAccessMode(
       config.messaging?.slack?.dmAccessMode,
     );
+    const slackGroupDmAccessMode = this.resolveSlackGroupDmAccessMode(
+      config.messaging?.slack?.groupDmAccessMode,
+    );
     const slackChannelUserAccessMode = this.resolveSlackChannelUserAccessMode(
       config.messaging?.slack?.channelUserAccessMode,
     );
@@ -815,6 +820,7 @@ export class DesktopSettingsService {
           teamAuthorizationMode: slackTeamAuthorizationMode,
           channelAuthorizationMode: slackChannelAuthorizationMode,
           dmAccessMode: slackDmAccessMode,
+          groupDmAccessMode: slackGroupDmAccessMode,
           channelUserAccessMode: slackChannelUserAccessMode,
           slashCommandPrefix: this.resolveStringWithDefault(
             config.messaging?.slack?.slashCommandPrefix,
@@ -1928,6 +1934,15 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopMessagingSlackChannelUserAccessMode> {
     return {
       value: configValue ?? SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveSlackGroupDmAccessMode(
+    configValue: DesktopMessagingSlackGroupDmAccessMode | undefined,
+  ): DesktopSettingsValue<DesktopMessagingSlackGroupDmAccessMode> {
+    return {
+      value: configValue ?? SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }

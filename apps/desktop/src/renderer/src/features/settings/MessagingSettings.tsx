@@ -26,6 +26,7 @@ import {
   type DesktopMessagingAuthorizationMode,
   type DesktopMessagingSlackChannelUserAccessMode,
   type DesktopMessagingSlackDmAccessMode,
+  type DesktopMessagingSlackGroupDmAccessMode,
   type DesktopMessagingImageProfile,
   type DesktopMessagingResponseMode,
   type DesktopMessagingContactLookupKind,
@@ -881,7 +882,7 @@ export function MessagingSettings(props: {
           <SegmentedField
             disabled={props.saving}
             label="DM access"
-            sub="Who may DM the bot directly. Authorized users only is the safest default; the team and channel gates below do not apply to DMs. Group DMs are always authorized-users-only (with an @mention); No DMs turns off group DMs too."
+            sub="Who may DM the bot directly (1:1). Authorized users only is the safest default; the team and channel gates below do not apply to DMs."
             options={DM_ACCESS_MODE_OPTIONS}
             source={sourceBadge(slack.dmAccessMode)}
             value={slack.dmAccessMode.value}
@@ -889,6 +890,23 @@ export function MessagingSettings(props: {
               void props.onSaveSlack({
                 ...slack,
                 dmAccessMode: { ...slack.dmAccessMode, value: dmAccessMode },
+              });
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Group DM access"
+            sub="Whether the bot participates in group DMs (multi-person DMs). Closed by default. When set to Authorized users, an Authorized User in the group DM can interact and the bot replies when @mentioned; team and channel gates do not apply."
+            options={GROUP_DM_ACCESS_MODE_OPTIONS}
+            source={sourceBadge(slack.groupDmAccessMode)}
+            value={slack.groupDmAccessMode.value}
+            onChange={(groupDmAccessMode) => {
+              void props.onSaveSlack({
+                ...slack,
+                groupDmAccessMode: {
+                  ...slack.groupDmAccessMode,
+                  value: groupDmAccessMode,
+                },
               });
             }}
           />
@@ -1583,6 +1601,14 @@ const CHANNEL_USER_ACCESS_MODE_OPTIONS: Array<{
   { label: "Authorized users", value: "authorized_users" },
   { label: "Anyone in channel", value: "any_channel_user" },
   { label: "No one", value: "none" },
+];
+
+const GROUP_DM_ACCESS_MODE_OPTIONS: Array<{
+  label: string;
+  value: DesktopMessagingSlackGroupDmAccessMode;
+}> = [
+  { label: "Reject all", value: "none" },
+  { label: "Authorized users", value: "authorized_users" },
 ];
 
 const FULL_ACCESS_WARNING_POLICY_OPTIONS: Array<{

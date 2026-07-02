@@ -18,6 +18,7 @@ import type {
   DesktopMessagingResponseMode,
   DesktopMessagingSlackChannelUserAccessMode,
   DesktopMessagingSlackDmAccessMode,
+  DesktopMessagingSlackGroupDmAccessMode,
   DesktopOnboardingCompletedSource,
   DesktopSettingsConfigPatch,
   DesktopUpdateChannel,
@@ -175,6 +176,7 @@ export type DesktopSettingsConfig = {
       channelAuthorizationMode?: DesktopMessagingAuthorizationMode;
       dmAccessMode?: DesktopMessagingSlackDmAccessMode;
       channelUserAccessMode?: DesktopMessagingSlackChannelUserAccessMode;
+      groupDmAccessMode?: DesktopMessagingSlackGroupDmAccessMode;
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: AuthorizedContactConfig[];
@@ -1035,6 +1037,9 @@ export function desktopSettingsPatchToEdits(
   if (slack?.dmAccessMode !== undefined) {
     set(["messaging", "slack", "dm_access_mode"], slack.dmAccessMode);
   }
+  if (slack?.groupDmAccessMode !== undefined) {
+    set(["messaging", "slack", "group_dm_access_mode"], slack.groupDmAccessMode);
+  }
   if (slack?.channelUserAccessMode !== undefined) {
     set(
       ["messaging", "slack", "channel_user_access_mode"],
@@ -1427,6 +1432,7 @@ function normalizeDesktopConfig(
           slack?.channel_authorization_mode,
         ),
         dmAccessMode: readSlackDmAccessMode(slack?.dm_access_mode),
+        groupDmAccessMode: readSlackGroupDmAccessMode(slack?.group_dm_access_mode),
         channelUserAccessMode: readSlackChannelUserAccessMode(
           slack?.channel_user_access_mode,
         ),
@@ -1914,6 +1920,12 @@ function readSlackDmAccessMode(
     || value === "none"
     ? value
     : undefined;
+}
+
+function readSlackGroupDmAccessMode(
+  value: TomlScalar | undefined,
+): DesktopMessagingSlackGroupDmAccessMode | undefined {
+  return value === "none" || value === "authorized_users" ? value : undefined;
 }
 
 function readSlackChannelUserAccessMode(

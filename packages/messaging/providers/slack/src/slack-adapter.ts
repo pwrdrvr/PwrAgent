@@ -9,6 +9,7 @@ import type {
   MessagingAuthorizationMode,
   MessagingChannelUserAccessMode,
   MessagingDmAccessMode,
+  MessagingGroupDmAccessMode,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
@@ -37,6 +38,7 @@ import {
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
   SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
   SLACK_DM_ACCESS_MODE_DEFAULT,
+  SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
   SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
 } from "@pwragent/messaging-interface";
 import type { SlackMessagingConfig } from "./slack-config.ts";
@@ -127,6 +129,8 @@ export type SlackMessageResult = {
 export type SlackConversationInfo = {
   id?: string;
   name?: string;
+  is_im?: boolean;
+  is_mpim?: boolean;
 };
 
 export type SlackThreadMessageInfo = {
@@ -299,6 +303,8 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
   private readonly conversationTitleCache = new Map<string, string | undefined>();
+  // Caches whether a channel id is a multi-person DM (mpim / "group DM").
+  private readonly conversationGroupDmCache = new Map<string, boolean>();
   private readonly recentInboundMessageEvents = new Map<string, number>();
   private readonly threadTitleCache = new Map<string, string | undefined>();
   private readonly userDisplayNameCache = new Map<string, string | undefined>();
@@ -361,6 +367,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
     if (update.channelUserAccessMode !== undefined) {
       this.config.channelUserAccessMode = update.channelUserAccessMode;
+    }
+    if (update.groupDmAccessMode !== undefined) {
+      this.config.groupDmAccessMode = update.groupDmAccessMode;
     }
     this.config.authorizedActorIds = slackContactsFromIds(
       update.authorizedActorIds,
@@ -666,7 +675,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       : parseCommand(text);
     const kind = command ? "command" : event.files?.length ? "media" : "text";
 
-    const isGroupDm = isSlackGroupDm({ channelType: event.channel_type });
+    const isGroupDm = await this.resolveIsGroupDm({
+      channelId: ids.channelId,
+      channelType: event.channel_type,
+    });
     if (!this.authorizeInbound({
       actor,
       channel,
@@ -770,7 +782,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       actor,
       channel,
       kind: "callback",
-      isGroupDm: isSlackGroupDm({ channelName: body.channel?.name }),
+      isGroupDm: await this.resolveIsGroupDm({
+        channelId: ids.channelId,
+        channelName: body.channel?.name,
+      }),
       routingState,
       teamId: ids.teamId,
     })) {
@@ -836,7 +851,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       actor,
       channel,
       kind: "command",
-      isGroupDm: isSlackGroupDm({ channelName: body.channel_name }),
+      isGroupDm: await this.resolveIsGroupDm({
+        channelId: ids.channelId,
+        channelName: body.channel_name,
+      }),
       routingState,
       teamId: ids.teamId,
     })) {
@@ -1219,13 +1237,13 @@ export class SlackAdapter implements SlackProviderAdapter {
       return true;
     }
 
-    // Group DMs (multi-person IMs) are driven by the authorized-user list, not
-    // the team/channel gates — a Slack "team" is the workspace, not a group
-    // DM. An authorized user in a group DM may interact (the caller additionally
-    // requires an @mention for messages); unauthorized senders are rejected
-    // regardless of who else is in the group DM. "No DMs" disables group DMs too.
+    // Group DMs (multi-person IMs) have their own access mode, independent of
+    // the team/channel gates — a Slack "team" is the workspace, not a group DM.
+    // Closed by default; when opened, an authorized user may interact (the
+    // caller additionally requires an @mention for messages) while unauthorized
+    // senders are rejected regardless of who else is in the group DM.
     if (params.isGroupDm) {
-      if (slackDmAccessMode(this.config) === "none") {
+      if (slackGroupDmAccessMode(this.config) === "none") {
         return reject("unauthorized-conversation");
       }
       if (!actorAuthorized) return reject("unauthorized-actor");
@@ -1365,6 +1383,40 @@ export class SlackAdapter implements SlackProviderAdapter {
       }
       this.userDisplayNameCache.set(userId, undefined);
       return undefined;
+    }
+  }
+
+  /**
+   * Whether an inbound conversation is a Slack group DM (mpim). Message events
+   * carry `channel_type: "mpim"` and can be classified synchronously; block
+   * actions and slash commands do not, so we fall back to an authoritative
+   * (cached) `conversations.info` lookup rather than guessing from the channel
+   * name — group DMs have C- or G-prefixed ids and unreliable payload names.
+   */
+  private async resolveIsGroupDm(params: {
+    channelId: string;
+    channelType?: string;
+    channelName?: string;
+  }): Promise<boolean> {
+    if (isSlackGroupDm({ channelType: params.channelType, channelName: params.channelName })) {
+      return true;
+    }
+    const cached = this.conversationGroupDmCache.get(params.channelId);
+    if (cached !== undefined) return cached;
+    if (this.conversationInfoLookupDisabled || !this.api.conversationsInfo) {
+      return false;
+    }
+    try {
+      const info = await this.api.conversationsInfo({ channel: params.channelId });
+      const isGroupDm = info?.is_mpim === true;
+      this.conversationGroupDmCache.set(params.channelId, isGroupDm);
+      return isGroupDm;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (reason.includes("missing_scope")) {
+        this.conversationInfoLookupDisabled = true;
+      }
+      return false;
     }
   }
 
@@ -1814,6 +1866,12 @@ function slackChannelUserAccessMode(
   config: SlackMessagingConfig,
 ): MessagingChannelUserAccessMode {
   return config.channelUserAccessMode ?? SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT;
+}
+
+function slackGroupDmAccessMode(
+  config: SlackMessagingConfig,
+): MessagingGroupDmAccessMode {
+  return config.groupDmAccessMode ?? SLACK_GROUP_DM_ACCESS_MODE_DEFAULT;
 }
 
 /**

@@ -319,6 +319,7 @@ export type MessagingAdapterAuthorizationUpdate = {
   workspaceAuthorizationMode?: MessagingAuthorizationMode;
   dmAccessMode?: MessagingDmAccessMode;
   channelUserAccessMode?: MessagingChannelUserAccessMode;
+  groupDmAccessMode?: MessagingGroupDmAccessMode;
 };
 
 export type MessagingResponseMode = "every_message" | "mention_only";
@@ -333,6 +334,8 @@ export type MessagingChannelUserAccessMode =
   | "any_channel_user"
   | "authorized_users"
   | "none";
+/** Whether the bot participates in Slack group DMs (mpim), and for whom. */
+export type MessagingGroupDmAccessMode = "none" | "authorized_users";
 
 /**
  * Locked-down default posture for Slack access modes. Single source of truth
@@ -349,6 +352,9 @@ export const SLACK_DM_ACCESS_MODE_DEFAULT: MessagingDmAccessMode =
   "authorized_users";
 export const SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT: MessagingChannelUserAccessMode =
   "authorized_users";
+/** Group DMs are closed by default; the operator opts in explicitly. */
+export const SLACK_GROUP_DM_ACCESS_MODE_DEFAULT: MessagingGroupDmAccessMode =
+  "none";
 
 export type MessagingConversationResponseMode = {
   conversationId: string;

@@ -189,6 +189,9 @@ export function buildSlackPatchDelta(
   if (snapshot.dmAccessMode.value !== candidate.dmAccessMode.value) {
     patch.dmAccessMode = candidate.dmAccessMode.value;
   }
+  if (snapshot.groupDmAccessMode.value !== candidate.groupDmAccessMode.value) {
+    patch.groupDmAccessMode = candidate.groupDmAccessMode.value;
+  }
   if (
     snapshot.channelUserAccessMode.value
     !== candidate.channelUserAccessMode.value

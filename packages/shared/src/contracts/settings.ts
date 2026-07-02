@@ -120,6 +120,7 @@ export type DesktopMessagingSlackChannelUserAccessMode =
   | "any_channel_user"
   | "authorized_users"
   | "none";
+export type DesktopMessagingSlackGroupDmAccessMode = "none" | "authorized_users";
 
 export type DesktopMessagingFullAccessWarningGlobalPolicy =
   | "always"
@@ -596,6 +597,7 @@ export type DesktopSettingsSnapshot = {
       channelAuthorizationMode: DesktopSettingsValue<DesktopMessagingAuthorizationMode>;
       dmAccessMode: DesktopSettingsValue<DesktopMessagingSlackDmAccessMode>;
       channelUserAccessMode: DesktopSettingsValue<DesktopMessagingSlackChannelUserAccessMode>;
+      groupDmAccessMode: DesktopSettingsValue<DesktopMessagingSlackGroupDmAccessMode>;
       slashCommandPrefix: DesktopSettingsValue<string>;
       registerSlashCommands: DesktopSettingsValue<boolean>;
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
@@ -807,6 +809,7 @@ export type DesktopSettingsConfigPatch = {
       channelAuthorizationMode?: DesktopMessagingAuthorizationMode;
       dmAccessMode?: DesktopMessagingSlackDmAccessMode;
       channelUserAccessMode?: DesktopMessagingSlackChannelUserAccessMode;
+      groupDmAccessMode?: DesktopMessagingSlackGroupDmAccessMode;
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];

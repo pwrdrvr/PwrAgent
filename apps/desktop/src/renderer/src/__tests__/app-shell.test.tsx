@@ -520,6 +520,7 @@ describe("App", () => {
           teamAuthorizationMode: { value: "approved_only", source: "default" },
           channelAuthorizationMode: { value: "approved_only", source: "default" },
           dmAccessMode: { value: "authorized_users", source: "default" },
+          groupDmAccessMode: { value: "none", source: "default" },
           channelUserAccessMode: { value: "authorized_users", source: "default" },
           slashCommandPrefix: { value: "pwragent_", source: "default" },
           registerSlashCommands: { value: false, source: "default" },

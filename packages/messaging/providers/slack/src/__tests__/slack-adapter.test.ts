@@ -57,6 +57,7 @@ function fakeApi(spies: {
   assistantStatusError?: Error;
   assistantStatuses?: Array<{ channelId: string; status: string; threadTs: string }>;
   conversations?: Record<string, string>;
+  mpimChannels?: string[];
   deleted?: Array<{ channel: string; ts: string }>;
   posted?: unknown[];
   replies?: Record<string, string>;
@@ -79,6 +80,7 @@ function fakeApi(spies: {
     conversationsInfo: async (params) => ({
       id: params.channel,
       name: spies.conversations?.[params.channel],
+      is_mpim: spies.mpimChannels?.includes(params.channel) ?? false,
     }),
     conversationsReplies: async (params) => [{
       ts: params.ts,
@@ -1065,13 +1067,14 @@ describe("SlackAdapter", () => {
   it("answers group DM @mentions from an authorized user regardless of team/channel gates", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
-      // Group DMs are driven by the authorized-user list, not team/channel
-      // gates: restrict both gates and leave the allowlists empty.
+      // Group DMs are driven by their own access mode, not team/channel gates:
+      // restrict both gates, leave the allowlists empty, and open group DMs.
       config: {
         ...baseConfig,
         authorizedTeamIds: [],
         teamAuthorizationMode: "approved_only",
         channelAuthorizationMode: "approved_only",
+        groupDmAccessMode: "authorized_users",
       },
       callbackHandleStore: fakeStore(),
       api: fakeApi({}),
@@ -1111,10 +1114,52 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("rejects group DM messages by default (group DM access closed)", async () => {
+    const socket = fakeSocket();
+    // No groupDmAccessMode set → defaults to "none".
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, authorizedTeamIds: [] },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "G012ABCDEF0",
+        channel_type: "mpim",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "<@U0BOTUSERID> status?",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({ reason: "unauthorized-conversation" }),
+    ]);
+  });
+
   it("ignores group DM messages that don't @mention the bot", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
-      config: { ...baseConfig, authorizedTeamIds: [] },
+      config: {
+        ...baseConfig,
+        authorizedTeamIds: [],
+        groupDmAccessMode: "authorized_users",
+      },
       callbackHandleStore: fakeStore(),
       api: fakeApi({}),
       socketClient: socket,
@@ -1149,7 +1194,11 @@ describe("SlackAdapter", () => {
   it("rejects group DM messages from an unauthorized user", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
-      config: { ...baseConfig, authorizedTeamIds: [] },
+      config: {
+        ...baseConfig,
+        authorizedTeamIds: [],
+        groupDmAccessMode: "authorized_users",
+      },
       callbackHandleStore: fakeStore(),
       api: fakeApi({}),
       socketClient: socket,
@@ -1545,7 +1594,12 @@ describe("SlackAdapter", () => {
   it("routes group DM Block Kit callbacks for an authorized user despite restricted gates", async () => {
     const socket = fakeSocket();
     const store = fakeStore();
-    const spies: { posted: unknown[] } = { posted: [] };
+    // The block-action payload doesn't reliably carry the mpdm name, so the
+    // adapter classifies the group DM via conversations.info is_mpim.
+    const spies: { posted: unknown[]; mpimChannels: string[] } = {
+      posted: [],
+      mpimChannels: ["C0BETJEH87L"],
+    };
     // Lock the team/channel gates and leave the allowlists empty: a group DM
     // must still work for an authorized user (callbacks, not just messages).
     const adapter = new SlackAdapter({
@@ -1554,6 +1608,7 @@ describe("SlackAdapter", () => {
         authorizedTeamIds: [],
         teamAuthorizationMode: "approved_only",
         channelAuthorizationMode: "approved_only",
+        groupDmAccessMode: "authorized_users",
       },
       callbackHandleStore: store,
       api: fakeApi(spies),
@@ -1594,7 +1649,7 @@ describe("SlackAdapter", () => {
         type: "block_actions",
         user: { id: "U012ABCDEF0", username: "alice" },
         team: { id: "T012ABCDEF0" },
-        channel: { id: "C0BETJEH87L", name: "mpdm-hhunt--pankaj--pwragent_hhunt-1" },
+        channel: { id: "C0BETJEH87L", name: "" },
         message: { ts: "1712023032.123456" },
         actions: [button],
       },
