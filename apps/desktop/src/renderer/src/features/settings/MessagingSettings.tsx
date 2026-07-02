@@ -2269,6 +2269,12 @@ function AuthorizedListField(props: {
 }) {
   const inputId = useId();
   const descriptionId = `${inputId}-validation`;
+  // When a row carries a labeled policy column (Full Access warning /
+  // Response mode), give the ID and Display name columns matching headers
+  // so every input shares a baseline instead of floating.
+  const showColumnHeaders = Boolean(
+    props.fullAccessWarningPolicy || props.responseModePolicy,
+  );
   const [rows, setRowsState] = useState<DesktopAuthorizedContact[]>(props.value);
   const rowsRef = useRef<DesktopAuthorizedContact[]>(props.value);
   const [lookupState, setLookupState] = useState<
@@ -2452,50 +2458,70 @@ function AuthorizedListField(props: {
                       : ""
                   }`}
                 >
-                  <input
-                    aria-describedby={invalid ? descriptionId : undefined}
-                    aria-invalid={invalid ? "true" : undefined}
-                    aria-label={`${props.label} ID ${index + 1}`}
-                    className={`settings-input settings-authorized-list__id${
-                      invalid ? " settings-input--invalid" : ""
-                    }`}
-                    disabled={props.disabled}
-                    placeholder="ID"
-                    value={row.id}
-                    onBlur={() => {
-                      const nextRows = rows.map((current, rowIndex) =>
-                        rowIndex === index ? normalized : current,
-                      );
-                      setRows(nextRows);
-                      saveIfValid(nextRows);
-                      if (normalized.displayName.length === 0) {
-                        void lookupRow(index, nextRows);
+                  <div className="settings-authorized-list__field">
+                    {showColumnHeaders ? (
+                      <span
+                        aria-hidden="true"
+                        className="settings-authorized-list__policy-label"
+                      >
+                        ID
+                      </span>
+                    ) : null}
+                    <input
+                      aria-describedby={invalid ? descriptionId : undefined}
+                      aria-invalid={invalid ? "true" : undefined}
+                      aria-label={`${props.label} ID ${index + 1}`}
+                      className={`settings-input settings-authorized-list__id${
+                        invalid ? " settings-input--invalid" : ""
+                      }`}
+                      disabled={props.disabled}
+                      placeholder="ID"
+                      value={row.id}
+                      onBlur={() => {
+                        const nextRows = rows.map((current, rowIndex) =>
+                          rowIndex === index ? normalized : current,
+                        );
+                        setRows(nextRows);
+                        saveIfValid(nextRows);
+                        if (normalized.displayName.length === 0) {
+                          void lookupRow(index, nextRows);
+                        }
+                      }}
+                      onChange={(event) =>
+                        updateRow(index, { id: event.currentTarget.value })
                       }
-                    }}
-                    onChange={(event) =>
-                      updateRow(index, { id: event.currentTarget.value })
-                    }
-                  />
-                  <input
-                    aria-label={`${props.label} display name ${index + 1}`}
-                    className="settings-input settings-authorized-list__name"
-                    disabled={props.disabled}
-                    maxLength={64}
-                    placeholder="Display name"
-                    value={row.displayName}
-                    onBlur={() => {
-                      const nextRows = rows.map((current, rowIndex) =>
-                        rowIndex === index ? normalized : current,
-                      );
-                      setRows(nextRows);
-                      saveIfValid(nextRows);
-                    }}
-                    onChange={(event) =>
-                      updateRow(index, {
-                        displayName: event.currentTarget.value,
-                      })
-                    }
-                  />
+                    />
+                  </div>
+                  <div className="settings-authorized-list__field">
+                    {showColumnHeaders ? (
+                      <span
+                        aria-hidden="true"
+                        className="settings-authorized-list__policy-label"
+                      >
+                        Display name
+                      </span>
+                    ) : null}
+                    <input
+                      aria-label={`${props.label} display name ${index + 1}`}
+                      className="settings-input settings-authorized-list__name"
+                      disabled={props.disabled}
+                      maxLength={64}
+                      placeholder="Display name"
+                      value={row.displayName}
+                      onBlur={() => {
+                        const nextRows = rows.map((current, rowIndex) =>
+                          rowIndex === index ? normalized : current,
+                        );
+                        setRows(nextRows);
+                        saveIfValid(nextRows);
+                      }}
+                      onChange={(event) =>
+                        updateRow(index, {
+                          displayName: event.currentTarget.value,
+                        })
+                      }
+                    />
+                  </div>
                   {props.fullAccessWarningPolicy ? (
                     <div className="settings-authorized-list__policy">
                       <label

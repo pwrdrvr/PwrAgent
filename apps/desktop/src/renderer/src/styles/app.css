@@ -5991,7 +5991,9 @@ textarea,
   display: grid;
   grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto auto;
   gap: 8px;
-  align-items: center;
+  /* Bottom-align so labeled and unlabeled columns share an input baseline
+     (some columns carry a header, buttons carry none). */
+  align-items: end;
 }
 
 .settings-authorized-list__row--with-warning {
@@ -6020,9 +6022,15 @@ textarea,
   min-width: 0;
 }
 
-.settings-authorized-list__policy {
+.settings-authorized-list__policy,
+.settings-authorized-list__field {
   display: grid;
   gap: 3px;
+  min-width: 0;
+}
+
+.settings-authorized-list__field > .settings-input {
+  width: 100%;
 }
 
 .settings-authorized-list__policy-label {
