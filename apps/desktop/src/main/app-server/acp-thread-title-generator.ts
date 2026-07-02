@@ -11,6 +11,11 @@ import type {
 
 export type AcpThreadTitleGeneratorOptions = {
   backend: AcpBackendId;
+  configureHelperSession?: (params: {
+    client: AcpRuntimeClient;
+    parentSession?: AcpSessionMetadata;
+    session: AcpSessionMetadata;
+  }) => Promise<void>;
   getClient: (backend: AcpBackendId) => Promise<AcpRuntimeClient>;
   getSession: (
     backend: AcpBackendId,
@@ -20,6 +25,11 @@ export type AcpThreadTitleGeneratorOptions = {
 
 export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
   private readonly backend: AcpBackendId;
+  private readonly configureHelperSession?: (params: {
+    client: AcpRuntimeClient;
+    parentSession?: AcpSessionMetadata;
+    session: AcpSessionMetadata;
+  }) => Promise<void>;
   private readonly getClient: (backend: AcpBackendId) => Promise<AcpRuntimeClient>;
   private readonly getSession: (
     backend: AcpBackendId,
@@ -28,6 +38,7 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
 
   constructor(options: AcpThreadTitleGeneratorOptions) {
     this.backend = options.backend;
+    this.configureHelperSession = options.configureHelperSession;
     this.getClient = options.getClient;
     this.getSession = options.getSession;
   }
@@ -52,16 +63,30 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
     }
 
     try {
+      const parentSession = this.getSession(this.backend, threadId);
+      const helperSession = await client.startSession({
+        cwd: parentSession?.cwd,
+        executionMode: parentSession?.executionMode ?? "default",
+        title: "Name this thread",
+        acpRuntime: parentSession?.acpRuntime,
+        hidden: true,
+      });
+      await this.configureHelperSession?.({
+        client,
+        parentSession,
+        session: helperSession,
+      });
       const response = await client.sendControlPrompt({
-        sessionId: threadId,
+        sessionId: helperSession.sessionId,
         prompt: params.prompt,
       });
       const model = resolveAcpTitleModel(
-        this.getSession(this.backend, threadId)?.acpRuntime,
+        helperSession.acpRuntime ?? parentSession?.acpRuntime,
       );
       return {
         status: "ok",
         object: parseAcpTitleObject(response.text),
+        helperThreadId: helperSession.sessionId,
         ...(model ? { model } : {}),
       };
     } catch {

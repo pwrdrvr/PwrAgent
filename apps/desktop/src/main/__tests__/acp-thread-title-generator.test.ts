@@ -8,6 +8,16 @@ describe("AcpThreadTitleGenerator", () => {
     const sendControlPrompt = vi.fn(async () => ({
       text: '{"title": "\nFavorite cereal question\n"}',
     }));
+    const startSession = vi.fn(async () => ({
+      backendId: backend,
+      sessionId: "qwen-title-helper",
+      title: "Name this thread",
+      createdAt: 1001,
+      updatedAt: 1001,
+      executionMode: "default" as const,
+      hidden: true,
+      status: "idle" as const,
+    }));
     const generator = new AcpThreadTitleGenerator({
       backend,
       getClient: async () => ({
@@ -20,7 +30,7 @@ describe("AcpThreadTitleGenerator", () => {
         refreshSession: vi.fn(),
         sendControlPrompt,
         startPrompt: vi.fn(),
-        startSession: vi.fn(),
+        startSession,
       }),
       getSession: () => ({
         backendId: backend,
@@ -46,6 +56,18 @@ describe("AcpThreadTitleGenerator", () => {
     ).resolves.toMatchObject({
       status: "ok",
       object: { title: " Favorite cereal question " },
+      helperThreadId: "qwen-title-helper",
+    });
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionMode: "default",
+        hidden: true,
+        title: "Name this thread",
+      }),
+    );
+    expect(sendControlPrompt).toHaveBeenCalledWith({
+      sessionId: "qwen-title-helper",
+      prompt: "Name this thread",
     });
   });
 });

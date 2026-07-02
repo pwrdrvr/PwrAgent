@@ -4796,6 +4796,17 @@ export class DesktopBackendRegistry {
                   isAcpBackendId(backend)
                     ? new AcpThreadTitleGenerator({
                         backend,
+                        configureHelperSession: async ({
+                          client,
+                          parentSession,
+                          session,
+                        }) => {
+                          await this.applyAcpRuntimeSelection(
+                            client,
+                            session.sessionId,
+                            session.acpRuntime ?? parentSession?.acpRuntime,
+                          );
+                        },
                         getClient: (acpBackend) =>
                           this.acpBackend.getClient(acpBackend),
                         getSession: (acpBackend, threadId) =>
@@ -7651,38 +7662,17 @@ export class DesktopBackendRegistry {
           params.backend,
           params.threadId,
         );
-        const titleGenerationKey = buildTitleGenerationKey(
-          params.backend,
-          params.threadId,
-        );
-        this.pendingTitleGenerationInputs.set(titleGenerationKey, params.input);
-        if (
-          this.threadTitleGenerationService &&
-          extractFirstMeaningfulTextInput(params.input)
-        ) {
-          await this.safePersistTitleHelperSubAgent({
-            backend: params.backend,
-            threadId: params.threadId,
-            status: "pending",
-            reason: "Waiting for the initial turn to complete.",
-          });
-        }
-        try {
-          return await this.startAcpTurn({
-            backend: params.backend,
-            threadId: params.threadId,
-            input: params.input,
-          });
-        } catch (error) {
-          this.pendingTitleGenerationInputs.delete(titleGenerationKey);
-          await this.safePersistExistingTitleHelperSubAgent({
-            backend: params.backend,
-            threadId: params.threadId,
-            status: "failed",
-            reason: error instanceof Error ? error.message : String(error),
-          });
-          throw error;
-        }
+        const result = await this.startAcpTurn({
+          backend: params.backend,
+          threadId: params.threadId,
+          input: params.input,
+        });
+        this.scheduleThreadTitleGeneration({
+          backend: params.backend,
+          threadId: result.threadId,
+          input: params.input,
+        });
+        return result;
       } finally {
         this.reservedAcpStartThreadKeys.delete(reservationKey);
       }
@@ -13838,12 +13828,14 @@ export class DesktopBackendRegistry {
         return;
       }
 
-      await this.safePersistExistingTitleHelperSubAgent({
-        backend: params.backend,
-        threadId: params.threadId,
-        status: "running",
-        reason: "Generating a title.",
-      });
+      if (isAcpBackendId(params.backend)) {
+        await this.safePersistTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "running",
+          reason: "Generating a title.",
+        });
+      }
       this.logThreadTitleGeneration("requesting", params, undefined, {
         promptTitle: truncateLogValue(shortenDerivedThreadTitle(params.prompt) ?? params.prompt),
       });
@@ -17956,12 +17948,7 @@ export class DesktopBackendRegistry {
           event.backend,
           notification.params.threadId,
         );
-        if (event.notification.method === "turn/completed") {
-          this.schedulePendingThreadTitleGenerationFromLifecycle({
-            backend: event.backend,
-            threadId: notification.params.threadId,
-          });
-        } else {
+        if (event.notification.method !== "turn/completed") {
           this.pendingTitleGenerationInputs.delete(
             buildTitleGenerationKey(event.backend, notification.params.threadId),
           );

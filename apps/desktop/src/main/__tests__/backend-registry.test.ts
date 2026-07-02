@@ -1448,10 +1448,14 @@ function createAcpAgentStoreMock(records: AcpInstalledAgentRecord[]) {
 
 function createAcpSessionStoreMock(records: AcpSessionMetadata[]) {
   return {
-    listSessions: (backendId: string, params?: { archived?: boolean }) =>
+    listSessions: (
+      backendId: string,
+      params?: { archived?: boolean; includeHidden?: boolean },
+    ) =>
       records.filter(
         (record) =>
           record.backendId === backendId &&
+          (params?.includeHidden === true || !record.hidden) &&
           Boolean(record.archivedAt) === (params?.archived === true),
       ),
     getSession: (backendId: string, sessionId: string) =>
@@ -1544,17 +1548,25 @@ function createKimiAcpRegistry(options?: {
     initialize: vi.fn(async () => undefined),
     dispose: vi.fn(),
     startSession: vi.fn(async (params: {
+      acpRuntime?: BackendAcpSessionRuntimeState;
       cwd?: string;
       executionMode: "default" | "full-access";
+      hidden?: boolean;
+      title?: string;
     }) => {
+      const resolvedSessionId = params.hidden
+        ? `${sessionId}:title-helper:${sessions.length + 1}`
+        : sessionId;
       const metadata: AcpSessionMetadata = {
         backendId: acpBackendId,
-        sessionId,
-        title: "ACP session",
+        sessionId: resolvedSessionId,
+        title: params.title ?? "ACP session",
         cwd: params.cwd,
         createdAt: 1000,
         updatedAt: 1000,
         executionMode: params.executionMode,
+        ...(params.acpRuntime ? { acpRuntime: params.acpRuntime } : {}),
+        ...(params.hidden ? { hidden: true } : {}),
         status: "idle",
       };
       sessions.push(metadata);
@@ -11659,10 +11671,27 @@ command = "pnpm dev"
     const sendControlPrompt = vi.fn(async () => ({
       text: '{ "title": "Favorite cereal" }',
     }));
+    const helperSession: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "kimi-title-helper",
+      title: "Name this thread",
+      cwd: "/repo/project",
+      createdAt: 1001,
+      updatedAt: 1001,
+      executionMode: "default",
+      acpRuntime: {
+        configValues: {
+          model: "kimi-k2-0711-preview",
+        },
+        updatedAt: 1001,
+      },
+      hidden: true,
+      status: "idle",
+    };
     const acpClient = {
       initialize: vi.fn(async () => undefined),
       dispose: vi.fn(),
-      startSession: vi.fn(async () => sessions[0]!),
+      startSession: vi.fn(async () => helperSession),
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
@@ -11701,24 +11730,20 @@ command = "pnpm dev"
     await emitCompletedTurn(registry, acpBackendId, "kimi-session-1");
     await waitForCondition(() => sessions[0]?.title === "Favorite cereal");
 
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/repo/project",
+        hidden: true,
+        title: "Name this thread",
+      }),
+    );
     expect(sendControlPrompt).toHaveBeenCalledWith({
-      sessionId: "kimi-session-1",
+      sessionId: "kimi-title-helper",
       prompt: expect.stringContaining(prompt),
     });
     expect(sessions[0]).toMatchObject({
       title: "Favorite cereal",
       titleSource: "derived",
-    });
-    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
-      backend: acpBackendId,
-      threadId: "kimi-session-1",
-      subAgent: expect.objectContaining({
-        monitorId: "system:title-helper:acp:kimi:kimi-session-1",
-        task: "Name this thread",
-        status: "pending",
-        agentName: "PwrAgent",
-        lastMessage: "Waiting for the initial turn to complete.",
-      }),
     });
     expect(upsertSubAgentSpy).toHaveBeenCalledWith({
       backend: acpBackendId,
@@ -11740,6 +11765,7 @@ command = "pnpm dev"
         status: "success",
         agentName: "PwrAgent",
         preferredModel: "kimi-k2-0711-preview",
+        monitorThreadId: "kimi-title-helper",
         lastMessage: "Generated title: Favorite cereal",
         outcome: "success",
       }),

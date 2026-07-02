@@ -260,6 +260,7 @@ export class AcpAgentClient {
     title?: string;
     createdAt?: number;
     acpRuntime?: BackendAcpSessionRuntimeState;
+    hidden?: boolean;
   }): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
     const mcpServers = this.buildMcpServers({
@@ -305,6 +306,7 @@ export class AcpAgentClient {
       updatedAt: now,
       executionMode: params.executionMode,
       acpRuntime: combinedRuntimeState,
+      ...(params.hidden ? { hidden: true } : {}),
       status: "idle",
     };
     this.options.store.upsertSession(metadata);
