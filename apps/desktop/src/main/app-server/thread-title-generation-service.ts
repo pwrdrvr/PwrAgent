@@ -102,6 +102,12 @@ export class ThreadTitleGenerationService {
     this.timeoutMs = options.timeoutMs ?? THREAD_TITLE_TIMEOUT_MS;
   }
 
+  canGenerateTitle(backend: AppServerBackendKind): boolean {
+    return Boolean(
+      this.generators[backend] ?? this.generatorResolver?.(backend),
+    );
+  }
+
   async generateTitle(params: {
     backend: AppServerBackendKind;
     threadId?: string;

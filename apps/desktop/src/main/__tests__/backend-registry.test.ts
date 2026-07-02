@@ -11031,12 +11031,20 @@ command = "pnpm dev"
 
   it("schedules Codex title generation from lifecycle events while turn/start is still pending", async () => {
     const startTurnDelay = createDeferred<void>();
+    const titleGenerationStarted = createDeferred<void>();
+    const titleGenerationRelease = createDeferred<void>();
     const titleService = {
-      generateTitle: vi.fn(async () => ({
-        status: "generated" as const,
-        title: "Lifecycle title",
-      })),
+      generateTitle: vi.fn(async () => {
+        titleGenerationStarted.resolve();
+        await titleGenerationRelease.promise;
+        return {
+          status: "generated" as const,
+          title: "Lifecycle title",
+        };
+      }),
     };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
       startTurnDelay: startTurnDelay.promise,
@@ -11055,7 +11063,7 @@ command = "pnpm dev"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       threadTitleGenerationService: titleService,
     });
 
@@ -11078,6 +11086,29 @@ command = "pnpm dev"
         },
       },
     });
+    await titleGenerationStarted.promise;
+    await waitForCondition(() =>
+      upsertSubAgentSpy.mock.calls.some(
+        ([call]) => call.subAgent.status === "running",
+      ),
+    );
+
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-lifecycle-title",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-lifecycle-title",
+        task: "Name this thread",
+        status: "running",
+        backend: "codex",
+        agentName: "PwrAgent",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        lastMessage: "Generating a title.",
+      }),
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+    titleGenerationRelease.resolve();
     await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
@@ -11148,7 +11179,26 @@ command = "pnpm dev"
       threadId: "thread-title-helper-parent",
       input: [{ type: "text", text: "Make button" }],
     });
-    await waitForCondition(() => upsertSubAgentSpy.mock.calls.length > 0);
+    await waitForCondition(() =>
+      upsertSubAgentSpy.mock.calls.some(
+        ([call]) => call.subAgent.status === "success",
+      ),
+    );
+
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-title-helper-parent",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-title-helper-parent",
+        task: "Name this thread",
+        status: "running",
+        backend: "codex",
+        agentName: "PwrAgent",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        lastMessage: "Generating a title.",
+      }),
+    });
 
     expect(upsertSubAgentSpy).toHaveBeenCalledWith({
       backend: "codex",
@@ -11157,6 +11207,7 @@ command = "pnpm dev"
         monitorId: "system:title-helper:codex:thread-title-helper-parent",
         task: "Name this thread",
         status: "success",
+        backend: "codex",
         agentName: "PwrAgent",
         preferredModel: "gpt-5.4-mini",
         preferredReasoningEffort: "low",
@@ -11222,7 +11273,18 @@ command = "pnpm dev"
     const overlayStore = createOverlayStoreMock();
     const upsertSubAgentSpy = vi
       .spyOn(overlayStore, "upsertThreadSubAgent")
-      .mockRejectedValueOnce(new Error("overlay write failed"));
+      .mockImplementation(async ({ backend, threadId, subAgent }) => {
+        if (subAgent.status === "success") {
+          throw new Error("overlay write failed");
+        }
+        return {
+          backend,
+          threadId,
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          subAgents: [subAgent],
+        };
+      });
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
       threads: [
@@ -11259,7 +11321,7 @@ command = "pnpm dev"
       threadId: "thread-title-helper-persist-failure",
       name: "Readable thread title",
     });
-    expect(upsertSubAgentSpy).toHaveBeenCalledTimes(1);
+    expect(upsertSubAgentSpy).toHaveBeenCalledTimes(2);
     expect(mainLoggerMock.warn).toHaveBeenCalledWith(
       "threadTitleHelperSubAgentPersistence",
       expect.objectContaining({

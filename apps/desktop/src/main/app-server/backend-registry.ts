@@ -208,7 +208,10 @@ import {
   type AcpSessionStoreLike,
   type LocalAcpDiscovery,
 } from "./acp-backend-adapter";
-import { CodexAppServerClient } from "../codex-app-server/client";
+import {
+  CodexAppServerClient,
+  DEFAULT_CODEX_THREAD_TITLE_MODEL,
+} from "../codex-app-server/client";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
@@ -988,7 +991,9 @@ type PendingServerRequest = {
   reject: (error: Error) => void;
 };
 
-type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle">;
+type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle"> & {
+  canGenerateTitle?: (backend: AppServerBackendKind) => boolean;
+};
 
 type ThreadTitleGenerationLogStatus =
   | ThreadTitleGenerationResult["status"]
@@ -13752,6 +13757,12 @@ export class DesktopBackendRegistry {
     if (!this.threadTitleGenerationService) {
       return;
     }
+    if (
+      this.threadTitleGenerationService.canGenerateTitle &&
+      !this.threadTitleGenerationService.canGenerateTitle(params.backend)
+    ) {
+      return;
+    }
 
     const prompt = extractFirstMeaningfulTextInput(params.input);
     if (!prompt) {
@@ -13831,7 +13842,7 @@ export class DesktopBackendRegistry {
         return;
       }
 
-      if (isAcpBackendId(params.backend)) {
+      if (params.backend === "codex" || isAcpBackendId(params.backend)) {
         const titleHelperRuntime = this.resolveTitleHelperRuntime(params);
         await this.safePersistTitleHelperSubAgent({
           backend: params.backend,
@@ -14153,6 +14164,12 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
   }): { model?: string; reasoningEffort?: string } {
+    if (params.backend === "codex") {
+      return {
+        model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+        reasoningEffort: "low",
+      };
+    }
     if (!isAcpBackendId(params.backend)) {
       return {};
     }

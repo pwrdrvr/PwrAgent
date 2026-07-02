@@ -94,10 +94,28 @@ import type {
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
-const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.4-mini";
+export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.4-mini";
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
 const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
   web_search: "disabled",
+  include_permissions_instructions: false,
+  include_apps_instructions: false,
+  include_collaboration_mode_instructions: false,
+  include_environment_context: false,
+  skills: {
+    include_instructions: false,
+    bundled: { enabled: false },
+  },
+};
+const LEGACY_CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
+  web_search: "disabled",
+  include_permissions_instructions: false,
+  include_apps_instructions: false,
+  include_collaboration_mode_instructions: false,
+  include_environment_context: false,
+  skills: {
+    include_instructions: false,
+  },
 };
 const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY =
   "features.default_mode_request_user_input";
@@ -6240,8 +6258,19 @@ export class CodexAppServerClient {
           }),
           buildThreadStartPayload({
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            serviceTier: "priority",
+            ephemeral: true,
+            config: LEGACY_CODEX_THREAD_TITLE_CONFIG,
+          }),
+          buildThreadStartPayload({
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
             ephemeral: true,
             config: CODEX_THREAD_TITLE_CONFIG,
+          }),
+          buildThreadStartPayload({
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            ephemeral: true,
+            config: LEGACY_CODEX_THREAD_TITLE_CONFIG,
           }),
         ],
         timeoutMs,

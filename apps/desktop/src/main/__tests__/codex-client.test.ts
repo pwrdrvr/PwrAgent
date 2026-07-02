@@ -6107,6 +6107,14 @@ describe("CodexAppServerClient", () => {
           serviceTier: "priority",
           config: {
             web_search: "disabled",
+            include_permissions_instructions: false,
+            include_apps_instructions: false,
+            include_collaboration_mode_instructions: false,
+            include_environment_context: false,
+            skills: {
+              include_instructions: false,
+              bundled: { enabled: false },
+            },
           },
         }),
       })
