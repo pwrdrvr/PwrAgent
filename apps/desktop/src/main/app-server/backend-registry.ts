@@ -3758,6 +3758,32 @@ function titleHelperSubAgentId(
   return `system:title-helper:${backend}:${threadId}`;
 }
 
+function titleHelperSubAgentMessage(params: {
+  result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+  status: "pending" | "running" | "success" | "failed" | "cancelled";
+  reason?: string;
+}): string {
+  if (params.status === "pending") {
+    return params.reason ?? "Title generation is queued.";
+  }
+  if (params.status === "running") {
+    return params.reason ?? "Generating a title.";
+  }
+  if (params.status === "success") {
+    return params.result?.title
+      ? `Generated title: ${params.result.title}`
+      : "Generated a title.";
+  }
+  if (params.status === "cancelled") {
+    return params.reason
+      ? `Title generation cancelled: ${params.reason}`
+      : "Title generation cancelled.";
+  }
+  return params.reason
+    ? `Title generation failed: ${params.reason}`
+    : "Title generation failed.";
+}
+
 function buildPromptHash(prompt: string): string {
   return prompt.replace(/\s+/g, " ").trim().toLowerCase();
 }
@@ -7630,6 +7656,17 @@ export class DesktopBackendRegistry {
           params.threadId,
         );
         this.pendingTitleGenerationInputs.set(titleGenerationKey, params.input);
+        if (
+          this.threadTitleGenerationService &&
+          extractFirstMeaningfulTextInput(params.input)
+        ) {
+          await this.safePersistTitleHelperSubAgent({
+            backend: params.backend,
+            threadId: params.threadId,
+            status: "pending",
+            reason: "Waiting for the initial turn to complete.",
+          });
+        }
         try {
           return await this.startAcpTurn({
             backend: params.backend,
@@ -7638,6 +7675,12 @@ export class DesktopBackendRegistry {
           });
         } catch (error) {
           this.pendingTitleGenerationInputs.delete(titleGenerationKey);
+          await this.safePersistExistingTitleHelperSubAgent({
+            backend: params.backend,
+            threadId: params.threadId,
+            status: "failed",
+            reason: error instanceof Error ? error.message : String(error),
+          });
           throw error;
         }
       } finally {
@@ -13786,9 +13829,21 @@ export class DesktopBackendRegistry {
           "current_title_not_eligible",
           buildTitleEligibilityLogDetails(currentThread, params.prompt)
         );
+        await this.safePersistExistingTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "cancelled",
+          reason: "Current title is no longer eligible.",
+        });
         return;
       }
 
+      await this.safePersistExistingTitleHelperSubAgent({
+        backend: params.backend,
+        threadId: params.threadId,
+        status: "running",
+        reason: "Generating a title.",
+      });
       this.logThreadTitleGeneration("requesting", params, undefined, {
         promptTitle: truncateLogValue(shortenDerivedThreadTitle(params.prompt) ?? params.prompt),
       });
@@ -13803,14 +13858,12 @@ export class DesktopBackendRegistry {
           params,
           result?.reason ?? "title_generation_unavailable"
         );
-        if (result?.status === "failed" || result?.status === "invalid") {
-          await this.safePersistTitleHelperSubAgent({
-            backend: params.backend,
-            threadId: params.threadId,
-            status: "failed",
-            reason: result.reason,
-          });
-        }
+        await this.safePersistExistingTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "failed",
+          reason: result?.reason ?? "title_generation_unavailable",
+        });
         if (isAcpBackendId(params.backend)) {
           await this.applyPromptDerivedAcpThreadTitle({
             backend: params.backend,
@@ -13831,6 +13884,12 @@ export class DesktopBackendRegistry {
         this.logThreadTitleGeneration("skipped", params, "stale_generation", {
           generatedTitle: truncateLogValue(result.title),
         });
+        await this.safePersistExistingTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "cancelled",
+          reason: "Title generation became stale.",
+        });
         return;
       }
 
@@ -13846,6 +13905,12 @@ export class DesktopBackendRegistry {
           "latest_title_not_eligible",
           buildTitleEligibilityLogDetails(latestThread, params.prompt)
         );
+        await this.safePersistExistingTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "cancelled",
+          reason: "Latest title is no longer eligible.",
+        });
         return;
       }
 
@@ -13890,7 +13955,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
-    status: "success" | "failed";
+    status: "pending" | "running" | "success" | "failed" | "cancelled";
     reason?: string;
   }): Promise<void> {
     try {
@@ -13904,6 +13969,35 @@ export class DesktopBackendRegistry {
         persistenceError: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async safePersistExistingTitleHelperSubAgent(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+    status: "running" | "success" | "failed" | "cancelled";
+    reason?: string;
+  }): Promise<void> {
+    try {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      const monitorId = titleHelperSubAgentId(params.backend, params.threadId);
+      if (!overlay?.subAgents?.some((subAgent) => subAgent.monitorId === monitorId)) {
+        return;
+      }
+    } catch (error) {
+      backendRegistryLog.warn("threadTitleHelperSubAgentLookup", {
+        backend: params.backend,
+        threadId: params.threadId,
+        status: params.status,
+        reason: params.reason ?? null,
+        lookupError: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    await this.safePersistTitleHelperSubAgent(params);
   }
 
   private async applyPromptDerivedAcpThreadTitle(params: {
@@ -13935,11 +14029,18 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
-    status: "success" | "failed";
+    status: "pending" | "running" | "success" | "failed" | "cancelled";
     reason?: string;
   }): Promise<void> {
     const now = Date.now();
     const monitorId = titleHelperSubAgentId(params.backend, params.threadId);
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const existing = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === monitorId,
+    );
     const usageSnapshot = params.result?.tokenUsage
       ? buildTaskMonitorUsageSnapshot({
           model: params.result.model,
@@ -13947,11 +14048,23 @@ export class DesktopBackendRegistry {
           tokenUsage: params.result.tokenUsage,
         })
       : undefined;
+    const terminal =
+      params.status === "success" ||
+      params.status === "failed" ||
+      params.status === "cancelled";
+    const outcome =
+      params.status === "success"
+        ? "success"
+        : params.status === "failed"
+          ? "failure"
+          : params.status === "cancelled"
+            ? "cancelled"
+            : undefined;
     const subAgent: ThreadSubAgentSummary = {
       monitorId,
       task: "Name this thread",
       status: params.status,
-      createdAt: now,
+      createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       agentName: "PwrAgent",
       ...(params.result?.model ? { preferredModel: params.result.model } : {}),
@@ -13962,22 +14075,24 @@ export class DesktopBackendRegistry {
         ? { monitorThreadId: params.result.helperThreadId }
         : {}),
       ...(params.result?.helperTurnId ? { monitorTurnId: params.result.helperTurnId } : {}),
-      lastMessage:
-        params.status === "success"
-          ? params.result?.title
-            ? `Generated title: ${params.result.title}`
-            : "Generated a title."
-          : params.reason
-            ? `Title generation failed: ${params.reason}`
-            : "Title generation failed.",
-      outcome: params.status === "success" ? "success" : "failure",
-      completedAt: now,
-      completionSource: {
-        type: "pwragent_fallback",
-        reason: "system_title_helper",
-        recoveryAttempted: false,
-        terminalStatus: params.status === "success" ? "completed" : "failed",
-      },
+      lastMessage: titleHelperSubAgentMessage(params),
+      ...(outcome ? { outcome } : {}),
+      ...(terminal ? { completedAt: now } : {}),
+      ...(terminal
+        ? {
+            completionSource: {
+              type: "pwragent_fallback",
+              reason: "system_title_helper",
+              recoveryAttempted: false,
+              terminalStatus:
+                params.status === "success"
+                  ? "completed"
+                  : params.status === "cancelled"
+                    ? "cancelled"
+                    : "failed",
+            },
+          }
+        : {}),
       ...(usageSnapshot ? { monitorUsage: usageSnapshot } : {}),
     };
 

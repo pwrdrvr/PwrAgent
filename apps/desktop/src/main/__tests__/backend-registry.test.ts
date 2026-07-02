@@ -2962,14 +2962,15 @@ describe("DesktopBackendRegistry", () => {
     await waitForCondition(() =>
       emittedEvents.some((event) => event.notification.method === "thread/name/updated"),
     );
-    expect(emittedEvents.map((event) => event.notification.method)).toEqual([
+    const emittedMethods = emittedEvents.map((event) => event.notification.method);
+    expect(emittedMethods.filter((method) => method.startsWith("turn/"))).toEqual([
       "turn/started",
-      "thread/name/updated",
       "turn/completed",
       "turn/started",
       "turn/completed",
       "turn/cancelled",
     ]);
+    expect(emittedMethods).toContain("thread/name/updated");
 
     await registry.close();
     expect(acpClient.dispose).toHaveBeenCalledTimes(1);
@@ -11209,7 +11210,7 @@ command = "pnpm dev"
     const overlayStore = createOverlayStoreMock();
     const upsertSubAgentSpy = vi
       .spyOn(overlayStore, "upsertThreadSubAgent")
-      .mockRejectedValue(new Error("overlay write failed"));
+      .mockRejectedValueOnce(new Error("overlay write failed"));
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
       threads: [
@@ -11707,6 +11708,28 @@ command = "pnpm dev"
     expect(sessions[0]).toMatchObject({
       title: "Favorite cereal",
       titleSource: "derived",
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:acp:kimi:kimi-session-1",
+        task: "Name this thread",
+        status: "pending",
+        agentName: "PwrAgent",
+        lastMessage: "Waiting for the initial turn to complete.",
+      }),
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:acp:kimi:kimi-session-1",
+        task: "Name this thread",
+        status: "running",
+        agentName: "PwrAgent",
+        lastMessage: "Generating a title.",
+      }),
     });
     expect(upsertSubAgentSpy).toHaveBeenCalledWith({
       backend: acpBackendId,
