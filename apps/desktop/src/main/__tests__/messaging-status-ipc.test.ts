@@ -408,6 +408,66 @@ describe("messaging status ipc", () => {
     expect(runtimeMock.deliverPairingOutcome).not.toHaveBeenCalled();
   });
 
+  it("maps a Slack thread pairing to the channel name and team ID, not the thread text", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    // Pairing sent as a thread reply in #signals-chat: title is the thread's
+    // root message ("hi"), parentTitle is the channel name, bucketId the team.
+    const entry = {
+      id: "pairing-slack-thread",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U079K80HTGS", displayName: "Harold" },
+      observedChat: {
+        id: "G01N9LZU287",
+        kind: "thread",
+        title: "hi",
+        parentId: "1712023032.000100",
+        parentTitle: "signals-chat",
+        bucketId: "T025C2NKT",
+      },
+    };
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    pairingStoreMock.recordApproval.mockReturnValue(entry);
+
+    const approve = async (target: string) => {
+      settingsServiceMock.writeConfigPatch.mockClear();
+      runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+      registerMessagingStatusIpcHandlers();
+      await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+        {},
+        { entryId: entry.id, target, consume: false },
+      );
+    };
+
+    // Channel approval uses the channel name (parentTitle), never "hi".
+    await approve("conversation");
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedChannels: [{ id: "G01N9LZU287", displayName: "signals-chat" }],
+        },
+      },
+    });
+
+    // Team approval uses the workspace ID with a blank name (never the
+    // channel name), so a Lookup can fill it in.
+    await approve("team");
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedWorkspaces: [{ id: "T025C2NKT", displayName: "" }],
+        },
+      },
+    });
+  });
+
   it("approves Feishu user and group pairing into the Feishu allowlists", async () => {
     const { registerMessagingStatusIpcHandlers } = await import(
       "../ipc/messaging-status"

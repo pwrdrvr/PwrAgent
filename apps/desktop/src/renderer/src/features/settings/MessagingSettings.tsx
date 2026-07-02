@@ -2231,6 +2231,27 @@ function pairingEntryDetails(entry: MessagingPairingEntry): string[] {
     details.push(`Phone ${entry.observedActor.phoneNumber}`);
   }
   const chat = entry.observedChat;
+  // Slack: label fields by what they actually are. For a thread the channel
+  // name is in parentTitle (title is the thread's root message), and the
+  // bucketId is the workspace/team — not the channel.
+  if (entry.platform === "slack" && chat) {
+    if (chat.kind === "dm") {
+      if (chat.title) details.push(`DM with ${chat.title}`);
+      if (chat.id) details.push(`DM ID ${chat.id}`);
+    } else {
+      const channelName =
+        chat.kind === "thread"
+          ? (chat.parentTitle ?? chat.title)
+          : (chat.title ?? chat.parentTitle);
+      if (channelName) details.push(`Channel ${channelName}`);
+      if (chat.id) details.push(`Channel ID ${chat.id}`);
+      if (chat.kind === "thread" && chat.title) {
+        details.push(`Thread: ${chat.title}`);
+      }
+    }
+    if (chat.bucketId) details.push(`Team ID ${chat.bucketId}`);
+    return details;
+  }
   if (chat?.id) {
     if (entry.platform === "telegram" && chat.kind === "topic") {
       details.push(`Topic ID ${chat.id}`);

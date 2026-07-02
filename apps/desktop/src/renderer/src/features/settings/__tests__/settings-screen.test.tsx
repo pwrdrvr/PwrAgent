@@ -2253,7 +2253,7 @@ describe("SettingsScreen", () => {
     const requestCard = request.closest(".settings-pairing__request");
     expect(requestCard).not.toBeNull();
     expect(requestCard).toHaveTextContent("User ID U012ABCDEF0");
-    expect(requestCard).toHaveTextContent("Chat ID C012ABCDEF0");
+    expect(requestCard).toHaveTextContent("Channel ID C012ABCDEF0");
     expect(requestCard).toHaveTextContent("team-alerts");
 
     fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {

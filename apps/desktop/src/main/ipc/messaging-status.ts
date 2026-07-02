@@ -267,20 +267,22 @@ function contactForPairing(
     throw new Error("Pairing request is missing observed identity.");
   }
   if (target === "team") {
-    const id = entry.observedChat.bucketId ?? entry.observedChat.parentId;
+    // The team/workspace ID is the observed bucket (Slack teamId). Never fall
+    // back to parentId — for a thread that is the thread timestamp, not a team.
+    const id = entry.observedChat.bucketId;
     if (!id) {
       throw new Error("Slack team approval requires an observed workspace ID.");
     }
-    return {
-      id,
-      displayName: entry.observedChat.parentTitle ?? "",
-    };
+    // We don't resolve the workspace name during approval; leave it blank so
+    // the operator can Lookup it. Do NOT use parentTitle — for a channel/thread
+    // that is the *channel* name, not the workspace name.
+    return { id, displayName: "" };
   }
   if (target === "conversation" || (!target && entry.scope === "bucket")) {
     if (entry.platform === "slack") {
       return {
         id: entry.observedChat.id,
-        displayName: entry.observedChat.title ?? entry.observedChat.parentTitle ?? "",
+        displayName: slackChannelDisplayName(entry.observedChat),
       };
     }
     const id = entry.observedChat.bucketId ?? entry.observedChat.parentId ?? entry.observedChat.id;
@@ -295,6 +297,20 @@ function contactForPairing(
       entry.observedActor.displayName
       ?? (entry.observedActor.username ? `@${entry.observedActor.username}` : ""),
   };
+}
+
+/**
+ * The channel name for a Slack observed chat. For a thread the channel name
+ * lives in `parentTitle` (its `title` is the thread's root message); for a
+ * plain channel it lives in `title`.
+ */
+function slackChannelDisplayName(
+  chat: NonNullable<MessagingPairingEntry["observedChat"]>,
+): string {
+  if (chat.kind === "thread") {
+    return chat.parentTitle ?? chat.title ?? "";
+  }
+  return chat.title ?? chat.parentTitle ?? "";
 }
 
 function recordPairingActivity(entry: MessagingPairingEntry, summary: string): void {
