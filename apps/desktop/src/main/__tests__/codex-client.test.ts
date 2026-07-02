@@ -943,6 +943,26 @@ vi.mock("../codex-app-server/stdio-transport", () => {
   };
 });
 
+async function waitForLatestTransportRequest(
+  method: string,
+  timeoutMs = 1_000
+): Promise<MockTransport> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const transport = MockTransport.instances.at(-1);
+    if (
+      transport?.sentMessages.some((message) => {
+        const payload = JSON.parse(message) as { method?: string };
+        return payload.method === method;
+      })
+    ) {
+      return transport;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${method} request`);
+}
+
 describe("CodexAppServerClient", () => {
   beforeEach(() => {
     codexClientLogError.mockClear();
@@ -6025,9 +6045,7 @@ describe("CodexAppServerClient", () => {
       timeoutMs: 5_000,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const transport = MockTransport.instances.at(-1);
-    expect(transport).toBeDefined();
+    const transport = await waitForLatestTransportRequest("thread/start");
 
     transport!.emitInbound({
       jsonrpc: "2.0",
@@ -6098,10 +6116,13 @@ describe("CodexAppServerClient", () => {
     const requests = transport!.sentMessages.map(
       (message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> }
     );
+    const titleHelperWorkspace = path.join(os.tmpdir(), "pwragent", "codex-title-helper");
     expect(requests).toContainEqual(
       expect.objectContaining({
         method: "thread/start",
         params: expect.objectContaining({
+          cwd: titleHelperWorkspace,
+          runtimeWorkspaceRoots: [titleHelperWorkspace],
           ephemeral: true,
           model: "gpt-5.4-mini",
           serviceTier: "priority",
@@ -6180,9 +6201,7 @@ describe("CodexAppServerClient", () => {
       timeoutMs: 5_000,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const transport = MockTransport.instances.at(-1);
-    expect(transport).toBeDefined();
+    const transport = await waitForLatestTransportRequest("thread/start");
 
     transport!.emitInbound({
       jsonrpc: "2.0",

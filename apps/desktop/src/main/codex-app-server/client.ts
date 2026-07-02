@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   estimateOpenAiTokenUsageCost,
@@ -96,6 +98,11 @@ const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.4-mini";
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
+const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
+  tmpdir(),
+  "pwragent",
+  "codex-title-helper",
+);
 const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
   web_search: "disabled",
   include_permissions_instructions: false,
@@ -4739,6 +4746,7 @@ function normalizeCodexReasoningEffort(
 
 function buildThreadStartPayload(params: {
   cwd?: string;
+  runtimeWorkspaceRoots?: string[];
   model?: string;
   approvalPolicy?: string;
   sandbox?: string;
@@ -4757,6 +4765,9 @@ function buildThreadStartPayload(params: {
 
   if (params.cwd?.trim()) {
     base.cwd = params.cwd.trim();
+  }
+  if (params.runtimeWorkspaceRoots !== undefined) {
+    base.runtimeWorkspaceRoots = params.runtimeWorkspaceRoots;
   }
   if (params.model?.trim()) {
     base.model = params.model.trim();
@@ -5316,6 +5327,11 @@ type HelperTurnResult =
       status: "failed";
       error: Error;
     };
+
+async function ensureCodexThreadTitleWorkspace(): Promise<string> {
+  await mkdir(CODEX_THREAD_TITLE_WORKSPACE_DIR, { recursive: true });
+  return CODEX_THREAD_TITLE_WORKSPACE_DIR;
+}
 
 export class CodexAppServerClient {
   private readonly connection: JsonRpcConnection;
@@ -6245,29 +6261,38 @@ export class CodexAppServerClient {
 
     let helperThreadId: string | undefined;
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
+    const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
     try {
       const threadStartResult = await requestWithFallbacks({
         client: this.connection,
         methods: ["thread/start"],
         payloads: [
           buildThreadStartPayload({
+            cwd: helperWorkspaceDir,
+            runtimeWorkspaceRoots: [helperWorkspaceDir],
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
             serviceTier: "priority",
             ephemeral: true,
             config: CODEX_THREAD_TITLE_CONFIG,
           }),
           buildThreadStartPayload({
+            cwd: helperWorkspaceDir,
+            runtimeWorkspaceRoots: [helperWorkspaceDir],
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
             serviceTier: "priority",
             ephemeral: true,
             config: LEGACY_CODEX_THREAD_TITLE_CONFIG,
           }),
           buildThreadStartPayload({
+            cwd: helperWorkspaceDir,
+            runtimeWorkspaceRoots: [helperWorkspaceDir],
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
             ephemeral: true,
             config: CODEX_THREAD_TITLE_CONFIG,
           }),
           buildThreadStartPayload({
+            cwd: helperWorkspaceDir,
+            runtimeWorkspaceRoots: [helperWorkspaceDir],
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
             ephemeral: true,
             config: LEGACY_CODEX_THREAD_TITLE_CONFIG,
