@@ -1298,6 +1298,18 @@ textarea,
   -webkit-app-region: no-drag;
 }
 
+/* Chromium ignores `-webkit-app-region` on inline-level boxes, so the
+   no-drag rule above silently fails for the plain-`inline` label span and
+   the replaced-`inline` <svg> icons. Those children then fall back to the
+   title bar's inherited drag region, which makes the OS swallow
+   pointerenter/click events over them — the popover only opened over the
+   button's bare padding. Forcing a non-inline display lets the no-drag
+   above take effect across the whole control. (The button, chips, and
+   platforms wrapper are already `inline-flex`, which is why they worked.) */
+.messaging-status-bar svg {
+  display: block;
+}
+
 .messaging-status-chip {
   position: relative;
   display: inline-flex;
@@ -1316,6 +1328,8 @@ textarea,
 }
 
 .messaging-status-chip__fallback {
+  /* Non-inline so no-drag applies — see .messaging-status-bar svg note. */
+  display: inline-flex;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1365,6 +1379,10 @@ textarea,
 }
 
 .messaging-status-controller__label {
+  /* inline-flex (not the default `inline`) so `-webkit-app-region: no-drag`
+     applies — see the .messaging-status-bar svg note above. */
+  display: inline-flex;
+  align-items: center;
   font: 700 10px/1 var(--font-sans, sans-serif);
   letter-spacing: 0.08em;
   text-transform: uppercase;
