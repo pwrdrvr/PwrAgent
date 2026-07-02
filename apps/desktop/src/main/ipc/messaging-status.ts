@@ -31,6 +31,7 @@ import { getMainLogger } from "../log";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import { showMessagingActivityWindow } from "../messaging-activity-window";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import { getRuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease";
 import { subscribersForChannel } from "../window-channels";
@@ -101,13 +102,14 @@ function buildPairingApprovalPatch(
   entry: MessagingPairingEntry,
   snapshot: DesktopSettingsSnapshot,
   target?: MessagingPairingApprovalTarget,
+  options?: { teamName?: string },
 ): { added: boolean; patch: DesktopSettingsConfigPatch } {
   if (entry.status !== "observed" || !entry.observedActor || !entry.observedChat) {
     throw new Error("Pairing request has not been observed yet.");
   }
 
   const approvalTarget = entry.platform === "slack" ? target : undefined;
-  const contact = contactForPairing(entry, approvalTarget);
+  const contact = contactForPairing(entry, approvalTarget, options?.teamName);
   const merge = (
     current: DesktopAuthorizedContact[],
   ): { added: boolean; contacts: DesktopAuthorizedContact[] } => {
@@ -262,6 +264,7 @@ function buildPairingApprovalPatch(
 function contactForPairing(
   entry: MessagingPairingEntry,
   target?: MessagingPairingApprovalTarget,
+  teamName?: string,
 ): DesktopAuthorizedContact {
   if (!entry.observedActor || !entry.observedChat) {
     throw new Error("Pairing request is missing observed identity.");
@@ -273,10 +276,10 @@ function contactForPairing(
     if (!id) {
       throw new Error("Slack team approval requires an observed workspace ID.");
     }
-    // We don't resolve the workspace name during approval; leave it blank so
-    // the operator can Lookup it. Do NOT use parentTitle — for a channel/thread
-    // that is the *channel* name, not the workspace name.
-    return { id, displayName: "" };
+    // The workspace name is resolved best-effort at approval time (blank if the
+    // lookup is unavailable or times out). Never use parentTitle — for a
+    // channel/thread that is the *channel* name, not the workspace name.
+    return { id, displayName: teamName ?? "" };
   }
   if (target === "conversation" || (!target && entry.scope === "bucket")) {
     if (entry.platform === "slack") {
@@ -297,6 +300,47 @@ function contactForPairing(
       entry.observedActor.displayName
       ?? (entry.observedActor.username ? `@${entry.observedActor.username}` : ""),
   };
+}
+
+/**
+ * Best-effort Slack workspace/team name lookup for a pairing approval. Uses the
+ * same `resolveContact` path as the Settings "Lookup" button, but bounded by a
+ * short timeout and swallowing all failures so approval never hangs or throws —
+ * a blank name just means the operator can Lookup it later.
+ */
+async function resolveSlackWorkspaceName(
+  service: DesktopSettingsService,
+  teamId: string,
+  options?: { timeoutMs?: number },
+): Promise<string | undefined> {
+  const botToken = service.resolveSlackBotTokenSync();
+  if (!botToken) return undefined;
+  try {
+    const provider = await import("@pwragent/messaging-provider-slack");
+    const result = await withTimeout(
+      provider.resolveContact({ botToken }, { id: teamId, kind: "workspace" }),
+      options?.timeoutMs ?? 2_000,
+    );
+    if (result && result.status === "ok" && result.displayName) {
+      return result.displayName;
+    }
+  } catch (error) {
+    log.warn("slack workspace pairing name lookup failed", {
+      teamId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return undefined;
+}
+
+/** Resolve `promise`, or `undefined` if it takes longer than `ms`. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return Promise.race([
+    promise,
+    new Promise<undefined>((resolve) => {
+      setTimeout(() => resolve(undefined), ms);
+    }),
+  ]);
 }
 
 /**
@@ -423,10 +467,20 @@ export function registerMessagingStatusIpcHandlers(): void {
       const pairing = runtime.listPairingRequests({ includeResolved: true }).entries
         .find((entry) => entry.id === request.entryId);
       if (!pairing) throw new Error("Pairing request not found.");
+      // For a Slack team approval, resolve the workspace name best-effort so the
+      // saved row carries a label (blank on failure/timeout), mirroring how the
+      // channel name is captured at observe time.
+      const teamName =
+        pairing.platform === "slack"
+        && request.target === "team"
+        && pairing.observedChat?.bucketId
+          ? await resolveSlackWorkspaceName(service, pairing.observedChat.bucketId)
+          : undefined;
       const approval = buildPairingApprovalPatch(
         pairing,
         await service.readSettings(),
         request.target,
+        { teamName },
       );
       const next = await service.writeConfigPatch(approval.patch);
       await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(

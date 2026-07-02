@@ -468,6 +468,144 @@ describe("messaging status ipc", () => {
     });
   });
 
+  it("maps a Slack channel-level pairing (no thread) to the channel name", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    // Pairing sent directly in #signals-chat (not a thread): the channel name
+    // is the chat title, there is no parentTitle, bucketId is the team.
+    const entry = {
+      id: "pairing-slack-channel-level",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U079K80HTGS", displayName: "Harold" },
+      observedChat: {
+        id: "G01N9LZU287",
+        kind: "channel",
+        title: "signals-chat",
+        bucketId: "T025C2NKT",
+      },
+    };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    pairingStoreMock.recordApproval.mockReturnValue(entry);
+
+    registerMessagingStatusIpcHandlers();
+
+    await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+      {},
+      { entryId: entry.id, target: "conversation", consume: false },
+    );
+
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedChannels: [{ id: "G01N9LZU287", displayName: "signals-chat" }],
+        },
+      },
+    });
+  });
+
+  it("resolves the Slack workspace name for a team approval when available", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const entry = {
+      id: "pairing-slack-teamname",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U079K80HTGS", displayName: "Harold" },
+      observedChat: {
+        id: "G01N9LZU287",
+        kind: "thread",
+        title: "hi",
+        parentTitle: "signals-chat",
+        bucketId: "T025C2NKT",
+      },
+    };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.resolveSlackBotTokenSync.mockReturnValue("xoxb-token");
+    slackProviderMock.resolveContact.mockResolvedValue({
+      status: "ok",
+      id: "T025C2NKT",
+      displayName: "PwrDrvr",
+    });
+    pairingStoreMock.recordApproval.mockReturnValue(entry);
+
+    registerMessagingStatusIpcHandlers();
+
+    await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+      {},
+      { entryId: entry.id, target: "team", consume: false },
+    );
+
+    expect(slackProviderMock.resolveContact).toHaveBeenCalledWith(
+      { botToken: "xoxb-token" },
+      { id: "T025C2NKT", kind: "workspace" },
+    );
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedWorkspaces: [{ id: "T025C2NKT", displayName: "PwrDrvr" }],
+        },
+      },
+    });
+  });
+
+  it("falls back to a blank Slack workspace name when the lookup fails", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const entry = {
+      id: "pairing-slack-teamname-fail",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U079K80HTGS", displayName: "Harold" },
+      observedChat: {
+        id: "G01N9LZU287",
+        kind: "channel",
+        title: "signals-chat",
+        bucketId: "T025C2NKT",
+      },
+    };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.resolveSlackBotTokenSync.mockReturnValue("xoxb-token");
+    slackProviderMock.resolveContact.mockRejectedValue(new Error("network down"));
+    pairingStoreMock.recordApproval.mockReturnValue(entry);
+
+    registerMessagingStatusIpcHandlers();
+
+    await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+      {},
+      { entryId: entry.id, target: "team", consume: false },
+    );
+
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedWorkspaces: [{ id: "T025C2NKT", displayName: "" }],
+        },
+      },
+    });
+  });
+
   it("approves Feishu user and group pairing into the Feishu allowlists", async () => {
     const { registerMessagingStatusIpcHandlers } = await import(
       "../ipc/messaging-status"
