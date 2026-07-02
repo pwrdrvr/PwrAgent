@@ -174,6 +174,30 @@ export function buildSlackPatchDelta(
   if (snapshot.inboundMode.value !== candidate.inboundMode.value) {
     patch.inboundMode = candidate.inboundMode.value;
   }
+  if (
+    snapshot.teamAuthorizationMode.value
+    !== candidate.teamAuthorizationMode.value
+  ) {
+    patch.teamAuthorizationMode = candidate.teamAuthorizationMode.value;
+  }
+  if (
+    snapshot.channelAuthorizationMode.value
+    !== candidate.channelAuthorizationMode.value
+  ) {
+    patch.channelAuthorizationMode = candidate.channelAuthorizationMode.value;
+  }
+  if (snapshot.dmAccessMode.value !== candidate.dmAccessMode.value) {
+    patch.dmAccessMode = candidate.dmAccessMode.value;
+  }
+  if (snapshot.groupDmAccessMode.value !== candidate.groupDmAccessMode.value) {
+    patch.groupDmAccessMode = candidate.groupDmAccessMode.value;
+  }
+  if (
+    snapshot.channelUserAccessMode.value
+    !== candidate.channelUserAccessMode.value
+  ) {
+    patch.channelUserAccessMode = candidate.channelUserAccessMode.value;
+  }
   if (snapshot.slashCommandPrefix.value !== candidate.slashCommandPrefix.value) {
     patch.slashCommandPrefix = candidate.slashCommandPrefix.value;
   }

@@ -17,12 +17,18 @@ import type {
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
   MessagingChannelKind,
+  MessagingPairingApprovalTarget,
   MessagingPairingScope,
   SettingsCredentialTestKind,
   SettingsCredentialTestResult,
 } from "@pwragent/shared";
 import { isMessagingRuntimeSecret } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  SLACK_APPROVAL_TARGET_LABELS,
+  slackApplicableApprovalTargets,
+  slackApprovalSequence,
+} from "../../lib/slack-pairing-approval";
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import { filterBufferedSecrets } from "./filterBufferedSecrets";
@@ -3908,12 +3914,12 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
     pairingTitle: "Pair a Slack conversation",
     pairingOptions: [
       {
-        scope: "user_dm",
-        label: "Pair your DMs with the bot",
+        scope: "observed",
+        label: "Pair from Slack",
         help: (
           <>
-            Open a DM with the bot in Slack and post the pairing message
-            below.
+            Send the pairing message in a Slack DM or channel. PwrAgent will
+            show what it saw so you can approve the user or the channel.
           </>
         ),
       },
@@ -4535,6 +4541,16 @@ function PairingBlock(props: {
   const [entryId, setEntryId] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    },
+    [],
+  );
   const [resolution, setResolution] = useState<"observed" | "approved" | undefined>(
     undefined,
   );
@@ -4547,6 +4563,15 @@ function PairingBlock(props: {
   const [observedChatLabel, setObservedChatLabel] = useState<string | undefined>(
     undefined,
   );
+  const [observedChatKind, setObservedChatKind] = useState<string | undefined>(
+    undefined,
+  );
+  const [observedChatBucketId, setObservedChatBucketId] = useState<
+    string | undefined
+  >(undefined);
+  const [approvedTargets, setApprovedTargets] = useState<
+    MessagingPairingApprovalTarget[]
+  >([]);
   const [approving, setApproving] = useState(false);
   // Pairings approved during this wizard session, in order. Rendered
   // as a compact summary once at least one pairing has been approved.
@@ -4577,36 +4602,102 @@ function PairingBlock(props: {
         setObservedChatLabel(
           event.entry.observedChat?.title ?? event.entry.observedChat?.id,
         );
+        setObservedChatKind(event.entry.observedChat?.kind);
+        setObservedChatBucketId(event.entry.observedChat?.bucketId);
+        setApprovedTargets(event.entry.approvedTargets ?? []);
       }
     });
   }, [props.desktopApi, props.platform]);
 
-  const approve = async (): Promise<void> => {
+  // Move the just-resolved pairing into the compact "paired" summary and
+  // clear the active pairing-token surface. The "Pair another" button
+  // (rendered when `paired.length > 0`) re-arms the flow.
+  const finalizePaired = (id: string): void => {
+    setPaired((prev) => [
+      ...prev,
+      {
+        entryId: id,
+        scope,
+        actor: observedActorLabel,
+        chat: observedChatLabel,
+      },
+    ]);
+    setMessage(undefined);
+    setEntryId(undefined);
+    setObservedActorLabel(undefined);
+    setObservedChatLabel(undefined);
+    setObservedChatKind(undefined);
+    setObservedChatBucketId(undefined);
+    setApprovedTargets([]);
+    setResolution(undefined);
+    setPairingAnother(false);
+  };
+
+  // Generic single-shot approve for non-Slack platforms.
+  const approve = async (target?: MessagingPairingApprovalTarget): Promise<void> => {
     const id = entryIdRef.current;
     if (!id || approving || !props.desktopApi?.approveMessagingPairing) return;
     setApproving(true);
     setError(undefined);
     try {
-      await props.desktopApi.approveMessagingPairing({ entryId: id });
-      setResolution("approved");
-      setPaired((prev) => [
-        ...prev,
-        {
+      await props.desktopApi.approveMessagingPairing({
+        entryId: id,
+        ...(target ? { target } : {}),
+      });
+      finalizePaired(id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  // Approve a single facet (user / channel / team) while keeping the
+  // request open so the operator can approve the others too.
+  const approveTarget = async (
+    target: MessagingPairingApprovalTarget,
+  ): Promise<void> => {
+    const id = entryIdRef.current;
+    if (!id || approving || !props.desktopApi?.approveMessagingPairing) return;
+    setApproving(true);
+    setError(undefined);
+    try {
+      await props.desktopApi.approveMessagingPairing({
+        entryId: id,
+        target,
+        consume: false,
+      });
+      setApprovedTargets((prev) =>
+        prev.includes(target) ? prev : [...prev, target],
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  // Approve every remaining applicable facet, consume the request, and
+  // move it into the paired summary. Also used as the "Done" action once
+  // everything has been approved individually.
+  const finishPairing = async (): Promise<void> => {
+    const id = entryIdRef.current;
+    if (!id || approving || !props.desktopApi?.approveMessagingPairing) return;
+    const steps = slackApprovalSequence(
+      { kind: observedChatKind, bucketId: observedChatBucketId },
+      approvedTargets,
+    );
+    setApproving(true);
+    setError(undefined);
+    try {
+      for (const step of steps) {
+        await props.desktopApi.approveMessagingPairing({
           entryId: id,
-          scope,
-          actor: observedActorLabel,
-          chat: observedChatLabel,
-        },
-      ]);
-      // Clear the pairing-token surface — the approved entry is now
-      // captured in `paired`. The "Pair another" button (rendered
-      // below when `paired.length > 0`) re-arms the flow.
-      setMessage(undefined);
-      setEntryId(undefined);
-      setObservedActorLabel(undefined);
-      setObservedChatLabel(undefined);
-      setResolution(undefined);
-      setPairingAnother(false);
+          target: step.target,
+          ...(step.consume ? {} : { consume: false }),
+        });
+      }
+      finalizePaired(id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -4624,6 +4715,9 @@ function PairingBlock(props: {
     setResolution(undefined);
     setObservedActorLabel(undefined);
     setObservedChatLabel(undefined);
+    setObservedChatKind(undefined);
+    setObservedChatBucketId(undefined);
+    setApprovedTargets([]);
     setError(undefined);
     setPairingAnother(true);
   };
@@ -4640,6 +4734,9 @@ function PairingBlock(props: {
       });
       setMessage(result.message);
       setEntryId(result.entry.id);
+      // Auto-copy the freshly generated code so the operator can paste it
+      // straight into chat; best-effort.
+      await copy(result.message);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -4647,10 +4744,14 @@ function PairingBlock(props: {
     }
   };
 
-  const copy = async (): Promise<void> => {
-    if (!message) return;
+  const copy = async (text?: string): Promise<void> => {
+    const value = text ?? message;
+    if (!value) return;
     try {
-      await navigator.clipboard.writeText(message);
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
     } catch {
       // best effort — user can still select the text in the input
     }
@@ -4666,6 +4767,10 @@ function PairingBlock(props: {
     setEntryId(undefined);
     setResolution(undefined);
     setError(undefined);
+    setObservedActorLabel(undefined);
+    setObservedChatLabel(undefined);
+    setObservedChatKind(undefined);
+    setObservedChatBucketId(undefined);
   };
 
   // Active-flow gate: when the operator hasn't approved anything
@@ -4763,7 +4868,7 @@ function PairingBlock(props: {
                 className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
                 onClick={() => void copy()}
               >
-                Copy
+                {copied ? "Copied" : "Copy"}
               </button>
             </div>
           ) : !message ? (
@@ -4794,14 +4899,68 @@ function PairingBlock(props: {
                   . Approve to finish pairing.
                 </span>
               </div>
-              <button
-                type="button"
-                className="onboarding-wizard__btn onboarding-wizard__btn--primary"
-                disabled={approving || !props.desktopApi?.approveMessagingPairing}
-                onClick={() => void approve()}
-              >
-                {approving ? "Approving…" : "Approve"}
-              </button>
+              {props.platform === "slack" && scope === "observed" ? (
+                (() => {
+                  const targets = slackApplicableApprovalTargets({
+                    kind: observedChatKind,
+                    bucketId: observedChatBucketId,
+                  });
+                  const allApproved = targets.every((target) =>
+                    approvedTargets.includes(target),
+                  );
+                  return (
+                    <>
+                      {targets.map((target) =>
+                        approvedTargets.includes(target) ? (
+                          <span
+                            key={target}
+                            className="onboarding-wizard__field-pill is-ok"
+                          >
+                            ✓ {SLACK_APPROVAL_TARGET_LABELS[target].approved}
+                          </span>
+                        ) : (
+                          <button
+                            key={target}
+                            type="button"
+                            className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+                            disabled={
+                              approving || !props.desktopApi?.approveMessagingPairing
+                            }
+                            onClick={() => void approveTarget(target)}
+                          >
+                            {SLACK_APPROVAL_TARGET_LABELS[target].approve}
+                          </button>
+                        ),
+                      )}
+                      <button
+                        type="button"
+                        className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+                        disabled={
+                          approving || !props.desktopApi?.approveMessagingPairing
+                        }
+                        onClick={() => void finishPairing()}
+                      >
+                        {approving
+                          ? "Approving…"
+                          : allApproved
+                            ? "Done"
+                            : targets.length > 1
+                              ? "Approve all"
+                              : "Approve"}
+                      </button>
+                    </>
+                  );
+                })()
+              ) : (
+                <button
+                  type="button"
+                  className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+                  disabled={approving || !props.desktopApi?.approveMessagingPairing}
+                  onClick={() => void approve()}
+                >
+                  {approving ? "Approving…" : "Approve"}
+                </button>
+              )}
             </div>
           ) : null}
         </>
@@ -4834,6 +4993,9 @@ function labelForPairingScope(
   scope: MessagingPairingScope,
 ): string {
   if (scope === "user_dm") return "DM";
+  if (scope === "observed") {
+    return platform === "slack" ? "Slack pairing" : "Observed";
+  }
   switch (platform) {
     case "telegram":
       return "Supergroup";

@@ -17,6 +17,13 @@ import type {
   MessagingAdapterRenderingPreferencesUpdate,
   MessagingConversationResponseMode,
 } from "@pwragent/messaging-interface";
+import {
+  SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
+  SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
+  SLACK_DM_ACCESS_MODE_DEFAULT,
+  SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
+  SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
+} from "@pwragent/messaging-interface";
 import type { MessagingAttachmentPolicy } from "./core/messaging-attachment-processor";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { getMainLogger } from "../log";
@@ -248,7 +255,11 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     authorizedConversationIds: "authorization",
     authorizedTeamIds: "authorization",
     botToken: "connection",
+    channelAuthorizationMode: "authorization",
+    channelUserAccessMode: "authorization",
     channel: "irrelevant",
+    dmAccessMode: "authorization",
+    groupDmAccessMode: "authorization",
     enabled: "connection",
     inboundMode: "connection",
     registerSlashCommands: "connection",
@@ -256,6 +267,7 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     signingSecret: "connection",
     slashCommandPrefix: "connection",
     streamingResponses: "rendering",
+    teamAuthorizationMode: "authorization",
     workspaceUrl: "connection",
   },
   feishu: {
@@ -620,7 +632,12 @@ export function loadDesktopMessagingConfig(
               env,
               SLACK_STREAMING_RESPONSES_ENV,
             ).value ?? false,
+            channelAuthorizationMode: SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
+            channelUserAccessMode: SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
+            dmAccessMode: SLACK_DM_ACCESS_MODE_DEFAULT,
+            groupDmAccessMode: SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
             responseMode: "mention_only",
+            teamAuthorizationMode: SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
             authorizedActorIds: slackAuthorizedActorIds,
             authorizedTeamIds: slackAuthorizedWorkspaces,
           },
@@ -751,6 +768,14 @@ export async function loadDesktopMessagingConfigFromSettings(
   const slackAuthorizedConversationIds =
     envConfig.slack?.authorizedConversationIds
     ?? snapshot.messaging.slack.authorizedChannels.value;
+  const slackTeamAuthorizationMode =
+    snapshot.messaging.slack.teamAuthorizationMode.value;
+  const slackChannelAuthorizationMode =
+    snapshot.messaging.slack.channelAuthorizationMode.value;
+  const slackDmAccessMode = snapshot.messaging.slack.dmAccessMode.value;
+  const slackGroupDmAccessMode = snapshot.messaging.slack.groupDmAccessMode.value;
+  const slackChannelUserAccessMode =
+    snapshot.messaging.slack.channelUserAccessMode.value;
   const feishuAuthorizedActorIds =
     envConfig.feishu?.authorizedActorIds
     ?? snapshot.messaging.feishu.authorizedUserIds.value;
@@ -1002,7 +1027,12 @@ export async function loadDesktopMessagingConfigFromSettings(
               : {}),
             registerSlashCommands: slackRegisterSlashCommands,
             streamingResponses: snapshot.messaging.slack.streamingResponses.value,
+            channelAuthorizationMode: slackChannelAuthorizationMode,
+            channelUserAccessMode: slackChannelUserAccessMode,
+            dmAccessMode: slackDmAccessMode,
+            groupDmAccessMode: slackGroupDmAccessMode,
             responseMode: snapshot.messaging.slack.responseMode.value,
+            teamAuthorizationMode: slackTeamAuthorizationMode,
             authorizedActorIds: slackAuthorizedActorIds,
             authorizedTeamIds: slackAuthorizedTeamIds,
             authorizedConversationIds: slackAuthorizedConversationIds,
@@ -1414,11 +1444,16 @@ function authorizationUpdateForChannelConfig(
       return {
         authorizedActorIds: contactIds(config.slack?.authorizedActorIds),
         authorizedConversationIds: contactIds(config.slack?.authorizedConversationIds),
+        conversationAuthorizationMode: config.slack?.channelAuthorizationMode,
         conversationResponseModes: conversationResponseModes(
           config.slack?.authorizedConversationIds,
         ),
         responseMode: config.slack?.responseMode,
         authorizedWorkspaceIds: contactIds(config.slack?.authorizedTeamIds),
+        workspaceAuthorizationMode: config.slack?.teamAuthorizationMode,
+        dmAccessMode: config.slack?.dmAccessMode,
+        groupDmAccessMode: config.slack?.groupDmAccessMode,
+        channelUserAccessMode: config.slack?.channelUserAccessMode,
       };
     case "feishu":
       return {

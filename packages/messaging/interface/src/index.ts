@@ -312,12 +312,49 @@ export type MessagingActorIdentity = {
 export type MessagingAdapterAuthorizationUpdate = {
   authorizedActorIds: readonly string[];
   authorizedConversationIds?: readonly string[];
+  conversationAuthorizationMode?: MessagingAuthorizationMode;
   conversationResponseModes?: readonly MessagingConversationResponseMode[];
   responseMode?: MessagingResponseMode;
   authorizedWorkspaceIds?: readonly string[];
+  workspaceAuthorizationMode?: MessagingAuthorizationMode;
+  dmAccessMode?: MessagingDmAccessMode;
+  channelUserAccessMode?: MessagingChannelUserAccessMode;
+  groupDmAccessMode?: MessagingGroupDmAccessMode;
 };
 
 export type MessagingResponseMode = "every_message" | "mention_only";
+export type MessagingAuthorizationMode = "approved_only" | "allow_all";
+/** Who may DM the bot directly (Slack). */
+export type MessagingDmAccessMode =
+  | "any_workspace_user"
+  | "authorized_users"
+  | "none";
+/** Which senders in an authorized channel the bot responds to (Slack). */
+export type MessagingChannelUserAccessMode =
+  | "any_channel_user"
+  | "authorized_users"
+  | "none";
+/** Whether the bot participates in Slack group DMs (mpim), and for whom. */
+export type MessagingGroupDmAccessMode = "none" | "authorized_users";
+
+/**
+ * Locked-down default posture for Slack access modes. Single source of truth
+ * shared by the adapter's fallbacks, the desktop settings resolvers, and the
+ * env-only config loader so the four gates can never drift apart. A fresh
+ * Slack config requires listed teams and channels, and only pre-authorized
+ * users can DM or be responded to in channels.
+ */
+export const SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT: MessagingAuthorizationMode =
+  "approved_only";
+export const SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT: MessagingAuthorizationMode =
+  "approved_only";
+export const SLACK_DM_ACCESS_MODE_DEFAULT: MessagingDmAccessMode =
+  "authorized_users";
+export const SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT: MessagingChannelUserAccessMode =
+  "authorized_users";
+/** Group DMs are closed by default; the operator opts in explicitly. */
+export const SLACK_GROUP_DM_ACCESS_MODE_DEFAULT: MessagingGroupDmAccessMode =
+  "none";
 
 export type MessagingConversationResponseMode = {
   conversationId: string;

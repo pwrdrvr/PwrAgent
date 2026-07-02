@@ -12,6 +12,7 @@ import type {
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
+  MessagingPairingApprovalTarget,
   MessagingPairingEntry,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
@@ -21,6 +22,11 @@ import type {
   SetMessagingEnabledResponse,
   UnbindMessagingThreadRequest,
   UnbindMessagingThreadResponse,
+} from "@pwragent/shared";
+import {
+  validateSlackChannelId,
+  validateSlackTeamId,
+  validateSlackUserId,
 } from "@pwragent/shared";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-config";
@@ -97,16 +103,18 @@ function markPairingRejected(entryId: string): MessagingPairingEntry | undefined
   });
 }
 
-async function buildPairingApprovalPatch(
+function buildPairingApprovalPatch(
   entry: MessagingPairingEntry,
   snapshot: DesktopSettingsSnapshot,
-  service: DesktopSettingsService,
-): Promise<{ added: boolean; patch: DesktopSettingsConfigPatch }> {
+  target?: MessagingPairingApprovalTarget,
+  options?: { teamName?: string },
+): { added: boolean; patch: DesktopSettingsConfigPatch } {
   if (entry.status !== "observed" || !entry.observedActor || !entry.observedChat) {
     throw new Error("Pairing request has not been observed yet.");
   }
 
-  const contact = await contactForPairing(entry, service);
+  const approvalTarget = entry.platform === "slack" ? target : undefined;
+  const contact = contactForPairing(entry, approvalTarget, options?.teamName);
   const merge = (
     current: DesktopAuthorizedContact[],
   ): { added: boolean; contacts: DesktopAuthorizedContact[] } => {
@@ -156,11 +164,21 @@ async function buildPairingApprovalPatch(
       };
     }
     case "slack": {
-      if (entry.scope === "bucket") {
+      if (approvalTarget === "team") {
         const merged = merge(snapshot.messaging.slack.authorizedWorkspaces.value);
         return {
           added: merged.added,
           patch: { messaging: { slack: { authorizedWorkspaces: merged.contacts } } },
+        };
+      }
+      if (approvalTarget === "conversation" || (!approvalTarget && entry.scope === "bucket")) {
+        if (entry.observedChat.kind === "dm") {
+          throw new Error("Slack channel approval requires a channel or group DM.");
+        }
+        const merged = merge(snapshot.messaging.slack.authorizedChannels.value);
+        return {
+          added: merged.added,
+          patch: { messaging: { slack: { authorizedChannels: merged.contacts } } },
         };
       }
       const merged = merge(snapshot.messaging.slack.authorizedUserIds.value);
@@ -248,30 +266,51 @@ async function buildPairingApprovalPatch(
   }
 }
 
-async function contactForPairing(
+function contactForPairing(
   entry: MessagingPairingEntry,
-  service: DesktopSettingsService,
-): Promise<DesktopAuthorizedContact> {
+  target?: MessagingPairingApprovalTarget,
+  teamName?: string,
+): DesktopAuthorizedContact {
   if (!entry.observedActor || !entry.observedChat) {
     throw new Error("Pairing request is missing observed identity.");
   }
-  if (entry.scope === "bucket") {
-    const id = entry.observedChat.bucketId ?? entry.observedChat.parentId ?? entry.observedChat.id;
-    if (entry.platform === "slack") {
-      const displayName = await resolveSlackWorkspaceDisplayName(service, id);
-      return {
-        id,
-        displayName:
-          displayName
-          ?? entry.observedChat.parentTitle
-          ?? entry.observedChat.title
-          ?? "",
-      };
+  const isSlack = entry.platform === "slack";
+  if (target === "team") {
+    // The team/workspace ID is the observed bucket (Slack teamId). Never fall
+    // back to parentId — for a thread that is the thread timestamp, not a team.
+    // Validate the shape so a bogus bucketId (e.g. a channel/DM id from an
+    // event that omitted `team`) can't be written into the workspace allowlist.
+    const id = entry.observedChat.bucketId;
+    if (!id || (isSlack && !validateSlackTeamId(id).ok)) {
+      throw new Error(
+        "Slack team approval requires a valid workspace ID (starts with T).",
+      );
     }
+    // The workspace name is resolved best-effort at approval time (blank if the
+    // lookup is unavailable or times out). Never use parentTitle — for a
+    // channel/thread that is the *channel* name, not the workspace name.
+    return { id, displayName: teamName ?? "" };
+  }
+  if (target === "conversation" || (!target && entry.scope === "bucket")) {
+    if (isSlack) {
+      const id = entry.observedChat.id;
+      if (!validateSlackChannelId(id).ok) {
+        throw new Error(
+          "Slack channel approval requires a valid conversation ID (starts with C, G, or D).",
+        );
+      }
+      return { id, displayName: slackChannelDisplayName(entry.observedChat) };
+    }
+    const id = entry.observedChat.bucketId ?? entry.observedChat.parentId ?? entry.observedChat.id;
     return {
       id,
       displayName: entry.observedChat.title ?? entry.observedChat.parentTitle ?? "",
     };
+  }
+  if (isSlack && !validateSlackUserId(entry.observedActor.id).ok) {
+    throw new Error(
+      "Slack user approval requires a valid user ID (starts with U or W).",
+    );
   }
   return {
     id: entry.observedActor.id,
@@ -281,28 +320,112 @@ async function contactForPairing(
   };
 }
 
-async function resolveSlackWorkspaceDisplayName(
+/**
+ * Best-effort Slack workspace/team name lookup for a pairing approval. Uses the
+ * same `resolveContact` path as the Settings "Lookup" button, but bounded by a
+ * short timeout and swallowing all failures so approval never hangs or throws —
+ * a blank name just means the operator can Lookup it later.
+ */
+async function resolveSlackWorkspaceName(
   service: DesktopSettingsService,
-  id: string,
+  teamId: string,
+  options?: { timeoutMs?: number },
 ): Promise<string | undefined> {
   const botToken = service.resolveSlackBotTokenSync();
   if (!botToken) return undefined;
   try {
     const provider = await import("@pwragent/messaging-provider-slack");
-    const result = await provider.resolveContact(
-      { botToken },
-      { id, kind: "workspace" },
+    const result = await withTimeout(
+      provider.resolveContact({ botToken }, { id: teamId, kind: "workspace" }),
+      options?.timeoutMs ?? 2_000,
     );
-    if (result.status === "ok" && result.displayName) {
+    if (result && result.status === "ok" && result.displayName) {
       return result.displayName;
     }
   } catch (error) {
-    log.warn("slack workspace pairing lookup failed", {
-      workspaceId: id,
+    log.warn("slack workspace pairing name lookup failed", {
+      teamId,
       error: error instanceof Error ? error.message : String(error),
     });
   }
   return undefined;
+}
+
+/** Resolve `promise`, or `undefined` if it takes longer than `ms`. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms);
+  });
+  // Clear the timer once either side settles so the fast path doesn't keep a
+  // 2s timer (and this closure) alive after `promise` already resolved.
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+/**
+ * A confirmation note sent to the Slack user after approving one facet of a
+ * pairing. Tells them what they can do now and what is still gated, so a
+ * partial approval (e.g. user-only) doesn't leave them wondering why the bot
+ * won't answer in a channel yet.
+ */
+function slackApprovalConfirmationText(
+  target: MessagingPairingApprovalTarget,
+  entry: MessagingPairingEntry,
+  snapshot: DesktopSettingsSnapshot,
+): string {
+  const slack = snapshot.messaging.slack;
+  const inList = (
+    list: readonly DesktopAuthorizedContact[],
+    id: string | undefined,
+  ): boolean => !!id && list.some((contact) => contact.id === id);
+
+  // State *after* this approval — the just-approved target counts as added.
+  const userAuthorized =
+    target === "actor" || inList(slack.authorizedUserIds.value, entry.observedActor?.id);
+  const channelAuthorized =
+    slack.channelAuthorizationMode?.value === "allow_all"
+    || target === "conversation"
+    || inList(slack.authorizedChannels.value, entry.observedChat?.id);
+  const teamAuthorized =
+    slack.teamAuthorizationMode?.value === "allow_all"
+    || target === "team"
+    || inList(slack.authorizedWorkspaces.value, entry.observedChat?.bucketId);
+
+  switch (target) {
+    case "actor":
+      if (entry.observedChat?.kind === "dm") {
+        return "You're now an authorized user — you can DM the bot.";
+      }
+      if (channelAuthorized && teamAuthorized) {
+        return "You're now an authorized user. You can DM the bot and @mention it in this channel.";
+      }
+      return "You're now an authorized user and can DM the bot. This channel isn't authorized yet, so the bot can't respond here until the channel is approved.";
+    case "conversation":
+      if (userAuthorized) {
+        return "This channel is authorized. Authorized users (including you) can @mention the bot here.";
+      }
+      return "This channel is authorized. Authorized users can @mention the bot here, but you aren't an authorized user yet — approve your user to interact.";
+    case "team":
+      return "This workspace is authorized. Channels still need to be approved individually unless channel access is set to allow any channel.";
+    default:
+      return "PwrAgent pairing approved.";
+  }
+}
+
+/**
+ * The channel name for a Slack observed chat. For a thread the channel name
+ * lives in `parentTitle` (its `title` is the thread's root message); for a
+ * plain channel it lives in `title`.
+ */
+function slackChannelDisplayName(
+  chat: NonNullable<MessagingPairingEntry["observedChat"]>,
+): string {
+  if (chat.kind === "thread") {
+    return chat.parentTitle ?? chat.title ?? "";
+  }
+  return chat.title ?? chat.parentTitle ?? "";
 }
 
 function recordPairingActivity(entry: MessagingPairingEntry, summary: string): void {
@@ -415,10 +538,21 @@ export function registerMessagingStatusIpcHandlers(): void {
       const pairing = runtime.listPairingRequests({ includeResolved: true }).entries
         .find((entry) => entry.id === request.entryId);
       if (!pairing) throw new Error("Pairing request not found.");
-      const approval = await buildPairingApprovalPatch(
+      // For a Slack team approval, resolve the workspace name best-effort so the
+      // saved row carries a label (blank on failure/timeout), mirroring how the
+      // channel name is captured at observe time.
+      const teamName =
+        pairing.platform === "slack"
+        && request.target === "team"
+        && pairing.observedChat?.bucketId
+          ? await resolveSlackWorkspaceName(service, pairing.observedChat.bucketId)
+          : undefined;
+      const snapshot = await service.readSettings();
+      const approval = buildPairingApprovalPatch(
         pairing,
-        await service.readSettings(),
-        service,
+        snapshot,
+        request.target,
+        { teamName },
       );
       const next = await service.writeConfigPatch(approval.patch);
       await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(
@@ -428,6 +562,37 @@ export function registerMessagingStatusIpcHandlers(): void {
           logStartupEligibility: true,
         },
       );
+      // Keep the request `observed` when the caller opts out of consuming
+      // (Slack "approve user, then channel, then team" flow). We record the
+      // approved target so the settings card can show progress, and confirm the
+      // grant to the user with a note describing what they can do now and what
+      // is still gated.
+      const stay =
+        request.consume === false
+        && pairing.platform === "slack"
+        && pairing.scope === "observed"
+        && request.target !== undefined;
+      if (stay) {
+        const target = request.target as MessagingPairingApprovalTarget;
+        const updated =
+          getDesktopMessagingPairingStore().recordApproval({
+            entryId: request.entryId,
+            target,
+          }) ?? pairing;
+        recordPairingActivity(updated, `Approved pairing (${target})`);
+        await runtime.deliverPairingOutcome(updated, "approved", {
+          text: slackApprovalConfirmationText(target, updated, snapshot),
+        });
+        broadcastPairingChanged({ at: Date.now(), entry: updated });
+        log.info("messaging pairing target approved", {
+          pairingId: request.entryId,
+          platform: pairing.platform,
+          target: request.target,
+          added: approval.added,
+          configPath: next.configPath,
+        });
+        return { entry: updated, added: approval.added };
+      }
       const consumed = markPairingConsumed(request.entryId);
       recordPairingActivity(consumed ?? pairing, "Approved pairing request");
       await runtime.deliverPairingOutcome(consumed ?? pairing, "approved");

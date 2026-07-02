@@ -6,6 +6,10 @@ import type {
   MessagingAdapterState,
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
+  MessagingAuthorizationMode,
+  MessagingChannelUserAccessMode,
+  MessagingDmAccessMode,
+  MessagingGroupDmAccessMode,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
@@ -29,7 +33,14 @@ import type {
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
-import { extractMessagingPairingToken } from "@pwragent/messaging-interface";
+import {
+  extractMessagingPairingToken,
+  SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
+  SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
+  SLACK_DM_ACCESS_MODE_DEFAULT,
+  SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
+  SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
+} from "@pwragent/messaging-interface";
 import type { SlackMessagingConfig } from "./slack-config.ts";
 import {
   actionsForSlackIntent,
@@ -118,6 +129,8 @@ export type SlackMessageResult = {
 export type SlackConversationInfo = {
   id?: string;
   name?: string;
+  is_im?: boolean;
+  is_mpim?: boolean;
 };
 
 export type SlackThreadMessageInfo = {
@@ -290,6 +303,8 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
   private readonly conversationTitleCache = new Map<string, string | undefined>();
+  // Caches whether a channel id is a multi-person DM (mpim / "group DM").
+  private readonly conversationGroupDmCache = new Map<string, boolean>();
   private readonly recentInboundMessageEvents = new Map<string, number>();
   private readonly threadTitleCache = new Map<string, string | undefined>();
   private readonly userDisplayNameCache = new Map<string, string | undefined>();
@@ -340,6 +355,21 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.authorizedActorIdsValue = [...update.authorizedActorIds];
     if (update.responseMode !== undefined) {
       this.config.responseMode = update.responseMode;
+    }
+    if (update.conversationAuthorizationMode !== undefined) {
+      this.config.channelAuthorizationMode = update.conversationAuthorizationMode;
+    }
+    if (update.workspaceAuthorizationMode !== undefined) {
+      this.config.teamAuthorizationMode = update.workspaceAuthorizationMode;
+    }
+    if (update.dmAccessMode !== undefined) {
+      this.config.dmAccessMode = update.dmAccessMode;
+    }
+    if (update.channelUserAccessMode !== undefined) {
+      this.config.channelUserAccessMode = update.channelUserAccessMode;
+    }
+    if (update.groupDmAccessMode !== undefined) {
+      this.config.groupDmAccessMode = update.groupDmAccessMode;
     }
     this.config.authorizedActorIds = slackContactsFromIds(
       update.authorizedActorIds,
@@ -645,10 +675,24 @@ export class SlackAdapter implements SlackProviderAdapter {
       : parseCommand(text);
     const kind = command ? "command" : event.files?.length ? "media" : "text";
 
+    const isGroupDm = await this.resolveIsGroupDm({
+      channelId: ids.channelId,
+      channelType: event.channel_type,
+    });
+
+    // In a group DM the bot only answers when explicitly @mentioned. A message
+    // that doesn't mention the bot isn't addressed to it, so ignore it silently
+    // *before* authorization — otherwise an ordinary group-DM message from a
+    // non-authorized participant would be logged as a scary "rejected" event
+    // even though it was never meant for the bot. Slash commands and pairing
+    // are explicit invocations and are exempt.
+    if (isGroupDm && !isMention && !command && !isPairingMessage) return;
+
     if (!this.authorizeInbound({
       actor,
       channel,
       kind,
+      isGroupDm,
       pairing: isPairingMessage,
       routingState,
       teamId: ids.teamId,
@@ -742,6 +786,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       actor,
       channel,
       kind: "callback",
+      isGroupDm: await this.resolveIsGroupDm({
+        channelId: ids.channelId,
+        channelName: body.channel?.name,
+      }),
       routingState,
       teamId: ids.teamId,
     })) {
@@ -807,6 +855,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       actor,
       channel,
       kind: "command",
+      isGroupDm: await this.resolveIsGroupDm({
+        channelId: ids.channelId,
+        channelName: body.channel_name,
+      }),
       routingState,
       teamId: ids.teamId,
     })) {
@@ -1155,51 +1207,75 @@ export class SlackAdapter implements SlackProviderAdapter {
     actor: MessagingActorIdentity;
     channel: MessagingChannelRef;
     kind: MessagingInboundEvent["kind"];
+    isGroupDm?: boolean;
     pairing?: boolean;
     routingState?: MessagingAdapterState;
     teamId?: string;
   }): boolean {
     if (params.pairing) return true;
 
-    if (!this.authorizedActorIds.includes(params.actor.platformUserId)) {
+    const actorAuthorized = this.authorizedActorIds.includes(
+      params.actor.platformUserId,
+    );
+    const reject = (reason: "unauthorized-actor" | "unauthorized-conversation"): boolean => {
       this.emitInboundRejected({
         id: this.newEventId("slack-rejected"),
         kind: params.kind,
         actor: params.actor,
         channel: params.channel,
         receivedAt: this.now(),
-        reason: "unauthorized-actor",
+        reason,
         ...(params.routingState ? { routingState: params.routingState } : {}),
       });
       return false;
-    }
+    };
 
+    // DMs are governed by the DM access mode alone — the team/channel gates
+    // are about (shared) channel traffic and never apply to direct messages.
     if (params.channel.conversation.kind === "dm") {
+      const dmMode = slackDmAccessMode(this.config);
+      if (dmMode === "none") return reject("unauthorized-conversation");
+      if (dmMode === "authorized_users" && !actorAuthorized) {
+        return reject("unauthorized-actor");
+      }
       return true;
     }
 
+    // Group DMs (multi-person IMs) have their own access mode, independent of
+    // the team/channel gates — a Slack "team" is the workspace, not a group DM.
+    // Closed by default; when opened, an authorized user may interact (the
+    // caller additionally requires an @mention for messages) while unauthorized
+    // senders are rejected regardless of who else is in the group DM.
+    if (params.isGroupDm) {
+      if (slackGroupDmAccessMode(this.config) === "none") {
+        return reject("unauthorized-conversation");
+      }
+      if (!actorAuthorized) return reject("unauthorized-actor");
+      return true;
+    }
+
+    // Channel / thread traffic must clear the team gate, then the
+    // channel gate, then the per-user channel access mode.
     const allowedConversations = this.config.authorizedConversationIds?.map((item) => item.id)
       ?? [];
-    if (allowedConversations.includes(params.channel.conversation.id)) {
-      return true;
-    }
-
     const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id)
       ?? [];
-    if (params.teamId !== undefined && allowedTeams.includes(params.teamId)) {
-      return true;
+
+    const teamAllowed = slackTeamAuthorizationMode(this.config) === "allow_all"
+      || (params.teamId !== undefined && allowedTeams.includes(params.teamId));
+    const conversationAllowed = slackChannelAuthorizationMode(this.config) === "allow_all"
+      || allowedConversations.includes(params.channel.conversation.id);
+
+    if (!teamAllowed || !conversationAllowed) {
+      return reject("unauthorized-conversation");
     }
 
-    this.emitInboundRejected({
-      id: this.newEventId("slack-rejected"),
-      kind: params.kind,
-      actor: params.actor,
-      channel: params.channel,
-      receivedAt: this.now(),
-      reason: "unauthorized-conversation",
-      ...(params.routingState ? { routingState: params.routingState } : {}),
-    });
-    return false;
+    const channelUserMode = slackChannelUserAccessMode(this.config);
+    if (channelUserMode === "none") return reject("unauthorized-conversation");
+    if (channelUserMode === "authorized_users" && !actorAuthorized) {
+      return reject("unauthorized-actor");
+    }
+    return true;
   }
 
   private async channelRefForSlack(params: {
@@ -1311,6 +1387,40 @@ export class SlackAdapter implements SlackProviderAdapter {
       }
       this.userDisplayNameCache.set(userId, undefined);
       return undefined;
+    }
+  }
+
+  /**
+   * Whether an inbound conversation is a Slack group DM (mpim). Message events
+   * carry `channel_type: "mpim"` and can be classified synchronously; block
+   * actions and slash commands do not, so we fall back to an authoritative
+   * (cached) `conversations.info` lookup rather than guessing from the channel
+   * name — group DMs have C- or G-prefixed ids and unreliable payload names.
+   */
+  private async resolveIsGroupDm(params: {
+    channelId: string;
+    channelType?: string;
+    channelName?: string;
+  }): Promise<boolean> {
+    if (isSlackGroupDm({ channelType: params.channelType, channelName: params.channelName })) {
+      return true;
+    }
+    const cached = this.conversationGroupDmCache.get(params.channelId);
+    if (cached !== undefined) return cached;
+    if (this.conversationInfoLookupDisabled || !this.api.conversationsInfo) {
+      return false;
+    }
+    try {
+      const info = await this.api.conversationsInfo({ channel: params.channelId });
+      const isGroupDm = info?.is_mpim === true;
+      this.conversationGroupDmCache.set(params.channelId, isGroupDm);
+      return isGroupDm;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (reason.includes("missing_scope")) {
+        this.conversationInfoLookupDisabled = true;
+      }
+      return false;
     }
   }
 
@@ -1731,6 +1841,55 @@ function slackContactsFromIds(
 ): { id: string; displayName: string; responseMode?: MessagingResponseMode }[] {
   const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
   return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
+}
+
+// All four fall back to the shared locked-down defaults so the adapter's gate
+// can never be looser than what the settings screen shows. Callers that want a
+// broader posture must set the mode explicitly.
+function slackTeamAuthorizationMode(
+  config: SlackMessagingConfig,
+): MessagingAuthorizationMode {
+  return config.teamAuthorizationMode ?? SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT;
+}
+
+function slackChannelAuthorizationMode(
+  config: SlackMessagingConfig,
+): MessagingAuthorizationMode {
+  return (
+    config.channelAuthorizationMode ?? SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT
+  );
+}
+
+function slackDmAccessMode(
+  config: SlackMessagingConfig,
+): MessagingDmAccessMode {
+  return config.dmAccessMode ?? SLACK_DM_ACCESS_MODE_DEFAULT;
+}
+
+function slackChannelUserAccessMode(
+  config: SlackMessagingConfig,
+): MessagingChannelUserAccessMode {
+  return config.channelUserAccessMode ?? SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT;
+}
+
+function slackGroupDmAccessMode(
+  config: SlackMessagingConfig,
+): MessagingGroupDmAccessMode {
+  return config.groupDmAccessMode ?? SLACK_GROUP_DM_ACCESS_MODE_DEFAULT;
+}
+
+/**
+ * Detect a Slack multi-person DM (mpim / "group DM"). Message events carry
+ * `channel_type: "mpim"`; interactive (block action) and slash payloads carry
+ * only a channel name, but Slack always names group DMs `mpdm-…`. Both signals
+ * are checked so every inbound path (message, callback, slash) agrees.
+ */
+function isSlackGroupDm(params: {
+  channelType?: string;
+  channelName?: string;
+}): boolean {
+  if (params.channelType === "mpim") return true;
+  return params.channelName?.startsWith("mpdm") ?? false;
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {

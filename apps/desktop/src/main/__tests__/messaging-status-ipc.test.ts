@@ -19,6 +19,7 @@ const settingsServiceMock = vi.hoisted(() => ({
 }));
 const pairingStoreMock = vi.hoisted(() => ({
   markStatus: vi.fn(),
+  recordApproval: vi.fn(),
 }));
 const activityLogMock = vi.hoisted(() => ({
   getPlatformActivitySummary: vi.fn(() => ({ summaries: [] as unknown[] })),
@@ -134,6 +135,7 @@ describe("messaging status ipc", () => {
       configPath: "/tmp/pwragent-config.toml",
     });
     pairingStoreMock.markStatus.mockReset();
+    pairingStoreMock.recordApproval.mockReset();
     activityLogMock.getPlatformActivitySummary.mockClear();
     activityLogMock.getPlatformActivitySummary.mockReturnValue({ summaries: [] });
     activityLogMock.record.mockClear();
@@ -285,16 +287,16 @@ describe("messaging status ipc", () => {
     });
   });
 
-  it("resolves Slack workspace pairing labels from the team lookup", async () => {
+  it("approves Slack observed pairing into the requested allowlist", async () => {
     const { registerMessagingStatusIpcHandlers } = await import(
       "../ipc/messaging-status"
     );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     const entry = {
-      id: "pairing-slack-workspace",
+      id: "pairing-slack-channel",
       platform: "slack",
       instanceId: "default",
-      scope: "bucket",
+      scope: "observed",
       status: "observed",
       generatedAt: 1_000,
       expiresAt: 2_000,
@@ -309,20 +311,290 @@ describe("messaging status ipc", () => {
     const consumed = { ...entry, status: "consumed" };
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
     settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
-    settingsServiceMock.resolveSlackBotTokenSync.mockReturnValue("xoxb-token");
-    slackProviderMock.resolveContact.mockResolvedValue({
-      status: "ok",
-      id: "T025C2NKT",
-      displayName: "Giphy",
-      detail: "workspace",
-    });
     pairingStoreMock.markStatus.mockReturnValue(consumed);
 
     registerMessagingStatusIpcHandlers();
 
     await expect(
-      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id }),
+      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+        {},
+        { entryId: entry.id, target: "conversation" },
+      ),
     ).resolves.toMatchObject({ added: true, entry: consumed });
+
+    expect(slackProviderMock.resolveContact).not.toHaveBeenCalled();
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedChannels: [
+            { id: "C012ABCDEF0", displayName: "hi" },
+          ],
+        },
+      },
+    });
+
+    settingsServiceMock.writeConfigPatch.mockClear();
+    pairingStoreMock.markStatus.mockReturnValue(consumed);
+
+    await expect(
+      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+        {},
+        { entryId: entry.id, target: "actor" },
+      ),
+    ).resolves.toMatchObject({ added: true, entry: consumed });
+
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedUserIds: [
+            { id: "U012ABCDEF0", displayName: "Harold" },
+          ],
+        },
+      },
+    });
+  });
+
+  it("keeps a Slack request observed and records the target when consume is false", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const entry = {
+      id: "pairing-slack-stay",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U012ABCDEF0", displayName: "Harold" },
+      observedChat: {
+        id: "C012ABCDEF0",
+        kind: "channel",
+        title: "team-alerts",
+        bucketId: "T025C2NKT",
+      },
+    };
+    const observedWithTarget = { ...entry, approvedTargets: ["team"] };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    pairingStoreMock.recordApproval.mockReturnValue(observedWithTarget);
+
+    registerMessagingStatusIpcHandlers();
+
+    await expect(
+      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+        {},
+        { entryId: entry.id, target: "team", consume: false },
+      ),
+    ).resolves.toMatchObject({ added: true, entry: observedWithTarget });
+
+    // Team approval writes the workspace allowlist using the observed team ID.
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedWorkspaces: [
+            { id: "T025C2NKT", displayName: "" },
+          ],
+        },
+      },
+    });
+    // Stays observed: recorded, never consumed, no outcome delivered.
+    expect(pairingStoreMock.recordApproval).toHaveBeenCalledWith({
+      entryId: entry.id,
+      target: "team",
+    });
+    expect(pairingStoreMock.markStatus).not.toHaveBeenCalled();
+    // Stays observed, but the user gets a note confirming what was granted.
+    expect(runtimeMock.deliverPairingOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ id: entry.id }),
+      "approved",
+      expect.objectContaining({ text: expect.stringContaining("workspace") }),
+    );
+  });
+
+  it("confirms a user-only approval and notes the channel is still gated", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const entry = {
+      id: "pairing-slack-actor-note",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U079K80HTGS", displayName: "Harold" },
+      observedChat: {
+        id: "C012ABCDEF0",
+        kind: "channel",
+        title: "signals-chat",
+        bucketId: "T025C2NKT",
+      },
+    };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    pairingStoreMock.recordApproval.mockReturnValue(entry);
+
+    registerMessagingStatusIpcHandlers();
+
+    await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+      {},
+      { entryId: entry.id, target: "actor", consume: false },
+    );
+
+    expect(runtimeMock.deliverPairingOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ id: entry.id }),
+      "approved",
+      expect.objectContaining({
+        text: expect.stringContaining("channel isn't authorized yet"),
+      }),
+    );
+  });
+
+  it("maps a Slack thread pairing to the channel name and team ID, not the thread text", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    // Pairing sent as a thread reply in #signals-chat: title is the thread's
+    // root message ("hi"), parentTitle is the channel name, bucketId the team.
+    const entry = {
+      id: "pairing-slack-thread",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U079K80HTGS", displayName: "Harold" },
+      observedChat: {
+        id: "G01N9LZU287",
+        kind: "thread",
+        title: "hi",
+        parentId: "1712023032.000100",
+        parentTitle: "signals-chat",
+        bucketId: "T025C2NKT",
+      },
+    };
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    pairingStoreMock.recordApproval.mockReturnValue(entry);
+
+    const approve = async (target: string) => {
+      settingsServiceMock.writeConfigPatch.mockClear();
+      runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+      registerMessagingStatusIpcHandlers();
+      await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+        {},
+        { entryId: entry.id, target, consume: false },
+      );
+    };
+
+    // Channel approval uses the channel name (parentTitle), never "hi".
+    await approve("conversation");
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedChannels: [{ id: "G01N9LZU287", displayName: "signals-chat" }],
+        },
+      },
+    });
+
+    // Team approval uses the workspace ID with a blank name (never the
+    // channel name), so a Lookup can fill it in.
+    await approve("team");
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedWorkspaces: [{ id: "T025C2NKT", displayName: "" }],
+        },
+      },
+    });
+  });
+
+  it("maps a Slack channel-level pairing (no thread) to the channel name", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    // Pairing sent directly in #signals-chat (not a thread): the channel name
+    // is the chat title, there is no parentTitle, bucketId is the team.
+    const entry = {
+      id: "pairing-slack-channel-level",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U079K80HTGS", displayName: "Harold" },
+      observedChat: {
+        id: "G01N9LZU287",
+        kind: "channel",
+        title: "signals-chat",
+        bucketId: "T025C2NKT",
+      },
+    };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    pairingStoreMock.recordApproval.mockReturnValue(entry);
+
+    registerMessagingStatusIpcHandlers();
+
+    await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+      {},
+      { entryId: entry.id, target: "conversation", consume: false },
+    );
+
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedChannels: [{ id: "G01N9LZU287", displayName: "signals-chat" }],
+        },
+      },
+    });
+  });
+
+  it("resolves the Slack workspace name for a team approval when available", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const entry = {
+      id: "pairing-slack-teamname",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U079K80HTGS", displayName: "Harold" },
+      observedChat: {
+        id: "G01N9LZU287",
+        kind: "thread",
+        title: "hi",
+        parentTitle: "signals-chat",
+        bucketId: "T025C2NKT",
+      },
+    };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.resolveSlackBotTokenSync.mockReturnValue("xoxb-token");
+    slackProviderMock.resolveContact.mockResolvedValue({
+      status: "ok",
+      id: "T025C2NKT",
+      displayName: "PwrDrvr",
+    });
+    pairingStoreMock.recordApproval.mockReturnValue(entry);
+
+    registerMessagingStatusIpcHandlers();
+
+    await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+      {},
+      { entryId: entry.id, target: "team", consume: false },
+    );
 
     expect(slackProviderMock.resolveContact).toHaveBeenCalledWith(
       { botToken: "xoxb-token" },
@@ -331,9 +603,50 @@ describe("messaging status ipc", () => {
     expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
       messaging: {
         slack: {
-          authorizedWorkspaces: [
-            { id: "T025C2NKT", displayName: "Giphy" },
-          ],
+          authorizedWorkspaces: [{ id: "T025C2NKT", displayName: "PwrDrvr" }],
+        },
+      },
+    });
+  });
+
+  it("falls back to a blank Slack workspace name when the lookup fails", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const entry = {
+      id: "pairing-slack-teamname-fail",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U079K80HTGS", displayName: "Harold" },
+      observedChat: {
+        id: "G01N9LZU287",
+        kind: "channel",
+        title: "signals-chat",
+        bucketId: "T025C2NKT",
+      },
+    };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.resolveSlackBotTokenSync.mockReturnValue("xoxb-token");
+    slackProviderMock.resolveContact.mockRejectedValue(new Error("network down"));
+    pairingStoreMock.recordApproval.mockReturnValue(entry);
+
+    registerMessagingStatusIpcHandlers();
+
+    await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+      {},
+      { entryId: entry.id, target: "team", consume: false },
+    );
+
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedWorkspaces: [{ id: "T025C2NKT", displayName: "" }],
         },
       },
     });

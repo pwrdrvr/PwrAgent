@@ -10,9 +10,13 @@ import type {
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
+  DesktopMessagingAuthorizationMode,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingImageProfile,
   DesktopMessagingResponseMode,
+  DesktopMessagingSlackChannelUserAccessMode,
+  DesktopMessagingSlackDmAccessMode,
+  DesktopMessagingSlackGroupDmAccessMode,
   DesktopOnboardingCompletedSource,
   DesktopOnboardingSnapshot,
   DesktopSettingsConfigPatch,
@@ -37,6 +41,13 @@ import {
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
 } from "@pwragent/shared";
+import {
+  SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
+  SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
+  SLACK_DM_ACCESS_MODE_DEFAULT,
+  SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
+  SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
+} from "@pwragent/messaging-interface";
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import {
   applyDesktopSettingsPatch,
@@ -473,6 +484,28 @@ export class DesktopSettingsService {
     const feishuTenantRegion = this.resolveFeishuTenantRegion(
       config.messaging?.feishu?.tenantRegion,
     );
+    const slackAuthorizedWorkspaces = this.resolveList(
+      config.messaging?.slack?.authorizedWorkspaces,
+      SLACK_AUTHORIZED_WORKSPACES_ENV,
+    );
+    const slackAuthorizedChannels = this.resolveConfigList(
+      config.messaging?.slack?.authorizedChannels,
+    );
+    const slackTeamAuthorizationMode = this.resolveSlackTeamAuthorizationMode(
+      config.messaging?.slack?.teamAuthorizationMode,
+    );
+    const slackChannelAuthorizationMode = this.resolveSlackChannelAuthorizationMode(
+      config.messaging?.slack?.channelAuthorizationMode,
+    );
+    const slackDmAccessMode = this.resolveSlackDmAccessMode(
+      config.messaging?.slack?.dmAccessMode,
+    );
+    const slackGroupDmAccessMode = this.resolveSlackGroupDmAccessMode(
+      config.messaging?.slack?.groupDmAccessMode,
+    );
+    const slackChannelUserAccessMode = this.resolveSlackChannelUserAccessMode(
+      config.messaging?.slack?.channelUserAccessMode,
+    );
 
     return {
       fetchedAt: this.now(),
@@ -784,6 +817,11 @@ export class DesktopSettingsService {
           inboundMode: this.resolveSlackInboundMode(
             config.messaging?.slack?.inboundMode,
           ),
+          teamAuthorizationMode: slackTeamAuthorizationMode,
+          channelAuthorizationMode: slackChannelAuthorizationMode,
+          dmAccessMode: slackDmAccessMode,
+          groupDmAccessMode: slackGroupDmAccessMode,
+          channelUserAccessMode: slackChannelUserAccessMode,
           slashCommandPrefix: this.resolveStringWithDefault(
             config.messaging?.slack?.slashCommandPrefix,
             "pwragent_",
@@ -798,13 +836,8 @@ export class DesktopSettingsService {
             config.messaging?.slack?.authorizedUserIds,
             SLACK_AUTHORIZED_USER_IDS_ENV,
           ),
-          authorizedWorkspaces: this.resolveList(
-            config.messaging?.slack?.authorizedWorkspaces,
-            SLACK_AUTHORIZED_WORKSPACES_ENV,
-          ),
-          authorizedChannels: this.resolveConfigList(
-            config.messaging?.slack?.authorizedChannels,
-          ),
+          authorizedWorkspaces: slackAuthorizedWorkspaces,
+          authorizedChannels: slackAuthorizedChannels,
         },
         feishu: {
           enabled: this.resolveBoolean(
@@ -1862,6 +1895,54 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopMessagingResponseMode> {
     return {
       value: configValue ?? defaultValue,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  // Locked-down defaults: a fresh Slack setup responds to no one until the
+  // operator pairs/approves a team, channel, and/or user. Adding entries no
+  // longer silently flips the mode — the mode is an explicit choice.
+  private resolveSlackTeamAuthorizationMode(
+    configValue: DesktopMessagingAuthorizationMode | undefined,
+  ): DesktopSettingsValue<DesktopMessagingAuthorizationMode> {
+    return {
+      value: configValue ?? SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveSlackChannelAuthorizationMode(
+    configValue: DesktopMessagingAuthorizationMode | undefined,
+  ): DesktopSettingsValue<DesktopMessagingAuthorizationMode> {
+    return {
+      value: configValue ?? SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveSlackDmAccessMode(
+    configValue: DesktopMessagingSlackDmAccessMode | undefined,
+  ): DesktopSettingsValue<DesktopMessagingSlackDmAccessMode> {
+    return {
+      value: configValue ?? SLACK_DM_ACCESS_MODE_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveSlackChannelUserAccessMode(
+    configValue: DesktopMessagingSlackChannelUserAccessMode | undefined,
+  ): DesktopSettingsValue<DesktopMessagingSlackChannelUserAccessMode> {
+    return {
+      value: configValue ?? SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveSlackGroupDmAccessMode(
+    configValue: DesktopMessagingSlackGroupDmAccessMode | undefined,
+  ): DesktopSettingsValue<DesktopMessagingSlackGroupDmAccessMode> {
+    return {
+      value: configValue ?? SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }

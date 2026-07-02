@@ -11,10 +11,14 @@ import type {
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
   DesktopMessagingAcknowledgment,
+  DesktopMessagingAuthorizationMode,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingFullAccessWarningUserPolicy,
   DesktopMessagingImageProfile,
   DesktopMessagingResponseMode,
+  DesktopMessagingSlackChannelUserAccessMode,
+  DesktopMessagingSlackDmAccessMode,
+  DesktopMessagingSlackGroupDmAccessMode,
   DesktopOnboardingCompletedSource,
   DesktopSettingsConfigPatch,
   DesktopUpdateChannel,
@@ -168,6 +172,11 @@ export type DesktopSettingsConfig = {
       streamingResponses?: boolean;
       workspaceUrl?: string;
       inboundMode?: "socket" | "events";
+      teamAuthorizationMode?: DesktopMessagingAuthorizationMode;
+      channelAuthorizationMode?: DesktopMessagingAuthorizationMode;
+      dmAccessMode?: DesktopMessagingSlackDmAccessMode;
+      channelUserAccessMode?: DesktopMessagingSlackChannelUserAccessMode;
+      groupDmAccessMode?: DesktopMessagingSlackGroupDmAccessMode;
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: AuthorizedContactConfig[];
@@ -1013,6 +1022,30 @@ export function desktopSettingsPatchToEdits(
   if (slack?.inboundMode !== undefined) {
     set(["messaging", "slack", "inbound_mode"], slack.inboundMode);
   }
+  if (slack?.teamAuthorizationMode !== undefined) {
+    set(
+      ["messaging", "slack", "team_authorization_mode"],
+      slack.teamAuthorizationMode,
+    );
+  }
+  if (slack?.channelAuthorizationMode !== undefined) {
+    set(
+      ["messaging", "slack", "channel_authorization_mode"],
+      slack.channelAuthorizationMode,
+    );
+  }
+  if (slack?.dmAccessMode !== undefined) {
+    set(["messaging", "slack", "dm_access_mode"], slack.dmAccessMode);
+  }
+  if (slack?.groupDmAccessMode !== undefined) {
+    set(["messaging", "slack", "group_dm_access_mode"], slack.groupDmAccessMode);
+  }
+  if (slack?.channelUserAccessMode !== undefined) {
+    set(
+      ["messaging", "slack", "channel_user_access_mode"],
+      slack.channelUserAccessMode,
+    );
+  }
   if (slack?.slashCommandPrefix !== undefined) {
     set(["messaging", "slack", "slash_command_prefix"], slack.slashCommandPrefix);
   }
@@ -1392,6 +1425,17 @@ function normalizeDesktopConfig(
         streamingResponses: readBoolean(slack?.streaming_responses),
         workspaceUrl: readString(slack?.workspace_url),
         inboundMode: readSlackInboundMode(slack?.inbound_mode),
+        teamAuthorizationMode: readMessagingAuthorizationMode(
+          slack?.team_authorization_mode,
+        ),
+        channelAuthorizationMode: readMessagingAuthorizationMode(
+          slack?.channel_authorization_mode,
+        ),
+        dmAccessMode: readSlackDmAccessMode(slack?.dm_access_mode),
+        groupDmAccessMode: readSlackGroupDmAccessMode(slack?.group_dm_access_mode),
+        channelUserAccessMode: readSlackChannelUserAccessMode(
+          slack?.channel_user_access_mode,
+        ),
         slashCommandPrefix: readString(slack?.slash_command_prefix),
         registerSlashCommands: readBoolean(slack?.register_slash_commands),
         authorizedUserIds: readAuthorizedContacts(
@@ -1860,6 +1904,38 @@ function readSlackInboundMode(
   value: TomlScalar | undefined,
 ): "socket" | "events" | undefined {
   return value === "socket" || value === "events" ? value : undefined;
+}
+
+function readMessagingAuthorizationMode(
+  value: TomlScalar | undefined,
+): DesktopMessagingAuthorizationMode | undefined {
+  return value === "approved_only" || value === "allow_all" ? value : undefined;
+}
+
+function readSlackDmAccessMode(
+  value: TomlScalar | undefined,
+): DesktopMessagingSlackDmAccessMode | undefined {
+  return value === "any_workspace_user"
+    || value === "authorized_users"
+    || value === "none"
+    ? value
+    : undefined;
+}
+
+function readSlackGroupDmAccessMode(
+  value: TomlScalar | undefined,
+): DesktopMessagingSlackGroupDmAccessMode | undefined {
+  return value === "none" || value === "authorized_users" ? value : undefined;
+}
+
+function readSlackChannelUserAccessMode(
+  value: TomlScalar | undefined,
+): DesktopMessagingSlackChannelUserAccessMode | undefined {
+  return value === "any_channel_user"
+    || value === "authorized_users"
+    || value === "none"
+    ? value
+    : undefined;
 }
 
 function readFeishuInboundMode(

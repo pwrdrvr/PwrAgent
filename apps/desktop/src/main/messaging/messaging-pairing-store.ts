@@ -6,6 +6,7 @@ import {
 } from "node:crypto";
 import type {
   MessagingChannelKind,
+  MessagingPairingApprovalTarget,
   MessagingPairingEntry,
   MessagingPairingObservedActor,
   MessagingPairingObservedChat,
@@ -33,6 +34,7 @@ type PairingPayload = {
   observedActor?: MessagingPairingObservedActor;
   observedChat?: MessagingPairingObservedChat;
   failureReason?: string;
+  approvedTargets?: MessagingPairingApprovalTarget[];
 };
 
 export class MessagingPairingStore {
@@ -232,6 +234,9 @@ export class MessagingPairingStore {
     const payload: PairingPayload = {
       observedActor: current.observedActor,
       observedChat: current.observedChat,
+      ...(current.approvedTargets && current.approvedTargets.length > 0
+        ? { approvedTargets: current.approvedTargets }
+        : {}),
       ...(params.failureReason ? { failureReason: params.failureReason } : {}),
     };
     this.stateDb.raw
@@ -241,6 +246,37 @@ export class MessagingPairingStore {
          WHERE entry_id = ?`,
       )
       .run(params.status, JSON.stringify(payload), params.entryId);
+    return this.get(params.entryId);
+  }
+
+  /**
+   * Record that a specific approval target has been applied for an
+   * observed request while keeping the request `observed`. Used by the
+   * Slack "approve user, then channel, then team" flow so the request
+   * card stays visible until the operator finishes (or dismisses it).
+   */
+  recordApproval(params: {
+    entryId: string;
+    target: MessagingPairingApprovalTarget;
+  }): MessagingPairingEntry | undefined {
+    const current = this.get(params.entryId);
+    if (!current || current.status !== "observed") return current;
+    const approvedTargets = Array.from(
+      new Set([...(current.approvedTargets ?? []), params.target]),
+    );
+    const payload: PairingPayload = {
+      observedActor: current.observedActor,
+      observedChat: current.observedChat,
+      approvedTargets,
+      ...(current.failureReason ? { failureReason: current.failureReason } : {}),
+    };
+    this.stateDb.raw
+      .prepare(
+        `UPDATE messaging_pairing_tokens
+         SET payload = ?
+         WHERE entry_id = ? AND status = 'observed'`,
+      )
+      .run(JSON.stringify(payload), params.entryId);
     return this.get(params.entryId);
   }
 
@@ -295,6 +331,9 @@ function rowToEntry(row: PairingRow): MessagingPairingEntry {
     ...(payload.observedActor ? { observedActor: payload.observedActor } : {}),
     ...(payload.observedChat ? { observedChat: payload.observedChat } : {}),
     ...(payload.failureReason ? { failureReason: payload.failureReason } : {}),
+    ...(payload.approvedTargets && payload.approvedTargets.length > 0
+      ? { approvedTargets: payload.approvedTargets }
+      : {}),
   };
 }
 

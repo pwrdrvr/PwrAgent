@@ -633,14 +633,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   async deliverPairingOutcome(
     entry: MessagingPairingEntry,
     outcome: "approved" | "rejected" | "expired",
+    options?: { text?: string },
   ): Promise<void> {
     const running = this.runningAdapters.get(entry.platform);
     if (!running || !entry.observedActor || !entry.observedChat) return;
-    const text = outcome === "approved"
-      ? "PwrAgent pairing approved."
-      : outcome === "expired"
-        ? "PwrAgent pairing expired."
-        : "PwrAgent pairing rejected.";
+    const text = options?.text
+      ?? (outcome === "approved"
+        ? "PwrAgent pairing approved."
+        : outcome === "expired"
+          ? "PwrAgent pairing expired."
+          : "PwrAgent pairing rejected.");
     await running.adapter.deliver({
       id: `pairing:${outcome}:${entry.id}`,
       kind: "message",
@@ -2165,6 +2167,8 @@ function pairingScopeFailure(
   entry: MessagingPairingEntry,
   event: MessagingInboundEvent,
 ): string | undefined {
+  if (entry.scope === "observed") return undefined;
+
   const isDm = event.channel.conversation.kind === "dm";
   if (entry.scope === "user_dm" && !isDm) {
     return "token was generated for a DM but was pasted in a group/channel";

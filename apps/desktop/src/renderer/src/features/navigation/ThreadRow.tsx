@@ -574,11 +574,44 @@ function elide(value: string, max = CHIP_LEAF_MAX_CHARS): string {
  *               Discord:  <server>/#<channel>
  *   thread   →  Discord: <server>/#<channel>/<thread-elided>
  */
+/**
+ * A Slack multi-person DM (mpim) is stored as conversationKind "channel"
+ * (the routing key can't distinguish it), but its resolved title is always
+ * Slack's reserved `mpdm-…` name — so the display can classify it as a group
+ * DM rather than mislabelling it "Channel" / "Server channel".
+ */
+function isSlackGroupDmBinding(
+  binding: MessagingThreadBindingSummary,
+): boolean {
+  return (
+    binding.platform === "slack"
+    && binding.conversationKind === "channel"
+    && (binding.conversationTitle?.trim().toLowerCase().startsWith("mpdm") ?? false)
+  );
+}
+
+/** Best-effort member list from an mpdm title (`mpdm-a--b--c-1` → "a, b, c"). */
+function slackGroupDmMembers(title: string): string {
+  return title
+    .trim()
+    .replace(/^mpdm-/i, "")
+    .replace(/-\d+$/, "")
+    .split("--")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(", ");
+}
+
 function formatBindingLabel(binding: MessagingThreadBindingSummary): string {
   const title = binding.conversationTitle?.trim();
   const parent = binding.parentTitle?.trim();
   const ancestor = binding.ancestorTitle?.trim();
   const platform = binding.platform;
+
+  if (isSlackGroupDmBinding(binding)) {
+    const members = title ? slackGroupDmMembers(title) : "";
+    return members ? `Group DM: ${elide(members, 22)}` : "Group DM";
+  }
 
   switch (binding.conversationKind) {
     case "dm":
@@ -658,7 +691,10 @@ function formatBindingTooltip(binding: MessagingThreadBindingSummary): string {
       if (title) lines.push(`Thread: ${title}`);
       break;
     case "channel":
-      if (platform === "telegram") {
+      if (isSlackGroupDmBinding(binding)) {
+        const members = title ? slackGroupDmMembers(title) : "";
+        if (members) lines.push(`With: ${members}`);
+      } else if (platform === "telegram") {
         if (title) lines.push(`Group: ${title}`);
       } else if (ancestor) {
         // Discord thread — 3 levels: server / channel / thread.
@@ -681,6 +717,7 @@ function formatBindingTooltip(binding: MessagingThreadBindingSummary): string {
 }
 
 function formatConversationType(binding: MessagingThreadBindingSummary): string {
+  if (isSlackGroupDmBinding(binding)) return "Group DM";
   const platform = binding.platform;
   switch (binding.conversationKind) {
     case "dm":

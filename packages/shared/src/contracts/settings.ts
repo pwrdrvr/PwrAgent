@@ -111,6 +111,16 @@ export type DesktopAuthorizedContact = {
 };
 
 export type DesktopMessagingResponseMode = "every_message" | "mention_only";
+export type DesktopMessagingAuthorizationMode = "approved_only" | "allow_all";
+export type DesktopMessagingSlackDmAccessMode =
+  | "any_workspace_user"
+  | "authorized_users"
+  | "none";
+export type DesktopMessagingSlackChannelUserAccessMode =
+  | "any_channel_user"
+  | "authorized_users"
+  | "none";
+export type DesktopMessagingSlackGroupDmAccessMode = "none" | "authorized_users";
 
 export type DesktopMessagingFullAccessWarningGlobalPolicy =
   | "always"
@@ -583,6 +593,11 @@ export type DesktopSettingsSnapshot = {
       signingSecret: DesktopSettingsSecretState;
       workspaceUrl: DesktopSettingsValue<string>;
       inboundMode: DesktopSettingsValue<"socket" | "events">;
+      teamAuthorizationMode: DesktopSettingsValue<DesktopMessagingAuthorizationMode>;
+      channelAuthorizationMode: DesktopSettingsValue<DesktopMessagingAuthorizationMode>;
+      dmAccessMode: DesktopSettingsValue<DesktopMessagingSlackDmAccessMode>;
+      channelUserAccessMode: DesktopSettingsValue<DesktopMessagingSlackChannelUserAccessMode>;
+      groupDmAccessMode: DesktopSettingsValue<DesktopMessagingSlackGroupDmAccessMode>;
       slashCommandPrefix: DesktopSettingsValue<string>;
       registerSlashCommands: DesktopSettingsValue<boolean>;
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
@@ -790,6 +805,11 @@ export type DesktopSettingsConfigPatch = {
       streamingResponses?: boolean;
       workspaceUrl?: string;
       inboundMode?: "socket" | "events";
+      teamAuthorizationMode?: DesktopMessagingAuthorizationMode;
+      channelAuthorizationMode?: DesktopMessagingAuthorizationMode;
+      dmAccessMode?: DesktopMessagingSlackDmAccessMode;
+      channelUserAccessMode?: DesktopMessagingSlackChannelUserAccessMode;
+      groupDmAccessMode?: DesktopMessagingSlackGroupDmAccessMode;
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];

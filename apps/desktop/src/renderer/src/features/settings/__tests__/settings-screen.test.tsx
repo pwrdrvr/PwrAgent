@@ -228,6 +228,11 @@ function createSnapshot(
         signingSecret: { configured: false, source: "unset", writable: true },
         workspaceUrl: { value: "", source: "default" },
         inboundMode: { value: "socket", source: "default" },
+        teamAuthorizationMode: { value: "approved_only", source: "default" },
+        channelAuthorizationMode: { value: "approved_only", source: "default" },
+        dmAccessMode: { value: "authorized_users", source: "default" },
+        groupDmAccessMode: { value: "none", source: "default" },
+        channelUserAccessMode: { value: "authorized_users", source: "default" },
         slashCommandPrefix: { value: "pwragent_", source: "default" },
         registerSlashCommands: { value: false, source: "default" },
         authorizedUserIds: { value: [], source: "default" },
@@ -1987,14 +1992,18 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "Generate" })[0]!);
     expect(await screen.findByText(pairingMessage)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
 
+    // Generating auto-copies the code (bridge fails, browser clipboard wins)
+    // and the button flips to "Copied".
     await waitFor(() => {
       expect(bridgeCopy).toHaveBeenCalledWith(pairingMessage);
     });
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(pairingMessage);
     });
+    expect(
+      await screen.findByRole("button", { name: "Copied" }),
+    ).toBeInTheDocument();
   });
 
   it("clears a generated pairing message after the token is observed", async () => {
@@ -2189,6 +2198,107 @@ describe("SettingsScreen", () => {
     expect(screen.getByDisplayValue("Harold Hunt")).toBeInTheDocument();
   });
 
+  it("offers separate Slack pairing approvals for the observed user and channel", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        slack: {
+          ...snapshot.messaging.slack,
+          enabled: { value: true, source: "config" },
+        },
+      },
+    });
+    const observedEntry = {
+      id: "pairing-slack-1",
+      platform: "slack" as const,
+      instanceId: "default",
+      scope: "observed" as const,
+      status: "observed" as const,
+      generatedAt: 1,
+      expiresAt: 2,
+      observedAt: 1,
+      observedActor: {
+        id: "U012ABCDEF0",
+        displayName: "Harold",
+      },
+      observedChat: {
+        id: "C012ABCDEF0",
+        kind: "channel" as const,
+        title: "team-alerts",
+        bucketId: "T025C2NKT",
+      },
+    };
+    const approveMessagingPairing = vi.fn(async () => ({
+      added: true,
+      entry: {
+        ...observedEntry,
+        status: "consumed" as const,
+      },
+    }));
+    const desktopApi = {
+      approveMessagingPairing,
+      listMessagingPairingRequests: vi.fn(async (request) => ({
+        entries: request?.platform === "slack" ? [observedEntry] : [],
+      })),
+      onMessagingPairingChanged: vi.fn(() => () => undefined),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const request = await screen.findByText("Harold sent a pairing request");
+    const requestCard = request.closest(".settings-pairing__request");
+    expect(requestCard).not.toBeNull();
+    expect(requestCard).toHaveTextContent("User ID U012ABCDEF0");
+    expect(requestCard).toHaveTextContent("Channel ID C012ABCDEF0");
+    expect(requestCard).toHaveTextContent("team-alerts");
+
+    fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {
+      name: "Approve channel",
+    }));
+
+    await waitFor(() => {
+      expect(approveMessagingPairing).toHaveBeenCalledWith({
+        entryId: "pairing-slack-1",
+        target: "conversation",
+        consume: false,
+      });
+    });
+
+    fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {
+      name: "Approve user",
+    }));
+
+    await waitFor(() => {
+      expect(approveMessagingPairing).toHaveBeenCalledWith({
+        entryId: "pairing-slack-1",
+        target: "actor",
+        consume: false,
+      });
+    });
+
+    // A workspace was observed, so a team approval is offered too.
+    fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {
+      name: "Approve team",
+    }));
+
+    await waitFor(() => {
+      expect(approveMessagingPairing).toHaveBeenCalledWith({
+        entryId: "pairing-slack-1",
+        target: "team",
+        consume: false,
+      });
+    });
+  });
+
   it("labels Telegram topic pairing request IDs distinctly", async () => {
     const snapshot = createSnapshot();
     const settings = createSettingsState({
@@ -2282,6 +2392,23 @@ describe("SettingsScreen", () => {
       />,
     );
 
+    const warningPolicy = screen.getByRole("combobox", {
+      name: "Authorized User IDs Full Access warning 1",
+    });
+    expect(warningPolicy.closest(".settings-authorized-list__policy")).toHaveTextContent(
+      "Full Access warning",
+    );
+    expect(warningPolicy).toHaveAttribute(
+      "title",
+      "Controls whether this user sees the Full Access warning before escalation.",
+    );
+    expect(
+      within(warningPolicy).getByRole("option", { name: "Warn, can dismiss" }),
+    ).toBeInTheDocument();
+    expect(
+      within(warningPolicy).getByRole("option", { name: "Never warn" }),
+    ).toBeInTheDocument();
+
     fireEvent.click(
       screen.getByRole("button", {
         name: "Lookup Authorized User IDs row 1",
@@ -2306,6 +2433,80 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("places Slack channel pairing and defaults with channel authorization", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        slack: {
+          ...snapshot.messaging.slack,
+          enabled: { value: true, source: "config" },
+        },
+      },
+    });
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const slackHeader = screen.getByRole("button", { name: "Slack" });
+    if (slackHeader.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(slackHeader);
+    }
+    const slackSection = slackHeader.closest("section");
+    expect(slackSection).not.toBeNull();
+    const slackControls = within(slackSection as HTMLElement);
+
+    expect(
+      slackControls.queryByRole("radio", { name: "User via channel" }),
+    ).not.toBeInTheDocument();
+    expect(
+      slackControls.queryByRole("radio", { name: "Workspace" }),
+    ).not.toBeInTheDocument();
+    expect(
+      slackControls.getByText(/approve the observed user or channel/i),
+    ).toBeInTheDocument();
+    expect(slackControls.getByText("Authorized Team IDs")).toBeInTheDocument();
+    expect(slackControls.getByText("Team access default")).toBeInTheDocument();
+    expect(slackControls.getByText("Channel access default")).toBeInTheDocument();
+    expect(slackControls.getByText("Channel response default")).toBeInTheDocument();
+    expect(slackControls.getByText("Authorized Channels")).toBeInTheDocument();
+    expect(
+      slackControls.getByText(
+        /Require listed channels is the safest default/i,
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(slackControls.getByRole("radio", { name: "Any channel" }));
+
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          slack: {
+            channelAuthorizationMode: "allow_all",
+          },
+        },
+      });
+    });
+
+    fireEvent.click(slackControls.getByRole("radio", { name: "Every message" }));
+
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          slack: {
+            responseMode: "every_message",
+          },
+        },
+      });
+    });
+  });
+
   it("allows replacing the Slack signing secret while Socket Mode is selected", async () => {
     const settings = createSettingsState();
 
@@ -2317,7 +2518,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const signingSecretInput = screen.getByLabelText("Signing Secret");
+    const signingSecretInput = screen.getByLabelText("Signing Secret (Optional)");
     const signingSecretControls = signingSecretInput.closest(".settings-secret");
     expect(signingSecretInput).toBeEnabled();
     expect(signingSecretControls).not.toBeNull();
@@ -3047,7 +3248,7 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("radio", { name: "Always" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Always warn" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: { fullAccessWarning: "always" },

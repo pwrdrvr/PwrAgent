@@ -99,6 +99,43 @@ describe("MessagingPairingStore", () => {
     });
   });
 
+  it("accumulates approval targets while keeping the request observed", () => {
+    const token = "APPROVALTARGETS1234567890ABCDEF";
+    const entry = store.create({
+      token,
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      generatedAt: 1_000,
+      expiresAt: 5_000,
+    });
+    store.markObserved({
+      entryId: entry.id,
+      observedAt: 1_100,
+      actor: { id: "U1", displayName: "Harold" },
+      chat: { id: "C1", kind: "channel", title: "team-alerts", bucketId: "T1" },
+    });
+
+    expect(store.recordApproval({ entryId: entry.id, target: "actor" })).toMatchObject({
+      status: "observed",
+      approvedTargets: ["actor"],
+    });
+    // Idempotent + accumulates a second distinct target.
+    store.recordApproval({ entryId: entry.id, target: "actor" });
+    expect(
+      store.recordApproval({ entryId: entry.id, target: "conversation" }),
+    ).toMatchObject({
+      status: "observed",
+      approvedTargets: ["actor", "conversation"],
+    });
+
+    // Consuming preserves the recorded targets in the payload.
+    expect(store.markStatus({ entryId: entry.id, status: "consumed" })).toMatchObject({
+      status: "consumed",
+      approvedTargets: ["actor", "conversation"],
+    });
+  });
+
   it("parameterizes token lookups", () => {
     const token = "123456789ABCDEFGHJKLMNPQRSTUVWX";
     const entry = store.create({

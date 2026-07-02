@@ -1,4 +1,10 @@
-import type { MessagingResponseMode } from "@pwragent/messaging-interface";
+import type {
+  MessagingAuthorizationMode,
+  MessagingChannelUserAccessMode,
+  MessagingDmAccessMode,
+  MessagingGroupDmAccessMode,
+  MessagingResponseMode,
+} from "@pwragent/messaging-interface";
 
 export type SlackAuthorizedContact = {
   id: string;
@@ -13,6 +19,10 @@ export type SlackMessagingConfig = {
   authorizedActorIds: SlackAuthorizedContact[];
   authorizedConversationIds?: SlackAuthorizedContact[];
   authorizedTeamIds?: SlackAuthorizedContact[];
+  channelAuthorizationMode?: MessagingAuthorizationMode;
+  channelUserAccessMode?: MessagingChannelUserAccessMode;
+  dmAccessMode?: MessagingDmAccessMode;
+  groupDmAccessMode?: MessagingGroupDmAccessMode;
   botToken: string;
   channel: "slack";
   enabled?: boolean;
@@ -22,5 +32,6 @@ export type SlackMessagingConfig = {
   signingSecret?: string;
   slashCommandPrefix?: string;
   streamingResponses?: boolean;
+  teamAuthorizationMode?: MessagingAuthorizationMode;
   workspaceUrl?: string;
 };
