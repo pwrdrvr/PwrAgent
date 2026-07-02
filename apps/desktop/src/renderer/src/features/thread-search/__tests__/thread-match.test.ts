@@ -111,18 +111,68 @@ describe("mergePrNumberMatches", () => {
 
 describe("threadMatchesQuery", () => {
   const t = thread({
+    id: "7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84",
     title: "Messaging bug",
     gitBranch: "fix/messaging",
     prs: [pr(779)],
     linkedDirectories: [{ id: "d", label: "PwrAgent", path: "/x", kind: "local" }],
   });
 
-  it("matches title, branch, PR number (with or without #), and directory", () => {
+  it("matches id, title, branch, PR number (with or without #), and directory", () => {
+    expect(threadMatchesQuery(t, "7f2f4bd1-8e7b")).toBe(true);
     expect(threadMatchesQuery(t, "messaging")).toBe(true);
     expect(threadMatchesQuery(t, "fix/")).toBe(true);
     expect(threadMatchesQuery(t, "779")).toBe(true);
     expect(threadMatchesQuery(t, "#779")).toBe(true);
     expect(threadMatchesQuery(t, "pwragent")).toBe(true);
+  });
+
+  it("matches common thread id shapes", () => {
+    expect(
+      threadMatchesQuery(
+        thread({ id: "bd3381bd-d3a2-458c-9a9b-69819930354f" }),
+        "bd3381bd",
+      ),
+    ).toBe(true);
+    expect(
+      threadMatchesQuery(
+        thread({ id: "session_e31f5e66-7410-4235-aa19-3bbb63ee8c3d" }),
+        "session_e31f5e66",
+      ),
+    ).toBe(true);
+    expect(
+      threadMatchesQuery(
+        thread({ id: "session_e31f5e66-7410-4235-aa19-3bbb63ee8c3d" }),
+        "e31f5e66",
+      ),
+    ).toBe(true);
+    expect(
+      threadMatchesQuery(
+        thread({ id: "019f23aa-7673-7950-b077-107f5bf4777c" }),
+        "019f23aa",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match short accidental thread id fragments", () => {
+    const idOnly = thread({
+      id: "bd3381bd-d3a2-458c-9a9b-69819930354f",
+      title: "Echo",
+      gitBranch: undefined,
+      prs: [],
+      linkedDirectories: [],
+    });
+    const sessionIdOnly = thread({
+      id: "session_e31f5e66-7410-4235-aa19-3bbb63ee8c3d",
+      title: "Echo",
+      gitBranch: undefined,
+      prs: [],
+      linkedDirectories: [],
+    });
+
+    expect(threadMatchesQuery(idOnly, "b")).toBe(false);
+    expect(threadMatchesQuery(idOnly, "1")).toBe(false);
+    expect(threadMatchesQuery(sessionIdOnly, "session_")).toBe(false);
   });
 
   it("returns false for non-matches and empty queries", () => {

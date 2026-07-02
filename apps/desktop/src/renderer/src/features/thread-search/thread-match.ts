@@ -5,6 +5,9 @@ import {
   type ThreadSearchResult,
 } from "@pwragent/shared";
 
+const MIN_LONG_THREAD_ID_QUERY_LENGTH = 10;
+const MIN_UUID_FRAGMENT_HEX_CHARS = 8;
+
 /**
  * Parse a "bare PR number" query — "779" or "#779" — into its number, or
  * `null` when the query is anything else. Bounded to 7 digits so a long digit
@@ -21,6 +24,21 @@ export function parsePrNumberQuery(query: string): number | null {
 
 function threadPrNumbers(thread: NavigationThreadSummary): number[] {
   return (thread.prs ?? []).map((pr) => pr.number);
+}
+
+function threadIdMatchesQuery(threadId: string, query: string): boolean {
+  const id = threadId.toLowerCase();
+  if (!id.includes(query)) {
+    return false;
+  }
+  const hexChars = query.match(/[0-9a-f]/g)?.length ?? 0;
+  const uuidFragment =
+    /^[0-9a-f][0-9a-f-]{7,}$/i.test(query) &&
+    hexChars >= MIN_UUID_FRAGMENT_HEX_CHARS;
+  if (uuidFragment) {
+    return true;
+  }
+  return query.length >= MIN_LONG_THREAD_ID_QUERY_LENGTH;
 }
 
 /** Threads linked to the given PR number (via persisted overlay PRs). */
@@ -88,8 +106,9 @@ export function mergePrNumberMatches(
 
 /**
  * Client-side relevance test for the thread-list quick search: matches title,
- * linked PR number, git branch, and linked-directory label. PR numbers match
- * with or without the leading "#".
+ * thread id, linked PR number, git branch, and linked-directory label. PR
+ * numbers match with or without the leading "#"; thread ids only match
+ * sufficiently deliberate UUID-like fragments or longer pasted ids.
  */
 export function threadMatchesQuery(
   thread: NavigationThreadSummary,
@@ -100,6 +119,9 @@ export function threadMatchesQuery(
     return false;
   }
   if (thread.title.toLowerCase().includes(needle)) {
+    return true;
+  }
+  if (threadIdMatchesQuery(thread.id, needle)) {
     return true;
   }
   if ((thread.gitBranch ?? "").toLowerCase().includes(needle)) {

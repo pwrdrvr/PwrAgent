@@ -115,8 +115,9 @@ export class ThreadSearchStore {
         .prepare(
           `INSERT INTO thread_search_fts (
              identity_key, title, summary, project_key, directory_labels,
-             directory_paths, git_branch, git_origin_url, model, backend
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             directory_paths, git_branch, git_origin_url, model, backend,
+             thread_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           identityKey,
@@ -129,6 +130,7 @@ export class ThreadSearchStore {
           thread.gitOriginUrl ?? "",
           thread.model ?? "",
           thread.source,
+          buildThreadIdSearchText(thread.id),
         );
     });
 
@@ -231,6 +233,7 @@ export class ThreadSearchStore {
           ftsRow,
           typeof ftsRow.rank_value === "number" ? -ftsRow.rank_value : 0,
           ftsRow.snippet_text,
+          request.query,
         );
       });
   }
@@ -239,7 +242,9 @@ export class ThreadSearchStore {
     row: ThreadSearchDocumentRow,
     score: number,
     snippetText: string | null | undefined,
+    query?: string,
   ): ThreadSearchResult {
+    const threadIdMatch = queryMatchesIdentifier(query, row.thread_id);
     return {
       backend: row.backend,
       threadId: row.thread_id,
@@ -256,13 +261,37 @@ export class ThreadSearchStore {
       ...(row.git_branch ? { gitBranch: row.git_branch } : {}),
       ...(row.model ? { model: row.model } : {}),
       score,
-      confidence: score > 0 ? "medium" : "low",
-      matchReasons: score > 0 ? [{ kind: "summary_match", field: "projection" }] : [],
+      confidence: threadIdMatch ? "high" : score > 0 ? "medium" : "low",
+      matchReasons:
+        score > 0
+          ? [
+              threadIdMatch
+                ? { kind: "thread_id_match", field: "thread_id" }
+                : { kind: "summary_match", field: "projection" },
+            ]
+          : [],
       snippets: snippetText
         ? [{ scope: "projection", field: "summary", text: snippetText }]
         : [],
     };
   }
+}
+
+function queryMatchesIdentifier(query: string | undefined, identifier: string): boolean {
+  const needle = query?.trim().toLowerCase();
+  return needle !== undefined && needle.length > 0
+    ? identifier.toLowerCase().includes(needle)
+    : false;
+}
+
+function buildThreadIdSearchText(threadId: string): string {
+  const variants = new Set([threadId]);
+  for (const match of threadId.matchAll(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+  )) {
+    variants.add(match[0]);
+  }
+  return [...variants].join(" ");
 }
 
 function buildFilterWhereClause(filters: ThreadSearchFilters | undefined): {
