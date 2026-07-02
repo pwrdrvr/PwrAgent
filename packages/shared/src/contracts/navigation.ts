@@ -150,6 +150,7 @@ export type ThreadSubAgentSummary = {
   status: ThreadSubAgentStatus;
   createdAt: number;
   updatedAt: number;
+  backend?: AppServerBackendKind;
   agentName?: string;
   preferredModel?: string;
   preferredReasoningEffort?: string;

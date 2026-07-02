@@ -11,6 +11,7 @@ import {
 import type {
   AcpBackendId,
   AgentEvent,
+  AppServerBackendKind,
   AppServerNotification,
   AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
@@ -51,6 +52,17 @@ import type { WorktreeArchiveService } from "../app-server/worktree-archive-serv
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
+
+const mainLoggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
+
+vi.mock("../log", () => ({
+  getMainLogger: vi.fn(() => mainLoggerMock),
+}));
 
 const localAcpDiscoveryMock = vi.hoisted(() => ({
   discoverLocalAcpAgentRecords: vi.fn(
@@ -998,6 +1010,7 @@ class MockBackendClient {
       listThreadsDelay?: Promise<unknown>;
       archivedThreads?: AppServerThreadSummary[];
       startThreadResult?: { threadId: string };
+      startTurnDelay?: Promise<unknown>;
       startTurnError?: Error;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
@@ -1200,6 +1213,7 @@ class MockBackendClient {
     dynamicTools?: unknown;
   }): Promise<{ threadId: string; turnId: string }> {
     this.startTurnCallCount += 1;
+    await this.options.startTurnDelay;
     if (this.options.startTurnError) {
       throw this.options.startTurnError;
     }
@@ -1438,10 +1452,14 @@ function createAcpAgentStoreMock(records: AcpInstalledAgentRecord[]) {
 
 function createAcpSessionStoreMock(records: AcpSessionMetadata[]) {
   return {
-    listSessions: (backendId: string, params?: { archived?: boolean }) =>
+    listSessions: (
+      backendId: string,
+      params?: { archived?: boolean; includeHidden?: boolean },
+    ) =>
       records.filter(
         (record) =>
           record.backendId === backendId &&
+          (params?.includeHidden === true || !record.hidden) &&
           Boolean(record.archivedAt) === (params?.archived === true),
       ),
     getSession: (backendId: string, sessionId: string) =>
@@ -1534,17 +1552,25 @@ function createKimiAcpRegistry(options?: {
     initialize: vi.fn(async () => undefined),
     dispose: vi.fn(),
     startSession: vi.fn(async (params: {
+      acpRuntime?: BackendAcpSessionRuntimeState;
       cwd?: string;
       executionMode: "default" | "full-access";
+      hidden?: boolean;
+      title?: string;
     }) => {
+      const resolvedSessionId = params.hidden
+        ? `${sessionId}:title-helper:${sessions.length + 1}`
+        : sessionId;
       const metadata: AcpSessionMetadata = {
         backendId: acpBackendId,
-        sessionId,
-        title: "ACP session",
+        sessionId: resolvedSessionId,
+        title: params.title ?? "ACP session",
         cwd: params.cwd,
         createdAt: 1000,
         updatedAt: 1000,
         executionMode: params.executionMode,
+        ...(params.acpRuntime ? { acpRuntime: params.acpRuntime } : {}),
+        ...(params.hidden ? { hidden: true } : {}),
         status: "idle",
       };
       sessions.push(metadata);
@@ -1593,6 +1619,31 @@ function createKimiAcpRegistry(options?: {
     sessions,
     startPrompt,
   };
+}
+
+async function emitCompletedTurn(
+  registry: DesktopBackendRegistry,
+  backend: AppServerBackendKind,
+  threadId: string,
+  turnId = "turn-1",
+): Promise<void> {
+  await (
+    registry as unknown as { emit(event: AgentEvent): Promise<void> }
+  ).emit({
+    backend,
+    notification: {
+      method: "turn/completed",
+      params: {
+        threadId,
+        turnId,
+        turn: {
+          id: turnId,
+          status: "completed",
+          output: [],
+        },
+      },
+    },
+  });
 }
 
 describe("DesktopBackendRegistry", () => {
@@ -3045,14 +3096,15 @@ describe("DesktopBackendRegistry", () => {
     await waitForCondition(() =>
       emittedEvents.some((event) => event.notification.method === "thread/name/updated"),
     );
-    expect(emittedEvents.map((event) => event.notification.method)).toEqual([
+    const emittedMethods = emittedEvents.map((event) => event.notification.method);
+    expect(emittedMethods.filter((method) => method.startsWith("turn/"))).toEqual([
       "turn/started",
-      "thread/name/updated",
       "turn/completed",
       "turn/started",
       "turn/completed",
       "turn/cancelled",
     ]);
+    expect(emittedMethods).toContain("thread/name/updated");
 
     await registry.close();
     expect(acpClient.dispose).toHaveBeenCalledTimes(1);
@@ -4373,7 +4425,10 @@ script = "echo setup"
       },
     });
     await vi.waitFor(() => {
-      expect(sendControlPrompt).toHaveBeenCalledTimes(1);
+      expect(sendControlPrompt).toHaveBeenCalledWith({
+        sessionId: "kimi-session-1",
+        prompt: "/yolo",
+      });
       expect(sessions[0]?.executionMode).toBe("full-access");
     });
 
@@ -10893,6 +10948,50 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("does not generate a Codex title when startTurn fails before lifecycle confirmation", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Should not apply",
+      })),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      startTurnError: new Error("codex start failed"),
+      threads: [
+        {
+          id: "thread-start-failed-title",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: titleService,
+    });
+
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-start-failed-title",
+        input: [{ type: "text", text: "Make button" }],
+      }),
+    ).rejects.toThrow("codex start failed");
+    await flushAsync();
+
+    expect(titleService.generateTitle).not.toHaveBeenCalled();
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("reports in-progress quit threads across Codex active, queued, and ACP active turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -10988,12 +11087,443 @@ command = "pnpm dev"
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
+      threadId: "thread-title",
       userPrompt: "Make button",
     });
     expect(codexClient.lastRenameThreadParams).toEqual({
       threadId: "thread-title",
       name: "Leopard tea button",
     });
+
+    await registry.close();
+  });
+
+  it("logs Codex title generation failures to the main log", async () => {
+    mainLoggerMock.warn.mockClear();
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "failed" as const,
+        reason: "codex_title_helper_failed",
+      })),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-title-failure",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-title-failure",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() =>
+      mainLoggerMock.warn.mock.calls.some(
+        ([message]) => message === "threadTitleGeneration",
+      ),
+    );
+
+    expect(mainLoggerMock.warn).toHaveBeenCalledWith(
+      "threadTitleGeneration",
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-title-failure",
+        status: "failed",
+        reason: "codex_title_helper_failed",
+      }),
+    );
+
+    await registry.close();
+  });
+
+  it("schedules Codex title generation from lifecycle events while turn/start is still pending", async () => {
+    const startTurnDelay = createDeferred<void>();
+    const titleGenerationStarted = createDeferred<void>();
+    const titleGenerationRelease = createDeferred<void>();
+    const titleService = {
+      generateTitle: vi.fn(async () => {
+        titleGenerationStarted.resolve();
+        await titleGenerationRelease.promise;
+        return {
+          status: "generated" as const,
+          title: "Lifecycle title",
+        };
+      }),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      startTurnDelay: startTurnDelay.promise,
+      threads: [
+        {
+          id: "thread-lifecycle-title",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    const startTurnPromise = registry.startTurn({
+      backend: "codex",
+      threadId: "thread-lifecycle-title",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() => codexClient.startTurnCallCount === 1);
+
+    await (
+      registry as unknown as { emit(event: AgentEvent): Promise<void> }
+    ).emit({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-lifecycle-title",
+          status: { type: "active" },
+        },
+      },
+    });
+    await titleGenerationStarted.promise;
+    await waitForCondition(() =>
+      upsertSubAgentSpy.mock.calls.some(
+        ([call]) => call.subAgent.status === "running",
+      ),
+    );
+
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-lifecycle-title",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-lifecycle-title",
+        task: "Name this thread",
+        status: "running",
+        backend: "codex",
+        agentName: "PwrAgent",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        lastMessage: "Generating a title.",
+      }),
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+    titleGenerationRelease.resolve();
+    await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
+
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-lifecycle-title",
+      userPrompt: "Make button",
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-lifecycle-title",
+      name: "Lifecycle title",
+    });
+
+    startTurnDelay.resolve();
+    await expect(startTurnPromise).resolves.toEqual({
+      backend: "codex",
+      threadId: "thread-lifecycle-title",
+      turnId: "turn-1",
+    });
+    expect(titleService.generateTitle).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
+  it("persists the Codex title helper as a system sub-agent with usage", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Readable thread title",
+        helperThreadId: "title-helper-thread",
+        helperTurnId: "title-helper-turn",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        serviceTier: "priority",
+        tokenUsage: {
+          inputTokens: 100,
+          cachedInputTokens: 20,
+          outputTokens: 10,
+          totalTokens: 110,
+        },
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-title-helper-parent",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-title-helper-parent",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() =>
+      upsertSubAgentSpy.mock.calls.some(
+        ([call]) => call.subAgent.status === "success",
+      ),
+    );
+
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-title-helper-parent",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-title-helper-parent",
+        task: "Name this thread",
+        status: "running",
+        backend: "codex",
+        agentName: "PwrAgent",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        lastMessage: "Generating a title.",
+      }),
+    });
+
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-title-helper-parent",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-title-helper-parent",
+        task: "Name this thread",
+        status: "success",
+        backend: "codex",
+        agentName: "PwrAgent",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        monitorThreadId: "title-helper-thread",
+        monitorTurnId: "title-helper-turn",
+        lastMessage: "Generated title: Readable thread title",
+        outcome: "success",
+        monitorUsage: expect.objectContaining({
+          model: "gpt-5.4-mini",
+          serviceTier: "priority",
+          tokenUsage: {
+            inputTokens: 100,
+            cachedInputTokens: 20,
+            uncachedInputTokens: 80,
+            outputTokens: 10,
+            reasoningOutputTokens: 0,
+            totalTokens: 110,
+          },
+        }),
+      }),
+    });
+    expect(upsertUsageLineSpy).toHaveBeenCalledWith({
+      line: expect.objectContaining({
+        backend: "codex",
+        source: "monitor",
+        sourceItemId: "system:title-helper:codex:thread-title-helper-parent",
+        scope: "monitor",
+        parentThreadId: "thread-title-helper-parent",
+        threadId: "title-helper-thread",
+        turnId: "title-helper-turn",
+        model: "gpt-5.4-mini",
+        serviceTier: "priority",
+        inputTokens: 100,
+        cachedInputTokens: 20,
+        uncachedInputTokens: 80,
+        outputTokens: 10,
+        totalTokens: 110,
+      }),
+    });
+
+    await registry.close();
+  });
+
+  it("logs title helper sub-agent persistence failures without retrying the same write", async () => {
+    mainLoggerMock.warn.mockClear();
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Readable thread title",
+        helperThreadId: "title-helper-thread",
+        helperTurnId: "title-helper-turn",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        serviceTier: "priority",
+        tokenUsage: {
+          inputTokens: 100,
+          cachedInputTokens: 20,
+          outputTokens: 10,
+          totalTokens: 110,
+        },
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi
+      .spyOn(overlayStore, "upsertThreadSubAgent")
+      .mockImplementation(async ({ backend, threadId, subAgent }) => {
+        if (subAgent.status === "success") {
+          throw new Error("overlay write failed");
+        }
+        return {
+          backend,
+          threadId,
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          subAgents: [subAgent],
+        };
+      });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-title-helper-persist-failure",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-title-helper-persist-failure",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() =>
+      mainLoggerMock.warn.mock.calls.some(
+        ([message]) => message === "threadTitleHelperSubAgentPersistence",
+      ),
+    );
+
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-title-helper-persist-failure",
+      name: "Readable thread title",
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledTimes(2);
+    expect(mainLoggerMock.warn).toHaveBeenCalledWith(
+      "threadTitleHelperSubAgentPersistence",
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-title-helper-persist-failure",
+        status: "success",
+        persistenceError: "overlay write failed",
+      }),
+    );
+
+    await registry.close();
+  });
+
+  it("marks the title helper sub-agent failed when title generation throws", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => {
+        throw new Error("title helper unavailable");
+      }),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-title-helper-throws",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-title-helper-throws",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() =>
+      upsertSubAgentSpy.mock.calls.some(
+        ([call]) => call.subAgent.status === "failed",
+      ),
+    );
+
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-title-helper-throws",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-title-helper-throws",
+        status: "running",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        lastMessage: "Generating a title.",
+      }),
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-title-helper-throws",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-title-helper-throws",
+        status: "failed",
+        outcome: "failure",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        lastMessage: "Title generation failed: title helper unavailable",
+        completionSource: expect.objectContaining({
+          terminalStatus: "failed",
+        }),
+      }),
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
 
     await registry.close();
   });
@@ -11130,6 +11660,7 @@ command = "pnpm dev"
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
+      threadId: "forked-thread-title",
       userPrompt: "Improve the sidebar followup",
     });
     expect(codexClient.lastRenameThreadParams).toEqual({
@@ -11179,6 +11710,7 @@ command = "pnpm dev"
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
+      threadId: "thread-title",
       userPrompt: prompt,
     });
     expect(codexClient.lastRenameThreadParams).toEqual({
@@ -11229,6 +11761,7 @@ command = "pnpm dev"
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
+      threadId: "thread-title",
       userPrompt: prompt,
     });
     expect(codexClient.lastRenameThreadParams).toEqual({
@@ -11276,6 +11809,7 @@ command = "pnpm dev"
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "grok",
+      threadId: "thread-title",
       userPrompt: "Issue 123 rename",
     });
     expect(grokClient.lastRenameThreadParams).toEqual({
@@ -11350,15 +11884,149 @@ command = "pnpm dev"
       threadId: "qwen-session-1",
       input: [{ type: "text", text: "Does this project build?" }],
     });
+    await emitCompletedTurn(registry, acpBackendId, "qwen-session-1");
     await waitForCondition(() => sessions[0]?.title === "Does this project build?");
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: acpBackendId,
+      threadId: "qwen-session-1",
       userPrompt: "Does this project build?",
     });
     expect(sessions[0]).toMatchObject({
       title: "Does this project build?",
       titleSource: "fallback",
+    });
+
+    await registry.close();
+  });
+
+  it("applies generated title helper names to ACP prompt-derived fallback sessions", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const prompt =
+      "We're testing something here... just tell me your favorite cereal.";
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "kimi-session-1",
+        title: "We're testing something here... just tell me your favorite cereal",
+        titleSource: "fallback",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        acpRuntime: {
+          configValues: {
+            model: "kimi-k2-0711-preview",
+          },
+          updatedAt: 1000,
+        },
+        status: "idle",
+      },
+    ];
+    const sendControlPrompt = vi.fn(async () => ({
+      text: '{ "title": "Favorite cereal" }',
+    }));
+    const helperSession: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "kimi-title-helper",
+      title: "Name this thread",
+      cwd: "/repo/project",
+      createdAt: 1001,
+      updatedAt: 1001,
+      executionMode: "default",
+      acpRuntime: {
+        configValues: {
+          model: "kimi-k2-0711-preview",
+        },
+        updatedAt: 1001,
+      },
+      hidden: true,
+      status: "idle",
+    };
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async () => helperSession),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      startPrompt: vi.fn(() => ({
+        sessionId: "kimi-session-1",
+        turnId: "turn-1",
+      })),
+      sendControlPrompt,
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord(acpBackendId)]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      input: [{ type: "text", text: prompt }],
+    });
+    await emitCompletedTurn(registry, acpBackendId, "kimi-session-1");
+    await waitForCondition(() => sessions[0]?.title === "Favorite cereal");
+
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/repo/project",
+        hidden: true,
+        title: "Name this thread",
+      }),
+    );
+    expect(sendControlPrompt).toHaveBeenCalledWith({
+      sessionId: "kimi-title-helper",
+      prompt: expect.stringContaining(prompt),
+    });
+    expect(sessions[0]).toMatchObject({
+      title: "Favorite cereal",
+      titleSource: "derived",
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:acp:kimi:kimi-session-1",
+        task: "Name this thread",
+        status: "running",
+        agentName: "PwrAgent",
+        backend: acpBackendId,
+        preferredModel: "kimi-k2-0711-preview",
+        lastMessage: "Generating a title.",
+      }),
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:acp:kimi:kimi-session-1",
+        task: "Name this thread",
+        status: "success",
+        agentName: "PwrAgent",
+        backend: acpBackendId,
+        preferredModel: "kimi-k2-0711-preview",
+        monitorThreadId: "kimi-title-helper",
+        lastMessage: "Generated title: Favorite cereal",
+        outcome: "success",
+      }),
     });
 
     await registry.close();
@@ -11428,6 +12096,7 @@ command = "pnpm dev"
       threadId: "qwen-session-1",
       input: [{ type: "text", text: "what time is it?" }],
     });
+    await emitCompletedTurn(registry, acpBackendId, "qwen-session-1");
     await flushAsync();
     await flushAsync();
 

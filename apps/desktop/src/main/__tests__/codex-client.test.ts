@@ -943,6 +943,26 @@ vi.mock("../codex-app-server/stdio-transport", () => {
   };
 });
 
+async function waitForLatestTransportRequest(
+  method: string,
+  timeoutMs = 1_000
+): Promise<MockTransport> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const transport = MockTransport.instances.at(-1);
+    if (
+      transport?.sentMessages.some((message) => {
+        const payload = JSON.parse(message) as { method?: string };
+        return payload.method === method;
+      })
+    ) {
+      return transport;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${method} request`);
+}
+
 describe("CodexAppServerClient", () => {
   beforeEach(() => {
     codexClientLogError.mockClear();
@@ -6049,9 +6069,7 @@ describe("CodexAppServerClient", () => {
       timeoutMs: 5_000,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const transport = MockTransport.instances.at(-1);
-    expect(transport).toBeDefined();
+    const transport = await waitForLatestTransportRequest("thread/start");
 
     transport!.emitInbound({
       jsonrpc: "2.0",
@@ -6062,6 +6080,21 @@ describe("CodexAppServerClient", () => {
           preview: "",
           ephemeral: true,
           name: null,
+        },
+      },
+    });
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-title-helper",
+        turnId: "turn-title-helper",
+        tokenUsage: {
+          inputTokens: 100,
+          cachedInputTokens: 20,
+          outputTokens: 10,
+          totalTokens: 110,
         },
       },
     });
@@ -6090,21 +6123,43 @@ describe("CodexAppServerClient", () => {
       object: {
         title: "Add animated leopard tea button",
       },
+      helperThreadId: "thread-title-helper",
+      helperTurnId: "turn-title-helper",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      serviceTier: "priority",
+      tokenUsage: {
+        inputTokens: 100,
+        cachedInputTokens: 20,
+        outputTokens: 10,
+        totalTokens: 110,
+      },
     });
     expect(forwardedNotifications).toEqual([]);
 
     const requests = transport!.sentMessages.map(
       (message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> }
     );
+    const titleHelperWorkspace = path.join(os.tmpdir(), "pwragent", "codex-title-helper");
     expect(requests).toContainEqual(
       expect.objectContaining({
         method: "thread/start",
         params: expect.objectContaining({
+          cwd: titleHelperWorkspace,
+          runtimeWorkspaceRoots: [titleHelperWorkspace],
           ephemeral: true,
           model: "gpt-5.4-mini",
           serviceTier: "priority",
           config: {
             web_search: "disabled",
+            include_permissions_instructions: false,
+            include_apps_instructions: false,
+            include_collaboration_mode_instructions: false,
+            include_environment_context: false,
+            skills: {
+              include_instructions: false,
+              bundled: { enabled: false },
+            },
           },
         }),
       })
@@ -6182,9 +6237,7 @@ describe("CodexAppServerClient", () => {
       timeoutMs: 5_000,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const transport = MockTransport.instances.at(-1);
-    expect(transport).toBeDefined();
+    const transport = await waitForLatestTransportRequest("thread/start");
 
     transport!.emitInbound({
       jsonrpc: "2.0",
@@ -6220,6 +6273,11 @@ describe("CodexAppServerClient", () => {
       object: {
         title: "Animated jaguar tea button",
       },
+      helperThreadId: "thread-title-helper",
+      helperTurnId: "turn-title-helper",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      serviceTier: "priority",
     });
 
     await client.close();
@@ -6281,6 +6339,11 @@ describe("CodexAppServerClient", () => {
       object: {
         title: "Early helper title",
       },
+      helperThreadId: "thread-title-helper",
+      helperTurnId: "turn-title-helper",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      serviceTier: "priority",
     });
 
     await client.close();

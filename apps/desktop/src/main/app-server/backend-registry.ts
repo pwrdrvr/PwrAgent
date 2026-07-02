@@ -213,7 +213,10 @@ import {
   type AcpSessionStoreLike,
   type LocalAcpDiscovery,
 } from "./acp-backend-adapter";
-import { CodexAppServerClient } from "../codex-app-server/client";
+import {
+  CodexAppServerClient,
+  DEFAULT_CODEX_THREAD_TITLE_MODEL,
+} from "../codex-app-server/client";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
@@ -297,6 +300,7 @@ import {
   type ThreadTitleGenerator,
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
+import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
@@ -1083,7 +1087,9 @@ type PendingServerRequest = {
   reject: (error: Error) => void;
 };
 
-type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle">;
+type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle"> & {
+  canGenerateTitle?: (backend: AppServerBackendKind) => boolean;
+};
 
 type ThreadTitleGenerationLogStatus =
   | ThreadTitleGenerationResult["status"]
@@ -3846,6 +3852,39 @@ function buildTitleGenerationKey(
   return `${backend}:${threadId}`;
 }
 
+function titleHelperSubAgentId(
+  backend: AppServerBackendKind,
+  threadId: string,
+): string {
+  return `system:title-helper:${backend}:${threadId}`;
+}
+
+function titleHelperSubAgentMessage(params: {
+  result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+  status: "pending" | "running" | "success" | "failed" | "cancelled";
+  reason?: string;
+}): string {
+  if (params.status === "pending") {
+    return params.reason ?? "Title generation is queued.";
+  }
+  if (params.status === "running") {
+    return params.reason ?? "Generating a title.";
+  }
+  if (params.status === "success") {
+    return params.result?.title
+      ? `Generated title: ${params.result.title}`
+      : "Generated a title.";
+  }
+  if (params.status === "cancelled") {
+    return params.reason
+      ? `Title generation cancelled: ${params.reason}`
+      : "Title generation cancelled.";
+  }
+  return params.reason
+    ? `Title generation failed: ${params.reason}`
+    : "Title generation failed.";
+}
+
 function buildPromptHash(prompt: string): string {
   return prompt.replace(/\s+/g, " ").trim().toLowerCase();
 }
@@ -4505,6 +4544,10 @@ export class DesktopBackendRegistry {
       token: number;
     }
   >();
+  private readonly pendingTitleGenerationInputs = new Map<
+    string,
+    AppServerTurnInputItem[]
+  >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly activeCodexReviewTurnKeys = new Set<string>();
   private readonly activeCodexReviewInterruptTurnIds = new Map<string, string>();
@@ -4850,6 +4893,27 @@ export class DesktopBackendRegistry {
                       })
                     : undefined,
                 },
+                generatorResolver: (backend) =>
+                  isAcpBackendId(backend)
+                    ? new AcpThreadTitleGenerator({
+                        backend,
+                        configureHelperSession: async ({
+                          client,
+                          parentSession,
+                          session,
+                        }) => {
+                          await this.applyAcpRuntimeSelection(
+                            client,
+                            session.sessionId,
+                            session.acpRuntime ?? parentSession?.acpRuntime,
+                          );
+                        },
+                        getClient: (acpBackend) =>
+                          this.acpBackend.getClient(acpBackend),
+                        getSession: (acpBackend, threadId) =>
+                          this.acpBackend.getSession(acpBackend, threadId),
+                      })
+                    : undefined,
               }));
     this.threadInspectionSearchService =
       options && "threadSearchService" in options
@@ -7794,6 +7858,11 @@ export class DesktopBackendRegistry {
     }
 
     let result: { threadId: string; turnId: string };
+    const titleGenerationKey = buildTitleGenerationKey(
+      params.backend,
+      params.threadId,
+    );
+    this.pendingTitleGenerationInputs.set(titleGenerationKey, params.input);
     try {
       result =
         params.backend === "codex"
@@ -7858,6 +7927,7 @@ export class DesktopBackendRegistry {
       if (reserveCodexStart) {
         this.reservedCodexStartThreadIds.delete(params.threadId);
       }
+      this.pendingTitleGenerationInputs.delete(titleGenerationKey);
       throw error;
     }
     this.activeCodexTurnModes.delete(
@@ -7902,11 +7972,14 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       turnId: result.turnId,
     });
-    this.scheduleThreadTitleGeneration({
-      backend: params.backend,
-      threadId: result.threadId,
-      input: params.input,
-    });
+    if (!isAcpBackendId(params.backend)) {
+      this.pendingTitleGenerationInputs.delete(titleGenerationKey);
+      this.scheduleThreadTitleGeneration({
+        backend: params.backend,
+        threadId: result.threadId,
+        input: params.input,
+      });
+    }
 
     return response;
   }
@@ -12617,6 +12690,7 @@ export class DesktopBackendRegistry {
       status,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      backend: "codex",
       monitorThreadId: params.receiverThreadId,
       ...(params.call.parentTurnId
         ? { monitorTurnId: params.call.parentTurnId }
@@ -12882,6 +12956,7 @@ export class DesktopBackendRegistry {
         (record.monitorThreadId ? "running" : "pending"),
       createdAt: record.createdAt,
       updatedAt: patch.updatedAt ?? Date.now(),
+      backend: record.backend,
       preferredModel: record.preferredModel,
       preferredReasoningEffort: record.preferredReasoningEffort,
       ...(record.monitorThreadId ? { monitorThreadId: record.monitorThreadId } : {}),
@@ -12953,6 +13028,7 @@ export class DesktopBackendRegistry {
       status: patch.status ?? existing?.status ?? "running",
       createdAt: record.createdAt,
       updatedAt: patch.updatedAt ?? Date.now(),
+      backend: record.backend,
       monitorThreadId: record.reviewThreadId,
       monitorTurnId: record.turnId,
       ...(patch.lastMessage ?? existing?.lastMessage
@@ -13901,7 +13977,14 @@ export class DesktopBackendRegistry {
     threadId: string;
     input: AppServerTurnInputItem[];
   }): void {
+    const key = buildTitleGenerationKey(params.backend, params.threadId);
     if (!this.threadTitleGenerationService) {
+      return;
+    }
+    if (
+      this.threadTitleGenerationService.canGenerateTitle &&
+      !this.threadTitleGenerationService.canGenerateTitle(params.backend)
+    ) {
       return;
     }
 
@@ -13910,7 +13993,6 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    const key = buildTitleGenerationKey(params.backend, params.threadId);
     if (this.attemptedTitleGenerations.has(key)) {
       return;
     }
@@ -13937,6 +14019,23 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private schedulePendingThreadTitleGenerationFromLifecycle(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): void {
+    const key = buildTitleGenerationKey(params.backend, params.threadId);
+    const input = this.pendingTitleGenerationInputs.get(key);
+    if (!input) {
+      return;
+    }
+    this.pendingTitleGenerationInputs.delete(key);
+    this.scheduleThreadTitleGeneration({
+      backend: params.backend,
+      threadId: params.threadId,
+      input,
+    });
+  }
+
   private async generateAndApplyThreadTitle(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -13944,6 +14043,7 @@ export class DesktopBackendRegistry {
     key: string;
     token: number;
   }): Promise<void> {
+    let generatedResult: Extract<ThreadTitleGenerationResult, { status: "generated" }> | undefined;
     try {
       const currentThread = await this.findThreadForTitleGeneration({
         backend: params.backend,
@@ -13957,14 +14057,34 @@ export class DesktopBackendRegistry {
           "current_title_not_eligible",
           buildTitleEligibilityLogDetails(currentThread, params.prompt)
         );
+        await this.safePersistExistingTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "cancelled",
+          reason: "Current title is no longer eligible.",
+        });
         return;
       }
 
+      if (params.backend === "codex" || isAcpBackendId(params.backend)) {
+        const titleHelperRuntime = this.resolveTitleHelperRuntime(params);
+        await this.safePersistTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "running",
+          ...(titleHelperRuntime.model ? { model: titleHelperRuntime.model } : {}),
+          ...(titleHelperRuntime.reasoningEffort
+            ? { reasoningEffort: titleHelperRuntime.reasoningEffort }
+            : {}),
+          reason: "Generating a title.",
+        });
+      }
       this.logThreadTitleGeneration("requesting", params, undefined, {
         promptTitle: truncateLogValue(shortenDerivedThreadTitle(params.prompt) ?? params.prompt),
       });
       const result = await this.threadTitleGenerationService?.generateTitle({
         backend: params.backend,
+        threadId: params.threadId,
         userPrompt: params.prompt,
       });
       if (!result || result.status !== "generated") {
@@ -13973,6 +14093,12 @@ export class DesktopBackendRegistry {
           params,
           result?.reason ?? "title_generation_unavailable"
         );
+        await this.safePersistExistingTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "failed",
+          reason: result?.reason ?? "title_generation_unavailable",
+        });
         if (isAcpBackendId(params.backend)) {
           await this.applyPromptDerivedAcpThreadTitle({
             backend: params.backend,
@@ -13982,6 +14108,7 @@ export class DesktopBackendRegistry {
         }
         return;
       }
+      generatedResult = result;
       this.logThreadTitleGeneration("generated", params, undefined, {
         generatedTitle: truncateLogValue(result.title),
         cachedTokens: result.cachedTokens ?? null,
@@ -13991,6 +14118,12 @@ export class DesktopBackendRegistry {
       if (!pending || pending.token !== params.token) {
         this.logThreadTitleGeneration("skipped", params, "stale_generation", {
           generatedTitle: truncateLogValue(result.title),
+        });
+        await this.safePersistExistingTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "cancelled",
+          reason: "Title generation became stale.",
         });
         return;
       }
@@ -14007,6 +14140,12 @@ export class DesktopBackendRegistry {
           "latest_title_not_eligible",
           buildTitleEligibilityLogDetails(latestThread, params.prompt)
         );
+        await this.safePersistExistingTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "cancelled",
+          reason: "Latest title is no longer eligible.",
+        });
         return;
       }
 
@@ -14015,14 +14154,37 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
         title: result.title,
       });
+      await this.safePersistTitleHelperSubAgent({
+        backend: params.backend,
+        threadId: params.threadId,
+        result,
+        status: "success",
+      });
       this.logThreadTitleGeneration("applied", params, undefined, {
         generatedTitle: truncateLogValue(result.title),
       });
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (generatedResult) {
+        await this.safePersistTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          result: generatedResult,
+          status: "failed",
+          reason,
+        });
+      } else {
+        await this.safePersistExistingTitleHelperSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          status: "failed",
+          reason,
+        });
+      }
       this.logThreadTitleGeneration(
         "failed",
         params,
-        error instanceof Error ? error.message : String(error)
+        reason
       );
     } finally {
       const pending = this.pendingTitleGenerations.get(params.key);
@@ -14030,6 +14192,59 @@ export class DesktopBackendRegistry {
         this.pendingTitleGenerations.delete(params.key);
       }
     }
+  }
+
+  private async safePersistTitleHelperSubAgent(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+    status: "pending" | "running" | "success" | "failed" | "cancelled";
+    model?: string;
+    reasoningEffort?: string;
+    reason?: string;
+  }): Promise<void> {
+    try {
+      await this.persistTitleHelperSubAgent(params);
+    } catch (error) {
+      backendRegistryLog.warn("threadTitleHelperSubAgentPersistence", {
+        backend: params.backend,
+        threadId: params.threadId,
+        status: params.status,
+        reason: params.reason ?? null,
+        persistenceError: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async safePersistExistingTitleHelperSubAgent(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+    status: "running" | "success" | "failed" | "cancelled";
+    model?: string;
+    reasoningEffort?: string;
+    reason?: string;
+  }): Promise<void> {
+    try {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      const monitorId = titleHelperSubAgentId(params.backend, params.threadId);
+      if (!overlay?.subAgents?.some((subAgent) => subAgent.monitorId === monitorId)) {
+        return;
+      }
+    } catch (error) {
+      backendRegistryLog.warn("threadTitleHelperSubAgentLookup", {
+        backend: params.backend,
+        threadId: params.threadId,
+        status: params.status,
+        reason: params.reason ?? null,
+        lookupError: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    await this.safePersistTitleHelperSubAgent(params);
   }
 
   private async applyPromptDerivedAcpThreadTitle(params: {
@@ -14055,6 +14270,157 @@ export class DesktopBackendRegistry {
     this.logThreadTitleGeneration("applied", params, "prompt_derived_fallback", {
       generatedTitle: truncateLogValue(title),
     });
+  }
+
+  private async persistTitleHelperSubAgent(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+    status: "pending" | "running" | "success" | "failed" | "cancelled";
+    model?: string;
+    reasoningEffort?: string;
+    reason?: string;
+  }): Promise<void> {
+    const now = Date.now();
+    const monitorId = titleHelperSubAgentId(params.backend, params.threadId);
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const existing = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === monitorId,
+    );
+    const usageSnapshot = params.result?.tokenUsage
+      ? buildTaskMonitorUsageSnapshot({
+          model: params.result.model,
+          serviceTier: params.result.serviceTier,
+          tokenUsage: params.result.tokenUsage,
+        })
+      : undefined;
+    const preferredModel =
+      params.result?.model ?? params.model ?? existing?.preferredModel;
+    const preferredReasoningEffort =
+      params.result?.reasoningEffort ??
+      params.reasoningEffort ??
+      existing?.preferredReasoningEffort;
+    const terminal =
+      params.status === "success" ||
+      params.status === "failed" ||
+      params.status === "cancelled";
+    const outcome =
+      params.status === "success"
+        ? "success"
+        : params.status === "failed"
+          ? "failure"
+          : params.status === "cancelled"
+            ? "cancelled"
+            : undefined;
+    const subAgent: ThreadSubAgentSummary = {
+      monitorId,
+      task: "Name this thread",
+      status: params.status,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      backend: params.backend,
+      agentName: "PwrAgent",
+      ...(preferredModel ? { preferredModel } : {}),
+      ...(preferredReasoningEffort
+        ? { preferredReasoningEffort }
+        : {}),
+      ...(params.result?.helperThreadId
+        ? { monitorThreadId: params.result.helperThreadId }
+        : {}),
+      ...(params.result?.helperTurnId ? { monitorTurnId: params.result.helperTurnId } : {}),
+      lastMessage: titleHelperSubAgentMessage(params),
+      ...(outcome ? { outcome } : {}),
+      ...(terminal ? { completedAt: now } : {}),
+      ...(terminal
+        ? {
+            completionSource: {
+              type: "pwragent_fallback",
+              reason: "system_title_helper",
+              recoveryAttempted: false,
+              terminalStatus:
+                params.status === "success"
+                  ? "completed"
+                  : params.status === "cancelled"
+                    ? "cancelled"
+                    : "failed",
+            },
+          }
+        : {}),
+      ...(usageSnapshot ? { monitorUsage: usageSnapshot } : {}),
+    };
+
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: params.backend,
+      threadId: params.threadId,
+      subAgent,
+    });
+    this.invalidateThreadListCache(params.backend);
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: params.threadId,
+        },
+      },
+    });
+    if (
+      usageSnapshot &&
+      params.result?.helperThreadId &&
+      typeof this.overlayStore.upsertThreadUsageLine === "function"
+    ) {
+      const line = buildTaskMonitorUsageLine({
+        backend: params.backend,
+        model: params.result.model,
+        monitorId,
+        monitorThreadId: params.result.helperThreadId,
+        monitorTurnId: params.result.helperTurnId,
+        parentThreadId: params.threadId,
+        serviceTier: params.result.serviceTier,
+        source: "monitor",
+        usage: usageSnapshot,
+      });
+      logUnpricedThreadUsageLine(line);
+      await this.overlayStore.upsertThreadUsageLine({ line });
+      await this.emitThreadPricingUpdated({
+        backend: params.backend,
+        threadId: line.parentThreadId ?? line.threadId,
+      });
+    }
+  }
+
+  private resolveTitleHelperRuntime(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): { model?: string; reasoningEffort?: string } {
+    if (params.backend === "codex") {
+      return {
+        model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+        reasoningEffort: "low",
+      };
+    }
+    if (!isAcpBackendId(params.backend)) {
+      return {};
+    }
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
+    const model =
+      session?.acpRuntime?.currentModelId ??
+      (typeof session?.acpRuntime?.configValues?.model === "string"
+        ? session.acpRuntime.configValues.model
+        : undefined);
+    const reasoningEffort =
+      typeof session?.acpRuntime?.configValues?.reasoningEffort === "string"
+        ? session.acpRuntime.configValues.reasoningEffort
+        : typeof session?.acpRuntime?.configValues?.reasoning_effort === "string"
+          ? session.acpRuntime.configValues.reasoning_effort
+          : undefined;
+    return {
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    };
   }
 
   private async applyGeneratedThreadTitle(params: {
@@ -14097,13 +14463,18 @@ export class DesktopBackendRegistry {
     reason?: string,
     details?: Record<string, unknown>,
   ): void {
-    logDebug("threadTitleGeneration", {
+    const payload = {
       backend: params.backend,
       threadId: params.threadId,
       status,
       reason: reason ?? null,
       ...details,
-    });
+    };
+    if (status === "failed" || status === "invalid" || status === "unavailable") {
+      backendRegistryLog.warn("threadTitleGeneration", payload);
+      return;
+    }
+    logDebug("threadTitleGeneration", payload);
   }
 
   private async handleServerRequest(
@@ -17762,6 +18133,17 @@ export class DesktopBackendRegistry {
 
     if (
       event.backend === "codex" &&
+      event.notification.method === "thread/status/changed" &&
+      readStatusType(event.notification.params.status) === "active"
+    ) {
+      this.schedulePendingThreadTitleGenerationFromLifecycle({
+        backend: event.backend,
+        threadId: event.notification.params.threadId,
+      });
+    }
+
+    if (
+      event.backend === "codex" &&
       event.notification.method === "configWarning"
     ) {
       this.latestCodexConfigWarning = event;
@@ -17778,6 +18160,12 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromStartedNotification(notification);
+      if (!isAcpBackendId(event.backend)) {
+        this.schedulePendingThreadTitleGenerationFromLifecycle({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+        });
+      }
       this.activeTurnKeys.add(
         buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
       );
@@ -17906,6 +18294,11 @@ export class DesktopBackendRegistry {
           event.backend,
           notification.params.threadId,
         );
+        if (event.notification.method !== "turn/completed") {
+          this.pendingTitleGenerationInputs.delete(
+            buildTitleGenerationKey(event.backend, notification.params.threadId),
+          );
+        }
       }
       void this.threadTurnQueue.releaseThread({
         backend: event.backend,

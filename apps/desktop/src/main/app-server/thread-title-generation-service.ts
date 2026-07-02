@@ -26,10 +26,12 @@ const THREAD_TITLE_RESPONSE_SCHEMA = {
 } as const;
 
 export type ThreadTitleAdapterParams = {
+  backend?: AppServerBackendKind;
   prompt: string;
   promptVersion: string;
   schema: Record<string, unknown>;
   schemaName: string;
+  threadId?: string;
   timeoutMs: number;
 };
 
@@ -38,6 +40,12 @@ export type ThreadTitleAdapterResult =
       status: "ok";
       object: unknown;
       cachedTokens?: number;
+      helperThreadId?: string;
+      helperTurnId?: string;
+      model?: string;
+      reasoningEffort?: string;
+      serviceTier?: string;
+      tokenUsage?: unknown;
     }
   | {
       status: "unavailable" | "failed";
@@ -53,6 +61,12 @@ export type ThreadTitleGenerationResult =
       status: "generated";
       title: string;
       cachedTokens?: number;
+      helperThreadId?: string;
+      helperTurnId?: string;
+      model?: string;
+      reasoningEffort?: string;
+      serviceTier?: string;
+      tokenUsage?: unknown;
     }
   | {
       status: "unavailable" | "invalid" | "failed";
@@ -61,6 +75,7 @@ export type ThreadTitleGenerationResult =
 
 export type ThreadTitleGenerationServiceOptions = {
   generators?: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
+  generatorResolver?: (backend: AppServerBackendKind) => ThreadTitleGenerator | undefined;
   timeoutMs?: number;
 };
 
@@ -75,6 +90,7 @@ export type GrokThreadTitleGeneratorOptions = {
 
 export class ThreadTitleGenerationService {
   private readonly generators: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
+  private readonly generatorResolver?: (backend: AppServerBackendKind) => ThreadTitleGenerator | undefined;
   private readonly timeoutMs: number;
 
   constructor(options: ThreadTitleGenerationServiceOptions = {}) {
@@ -82,11 +98,19 @@ export class ThreadTitleGenerationService {
       grok: new GrokThreadTitleGenerator({ timeoutMs: options.timeoutMs }),
       ...options.generators,
     };
+    this.generatorResolver = options.generatorResolver;
     this.timeoutMs = options.timeoutMs ?? THREAD_TITLE_TIMEOUT_MS;
+  }
+
+  canGenerateTitle(backend: AppServerBackendKind): boolean {
+    return Boolean(
+      this.generators[backend] ?? this.generatorResolver?.(backend),
+    );
   }
 
   async generateTitle(params: {
     backend: AppServerBackendKind;
+    threadId?: string;
     userPrompt: string;
   }): Promise<ThreadTitleGenerationResult> {
     const userPrompt = params.userPrompt.trim();
@@ -97,7 +121,8 @@ export class ThreadTitleGenerationService {
       };
     }
 
-    const generator = this.generators[params.backend];
+    const generator =
+      this.generators[params.backend] ?? this.generatorResolver?.(params.backend);
     if (!generator) {
       return {
         status: "unavailable",
@@ -106,10 +131,12 @@ export class ThreadTitleGenerationService {
     }
 
     const result = await generator.generateTitle({
+      backend: params.backend,
       prompt: buildThreadTitlePrompt(userPrompt),
       promptVersion: THREAD_TITLE_PROMPT_VERSION,
       schema: THREAD_TITLE_RESPONSE_SCHEMA,
       schemaName: "thread_title",
+      threadId: params.threadId,
       timeoutMs: this.timeoutMs,
     });
     if (result.status !== "ok") {
@@ -127,7 +154,13 @@ export class ThreadTitleGenerationService {
     return {
       status: "generated",
       title: normalized.title,
-      cachedTokens: result.cachedTokens,
+      ...(result.cachedTokens !== undefined ? { cachedTokens: result.cachedTokens } : {}),
+      ...(result.helperThreadId ? { helperThreadId: result.helperThreadId } : {}),
+      ...(result.helperTurnId ? { helperTurnId: result.helperTurnId } : {}),
+      ...(result.model ? { model: result.model } : {}),
+      ...(result.reasoningEffort ? { reasoningEffort: result.reasoningEffort } : {}),
+      ...(result.serviceTier ? { serviceTier: result.serviceTier } : {}),
+      ...(result.tokenUsage !== undefined ? { tokenUsage: result.tokenUsage } : {}),
     };
   }
 }
@@ -176,6 +209,7 @@ export class GrokThreadTitleGenerator implements ThreadTitleGenerator {
       status: "ok",
       object: result.response.object,
       cachedTokens: result.response.cachedTokens,
+      model: this.model,
     };
   }
 }

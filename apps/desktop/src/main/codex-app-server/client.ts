@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   estimateOpenAiTokenUsageCost,
@@ -94,10 +96,33 @@ import type {
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
-const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.4-mini";
+export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.4-mini";
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
+const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
+  tmpdir(),
+  "pwragent",
+  "codex-title-helper",
+);
 const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
   web_search: "disabled",
+  include_permissions_instructions: false,
+  include_apps_instructions: false,
+  include_collaboration_mode_instructions: false,
+  include_environment_context: false,
+  skills: {
+    include_instructions: false,
+    bundled: { enabled: false },
+  },
+};
+const LEGACY_CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
+  web_search: "disabled",
+  include_permissions_instructions: false,
+  include_apps_instructions: false,
+  include_collaboration_mode_instructions: false,
+  include_environment_context: false,
+  skills: {
+    include_instructions: false,
+  },
 };
 const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY =
   "features.default_mode_request_user_input";
@@ -428,6 +453,22 @@ function readStringFromRecord(value: unknown, key: string): string | undefined {
 
 function buildHelperTurnKey(threadId: string, turnId: string): string {
   return `${threadId}:${turnId}`;
+}
+
+function readHelperTokenUsage(params: unknown): unknown {
+  const record = asRecord(params);
+  if (!record) {
+    return undefined;
+  }
+  const turn = asRecord(record.turn);
+  return (
+    record.tokenUsage ??
+    record.token_usage ??
+    record.usage ??
+    turn?.tokenUsage ??
+    turn?.token_usage ??
+    turn?.usage
+  );
 }
 
 function extractTurnIdFromNotificationParams(params: unknown): string | undefined {
@@ -4705,6 +4746,7 @@ function normalizeCodexReasoningEffort(
 
 function buildThreadStartPayload(params: {
   cwd?: string;
+  runtimeWorkspaceRoots?: string[];
   model?: string;
   approvalPolicy?: string;
   sandbox?: string;
@@ -4724,6 +4766,9 @@ function buildThreadStartPayload(params: {
 
   if (params.cwd?.trim()) {
     base.cwd = params.cwd.trim();
+  }
+  if (params.runtimeWorkspaceRoots !== undefined) {
+    base.runtimeWorkspaceRoots = params.runtimeWorkspaceRoots;
   }
   if (params.model?.trim()) {
     base.model = params.model.trim();
@@ -5280,11 +5325,17 @@ type HelperTurnResult =
   | {
       status: "ok";
       object: unknown;
+      tokenUsage?: unknown;
     }
   | {
       status: "failed";
       error: Error;
     };
+
+async function ensureCodexThreadTitleWorkspace(): Promise<string> {
+  await mkdir(CODEX_THREAD_TITLE_WORKSPACE_DIR, { recursive: true });
+  return CODEX_THREAD_TITLE_WORKSPACE_DIR;
+}
 
 export class CodexAppServerClient {
   private readonly connection: JsonRpcConnection;
@@ -5317,13 +5368,14 @@ export class CodexAppServerClient {
   private readonly helperTurnWaiters = new Map<
     string,
     {
-      resolve: (object: unknown) => void;
+      resolve: (result: Extract<HelperTurnResult, { status: "ok" }>) => void;
       reject: (error: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
   >();
   private readonly completedHelperTurnResults = new Map<string, HelperTurnResult>();
   private readonly helperTurnTitleObjects = new Map<string, unknown>();
+  private readonly helperTurnTokenUsage = new Map<string, unknown>();
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
@@ -5433,6 +5485,7 @@ export class CodexAppServerClient {
     this.helperThreadIds.clear();
     this.completedHelperTurnResults.clear();
     this.helperTurnTitleObjects.clear();
+    this.helperTurnTokenUsage.clear();
     await this.connection.close();
   }
 
@@ -5568,7 +5621,8 @@ export class CodexAppServerClient {
     if (
       method !== "item/completed" &&
       method !== "turn/completed" &&
-      method !== "turn/failed"
+      method !== "turn/failed" &&
+      method !== "thread/tokenUsage/updated"
     ) {
       return;
     }
@@ -5580,6 +5634,13 @@ export class CodexAppServerClient {
     }
 
     const key = buildHelperTurnKey(threadId, turnId);
+    if (method === "thread/tokenUsage/updated") {
+      const tokenUsage = readHelperTokenUsage(notification.params);
+      if (tokenUsage !== undefined) {
+        this.helperTurnTokenUsage.set(key, tokenUsage);
+      }
+      return;
+    }
     if (method === "item/completed") {
       const object = extractGeneratedTitleObject(notification.params);
       if (object) {
@@ -5592,6 +5653,7 @@ export class CodexAppServerClient {
     if (method === "turn/failed") {
       const error = new Error("codex_title_turn_failed");
       this.helperTurnTitleObjects.delete(key);
+      this.helperTurnTokenUsage.delete(key);
       if (!waiter) {
         this.completedHelperTurnResults.set(key, {
           status: "failed",
@@ -5608,7 +5670,10 @@ export class CodexAppServerClient {
     const object =
       extractGeneratedTitleObject(notification.params) ??
       this.helperTurnTitleObjects.get(key);
+    const tokenUsage =
+      readHelperTokenUsage(notification.params) ?? this.helperTurnTokenUsage.get(key);
     this.helperTurnTitleObjects.delete(key);
+    this.helperTurnTokenUsage.delete(key);
     if (!object) {
       const error = new Error("codex_title_turn_completed_without_title");
       if (!waiter) {
@@ -5628,20 +5693,25 @@ export class CodexAppServerClient {
       this.completedHelperTurnResults.set(key, {
         status: "ok",
         object,
+        ...(tokenUsage !== undefined ? { tokenUsage } : {}),
       });
       return;
     }
 
     clearTimeout(waiter.timer);
     this.helperTurnWaiters.delete(key);
-    waiter.resolve(object);
+    waiter.resolve({
+      status: "ok",
+      object,
+      ...(tokenUsage !== undefined ? { tokenUsage } : {}),
+    });
   }
 
   private waitForHelperTurnTitle(params: {
     threadId: string;
     turnId: string;
     timeoutMs: number;
-  }): Promise<unknown> {
+  }): Promise<Extract<HelperTurnResult, { status: "ok" }>> {
     const key = buildHelperTurnKey(params.threadId, params.turnId);
     const completed = this.completedHelperTurnResults.get(key);
     if (completed) {
@@ -5649,7 +5719,7 @@ export class CodexAppServerClient {
       if (completed.status === "failed") {
         return Promise.reject(completed.error);
       }
-      return Promise.resolve(completed.object);
+      return Promise.resolve(completed);
     }
 
     return new Promise((resolve, reject) => {
@@ -6196,21 +6266,41 @@ export class CodexAppServerClient {
 
     let helperThreadId: string | undefined;
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
+    const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
     try {
       const threadStartResult = await requestWithFallbacks({
         client: this.connection,
         methods: ["thread/start"],
         payloads: [
           buildThreadStartPayload({
+            cwd: helperWorkspaceDir,
+            runtimeWorkspaceRoots: [helperWorkspaceDir],
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
             serviceTier: "priority",
             ephemeral: true,
             config: CODEX_THREAD_TITLE_CONFIG,
           }),
           buildThreadStartPayload({
+            cwd: helperWorkspaceDir,
+            runtimeWorkspaceRoots: [helperWorkspaceDir],
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            serviceTier: "priority",
+            ephemeral: true,
+            config: LEGACY_CODEX_THREAD_TITLE_CONFIG,
+          }),
+          buildThreadStartPayload({
+            cwd: helperWorkspaceDir,
+            runtimeWorkspaceRoots: [helperWorkspaceDir],
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
             ephemeral: true,
             config: CODEX_THREAD_TITLE_CONFIG,
+          }),
+          buildThreadStartPayload({
+            cwd: helperWorkspaceDir,
+            runtimeWorkspaceRoots: [helperWorkspaceDir],
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            ephemeral: true,
+            config: LEGACY_CODEX_THREAD_TITLE_CONFIG,
           }),
         ],
         timeoutMs,
@@ -6248,9 +6338,17 @@ export class CodexAppServerClient {
       });
       const immediateObject = extractGeneratedTitleObject(turnStartResult);
       if (immediateObject) {
+        const immediateTurnId = extractTurnIdFromValue(turnStartResult);
+        const tokenUsage = readHelperTokenUsage(turnStartResult);
         return {
           status: "ok",
           object: immediateObject,
+          helperThreadId,
+          ...(immediateTurnId ? { helperTurnId: immediateTurnId } : {}),
+          model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+          reasoningEffort: "low",
+          serviceTier: "priority",
+          ...(tokenUsage !== undefined ? { tokenUsage } : {}),
         };
       }
 
@@ -6262,13 +6360,22 @@ export class CodexAppServerClient {
         };
       }
 
+      const helperResult = await this.waitForHelperTurnTitle({
+        threadId: helperThreadId,
+        turnId,
+        timeoutMs,
+      });
       return {
         status: "ok",
-        object: await this.waitForHelperTurnTitle({
-          threadId: helperThreadId,
-          turnId,
-          timeoutMs,
-        }),
+        object: helperResult.object,
+        helperThreadId,
+        helperTurnId: turnId,
+        model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+        reasoningEffort: "low",
+        serviceTier: "priority",
+        ...(helperResult.tokenUsage !== undefined
+          ? { tokenUsage: helperResult.tokenUsage }
+          : {}),
       };
     } catch (error) {
       return {

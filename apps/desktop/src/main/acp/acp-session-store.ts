@@ -24,6 +24,7 @@ export type AcpSessionMetadata = {
   acpRuntime?: BackendAcpSessionRuntimeState;
   availableCommands?: AppServerAvailableCommandSummary[];
   status: "active" | "idle" | "failed" | "unknown";
+  hidden?: boolean;
   hasConversationHistory?: boolean;
   requiresAgentSessionRebind?: boolean;
   archivedAt?: number;
@@ -62,7 +63,7 @@ export class AcpSessionStore {
 
   listSessions(
     backendId: AcpBackendId,
-    params?: { archived?: boolean },
+    params?: { archived?: boolean; includeHidden?: boolean },
   ): AcpSessionMetadata[] {
     const rows = this.stateDb.raw
       .prepare(
@@ -75,6 +76,9 @@ export class AcpSessionStore {
     return rows.flatMap((row) => {
       const parsed = parseJson(row.payload);
       if (!isSessionMetadata(parsed)) {
+        return [];
+      }
+      if (parsed.hidden && params?.includeHidden !== true) {
         return [];
       }
       return Boolean(parsed.archivedAt) === archived

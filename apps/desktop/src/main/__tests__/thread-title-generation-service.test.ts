@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AppServerBackendKind } from "@pwragent/shared";
 import {
   DEFAULT_GROK_THREAD_TITLE_MODEL,
   GrokThreadTitleGenerator,
@@ -55,6 +56,39 @@ describe("ThreadTitleGenerationService", () => {
         timeoutMs: 20_000,
       })
     );
+  });
+
+  it("uses a backend-specific resolver without falling back to Codex", async () => {
+    const acpGenerator = makeGenerator({ title: "Favorite cereal" });
+    const codexGenerator = makeGenerator({ title: "Wrong backend" });
+    const generatorResolver = vi.fn((backend: AppServerBackendKind) =>
+      backend === "acp:kimi" ? acpGenerator : undefined,
+    );
+    const service = new ThreadTitleGenerationService({
+      generators: { codex: codexGenerator },
+      generatorResolver,
+    });
+
+    await expect(
+      service.generateTitle({
+        backend: "acp:kimi",
+        threadId: "kimi-session-1",
+        userPrompt:
+          "We're testing something here... just tell me your favorite cereal.",
+      })
+    ).resolves.toEqual({
+      status: "generated",
+      title: "Favorite cereal",
+      cachedTokens: 12,
+    });
+    expect(generatorResolver).toHaveBeenCalledWith("acp:kimi");
+    expect(acpGenerator.generateTitle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "acp:kimi",
+        threadId: "kimi-session-1",
+      }),
+    );
+    expect(codexGenerator.generateTitle).not.toHaveBeenCalled();
   });
 
   it("preserves recognized issue and PR references", async () => {
@@ -266,6 +300,7 @@ describe("GrokThreadTitleGenerator", () => {
 
     await expect(
       generator.generateTitle({
+        backend: "grok",
         prompt: "Name this thread",
         promptVersion: THREAD_TITLE_PROMPT_VERSION,
         schema: { type: "object" },
@@ -276,6 +311,7 @@ describe("GrokThreadTitleGenerator", () => {
       status: "ok",
       object: { title: "Thread naming" },
       cachedTokens: 8,
+      model: DEFAULT_GROK_THREAD_TITLE_MODEL,
     });
 
     expect(client.generateObject).toHaveBeenCalledWith(
