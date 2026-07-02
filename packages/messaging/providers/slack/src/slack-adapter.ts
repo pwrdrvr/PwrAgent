@@ -666,14 +666,21 @@ export class SlackAdapter implements SlackProviderAdapter {
       : parseCommand(text);
     const kind = command ? "command" : event.files?.length ? "media" : "text";
 
+    const isGroupDm = event.channel_type === "mpim";
     if (!this.authorizeInbound({
       actor,
       channel,
       kind,
+      isGroupDm,
       pairing: isPairingMessage,
       routingState,
       teamId: ids.teamId,
     })) return;
+
+    // In a group DM the bot only answers when explicitly @mentioned, so it
+    // doesn't chime in on every message in a multi-person conversation. Slash
+    // commands and pairing messages are explicit invocations and are exempt.
+    if (isGroupDm && !isMention && !command && !isPairingMessage) return;
 
     if (event.files?.length) {
       await this.listener({
@@ -1176,6 +1183,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     actor: MessagingActorIdentity;
     channel: MessagingChannelRef;
     kind: MessagingInboundEvent["kind"];
+    isGroupDm?: boolean;
     pairing?: boolean;
     routingState?: MessagingAdapterState;
     teamId?: string;
@@ -1209,7 +1217,17 @@ export class SlackAdapter implements SlackProviderAdapter {
       return true;
     }
 
-    // Channel / thread / group DM traffic must clear the team gate, then the
+    // Group DMs (multi-person IMs) are driven by the authorized-user list, not
+    // the team/channel gates — a Slack "team" is the workspace, not a group
+    // DM. If an authorized user messages the bot in a group DM, it may respond;
+    // the caller additionally requires an @mention there. Unauthorized senders
+    // are rejected regardless of who else is in the group DM.
+    if (params.isGroupDm) {
+      if (!actorAuthorized) return reject("unauthorized-actor");
+      return true;
+    }
+
+    // Channel / thread traffic must clear the team gate, then the
     // channel gate, then the per-user channel access mode.
     const allowedConversations = this.config.authorizedConversationIds?.map((item) => item.id)
       ?? [];

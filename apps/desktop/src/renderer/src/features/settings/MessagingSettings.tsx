@@ -1000,7 +1000,7 @@ export function MessagingSettings(props: {
             <SegmentedField
               disabled={props.saving}
               label="Channel response default"
-              sub="Default response behavior after a Slack channel message passes the access checks above."
+              sub="Default response behavior after a Slack channel message passes the access checks above. Group DMs are separate: any authorized user can reach the bot there, but it only replies when @mentioned."
               options={RESPONSE_MODE_OPTIONS}
               source={sourceBadge(slack.responseMode)}
               value={slack.responseMode.value}

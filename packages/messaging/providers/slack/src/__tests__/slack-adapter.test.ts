@@ -1062,13 +1062,16 @@ describe("SlackAdapter", () => {
     ]);
   });
 
-  it("rejects group DM events when the authorized workspace list is empty", async () => {
+  it("answers group DM @mentions from an authorized user regardless of team/channel gates", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
+      // Group DMs are driven by the authorized-user list, not team/channel
+      // gates: restrict both gates and leave the allowlists empty.
       config: {
         ...baseConfig,
         authorizedTeamIds: [],
         teamAuthorizationMode: "approved_only",
+        channelAuthorizationMode: "approved_only",
       },
       callbackHandleStore: fakeStore(),
       api: fakeApi({}),
@@ -1093,15 +1096,92 @@ describe("SlackAdapter", () => {
         team: "T012ABCDEF0",
         ts: "1712023032.123456",
         user: "U012ABCDEF0",
-        text: "/status",
+        text: "<@U0BOTUSERID> status?",
+      },
+    });
+
+    expect(rejected).toEqual([]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        botMention: true,
+        text: "status?",
+        actor: expect.objectContaining({ platformUserId: "U012ABCDEF0" }),
+      }),
+    ]);
+  });
+
+  it("ignores group DM messages that don't @mention the bot", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, authorizedTeamIds: [] },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "G012ABCDEF0",
+        channel_type: "mpim",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "just chatting, not to the bot",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([]);
+  });
+
+  it("rejects group DM messages from an unauthorized user", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, authorizedTeamIds: [] },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "G012ABCDEF0",
+        channel_type: "mpim",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U999UNKNOWN0",
+        text: "<@U0BOTUSERID> let me in",
       },
     });
 
     expect(events).toEqual([]);
     expect(rejected).toEqual([
       expect.objectContaining({
-        reason: "unauthorized-conversation",
-        actor: expect.objectContaining({ platformUserId: "U012ABCDEF0" }),
+        reason: "unauthorized-actor",
+        actor: expect.objectContaining({ platformUserId: "U999UNKNOWN0" }),
       }),
     ]);
   });
