@@ -4719,6 +4719,7 @@ function buildThreadStartPayload(params: {
   const base: CodexThreadStartParams = {
     experimentalRawEvents: false,
     persistExtendedHistory: false,
+    threadSource: "user",
   };
 
   if (params.cwd?.trim()) {

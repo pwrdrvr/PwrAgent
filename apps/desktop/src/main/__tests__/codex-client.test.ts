@@ -5316,6 +5316,29 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("starts Codex threads as user-sourced sessions", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startThread({
+      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+    });
+
+    const request = MockTransport.instances[0]?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/start");
+    expect(request?.params).toMatchObject({
+      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      threadSource: "user",
+    });
+
+    await client.close();
+  });
+
   it("forks a Codex thread through thread/fork with workspace and permission overrides", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
