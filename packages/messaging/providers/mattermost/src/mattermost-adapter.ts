@@ -36,7 +36,10 @@ import type {
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
-import { extractMessagingPairingToken } from "@pwragent/messaging-interface";
+import {
+  extractMessagingPairingToken,
+  splitTextForDelivery,
+} from "@pwragent/messaging-interface";
 import type { MattermostMessagingConfig } from "./mattermost-config.ts";
 import {
   createMattermostCallbackServer,
@@ -121,6 +124,9 @@ function bindPortFromCallbackUrl(callbackBaseUrl: string): number {
  * Conversation title (channel header) limit per Mattermost product limits.
  */
 const MATTERMOST_CHANNEL_HEADER_LIMIT = 1024;
+// Mattermost's per-post message limit (matches the capability profile). Longer
+// responses split onto multiple posts rather than truncating.
+const MATTERMOST_MESSAGE_TEXT_LIMIT = 16_383;
 
 export type MattermostProviderLogger = {
   debug?: (msg: string, data?: Record<string, unknown>) => void;
@@ -329,6 +335,15 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    * reply per root.
    */
   private readonly threadRootMessageCache = new Map<string, string>();
+  // Per-stream post created for a streaming response, keyed by
+  // `intent.stream.key`. Mattermost has no create-or-edit primitive, so the
+  // first chunk creates a post and records its id here; later chunks (and the
+  // final) patch it in place — the same post-new-then-edit pattern Telegram,
+  // Discord, and Slack use. Cleared when the final chunk lands.
+  private readonly streamSurfaces = new Map<
+    string,
+    Array<{ channelId: string; postId: string; rootId?: string; text: string }>
+  >();
   /**
    * Post ids we created via `response_url` (the slash-command delayed
    * response endpoint). Mattermost's response_url handler stamps the
@@ -1680,7 +1695,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       };
     }
 
-    const text = clampMattermostMessage(textForMattermostIntent(intent));
+    const rawText = textForMattermostIntent(intent);
+    const text = clampMattermostMessage(rawText);
     const actions = actionsForMattermostIntent(intent);
     const callbackContextBuilder = await this.buildCallbackContextBuilder({
       intent,
@@ -1705,6 +1721,40 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       channelId: target.channelId,
       intent,
     });
+
+    // Long text-only messages: split into several posts at clean boundaries so
+    // the per-post limit doesn't truncate the tail. Restricted to the simple
+    // case — a plain message, no buttons/attachments, not an edit or a
+    // response_url delivery — which is the assistant-response path.
+    if (
+      intent.kind === "message" &&
+      !buttons &&
+      fileIds.length === 0 &&
+      !(target.existingPostId && target.canUpdate) &&
+      !target.responseUrl
+    ) {
+      const chunks = splitTextForDelivery(rawText, {
+        limit: MATTERMOST_MESSAGE_TEXT_LIMIT,
+        measure: "chars",
+      });
+      if (chunks.length > 1) {
+        let firstSurface: MessagingSurfaceRef | undefined;
+        for (const chunk of chunks) {
+          const created = await this.client.createPost({
+            channel_id: target.channelId,
+            message: chunk,
+            ...(target.rootId ? { root_id: target.rootId } : {}),
+          });
+          firstSurface ??= surfaceRefForPost(created.id, target.channelId, target.rootId);
+        }
+        return {
+          channel: this.channel,
+          deliveredAt: this.now(),
+          outcome: "presented",
+          ...(firstSurface ? { surface: firstSurface } : {}),
+        };
+      }
+    }
 
     const post: MattermostPostBody = {
       message: text || " ",
@@ -2056,31 +2106,89 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         outcome: "discarded",
       };
     }
+    const streamKey = intent.stream.key;
     const target = intent.targetSurface as MessagingSurfaceRef | undefined;
     const opaque = target?.state?.opaque as MattermostSurfaceOpaqueState | undefined;
-    if (!opaque?.postId) {
-      // No prior post to edit — let the controller present a new one
-      // through the regular `message` path next.
-      return {
-        channel: this.channel,
-        deliveredAt: this.now(),
-        outcome: "discarded",
-      };
+    // Split the accumulated stream text at Mattermost's per-post limit so a
+    // long response rolls onto extra posts instead of being truncated. Greedy
+    // splitting keeps prefix chunks stable, so only the last is re-patched.
+    const chunks = splitTextForDelivery(intent.text, {
+      limit: MATTERMOST_MESSAGE_TEXT_LIMIT,
+      measure: "chars",
+    });
+    if (chunks.length === 0) {
+      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
     }
+    // Seed anchor 0 from a caller-supplied surface (restart-safety).
+    const anchors =
+      this.streamSurfaces.get(streamKey) ??
+      (opaque?.postId && opaque.channelId
+        ? [
+            {
+              channelId: opaque.channelId,
+              postId: opaque.postId,
+              text: "",
+              ...(opaque.rootId ? { rootId: opaque.rootId } : {}),
+            },
+          ]
+        : []);
+    let firstOutcome: "presented" | "updated" | undefined;
     try {
-      await this.client.patchPost({
-        id: opaque.postId,
-        message: clampMattermostMessage(intent.text),
-      });
+      // Resolve the target channel once, only if we may need to create a post.
+      let resolved: Awaited<ReturnType<typeof this.resolveTarget>> | undefined;
+      if (anchors.length < chunks.length) {
+        resolved = await this.resolveTarget(intent);
+        if (!resolved || resolved.responseUrl) {
+          // No channel to post into, or a slash-command response_url path we
+          // don't drive from the stream — fall back to a regular message (only
+          // when we still have nothing posted).
+          if (anchors.length === 0) {
+            return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+          }
+          resolved = undefined;
+        }
+      }
+      for (let index = 0; index < chunks.length; index += 1) {
+        const message = chunks[index]!;
+        const anchor = anchors[index];
+        if (anchor) {
+          if (anchor.text === message) {
+            firstOutcome ??= "updated";
+            continue;
+          }
+          await this.client.patchPost({ id: anchor.postId, message });
+          anchor.text = message;
+          firstOutcome ??= "updated";
+        } else if (resolved) {
+          const created = await this.client.createPost({
+            channel_id: resolved.channelId,
+            message,
+            ...(resolved.rootId ? { root_id: resolved.rootId } : {}),
+          });
+          anchors[index] = {
+            channelId: resolved.channelId,
+            postId: created.id,
+            text: message,
+            ...(resolved.rootId ? { rootId: resolved.rootId } : {}),
+          };
+          firstOutcome ??= "presented";
+        }
+      }
+      if (intent.stream.isFinal) {
+        this.streamSurfaces.delete(streamKey);
+      } else {
+        this.streamSurfaces.set(streamKey, anchors);
+      }
+      const head = anchors[0]!;
       return {
         channel: this.channel,
         deliveredAt: this.now(),
-        outcome: "updated",
-        surface: target!,
+        outcome: firstOutcome ?? "updated",
+        surface: surfaceRefForPost(head.postId, head.channelId, head.rootId),
       };
     } catch (error) {
-      this.logger.debug?.("mattermost stream update patch failed", {
-        postId: opaque.postId,
+      this.logger.debug?.("mattermost stream update failed", {
+        streamKey,
         error: error instanceof Error ? error.message : String(error),
       });
       return {

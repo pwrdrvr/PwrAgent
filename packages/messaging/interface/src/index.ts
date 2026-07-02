@@ -16,6 +16,11 @@ import type {
   NavigationSnapshot,
   NavigationThreadSummary,
 } from "@pwragent/shared";
+export {
+  measureMessageText,
+  splitTextForDelivery,
+  type MessageTextMeasure,
+} from "./text-splitting";
 // Re-export shared messaging primitives so consumers can pick either
 // import path without seeing two parallel declarations.
 export {

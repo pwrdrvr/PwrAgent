@@ -443,6 +443,109 @@ describe("MattermostAdapter — outbound deliver", () => {
     expect(spies.createdPosts[0].root_id).toBeUndefined();
   });
 
+  function makeStreamIntent(params: {
+    id: string;
+    text: string;
+    isFinal: boolean;
+    sequence: number;
+    policy?: "inherit" | "enabled" | "disabled";
+    audit: { channel: MessagingChannelRef; actor?: { platformUserId: string } };
+  }): MessagingSurfaceIntent {
+    return {
+      id: params.id,
+      kind: "stream_update",
+      createdAt: 1_700_000_000_000,
+      role: "assistant",
+      markdown: params.isFinal ? "markdown" : "plain",
+      policy: params.policy ?? "enabled",
+      text: params.text,
+      stream: {
+        key: "codex:thread-1:turn-1",
+        isFinal: params.isFinal,
+        sequence: params.sequence,
+      },
+      audit: params.audit,
+    } as unknown as MessagingSurfaceIntent;
+  }
+
+  it("discards stream updates when streaming is off without touching the channel", async () => {
+    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const adapter = makeAdapter(spies); // baseConfig: streaming off
+
+    const result = await adapter.deliver(
+      makeStreamIntent({
+        id: "assistant-stream-1",
+        text: "partial",
+        isFinal: false,
+        sequence: 1,
+        policy: "inherit",
+        audit: { channel: dmChannel("dm-1"), actor: { platformUserId: "user-1" } },
+      }),
+    );
+
+    expect(result.outcome).toBe("discarded");
+    expect(spies.createdPosts).toHaveLength(0);
+    expect(spies.patchedPosts).toHaveLength(0);
+  });
+
+  it("posts the first stream chunk then patches it for the rest of the turn", async () => {
+    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: fakeStore,
+      client: fakeClient4(spies),
+      config: { ...baseConfig, streamingResponses: true },
+      logger: silentLogger,
+      websocketClient: fakeWebSocketClient(),
+      now: () => 1_700_000_000_000,
+    });
+    const audit = { channel: dmChannel("dm-1"), actor: { platformUserId: "user-1" } };
+
+    const first = await adapter.deliver(
+      makeStreamIntent({ id: "s1", text: "Partial", isFinal: false, sequence: 1, audit }),
+    );
+    expect(first.outcome).toBe("presented");
+
+    const second = await adapter.deliver(
+      makeStreamIntent({ id: "s2", text: "Partial answer", isFinal: false, sequence: 2, audit }),
+    );
+    expect(second.outcome).toBe("updated");
+
+    const final = await adapter.deliver(
+      makeStreamIntent({ id: "s3", text: "Partial answer, done.", isFinal: true, sequence: 3, audit }),
+    );
+    expect(final.outcome).toBe("updated");
+
+    // One created post, patched twice — a single Mattermost post.
+    expect(spies.createdPosts).toHaveLength(1);
+    expect(spies.createdPosts[0].channel_id).toBe("dm-1");
+    expect(spies.patchedPosts).toHaveLength(2);
+    expect(spies.patchedPosts.every((p) => p.id === "post-1")).toBe(true);
+  });
+
+  it("splits a long text-only message across multiple posts", async () => {
+    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const adapter = makeAdapter(spies);
+    const longText = "This is a full sentence that keeps going. ".repeat(500); // ~21k chars
+
+    const result = await adapter.deliver({
+      id: "intent-long",
+      kind: "message",
+      createdAt: 1_700_000_000_000,
+      capabilityProfile: { text: { maxLength: 16_383, encoding: "characters" } },
+      parts: [{ type: "text", text: longText }],
+      audit: {
+        channel: dmChannel("dm-1"),
+        actor: { platformUserId: "user-1" },
+      },
+    } as unknown as MessagingSurfaceIntent);
+
+    expect(result.outcome).toBe("presented");
+    expect(spies.createdPosts.length).toBeGreaterThan(1);
+    for (const post of spies.createdPosts) {
+      expect(post.message.length).toBeLessThanOrEqual(16_383);
+    }
+  });
+
   it("returns failed outcome when neither audit.channel nor opaque postId is present", async () => {
     const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
     const adapter = makeAdapter(spies);

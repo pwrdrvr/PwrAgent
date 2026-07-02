@@ -962,10 +962,15 @@ export class MessagingController {
 
       const assistantText = assistantTextForBackendEvent(event);
       if (assistantText) {
-        if (
-          !automationTurnEvent ||
-          !isNonFinalAssistantTextForBackendEvent(event)
-        ) {
+        // Suppress NON-final agentMessage completions (e.g. Codex "commentary"
+        // phases the agent emits while thinking) on every turn, not just
+        // automation ones. Each such `item/completed` otherwise posts its own
+        // message, so a single turn fans out into a burst of separate messages
+        // on the channel — the "pinged a dozen times" flood. Messaging shows
+        // the agent's final answer (streamed into one message when streaming is
+        // on); intermediate commentary stays on the desktop transcript. Items
+        // with no phase, or phase "final"/"final_answer", still post.
+        if (!isNonFinalAssistantTextForBackendEvent(event)) {
           const deliveredFinalStream = await this.flushAssistantStreamForEvent(
             event,
             binding,
@@ -977,7 +982,14 @@ export class MessagingController {
             await this.deliverAssistantMessage(assistantText, event, binding);
           }
         }
-      } else if (isTerminalTurnLifecycle(activeTurn)) {
+      } else if (isTerminalTurnLifecycle(activeTurn) && !assistantDelta) {
+        // Only flush buffered stream text on a genuine terminal event (e.g.
+        // turn/completed, idle) — never on an assistant delta. Deltas are
+        // mid-stream content owned by deliverAssistantStreamUpdate's buffer;
+        // when the turn lifecycle is already terminal but the backend keeps
+        // emitting deltas, letting each delta run the terminal flush re-posts
+        // the (growing) buffer as a brand-new message every time — the
+        // multi-message channel flood (and the budget starvation it caused).
         await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
         await this.flushBufferedAssistantStreamsForTerminalEvent(event, binding);
       }
@@ -3068,6 +3080,22 @@ export class MessagingController {
     return binding;
   }
 
+  /**
+   * Resolve the effective streaming-responses toggle for a binding. Mirrors the
+   * adapter-side check (`policy` + global `config.streamingResponses`) and the
+   * new-thread summary in {@link newThreadOptionsForSession}: a per-binding
+   * `"inherit"` follows the channel default, otherwise the explicit setting
+   * wins. Consulted BEFORE generating stream intents so a disabled setting is a
+   * real short-circuit on this path — not a `policy` the adapter discards after
+   * the intent has already churned the delivery budget.
+   */
+  private isStreamingResponsesEnabledForBinding(
+    binding: MessagingBindingRecord,
+  ): boolean {
+    const mode = binding.preferences?.streamingResponses ?? "inherit";
+    return mode === "inherit" ? this.streamingResponsesDefault : mode === "enabled";
+  }
+
   private async deliverAssistantStreamUpdate(
     delta: AssistantStreamDelta,
     binding: MessagingBindingRecord,
@@ -3090,6 +3118,15 @@ export class MessagingController {
         };
     this.assistantStreamBuffers.set(bufferKey, buffer);
 
+    // Streaming off: keep accumulating deltas (the terminal flush still needs
+    // the buffered text — e.g. ACP turns whose only output arrives as deltas)
+    // but never emit a partial `stream_update`. Those intents would be
+    // discarded downstream yet still consume a budget-admission check, and the
+    // surface churn is what floods the channel with many separate messages.
+    if (!this.isStreamingResponsesEnabledForBinding(binding)) {
+      return;
+    }
+
     if (
       buffer.text.trim().length === 0 ||
       (buffer.lastEmittedAt > 0 && now - buffer.lastEmittedAt < STREAM_UPDATE_REFRESH_MS)
@@ -3109,10 +3146,20 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     finalText: string,
   ): Promise<boolean> {
+    const streamingEnabled = this.isStreamingResponsesEnabledForBinding(binding);
     let deliveredFinalStream = false;
     for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
       const buffer = this.assistantStreamBuffers.get(bufferKey);
       if (!buffer) {
+        continue;
+      }
+      // Streaming off: drop the accumulator without emitting a final
+      // `stream_update`. Returning `false` routes the caller to
+      // `deliverAssistantMessage`, so the turn lands as a single message
+      // instead of a discarded stream edit followed by that same message.
+      if (!streamingEnabled) {
+        this.assistantStreamBuffers.delete(bufferKey);
+        this.assistantStreamDeliveryQueues.delete(bufferKey);
         continue;
       }
       this.assistantStreamBuffers.set(bufferKey, {
@@ -3134,6 +3181,7 @@ export class MessagingController {
     event: AgentEvent,
     binding: MessagingBindingRecord,
   ): Promise<void> {
+    const streamingEnabled = this.isStreamingResponsesEnabledForBinding(binding);
     const fallbackTexts: string[] = [];
     for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
       const buffer = this.assistantStreamBuffers.get(bufferKey);
@@ -3142,6 +3190,15 @@ export class MessagingController {
       }
       const text = buffer.text.trim();
       if (!text) {
+        this.assistantStreamBuffers.delete(bufferKey);
+        this.assistantStreamDeliveryQueues.delete(bufferKey);
+        continue;
+      }
+      // Streaming off: post the buffered text as a plain message rather than an
+      // (immediately discarded) final `stream_update`. Same single-message
+      // outcome, without churning the delivery budget on a doomed stream edit.
+      if (!streamingEnabled) {
+        fallbackTexts.push(text);
         this.assistantStreamBuffers.delete(bufferKey);
         this.assistantStreamDeliveryQueues.delete(bufferKey);
         continue;
@@ -10922,6 +10979,11 @@ export class MessagingController {
     };
     if (result.outcome === "failed") {
       this.logger.warn?.("messaging delivery failed", logContext);
+    } else if (intent.kind === "stream_update" && !intent.stream.isFinal) {
+      // A streaming turn edits its message roughly once a second for its whole
+      // duration; logging every partial at info drowns the log. Keep the
+      // per-partial deliveries at debug — the final stream + message stay info.
+      this.logger.debug?.("messaging delivery completed", logContext);
     } else {
       this.logger.info?.("messaging delivery completed", logContext);
     }

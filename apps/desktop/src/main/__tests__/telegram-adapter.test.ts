@@ -982,6 +982,9 @@ describe("TelegramAdapter", () => {
     } satisfies MessagingSurfaceIntent;
 
     const first = await adapter.deliver(baseIntent);
+    // Final text differs from the first chunk, so an edit is actually attempted
+    // (Telegram can still report "not modified" after HTML normalization, which
+    // the adapter treats as a successful update rather than a failure).
     const final = await adapter.deliver({
       ...baseIntent,
       id: "stream-2",
@@ -990,7 +993,7 @@ describe("TelegramAdapter", () => {
         isFinal: true,
         sequence: 2,
       },
-      text: "Hello",
+      text: "Hello world",
     } satisfies MessagingSurfaceIntent);
 
     expect(first).toMatchObject({

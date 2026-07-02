@@ -36,6 +36,7 @@ import type {
 import {
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  splitTextForDelivery,
 } from "@pwragent/messaging-interface";
 import type { FeishuMessagingConfig } from "./feishu-config.ts";
 import {
@@ -60,6 +61,9 @@ const DEFAULT_CALLBACK_PORT = 47823;
 const DEFAULT_CALLBACK_HOST = "127.0.0.1";
 const FEISHU_SIGNED_VALUE_VERSION = 1;
 const FEISHU_WEBHOOK_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
+// Feishu's per-message text limit (matches the capability profile). Longer
+// responses split onto multiple card messages instead of truncating.
+const FEISHU_MESSAGE_TEXT_LIMIT = 30_000;
 const FEISHU_INBOUND_DEDUP_TTL_MS = 10 * 60 * 1000;
 const FEISHU_INBOUND_DEDUP_MAX = 1_000;
 
@@ -323,6 +327,21 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
   private readonly recentlyHandledInboundKeys = new Map<string, number>();
+  // Per-stream card message created for a streaming response, keyed by
+  // `intent.stream.key`. Feishu has no create-or-edit primitive, so the first
+  // chunk sends a card and records its message id here; later chunks (and the
+  // final) update it in place — the post-new-then-edit pattern Telegram,
+  // Discord, Slack, and Mattermost use. Cleared when the final chunk lands.
+  private readonly streamSurfaces = new Map<
+    string,
+    Array<{
+      messageId: string;
+      receiveId: string;
+      receiveIdType: "chat_id" | "open_id";
+      tenantKey?: string;
+      text: string;
+    }>
+  >();
 
   constructor(options: FeishuAdapterOptions) {
     this.config = options.config;
@@ -483,6 +502,66 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       capabilityProfile: this.capabilityProfile,
       layout: intent.actionLayout,
     });
+
+    // Long text-only messages: split into several card messages at clean
+    // boundaries so the per-message limit doesn't truncate the tail. Restricted
+    // to the simple assistant-response case — no buttons, not an in-place edit.
+    if (
+      intent.kind === "message" &&
+      actionElements.length === 0 &&
+      intent.delivery?.mode !== "update"
+    ) {
+      const chunks = splitTextForDelivery(rawText, {
+        limit: FEISHU_MESSAGE_TEXT_LIMIT,
+        measure: "chars",
+      });
+      if (chunks.length > 1) {
+        let firstMessageId: string | undefined;
+        try {
+          for (const chunk of chunks) {
+            const useCard = shouldSendFeishuCard(intent, chunk, 0);
+            const result = await this.api.sendMessage({
+              card: useCard ? buildFeishuCardForIntent({ intent, text: chunk }) : undefined,
+              receiveId: target.receiveId,
+              receiveIdType: target.receiveIdType,
+              text: useCard ? undefined : clampFeishuMessage(chunk),
+            });
+            firstMessageId ??= result.messageId;
+          }
+        } catch (error) {
+          const rateLimit = this.emitRateLimitFromError(error, target, { retryable: !firstMessageId });
+          return {
+            outcome: "failed",
+            channel: this.channel,
+            deliveredAt: this.now(),
+            errorMessage: error instanceof Error ? error.message : String(error),
+            ...(rateLimit ? { rateLimit } : {}),
+          };
+        }
+        return {
+          outcome: "presented",
+          channel: this.channel,
+          deliveredAt: this.now(),
+          ...(firstMessageId
+            ? {
+                surface: {
+                  channel: this.channel,
+                  id: firstMessageId,
+                  state: {
+                    opaque: {
+                      messageId: firstMessageId,
+                      receiveId: target.receiveId,
+                      receiveIdType: target.receiveIdType,
+                      ...(target.tenantKey ? { tenantKey: target.tenantKey } : {}),
+                    },
+                  },
+                },
+              }
+            : {}),
+        };
+      }
+    }
+
     const card = buildFeishuCardForIntent({
       actionElements,
       intent,
@@ -661,35 +740,104 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         deliveredAt: this.now(),
       };
     }
+    const streamKey = intent.stream.key;
     const target = this.resolveTarget(intent);
-    if (!target?.messageId) {
-      return {
-        outcome: "discarded",
-        channel: this.channel,
-        deliveredAt: this.now(),
-      };
-    }
-    const card = buildFeishuCardForIntent({
-      intent,
-      text: intent.text,
+    const surfaceFor = (state: {
+      messageId: string;
+      receiveId: string;
+      receiveIdType: "chat_id" | "open_id";
+      tenantKey?: string;
+    }) => ({
+      channel: this.channel,
+      id: state.messageId,
+      state: {
+        opaque: {
+          messageId: state.messageId,
+          receiveId: state.receiveId,
+          receiveIdType: state.receiveIdType,
+          ...(state.tenantKey ? { tenantKey: state.tenantKey } : {}),
+        },
+      },
     });
-    try {
-      await this.api.updateMessage({ card, messageId: target.messageId });
-      return {
-        outcome: "updated",
-        channel: this.channel,
-        deliveredAt: this.now(),
-        surface: {
-          channel: this.channel,
-          id: target.messageId,
-          state: {
-            opaque: {
+    // Split the accumulated stream text at Feishu's per-message limit so a long
+    // response rolls onto extra card messages instead of truncating. Greedy
+    // splitting keeps prefix chunks stable, so only the last is re-updated.
+    const chunks = splitTextForDelivery(intent.text, {
+      limit: FEISHU_MESSAGE_TEXT_LIMIT,
+      measure: "chars",
+    });
+    if (chunks.length === 0) {
+      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+    }
+    // Seed anchor 0 from a caller-supplied surface (restart-safety).
+    const anchors =
+      this.streamSurfaces.get(streamKey) ??
+      (target?.messageId
+        ? [
+            {
               messageId: target.messageId,
               receiveId: target.receiveId,
               receiveIdType: target.receiveIdType,
+              text: "",
+              ...(target.tenantKey ? { tenantKey: target.tenantKey } : {}),
             },
-          },
-        },
+          ]
+        : []);
+    if (anchors.length === 0 && !target) {
+      // No conversation to post into yet — let the controller fall back to a
+      // regular message.
+      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+    }
+    let firstOutcome: "presented" | "updated" | undefined;
+    try {
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunkText = chunks[index]!;
+        const card = buildFeishuCardForIntent({ intent, text: chunkText });
+        const anchor = anchors[index];
+        if (anchor) {
+          if (anchor.text === chunkText) {
+            firstOutcome ??= "updated";
+            continue;
+          }
+          await this.api.updateMessage({ card, messageId: anchor.messageId });
+          anchor.text = chunkText;
+          firstOutcome ??= "updated";
+        } else if (target) {
+          const result = await this.api.sendMessage({
+            card,
+            receiveId: target.receiveId,
+            receiveIdType: target.receiveIdType,
+          });
+          const messageId = result.messageId;
+          if (!messageId) {
+            if (anchors.length === 0) {
+              return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+            }
+            break;
+          }
+          anchors[index] = {
+            messageId,
+            receiveId: target.receiveId,
+            receiveIdType: target.receiveIdType,
+            text: chunkText,
+            ...(target.tenantKey ? { tenantKey: target.tenantKey } : {}),
+          };
+          firstOutcome ??= "presented";
+        }
+      }
+      if (anchors.length === 0) {
+        return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+      }
+      if (intent.stream.isFinal) {
+        this.streamSurfaces.delete(streamKey);
+      } else {
+        this.streamSurfaces.set(streamKey, anchors);
+      }
+      return {
+        outcome: firstOutcome ?? "updated",
+        channel: this.channel,
+        deliveredAt: this.now(),
+        surface: surfaceFor(anchors[0]!),
       };
     } catch (error) {
       return {

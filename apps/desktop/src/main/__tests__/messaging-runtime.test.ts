@@ -1608,6 +1608,72 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it("surfaces a budget-starved approval with an operator-legible reason", async () => {
+    const { runtime } = await createRuntimeHarness();
+    await runtime.start();
+
+    const event: MessagingControllerDeliveryBudgetEvent = {
+      at: Date.now(),
+      backend: "codex",
+      bindingId: "binding:telegram:topic:-1003841603622:10345:codex:thread-1",
+      channel: "telegram",
+      conversation: {
+        id: "10345",
+        kind: "topic",
+        parentId: "-1003841603622",
+        parentTitle: "PwrAgent Mini Dev Group",
+        title: "Approval Thread",
+      },
+      intentId: "approval:d778bf36",
+      intentKind: "approval",
+      outcome: "deferred",
+      priority: "critical_interactive",
+      reason: "budget-exhausted",
+      retryAt: Date.now() + 12_000,
+      scope: {
+        platform: "telegram",
+        id: "telegram:group:-1003841603622",
+        kind: "group",
+        label: "PwrAgent Mini Dev",
+      },
+      slowMode: true,
+      threadId: "thread-1",
+    };
+    const handleDeliveryBudgetEvent = (
+      runtime as unknown as {
+        handleDeliveryBudgetEvent: (
+          event: MessagingControllerDeliveryBudgetEvent,
+        ) => Promise<void>;
+      }
+    ).handleDeliveryBudgetEvent.bind(runtime);
+
+    await handleDeliveryBudgetEvent(event);
+
+    // The live status names the approval, not the raw `critical_interactive`
+    // scheduling token, so a starved approval reads as a clear reason.
+    expect(runtime.getPlatformStatuses()).toEqual([
+      expect.objectContaining({
+        degradationReasons: expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.stringContaining("approval / interactive prompt"),
+          }),
+        ]),
+      }),
+    ]);
+
+    const { getAppStateDb } = await import("../state/app-state");
+    const rows = getAppStateDb().raw
+      .prepare(
+        `SELECT summary FROM messaging_activity_log
+         WHERE kind = ?
+         ORDER BY id DESC
+         LIMIT 1`,
+      )
+      .all("diagnostic") as { summary: string }[];
+    expect(rows[0]?.summary).toContain("approval / interactive prompt");
+    expect(rows[0]?.summary).not.toContain("critical_interactive");
+  });
+
   it("logs Telegram topic pairing activity with supergroup parent metadata", async () => {
     const { runtime, adapter } = await createRuntimeHarness();
     await runtime.start();

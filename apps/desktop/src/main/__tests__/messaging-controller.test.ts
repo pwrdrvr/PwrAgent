@@ -8234,6 +8234,7 @@ describe("MessagingController", () => {
     let now = 1000;
     const recordPlatformResponseActivity = vi.fn();
     const harness = await createHarness({
+      streamingResponsesDefault: true,
       activityLog: () => ({
         record: vi.fn(),
         recordPlatformResponseActivity,
@@ -8469,6 +8470,7 @@ describe("MessagingController", () => {
   it("falls back with a final assistant message per binding", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
+      streamingResponsesDefault: true,
       deliver: async (intent) => {
         delivered.push(intent);
         if (
@@ -8572,6 +8574,7 @@ describe("MessagingController", () => {
     };
     const attempts: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
+      streamingResponsesDefault: true,
       now: () => now,
       deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
       deliver: async (intent) => {
@@ -8644,6 +8647,7 @@ describe("MessagingController", () => {
     };
     const attempts: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
+      streamingResponsesDefault: true,
       now: () => now,
       deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
       deliver: async (intent) => {
@@ -8726,6 +8730,7 @@ describe("MessagingController", () => {
     );
     const deliveryBudget = new MessagingDeliveryBudget({ now: () => now });
     const harness = await createHarness({
+      streamingResponsesDefault: true,
       channel: "telegram",
       now: () => now,
       deliveryBudget,
@@ -9019,6 +9024,7 @@ describe("MessagingController", () => {
     });
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
+      streamingResponsesDefault: true,
       now: () => now,
       deliver: async (intent) => {
         delivered.push(intent);
@@ -9135,6 +9141,7 @@ describe("MessagingController", () => {
     });
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
+      streamingResponsesDefault: true,
       now: () => now,
       deliver: async (intent) => {
         delivered.push(intent);
@@ -9239,6 +9246,7 @@ describe("MessagingController", () => {
   it("delivers the final assistant message when stream updates are discarded", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
+      streamingResponsesDefault: true,
       deliver: async (intent) => {
         delivered.push(intent);
         return {
@@ -9317,6 +9325,7 @@ describe("MessagingController", () => {
   it("delivers buffered assistant stream text when ACP terminal output is empty", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
+      streamingResponsesDefault: true,
       deliver: async (intent) => {
         delivered.push(intent);
         return {
@@ -9384,6 +9393,311 @@ describe("MessagingController", () => {
             text: "Gemini streamed the answer.",
           }),
         ],
+      }),
+    ]);
+  });
+
+  it("streams no partial updates and posts one message when streaming is disabled", async () => {
+    let now = 1000;
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      // streamingResponsesDefault defaults to false and the binding inherits it,
+      // so streaming is disabled for this thread.
+      now: () => now,
+      deliver: async (intent) => {
+        delivered.push(intent);
+        return {
+          channel: "telegram" as const,
+          deliveredAt: now,
+          outcome: "presented" as const,
+          surface: { channel: "telegram" as const, id: `surface:${intent.id}` },
+        };
+      },
+    });
+    await bindThread(harness);
+    delivered.length = 0;
+
+    // Multiple deltas, each spaced beyond STREAM_UPDATE_REFRESH_MS. With
+    // streaming enabled this would flush several partial `stream_update`
+    // intents (each minting a fresh Slack surface → the ping flood we fixed).
+    // With streaming disabled the controller must never generate them.
+    for (const delta of ["Hel", "lo ", "wor", "ld."]) {
+      now += 2_000;
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "item-1",
+            delta,
+          },
+        },
+      } satisfies AgentEvent);
+    }
+
+    now += 2_000;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "item-1", type: "agentMessage", text: "Hello world." },
+        },
+      },
+    } satisfies AgentEvent);
+    now += 2_000;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Hello world." }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    // No stream_update intents at all — a disabled setting short-circuits
+    // generation instead of being carried as a policy the adapter discards.
+    expect(delivered.filter((intent) => intent.kind === "stream_update")).toEqual([]);
+    // Exactly one assistant message on a single surface — no burst of posts.
+    expect(
+      delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "assistant",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [expect.objectContaining({ text: "Hello world." })],
+      }),
+    ]);
+  });
+
+  it("posts buffered delta text as one message when streaming is disabled and terminal output is empty", async () => {
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      deliver: async (intent) => {
+        delivered.push(intent);
+        return {
+          channel: "telegram" as const,
+          deliveredAt: 1000,
+          outcome: "presented" as const,
+          surface: { channel: "telegram" as const, id: `surface:${intent.id}` },
+        };
+      },
+    });
+    await bindThreadToBackend(harness, "acp:gemini");
+    delivered.length = 0;
+
+    // The only assistant output arrives as a delta (ACP terminal output is
+    // empty). Streaming-off must still BUFFER the delta so the terminal flush
+    // can post it — dropping the buffer would swallow the whole answer.
+    await harness.controller.handleBackendEvent({
+      backend: "acp:gemini",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant:turn-1",
+          delta: "Answer that only arrived as a delta.",
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "acp:gemini",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(delivered.filter((intent) => intent.kind === "stream_update")).toEqual([]);
+    expect(
+      delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "assistant",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({ text: "Answer that only arrived as a delta." }),
+        ],
+      }),
+    ]);
+  });
+
+  it("suppresses non-final commentary completions so a turn posts one message", async () => {
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      deliver: async (intent) => {
+        delivered.push(intent);
+        return {
+          channel: "telegram" as const,
+          deliveredAt: 1000,
+          outcome: "presented" as const,
+          surface: { channel: "telegram" as const, id: `surface:${intent.id}` },
+        };
+      },
+    });
+    await bindThread(harness);
+    delivered.length = 0;
+
+    // A regular (non-automation) turn where the backend emits intermediate
+    // "commentary" agentMessage completions before the final answer. Each of
+    // these used to post its own message — the multi-message channel flood.
+    for (const [phase, text] of [
+      ["commentary", "I'll check the weather for 07747."],
+      ["commentary", "Pulling current conditions now."],
+      ["final", "For 07747 / Matawan, NJ: sunny and very hot."],
+    ] as const) {
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: `msg-${phase}-${text.length}`,
+              type: "agentMessage",
+              phase,
+              text,
+            },
+          },
+        },
+      } satisfies AgentEvent);
+    }
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              { type: "text", text: "For 07747 / Matawan, NJ: sunny and very hot." },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    // Only the final answer is posted — the commentary phases are dropped, so
+    // the turn lands as a single message instead of a burst.
+    expect(
+      delivered.filter((intent) => intent.kind === "message" && intent.role === "assistant"),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            text: "For 07747 / Matawan, NJ: sunny and very hot.",
+          }),
+        ],
+      }),
+    ]);
+    expect(JSON.stringify(delivered)).not.toContain("I'll check the weather");
+    expect(JSON.stringify(delivered)).not.toContain("Pulling current conditions");
+  });
+
+  it("does not re-post buffered text when deltas arrive after the turn is terminal", async () => {
+    let now = 1000;
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      now: () => now,
+      deliver: async (intent) => {
+        delivered.push(intent);
+        return {
+          channel: "telegram" as const,
+          deliveredAt: now,
+          outcome:
+            intent.kind === "stream_update" ? ("discarded" as const) : ("presented" as const),
+          surface: { channel: "telegram" as const, id: `surface:${intent.id}` },
+        };
+      },
+    });
+    await bindThread(harness);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "running" },
+        },
+      },
+    } satisfies AgentEvent);
+    delivered.length = 0;
+
+    for (const delta of ["For 07747", ": sunny", " and hot."]) {
+      now += 50;
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", delta },
+        },
+      } satisfies AgentEvent);
+    }
+
+    // Turn goes terminal with no final output text, so the buffered stream text
+    // is flushed as the single message.
+    now += 50;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    } satisfies AgentEvent);
+
+    // The backend keeps emitting deltas after the terminal event (the real
+    // flood: each one used to re-run the terminal flush and re-post the growing
+    // buffer as a brand-new message).
+    for (const delta of [" Stay", " cool", " out", " there."]) {
+      now += 50;
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", delta },
+        },
+      } satisfies AgentEvent);
+    }
+
+    // Exactly one message; the post-terminal deltas do not re-flush.
+    expect(
+      delivered.filter((intent) => intent.kind === "message" && intent.role === "assistant"),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [expect.objectContaining({ text: "For 07747: sunny and hot." })],
       }),
     ]);
   });

@@ -74,7 +74,10 @@ import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
 import { getDesktopMessagingPairingStore } from "./desktop-messaging-pairing-store";
 import { loadConfiguredMessagingAdapters } from "./provider-loader";
-import { MessagingDeliveryBudget } from "./core/messaging-delivery-budget";
+import {
+  MessagingDeliveryBudget,
+  type MessagingDeliveryPriority,
+} from "./core/messaging-delivery-budget";
 import type { MessagingAgentToolService } from "./messaging-agent-tool-service";
 
 export type DesktopMessagingAdapter = {
@@ -1464,12 +1467,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       "warning",
       `delivery-budget:${scopeId}:${targetKey}`,
     );
+    const priorityPhrase = describeDeliveryPriority(event.priority);
     this.addPlatformDegradationReason(event.channel, {
       kind: "warning",
       key,
       message: event.outcome === "deferred"
-        ? `${modeLabel} active; holding ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}.`
-        : `${modeLabel} active; dropped ${event.priority} (${reason})${targetPhrase}.`,
+        ? `${modeLabel} active; holding ${priorityPhrase} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}.`
+        : `${modeLabel} active; dropped ${priorityPhrase} (${reason})${targetPhrase}.`,
       scope: event.scope ? sanitizeDeliveryScope(event.scope) : undefined,
       startedAt: event.at,
       expiresAt,
@@ -1481,8 +1485,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       bindingId: event.bindingId,
       conversation: event.conversation,
       summary: event.outcome === "deferred"
-        ? `${modeLabel} held ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}`
-        : `${modeLabel} dropped ${event.priority}: ${reason}${targetPhrase}`,
+        ? `${modeLabel} held ${priorityPhrase} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}`
+        : `${modeLabel} dropped ${priorityPhrase}: ${reason}${targetPhrase}`,
       createdAt: event.at,
       payload: {
         type: isCoolOff ? "cool-off" : "slow-mode",
@@ -2241,6 +2245,10 @@ function streamingResponsesDefaultForChannel(
       return config.slack?.streamingResponses ?? false;
     case "telegram":
       return config.telegram?.streamingResponses ?? false;
+    case "feishu":
+      return config.feishu?.streamingResponses ?? false;
+    // LINE has no message-edit API, so it never streams — the `default` false
+    // is correct for it (there is no LINE streaming setting).
     default:
       return false;
   }
@@ -2366,6 +2374,33 @@ function describeConversation(
     conversation.title,
   ].filter((piece): piece is string => Boolean(piece));
   return pieces.length > 0 ? pieces.join(" / ") : conversation.id;
+}
+
+/**
+ * Operator-legible name for a delivery priority. The raw tokens
+ * (`critical_interactive`, `stream_partial`, …) are internal scheduling labels;
+ * Messaging Activity rows should say what an operator recognizes. Notably an
+ * approval/questionnaire delayed or dropped by the budget reads as
+ * "approval / interactive prompt" so a starved approval surfaces a clear reason
+ * instead of an opaque token (or nothing at all).
+ */
+function describeDeliveryPriority(priority: MessagingDeliveryPriority): string {
+  switch (priority) {
+    case "critical_interactive":
+      return "approval / interactive prompt";
+    case "final_turn":
+      return "final response";
+    case "user_command":
+      return "command reply";
+    case "routine_status":
+      return "status update";
+    case "tool_progress":
+      return "tool progress";
+    case "stream_partial":
+      return "streaming update";
+    default:
+      return priority;
+  }
 }
 
 function formatDurationForStatus(durationMs: number): string {
