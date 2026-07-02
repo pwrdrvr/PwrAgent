@@ -5316,7 +5316,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("starts Codex threads as user-sourced sessions", async () => {
+  it("passes explicit user source classification when starting Codex threads", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -5326,6 +5326,7 @@ describe("CodexAppServerClient", () => {
 
     await client.startThread({
       cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      threadSource: "user",
     });
 
     const request = MockTransport.instances[0]?.sentMessages
@@ -6107,6 +6108,18 @@ describe("CodexAppServerClient", () => {
           },
         }),
       })
+    );
+    const threadStartRequests = requests.filter(
+      (request) => request.method === "thread/start",
+    );
+    expect(threadStartRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: expect.not.objectContaining({
+            threadSource: expect.anything(),
+          }),
+        }),
+      ]),
     );
     expect(requests).toContainEqual(
       expect.objectContaining({

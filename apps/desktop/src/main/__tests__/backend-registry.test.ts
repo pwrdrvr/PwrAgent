@@ -34,6 +34,7 @@ import type {
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
+import type { ThreadSource as CodexThreadSource } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { buildNavigationSnapshot } from "@pwragent/agent-core";
 import {
   buildCodexFastModeMismatchNotificationParams,
@@ -848,6 +849,7 @@ class MockBackendClient {
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     defaultModeRequestUserInput?: boolean;
+    threadSource?: CodexThreadSource;
   };
   lastForkThreadParams?: {
     threadId: string;
@@ -1158,6 +1160,7 @@ class MockBackendClient {
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     defaultModeRequestUserInput?: boolean;
+    threadSource?: CodexThreadSource;
   }): Promise<{ threadId: string }> {
     this.lastStartThreadParams = params;
     return this.options.startThreadResult ?? { threadId: "thread-1" };
@@ -13011,6 +13014,7 @@ command = "pnpm dev"
       ephemeral: true,
       sandbox: "workspace-write",
     });
+    expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();
     expect(codexClient.lastStartTurnParams).toMatchObject({
       approvalPolicy: "never",
       sandbox: "workspace-write",
@@ -13142,6 +13146,7 @@ command = "pnpm dev"
       ephemeral: true,
       sandbox: "danger-full-access",
     });
+    expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();
     expect(codexClient.lastStartTurnParams).toMatchObject({
       approvalPolicy: "never",
       cwd: "/tmp/full-access-project",
@@ -14030,6 +14035,7 @@ command = "pnpm dev"
       fastMode: true,
       approvalPolicy: "never",
       sandbox: "danger-full-access",
+      threadSource: "user",
     });
     expect(codexClient.lastRenameThreadParams).toEqual({
       threadId: "thread-1",
@@ -17640,6 +17646,7 @@ script = "printf setup"
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
+    expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();
     expect(
       (codexClient.lastStartThreadParams?.dynamicTools as Array<{ name: string }> | undefined)
         ?.map((tool) => tool.name),
@@ -17875,6 +17882,7 @@ script = "printf setup"
       ephemeral: true,
       model: "gpt-5.4-mini",
     });
+    expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();
     expect(codexClient.startTurnCallCount).toBe(1);
 
     await registry.close();
@@ -17954,6 +17962,7 @@ script = "printf setup"
       ephemeral: true,
       sandbox: "danger-full-access",
     });
+    expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();
     expect(codexClient.lastStartTurnParams).toMatchObject({
       approvalPolicy: "never",
       codexEnvironmentRuntime,

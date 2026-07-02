@@ -4,7 +4,10 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { DynamicToolSpec as CodexDynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
+import type {
+  DynamicToolSpec as CodexDynamicToolSpec,
+  ThreadSource as CodexThreadSource,
+} from "@pwrdrvr/codex-app-server-protocol/v2";
 import type {
   MessagingApprovalDecision,
   MessagingBindingRecord,
@@ -471,6 +474,7 @@ type BackendClient = {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
+    threadSource?: CodexThreadSource;
   }): Promise<{ threadId: string }>;
   forkThread?(params: {
     threadId: string;
@@ -7116,6 +7120,7 @@ export class DesktopBackendRegistry {
               ? {
                   defaultModeRequestUserInput:
                     this.resolveCodexDefaultModeRequestUserInputFn(),
+                  threadSource: "user" as CodexThreadSource,
                 }
               : {}),
             dynamicTools,
