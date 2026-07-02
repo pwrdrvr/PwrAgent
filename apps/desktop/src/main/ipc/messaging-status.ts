@@ -362,6 +362,56 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined>
 }
 
 /**
+ * A confirmation note sent to the Slack user after approving one facet of a
+ * pairing. Tells them what they can do now and what is still gated, so a
+ * partial approval (e.g. user-only) doesn't leave them wondering why the bot
+ * won't answer in a channel yet.
+ */
+function slackApprovalConfirmationText(
+  target: MessagingPairingApprovalTarget,
+  entry: MessagingPairingEntry,
+  snapshot: DesktopSettingsSnapshot,
+): string {
+  const slack = snapshot.messaging.slack;
+  const inList = (
+    list: readonly DesktopAuthorizedContact[],
+    id: string | undefined,
+  ): boolean => !!id && list.some((contact) => contact.id === id);
+
+  // State *after* this approval — the just-approved target counts as added.
+  const userAuthorized =
+    target === "actor" || inList(slack.authorizedUserIds.value, entry.observedActor?.id);
+  const channelAuthorized =
+    slack.channelAuthorizationMode?.value === "allow_all"
+    || target === "conversation"
+    || inList(slack.authorizedChannels.value, entry.observedChat?.id);
+  const teamAuthorized =
+    slack.teamAuthorizationMode?.value === "allow_all"
+    || target === "team"
+    || inList(slack.authorizedWorkspaces.value, entry.observedChat?.bucketId);
+
+  switch (target) {
+    case "actor":
+      if (entry.observedChat?.kind === "dm") {
+        return "You're now an authorized user — you can DM the bot.";
+      }
+      if (channelAuthorized && teamAuthorized) {
+        return "You're now an authorized user. You can DM the bot and @mention it in this channel.";
+      }
+      return "You're now an authorized user and can DM the bot. This channel isn't authorized yet, so the bot can't respond here until the channel is approved.";
+    case "conversation":
+      if (userAuthorized) {
+        return "This channel is authorized. Authorized users (including you) can @mention the bot here.";
+      }
+      return "This channel is authorized. Authorized users can @mention the bot here, but you aren't an authorized user yet — approve your user to interact.";
+    case "team":
+      return "This workspace is authorized. Channels still need to be approved individually unless channel access is set to allow any channel.";
+    default:
+      return "PwrAgent pairing approved.";
+  }
+}
+
+/**
  * The channel name for a Slack observed chat. For a thread the channel name
  * lives in `parentTitle` (its `title` is the thread's root message); for a
  * plain channel it lives in `title`.
@@ -494,9 +544,10 @@ export function registerMessagingStatusIpcHandlers(): void {
         && pairing.observedChat?.bucketId
           ? await resolveSlackWorkspaceName(service, pairing.observedChat.bucketId)
           : undefined;
+      const snapshot = await service.readSettings();
       const approval = buildPairingApprovalPatch(
         pairing,
-        await service.readSettings(),
+        snapshot,
         request.target,
         { teamName },
       );
@@ -510,21 +561,25 @@ export function registerMessagingStatusIpcHandlers(): void {
       );
       // Keep the request `observed` when the caller opts out of consuming
       // (Slack "approve user, then channel, then team" flow). We record the
-      // approved target so the settings card can show progress, and hold the
-      // "approved" outcome message until the operator finishes so the user
-      // isn't pinged once per facet.
+      // approved target so the settings card can show progress, and confirm the
+      // grant to the user with a note describing what they can do now and what
+      // is still gated.
       const stay =
         request.consume === false
         && pairing.platform === "slack"
         && pairing.scope === "observed"
         && request.target !== undefined;
       if (stay) {
+        const target = request.target as MessagingPairingApprovalTarget;
         const updated =
           getDesktopMessagingPairingStore().recordApproval({
             entryId: request.entryId,
-            target: request.target as MessagingPairingApprovalTarget,
+            target,
           }) ?? pairing;
-        recordPairingActivity(updated, `Approved pairing (${request.target})`);
+        recordPairingActivity(updated, `Approved pairing (${target})`);
+        await runtime.deliverPairingOutcome(updated, "approved", {
+          text: slackApprovalConfirmationText(target, updated, snapshot),
+        });
         broadcastPairingChanged({ at: Date.now(), entry: updated });
         log.info("messaging pairing target approved", {
           pairingId: request.entryId,

@@ -405,7 +405,53 @@ describe("messaging status ipc", () => {
       target: "team",
     });
     expect(pairingStoreMock.markStatus).not.toHaveBeenCalled();
-    expect(runtimeMock.deliverPairingOutcome).not.toHaveBeenCalled();
+    // Stays observed, but the user gets a note confirming what was granted.
+    expect(runtimeMock.deliverPairingOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ id: entry.id }),
+      "approved",
+      expect.objectContaining({ text: expect.stringContaining("workspace") }),
+    );
+  });
+
+  it("confirms a user-only approval and notes the channel is still gated", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const entry = {
+      id: "pairing-slack-actor-note",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U079K80HTGS", displayName: "Harold" },
+      observedChat: {
+        id: "C012ABCDEF0",
+        kind: "channel",
+        title: "signals-chat",
+        bucketId: "T025C2NKT",
+      },
+    };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    pairingStoreMock.recordApproval.mockReturnValue(entry);
+
+    registerMessagingStatusIpcHandlers();
+
+    await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+      {},
+      { entryId: entry.id, target: "actor", consume: false },
+    );
+
+    expect(runtimeMock.deliverPairingOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ id: entry.id }),
+      "approved",
+      expect.objectContaining({
+        text: expect.stringContaining("channel isn't authorized yet"),
+      }),
+    );
   });
 
   it("maps a Slack thread pairing to the channel name and team ID, not the thread text", async () => {
