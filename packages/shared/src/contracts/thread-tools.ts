@@ -14,6 +14,8 @@ import type {
 import type { LinkedDirectorySummary } from "./normalized-app-server";
 import type {
   MessagingThreadBindingSummary,
+  PrSummary,
+  RefreshThreadPullRequestsResponse,
   ThreadAgentMetadata,
 } from "./navigation";
 import type {
@@ -42,6 +44,8 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "search_threads",
   "read_thread",
   "get_thread_status",
+  "attach_thread_pull_request",
+  "check_thread_pull_request_status",
   "mutate_thread",
 ] as const;
 
@@ -85,8 +89,14 @@ export type SearchThreadsToolArgs = {
 };
 
 export type GetThreadStatusToolArgs = {
-  backend: AppServerBackendKind;
-  threadId: ThreadIdentifier;
+  /**
+   * Defaults to the invoking PwrAgent thread's backend when omitted.
+   */
+  backend?: AppServerBackendKind;
+  /**
+   * Defaults to the invoking PwrAgent thread id when omitted.
+   */
+  threadId?: ThreadIdentifier;
 };
 
 export type ReadThreadToolArgs = {
@@ -140,6 +150,69 @@ export type MutateThreadToolArgs = {
   dryRun?: boolean;
 };
 
+export type AttachThreadPullRequestToolArgs = {
+  /**
+   * Defaults to the invoking PwrAgent thread's backend when omitted.
+   */
+  backend?: AppServerBackendKind;
+  /**
+   * Defaults to the invoking PwrAgent thread id when omitted.
+   */
+  threadId?: ThreadIdentifier;
+  /**
+   * Full PR/MR URL. Supports GitHub/GHE `/pull/<number>` and GitLab
+   * `/merge_requests/<number>` URL shapes.
+   */
+  url?: string;
+  /** Forge host, e.g. github.com, ghe.example.com, gitlab.example.com. */
+  provider?: string;
+  /** Repo owner or group. For nested GitLab groups, use the slash-separated group path. */
+  org?: string;
+  repo?: string;
+  /**
+   * PR/MR number. If provider/org/repo are omitted, the implementation may
+   * infer them when the thread has exactly one primary/linked repo.
+   */
+  number?: number;
+  /** Optional title to show until the next provider refresh can hydrate status. */
+  title?: string;
+};
+
+export type AttachThreadPullRequestResult = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  pr: PrSummary;
+  prs: PrSummary[];
+};
+
+export type CheckThreadPullRequestStatusToolArgs = {
+  /**
+   * Defaults to the invoking PwrAgent thread's backend when omitted.
+   */
+  backend?: AppServerBackendKind;
+  /**
+   * Defaults to the invoking PwrAgent thread id when omitted.
+   */
+  threadId?: ThreadIdentifier;
+  /** Forge host for this lookup. Defaults to github.com when omitted. */
+  provider?: string;
+  /** Optional branch override. Defaults to the thread's observed/expected branch or HEAD. */
+  branch?: string;
+  /**
+   * Optional cwd list for provider lookups. Defaults to the thread's linked
+   * worktree/local directories, or a neutral cwd when only attached PR URLs
+   * need to be refreshed.
+   */
+  directoryPaths?: string[];
+};
+
+export type CheckThreadPullRequestStatusResult =
+  RefreshThreadPullRequestsResponse & {
+    requestedAt: number;
+    branch: string;
+    directoryPaths: string[];
+  };
+
 export type ThreadMutationField =
   | "title"
   | "model_settings"
@@ -180,11 +253,22 @@ export type ThreadInspectionSummary = {
   fastMode?: boolean;
   gitWorkingState?: ThreadGitWorkingState;
   linkedDirectories: LinkedDirectorySummary[];
+  linkedRepositories?: ThreadLinkedRepositorySummary[];
+  pullRequests?: PrSummary[];
   score?: number;
   confidence?: ThreadSearchConfidenceBand;
   matchReasons?: ThreadSearchMatchReason[];
   messagingBindings?: MessagingThreadBindingSummary[];
   snippets?: ThreadSearchSnippet[];
+};
+
+export type ThreadLinkedRepositorySummary = {
+  /** Canonical parent checkout/repository path for this group. */
+  repositoryPath: string;
+  /** Directory ids whose repository/local checkout path maps to this group. */
+  directoryIds: string[];
+  labels: string[];
+  worktreePaths: string[];
 };
 
 export type ThreadStatusInspectionSummary = ThreadInspectionSummary & {
@@ -342,6 +426,8 @@ export type PwrAgentThreadInspectionToolArgsByOperation = {
   search_threads: SearchThreadsToolArgs;
   read_thread: ReadThreadToolArgs;
   get_thread_status: GetThreadStatusToolArgs;
+  attach_thread_pull_request: AttachThreadPullRequestToolArgs;
+  check_thread_pull_request_status: CheckThreadPullRequestStatusToolArgs;
   mutate_thread: MutateThreadToolArgs;
 };
 
@@ -383,6 +469,12 @@ export type PwrAgentThreadInspectionResponse =
           }
         | {
             thread: ThreadStatusInspectionSummary;
+          }
+        | {
+            pullRequestReference: AttachThreadPullRequestResult;
+          }
+        | {
+            pullRequestStatus: CheckThreadPullRequestStatusResult;
           }
         | {
             mutation: ThreadMutationResult;

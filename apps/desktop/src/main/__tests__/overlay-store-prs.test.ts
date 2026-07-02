@@ -190,6 +190,75 @@ describe("SqliteOverlayStore — thread PRs", () => {
     expect(next.prs).toEqual([]);
   });
 
+  it("keeps detached prs hidden across later refresh writes", async () => {
+    const detachedPrSha = "a".repeat(40);
+    const detachedPr: PrSummary = {
+      ...prPassing,
+      lifecycleState: "merged",
+      commitShas: [detachedPrSha],
+    };
+
+    await store.setThreadPullRequests({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: [detachedPr, prMerged],
+    });
+
+    const detached = await store.detachThreadPullRequest({
+      backend: "codex",
+      threadId: "thread-1",
+      pr: detachedPr,
+    });
+    expect(detached.detachedPrKeys).toEqual([
+      "github.com/pwrdrvr/pwragent#179",
+    ]);
+    expect(detached.detachedPrs).toEqual([detachedPr]);
+    expect(detached.prs).toEqual([prMerged]);
+
+    const refreshed = await store.setThreadPullRequests({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: [prMerged],
+    });
+    expect(refreshed.detachedPrKeys).toEqual([
+      "github.com/pwrdrvr/pwragent#179",
+    ]);
+    expect(refreshed.detachedPrs).toEqual([detachedPr]);
+    expect(refreshed.prs).toEqual([prMerged]);
+  });
+
+  it("explicitly adding a PR reference makes a previously detached PR visible again", async () => {
+    await store.setThreadPullRequests({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: [prPassing, prMerged],
+    });
+    await store.detachThreadPullRequest({
+      backend: "codex",
+      threadId: "thread-1",
+      pr: prPassing,
+    });
+
+    const added = await store.addThreadPullRequestReference({
+      backend: "codex",
+      threadId: "thread-1",
+      pr: {
+        ...prPassing,
+        title: "Explicitly restored PR",
+      },
+    });
+
+    expect(added.detachedPrKeys).toEqual([]);
+    expect(added.detachedPrs).toBeUndefined();
+    expect(added.prs).toEqual([
+      prMerged,
+      {
+        ...prPassing,
+        title: "Explicitly restored PR",
+      },
+    ]);
+  });
+
   it("persists canonical PR status cache rows across reopen", async () => {
     await store.writePrStatusCacheEntries([
       {

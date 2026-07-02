@@ -125,6 +125,12 @@ import {
   type PendingThreadHandoffPhase,
   type PendingThreadHandoffSummary,
   type PendingThreadWorkspaceMoveSummary,
+  type AttachThreadDirectoryResult,
+  type AttachThreadDirectoryToolArgs,
+  type AttachThreadDirectoryWorkspaceMode,
+  type AttachThreadPullRequestToolArgs,
+  type CheckThreadPullRequestStatusToolArgs,
+  type DetachThreadDirectoryToolArgs,
   type ReadThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
@@ -161,6 +167,7 @@ import {
   type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
   type ThreadUsageLineRecord,
+  type PrSummary,
   type WorktreeSnapshotSummary,
   type UpdateDirectoryLaunchpadRequest,
   type UpdateDirectoryLaunchpadResponse,
@@ -173,6 +180,7 @@ import {
   buildThreadIdentityKey,
   isAcpBackendId,
   isAppServerBackendKind,
+  normalizePullRequestProvider,
   DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
   DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
   MAX_THREAD_INSPECTION_SEARCH_LIMIT,
@@ -578,13 +586,57 @@ function resolveThreadWorkspaceCwd(
   overlayDirectories: AppServerThreadSummary["linkedDirectories"] = [],
 ): string | undefined {
   if (!thread) {
-    return undefined;
+    return resolveLinkedDirectoryWorkspaceCwd(overlayDirectories);
   }
 
-  return resolveLinkedDirectoryWorkspaceCwd([
-    ...overlayDirectories,
-    ...thread.linkedDirectories,
-  ]) ?? thread.projectKey;
+  const overlayHandoffDirectory = overlayDirectories.find(isHandoffDirectory);
+  if (overlayHandoffDirectory) {
+    return overlayHandoffDirectory.worktreePath ?? overlayHandoffDirectory.path;
+  }
+
+  const providerDirectories = thread.linkedDirectories.filter(
+    (directory) =>
+      !overlayDirectories.some((overlayDirectory) =>
+        linkedDirectoriesHaveSameWorkspaceIdentity(directory, overlayDirectory),
+      ),
+  );
+
+  return (
+    resolveLinkedDirectoryWorkspaceCwd(providerDirectories) ??
+    resolveLinkedDirectoryWorkspaceCwd(thread.linkedDirectories) ??
+    resolveLinkedDirectoryWorkspaceCwd(overlayDirectories) ??
+    thread.projectKey
+  );
+}
+
+function linkedDirectoriesHaveSameWorkspaceIdentity(
+  left: LinkedDirectorySummary,
+  right: LinkedDirectorySummary,
+): boolean {
+  if (left.id === right.id) {
+    return true;
+  }
+
+  const leftPath = normalizeLinkedDirectoryIdentityPath(left.path);
+  const rightPath = normalizeLinkedDirectoryIdentityPath(right.path);
+  const leftWorktreePath = normalizeLinkedDirectoryIdentityPath(left.worktreePath);
+  const rightWorktreePath = normalizeLinkedDirectoryIdentityPath(right.worktreePath);
+  if (leftPath && rightPath && leftPath === rightPath) {
+    return leftWorktreePath === rightWorktreePath;
+  }
+
+  return Boolean(
+    leftWorktreePath &&
+      rightWorktreePath &&
+      leftWorktreePath === rightWorktreePath,
+  );
+}
+
+function normalizeLinkedDirectoryIdentityPath(
+  value: string | undefined,
+): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? toDirectoryId(path.resolve(normalized)) : undefined;
 }
 
 function resolveLinkedDirectoryWorkspaceCwd(
@@ -671,6 +723,35 @@ function buildWorktreeLinkedDirectory(params: {
       worktreePath: toDirectoryId(worktreePath),
     },
   ];
+}
+
+function normalizeLinkedDirectoryPathForMatch(
+  value: string | undefined,
+): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? toDirectoryId(path.resolve(normalized)) : undefined;
+}
+
+function linkedDirectoryMatchesDetachArgs(
+  directory: LinkedDirectorySummary,
+  args: DetachThreadDirectoryToolArgs,
+): boolean {
+  if (args.directoryId?.trim() && directory.id === args.directoryId.trim()) {
+    return true;
+  }
+  const requestedPath = normalizeLinkedDirectoryPathForMatch(args.path);
+  if (
+    requestedPath &&
+    normalizeLinkedDirectoryPathForMatch(directory.path) === requestedPath
+  ) {
+    return true;
+  }
+  const requestedWorktreePath = normalizeLinkedDirectoryPathForMatch(args.worktreePath);
+  return Boolean(
+    requestedWorktreePath &&
+      normalizeLinkedDirectoryPathForMatch(directory.worktreePath) ===
+        requestedWorktreePath,
+  );
 }
 
 function isLikelyToolManagedWorktreePath(projectKey: string | undefined): boolean {
@@ -854,6 +935,31 @@ function normalizeLinkedDirectoryKind(
   }
 
   return directory;
+}
+
+function linkedDirectoryIdentityKey(directory: LinkedDirectorySummary): string {
+  const normalized = normalizeLinkedDirectoryKind(directory);
+  const repositoryPath = path.resolve(normalized.path);
+  const worktreePath = normalized.worktreePath?.trim()
+    ? path.resolve(normalized.worktreePath)
+    : "";
+  return `${normalized.kind}:${repositoryPath}:${worktreePath}`;
+}
+
+function dedupeLinkedDirectoriesByNormalizedIdentity(
+  directories: LinkedDirectorySummary[],
+): LinkedDirectorySummary[] {
+  const seen = new Set<string>();
+  const deduped: LinkedDirectorySummary[] = [];
+  for (const directory of directories) {
+    const key = linkedDirectoryIdentityKey(directory);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(directory);
+  }
+  return deduped;
 }
 
 function pendingStartedThreadMatchesFilter(
@@ -1082,6 +1188,134 @@ function linkedDirectoriesActiveWorkspaceCoversCwd(params: {
   );
 }
 
+type PullRequestRepositoryRef = {
+  provider: string;
+  org: string;
+  repo: string;
+  urlBase?: string;
+};
+
+type PullRequestReferenceIdentity = PullRequestRepositoryRef & {
+  number: number;
+  url: string;
+};
+
+function parsePullRequestReferenceUrl(
+  value: string | undefined,
+): PullRequestReferenceIdentity | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return undefined;
+  }
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  const markerIndex = segments.findIndex(
+    (segment) => segment === "pull" || segment === "merge_requests",
+  );
+  if (markerIndex <= 0 || markerIndex >= segments.length - 1) {
+    return undefined;
+  }
+  const number = Number.parseInt(segments[markerIndex + 1] ?? "", 10);
+  if (!Number.isInteger(number) || number <= 0) {
+    return undefined;
+  }
+  const repoIndex = segments[markerIndex - 1] === "-"
+    ? markerIndex - 2
+    : markerIndex - 1;
+  if (repoIndex <= 0) {
+    return undefined;
+  }
+  const org = segments.slice(0, repoIndex).join("/");
+  const repo = segments[repoIndex];
+  if (!org || !repo) {
+    return undefined;
+  }
+  return {
+    provider: normalizePullRequestProvider(parsed.hostname),
+    org,
+    repo,
+    number,
+    url: trimmed,
+    urlBase: `${parsed.protocol}//${parsed.host}`,
+  };
+}
+
+function parseGitRemoteRepositoryUrl(
+  value: string | undefined,
+): PullRequestRepositoryRef | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const sshMatch = /^git@([^:]+):(.+)$/.exec(trimmed);
+  const rawPath = sshMatch ? sshMatch[2] : undefined;
+  const provider = sshMatch?.[1]
+    ? normalizePullRequestProvider(sshMatch[1])
+    : undefined;
+  if (rawPath && provider) {
+    return parseGitRemotePath(provider, rawPath, `https://${provider}`);
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parseGitRemotePath(
+      normalizePullRequestProvider(parsed.hostname),
+      parsed.pathname,
+      `${parsed.protocol}//${parsed.host}`,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function parseGitRemotePath(
+  provider: string,
+  rawPath: string,
+  urlBase: string,
+): PullRequestRepositoryRef | undefined {
+  const segments = rawPath
+    .replace(/^\/+/, "")
+    .replace(/\.git$/i, "")
+    .split("/")
+    .filter(Boolean);
+  if (segments.length < 2) {
+    return undefined;
+  }
+  const repo = segments.at(-1);
+  const org = segments.slice(0, -1).join("/");
+  if (!org || !repo) {
+    return undefined;
+  }
+  return { provider, org, repo, urlBase };
+}
+
+function pullRequestRepositoryKey(ref: PullRequestRepositoryRef): string {
+  return `${normalizePullRequestProvider(ref.provider)}/${ref.org.toLowerCase()}/${ref.repo.toLowerCase()}`;
+}
+
+function buildPullRequestReferenceUrl(ref: PullRequestRepositoryRef & { number: number }): string {
+  const provider = normalizePullRequestProvider(ref.provider);
+  const base = ref.urlBase?.replace(/\/+$/, "") || `https://${provider}`;
+  const encodedPath = [...ref.org.split("/"), ref.repo]
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  const marker = provider.includes("gitlab")
+    ? "-/merge_requests"
+    : "pull";
+  return `${base}/${encodedPath}/${marker}/${ref.number}`;
+}
+
+function normalizePositivePullRequestNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return undefined;
+  }
+  return value;
+}
+
 type PendingServerRequest = {
   resolve: (response: SubmitServerRequestRequest["response"]) => void;
   reject: (error: Error) => void;
@@ -1090,6 +1324,10 @@ type PendingServerRequest = {
 type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle"> & {
   canGenerateTitle?: (backend: AppServerBackendKind) => boolean;
 };
+
+type ThreadPullRequestStatusToolHandler = (
+  args: CheckThreadPullRequestStatusToolArgs,
+) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
 
 type ThreadTitleGenerationLogStatus =
   | ThreadTitleGenerationResult["status"]
@@ -4608,6 +4846,9 @@ export class DesktopBackendRegistry {
     async (request) => await this.handleThreadInspectionRequest(request);
   private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
     async (request) => await this.handleThreadOrchestrationRequest(request);
+  private threadPullRequestStatusToolHandler:
+    | ThreadPullRequestStatusToolHandler
+    | undefined;
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
@@ -5121,6 +5362,12 @@ export class DesktopBackendRegistry {
     handler: PwrAgentAppManagementHandler | null | undefined,
   ): void {
     this.appManagementHandler = handler ?? undefined;
+  }
+
+  setThreadPullRequestStatusToolHandler(
+    handler: ThreadPullRequestStatusToolHandler | null | undefined,
+  ): void {
+    this.threadPullRequestStatusToolHandler = handler ?? undefined;
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
@@ -5796,7 +6043,7 @@ export class DesktopBackendRegistry {
         return {
           ...thread,
           executionMode,
-          linkedDirectories,
+          linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(linkedDirectories),
           codexEnvironmentOptions,
         };
       }),
@@ -7311,9 +7558,13 @@ export class DesktopBackendRegistry {
         ...modelSettings,
         acpRuntime,
         codexEnvironmentRuntime,
-        linkedDirectories: (
-          resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd)
-        ).map(normalizeLinkedDirectoryKind),
+        linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+          (
+            resolvedLinkedDirectories?.length
+              ? resolvedLinkedDirectories
+              : buildLocalLinkedDirectory(cwd)
+          ).map(normalizeLinkedDirectoryKind),
+        ),
         gitBranch,
       },
     );
@@ -7561,7 +7812,9 @@ export class DesktopBackendRegistry {
         ...(forkedCodexEnvironmentRuntime
           ? { codexEnvironmentRuntime: forkedCodexEnvironmentRuntime }
           : {}),
-        linkedDirectories: linkedDirectories.map(normalizeLinkedDirectoryKind),
+        linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+          linkedDirectories.map(normalizeLinkedDirectoryKind),
+        ),
         gitBranch,
       });
 
@@ -9566,6 +9819,8 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId?: string;
     itemId?: string;
+    cancelLabel?: string;
+    cancelDescription?: string;
   }): Promise<boolean> {
     const normalizedCwd = toDirectoryId(path.resolve(params.cwd));
     const requestId = `${params.handoffId}:cwd-trust`;
@@ -9602,8 +9857,9 @@ export class DesktopBackendRegistry {
                         "Trust this directory for future Default Access agent work.",
                     },
                     {
-                      label: "Cancel handoff",
+                      label: params.cancelLabel ?? "Cancel handoff",
                       description:
+                        params.cancelDescription ??
                         "Do not add this directory or start the handoff.",
                     },
                   ],
@@ -9672,6 +9928,62 @@ export class DesktopBackendRegistry {
       preferredBackend: params.preferredBackend,
       registeredAt: Date.now(),
     });
+  }
+
+  private async ensureThreadDirectoryAttachmentTrusted(params: {
+    backend: AppServerBackendKind;
+    cwd: string;
+    executionMode: ThreadExecutionMode;
+    sourceOverlay?: ThreadOverlayState;
+    sourceThread?: AppServerThreadSummary;
+    sourceThreadId: string;
+    sourceTurnId: string;
+    callId?: string;
+  }): Promise<PwrAgentThreadOrchestrationResponse | undefined> {
+    if (
+      params.executionMode === "full-access" ||
+      linkedDirectoriesActiveWorkspaceCoversCwd({
+        cwd: params.cwd,
+        overlay: params.sourceOverlay,
+        thread: params.sourceThread,
+      }) ||
+      (await this.directoryLaunchpadCoversCwd(params.cwd))
+    ) {
+      return undefined;
+    }
+
+    const normalizedCwd = toDirectoryId(path.resolve(params.cwd));
+    const confirmed = await this.requestHandoffCwdTrustConfirmation({
+      backend: params.backend,
+      cwd: params.cwd,
+      handoffId: [
+        "attach-directory",
+        params.backend,
+        params.sourceThreadId,
+        params.sourceTurnId,
+        params.callId?.trim() || randomUUID(),
+      ].join(":"),
+      threadId: params.sourceThreadId,
+      turnId: params.sourceTurnId,
+      itemId: params.callId,
+      cancelLabel: "Cancel attachment",
+      cancelDescription: "Do not add this directory to the thread.",
+    });
+    if (!confirmed) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        `The operator did not approve adding ${normalizedCwd} to the Default Access write scope.`,
+        { cwd: normalizedCwd },
+      );
+    }
+
+    await this.ensureHandoffTrustedDirectoryLaunchpad({
+      cwd: params.cwd,
+      preferredBackend: params.backend,
+      parentThreadId: params.sourceThreadId,
+      parentThreadTitle: params.sourceThread?.title,
+    });
+    return undefined;
   }
 
   async ensureDirectoryLaunchpad(
@@ -11768,6 +12080,9 @@ export class DesktopBackendRegistry {
           reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
           serviceTier: overlay?.serviceTier ?? thread.serviceTier,
           fastMode: overlay?.fastMode ?? thread.fastMode,
+          linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+            thread.linkedDirectories,
+          ),
           codexEnvironmentOptions,
         };
       }),
@@ -13395,19 +13710,17 @@ export class DesktopBackendRegistry {
     threadId: string,
     overlay?: ThreadOverlayState,
   ): Promise<string | undefined> {
-    const overlayCwd = resolveLinkedDirectoryWorkspaceCwd(
-      overlay?.extraLinkedDirectories,
-    );
-    if (overlayCwd?.trim()) {
-      return overlayCwd.trim();
-    }
-
     const pendingThread = this.pendingStartedThreads.get(
       buildThreadIdentityKey(backend, threadId),
     );
-    const pendingCwd = resolveThreadWorkspaceCwd(pendingThread);
-    if (pendingCwd?.trim()) {
-      return pendingCwd.trim();
+    if (pendingThread) {
+      const pendingCwd = resolveThreadWorkspaceCwd(
+        pendingThread,
+        overlay?.extraLinkedDirectories,
+      );
+      if (pendingCwd?.trim()) {
+        return pendingCwd.trim();
+      }
     }
 
     const thread = await this.findThreadForWorkspaceHandoff({
@@ -13415,7 +13728,16 @@ export class DesktopBackendRegistry {
       callerReason: "turn-cwd",
       threadId,
     });
-    return resolveThreadWorkspaceCwd(thread)?.trim() || undefined;
+    const threadCwd = resolveThreadWorkspaceCwd(
+      thread,
+      overlay?.extraLinkedDirectories,
+    );
+    if (threadCwd?.trim()) {
+      return threadCwd.trim();
+    }
+
+    return resolveLinkedDirectoryWorkspaceCwd(overlay?.extraLinkedDirectories)?.trim() ||
+      undefined;
   }
 
   private async recordCodexWorktreeOwnerThread(params: {
@@ -14800,6 +15122,12 @@ export class DesktopBackendRegistry {
   private async handleThreadOrchestrationRequest(
     request: PwrAgentThreadOrchestrationRequest,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
+    if (request.operation === "attach_thread_directory") {
+      return await this.attachThreadDirectory(request);
+    }
+    if (request.operation === "detach_thread_directory") {
+      return await this.detachThreadDirectory(request);
+    }
     if (request.operation === "handoff_task") {
       return await this.handoffTaskToThread(request);
     }
@@ -15005,6 +15333,311 @@ export class DesktopBackendRegistry {
       updatedAt: move.updatedAt,
       message: move.message ?? "Workspace move is pending.",
       ...(move.error ? { error: move.error } : {}),
+    };
+  }
+
+  private async attachThreadDirectory(
+    request: PwrAgentThreadOrchestrationRequest<"attach_thread_directory">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const sourceBackend = request.context.backend;
+    const sourceThreadId = request.context.threadId;
+    const sourceTurnId = request.context.turnId?.trim();
+    if (
+      !sourceTurnId ||
+      !this.isLiveDynamicToolCall(sourceBackend, {
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+      })
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Directory attachment tools must be invoked from a live turn.",
+      );
+    }
+    const backend = request.args.backend ?? sourceBackend;
+    if (!isAppServerBackendKind(backend)) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "backend must be a known PwrAgent backend.",
+      );
+    }
+    if (backend !== sourceBackend) {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        "Directory attachment currently supports only the invoking thread backend.",
+      );
+    }
+
+    const sourcePath = request.args.path.trim();
+    const workspaceMode: AttachThreadDirectoryWorkspaceMode =
+      request.args.workspaceMode ?? "local";
+    let rollback: (() => Promise<void>) | undefined;
+    try {
+      const sourceOverlay =
+        (await this.overlayStore.getThreadOverlayState({
+          backend,
+          threadId: sourceThreadId,
+        })) ?? undefined;
+      const sourceThread = await this.findThreadForWorkspaceHandoff({
+        backend,
+        callerReason: "attach-thread-directory",
+        threadId: sourceThreadId,
+      });
+      const executionMode =
+        this.activeCodexTurnModes.get(
+          buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
+        ) ??
+        sourceOverlay?.executionMode ??
+        (backend === "codex"
+          ? await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId)
+          : "default");
+      const primaryPath =
+        await this.gitDirectoryService.resolvePrimaryWorkspacePath(sourcePath);
+      if (workspaceMode === "local" && !primaryPath) {
+        throw new Error("path must be inside a Git repository.");
+      }
+      const repositoryPath = primaryPath ?? sourcePath;
+      const trustFailure = await this.ensureThreadDirectoryAttachmentTrusted({
+        backend,
+        cwd: repositoryPath,
+        executionMode,
+        sourceOverlay,
+        sourceThread,
+        sourceThreadId,
+        sourceTurnId,
+        callId: request.context.callId,
+      });
+      if (trustFailure) {
+        return trustFailure;
+      }
+
+      const directory =
+        workspaceMode === "new_worktree"
+          ? await this.createAttachedWorktreeDirectory({
+              backend,
+              args: request.args,
+              repositoryPath,
+              sourceThreadId,
+            }).then((result) => {
+              rollback = result.rollback;
+              return result.directory;
+            })
+          : await this.createAttachedLocalDirectory(repositoryPath);
+
+      const overlay = await this.overlayStore.addLinkedDirectory({
+        backend,
+        threadId: sourceThreadId,
+        directory,
+      });
+      rollback = undefined;
+      await this.publishLocalEvent({
+        backend,
+        notification: {
+          method: "navigation/threadDirectories/updated",
+          params: {
+            reason: "selected-thread",
+            threadIds: [sourceThreadId],
+          },
+        },
+      });
+
+      const branchSource = directory.worktreePath ?? directory.path;
+      const branch = branchSource
+        ? await readCurrentGitBranch(branchSource).catch(() => undefined)
+        : undefined;
+      return {
+        ok: true,
+        data: {
+          backend,
+          threadId: sourceThreadId,
+          directory: overlay.extraLinkedDirectories.find(
+            (current) => current.id === directory.id,
+          ) ?? directory,
+          workspaceMode,
+          ...(branch ? { branch } : {}),
+          message:
+            workspaceMode === "new_worktree"
+              ? "Attached a managed worktree directory to this thread."
+              : "Attached a secondary directory to this thread.",
+        } satisfies AttachThreadDirectoryResult,
+      };
+    } catch (error) {
+      await rollback?.().catch((rollbackError) => {
+        backendRegistryLog.warn("attach_thread_directory rollback failed", {
+          error:
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : String(rollbackError),
+          threadId: sourceThreadId,
+        });
+      });
+      return threadOrchestrationFailure(
+        "internal_error",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private async createAttachedLocalDirectory(
+    directoryPath: string,
+  ): Promise<LinkedDirectorySummary> {
+    const primaryPath = await this.gitDirectoryService.resolvePrimaryWorkspacePath(
+      directoryPath,
+    );
+    if (!primaryPath) {
+      throw new Error("path must be inside a Git repository.");
+    }
+    const [directory] = buildLocalLinkedDirectory(primaryPath);
+    if (!directory) {
+      throw new Error("failed to build linked directory metadata.");
+    }
+    return directory;
+  }
+
+  private async createAttachedWorktreeDirectory(params: {
+    backend: AppServerBackendKind;
+    args: AttachThreadDirectoryToolArgs;
+    repositoryPath?: string;
+    sourceThreadId: string;
+  }): Promise<{
+    directory: LinkedDirectorySummary;
+    rollback?: () => Promise<void>;
+  }> {
+    const sourcePath = params.args.path.trim();
+    const repositoryPath =
+      params.repositoryPath ??
+      (await this.gitDirectoryService.resolvePrimaryWorkspacePath(sourcePath)) ??
+      sourcePath;
+    const prepared = await this.gitDirectoryService.prepareLaunchpadWorkspace({
+      backend: params.backend,
+      branchName: params.args.branchName,
+      directoryKind: "directory",
+      directoryLabel: path.basename(repositoryPath) || repositoryPath,
+      directoryPath: repositoryPath,
+      workMode: "worktree",
+      worktreeBranchMode: params.args.worktreeBranchMode ?? "detached",
+    });
+    if (prepared.workMode !== "worktree" || !prepared.cwd?.trim()) {
+      throw new Error("PwrAgent could not allocate a managed worktree.");
+    }
+    try {
+      const [directory] = buildWorktreeLinkedDirectory({
+        repositoryPath: prepared.repositoryPath ?? repositoryPath,
+        worktreePath: prepared.cwd,
+        label: path.basename(prepared.repositoryPath ?? repositoryPath) || repositoryPath,
+      });
+      if (!directory) {
+        throw new Error("failed to build worktree linked directory metadata.");
+      }
+      await this.recordCodexWorktreeOwnerThread({
+        backend: params.backend,
+        threadId: params.sourceThreadId,
+        worktreePath: prepared.cwd,
+      });
+      return {
+        directory,
+        rollback: prepared.rollback,
+      };
+    } catch (error) {
+      await prepared.rollback?.().catch((rollbackError) => {
+        backendRegistryLog.warn("attach_thread_directory worktree rollback failed", {
+          error:
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : String(rollbackError),
+          threadId: params.sourceThreadId,
+        });
+      });
+      throw error;
+    }
+  }
+
+  private async detachThreadDirectory(
+    request: PwrAgentThreadOrchestrationRequest<"detach_thread_directory">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const sourceBackend = request.context.backend;
+    const sourceThreadId = request.context.threadId;
+    const sourceTurnId = request.context.turnId?.trim();
+    if (
+      !sourceTurnId ||
+      !this.isLiveDynamicToolCall(sourceBackend, {
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+      })
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Directory detachment tools must be invoked from a live turn.",
+      );
+    }
+    const backend = request.args.backend ?? sourceBackend;
+    if (!isAppServerBackendKind(backend)) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "backend must be a known PwrAgent backend.",
+      );
+    }
+    if (backend !== sourceBackend) {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        "Directory detachment currently supports only the invoking thread backend.",
+      );
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend,
+      threadId: sourceThreadId,
+    });
+    const matched = overlay?.extraLinkedDirectories.find((directory) =>
+      linkedDirectoryMatchesDetachArgs(directory, request.args),
+    );
+    if (!matched) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Only secondary directories attached to this thread can be detached.",
+      );
+    }
+    const sourceThread = await this.findThreadForWorkspaceHandoff({
+      backend,
+      callerReason: "agent-thread-directory-detach",
+      threadId: sourceThreadId,
+    });
+    const totalLinkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity([
+      ...(sourceThread?.linkedDirectories ?? []),
+      ...(overlay?.extraLinkedDirectories ?? []),
+    ]).length;
+    if (totalLinkedDirectories <= 1) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Cannot detach the last linked directory from a thread.",
+      );
+    }
+
+    const next = await this.overlayStore.removeLinkedDirectory({
+      backend,
+      threadId: sourceThreadId,
+      directory: matched,
+    });
+    await this.publishLocalEvent({
+      backend,
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: {
+          reason: "selected-thread",
+          threadIds: [sourceThreadId],
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      data: {
+        backend,
+        threadId: sourceThreadId,
+        detachedDirectory: matched,
+        directories: next.extraLinkedDirectories,
+        message: "Detached a secondary directory from this thread.",
+      },
     };
   }
 
@@ -17226,7 +17859,8 @@ export class DesktopBackendRegistry {
     }
 
     if (request.operation === "get_thread_status") {
-      if (!isAppServerBackendKind(request.args.backend)) {
+      const backend = request.args.backend ?? request.context.backend;
+      if (!isAppServerBackendKind(backend)) {
         return {
           ok: false,
           error: {
@@ -17235,7 +17869,7 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      const threadId = request.args.threadId?.trim();
+      const threadId = request.args.threadId?.trim() || request.context.threadId;
       if (!threadId) {
         return {
           ok: false,
@@ -17246,7 +17880,7 @@ export class DesktopBackendRegistry {
         };
       }
       const activeThreads = await this.listThreads({
-        backend: request.args.backend,
+        backend,
         archived: false,
         callerReason: "agent-thread-inspection",
       });
@@ -17254,7 +17888,7 @@ export class DesktopBackendRegistry {
       if (candidateThreads.length === 0) {
         candidateThreads = (
           await this.listThreads({
-            backend: request.args.backend,
+            backend,
             archived: true,
             callerReason: "agent-thread-inspection:archived",
           })
@@ -17266,27 +17900,27 @@ export class DesktopBackendRegistry {
           ok: false,
           error: {
             code: "not_found",
-            message: `Thread ${request.args.backend}:${threadId} was not found.`,
+            message: `Thread ${backend}:${threadId} was not found.`,
           },
         };
       }
       const status = await this.readThread({
-        backend: request.args.backend,
+        backend,
         includeTurns: false,
         limit: 0,
         threadId,
       })
         .then((response) => response.threadStatus ?? response.replay.threadStatus)
         .catch((): AppServerThreadStatus | undefined => undefined);
-      const queueKey = buildThreadIdentityKey(request.args.backend, threadId);
+      const queueKey = buildThreadIdentityKey(backend, threadId);
       const queued = this.getQueuedExecutionModesSnapshot()[queueKey];
       const pendingHandoffs = this.getPendingThreadHandoffsForInspection({
-        backend: request.args.backend,
+        backend,
         sourceThreadId: threadId,
       });
       const pendingWorkspaceMoves =
         this.getPendingThreadWorkspaceMovesForInspection({
-          backend: request.args.backend,
+          backend,
           sourceThreadId: threadId,
         });
       return {
@@ -17308,6 +17942,31 @@ export class DesktopBackendRegistry {
       return await this.handleReadThreadInspectionRequest(request.args);
     }
 
+    if (request.operation === "attach_thread_pull_request") {
+      return await this.handleAttachThreadPullRequestInspectionRequest({
+        ...request.args,
+        backend: request.args.backend ?? request.context.backend,
+        threadId: request.args.threadId ?? request.context.threadId,
+      });
+    }
+
+    if (request.operation === "check_thread_pull_request_status") {
+      if (!this.threadPullRequestStatusToolHandler) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message: "Pull request status checks are not available.",
+          },
+        };
+      }
+      return await this.threadPullRequestStatusToolHandler({
+        ...request.args,
+        backend: request.args.backend ?? request.context.backend,
+        threadId: request.args.threadId ?? request.context.threadId,
+      });
+    }
+
     if (request.operation === "mutate_thread") {
       return await this.handleMutateThreadInspectionRequest(request.args);
     }
@@ -17319,6 +17978,262 @@ export class DesktopBackendRegistry {
         message: "Unsupported PwrAgent thread inspection operation.",
       },
     };
+  }
+
+  private async handleAttachThreadPullRequestInspectionRequest(
+    args: AttachThreadPullRequestToolArgs,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (!args.backend || !isAppServerBackendKind(args.backend)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "backend must be a known PwrAgent backend.",
+        },
+      };
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "threadId is required.",
+        },
+      };
+    }
+
+    const summary = await this.readThreadInspectionSummaryForMutation({
+      backend: args.backend,
+      threadId,
+    });
+    if (!summary) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: `Thread ${args.backend}:${threadId} was not found.`,
+        },
+      };
+    }
+
+    const resolved = await this.resolvePullRequestReferenceForThread(args, summary);
+    if (!resolved.ok) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: resolved.message,
+        },
+      };
+    }
+
+    const pr: PrSummary = {
+      provider: normalizePullRequestProvider(resolved.ref.provider),
+      org: resolved.ref.org,
+      repo: resolved.ref.repo,
+      number: resolved.ref.number,
+      ...(args.title?.trim() ? { title: args.title.trim() } : {}),
+      state: "pending",
+      checkState: "pending",
+      lifecycleState: "open",
+      reviewState: "ready_for_review",
+      mergeState: "unknown",
+      url: resolved.ref.url,
+    };
+
+    const overlay = await this.overlayStore.addThreadPullRequestReference({
+      backend: args.backend,
+      threadId,
+      pr,
+    });
+    const prs = overlay.prs ?? [];
+    await this.publishLocalEvent({
+      backend: args.backend,
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: {
+          threadId,
+          prs,
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      data: {
+        pullRequestReference: {
+          backend: args.backend,
+          threadId,
+          pr,
+          prs,
+        },
+      },
+    };
+  }
+
+  private async readThreadInspectionSummaryForMutation(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadInspectionSummary | undefined> {
+    const activeThreads = await this.listThreads({
+      backend: params.backend,
+      archived: false,
+      callerReason: "agent-thread-inspection",
+    });
+    let candidateThreads = activeThreads.filter(
+      (thread) => thread.id === params.threadId,
+    );
+    if (candidateThreads.length === 0) {
+      candidateThreads = (
+        await this.listThreads({
+          backend: params.backend,
+          archived: true,
+          callerReason: "agent-thread-inspection:archived",
+        })
+      ).filter((thread) => thread.id === params.threadId);
+    }
+    const [summary] = await this.enrichThreadInspectionSummaries(candidateThreads);
+    return summary;
+  }
+
+  private async resolvePullRequestReferenceForThread(
+    args: AttachThreadPullRequestToolArgs,
+    summary: ThreadInspectionSummary,
+  ): Promise<
+    | { ok: true; ref: PullRequestReferenceIdentity }
+    | { ok: false; message: string }
+  > {
+    const parsedUrl = parsePullRequestReferenceUrl(args.url);
+    if (args.url?.trim() && !parsedUrl) {
+      return {
+        ok: false,
+        message:
+          "url must look like a GitHub/GHE /pull/<number> URL or a GitLab /merge_requests/<number> URL.",
+      };
+    }
+    const explicitNumber = normalizePositivePullRequestNumber(args.number);
+    const explicitProvider = args.provider?.trim()
+      ? normalizePullRequestProvider(args.provider)
+      : undefined;
+    const explicitOrg = args.org?.trim();
+    const explicitRepo = args.repo?.trim();
+    if (parsedUrl) {
+      const conflicts = [
+        explicitNumber !== undefined && explicitNumber !== parsedUrl.number
+          ? "number"
+          : undefined,
+        explicitProvider && explicitProvider !== parsedUrl.provider
+          ? "provider"
+          : undefined,
+        explicitOrg && explicitOrg !== parsedUrl.org ? "org" : undefined,
+        explicitRepo && explicitRepo !== parsedUrl.repo ? "repo" : undefined,
+      ].filter((field): field is string => Boolean(field));
+      if (conflicts.length > 0) {
+        return {
+          ok: false,
+          message: `url conflicts with explicit ${conflicts.join(
+            "/",
+          )}. Provide matching PR identity fields or omit the conflicting fields.`,
+        };
+      }
+    }
+
+    const number = explicitNumber ?? parsedUrl?.number;
+    if (!number) {
+      return {
+        ok: false,
+        message: "number must be a positive integer unless url contains one.",
+      };
+    }
+
+    const provider = explicitProvider ?? parsedUrl?.provider;
+    const org = explicitOrg || parsedUrl?.org;
+    const repo = explicitRepo || parsedUrl?.repo;
+    if (provider && org && repo) {
+      return {
+        ok: true,
+        ref: {
+          provider,
+          org,
+          repo,
+          number,
+          url: args.url?.trim() || buildPullRequestReferenceUrl({
+            provider,
+            org,
+            repo,
+            number,
+            urlBase: parsedUrl?.urlBase,
+          }),
+          urlBase: parsedUrl?.urlBase,
+        },
+      };
+    }
+
+    const inferredRepositories = await this.inferPullRequestRepositories(summary);
+    if (inferredRepositories.length !== 1) {
+      return {
+        ok: false,
+        message:
+          inferredRepositories.length === 0
+            ? "provider/org/repo are required because no repository could be inferred from the thread."
+            : "provider/org/repo are required because the thread has multiple inferable repositories.",
+      };
+    }
+    const [inferred] = inferredRepositories;
+    return {
+      ok: true,
+      ref: {
+        ...inferred,
+        number,
+        url: buildPullRequestReferenceUrl({ ...inferred, number }),
+      },
+    };
+  }
+
+  private async inferPullRequestRepositories(
+    summary: ThreadInspectionSummary,
+  ): Promise<PullRequestRepositoryRef[]> {
+    const byKey = new Map<string, PullRequestRepositoryRef>();
+    for (const pr of summary.pullRequests ?? []) {
+      const ref = {
+        provider: normalizePullRequestProvider(pr.provider),
+        org: pr.org,
+        repo: pr.repo,
+        urlBase: parsePullRequestReferenceUrl(pr.url)?.urlBase,
+      };
+      byKey.set(pullRequestRepositoryKey(ref), ref);
+    }
+    await Promise.all(
+      summary.linkedDirectories.map(async (directory) => {
+        const cwd = directory.worktreePath?.trim() || directory.path.trim();
+        if (!cwd) {
+          return;
+        }
+        const ref = await this.readPullRequestRepositoryFromGitRemote(cwd);
+        if (ref) {
+          byKey.set(pullRequestRepositoryKey(ref), ref);
+        }
+      }),
+    );
+    return [...byKey.values()].sort((left, right) =>
+      pullRequestRepositoryKey(left).localeCompare(pullRequestRepositoryKey(right)),
+    );
+  }
+
+  private async readPullRequestRepositoryFromGitRemote(
+    cwd: string,
+  ): Promise<PullRequestRepositoryRef | undefined> {
+    try {
+      const result = await execFile(
+        "git",
+        ["-C", cwd, "config", "--get", "remote.origin.url"],
+        { env: process.env, timeout: 2_000 },
+      );
+      return parseGitRemoteRepositoryUrl(result.stdout);
+    } catch {
+      return undefined;
+    }
   }
 
   private async handleMutateThreadInspectionRequest(
@@ -18771,6 +19686,12 @@ function toThreadInspectionSummary(
   overlay: ThreadOverlayState | undefined,
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
+  const linkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity(
+    [
+      ...(overlay?.extraLinkedDirectories ?? []),
+      ...thread.linkedDirectories,
+    ],
+  );
   return {
     backend: thread.source,
     threadId: thread.id,
@@ -18789,7 +19710,9 @@ function toThreadInspectionSummary(
     fastMode: thread.fastMode,
     gitWorkingState: thread.gitWorkingState,
     ...(messagingBindings?.length ? { messagingBindings } : {}),
-    linkedDirectories: thread.linkedDirectories,
+    linkedDirectories,
+    linkedRepositories: summarizeLinkedRepositories(linkedDirectories),
+    ...(overlay?.prs?.length ? { pullRequests: overlay.prs } : {}),
   };
 }
 
@@ -18798,6 +19721,12 @@ function toThreadInspectionSummaryFromSearchResult(
   overlay: ThreadOverlayState | undefined,
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
+  const linkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity(
+    [
+      ...(overlay?.extraLinkedDirectories ?? []),
+      ...result.linkedDirectories,
+    ],
+  );
   return {
     backend: result.backend,
     threadId: result.threadId,
@@ -18810,7 +19739,9 @@ function toThreadInspectionSummaryFromSearchResult(
     agent: overlay?.agent,
     handoffOrigin: overlay?.handoffOrigin,
     model: result.model,
-    linkedDirectories: result.linkedDirectories,
+    linkedDirectories,
+    linkedRepositories: summarizeLinkedRepositories(linkedDirectories),
+    ...(overlay?.prs?.length ? { pullRequests: overlay.prs } : {}),
     ...(messagingBindings?.length ? { messagingBindings } : {}),
     score: result.score,
     confidence: result.confidence,
@@ -19042,7 +19973,64 @@ function toThreadInspectionSearchSummary(
       path: directory.path,
       ...(directory.worktreePath ? { worktreePath: directory.worktreePath } : {}),
     })),
+    ...(thread.linkedRepositories?.length
+      ? {
+          linkedRepositories: thread.linkedRepositories.slice(0, 5).map((repo) => ({
+            repositoryPath: repo.repositoryPath,
+            directoryIds: repo.directoryIds.slice(0, 8),
+            labels: repo.labels.slice(0, 8),
+            worktreePaths: repo.worktreePaths.slice(0, 8),
+          })),
+        }
+      : {}),
+    ...(thread.pullRequests?.length
+      ? {
+          pullRequests: thread.pullRequests.slice(0, 8).map((pr) => ({
+            provider: pr.provider,
+            org: pr.org,
+            repo: pr.repo,
+            number: pr.number,
+            state: pr.state,
+            ...(pr.checkState ? { checkState: pr.checkState } : {}),
+            ...(pr.lifecycleState ? { lifecycleState: pr.lifecycleState } : {}),
+            ...(pr.reviewState ? { reviewState: pr.reviewState } : {}),
+            ...(pr.mergeState ? { mergeState: pr.mergeState } : {}),
+            ...(pr.title ? { title: pr.title } : {}),
+            url: pr.url,
+          })),
+        }
+      : {}),
   };
+}
+
+function summarizeLinkedRepositories(
+  directories: LinkedDirectorySummary[],
+): ThreadInspectionSummary["linkedRepositories"] {
+  if (directories.length === 0) {
+    return undefined;
+  }
+  const byRepositoryPath = new Map<
+    string,
+    NonNullable<ThreadInspectionSummary["linkedRepositories"]>[number]
+  >();
+  for (const directory of directories) {
+    const repositoryPath = directory.path;
+    const current = byRepositoryPath.get(repositoryPath) ?? {
+      repositoryPath,
+      directoryIds: [],
+      labels: [],
+      worktreePaths: [],
+    };
+    current.directoryIds.push(directory.id);
+    if (!current.labels.includes(directory.label)) {
+      current.labels.push(directory.label);
+    }
+    if (directory.worktreePath && !current.worktreePaths.includes(directory.worktreePath)) {
+      current.worktreePaths.push(directory.worktreePath);
+    }
+    byRepositoryPath.set(repositoryPath, current);
+  }
+  return [...byRepositoryPath.values()];
 }
 
 function toMessagingThreadBindingSummary(

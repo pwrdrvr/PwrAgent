@@ -52,9 +52,7 @@ function dedupeLinkedDirectories(
     byId.set(directory.id, directory);
   }
 
-  return [...byId.values()].sort((left, right) =>
-    left.label.localeCompare(right.label),
-  );
+  return [...byId.values()];
 }
 
 function normalizeLinkedDirectoryKind(

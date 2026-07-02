@@ -907,6 +907,9 @@ function DesktopAppShell(props: {
     onPickAndRegisterDirectory: () => {
       void navigation.pickAndRegisterDirectory();
     },
+    onPickAndAttachDirectoryToThread: () => {
+      void navigation.pickAndAttachDirectoryToSelectedThread();
+    },
     onClearPickDirectoryError: navigation.clearPickDirectoryError,
     setExecutionModeError: navigation.setThreadExecutionModeError,
     setThreadModelSettingsError: navigation.setThreadModelSettingsError,
@@ -1180,6 +1183,15 @@ function DesktopAppShell(props: {
           onSetDirectoryPin={navigation.setDirectoryPin}
           onReorderDirectoryPins={navigation.reorderDirectoryPins}
           onPrefetchPullRequests={pullRequests.prefetch}
+          onDetachPullRequest={async (thread, pr) => {
+            if (!desktopApi?.detachThreadPullRequest) return;
+            await desktopApi.detachThreadPullRequest({
+              backend: thread.source,
+              threadId: thread.id,
+              pr,
+            });
+            await navigation.refresh?.();
+          }}
           onUnbindMessagingBinding={async (_thread, binding) => {
             if (!desktopApi?.unbindMessagingThread) return;
             await desktopApi.unbindMessagingThread({ bindingId: binding.bindingId });

@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   AppServerBackendScope,
   AppServerThreadSummary,
@@ -30,6 +31,7 @@ import {
   MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   MAX_TURN_FAILURE_LOG_ENTRIES,
+  buildPullRequestStatusKey,
   buildThreadIdentityKey,
   applyNavigationLaunchpadProviderSettingsPatch,
   estimateOpenAiTokenUsageCost,
@@ -90,6 +92,54 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
     mergeState: pr.mergeState ?? "unknown",
     commitShas: normalizeCommitShas(pr.commitShas),
   };
+}
+
+function normalizeDetachedPrKeys(keys: string[] | undefined): string[] {
+  return [
+    ...new Set(
+      (keys ?? [])
+        .map((key) => key.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+}
+
+function filterDetachedPrs(prs: PrSummary[], detachedPrKeys: string[]): PrSummary[] {
+  if (detachedPrKeys.length === 0) {
+    return prs;
+  }
+  const detached = new Set(detachedPrKeys);
+  return prs.filter((pr) => !detached.has(buildPullRequestStatusKey(pr)));
+}
+
+function collectDetachedPrs(
+  prs: PrSummary[],
+  detachedPrKeys: string[],
+): PrSummary[] {
+  if (detachedPrKeys.length === 0) {
+    return [];
+  }
+  const detached = new Set(detachedPrKeys);
+  return prs.filter((pr) => detached.has(buildPullRequestStatusKey(pr)));
+}
+
+function mergePrSummariesByStatusKey(
+  existingPrs: PrSummary[] | undefined,
+  nextPrs: PrSummary[],
+): PrSummary[] | undefined {
+  const byKey = new Map<string, PrSummary>();
+  for (const pr of existingPrs ?? []) {
+    const normalized = normalizePrSummary(pr);
+    byKey.set(buildPullRequestStatusKey(normalized), normalized);
+  }
+  for (const pr of nextPrs) {
+    const normalized = normalizePrSummary(pr);
+    byKey.set(buildPullRequestStatusKey(normalized), normalized);
+  }
+  const merged = [...byKey.values()].sort((left, right) =>
+    buildPullRequestStatusKey(left).localeCompare(buildPullRequestStatusKey(right)),
+  );
+  return merged.length > 0 ? merged : undefined;
 }
 
 function normalizeCommitShas(commitShas: string[] | undefined): string[] | undefined {
@@ -420,10 +470,32 @@ export class SqliteOverlayStore {
       ...current,
       extraLinkedDirectories: [
         ...current.extraLinkedDirectories.filter(
-          (d) => d.id !== params.directory.id,
+          (directory) => !linkedDirectoriesEquivalent(directory, params.directory),
         ),
         params.directory,
       ],
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async removeLinkedDirectory(params: {
+    backend: ThreadOverlayState["backend"];
+    directory: LinkedDirectorySummary;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      extraLinkedDirectories: current.extraLinkedDirectories.filter(
+        (directory) => !linkedDirectoriesEquivalent(directory, params.directory),
+      ),
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -1151,11 +1223,85 @@ export class SqliteOverlayStore {
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
+    const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys);
+    const detachedPrs = mergePrSummariesByStatusKey(
+      current.detachedPrs,
+      collectDetachedPrs(params.prs, detachedPrKeys),
+    );
     const nextState: ThreadOverlayState = {
       ...current,
-      prs: params.prs.map(normalizePrSummary),
+      detachedPrKeys,
+      detachedPrs,
+      prs: filterDetachedPrs(params.prs, detachedPrKeys).map(normalizePrSummary),
       prsFetchedAt: params.fetchedAt ?? Date.now(),
       prsRefreshKey: params.refreshKey,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async detachThreadPullRequest(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    pr: Pick<PrSummary, "provider" | "org" | "repo" | "number">;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextDetachedKeys = [
+      ...new Set([
+        ...normalizeDetachedPrKeys(current.detachedPrKeys),
+        buildPullRequestStatusKey(params.pr),
+      ]),
+    ].sort((left, right) => left.localeCompare(right));
+    const currentPrs = (current.prs ?? []).map(normalizePrSummary);
+    const detachedPrs = mergePrSummariesByStatusKey(
+      current.detachedPrs,
+      collectDetachedPrs(currentPrs, nextDetachedKeys),
+    );
+    const nextState: ThreadOverlayState = {
+      ...current,
+      detachedPrKeys: nextDetachedKeys,
+      detachedPrs,
+      prs: filterDetachedPrs(currentPrs, nextDetachedKeys),
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async addThreadPullRequestReference(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    pr: PrSummary;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const normalizedPr = normalizePrSummary(params.pr);
+    const prKey = buildPullRequestStatusKey(normalizedPr);
+    const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys).filter(
+      (key) => key !== prKey,
+    );
+    const detachedPrs = mergePrSummariesByStatusKey(
+      undefined,
+      (current.detachedPrs ?? []).filter(
+        (pr) => buildPullRequestStatusKey(pr) !== prKey,
+      ),
+    );
+    const prs = mergePrSummariesByStatusKey(current.prs, [normalizedPr]) ?? [];
+    const nextState: ThreadOverlayState = {
+      ...current,
+      detachedPrKeys,
+      detachedPrs,
+      prs,
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -2082,6 +2228,30 @@ function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
   );
 }
 
+function linkedDirectoriesEquivalent(
+  left: LinkedDirectorySummary,
+  right: LinkedDirectorySummary,
+): boolean {
+  if (left.id === right.id) {
+    return true;
+  }
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (normalizeLinkedDirectoryPath(left.path) !== normalizeLinkedDirectoryPath(right.path)) {
+    return false;
+  }
+  return (
+    normalizeLinkedDirectoryPath(left.worktreePath) ===
+    normalizeLinkedDirectoryPath(right.worktreePath)
+  );
+}
+
+function normalizeLinkedDirectoryPath(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? path.resolve(normalized) : undefined;
+}
+
 function normalizeThreadAgent(
   input: { name: string; instructions?: string },
   now = Date.now(),
@@ -2499,6 +2669,7 @@ export type OverlayStoreLike = Pick<
   | "reconcileNavigationSnapshot"
   | "markThreadSeen"
   | "addLinkedDirectory"
+  | "removeLinkedDirectory"
   | "replaceWorkspaceLinkedDirectory"
   | "getThreadExecutionMode"
   | "getThreadOverlayState"
@@ -2521,6 +2692,8 @@ export type OverlayStoreLike = Pick<
   | "getDirectoryOverlayState"
   | "readAllDirectoryOverlays"
   | "setThreadPullRequests"
+  | "detachThreadPullRequest"
+  | "addThreadPullRequestReference"
   | "readPrStatusCache"
   | "writePrStatusCacheEntries"
   | "readPrLookupCache"

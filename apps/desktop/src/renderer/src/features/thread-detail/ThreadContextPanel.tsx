@@ -704,10 +704,18 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       case "prs":
-        return <PullRequestsPanel thread={props.thread} />;
+        return (
+          <PullRequestsPanel
+            desktopApi={props.desktopApi}
+            onRefreshNavigation={props.onRefreshNavigation}
+            thread={props.thread}
+          />
+        );
       case "projects":
         return (
           <LinkedProjectsPanel
+            desktopApi={props.desktopApi}
+            onRefreshNavigation={props.onRefreshNavigation}
             thread={props.thread}
             showTooltip={showRailTooltip}
             hideTooltip={hideRailTooltip}

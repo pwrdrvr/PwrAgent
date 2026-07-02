@@ -70,6 +70,10 @@ import type {
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
   NavigationBrowseMode,
+  AttachDirectoryToThreadRequest,
+  AttachDirectoryToThreadResponse,
+  DetachDirectoryFromThreadRequest,
+  DetachDirectoryFromThreadResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   ReorderDirectoryPinsRequest,
@@ -110,6 +114,8 @@ import type {
   SetMessagingEnabledResponse,
   PickDirectoryFromDiskResponse,
   PickGhCommandResponse,
+  DetachThreadPullRequestRequest,
+  DetachThreadPullRequestResponse,
   RegisterDirectoryFromDiskRequest,
   RegisterDirectoryFromDiskResponse,
   UnbindMessagingThreadRequest,
@@ -342,6 +348,9 @@ import {
   MESSAGING_SHUTDOWN_RUNTIME_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
+  NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
+  NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
+  NAVIGATION_DETACH_THREAD_PR_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
@@ -1074,6 +1083,10 @@ const desktopApi = Object.freeze({
       NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
       request,
     ),
+  detachThreadPullRequest: async (
+    request: DetachThreadPullRequestRequest,
+  ): Promise<DetachThreadPullRequestResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_DETACH_THREAD_PR_CHANNEL, request),
   refreshDirectoryGitStatuses: async (
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse> =>
@@ -1146,6 +1159,20 @@ const desktopApi = Object.freeze({
   ): Promise<RegisterDirectoryFromDiskResponse> =>
     await ipcRenderer.invoke(
       NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
+      request,
+    ),
+  attachDirectoryToThread: async (
+    request: AttachDirectoryToThreadRequest,
+  ): Promise<AttachDirectoryToThreadResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
+      request,
+    ),
+  detachDirectoryFromThread: async (
+    request: DetachDirectoryFromThreadRequest,
+  ): Promise<DetachDirectoryFromThreadResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
       request,
     ),
   reportRendererError: async (report: RendererErrorReport): Promise<void> => {

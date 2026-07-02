@@ -23,6 +23,11 @@ import {
   type AppServerListSkillsResponse,
   type AppServerListThreadsRequest,
   type AppServerListThreadsResponse,
+  type AttachDirectoryToThreadRequest,
+  type AttachDirectoryToThreadResponse,
+  type DetachDirectoryFromThreadRequest,
+  type DetachDirectoryFromThreadResponse,
+  type CheckThreadPullRequestStatusToolArgs,
   type ThreadSearchRequest,
   type ThreadSearchResponse,
   type PersistThreadUsageActivityRequest,
@@ -40,7 +45,10 @@ import {
   type HandoffThreadWorkspaceResponse,
   type GetGhStatusRequest,
   type GhStatus,
+  type LinkedDirectorySummary,
   type PickDirectoryFromDiskResponse,
+  type DetachThreadPullRequestRequest,
+  type DetachThreadPullRequestResponse,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
   type RefreshThreadPullRequestsRequest,
@@ -99,10 +107,12 @@ import {
   type UpdateDirectoryLaunchpadResponse,
   type UpdateSubthreadOrderRequest,
   type UpdateSubthreadOrderResponse,
+  type PwrAgentThreadInspectionResponse,
 } from "@pwragent/shared";
 import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  isAppServerBackendKind,
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
@@ -137,6 +147,9 @@ import {
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
+  NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
+  NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
+  NAVIGATION_DETACH_THREAD_PR_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
@@ -436,6 +449,50 @@ function normalizePrLookupDirectoryPaths(directoryPaths: string[]): string[] {
     .sort((left, right) => left.localeCompare(right));
 }
 
+function toLinkedDirectoryPathId(value: string): string {
+  return path.resolve(value).replace(/\\/g, "/");
+}
+
+function normalizeLinkedDirectoryPathForMatch(
+  value: string | undefined,
+): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? path.resolve(trimmed).replace(/\\/g, "/") : undefined;
+}
+
+function linkedDirectoriesMatchForDetach(
+  left: Pick<LinkedDirectorySummary, "id" | "kind" | "path" | "worktreePath">,
+  right: Pick<LinkedDirectorySummary, "id" | "kind" | "path" | "worktreePath">,
+): boolean {
+  if (left.id === right.id) {
+    return true;
+  }
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  return (
+    normalizeLinkedDirectoryPathForMatch(left.path) ===
+      normalizeLinkedDirectoryPathForMatch(right.path) &&
+    normalizeLinkedDirectoryPathForMatch(left.worktreePath) ===
+      normalizeLinkedDirectoryPathForMatch(right.worktreePath)
+  );
+}
+
+function countDistinctLinkedDirectories(
+  directories: LinkedDirectorySummary[],
+): number {
+  const seen = new Set<string>();
+  for (const directory of directories) {
+    const key = [
+      directory.kind,
+      normalizeLinkedDirectoryPathForMatch(directory.path),
+      normalizeLinkedDirectoryPathForMatch(directory.worktreePath),
+    ].join("\0");
+    seen.add(key);
+  }
+  return seen.size;
+}
+
 function getPullRequestLookupKey(
   request: Pick<
     RefreshThreadPullRequestsRequest,
@@ -522,6 +579,19 @@ function getPrStatusKey(
   pr: Pick<PrSummary, "provider" | "org" | "repo" | "number">,
 ): string {
   return buildPullRequestStatusKey(pr);
+}
+
+function filterDetachedPullRequests(
+  prs: PrSummary[],
+  detachedPrKeys: string[] | undefined,
+): PrSummary[] {
+  if (!detachedPrKeys?.length) {
+    return prs;
+  }
+  const detached = new Set(
+    detachedPrKeys.map((key) => key.trim().toLowerCase()).filter(Boolean),
+  );
+  return prs.filter((pr) => !detached.has(getPrStatusKey(pr)));
 }
 
 function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
@@ -641,6 +711,22 @@ function userPrRefreshLogPayload(params: {
     requestKey: params.requestKey,
     threadId: params.threadId,
     trigger: params.trigger,
+  };
+}
+
+function pullRequestStatusFreshness(
+  fetchedAt: number | undefined,
+  now: number,
+): Pick<
+  RefreshThreadPullRequestsResponse,
+  "lastStatusCheckAt" | "lastStatusCheckAgeMs"
+> {
+  if (!fetchedAt || fetchedAt <= 0) {
+    return {};
+  }
+  return {
+    lastStatusCheckAt: fetchedAt,
+    lastStatusCheckAgeMs: Math.max(0, now - fetchedAt),
   };
 }
 
@@ -1095,7 +1181,13 @@ class DesktopAppServerService {
     await this.loadThreadGitWorkingStateCache();
     this.rememberThreadWorktreePaths(canonicalSnapshot.threads);
     this.rememberThreadPrRefreshContexts(canonicalSnapshot.threads);
-    this.rememberMergedPrCommitShas(canonicalSnapshot.threads);
+    const detachedPrsByThreadKey = await this.readDetachedPrsByThreadKey(
+      canonicalSnapshot.threads,
+    );
+    this.rememberMergedPrCommitShas(
+      canonicalSnapshot.threads,
+      detachedPrsByThreadKey,
+    );
     const threadsWithWorkingState = canonicalSnapshot.threads.map((thread) =>
       this.applyCachedWorktreeWorkingState(thread),
     );
@@ -1215,15 +1307,50 @@ class DesktopAppServerService {
     }
   }
 
+  private async readDetachedPrsByThreadKey(
+    threads: NavigationSnapshot["threads"],
+  ): Promise<Map<string, PrSummary[]>> {
+    const threadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
+    for (const thread of threads) {
+      const threadIds = threadIdsByBackend.get(thread.source) ?? new Set<string>();
+      threadIds.add(thread.id);
+      threadIdsByBackend.set(thread.source, threadIds);
+    }
+
+    const detachedPrsByThreadKey = new Map<string, PrSummary[]>();
+    await Promise.all(
+      [...threadIdsByBackend.entries()].map(async ([backend, threadIds]) => {
+        const overlays = await this.getOverlayStore().getThreadOverlayStates({
+          backend,
+          threadIds: [...threadIds],
+        });
+        for (const [threadId, overlay] of Object.entries(overlays)) {
+          if (overlay?.detachedPrs?.length) {
+            detachedPrsByThreadKey.set(
+              buildThreadIdentityKey(backend, threadId),
+              overlay.detachedPrs,
+            );
+          }
+        }
+      }),
+    );
+    return detachedPrsByThreadKey;
+  }
+
   private rememberMergedPrCommitShas(
     threads: NavigationSnapshot["threads"],
+    detachedPrsByThreadKey: Map<string, PrSummary[]> = new Map(),
   ): void {
     for (const thread of threads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       this.rememberMergedPrCommitShasForThread({
         backend: thread.source,
         threadId: thread.id,
         worktreePath: thread.projectKey,
-        prs: thread.prs ?? [],
+        prs: [
+          ...(thread.prs ?? []),
+          ...(detachedPrsByThreadKey.get(threadKey) ?? []),
+        ],
       });
     }
   }
@@ -1826,38 +1953,125 @@ class DesktopAppServerService {
     }
   }
 
+  async checkThreadPullRequestStatusForTool(
+    args: CheckThreadPullRequestStatusToolArgs,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (!args.backend || !isAppServerBackendKind(args.backend)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "backend must be a known PwrAgent backend.",
+        },
+      };
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "threadId is required.",
+        },
+      };
+    }
+
+    const activeThreads = await this.listThreads({ backend: args.backend });
+    let thread = activeThreads.threads.find((candidate) => candidate.id === threadId);
+    if (!thread) {
+      const archivedThreads = await this.listThreads({
+        backend: args.backend,
+        archived: true,
+      });
+      thread = archivedThreads.threads.find((candidate) => candidate.id === threadId);
+    }
+    if (!thread) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: `Thread ${args.backend}:${threadId} was not found.`,
+        },
+      };
+    }
+
+    const overlay = await this.getOverlayStore().getThreadOverlayState({
+      backend: args.backend,
+      threadId,
+    });
+    const branch = args.branch?.trim()
+      || thread.observedGitBranch?.trim()
+      || thread.gitBranch?.trim()
+      || "HEAD";
+    const directoryPaths = normalizePrLookupDirectoryPaths(
+      args.directoryPaths?.length
+        ? args.directoryPaths
+        : resolveThreadPullRequestDirectoryPaths({
+            linkedDirectories: [
+              ...(thread.linkedDirectories ?? []),
+              ...(overlay?.extraLinkedDirectories ?? []),
+            ],
+          }),
+    );
+    const lookupDirectoryPaths = directoryPaths.length > 0
+      ? directoryPaths
+      : (overlay?.prs?.length ? [os.homedir()] : []);
+    const requestedAt = Date.now();
+    const response = await this.refreshThreadPullRequests({
+      backend: args.backend,
+      threadId,
+      provider: args.provider,
+      trigger: "user",
+      branch,
+      directoryPaths: lookupDirectoryPaths,
+      includeStatusFreshness: true,
+    });
+
+    return {
+      ok: true,
+      data: {
+        pullRequestStatus: {
+          ...response,
+          requestedAt,
+          branch,
+          directoryPaths: lookupDirectoryPaths,
+        },
+      },
+    };
+  }
+
+  async detachThreadPullRequest(
+    request: DetachThreadPullRequestRequest,
+  ): Promise<DetachThreadPullRequestResponse> {
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().detachThreadPullRequest({
+      backend,
+      threadId: request.threadId,
+      pr: request.pr,
+    });
+    const prs = overlay.prs ?? [];
+    await this.publishThreadPullRequestsUpdated({
+      backend,
+      threadId: request.threadId,
+      prs,
+      detachedPrs: overlay.detachedPrs ?? [],
+    });
+    return {
+      backend,
+      threadId: request.threadId,
+      detachedPrKeys: overlay.detachedPrKeys ?? [],
+      prs,
+    };
+  }
+
   private async refreshThreadPullRequestsUncached(
     backend: AppServerBackendKind,
     request: RefreshThreadPullRequestsRequest,
     requestKey: string,
   ): Promise<RefreshThreadPullRequestsResponse> {
+    const now = Date.now();
     const provider = normalizePullRequestProvider(request.provider);
     const trigger = request.trigger ?? "scheduled";
-    const fetcher = this.getPrFetcher();
-    const ghAvailable = await fetcher.isGhAvailable();
-    if (!ghAvailable) {
-      if (trigger === "user") {
-        logDebug("threadPullRequestsRefresh:skipped", userPrRefreshLogPayload({
-          backend,
-          branch: request.branch.trim(),
-          directoryPathCount: request.directoryPaths.length,
-          ghAvailable,
-          provider,
-          reason: "gh-unavailable",
-          requestKey,
-          threadId: request.threadId,
-          trigger,
-        }));
-      }
-      return {
-        backend,
-        threadId: request.threadId,
-        provider,
-        prs: [],
-        ghAvailable: false,
-      };
-    }
-
     const overlay = this.getOverlayStore();
     const existing = await overlay.getThreadOverlayState({
       backend,
@@ -1865,7 +2079,10 @@ class DesktopAppServerService {
     });
     await this.loadPrStatusRegistry();
     await this.loadPrLookupRegistry();
-    const persistedPrs = existing?.prs ?? [];
+    const persistedPrs = this.mergePrHistory(
+      existing?.prs ?? [],
+      existing?.detachedPrs ?? [],
+    );
     this.rememberPrStatuses(persistedPrs, existing?.prsFetchedAt ?? 0);
     const existingPrs = this.canonicalizePrs(persistedPrs);
     const branch = request.branch.trim();
@@ -1890,7 +2107,20 @@ class DesktopAppServerService {
       : existingLookupMatches
         ? existingPrs
         : [];
-    const knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
+    let knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
+    const visibleKnownPrs = (): PrSummary[] =>
+      filterDetachedPullRequests(knownPrs, existing?.detachedPrKeys);
+    const statusFetchedAt = lookupEntry?.fetchedAt
+      ?? (existingPrs.length > 0 ? existing?.prsFetchedAt : undefined);
+    const freshness = pullRequestStatusFreshness(statusFetchedAt, now);
+    const responseFreshness = request.includeStatusFreshness === true
+      ? (refreshStarted: boolean) => ({
+          ...freshness,
+          refreshStarted,
+        })
+      : () => ({});
+    const fetcher = this.getPrFetcher();
+    const ghAvailable = await fetcher.isGhAvailable();
     if (trigger === "user") {
       logDebug("threadPullRequestsRefresh:requested", userPrRefreshLogPayload({
         backend,
@@ -1900,15 +2130,39 @@ class DesktopAppServerService {
         ghAvailable,
         lookupCacheHit: Boolean(lookupEntry),
         lookupKey,
-        previousPrs: knownPrs,
+        previousPrs: visibleKnownPrs(),
         provider,
         requestKey,
         threadId: request.threadId,
         trigger,
       }));
     }
+    if (!ghAvailable) {
+      if (trigger === "user") {
+        logDebug("threadPullRequestsRefresh:skipped", userPrRefreshLogPayload({
+          backend,
+          branch,
+          directoryPathCount: request.directoryPaths.length,
+          ghAvailable,
+          previousPrs: visibleKnownPrs(),
+          provider,
+          reason: "gh-unavailable",
+          requestKey,
+          threadId: request.threadId,
+          trigger,
+        }));
+      }
+      return {
+        backend,
+        threadId: request.threadId,
+        provider,
+        prs: visibleKnownPrs(),
+        ...responseFreshness(false),
+        ghAvailable: false,
+      };
+    }
     if (lookupEntry && lookupEntry.fetchedAt > 0) {
-      await this.persistPullRequestLookupHit({
+      knownPrs = await this.persistPullRequestLookupHit({
         backend,
         request,
         requestKey,
@@ -1946,8 +2200,9 @@ class DesktopAppServerService {
         backend,
         threadId: request.threadId,
         provider,
-        prs: knownPrs,
+        prs: visibleKnownPrs(),
         ghAvailable: true,
+        ...responseFreshness(false),
         shortCircuited: true,
       };
     }
@@ -1959,7 +2214,7 @@ class DesktopAppServerService {
           branch,
           directoryPathCount: request.directoryPaths.length,
           ghAvailable: true,
-          previousPrs: knownPrs,
+          previousPrs: visibleKnownPrs(),
           provider,
           reason: !branch ? "missing-branch" : "missing-directory-paths",
           requestKey,
@@ -1971,12 +2226,13 @@ class DesktopAppServerService {
         backend,
         threadId: request.threadId,
         provider,
-        prs: knownPrs,
+        prs: visibleKnownPrs(),
+        ...responseFreshness(false),
         ghAvailable: true,
       };
     }
 
-    this.startPullRequestLookupRefresh({
+    const refreshStarted = this.startPullRequestLookupRefresh({
       backend,
       request,
       requestKey,
@@ -1989,7 +2245,8 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
       provider,
-      prs: knownPrs,
+      prs: visibleKnownPrs(),
+      ...responseFreshness(refreshStarted),
       ghAvailable: true,
     };
   }
@@ -2101,7 +2358,7 @@ class DesktopAppServerService {
     lookupKey: string;
     lookupDirectoryPaths: string[];
     previousPrs: PrSummary[];
-  }): void {
+  }): boolean {
     const trigger = params.request.trigger ?? "scheduled";
     const provider = normalizePullRequestProvider(params.request.provider);
     const pending = this.pendingPrLookupRefreshes.get(params.lookupKey);
@@ -2120,7 +2377,7 @@ class DesktopAppServerService {
           trigger,
         }));
       }
-      return;
+      return true;
     }
 
     const claim = this.claimPullRequestLookupRefreshKey(
@@ -2152,7 +2409,7 @@ class DesktopAppServerService {
           nextAllowedInMs: claim.nextAllowedInMs,
         });
       }
-      return;
+      return false;
     }
     const refreshKey = claim.refreshKey;
 
@@ -2216,6 +2473,7 @@ class DesktopAppServerService {
         }
       });
     this.pendingPrLookupRefreshes.set(params.lookupKey, promise);
+    return true;
   }
 
   private addPullRequestLookupSubscriber(
@@ -2256,20 +2514,22 @@ class DesktopAppServerService {
     await Promise.all(
       [...subscribers.values()].map(async (subscriber) => {
         const nextPrs = this.mergePrHistory(subscriber.previousPrs, params.prs);
-        await this.getOverlayStore().setThreadPullRequests({
+        const updated = await this.getOverlayStore().setThreadPullRequests({
           backend: subscriber.backend,
           threadId: subscriber.threadId,
           prs: nextPrs,
           fetchedAt: params.fetchedAt,
           refreshKey: subscriber.requestKey,
         });
+        const persistedPrs = updated.prs ?? [];
 
-        if (!prSummariesEqual(subscriber.previousPrs, nextPrs)) {
+        if (!prSummariesEqual(subscriber.previousPrs, persistedPrs)) {
           changedThreadCount += 1;
           await this.publishThreadPullRequestsUpdated({
             backend: subscriber.backend,
             threadId: subscriber.threadId,
-            prs: nextPrs,
+            prs: persistedPrs,
+            detachedPrs: updated.detachedPrs ?? [],
           });
         }
       }),
@@ -2285,30 +2545,33 @@ class DesktopAppServerService {
     persistedRefreshKey?: string;
     prs: PrSummary[];
     fetchedAt: number;
-  }): Promise<void> {
+  }): Promise<PrSummary[]> {
     const nextPrs = this.mergePrHistory(params.persistedPrs, params.prs);
     if (
       params.persistedRefreshKey === params.requestKey
       && prSummariesEqual(params.persistedPrs, nextPrs)
     ) {
-      return;
+      return params.persistedPrs;
     }
 
-    await this.getOverlayStore().setThreadPullRequests({
+    const updated = await this.getOverlayStore().setThreadPullRequests({
       backend: params.backend,
       threadId: params.request.threadId,
       prs: nextPrs,
       fetchedAt: params.fetchedAt,
       refreshKey: params.requestKey,
     });
+    const persistedPrs = updated.prs ?? [];
 
-    if (!prSummariesEqual(params.persistedPrs, nextPrs)) {
+    if (!prSummariesEqual(params.persistedPrs, persistedPrs)) {
       await this.publishThreadPullRequestsUpdated({
         backend: params.backend,
         threadId: params.request.threadId,
-        prs: nextPrs,
+        prs: persistedPrs,
+        detachedPrs: updated.detachedPrs ?? [],
       });
     }
+    return persistedPrs;
   }
 
   private claimPullRequestLookupRefreshKey(
@@ -2512,8 +2775,12 @@ class DesktopAppServerService {
     backend: AppServerBackendKind;
     threadId: string;
     prs: PrSummary[];
+    detachedPrs?: PrSummary[];
   }): Promise<void> {
-    const worktreePath = this.rememberMergedPrCommitShasForThread(params);
+    const worktreePath = this.rememberMergedPrCommitShasForThread({
+      ...params,
+      prs: [...params.prs, ...(params.detachedPrs ?? [])],
+    });
     if (worktreePath) {
       getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
       void this.loadThreadGitWorkingStateCache().then(() => {
@@ -2966,6 +3233,123 @@ class DesktopAppServerService {
     return response;
   }
 
+  async attachDirectoryToThread(
+    request: AttachDirectoryToThreadRequest,
+  ): Promise<AttachDirectoryToThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const registered = await this.registerDirectoryFromDisk({
+      path: request.path,
+      preferredBackend: request.preferredBackend ?? backend,
+    });
+    if (!registered.ok) {
+      return {
+        ok: false,
+        backend,
+        threadId: request.threadId,
+        reason: registered.reason,
+        message: registered.message,
+      };
+    }
+
+    const directoryPathId = toLinkedDirectoryPathId(registered.directoryPath);
+    const directory: LinkedDirectorySummary = {
+      id: directoryPathId,
+      kind: "local",
+      label: registered.directoryLabel,
+      path: directoryPathId,
+    };
+    await this.getOverlayStore().addLinkedDirectory({
+      backend,
+      threadId: request.threadId,
+      directory,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: {
+          reason: "selected-thread",
+          threadIds: [request.threadId],
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      backend,
+      threadId: request.threadId,
+      directory,
+    };
+  }
+
+  async detachDirectoryFromThread(
+    request: DetachDirectoryFromThreadRequest,
+  ): Promise<DetachDirectoryFromThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().getThreadOverlayState({
+      backend,
+      threadId: request.threadId,
+    });
+    const currentDirectories = overlay?.extraLinkedDirectories ?? [];
+    const matched = currentDirectories.find((directory) =>
+      linkedDirectoriesMatchForDetach(directory, request.directory),
+    );
+    if (!matched) {
+      return {
+        ok: false,
+        backend,
+        threadId: request.threadId,
+        reason: "primary-directory",
+        message:
+          "Only secondary directories attached to this thread can be detached.",
+      };
+    }
+    const fullThread = await this.listThreads({ backend })
+      .then((response) =>
+        response.threads.find((thread) => thread.id === request.threadId),
+      )
+      .catch(() => undefined);
+    const totalLinkedDirectories = countDistinctLinkedDirectories([
+      ...(fullThread?.linkedDirectories ?? []),
+      ...currentDirectories,
+    ]);
+    if (totalLinkedDirectories <= 1) {
+      return {
+        ok: false,
+        backend,
+        threadId: request.threadId,
+        reason: "last-directory",
+        message:
+          "Cannot detach the last linked directory from a thread.",
+      };
+    }
+
+    const next = await this.getOverlayStore().removeLinkedDirectory({
+      backend,
+      threadId: request.threadId,
+      directory: matched,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: {
+          reason: "selected-thread",
+          threadIds: [request.threadId],
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      backend,
+      threadId: request.threadId,
+      directories: next.extraLinkedDirectories,
+    };
+  }
+
   async analyzeFocusedDiff(
     request: FocusedDiffAnalysisRequest
   ): Promise<FocusedDiffAnalysisResponse> {
@@ -3101,7 +3485,7 @@ function isFreshWorktreeWorkingStateCacheEntry(
 }
 
 function resolveThreadPullRequestDirectoryPaths(
-  thread: NavigationSnapshot["threads"][number],
+  thread: Pick<AppServerThreadSummary, "linkedDirectories">,
 ): string[] {
   const seen = new Set<string>();
   const paths: string[] = [];
@@ -3146,6 +3530,9 @@ export function registerAppServerIpcHandlers(): void {
   unsubscribeWorkingStateEvents = getDesktopBackendRegistry().onEvent((event) => {
     appServerService.handleAgentEventForWorkingState(event);
   });
+  getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
+    async (args) => await appServerService.checkThreadPullRequestStatusForTool(args),
+  );
 
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.handle(
@@ -3479,6 +3866,16 @@ export function registerAppServerIpcHandlers(): void {
       });
     },
   );
+  ipcMain.removeHandler(NAVIGATION_DETACH_THREAD_PR_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_DETACH_THREAD_PR_CHANNEL,
+    async (
+      _event,
+      request: DetachThreadPullRequestRequest,
+    ): Promise<DetachThreadPullRequestResponse> => {
+      return await appServerService.detachThreadPullRequest(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
   ipcMain.handle(
     NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
@@ -3590,6 +3987,26 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.registerDirectoryFromDisk(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
+    async (
+      _event,
+      request: AttachDirectoryToThreadRequest,
+    ): Promise<AttachDirectoryToThreadResponse> => {
+      return await appServerService.attachDirectoryToThread(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
+    async (
+      _event,
+      request: DetachDirectoryFromThreadRequest,
+    ): Promise<DetachDirectoryFromThreadResponse> => {
+      return await appServerService.detachDirectoryFromThread(request);
+    },
+  );
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
@@ -3616,6 +4033,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_DETACH_THREAD_PR_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL);
@@ -3626,8 +4044,11 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL);
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
+  getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(undefined);
   await appServerService.close();
 }
 

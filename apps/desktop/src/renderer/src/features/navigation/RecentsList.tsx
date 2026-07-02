@@ -36,6 +36,10 @@ type RecentsListProps = {
     position: { x: number; y: number; anchorTop?: number }
   ) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
+  onDetachPullRequest?: (
+    thread: NavigationThreadSummary,
+    pr: PrSummary,
+  ) => void;
   onReorderThreadPins?: (orderedThreadKeys: string[]) => Promise<void>;
   onUpdateSubthreadOrder?: (
     parent: NavigationThreadSummary,
@@ -208,6 +212,7 @@ export function RecentsList(props: RecentsListProps) {
               }}
               onOpenContextMenu={props.onOpenThreadContextMenu}
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
+              onDetachPullRequest={props.onDetachPullRequest}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetReaction}
@@ -318,6 +323,7 @@ export function RecentsList(props: RecentsListProps) {
           onMovePinnedThread={pinned ? movePinnedThreadByKeyboard : undefined}
           onOpenContextMenu={props.onOpenThreadContextMenu}
           onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
+          onDetachPullRequest={props.onDetachPullRequest}
           onPrefetchPullRequests={props.onPrefetchPullRequests}
           onSelectThread={props.onSelectThread}
           onSetReaction={props.onSetReaction}

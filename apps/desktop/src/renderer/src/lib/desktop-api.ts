@@ -34,6 +34,10 @@ import type {
   CreateAutomationRequest,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
+  AttachDirectoryToThreadRequest,
+  AttachDirectoryToThreadResponse,
+  DetachDirectoryFromThreadRequest,
+  DetachDirectoryFromThreadResponse,
   ThreadSearchRequest,
   ThreadSearchResponse,
   FocusedDiffAnalysisRequest,
@@ -108,6 +112,8 @@ import type {
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
   PickDirectoryFromDiskResponse,
+  DetachThreadPullRequestRequest,
+  DetachThreadPullRequestResponse,
   RegisterDirectoryFromDiskRequest,
   RegisterDirectoryFromDiskResponse,
   UnbindMessagingThreadRequest,
@@ -598,6 +604,9 @@ export type DesktopApi = {
   refreshThreadPullRequests?: (
     request: RefreshThreadPullRequestsRequest
   ) => Promise<RefreshThreadPullRequestsResponse>;
+  detachThreadPullRequest?: (
+    request: DetachThreadPullRequestRequest
+  ) => Promise<DetachThreadPullRequestResponse>;
   refreshDirectoryGitStatuses?: (
     request: RefreshDirectoryGitStatusesRequest
   ) => Promise<RefreshDirectoryGitStatusesResponse>;
@@ -645,6 +654,12 @@ export type DesktopApi = {
   registerDirectoryFromDisk?: (
     request: RegisterDirectoryFromDiskRequest,
   ) => Promise<RegisterDirectoryFromDiskResponse>;
+  attachDirectoryToThread?: (
+    request: AttachDirectoryToThreadRequest,
+  ) => Promise<AttachDirectoryToThreadResponse>;
+  detachDirectoryFromThread?: (
+    request: DetachDirectoryFromThreadRequest,
+  ) => Promise<DetachDirectoryFromThreadResponse>;
   normalizeImageForUpload?: (
     request: ImageUploadFallbackRequest
   ) => Promise<ImageUploadFallbackResponse>;

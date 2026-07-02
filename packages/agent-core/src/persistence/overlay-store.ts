@@ -181,7 +181,7 @@ export class OverlayStore {
 
       const nextDirectories = [
         ...current.extraLinkedDirectories.filter(
-          (directory) => directory.id !== params.directory.id,
+          (directory) => !linkedDirectoriesEquivalent(directory, params.directory),
         ),
         params.directory,
       ];
@@ -189,6 +189,30 @@ export class OverlayStore {
       const nextState: ThreadOverlayState = {
         ...current,
         extraLinkedDirectories: nextDirectories,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
+  async removeLinkedDirectory(params: {
+    backend: ThreadOverlayState["backend"];
+    directory: LinkedDirectorySummary;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const nextState: ThreadOverlayState = {
+        ...current,
+        extraLinkedDirectories: current.extraLinkedDirectories.filter(
+          (directory) => !linkedDirectoriesEquivalent(directory, params.directory),
+        ),
       };
       data.threads[threadKey] = nextState;
       return nextState;
@@ -879,4 +903,28 @@ export class OverlayStore {
     await writeFile(tempPath, JSON.stringify(data, null, 2), "utf8");
     await rename(tempPath, this.filePath);
   }
+}
+
+function linkedDirectoriesEquivalent(
+  left: LinkedDirectorySummary,
+  right: LinkedDirectorySummary,
+): boolean {
+  if (left.id === right.id) {
+    return true;
+  }
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (normalizeLinkedDirectoryPath(left.path) !== normalizeLinkedDirectoryPath(right.path)) {
+    return false;
+  }
+  return (
+    normalizeLinkedDirectoryPath(left.worktreePath) ===
+    normalizeLinkedDirectoryPath(right.worktreePath)
+  );
+}
+
+function normalizeLinkedDirectoryPath(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? path.resolve(normalized) : undefined;
 }

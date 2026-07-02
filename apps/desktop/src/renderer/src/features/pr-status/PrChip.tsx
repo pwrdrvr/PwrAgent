@@ -1,5 +1,6 @@
 import type { KeyboardEvent, MouseEvent } from "react";
 import type { PrSummary } from "@pwragent/shared";
+import { CloseIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 type PrChipProps = {
@@ -20,6 +21,7 @@ type PrChipProps = {
     pr: PrSummary,
     position: { x: number; y: number; anchorTop?: number },
   ) => void;
+  onDetach?: (pr: PrSummary) => void;
 };
 
 export function PrChip(props: PrChipProps) {
@@ -70,6 +72,13 @@ export function PrChip(props: PrChipProps) {
     event.currentTarget.blur();
     props.onOpen(pr.url);
   };
+  const handleDetach = (
+    event: MouseEvent<HTMLSpanElement> | KeyboardEvent<HTMLSpanElement>,
+  ): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    props.onDetach?.(pr);
+  };
 
   return (
     <>
@@ -106,6 +115,23 @@ export function PrChip(props: PrChipProps) {
       >
         <span className="pr-chip__dot" aria-hidden="true" />
         <span className="pr-chip__label">{label}</span>
+        {props.onDetach ? (
+          <span
+            aria-label={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
+            className="pr-chip__detach"
+            role="button"
+            tabIndex={0}
+            title={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
+            onClick={handleDetach}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                handleDetach(event);
+              }
+            }}
+          >
+            <CloseIcon size={11} aria-hidden="true" />
+          </span>
+        ) : null}
         {isDraft ? <span className="pr-chip__draft-bar" aria-hidden="true" /> : null}
       </span>
       {tooltipController.tooltipNode}

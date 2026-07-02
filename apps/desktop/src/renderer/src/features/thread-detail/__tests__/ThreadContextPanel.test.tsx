@@ -1689,6 +1689,133 @@ describe("ThreadContextPanel", () => {
     );
   });
 
+  it("deduplicates identical linked projects while preserving distinct worktrees", () => {
+    renderPanel({
+      activeTab: "projects",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        linkedDirectories: [
+          {
+            id: "repo-dir",
+            kind: "worktree",
+            label: "PwrAgent",
+            path: "/Users/huntharo/github/PwrAgent",
+            worktreePath:
+              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+          },
+          {
+            id: "repo-dir-duplicate",
+            kind: "worktree",
+            label: "PwrAgent",
+            path: "/Users/huntharo/github/PwrAgent",
+            worktreePath:
+              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+          },
+          {
+            id: "repo-dir-other-worktree",
+            kind: "worktree",
+            label: "PwrAgent Other",
+            path: "/Users/huntharo/github/PwrAgent",
+            worktreePath:
+              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-other",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getAllByLabelText("Path for PwrAgent")).toHaveLength(1);
+    expect(screen.getByLabelText("Path for PwrAgent Other")).toBeInTheDocument();
+  });
+
+  it("detaches a secondary linked project from the Linked Projects tab", async () => {
+    const detachDirectoryFromThread = vi.fn(async () => ({
+      ok: true as const,
+      backend: "codex" as const,
+      threadId: "thread-1",
+      directories: [],
+    }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
+    renderPanel({
+      activeTab: "projects",
+      desktopApi: {
+        detachDirectoryFromThread,
+      },
+      onRefreshNavigation,
+      pinned: true,
+      thread: {
+        ...baseThread,
+        projectKey: "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+        linkedDirectories: [
+          {
+            id: "primary-dir",
+            kind: "worktree",
+            label: "PwrAgent",
+            path: "/Users/huntharo/github/PwrAgent",
+            worktreePath:
+              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+          },
+          {
+            id: "agent-kit-dir",
+            kind: "local",
+            label: "agent-kit",
+            path: "/Users/huntharo/github/agent-kit",
+          },
+        ],
+      },
+    });
+
+    const detachButtons = screen.getAllByRole("button", { name: "Detach" });
+    expect(detachButtons).toHaveLength(1);
+    fireEvent.click(detachButtons[0]!);
+
+    await waitFor(() => {
+      expect(detachDirectoryFromThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        directory: {
+          id: "agent-kit-dir",
+          kind: "local",
+          label: "agent-kit",
+          path: "/Users/huntharo/github/agent-kit",
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(onRefreshNavigation).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("does not allow detaching the only linked project on a directory-less thread", () => {
+    const detachDirectoryFromThread = vi.fn(async () => ({
+      ok: true as const,
+      backend: "codex" as const,
+      threadId: "thread-1",
+      directories: [],
+    }));
+    renderPanel({
+      activeTab: "projects",
+      desktopApi: {
+        detachDirectoryFromThread,
+      },
+      pinned: true,
+      thread: {
+        ...baseThread,
+        linkedDirectories: [
+          {
+            id: "agent-kit-dir",
+            kind: "local",
+            label: "agent-kit",
+            path: "/Users/huntharo/github/agent-kit",
+          },
+        ],
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: "Detach" })).not.toBeInTheDocument();
+    expect(detachDirectoryFromThread).not.toHaveBeenCalled();
+  });
+
   it("shows regular and Spark rate limits together on the Provider status tab", () => {
     renderPanel({ activeTab: "providers", pinned: true });
 

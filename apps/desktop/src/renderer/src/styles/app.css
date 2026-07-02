@@ -3827,6 +3827,90 @@ textarea,
   background: var(--status-error);
 }
 
+.pr-chip__detach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: -4px;
+  border-radius: 50%;
+  color: var(--text-muted);
+}
+
+.pr-chip__detach:hover,
+.pr-chip__detach:focus-visible {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+  outline: none;
+}
+
+.pr-detach-warning-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim-strong);
+}
+
+.pr-detach-warning-dialog {
+  width: min(420px, 100%);
+  padding: 18px;
+  border: 1px solid var(--danger-border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+}
+
+.pr-detach-warning-dialog h2 {
+  margin: 0 0 8px;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.pr-detach-warning-dialog p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.pr-detach-warning-dialog__checkbox {
+  margin-top: 14px;
+}
+
+.pr-detach-warning-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.pr-detach-warning-dialog__actions button {
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.pr-detach-warning-dialog__actions button:hover,
+.pr-detach-warning-dialog__actions button:focus-visible {
+  border-color: var(--border-strong);
+  outline: none;
+}
+
+.pr-detach-warning-dialog__actions .button--danger {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
 .thread-row__chip--muted {
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
@@ -12800,6 +12884,24 @@ textarea,
 }
 
 /* Linked Projects panel. */
+.linked-projects__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.linked-projects__header h3 {
+  margin: 0;
+}
+
+.linked-projects__header .context-list__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .linked-projects-list {
   gap: 14px;
 }
@@ -12808,6 +12910,14 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.linked-project__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 
 .linked-project__facts {
@@ -14211,6 +14321,17 @@ textarea,
 .composer__action-button:disabled {
   color: var(--text-secondary);
   cursor: default;
+}
+
+.composer__attach-directory-button {
+  gap: 6px;
+}
+
+.composer__inline-error {
+  max-width: min(320px, 100%);
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .composer__action-button--busy {

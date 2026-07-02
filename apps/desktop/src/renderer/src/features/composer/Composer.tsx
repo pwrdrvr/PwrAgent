@@ -42,6 +42,7 @@ import {
   BranchIcon,
   CloseIcon,
   FileCodeIcon,
+  FolderIcon,
   LightningIcon,
   PlanIcon,
   PlayIcon,
@@ -182,6 +183,7 @@ type ComposerProps = {
   onSelectDirectoryFromPicker?: (directory: NavigationDirectorySummary) => void;
   onSelectNoDirectoryFromPicker?: () => void;
   onPickAndRegisterDirectory?: () => void;
+  onPickAndAttachDirectoryToThread?: () => void;
   onClearPickDirectoryError?: () => void;
   pickDirectoryError?: string;
   pickingDirectory?: boolean;
@@ -6394,6 +6396,28 @@ export function Composer(props: ComposerProps) {
                 props.onPickAndRegisterDirectory?.();
               }}
             />
+          ) : null}
+
+          {props.thread && props.onPickAndAttachDirectoryToThread ? (
+            <>
+              <button
+                className="composer__action-button composer__attach-directory-button"
+                disabled={props.pickingDirectory}
+                type="button"
+                onClick={() => {
+                  props.onClearPickDirectoryError?.();
+                  props.onPickAndAttachDirectoryToThread?.();
+                }}
+              >
+                <FolderIcon size={14} aria-hidden="true" />
+                <span>{props.pickingDirectory ? "Adding" : "Add directory"}</span>
+              </button>
+              {props.pickDirectoryError ? (
+                <span className="composer__inline-error" role="alert">
+                  {props.pickDirectoryError}
+                </span>
+              ) : null}
+            </>
           ) : null}
 
           {props.launchpad ? (

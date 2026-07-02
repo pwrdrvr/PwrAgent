@@ -928,13 +928,99 @@ export type RefreshThreadPullRequestsRequest = {
    * re-walk the snapshot.
    */
   directoryPaths: string[];
+  /** Include status freshness metadata in the response. Used by agent tools. */
+  includeStatusFreshness?: boolean;
 };
+
+export type DetachThreadPullRequestRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  pr: Pick<PrSummary, "provider" | "org" | "repo" | "number">;
+};
+
+export type DetachThreadPullRequestResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  detachedPrKeys: string[];
+  prs: PrSummary[];
+};
+
+export type AttachDirectoryToThreadRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Absolute path the user picked from the system dialog. */
+  path: string;
+  /**
+   * Backend the directory's launchpad should default to if the directory has
+   * not already been registered.
+   */
+  preferredBackend?: AppServerBackendKind;
+};
+
+export type AttachDirectoryToThreadFailureReason =
+  | "inaccessible"
+  | "not-a-directory"
+  | "not-a-git-repo";
+
+export type AttachDirectoryToThreadResponse =
+  | {
+      ok: true;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      directory: LinkedDirectorySummary;
+    }
+  | {
+      ok: false;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      reason: AttachDirectoryToThreadFailureReason;
+      message: string;
+    };
+
+export type DetachDirectoryFromThreadFailureReason =
+  | "not-found"
+  | "primary-directory"
+  | "last-directory"
+  | "not-attached";
+
+export type DetachDirectoryFromThreadRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  directory: Pick<
+    LinkedDirectorySummary,
+    "id" | "kind" | "label" | "path" | "worktreePath"
+  >;
+};
+
+export type DetachDirectoryFromThreadResponse =
+  | {
+      ok: true;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      directories: LinkedDirectorySummary[];
+    }
+  | {
+      ok: false;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      reason: DetachDirectoryFromThreadFailureReason;
+      message: string;
+    };
 
 export type RefreshThreadPullRequestsResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   provider: PullRequestProvider;
   prs: PrSummary[];
+  /**
+   * Wall-clock ms for the provider/cache check that produced the returned
+   * statuses. Undefined means no successful provider check has been recorded.
+   */
+  lastStatusCheckAt?: number;
+  /** Milliseconds elapsed since `lastStatusCheckAt`, computed by main. */
+  lastStatusCheckAgeMs?: number;
+  /** True when main accepted this request and started a provider refresh. */
+  refreshStarted?: boolean;
   /** True when the host doesn't have `gh` installed; degrade silently. */
   ghAvailable: boolean;
   /**
@@ -1054,6 +1140,18 @@ export type ThreadOverlayState = {
    * sidebar/history purposes; status refreshes replace matching entries.
    */
   prs?: PrSummary[];
+  /**
+   * Normalized PR status keys the user removed from this thread. Refreshes
+   * keep collecting provider state, but these keys stay hidden until a future
+   * explicit re-attach flow exists.
+   */
+  detachedPrKeys?: string[];
+  /**
+   * Detached PR summaries retained for non-UI bookkeeping. These PRs stay
+   * hidden from `prs`, but merged commit SHAs still need to classify local
+   * worktree commits after a remote PR branch is deleted.
+   */
+  detachedPrs?: PrSummary[];
   /** Wall-clock ms when `prs` was last refreshed via gh. */
   prsFetchedAt?: number;
   /**
