@@ -157,6 +157,13 @@ function buildPairingApprovalPatch(
       };
     }
     case "slack": {
+      if (approvalTarget === "team") {
+        const merged = merge(snapshot.messaging.slack.authorizedWorkspaces.value);
+        return {
+          added: merged.added,
+          patch: { messaging: { slack: { authorizedWorkspaces: merged.contacts } } },
+        };
+      }
       if (approvalTarget === "conversation" || (!approvalTarget && entry.scope === "bucket")) {
         if (entry.observedChat.kind === "dm") {
           throw new Error("Slack channel approval requires a channel or group DM.");
@@ -258,6 +265,16 @@ function contactForPairing(
 ): DesktopAuthorizedContact {
   if (!entry.observedActor || !entry.observedChat) {
     throw new Error("Pairing request is missing observed identity.");
+  }
+  if (target === "team") {
+    const id = entry.observedChat.bucketId ?? entry.observedChat.parentId;
+    if (!id) {
+      throw new Error("Slack team approval requires an observed workspace ID.");
+    }
+    return {
+      id,
+      displayName: entry.observedChat.parentTitle ?? "",
+    };
   }
   if (target === "conversation" || (!target && entry.scope === "bucket")) {
     if (entry.platform === "slack") {
@@ -403,6 +420,33 @@ export function registerMessagingStatusIpcHandlers(): void {
           logStartupEligibility: true,
         },
       );
+      // Keep the request `observed` when the caller opts out of consuming
+      // (Slack "approve user, then channel, then team" flow). We record the
+      // approved target so the settings card can show progress, and hold the
+      // "approved" outcome message until the operator finishes so the user
+      // isn't pinged once per facet.
+      const stay =
+        request.consume === false
+        && pairing.platform === "slack"
+        && pairing.scope === "observed"
+        && request.target !== undefined;
+      if (stay) {
+        const updated =
+          getDesktopMessagingPairingStore().recordApproval({
+            entryId: request.entryId,
+            target: request.target as MessagingPairingApprovalTarget,
+          }) ?? pairing;
+        recordPairingActivity(updated, `Approved pairing (${request.target})`);
+        broadcastPairingChanged({ at: Date.now(), entry: updated });
+        log.info("messaging pairing target approved", {
+          pairingId: request.entryId,
+          platform: pairing.platform,
+          target: request.target,
+          added: approval.added,
+          configPath: next.configPath,
+        });
+        return { entry: updated, added: approval.added };
+      }
       const consumed = markPairingConsumed(request.entryId);
       recordPairingActivity(consumed ?? pairing, "Approved pairing request");
       await runtime.deliverPairingOutcome(consumed ?? pairing, "approved");

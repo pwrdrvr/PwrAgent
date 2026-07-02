@@ -20,6 +20,19 @@ import type { DesktopApi } from "../../lib/desktop-api";
  * - On `unset`: render a quiet "Not configured" pill — the user
  *   needs to enter credentials before the test makes sense.
  */
+/**
+ * A single required/optional input the probe depends on. Rendered as a
+ * checklist under the test row so the operator can see at a glance which
+ * credentials are present before running the probe. Required prerequisites
+ * that are unmet disable the Test button.
+ */
+export type SettingsTestPrerequisite = {
+  label: string;
+  met: boolean;
+  /** Optional prerequisites are shown with a check but never block Test. */
+  optional?: boolean;
+};
+
 export function SettingsTestBlock(props: {
   /** Discriminator for which probe runs in the main process. */
   kind: SettingsCredentialTestKind;
@@ -31,6 +44,8 @@ export function SettingsTestBlock(props: {
   /** Default sub-line shown until a real test runs.
    *  e.g. "Pings getMe on the Telegram Bot API." */
   defaultSub: string;
+  /** Optional prerequisite checklist (present/valid-looking inputs). */
+  prerequisites?: SettingsTestPrerequisite[];
   desktopApi?: DesktopApi;
 }) {
   const desktopApi = props.desktopApi;
@@ -75,41 +90,71 @@ export function SettingsTestBlock(props: {
     }
   }, [desktopApi, props.kind]);
 
+  const prerequisites = props.prerequisites;
+  const missingRequired = (prerequisites ?? []).filter(
+    (item) => !item.optional && !item.met,
+  );
+  const blockedByPrereqs = missingRequired.length > 0;
+
   const status = testing
     ? "testing"
     : (result?.status ?? "idle");
   const name = result?.account ?? props.defaultName;
-  const sub = describeSub({
-    result,
-    defaultSub: props.defaultSub,
-    testing,
-  });
+  const sub = blockedByPrereqs
+    ? `Enter ${missingRequired.map((item) => item.label).join(" and ")} to run the test.`
+    : describeSub({
+        result,
+        defaultSub: props.defaultSub,
+        testing,
+      });
 
   return (
-    <div className="settings-testblock" data-status={status}>
-      <span className="settings-testblock__icon" aria-hidden="true">
-        {props.icon}
-      </span>
-      <div className="settings-testblock__main">
-        <div className="settings-testblock__name">{name}</div>
-        <div className="settings-testblock__sub">{sub}</div>
+    <div className="settings-testblock-wrap">
+      <div className="settings-testblock" data-status={status}>
+        <span className="settings-testblock__icon" aria-hidden="true">
+          {props.icon}
+        </span>
+        <div className="settings-testblock__main">
+          <div className="settings-testblock__name">{name}</div>
+          <div className="settings-testblock__sub">{sub}</div>
+        </div>
+        <span
+          aria-live="polite"
+          className={`settings-testblock__status settings-testblock__status--${status}`}
+        >
+          {describeStatus(status)}
+        </span>
+        <button
+          className="button button--secondary"
+          disabled={testing || blockedByPrereqs || !desktopApi?.testSettingsCredentials}
+          type="button"
+          onClick={() => {
+            void onTest();
+          }}
+        >
+          {testing ? "Testing…" : "Test"}
+        </button>
       </div>
-      <span
-        aria-live="polite"
-        className={`settings-testblock__status settings-testblock__status--${status}`}
-      >
-        {describeStatus(status)}
-      </span>
-      <button
-        className="button button--secondary"
-        disabled={testing || !desktopApi?.testSettingsCredentials}
-        type="button"
-        onClick={() => {
-          void onTest();
-        }}
-      >
-        {testing ? "Testing…" : "Test"}
-      </button>
+      {prerequisites && prerequisites.length > 0 ? (
+        <ul className="settings-testblock__prereqs">
+          {prerequisites.map((item) => (
+            <li
+              className={`settings-testblock__prereq${
+                item.met ? " is-met" : " is-missing"
+              }`}
+              key={item.label}
+            >
+              <span className="settings-testblock__prereq-mark" aria-hidden="true">
+                {item.met ? "✓" : "○"}
+              </span>
+              <span className="settings-testblock__prereq-label">
+                {item.label}
+                {item.optional ? " (optional)" : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

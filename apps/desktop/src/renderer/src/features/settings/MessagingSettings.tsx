@@ -24,6 +24,8 @@ import {
   validateTelegramPositiveId,
   type DesktopAuthorizedContact,
   type DesktopMessagingAuthorizationMode,
+  type DesktopMessagingSlackChannelUserAccessMode,
+  type DesktopMessagingSlackDmAccessMode,
   type DesktopMessagingImageProfile,
   type DesktopMessagingResponseMode,
   type DesktopMessagingContactLookupKind,
@@ -117,6 +119,14 @@ export function MessagingSettings(props: {
     ? !runtimeMessaging.disabled
     : messagingEnabled.value;
   const platformControlsDisabled = props.saving || !masterEnabled;
+  // With the actor gate, an enabled Slack adapter with no authorized users,
+  // channels, or teams cannot respond to anyone — pairing is the required
+  // next step, so promote Generate to a primary CTA.
+  const slackNeedsPairingCta =
+    slack.enabled.value
+    && slack.authorizedUserIds.value.length === 0
+    && slack.authorizedChannels.value.length === 0
+    && slack.authorizedWorkspaces.value.length === 0;
   const leaseHolderLabel = runtimeMessaging.leaseHolder
     ? [
         runtimeMessaging.leaseHolder.cwdHint,
@@ -765,6 +775,21 @@ export function MessagingSettings(props: {
               });
             }}
           />
+          <SettingsGroupLabel>Connection</SettingsGroupLabel>
+          <TextField
+            disabled={props.saving}
+            label="Workspace URL"
+            sub="Display URL for the Slack workspace, e.g. so links back to Slack resolve."
+            help={<code>https://example.slack.com</code>}
+            source={optionalStringSourceBadge(slack.workspaceUrl)}
+            value={slack.workspaceUrl.value}
+            onSave={(workspaceUrl) => {
+              void props.onSaveSlack({
+                ...slack,
+                workspaceUrl: { ...slack.workspaceUrl, value: workspaceUrl },
+              });
+            }}
+          />
           <SecretField
             disabled={props.saving || !slack.botToken.writable}
             label="Bot Token"
@@ -783,6 +808,15 @@ export function MessagingSettings(props: {
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
           />
+          <SecretField
+            disabled={props.saving || !slack.signingSecret.writable}
+            label="Signing Secret (Optional)"
+            sub="Optional for Socket Mode button validation. Required for future Events API mode."
+            secret="slackSigningSecret"
+            state={slack.signingSecret}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
           <SettingsField
             label="Connection test"
             sub="Validates the bot token with Slack auth.test."
@@ -793,30 +827,191 @@ export function MessagingSettings(props: {
                 icon={<SlackIcon size={14} />}
                 defaultName="Your bot"
                 defaultSub="auth.test"
+                prerequisites={[
+                  { label: "Bot Token", met: slack.botToken.configured },
+                  { label: "App Token", met: slack.appToken.configured },
+                  {
+                    label: "Workspace URL",
+                    met: isLikelyWorkspaceUrl(slack.workspaceUrl.value),
+                    optional: true,
+                  },
+                ]}
               />
             }
           />
+
+          <SettingsGroupLabel>Authorization</SettingsGroupLabel>
           <PairingTokenField
             desktopApi={props.desktopApi}
             disabled={platformControlsDisabled || !slack.enabled.value}
+            highlight={slackNeedsPairingCta}
             onSettingsChanged={props.onPairingSettingsChanged}
             platform="slack"
             supportsBucket
           />
-          <TextField
+          <AuthorizedListField
             disabled={props.saving}
-            label="Workspace URL"
-            sub="Optional display URL for the Slack workspace."
-            help={<code>https://example.slack.com</code>}
-            source={optionalStringSourceBadge(slack.workspaceUrl)}
-            value={slack.workspaceUrl.value}
-            onSave={(workspaceUrl) => {
+            lookup={contactLookup(
+              props.desktopApi,
+              "slack",
+              "user",
+            )}
+            label="Authorized User IDs"
+            sub="Slack user IDs that count as authorized users below."
+            help="Slack user IDs start with U or W, e.g. U012ABCDEF0. Rejected Slack messages show the user ID in Messaging Activity."
+            source={optionalListSourceBadge(slack.authorizedUserIds)}
+            validateEntry={validateSlackUserIdEntry}
+            value={slack.authorizedUserIds.value}
+            fullAccessWarningPolicy
+            onSave={(authorizedUserIds) => {
               void props.onSaveSlack({
                 ...slack,
-                workspaceUrl: { ...slack.workspaceUrl, value: workspaceUrl },
+                authorizedUserIds: {
+                  ...slack.authorizedUserIds,
+                  value: authorizedUserIds,
+                },
               });
             }}
           />
+          <SegmentedField
+            disabled={props.saving}
+            label="DM access"
+            sub="Who may DM the bot directly. Authorized users only is the safest default; the team and channel gates below do not apply to DMs."
+            options={DM_ACCESS_MODE_OPTIONS}
+            source={sourceBadge(slack.dmAccessMode)}
+            value={slack.dmAccessMode.value}
+            onChange={(dmAccessMode) => {
+              void props.onSaveSlack({
+                ...slack,
+                dmAccessMode: { ...slack.dmAccessMode, value: dmAccessMode },
+              });
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Team access default"
+            sub="Whether channel messages must come from an Authorized Team. Team IDs mainly restrict Slack Connect and other shared-channel traffic; they do not affect DMs."
+            options={TEAM_AUTHORIZATION_MODE_OPTIONS}
+            source={sourceBadge(slack.teamAuthorizationMode)}
+            value={slack.teamAuthorizationMode.value}
+            onChange={(teamAuthorizationMode) => {
+              void props.onSaveSlack({
+                ...slack,
+                teamAuthorizationMode: {
+                  ...slack.teamAuthorizationMode,
+                  value: teamAuthorizationMode,
+                },
+              });
+            }}
+          />
+          <div className="settings-subfield">
+            <AuthorizedListField
+              disabled={props.saving}
+              lookup={contactLookup(
+                props.desktopApi,
+                "slack",
+                "workspace",
+              )}
+              label="Authorized Team IDs"
+              sub="Broad allowlist for Slack teams. Add a Team ID only when every channel or group DM in that team where the bot is present should be approved."
+              help="Slack team IDs start with T, e.g. T012ABCDEF0. These are not channel IDs, and the Workspace URL is only display text."
+              source={optionalListSourceBadge(slack.authorizedWorkspaces)}
+              validateEntry={validateSlackWorkspaceIdEntry}
+              value={slack.authorizedWorkspaces.value}
+              onSave={(authorizedWorkspaces) => {
+                void props.onSaveSlack({
+                  ...slack,
+                  authorizedWorkspaces: {
+                    ...slack.authorizedWorkspaces,
+                    value: authorizedWorkspaces,
+                  },
+                });
+              }}
+            />
+          </div>
+          <SegmentedField
+            disabled={props.saving}
+            label="Channel access default"
+            sub="Whether Slack messages must come from an Authorized Channel. Require listed channels is the safest default."
+            options={CHANNEL_AUTHORIZATION_MODE_OPTIONS}
+            source={sourceBadge(slack.channelAuthorizationMode)}
+            value={slack.channelAuthorizationMode.value}
+            onChange={(channelAuthorizationMode) => {
+              void props.onSaveSlack({
+                ...slack,
+                channelAuthorizationMode: {
+                  ...slack.channelAuthorizationMode,
+                  value: channelAuthorizationMode,
+                },
+              });
+            }}
+          />
+          <div className="settings-subfield">
+            <AuthorizedListField
+              disabled={props.saving}
+              lookup={contactLookup(
+                props.desktopApi,
+                "slack",
+                "channel",
+              )}
+              label="Authorized Channels"
+              sub="Slack channel, private channel, DM, or group DM IDs approved individually."
+              help="Slack conversation IDs start with C, G, or D, e.g. C012ABCDEF0. Use Channel pairing to add one from chat, or add a row here to override that channel's response mode."
+              source={optionalListSourceBadge(slack.authorizedChannels)}
+              validateEntry={validateSlackChannelIdEntry}
+              value={slack.authorizedChannels.value}
+              responseModePolicy
+              onSave={(authorizedChannels) => {
+                void props.onSaveSlack({
+                  ...slack,
+                  authorizedChannels: {
+                    ...slack.authorizedChannels,
+                    value: authorizedChannels,
+                  },
+                });
+              }}
+            />
+          </div>
+          <div className="settings-subfield">
+            <SegmentedField
+              disabled={props.saving}
+              label="Channel user access"
+              sub="Which senders in an authorized channel the bot responds to. Authorized users only is the safest default."
+              options={CHANNEL_USER_ACCESS_MODE_OPTIONS}
+              source={sourceBadge(slack.channelUserAccessMode)}
+              value={slack.channelUserAccessMode.value}
+              onChange={(channelUserAccessMode) => {
+                void props.onSaveSlack({
+                  ...slack,
+                  channelUserAccessMode: {
+                    ...slack.channelUserAccessMode,
+                    value: channelUserAccessMode,
+                  },
+                });
+              }}
+            />
+          </div>
+          <div className="settings-subfield">
+            <SegmentedField
+              disabled={props.saving}
+              label="Channel response default"
+              sub="Default response behavior after a Slack channel message passes the access checks above."
+              options={RESPONSE_MODE_OPTIONS}
+              source={sourceBadge(slack.responseMode)}
+              value={slack.responseMode.value}
+              onChange={(responseMode) => {
+                void props.onSaveSlack({
+                  ...slack,
+                  responseMode: {
+                    ...slack.responseMode,
+                    value: responseMode,
+                  },
+                });
+              }}
+            />
+          </div>
+
+          <SettingsGroupLabel>Advanced</SettingsGroupLabel>
           <SegmentedField
             disabled={props.saving}
             label="Inbound Mode"
@@ -828,32 +1023,6 @@ export function MessagingSettings(props: {
               void props.onSaveSlack({
                 ...slack,
                 inboundMode: { ...slack.inboundMode, value: inboundMode },
-              });
-            }}
-          />
-          <SecretField
-            disabled={props.saving || !slack.signingSecret.writable}
-            label="Signing Secret"
-            sub="Optional for Socket Mode button validation. Required for future Events API mode."
-            secret="slackSigningSecret"
-            state={slack.signingSecret}
-            onClearSecret={props.onClearSecret}
-            onReplaceSecret={props.onReplaceSecret}
-          />
-          <ToggleField
-            checked={slack.streamingResponses.value}
-            disabled={props.saving}
-            label="Streaming Responses (Advanced)"
-            sub="Sends partial assistant text as Slack message edits."
-            help={STREAMING_RESPONSES_WARNING}
-            source={sourceBadge(slack.streamingResponses)}
-            onChange={(streamingResponses) => {
-              void props.onSaveSlack({
-                ...slack,
-                streamingResponses: {
-                  ...slack.streamingResponses,
-                  value: streamingResponses,
-                },
               });
             }}
           />
@@ -873,140 +1042,37 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          <TextField
-            disabled={props.saving || !slack.registerSlashCommands.value}
-            label="Slash command prefix"
-            sub="Prefix prepended to canonical commands (default pwragent_ → /pwragent_help)."
-            source={optionalStringSourceBadge(slack.slashCommandPrefix)}
-            value={slack.slashCommandPrefix.value}
-            onSave={(slashCommandPrefix) => {
-              void props.onSaveSlack({
-                ...slack,
-                slashCommandPrefix: {
-                  ...slack.slashCommandPrefix,
-                  value: slashCommandPrefix,
-                },
-              });
-            }}
-          />
-          <AuthorizedListField
+          <div className="settings-subfield">
+            <TextField
+              disabled={props.saving || !slack.registerSlashCommands.value}
+              label="Slash command prefix"
+              sub="Prefix prepended to canonical commands (default pwragent_ → /pwragent_help)."
+              source={optionalStringSourceBadge(slack.slashCommandPrefix)}
+              value={slack.slashCommandPrefix.value}
+              onSave={(slashCommandPrefix) => {
+                void props.onSaveSlack({
+                  ...slack,
+                  slashCommandPrefix: {
+                    ...slack.slashCommandPrefix,
+                    value: slashCommandPrefix,
+                  },
+                });
+              }}
+            />
+          </div>
+          <ToggleField
+            checked={slack.streamingResponses.value}
             disabled={props.saving}
-            lookup={contactLookup(
-              props.desktopApi,
-              "slack",
-              "user",
-            )}
-            label="Authorized User IDs"
-            sub="Slack user IDs that can DM or mention the bot."
-            help="Slack user IDs start with U or W, e.g. U012ABCDEF0. Rejected Slack messages show the user ID in Messaging Activity."
-            source={optionalListSourceBadge(slack.authorizedUserIds)}
-            validateEntry={validateSlackUserIdEntry}
-            value={slack.authorizedUserIds.value}
-            fullAccessWarningPolicy
-            onSave={(authorizedUserIds) => {
+            label="Streaming responses"
+            sub="Sends partial assistant text as Slack message edits."
+            help={STREAMING_RESPONSES_WARNING}
+            source={sourceBadge(slack.streamingResponses)}
+            onChange={(streamingResponses) => {
               void props.onSaveSlack({
                 ...slack,
-                authorizedUserIds: {
-                  ...slack.authorizedUserIds,
-                  value: authorizedUserIds,
-                },
-              });
-            }}
-          />
-          <AuthorizedListField
-            disabled={props.saving}
-            lookup={contactLookup(
-              props.desktopApi,
-              "slack",
-              "workspace",
-            )}
-            label="Authorized Team IDs"
-            sub="Broad allowlist for Slack teams. Add a Team ID only when every channel or group DM in that team where the bot is present should be approved."
-            help="Slack team IDs start with T, e.g. T012ABCDEF0. These are not channel IDs, and the Workspace URL is only display text."
-            source={optionalListSourceBadge(slack.authorizedWorkspaces)}
-            validateEntry={validateSlackWorkspaceIdEntry}
-            value={slack.authorizedWorkspaces.value}
-            onSave={(authorizedWorkspaces) => {
-              void props.onSaveSlack({
-                ...slack,
-                authorizedWorkspaces: {
-                  ...slack.authorizedWorkspaces,
-                  value: authorizedWorkspaces,
-                },
-              });
-            }}
-          />
-          <SegmentedField
-            disabled={props.saving}
-            label="Team access default"
-            sub="Choose whether Slack events must come from Authorized Team IDs. Team IDs are mainly useful for restricting Slack Connect and other shared-channel traffic."
-            options={TEAM_AUTHORIZATION_MODE_OPTIONS}
-            source={sourceBadge(slack.teamAuthorizationMode)}
-            value={slack.teamAuthorizationMode.value}
-            onChange={(teamAuthorizationMode) => {
-              void props.onSaveSlack({
-                ...slack,
-                teamAuthorizationMode: {
-                  ...slack.teamAuthorizationMode,
-                  value: teamAuthorizationMode,
-                },
-              });
-            }}
-          />
-          <SegmentedField
-            disabled={props.saving}
-            label="Channel access default"
-            sub="Choose whether Slack messages must come from Authorized Channels. Require listed channels is the safest default."
-            options={CHANNEL_AUTHORIZATION_MODE_OPTIONS}
-            source={sourceBadge(slack.channelAuthorizationMode)}
-            value={slack.channelAuthorizationMode.value}
-            onChange={(channelAuthorizationMode) => {
-              void props.onSaveSlack({
-                ...slack,
-                channelAuthorizationMode: {
-                  ...slack.channelAuthorizationMode,
-                  value: channelAuthorizationMode,
-                },
-              });
-            }}
-          />
-          <AuthorizedListField
-            disabled={props.saving}
-            lookup={contactLookup(
-              props.desktopApi,
-              "slack",
-              "channel",
-            )}
-            label="Authorized Channels"
-            sub="Slack channel, private channel, DM, or group DM IDs approved individually."
-            help="Slack conversation IDs start with C, G, or D, e.g. C012ABCDEF0. Use Channel pairing to add one from chat, or add a row here to override that channel's response mode."
-            source={optionalListSourceBadge(slack.authorizedChannels)}
-            validateEntry={validateSlackChannelIdEntry}
-            value={slack.authorizedChannels.value}
-            responseModePolicy
-            onSave={(authorizedChannels) => {
-              void props.onSaveSlack({
-                ...slack,
-                authorizedChannels: {
-                  ...slack.authorizedChannels,
-                  value: authorizedChannels,
-                },
-              });
-            }}
-          />
-          <SegmentedField
-            disabled={props.saving}
-            label="Channel response default"
-            sub="Default response behavior after a Slack message passes the team and channel access checks."
-            options={RESPONSE_MODE_OPTIONS}
-            source={sourceBadge(slack.responseMode)}
-            value={slack.responseMode.value}
-            onChange={(responseMode) => {
-              void props.onSaveSlack({
-                ...slack,
-                responseMode: {
-                  ...slack.responseMode,
-                  value: responseMode,
+                streamingResponses: {
+                  ...slack.streamingResponses,
+                  value: streamingResponses,
                 },
               });
             }}
@@ -1496,6 +1562,24 @@ const CHANNEL_AUTHORIZATION_MODE_OPTIONS: Array<{
   { label: "Any channel", value: "allow_all" },
 ];
 
+const DM_ACCESS_MODE_OPTIONS: Array<{
+  label: string;
+  value: DesktopMessagingSlackDmAccessMode;
+}> = [
+  { label: "Authorized users", value: "authorized_users" },
+  { label: "Any workspace user", value: "any_workspace_user" },
+  { label: "No DMs", value: "none" },
+];
+
+const CHANNEL_USER_ACCESS_MODE_OPTIONS: Array<{
+  label: string;
+  value: DesktopMessagingSlackChannelUserAccessMode;
+}> = [
+  { label: "Authorized users", value: "authorized_users" },
+  { label: "Anyone in channel", value: "any_channel_user" },
+  { label: "No one", value: "none" },
+];
+
 const FULL_ACCESS_WARNING_POLICY_OPTIONS: Array<{
   label: string;
   value: DesktopMessagingFullAccessWarningGlobalPolicy;
@@ -1555,6 +1639,17 @@ function chipKindForBotToken(
   if (botToken.source === "env") return "warn";
   if (botToken.configured) return "ok";
   return "default";
+}
+
+/** Uppercase labeled divider that groups related fields within a section. */
+function SettingsGroupLabel(props: { children: ReactNode }) {
+  return <div className="settings-group-label">{props.children}</div>;
+}
+
+/** Best-effort "looks like a URL" check for the Workspace URL prerequisite. */
+function isLikelyWorkspaceUrl(value: string): boolean {
+  const trimmed = value.trim();
+  return /^https?:\/\/[^\s.]+\.[^\s]+$/i.test(trimmed);
 }
 
 function SegmentedField<TValue extends string>(props: {
@@ -1718,6 +1813,8 @@ function NumberField(props: {
 function PairingTokenField(props: {
   desktopApi?: DesktopApi;
   disabled: boolean;
+  /** Promote Generate to a primary CTA (e.g. nothing is authorized yet). */
+  highlight?: boolean;
   onSettingsChanged?: () => Promise<void>;
   platform: MessagingChannelKind;
   scopeOptions?: PairingScopeOption[];
@@ -1795,6 +1892,7 @@ function PairingTokenField(props: {
     entry: MessagingPairingEntry,
     decision: "approve" | "reject",
     target?: MessagingPairingApprovalTarget,
+    consume?: boolean,
   ) => {
     setBusyId(entry.id);
     setError(undefined);
@@ -1803,6 +1901,7 @@ function PairingTokenField(props: {
         const result = await props.desktopApi?.approveMessagingPairing?.({
           entryId: entry.id,
           ...(target ? { target } : {}),
+          ...(consume === false ? { consume: false } : {}),
         });
         if (result?.entry.id === messageEntryId) {
           setGeneratedMessage(undefined, undefined);
@@ -1815,6 +1914,40 @@ function PairingTokenField(props: {
         if (result?.entry.id === messageEntryId) {
           setGeneratedMessage(undefined, undefined);
         }
+      }
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusyId(undefined);
+    }
+  };
+
+  // "Approve all" — apply every applicable target for a Slack observed
+  // request, consuming the request on the final target so the card clears.
+  const approveAll = async (entry: MessagingPairingEntry) => {
+    const targets = applicableApprovalTargets(entry).filter(
+      (target) => !(entry.approvedTargets ?? []).includes(target),
+    );
+    // If everything was already approved individually, still consume so the
+    // card resolves. Fall back to the actor target for the consuming call.
+    const sequence = targets.length > 0 ? targets : (["actor"] as const);
+    setBusyId(entry.id);
+    setError(undefined);
+    try {
+      for (let index = 0; index < sequence.length; index += 1) {
+        const isLast = index === sequence.length - 1;
+        const result = await props.desktopApi?.approveMessagingPairing?.({
+          entryId: entry.id,
+          target: sequence[index],
+          ...(isLast ? {} : { consume: false }),
+        });
+        if (result?.added) {
+          await props.onSettingsChanged?.();
+        }
+      }
+      if (entry.id === messageEntryId) {
+        setGeneratedMessage(undefined, undefined);
       }
       await refresh();
     } catch (caught) {
@@ -1866,7 +1999,7 @@ function PairingTokenField(props: {
               </div>
             ) : null}
             <button
-              className="button button--secondary"
+              className={`button ${props.highlight ? "button--primary" : "button--secondary"}`}
               disabled={
                 props.disabled
                 || busyId === "generate"
@@ -1892,37 +2025,85 @@ function PairingTokenField(props: {
           ) : null}
           {observedEntries.length > 0 ? (
             <div className="settings-pairing__requests">
-              {observedEntries.map((entry) => (
-                <div className="settings-pairing__request" key={entry.id}>
-                  <div className="settings-pairing__request-text">
-                    <span className="settings-pairing__request-title">
-                      {pairingEntryLabel(entry)}
-                    </span>
-                    <span className="settings-pairing__request-meta">
-                      {pairingEntryDetails(entry).join(" | ")}
-                    </span>
+              {observedEntries.map((entry) => {
+                const actions = pairingApprovalActions(entry);
+                const approved = entry.approvedTargets ?? [];
+                const staysOpen =
+                  entry.platform === "slack" && entry.scope === "observed";
+                const rejectLabel = staysOpen ? "Dismiss" : "Reject";
+                return (
+                  <div className="settings-pairing__request" key={entry.id}>
+                    <div className="settings-pairing__request-text">
+                      <span className="settings-pairing__request-title">
+                        {pairingEntryLabel(entry)}
+                      </span>
+                      <div className="settings-pairing__request-details">
+                        {pairingEntryDetails(entry).map((detail) => (
+                          <div
+                            className="settings-pairing__request-detail"
+                            key={detail}
+                          >
+                            {detail}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="settings-pairing__request-actions">
+                      {actions.map((action) => {
+                        const isApproved =
+                          action.target !== undefined
+                          && approved.includes(action.target);
+                        if (isApproved) {
+                          return (
+                            <span
+                              className="settings-pairing__approved"
+                              key={action.label}
+                            >
+                              ✓ {action.approvedLabel ?? action.label}
+                            </span>
+                          );
+                        }
+                        return (
+                          <button
+                            className="button button--secondary"
+                            disabled={busyId === entry.id}
+                            key={action.label}
+                            type="button"
+                            onClick={() =>
+                              void decide(
+                                entry,
+                                "approve",
+                                action.target,
+                                staysOpen ? false : undefined,
+                              )
+                            }
+                          >
+                            {action.label}
+                          </button>
+                        );
+                      })}
+                      {staysOpen && actions.length > 1 ? (
+                        <button
+                          className="button button--primary"
+                          disabled={busyId === entry.id}
+                          type="button"
+                          onClick={() => void approveAll(entry)}
+                        >
+                          Approve all
+                        </button>
+                      ) : null}
+                      <button
+                        className="button button--ghost"
+                        disabled={busyId === entry.id}
+                        type="button"
+                        onClick={() => void decide(entry, "reject")}
+                      >
+                        {rejectLabel}
+                      </button>
+                    </div>
                   </div>
-                  {pairingApprovalActions(entry).map((action) => (
-                    <button
-                      className="button button--secondary"
-                      disabled={busyId === entry.id}
-                      key={action.label}
-                      type="button"
-                      onClick={() => void decide(entry, "approve", action.target)}
-                    >
-                      {action.label}
-                    </button>
-                  ))}
-                  <button
-                    className="button button--ghost"
-                    disabled={busyId === entry.id}
-                    type="button"
-                    onClick={() => void decide(entry, "reject")}
-                  >
-                    Reject
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -2000,20 +2181,42 @@ function pairingEntryLabel(entry: MessagingPairingEntry): string {
   return `${actor} wants access`;
 }
 
+/**
+ * Which approval targets apply to a Slack observed request: always the
+ * user, the channel unless it's a DM, and the team when a workspace ID
+ * was observed.
+ */
+function applicableApprovalTargets(
+  entry: MessagingPairingEntry,
+): MessagingPairingApprovalTarget[] {
+  const targets: MessagingPairingApprovalTarget[] = ["actor"];
+  if (entry.observedChat?.kind !== "dm") {
+    targets.push("conversation");
+  }
+  if (entry.observedChat?.bucketId) {
+    targets.push("team");
+  }
+  return targets;
+}
+
 function pairingApprovalActions(entry: MessagingPairingEntry): Array<{
   label: string;
+  approvedLabel?: string;
   target?: MessagingPairingApprovalTarget;
 }> {
   if (entry.platform !== "slack" || entry.scope !== "observed") {
     return [{ label: "Approve" }];
   }
-  const actions: Array<{ label: string; target: MessagingPairingApprovalTarget }> = [
-    { label: "Approve user", target: "actor" },
-  ];
-  if (entry.observedChat?.kind !== "dm") {
-    actions.push({ label: "Approve channel", target: "conversation" });
-  }
-  return actions;
+  const labels: Record<MessagingPairingApprovalTarget, { label: string; approvedLabel: string }> = {
+    actor: { label: "Approve user", approvedLabel: "User approved" },
+    conversation: { label: "Approve channel", approvedLabel: "Channel approved" },
+    team: { label: "Approve team", approvedLabel: "Team approved" },
+  };
+  return applicableApprovalTargets(entry).map((target) => ({
+    label: labels[target].label,
+    approvedLabel: labels[target].approvedLabel,
+    target,
+  }));
 }
 
 function pairingEntryDetails(entry: MessagingPairingEntry): string[] {
@@ -2040,7 +2243,12 @@ function pairingEntryDetails(entry: MessagingPairingEntry): string[] {
     details.push(entry.observedChat.title);
   }
   if (chat?.bucketId && chat.bucketId !== chat.id) {
-    const bucketLabel = entry.platform === "telegram" ? "Supergroup ID" : "Bucket ID";
+    const bucketLabel =
+      entry.platform === "telegram"
+        ? "Supergroup ID"
+        : entry.platform === "slack"
+          ? "Team ID"
+          : "Bucket ID";
     details.push(`${bucketLabel} ${chat.bucketId}`);
   }
   return details;

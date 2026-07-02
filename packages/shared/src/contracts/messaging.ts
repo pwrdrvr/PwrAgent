@@ -331,6 +331,13 @@ export type MessagingPairingEntry = {
   observedActor?: MessagingPairingObservedActor;
   observedChat?: MessagingPairingObservedChat;
   failureReason?: string;
+  /**
+   * Approval targets that have already been applied for this observed
+   * request. Lets the settings UI show which of user / channel / team
+   * are done and keep the request card visible for the remaining ones
+   * (Slack "approve user, then channel, then team" flow).
+   */
+  approvedTargets?: MessagingPairingApprovalTarget[];
 };
 
 export type GenerateMessagingPairingTokenRequest = {
@@ -356,11 +363,17 @@ export type ListMessagingPairingRequestsResponse = {
   entries: MessagingPairingEntry[];
 };
 
-export type MessagingPairingApprovalTarget = "actor" | "conversation";
+export type MessagingPairingApprovalTarget = "actor" | "conversation" | "team";
 
 export type ApproveMessagingPairingRequest = {
   entryId: string;
   target?: MessagingPairingApprovalTarget;
+  /**
+   * When `false`, apply the approval but keep the request `observed` so
+   * additional targets can be approved from the same card. Defaults to
+   * consuming the request (the historical behavior).
+   */
+  consume?: boolean;
 };
 
 export type ApproveMessagingPairingResponse = {

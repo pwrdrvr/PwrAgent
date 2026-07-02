@@ -228,8 +228,10 @@ function createSnapshot(
         signingSecret: { configured: false, source: "unset", writable: true },
         workspaceUrl: { value: "", source: "default" },
         inboundMode: { value: "socket", source: "default" },
-        teamAuthorizationMode: { value: "allow_all", source: "default" },
+        teamAuthorizationMode: { value: "approved_only", source: "default" },
         channelAuthorizationMode: { value: "approved_only", source: "default" },
+        dmAccessMode: { value: "authorized_users", source: "default" },
+        channelUserAccessMode: { value: "authorized_users", source: "default" },
         slashCommandPrefix: { value: "pwragent_", source: "default" },
         registerSlashCommands: { value: false, source: "default" },
         authorizedUserIds: { value: [], source: "default" },
@@ -2262,6 +2264,7 @@ describe("SettingsScreen", () => {
       expect(approveMessagingPairing).toHaveBeenCalledWith({
         entryId: "pairing-slack-1",
         target: "conversation",
+        consume: false,
       });
     });
 
@@ -2273,6 +2276,20 @@ describe("SettingsScreen", () => {
       expect(approveMessagingPairing).toHaveBeenCalledWith({
         entryId: "pairing-slack-1",
         target: "actor",
+        consume: false,
+      });
+    });
+
+    // A workspace was observed, so a team approval is offered too.
+    fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {
+      name: "Approve team",
+    }));
+
+    await waitFor(() => {
+      expect(approveMessagingPairing).toHaveBeenCalledWith({
+        entryId: "pairing-slack-1",
+        target: "team",
+        consume: false,
       });
     });
   });
@@ -2496,7 +2513,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const signingSecretInput = screen.getByLabelText("Signing Secret");
+    const signingSecretInput = screen.getByLabelText("Signing Secret (Optional)");
     const signingSecretControls = signingSecretInput.closest(".settings-secret");
     expect(signingSecretInput).toBeEnabled();
     expect(signingSecretControls).not.toBeNull();

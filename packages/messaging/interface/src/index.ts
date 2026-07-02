@@ -317,10 +317,22 @@ export type MessagingAdapterAuthorizationUpdate = {
   responseMode?: MessagingResponseMode;
   authorizedWorkspaceIds?: readonly string[];
   workspaceAuthorizationMode?: MessagingAuthorizationMode;
+  dmAccessMode?: MessagingDmAccessMode;
+  channelUserAccessMode?: MessagingChannelUserAccessMode;
 };
 
 export type MessagingResponseMode = "every_message" | "mention_only";
 export type MessagingAuthorizationMode = "approved_only" | "allow_all";
+/** Who may DM the bot directly (Slack). */
+export type MessagingDmAccessMode =
+  | "any_workspace_user"
+  | "authorized_users"
+  | "none";
+/** Which senders in an authorized channel the bot responds to (Slack). */
+export type MessagingChannelUserAccessMode =
+  | "any_channel_user"
+  | "authorized_users"
+  | "none";
 
 export type MessagingConversationResponseMode = {
   conversationId: string;

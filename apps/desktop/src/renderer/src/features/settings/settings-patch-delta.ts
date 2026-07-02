@@ -186,6 +186,15 @@ export function buildSlackPatchDelta(
   ) {
     patch.channelAuthorizationMode = candidate.channelAuthorizationMode.value;
   }
+  if (snapshot.dmAccessMode.value !== candidate.dmAccessMode.value) {
+    patch.dmAccessMode = candidate.dmAccessMode.value;
+  }
+  if (
+    snapshot.channelUserAccessMode.value
+    !== candidate.channelUserAccessMode.value
+  ) {
+    patch.channelUserAccessMode = candidate.channelUserAccessMode.value;
+  }
   if (snapshot.slashCommandPrefix.value !== candidate.slashCommandPrefix.value) {
     patch.slashCommandPrefix = candidate.slashCommandPrefix.value;
   }

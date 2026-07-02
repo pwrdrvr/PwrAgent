@@ -14,6 +14,8 @@ import type {
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingImageProfile,
   DesktopMessagingResponseMode,
+  DesktopMessagingSlackChannelUserAccessMode,
+  DesktopMessagingSlackDmAccessMode,
   DesktopOnboardingCompletedSource,
   DesktopOnboardingSnapshot,
   DesktopSettingsConfigPatch,
@@ -490,6 +492,12 @@ export class DesktopSettingsService {
       slackAuthorizedWorkspaces.value,
       slackAuthorizedChannels.value,
     );
+    const slackDmAccessMode = this.resolveSlackDmAccessMode(
+      config.messaging?.slack?.dmAccessMode,
+    );
+    const slackChannelUserAccessMode = this.resolveSlackChannelUserAccessMode(
+      config.messaging?.slack?.channelUserAccessMode,
+    );
 
     return {
       fetchedAt: this.now(),
@@ -803,6 +811,8 @@ export class DesktopSettingsService {
           ),
           teamAuthorizationMode: slackTeamAuthorizationMode,
           channelAuthorizationMode: slackChannelAuthorizationMode,
+          dmAccessMode: slackDmAccessMode,
+          channelUserAccessMode: slackChannelUserAccessMode,
           slashCommandPrefix: this.resolveStringWithDefault(
             config.messaging?.slack?.slashCommandPrefix,
             "pwragent_",
@@ -1880,29 +1890,44 @@ export class DesktopSettingsService {
     };
   }
 
+  // Locked-down defaults: a fresh Slack setup responds to no one until the
+  // operator pairs/approves a team, channel, and/or user. Adding entries no
+  // longer silently flips the mode — the mode is an explicit choice.
   private resolveSlackTeamAuthorizationMode(
     configValue: DesktopMessagingAuthorizationMode | undefined,
-    authorizedWorkspaces: DesktopAuthorizedContact[],
+    _authorizedWorkspaces: DesktopAuthorizedContact[],
   ): DesktopSettingsValue<DesktopMessagingAuthorizationMode> {
     return {
-      value: configValue ?? (authorizedWorkspaces.length > 0
-        ? "approved_only"
-        : "allow_all"),
+      value: configValue ?? "approved_only",
       source: configValue === undefined ? "default" : "config",
     };
   }
 
   private resolveSlackChannelAuthorizationMode(
     configValue: DesktopMessagingAuthorizationMode | undefined,
-    authorizedWorkspaces: DesktopAuthorizedContact[],
-    authorizedChannels: DesktopAuthorizedContact[],
+    _authorizedWorkspaces: DesktopAuthorizedContact[],
+    _authorizedChannels: DesktopAuthorizedContact[],
   ): DesktopSettingsValue<DesktopMessagingAuthorizationMode> {
     return {
-      value: configValue ?? (authorizedChannels.length > 0
-        ? "approved_only"
-        : authorizedWorkspaces.length > 0
-          ? "allow_all"
-          : "approved_only"),
+      value: configValue ?? "approved_only",
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveSlackDmAccessMode(
+    configValue: DesktopMessagingSlackDmAccessMode | undefined,
+  ): DesktopSettingsValue<DesktopMessagingSlackDmAccessMode> {
+    return {
+      value: configValue ?? "authorized_users",
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveSlackChannelUserAccessMode(
+    configValue: DesktopMessagingSlackChannelUserAccessMode | undefined,
+  ): DesktopSettingsValue<DesktopMessagingSlackChannelUserAccessMode> {
+    return {
+      value: configValue ?? "authorized_users",
       source: configValue === undefined ? "default" : "config",
     };
   }

@@ -347,6 +347,12 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (update.workspaceAuthorizationMode !== undefined) {
       this.config.teamAuthorizationMode = update.workspaceAuthorizationMode;
     }
+    if (update.dmAccessMode !== undefined) {
+      this.config.dmAccessMode = update.dmAccessMode;
+    }
+    if (update.channelUserAccessMode !== undefined) {
+      this.config.channelUserAccessMode = update.channelUserAccessMode;
+    }
     this.config.authorizedActorIds = slackContactsFromIds(
       update.authorizedActorIds,
       this.config.authorizedActorIds,
@@ -1167,23 +1173,35 @@ export class SlackAdapter implements SlackProviderAdapter {
   }): boolean {
     if (params.pairing) return true;
 
-    if (!this.authorizedActorIds.includes(params.actor.platformUserId)) {
+    const actorAuthorized = this.authorizedActorIds.includes(
+      params.actor.platformUserId,
+    );
+    const reject = (reason: "unauthorized-actor" | "unauthorized-conversation"): boolean => {
       this.emitInboundRejected({
         id: this.newEventId("slack-rejected"),
         kind: params.kind,
         actor: params.actor,
         channel: params.channel,
         receivedAt: this.now(),
-        reason: "unauthorized-actor",
+        reason,
         ...(params.routingState ? { routingState: params.routingState } : {}),
       });
       return false;
-    }
+    };
 
+    // DMs are governed by the DM access mode alone — the team/channel gates
+    // are about (shared) channel traffic and never apply to direct messages.
     if (params.channel.conversation.kind === "dm") {
+      const dmMode = slackDmAccessMode(this.config);
+      if (dmMode === "none") return reject("unauthorized-conversation");
+      if (dmMode === "authorized_users" && !actorAuthorized) {
+        return reject("unauthorized-actor");
+      }
       return true;
     }
 
+    // Channel / thread / group DM traffic must clear the team gate, then the
+    // channel gate, then the per-user channel access mode.
     const allowedConversations = this.config.authorizedConversationIds?.map((item) => item.id)
       ?? [];
     const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id)
@@ -1194,20 +1212,16 @@ export class SlackAdapter implements SlackProviderAdapter {
     const conversationAllowed = slackChannelAuthorizationMode(this.config) === "allow_all"
       || allowedConversations.includes(params.channel.conversation.id);
 
-    if (teamAllowed && conversationAllowed) {
-      return true;
+    if (!teamAllowed || !conversationAllowed) {
+      return reject("unauthorized-conversation");
     }
 
-    this.emitInboundRejected({
-      id: this.newEventId("slack-rejected"),
-      kind: params.kind,
-      actor: params.actor,
-      channel: params.channel,
-      receivedAt: this.now(),
-      reason: "unauthorized-conversation",
-      ...(params.routingState ? { routingState: params.routingState } : {}),
-    });
-    return false;
+    const channelUserMode = slackChannelUserAccessMode(this.config);
+    if (channelUserMode === "none") return reject("unauthorized-conversation");
+    if (channelUserMode === "authorized_users" && !actorAuthorized) {
+      return reject("unauthorized-actor");
+    }
+    return true;
   }
 
   private async channelRefForSlack(params: {
@@ -1757,6 +1771,21 @@ function slackChannelAuthorizationMode(
       : (config.authorizedTeamIds?.length ?? 0) > 0
         ? "allow_all"
         : "approved_only");
+}
+
+// Default to the legacy posture (only pre-authorized users) so adapters
+// constructed without explicit modes keep their historical behavior. The
+// desktop settings layer supplies explicit values with locked-down defaults.
+function slackDmAccessMode(
+  config: SlackMessagingConfig,
+): "any_workspace_user" | "authorized_users" | "none" {
+  return config.dmAccessMode ?? "authorized_users";
+}
+
+function slackChannelUserAccessMode(
+  config: SlackMessagingConfig,
+): "any_channel_user" | "authorized_users" | "none" {
+  return config.channelUserAccessMode ?? "authorized_users";
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {

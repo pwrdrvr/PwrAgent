@@ -19,6 +19,7 @@ const settingsServiceMock = vi.hoisted(() => ({
 }));
 const pairingStoreMock = vi.hoisted(() => ({
   markStatus: vi.fn(),
+  recordApproval: vi.fn(),
 }));
 const activityLogMock = vi.hoisted(() => ({
   getPlatformActivitySummary: vi.fn(() => ({ summaries: [] as unknown[] })),
@@ -134,6 +135,7 @@ describe("messaging status ipc", () => {
       configPath: "/tmp/pwragent-config.toml",
     });
     pairingStoreMock.markStatus.mockReset();
+    pairingStoreMock.recordApproval.mockReset();
     activityLogMock.getPlatformActivitySummary.mockClear();
     activityLogMock.getPlatformActivitySummary.mockReturnValue({ summaries: [] });
     activityLogMock.record.mockClear();
@@ -350,6 +352,60 @@ describe("messaging status ipc", () => {
         },
       },
     });
+  });
+
+  it("keeps a Slack request observed and records the target when consume is false", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const entry = {
+      id: "pairing-slack-stay",
+      platform: "slack",
+      instanceId: "default",
+      scope: "observed",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U012ABCDEF0", displayName: "Harold" },
+      observedChat: {
+        id: "C012ABCDEF0",
+        kind: "channel",
+        title: "team-alerts",
+        bucketId: "T025C2NKT",
+      },
+    };
+    const observedWithTarget = { ...entry, approvedTargets: ["team"] };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    pairingStoreMock.recordApproval.mockReturnValue(observedWithTarget);
+
+    registerMessagingStatusIpcHandlers();
+
+    await expect(
+      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+        {},
+        { entryId: entry.id, target: "team", consume: false },
+      ),
+    ).resolves.toMatchObject({ added: true, entry: observedWithTarget });
+
+    // Team approval writes the workspace allowlist using the observed team ID.
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        slack: {
+          authorizedWorkspaces: [
+            { id: "T025C2NKT", displayName: "" },
+          ],
+        },
+      },
+    });
+    // Stays observed: recorded, never consumed, no outcome delivered.
+    expect(pairingStoreMock.recordApproval).toHaveBeenCalledWith({
+      entryId: entry.id,
+      target: "team",
+    });
+    expect(pairingStoreMock.markStatus).not.toHaveBeenCalled();
+    expect(runtimeMock.deliverPairingOutcome).not.toHaveBeenCalled();
   });
 
   it("approves Feishu user and group pairing into the Feishu allowlists", async () => {

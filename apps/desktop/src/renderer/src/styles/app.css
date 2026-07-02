@@ -5627,6 +5627,42 @@ textarea,
   border-top: 0;
 }
 
+/* Labeled divider that groups related fields within a section
+   (Connection / Authorization / Advanced). */
+.settings-group-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px 6px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.settings-group-label:first-child {
+  border-top: 0;
+}
+
+.settings-group-label + .settings-field,
+.settings-group-label + .settings-subfield > .settings-field {
+  border-top: 0;
+}
+
+/* A field that is a sub-setting of the field above it (e.g. Authorized
+   Team IDs under "Team access default"). Indented with a guide rail. */
+.settings-subfield {
+  margin-left: 18px;
+  border-left: 2px solid var(--border-subtle);
+}
+
+.settings-subfield > .settings-field {
+  border-top: 0;
+  padding-left: 18px;
+}
+
 .settings-field__label {
   display: flex;
   flex-direction: column;
@@ -6050,7 +6086,10 @@ textarea,
 }
 
 .settings-pairing__request {
-  padding: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: var(--bg-panel-elevated);
@@ -6060,25 +6099,48 @@ textarea,
   flex: 1 1 auto;
   min-width: 0;
   display: grid;
-  gap: 3px;
-}
-
-.settings-pairing__request-title,
-.settings-pairing__request-meta {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  gap: 6px;
 }
 
 .settings-pairing__request-title {
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-size: 12px;
+  font-weight: 650;
 }
 
-.settings-pairing__request-meta {
-  color: var(--text-muted);
+.settings-pairing__request-details {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.settings-pairing__request-detail {
+  min-width: 0;
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.settings-pairing__request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-pairing__approved {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--success-border);
+  border-radius: 999px;
+  background: var(--success-soft);
+  color: var(--success-text);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 @media (max-width: 760px) {
@@ -6284,6 +6346,12 @@ textarea,
    (Messaging → Telegram / Discord, Models → Grok / Codex). Mirrors
    the v2 design's `.pa-testblock`. The status pill on the right
    uses the same chip-tone vocabulary as `SettingsChipTone`. */
+.settings-testblock-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .settings-testblock {
   display: flex;
   align-items: center;
@@ -6292,6 +6360,38 @@ textarea,
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
+}
+
+.settings-testblock__prereqs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0;
+  padding: 0 2px;
+  list-style: none;
+}
+
+.settings-testblock__prereq {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.settings-testblock__prereq-mark {
+  display: inline-flex;
+  width: 14px;
+  justify-content: center;
+}
+
+.settings-testblock__prereq.is-met {
+  color: var(--success-text);
+}
+
+.settings-testblock__prereq.is-missing {
+  color: var(--text-muted);
 }
 
 .settings-testblock__icon {

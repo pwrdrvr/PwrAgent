@@ -110,6 +110,8 @@ describe("desktop messaging config", () => {
       "botToken",
       "channel",
       "channelAuthorizationMode",
+      "channelUserAccessMode",
+      "dmAccessMode",
       "enabled",
       "inboundMode",
       "registerSlashCommands",
@@ -311,7 +313,9 @@ describe("desktop messaging config", () => {
       appToken: "settings-slack-app-token",
       inboundMode: "socket",
       channelAuthorizationMode: "approved_only",
-      teamAuthorizationMode: "allow_all",
+      teamAuthorizationMode: "approved_only",
+      dmAccessMode: "authorized_users",
+      channelUserAccessMode: "authorized_users",
       authorizedActorIds: [],
       authorizedTeamIds: [],
     });
@@ -340,7 +344,7 @@ describe("desktop messaging config", () => {
       appToken: "env-slack-app-token",
       authorizedTeamIds: [{ id: "T012ABCDEF0", displayName: "" }],
       teamAuthorizationMode: "approved_only",
-      channelAuthorizationMode: "allow_all",
+      channelAuthorizationMode: "approved_only",
     });
   });
 
@@ -383,7 +387,9 @@ describe("desktop messaging config", () => {
       appToken: "xapp-token",
       inboundMode: "socket",
       channelAuthorizationMode: "approved_only",
-      teamAuthorizationMode: "allow_all",
+      teamAuthorizationMode: "approved_only",
+      dmAccessMode: "authorized_users",
+      channelUserAccessMode: "authorized_users",
       authorizedActorIds: [],
       authorizedTeamIds: [],
     });

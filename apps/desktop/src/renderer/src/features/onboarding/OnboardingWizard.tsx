@@ -4551,6 +4551,9 @@ function PairingBlock(props: {
   const [observedChatKind, setObservedChatKind] = useState<string | undefined>(
     undefined,
   );
+  const [observedChatBucketId, setObservedChatBucketId] = useState<
+    string | undefined
+  >(undefined);
   const [approving, setApproving] = useState(false);
   // Pairings approved during this wizard session, in order. Rendered
   // as a compact summary once at least one pairing has been approved.
@@ -4582,6 +4585,7 @@ function PairingBlock(props: {
           event.entry.observedChat?.title ?? event.entry.observedChat?.id,
         );
         setObservedChatKind(event.entry.observedChat?.kind);
+        setObservedChatBucketId(event.entry.observedChat?.bucketId);
       }
     });
   }, [props.desktopApi, props.platform]);
@@ -4614,6 +4618,7 @@ function PairingBlock(props: {
       setObservedActorLabel(undefined);
       setObservedChatLabel(undefined);
       setObservedChatKind(undefined);
+      setObservedChatBucketId(undefined);
       setResolution(undefined);
       setPairingAnother(false);
     } catch (caught) {
@@ -4634,6 +4639,7 @@ function PairingBlock(props: {
     setObservedActorLabel(undefined);
     setObservedChatLabel(undefined);
     setObservedChatKind(undefined);
+    setObservedChatBucketId(undefined);
     setError(undefined);
     setPairingAnother(true);
   };
@@ -4679,6 +4685,7 @@ function PairingBlock(props: {
     setObservedActorLabel(undefined);
     setObservedChatLabel(undefined);
     setObservedChatKind(undefined);
+    setObservedChatBucketId(undefined);
   };
 
   // Active-flow gate: when the operator hasn't approved anything
@@ -4825,6 +4832,16 @@ function PairingBlock(props: {
                       onClick={() => void approve("conversation")}
                     >
                       Approve channel
+                    </button>
+                  ) : null}
+                  {observedChatBucketId ? (
+                    <button
+                      type="button"
+                      className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+                      disabled={approving || !props.desktopApi?.approveMessagingPairing}
+                      onClick={() => void approve("team")}
+                    >
+                      Approve team
                     </button>
                   ) : null}
                 </>

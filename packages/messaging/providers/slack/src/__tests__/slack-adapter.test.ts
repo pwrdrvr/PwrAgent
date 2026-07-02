@@ -1230,6 +1230,154 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("allows DMs from any workspace user when the DM access mode is open", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, dmAccessMode: "any_workspace_user" },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => rejected.push(event));
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "D999AAA111",
+        channel_type: "im",
+        team: "T012ABCDEF0",
+        ts: "1712023033.123456",
+        user: "UNOTLISTED0",
+        text: "hi from an unlisted user",
+      },
+    });
+
+    expect(rejected).toEqual([]);
+    expect(events).toHaveLength(1);
+  });
+
+  it("blocks DMs entirely when the DM access mode is none", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, dmAccessMode: "none" },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => rejected.push(event));
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "D012ABCDEF0",
+        channel_type: "im",
+        team: "T012ABCDEF0",
+        ts: "1712023034.123456",
+        user: "U012ABCDEF0",
+        text: "even an authorized user is blocked",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({ reason: "unauthorized-conversation" }),
+    ]);
+  });
+
+  it("responds to any channel user when channel user access is open", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedConversationIds: [{ id: "C012ABCDEF0", displayName: "dev" }],
+        channelAuthorizationMode: "approved_only",
+        teamAuthorizationMode: "allow_all",
+        channelUserAccessMode: "any_channel_user",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => rejected.push(event));
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023035.123456",
+        user: "UNOTLISTED0",
+        text: "unlisted user in an approved channel",
+      },
+    });
+
+    expect(rejected).toEqual([]);
+    expect(events).toHaveLength(1);
+  });
+
+  it("rejects an unlisted channel user when channel user access is authorized-only", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedConversationIds: [{ id: "C012ABCDEF0", displayName: "dev" }],
+        channelAuthorizationMode: "approved_only",
+        teamAuthorizationMode: "allow_all",
+        channelUserAccessMode: "authorized_users",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => rejected.push(event));
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023036.123456",
+        user: "UNOTLISTED0",
+        text: "unlisted user in an approved channel",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({ reason: "unauthorized-actor" }),
+    ]);
+  });
+
   it("routes Block Kit callbacks from DMs back to the original DM handle", async () => {
     const socket = fakeSocket();
     const store = fakeStore();

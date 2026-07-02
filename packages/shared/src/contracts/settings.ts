@@ -112,6 +112,14 @@ export type DesktopAuthorizedContact = {
 
 export type DesktopMessagingResponseMode = "every_message" | "mention_only";
 export type DesktopMessagingAuthorizationMode = "approved_only" | "allow_all";
+export type DesktopMessagingSlackDmAccessMode =
+  | "any_workspace_user"
+  | "authorized_users"
+  | "none";
+export type DesktopMessagingSlackChannelUserAccessMode =
+  | "any_channel_user"
+  | "authorized_users"
+  | "none";
 
 export type DesktopMessagingFullAccessWarningGlobalPolicy =
   | "always"
@@ -586,6 +594,8 @@ export type DesktopSettingsSnapshot = {
       inboundMode: DesktopSettingsValue<"socket" | "events">;
       teamAuthorizationMode: DesktopSettingsValue<DesktopMessagingAuthorizationMode>;
       channelAuthorizationMode: DesktopSettingsValue<DesktopMessagingAuthorizationMode>;
+      dmAccessMode: DesktopSettingsValue<DesktopMessagingSlackDmAccessMode>;
+      channelUserAccessMode: DesktopSettingsValue<DesktopMessagingSlackChannelUserAccessMode>;
       slashCommandPrefix: DesktopSettingsValue<string>;
       registerSlashCommands: DesktopSettingsValue<boolean>;
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
@@ -795,6 +805,8 @@ export type DesktopSettingsConfigPatch = {
       inboundMode?: "socket" | "events";
       teamAuthorizationMode?: DesktopMessagingAuthorizationMode;
       channelAuthorizationMode?: DesktopMessagingAuthorizationMode;
+      dmAccessMode?: DesktopMessagingSlackDmAccessMode;
+      channelUserAccessMode?: DesktopMessagingSlackChannelUserAccessMode;
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];

@@ -1,5 +1,7 @@
 import type {
   MessagingAuthorizationMode,
+  MessagingChannelUserAccessMode,
+  MessagingDmAccessMode,
   MessagingResponseMode,
 } from "@pwragent/messaging-interface";
 
@@ -17,6 +19,8 @@ export type SlackMessagingConfig = {
   authorizedConversationIds?: SlackAuthorizedContact[];
   authorizedTeamIds?: SlackAuthorizedContact[];
   channelAuthorizationMode?: MessagingAuthorizationMode;
+  channelUserAccessMode?: MessagingChannelUserAccessMode;
+  dmAccessMode?: MessagingDmAccessMode;
   botToken: string;
   channel: "slack";
   enabled?: boolean;
