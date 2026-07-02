@@ -2228,15 +2228,6 @@ textarea,
   text-align: left;
 }
 
-.messaging-activity-pane__header h2 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.005em;
-  line-height: 1.2;
-}
-
 .messaging-activity-pane__header:hover .messaging-activity-pane__chevron {
   color: var(--text-secondary);
 }
@@ -5627,7 +5618,8 @@ textarea,
   text-transform: uppercase;
 }
 
-.settings-panel__header h2 {
+.settings-panel__header h2,
+.messaging-activity-pane__header h2 {
   margin: 0;
   color: var(--text-primary);
   font-size: 15px;

@@ -96,25 +96,43 @@ export function MessagingActivityScreen(props: { desktopApi?: DesktopApi }) {
     setCollapsed((current) => (current === pane ? null : pane));
   }, []);
 
-  const startDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    const container = containerRef.current;
-    if (!container) return;
-    event.preventDefault();
-    const rect = container.getBoundingClientRect();
-    const onMove = (move: PointerEvent) => {
-      if (rect.height <= 0) return;
-      const fraction = (move.clientY - rect.top) / rect.height;
-      setSplitFraction(Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, fraction)));
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      document.body.style.cursor = "";
-    };
-    document.body.style.cursor = "row-resize";
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+  // Tracks the in-flight drag so an unmount mid-drag can tear down the
+  // window-level listeners and reset the body cursor (see the cleanup effect).
+  const dragAbortRef = useRef<AbortController | null>(null);
+  const endDrag = useCallback(() => {
+    dragAbortRef.current?.abort();
+    dragAbortRef.current = null;
+    document.body.style.cursor = "";
   }, []);
+
+  const startDrag = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const container = containerRef.current;
+      if (!container) return;
+      event.preventDefault();
+      endDrag(); // Guard against a leaked prior drag.
+      const controller = new AbortController();
+      dragAbortRef.current = controller;
+      const rect = container.getBoundingClientRect();
+      const onMove = (move: PointerEvent) => {
+        if (rect.height <= 0) return;
+        const fraction = (move.clientY - rect.top) / rect.height;
+        setSplitFraction(Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, fraction)));
+      };
+      document.body.style.cursor = "row-resize";
+      window.addEventListener("pointermove", onMove, {
+        signal: controller.signal,
+      });
+      window.addEventListener("pointerup", endDrag, {
+        signal: controller.signal,
+      });
+    },
+    [endDrag],
+  );
+
+  // Abort any drag still in flight when the screen unmounts so the
+  // window-level listeners and the row-resize cursor don't dangle.
+  useEffect(() => endDrag, [endDrag]);
 
   return (
     <section
