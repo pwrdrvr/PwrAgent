@@ -4715,6 +4715,7 @@ function buildThreadStartPayload(params: {
   config?: CodexThreadStartParams["config"];
   defaultModeRequestUserInput?: boolean;
   dynamicTools?: CodexDynamicToolSpec[];
+  threadSource?: CodexThreadStartParams["threadSource"];
 }): CodexThreadStartParams {
   const base: CodexThreadStartParams = {
     experimentalRawEvents: false,
@@ -4744,6 +4745,9 @@ function buildThreadStartPayload(params: {
   }
   if (params.ephemeral !== undefined) {
     base.ephemeral = params.ephemeral;
+  }
+  if (params.threadSource) {
+    base.threadSource = params.threadSource;
   }
   const config = mergeCodexShellEnvironmentPolicyConfig(
     mergeCodexDefaultModeRequestUserInputConfig(
@@ -6037,6 +6041,7 @@ export class CodexAppServerClient {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
+    threadSource?: CodexThreadStartParams["threadSource"];
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
