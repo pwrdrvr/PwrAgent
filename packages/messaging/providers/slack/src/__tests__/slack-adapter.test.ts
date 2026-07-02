@@ -366,6 +366,10 @@ describe("SlackAdapter", () => {
         retryable: true,
         scope: {
           id: "slack:channel:C012ABCDEF0",
+          kind: "channel",
+          // Per-minute sliding window (not the legacy 1/sec) so an agent turn's
+          // burst is admitted. Channels mirror Discord: 30/min, 5 reserved.
+          budget: { limit: 30, intervalMs: 60_000, reserved: 5 },
         },
       },
     });
@@ -375,9 +379,54 @@ describe("SlackAdapter", () => {
         retryable: true,
         scope: expect.objectContaining({
           id: "slack:channel:C012ABCDEF0",
+          budget: { limit: 30, intervalMs: 60_000, reserved: 5 },
         }),
       }),
     ]);
+  });
+
+  it("budgets Slack DMs over a per-minute window like Telegram DMs", async () => {
+    const rateLimitError = Object.assign(new Error("rate_limited"), {
+      retryAfter: 3,
+    });
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: {
+        ...fakeApi({}),
+        postMessage: async () => {
+          throw rateLimitError;
+        },
+      },
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(adapter.deliver({
+      id: "message-1",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [{ type: "text", text: "Final answer" }],
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        bindingId: "slack-binding-1",
+        channel: {
+          channel: "slack",
+          conversation: { id: "D012ABCDEF0", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    })).resolves.toMatchObject({
+      outcome: "failed",
+      rateLimit: {
+        scope: {
+          id: "slack:channel:D012ABCDEF0",
+          kind: "dm",
+          budget: { limit: 60, intervalMs: 60_000, reserved: 0 },
+        },
+      },
+    });
   });
 
   it("marks Slack file-upload rate limits non-retryable after posting the message", async () => {

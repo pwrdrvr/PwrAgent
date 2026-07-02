@@ -100,17 +100,19 @@ export class MessagingDeliveryBudget {
     }
 
     if (!this.hasCapacity(request.scope, state, request.priority)) {
-      const slowModeUntil = Math.max(
-        nextWindowAt(request.scope, state, now),
-        now + SLOW_MODE_MINIMUM_MS,
-      );
+      // Local budget (not a provider 429): capacity frees at the next sliding
+      // window, so a deferrable message should retry then rather than waiting
+      // the full slow-mode floor. Slow mode itself still arms at the floor so
+      // low-priority chatter stays suppressed for at least SLOW_MODE_MINIMUM_MS.
+      const nextWindow = nextWindowAt(request.scope, state, now);
+      const slowModeUntil = Math.max(nextWindow, now + SLOW_MODE_MINIMUM_MS);
       state.slowModeUntil = Math.max(state.slowModeUntil ?? 0, slowModeUntil);
       slowMode = true;
       if (DEFERABLE_PRIORITIES.has(request.priority)) {
         return {
           outcome: "deferred",
           reason: "budget-exhausted",
-          retryAt: slowModeUntil,
+          retryAt: nextWindow,
           slowMode,
         };
       }

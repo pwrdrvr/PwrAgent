@@ -961,12 +961,21 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   private rateLimitScopeForTarget(target: { channelId: string }): MessagingDeliveryScope {
+    const isDm = target.channelId.startsWith("D");
     return {
       platform: this.channel,
       id: `slack:channel:${target.channelId}`,
-      kind: target.channelId.startsWith("D") ? "dm" : "channel",
-      label: target.channelId.startsWith("D") ? "Slack DM" : "Slack channel",
-      budget: { limit: 1, intervalMs: 1_000, reserved: 0 },
+      kind: isDm ? "dm" : "channel",
+      label: isDm ? "Slack DM" : "Slack channel",
+      // Slack budgets deliveries per channel over a sliding minute so a single
+      // agent turn's normal burst (status update + final stream + assistant
+      // message) is admitted instead of tripping slow mode on the 2nd send.
+      // Channels mirror Discord (30/min, 5 reserved for the final answer);
+      // DMs mirror Telegram DMs (60/min). Both stay comfortably under Slack's
+      // ~1 msg/sec/channel sustained limit while tolerating in-turn bursts.
+      budget: isDm
+        ? { limit: 60, intervalMs: 60_000, reserved: 0 }
+        : { limit: 30, intervalMs: 60_000, reserved: 5 },
     };
   }
 
