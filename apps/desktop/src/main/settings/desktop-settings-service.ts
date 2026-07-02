@@ -40,6 +40,12 @@ import {
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
 } from "@pwragent/shared";
+import {
+  SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
+  SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
+  SLACK_DM_ACCESS_MODE_DEFAULT,
+  SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
+} from "@pwragent/messaging-interface";
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import {
   applyDesktopSettingsPatch,
@@ -485,12 +491,9 @@ export class DesktopSettingsService {
     );
     const slackTeamAuthorizationMode = this.resolveSlackTeamAuthorizationMode(
       config.messaging?.slack?.teamAuthorizationMode,
-      slackAuthorizedWorkspaces.value,
     );
     const slackChannelAuthorizationMode = this.resolveSlackChannelAuthorizationMode(
       config.messaging?.slack?.channelAuthorizationMode,
-      slackAuthorizedWorkspaces.value,
-      slackAuthorizedChannels.value,
     );
     const slackDmAccessMode = this.resolveSlackDmAccessMode(
       config.messaging?.slack?.dmAccessMode,
@@ -1895,21 +1898,18 @@ export class DesktopSettingsService {
   // longer silently flips the mode — the mode is an explicit choice.
   private resolveSlackTeamAuthorizationMode(
     configValue: DesktopMessagingAuthorizationMode | undefined,
-    _authorizedWorkspaces: DesktopAuthorizedContact[],
   ): DesktopSettingsValue<DesktopMessagingAuthorizationMode> {
     return {
-      value: configValue ?? "approved_only",
+      value: configValue ?? SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }
 
   private resolveSlackChannelAuthorizationMode(
     configValue: DesktopMessagingAuthorizationMode | undefined,
-    _authorizedWorkspaces: DesktopAuthorizedContact[],
-    _authorizedChannels: DesktopAuthorizedContact[],
   ): DesktopSettingsValue<DesktopMessagingAuthorizationMode> {
     return {
-      value: configValue ?? "approved_only",
+      value: configValue ?? SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }
@@ -1918,7 +1918,7 @@ export class DesktopSettingsService {
     configValue: DesktopMessagingSlackDmAccessMode | undefined,
   ): DesktopSettingsValue<DesktopMessagingSlackDmAccessMode> {
     return {
-      value: configValue ?? "authorized_users",
+      value: configValue ?? SLACK_DM_ACCESS_MODE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }
@@ -1927,7 +1927,7 @@ export class DesktopSettingsService {
     configValue: DesktopMessagingSlackChannelUserAccessMode | undefined,
   ): DesktopSettingsValue<DesktopMessagingSlackChannelUserAccessMode> {
     return {
-      value: configValue ?? "authorized_users",
+      value: configValue ?? SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }

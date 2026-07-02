@@ -334,6 +334,22 @@ export type MessagingChannelUserAccessMode =
   | "authorized_users"
   | "none";
 
+/**
+ * Locked-down default posture for Slack access modes. Single source of truth
+ * shared by the adapter's fallbacks, the desktop settings resolvers, and the
+ * env-only config loader so the four gates can never drift apart. A fresh
+ * Slack config requires listed teams and channels, and only pre-authorized
+ * users can DM or be responded to in channels.
+ */
+export const SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT: MessagingAuthorizationMode =
+  "approved_only";
+export const SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT: MessagingAuthorizationMode =
+  "approved_only";
+export const SLACK_DM_ACCESS_MODE_DEFAULT: MessagingDmAccessMode =
+  "authorized_users";
+export const SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT: MessagingChannelUserAccessMode =
+  "authorized_users";
+
 export type MessagingConversationResponseMode = {
   conversationId: string;
   responseMode: MessagingResponseMode;

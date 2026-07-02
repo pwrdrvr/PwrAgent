@@ -17,6 +17,12 @@ import type {
   MessagingAdapterRenderingPreferencesUpdate,
   MessagingConversationResponseMode,
 } from "@pwragent/messaging-interface";
+import {
+  SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
+  SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
+  SLACK_DM_ACCESS_MODE_DEFAULT,
+  SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
+} from "@pwragent/messaging-interface";
 import type { MessagingAttachmentPolicy } from "./core/messaging-attachment-processor";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { getMainLogger } from "../log";
@@ -624,11 +630,11 @@ export function loadDesktopMessagingConfig(
               env,
               SLACK_STREAMING_RESPONSES_ENV,
             ).value ?? false,
-            channelAuthorizationMode: "approved_only",
-            channelUserAccessMode: "authorized_users",
-            dmAccessMode: "authorized_users",
+            channelAuthorizationMode: SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
+            channelUserAccessMode: SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
+            dmAccessMode: SLACK_DM_ACCESS_MODE_DEFAULT,
             responseMode: "mention_only",
-            teamAuthorizationMode: "approved_only",
+            teamAuthorizationMode: SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
             authorizedActorIds: slackAuthorizedActorIds,
             authorizedTeamIds: slackAuthorizedWorkspaces,
           },

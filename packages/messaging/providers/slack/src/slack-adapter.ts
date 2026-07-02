@@ -6,6 +6,9 @@ import type {
   MessagingAdapterState,
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
+  MessagingAuthorizationMode,
+  MessagingChannelUserAccessMode,
+  MessagingDmAccessMode,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
@@ -29,7 +32,13 @@ import type {
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
-import { extractMessagingPairingToken } from "@pwragent/messaging-interface";
+import {
+  extractMessagingPairingToken,
+  SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
+  SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
+  SLACK_DM_ACCESS_MODE_DEFAULT,
+  SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
+} from "@pwragent/messaging-interface";
 import type { SlackMessagingConfig } from "./slack-config.ts";
 import {
   actionsForSlackIntent,
@@ -1755,37 +1764,33 @@ function slackContactsFromIds(
   return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 
+// All four fall back to the shared locked-down defaults so the adapter's gate
+// can never be looser than what the settings screen shows. Callers that want a
+// broader posture must set the mode explicitly.
 function slackTeamAuthorizationMode(
   config: SlackMessagingConfig,
-): "approved_only" | "allow_all" {
-  return config.teamAuthorizationMode
-    ?? ((config.authorizedTeamIds?.length ?? 0) > 0 ? "approved_only" : "allow_all");
+): MessagingAuthorizationMode {
+  return config.teamAuthorizationMode ?? SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT;
 }
 
 function slackChannelAuthorizationMode(
   config: SlackMessagingConfig,
-): "approved_only" | "allow_all" {
-  return config.channelAuthorizationMode
-    ?? ((config.authorizedConversationIds?.length ?? 0) > 0
-      ? "approved_only"
-      : (config.authorizedTeamIds?.length ?? 0) > 0
-        ? "allow_all"
-        : "approved_only");
+): MessagingAuthorizationMode {
+  return (
+    config.channelAuthorizationMode ?? SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT
+  );
 }
 
-// Default to the legacy posture (only pre-authorized users) so adapters
-// constructed without explicit modes keep their historical behavior. The
-// desktop settings layer supplies explicit values with locked-down defaults.
 function slackDmAccessMode(
   config: SlackMessagingConfig,
-): "any_workspace_user" | "authorized_users" | "none" {
-  return config.dmAccessMode ?? "authorized_users";
+): MessagingDmAccessMode {
+  return config.dmAccessMode ?? SLACK_DM_ACCESS_MODE_DEFAULT;
 }
 
 function slackChannelUserAccessMode(
   config: SlackMessagingConfig,
-): "any_channel_user" | "authorized_users" | "none" {
-  return config.channelUserAccessMode ?? "authorized_users";
+): MessagingChannelUserAccessMode {
+  return config.channelUserAccessMode ?? SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT;
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {

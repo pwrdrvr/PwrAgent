@@ -17,6 +17,11 @@ const baseConfig = {
   authorizedActorIds: [{ id: "U012ABCDEF0", displayName: "Alice" }],
   authorizedTeamIds: [{ id: "T012ABCDEF0", displayName: "PwrDrvr" }],
   responseMode: "every_message" as const,
+  // Open the team/channel gates by default so tests focused on delivery and
+  // parsing aren't blocked by the locked-down defaults; authorization tests
+  // override these explicitly.
+  teamAuthorizationMode: "allow_all" as const,
+  channelAuthorizationMode: "allow_all" as const,
 };
 
 function fakeStore(): MessagingCallbackHandleStore & {
@@ -1019,6 +1024,7 @@ describe("SlackAdapter", () => {
       config: {
         ...baseConfig,
         authorizedTeamIds: [{ id: "TALLOWED123", displayName: "Allowed" }],
+        teamAuthorizationMode: "approved_only",
       },
       callbackHandleStore: fakeStore(),
       api: fakeApi({}),
@@ -1059,7 +1065,11 @@ describe("SlackAdapter", () => {
   it("rejects group DM events when the authorized workspace list is empty", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
-      config: { ...baseConfig, authorizedTeamIds: [] },
+      config: {
+        ...baseConfig,
+        authorizedTeamIds: [],
+        teamAuthorizationMode: "approved_only",
+      },
       callbackHandleStore: fakeStore(),
       api: fakeApi({}),
       socketClient: socket,
@@ -1241,7 +1251,9 @@ describe("SlackAdapter", () => {
     });
     const events: MessagingInboundEvent[] = [];
     const rejected: MessagingRejectedInboundEvent[] = [];
-    adapter.onInboundRejected((event) => rejected.push(event));
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
     await adapter.start(async (event) => {
       events.push(event);
     });
@@ -1274,7 +1286,9 @@ describe("SlackAdapter", () => {
     });
     const events: MessagingInboundEvent[] = [];
     const rejected: MessagingRejectedInboundEvent[] = [];
-    adapter.onInboundRejected((event) => rejected.push(event));
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
     await adapter.start(async (event) => {
       events.push(event);
     });
@@ -1315,7 +1329,9 @@ describe("SlackAdapter", () => {
     });
     const events: MessagingInboundEvent[] = [];
     const rejected: MessagingRejectedInboundEvent[] = [];
-    adapter.onInboundRejected((event) => rejected.push(event));
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
     await adapter.start(async (event) => {
       events.push(event);
     });
@@ -1354,7 +1370,9 @@ describe("SlackAdapter", () => {
     });
     const events: MessagingInboundEvent[] = [];
     const rejected: MessagingRejectedInboundEvent[] = [];
-    adapter.onInboundRejected((event) => rejected.push(event));
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
     await adapter.start(async (event) => {
       events.push(event);
     });
