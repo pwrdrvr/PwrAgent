@@ -44,6 +44,11 @@ import {
 } from "@pwragent/shared";
 import { DiscordIcon, FeishuIcon, LineIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
+import {
+  SLACK_APPROVAL_TARGET_LABELS,
+  slackApplicableApprovalTargets,
+  slackApprovalSequence,
+} from "../../lib/slack-pairing-approval";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
@@ -1941,21 +1946,15 @@ function PairingTokenField(props: {
   // "Approve all" — apply every applicable target for a Slack observed
   // request, consuming the request on the final target so the card clears.
   const approveAll = async (entry: MessagingPairingEntry) => {
-    const targets = applicableApprovalTargets(entry).filter(
-      (target) => !(entry.approvedTargets ?? []).includes(target),
-    );
-    // If everything was already approved individually, still consume so the
-    // card resolves. Fall back to the actor target for the consuming call.
-    const sequence = targets.length > 0 ? targets : (["actor"] as const);
+    const steps = slackApprovalSequence(entry.observedChat, entry.approvedTargets ?? []);
     setBusyId(entry.id);
     setError(undefined);
     try {
-      for (let index = 0; index < sequence.length; index += 1) {
-        const isLast = index === sequence.length - 1;
+      for (const step of steps) {
         const result = await props.desktopApi?.approveMessagingPairing?.({
           entryId: entry.id,
-          target: sequence[index],
-          ...(isLast ? {} : { consume: false }),
+          target: step.target,
+          ...(step.consume ? {} : { consume: false }),
         });
         if (result?.added) {
           await props.onSettingsChanged?.();
@@ -2205,24 +2204,6 @@ function pairingEntryLabel(entry: MessagingPairingEntry): string {
   return `${actor} wants access`;
 }
 
-/**
- * Which approval targets apply to a Slack observed request: always the
- * user, the channel unless it's a DM, and the team when a workspace ID
- * was observed.
- */
-function applicableApprovalTargets(
-  entry: MessagingPairingEntry,
-): MessagingPairingApprovalTarget[] {
-  const targets: MessagingPairingApprovalTarget[] = ["actor"];
-  if (entry.observedChat?.kind !== "dm") {
-    targets.push("conversation");
-  }
-  if (entry.observedChat?.bucketId) {
-    targets.push("team");
-  }
-  return targets;
-}
-
 function pairingApprovalActions(entry: MessagingPairingEntry): Array<{
   label: string;
   approvedLabel?: string;
@@ -2231,14 +2212,9 @@ function pairingApprovalActions(entry: MessagingPairingEntry): Array<{
   if (entry.platform !== "slack" || entry.scope !== "observed") {
     return [{ label: "Approve" }];
   }
-  const labels: Record<MessagingPairingApprovalTarget, { label: string; approvedLabel: string }> = {
-    actor: { label: "Approve user", approvedLabel: "User approved" },
-    conversation: { label: "Approve channel", approvedLabel: "Channel approved" },
-    team: { label: "Approve team", approvedLabel: "Team approved" },
-  };
-  return applicableApprovalTargets(entry).map((target) => ({
-    label: labels[target].label,
-    approvedLabel: labels[target].approvedLabel,
+  return slackApplicableApprovalTargets(entry.observedChat).map((target) => ({
+    label: SLACK_APPROVAL_TARGET_LABELS[target].approve,
+    approvedLabel: SLACK_APPROVAL_TARGET_LABELS[target].approved,
     target,
   }));
 }

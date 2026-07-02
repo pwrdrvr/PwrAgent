@@ -24,6 +24,11 @@ import type {
 } from "@pwragent/shared";
 import { isMessagingRuntimeSecret } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  SLACK_APPROVAL_TARGET_LABELS,
+  slackApplicableApprovalTargets,
+  slackApprovalSequence,
+} from "../../lib/slack-pairing-approval";
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import { filterBufferedSecrets } from "./filterBufferedSecrets";
@@ -4647,14 +4652,6 @@ function PairingBlock(props: {
     }
   };
 
-  // Which approval targets apply to the observed Slack request.
-  const applicableApprovalTargets = (): MessagingPairingApprovalTarget[] => {
-    const targets: MessagingPairingApprovalTarget[] = ["actor"];
-    if (observedChatKind !== "dm") targets.push("conversation");
-    if (observedChatBucketId) targets.push("team");
-    return targets;
-  };
-
   // Approve a single facet (user / channel / team) while keeping the
   // request open so the operator can approve the others too.
   const approveTarget = async (
@@ -4686,20 +4683,18 @@ function PairingBlock(props: {
   const finishPairing = async (): Promise<void> => {
     const id = entryIdRef.current;
     if (!id || approving || !props.desktopApi?.approveMessagingPairing) return;
-    const remaining = applicableApprovalTargets().filter(
-      (target) => !approvedTargets.includes(target),
+    const steps = slackApprovalSequence(
+      { kind: observedChatKind, bucketId: observedChatBucketId },
+      approvedTargets,
     );
-    const sequence: MessagingPairingApprovalTarget[] =
-      remaining.length > 0 ? remaining : ["actor"];
     setApproving(true);
     setError(undefined);
     try {
-      for (let index = 0; index < sequence.length; index += 1) {
-        const isLast = index === sequence.length - 1;
+      for (const step of steps) {
         await props.desktopApi.approveMessagingPairing({
           entryId: id,
-          target: sequence[index],
-          ...(isLast ? {} : { consume: false }),
+          target: step.target,
+          ...(step.consume ? {} : { consume: false }),
         });
       }
       finalizePaired(id);
@@ -4906,18 +4901,10 @@ function PairingBlock(props: {
               </div>
               {props.platform === "slack" && scope === "observed" ? (
                 (() => {
-                  const targets = applicableApprovalTargets();
-                  const labels: Record<
-                    MessagingPairingApprovalTarget,
-                    { approve: string; approved: string }
-                  > = {
-                    actor: { approve: "Approve user", approved: "User approved" },
-                    conversation: {
-                      approve: "Approve channel",
-                      approved: "Channel approved",
-                    },
-                    team: { approve: "Approve team", approved: "Team approved" },
-                  };
+                  const targets = slackApplicableApprovalTargets({
+                    kind: observedChatKind,
+                    bucketId: observedChatBucketId,
+                  });
                   const allApproved = targets.every((target) =>
                     approvedTargets.includes(target),
                   );
@@ -4929,7 +4916,7 @@ function PairingBlock(props: {
                             key={target}
                             className="onboarding-wizard__field-pill is-ok"
                           >
-                            ✓ {labels[target].approved}
+                            ✓ {SLACK_APPROVAL_TARGET_LABELS[target].approved}
                           </span>
                         ) : (
                           <button
@@ -4941,7 +4928,7 @@ function PairingBlock(props: {
                             }
                             onClick={() => void approveTarget(target)}
                           >
-                            {labels[target].approve}
+                            {SLACK_APPROVAL_TARGET_LABELS[target].approve}
                           </button>
                         ),
                       )}

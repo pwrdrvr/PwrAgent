@@ -23,6 +23,11 @@ import type {
   UnbindMessagingThreadRequest,
   UnbindMessagingThreadResponse,
 } from "@pwragent/shared";
+import {
+  validateSlackChannelId,
+  validateSlackTeamId,
+  validateSlackUserId,
+} from "@pwragent/shared";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-config";
 import { getDesktopMessagingActivityLog } from "../messaging/desktop-messaging-activity-log";
@@ -269,12 +274,17 @@ function contactForPairing(
   if (!entry.observedActor || !entry.observedChat) {
     throw new Error("Pairing request is missing observed identity.");
   }
+  const isSlack = entry.platform === "slack";
   if (target === "team") {
     // The team/workspace ID is the observed bucket (Slack teamId). Never fall
     // back to parentId — for a thread that is the thread timestamp, not a team.
+    // Validate the shape so a bogus bucketId (e.g. a channel/DM id from an
+    // event that omitted `team`) can't be written into the workspace allowlist.
     const id = entry.observedChat.bucketId;
-    if (!id) {
-      throw new Error("Slack team approval requires an observed workspace ID.");
+    if (!id || (isSlack && !validateSlackTeamId(id).ok)) {
+      throw new Error(
+        "Slack team approval requires a valid workspace ID (starts with T).",
+      );
     }
     // The workspace name is resolved best-effort at approval time (blank if the
     // lookup is unavailable or times out). Never use parentTitle — for a
@@ -282,17 +292,25 @@ function contactForPairing(
     return { id, displayName: teamName ?? "" };
   }
   if (target === "conversation" || (!target && entry.scope === "bucket")) {
-    if (entry.platform === "slack") {
-      return {
-        id: entry.observedChat.id,
-        displayName: slackChannelDisplayName(entry.observedChat),
-      };
+    if (isSlack) {
+      const id = entry.observedChat.id;
+      if (!validateSlackChannelId(id).ok) {
+        throw new Error(
+          "Slack channel approval requires a valid conversation ID (starts with C, G, or D).",
+        );
+      }
+      return { id, displayName: slackChannelDisplayName(entry.observedChat) };
     }
     const id = entry.observedChat.bucketId ?? entry.observedChat.parentId ?? entry.observedChat.id;
     return {
       id,
       displayName: entry.observedChat.title ?? entry.observedChat.parentTitle ?? "",
     };
+  }
+  if (isSlack && !validateSlackUserId(entry.observedActor.id).ok) {
+    throw new Error(
+      "Slack user approval requires a valid user ID (starts with U or W).",
+    );
   }
   return {
     id: entry.observedActor.id,
