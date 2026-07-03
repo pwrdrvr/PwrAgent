@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.0.0-beta.41 - 2026-07-03
+
+- Inbound Automations - Added Slack and Telegram message-triggered automations with provider/conversation pickers, sender and text filters, live preview, task prompts, and reply-to-source or Agent-context-only results.
+- Automation Safety - Added coalescing, idempotency, per-automation run limits, crash-safe delivery markers, and source-message loop protection for inbound-triggered runs.
+- Slack Authorization - Redesigned Slack access around explicit DM, team, channel, channel-user, response-mode, and group-DM controls, with locked-down defaults for fresh configs.
+- Slack Pairing and Settings - Reworked Slack pairing, onboarding, and Settings so operators can approve users, channels, and teams independently from one observed pairing flow.
+- Messaging Delivery - Fixed provider streaming so Slack, Mattermost, and Feishu post the first stream chunk then edit it, and stopped completed turns from flooding channels with repeated final messages.
+- Messaging Rate Limits - Updated Slack and Mattermost delivery budgets to allow normal agent-turn bursts while preserving throttling for real channel saturation.
+- Thread Context - Added thread controls for removing stale PR associations and linking additional project directories without changing the underlying agent transcript.
+- Agent Handoffs - Fixed cross-project handoffs so agents bind worktree creation to an explicit trusted target directory instead of accidentally reusing the parent workspace.
+- Markdown Files - Added in-app previews for local `.md` transcript links and a detached Files window for opening multiple Markdown files in the thread workspace context.
+- Composer and Markdown - Preserved bold/marked text around whitespace, horizontal rules, and `- --` list text across compose, edit, render, and copy-back flows.
+- Integrated Terminal - Preserves live terminal views when switching threads or hiding the terminal, avoiding scrollback resets and replay noise.
+- Review Command - Defaults bare `/review` to the base branch target, focuses the chooser, and lets Enter start the selected review without another click.
+- Thread Search and Visibility - Thread search now finds pasted thread UUIDs, and clean Codex handoff threads stay visible in the interactive thread list.
+- Messaging Activity - Made the Activity window denser, resizable, and collapsible; fixed the MSG titlebar control hover target across text and icons.
+- Usage Visibility - Exposed system title-helper runs in sub-agent and pricing views so automatic thread naming is visible and attributable.
+- Minor - Compact long environment action durations, fixed stale PR-chip tooltips after browser handoff, skipped disabled Grok thread listing noise, and updated `actions/checkout` to v7.
+
 ## v1.0.0-beta.40 - 2026-06-29
 
 - Workspace Moves - Added same-thread workspace moves so agents can move the current thread into a linked worktree and continue there without creating a child handoff thread.
