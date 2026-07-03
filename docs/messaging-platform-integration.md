@@ -37,6 +37,9 @@ stay in this repo:
   [`messaging-adapter-contract.md`](messaging-adapter-contract.md).
 - The hands-on walkthrough for adding a new provider lives in
   [`messaging-adding-a-provider.md`](messaging-adding-a-provider.md).
+- Automation trigger and output-action behavior, including inbound-message
+  automations that reply relative to a source platform event, lives in
+  [`automation-scheduling.md`](automation-scheduling.md).
 - Package boundary rules and `pnpm lint:boundaries` enforcement live in
   [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md).
 

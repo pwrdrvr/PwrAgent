@@ -53,6 +53,18 @@ const automation: AutomationDetail = {
   status: "enabled",
   taskPrompt: "Check email.",
   threadId: "thread-1",
+  triggers: [
+    {
+      id: "schedule",
+      kind: "schedule",
+      schedule: {
+        every: 5,
+        kind: "interval",
+        unit: "minutes",
+      },
+    },
+  ],
+  outputActions: [{ id: "agent-context", kind: "agent_context" }],
   updatedAt: 1,
 };
 
@@ -215,6 +227,7 @@ describe("AutomationsScreen", () => {
   it("shows rollout replay details for an automation run", async () => {
     const artifactResponse: GetAutomationRunArtifactResponse = {
       artifact: {
+        actionResults: [],
         automationId: "automation-1",
         createdAt: 1_000,
         finalText: "Bring an umbrella.",

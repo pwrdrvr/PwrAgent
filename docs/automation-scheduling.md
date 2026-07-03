@@ -1,9 +1,11 @@
 # Automation Scheduling
 
-PwrAgent automations are local recurring tasks assigned to an existing thread.
-They are intentionally not background daemons: schedules fire only while the
-desktop app is running, and every automation turn enters the same per-thread
-FIFO queue as manual messages and messaging follow-ups.
+PwrAgent automations are local tasks assigned to an existing thread. Scheduled
+automations are intentionally not background daemons: schedules fire only while
+the desktop app is running, and every automation turn enters the same per-thread
+FIFO queue as manual messages and messaging follow-ups. Inbound-message
+automations use the same run queue but are triggered by a matched messaging
+event instead of a clock tick.
 
 ## Thread Assignment
 
@@ -19,16 +21,26 @@ counts, run-now, pause/resume, edit/delete, and recent run history. The global
 Automations view is a secondary overview reached from the sidebar; it does not
 replace the Recents and Directories thread lenses.
 
-## Schedule Model
+## Trigger Model
 
-V1 stores structured schedules rather than raw cron strings:
+Automations store explicit trigger definitions. The first trigger kind is the
+structured schedule model, kept for backwards compatibility with existing
+recurring automations:
 
 - Interval: every N minutes or every N hours.
 - Weekdays: Monday through Friday at a time of day.
 - Weekly: one or more selected weekdays at a time of day.
 
-The scheduler runs in the desktop main process. Renderer components only create,
-edit, and inspect schedule records through IPC.
+The second trigger kind is `inbound_message`. It matches normalized
+`MessagingInboundEvent` text/media events by provider, conversation, optional
+sender identity, optional bot-sender flag, optional literal text filter, and
+whether replies inside an existing platform thread are allowed. The matcher
+captures bounded source metadata on the automation run: provider, conversation,
+sender, source text, received timestamp, message id, and thread/root references
+when the adapter supplies them.
+
+The scheduler and inbound trigger matcher run in the desktop main process.
+Renderer components only create, edit, and inspect trigger records through IPC.
 
 ## Local-Only Timing
 
@@ -62,11 +74,26 @@ next automatic run.
 Automation runs are persisted in the profile SQLite state database and capped
 per automation. History records whether a run was scheduled or manual, its
 status, queue/start/completion timestamps, backend turn id when available,
-errors, and the scheduled windows covered by coalesced runs.
+errors, source messaging metadata for inbound runs, output-action results, and
+the scheduled windows covered by coalesced runs.
 
 On app restart, stale local pending, queued, or running automation records are
 closed as cancelled because queued desktop-local work is not durable across
 process lifetimes.
+
+## Output Actions
+
+Every automation can declare one or more output actions. `agent_context` is the
+default action: the completed run artifact is stored for the assigned Agent's
+read-only automation inspection tools, so a user can ask the same Agent follow-up
+questions in that thread.
+
+Inbound-message automations may also declare a `source_message` action. The
+desktop messaging controller renders a short automation result and delivers it
+relative to the source event, usually as a source-thread reply. Providers that
+support platform broadcast flags can also expose the reply in the parent channel
+while preserving thread context. Action results are recorded on the run artifact
+so the Agent can answer whether a reply was posted, skipped, or failed.
 
 ## Runtime Disable
 

@@ -1707,6 +1707,38 @@ async function emitCompletedTurn(
 }
 
 describe("DesktopBackendRegistry", () => {
+  it("routes structured generation to the configured Codex backend", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const generateStructuredObject = vi.fn(async () => ({
+      status: "ok" as const,
+      object: { prompt: "drafted prompt" },
+    }));
+    (
+      codexClient as unknown as {
+        generateStructuredObject: typeof generateStructuredObject;
+      }
+    ).generateStructuredObject = generateStructuredObject;
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const result = await registry.generateStructuredObject({
+      system: "system",
+      prompt: "describe what to do",
+      schema: {
+        type: "object",
+        required: ["prompt"],
+        properties: { prompt: { type: "string" } },
+      },
+      schemaName: "automation_prompt",
+    });
+
+    expect(result).toEqual({ status: "ok", object: { prompt: "drafted prompt" } });
+    expect(generateStructuredObject).toHaveBeenCalledTimes(1);
+  });
+
   it("passes the Codex default-mode question toggle to new and resumed threads", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = new DesktopBackendRegistry({
@@ -13996,6 +14028,87 @@ command = "pnpm dev"
         text: expect.stringContaining("Access mode: Full Access (full-access)."),
       },
       { type: "text", text: "Check whether it will rain." },
+    ]);
+
+    await registry.close();
+  });
+
+  it("applies explicit headless automation profile overrides without changing approval policy", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [
+        {
+          id: "gpt-5.4",
+          label: "GPT-5.4",
+          supportsFast: true,
+          supportsReasoning: true,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread-1": {
+            backend: "codex",
+            threadId: "agent-thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [
+              {
+                id: "/tmp/default-project",
+                label: "Default Project",
+                path: "/tmp/default-project",
+                kind: "local",
+              },
+            ],
+          },
+        },
+      }),
+    });
+
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex",
+      agentThreadId: "agent-thread-1",
+      automationName: "Incident triage",
+      automationRunId: "run-1",
+      cwd: "/tmp/incident-bot",
+      executionMode: "full-access",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+      input: [{ type: "text", text: "Investigate alert." }],
+    });
+
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      approvalPolicy: "never",
+      cwd: "/tmp/incident-bot",
+      ephemeral: true,
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      sandbox: "danger-full-access",
+      serviceTier: "priority",
+      fastMode: true,
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      approvalPolicy: "never",
+      cwd: "/tmp/incident-bot",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      sandbox: "danger-full-access",
+      serviceTier: "priority",
+      fastMode: true,
+      threadId: "thread-1",
+    });
+    expect(codexClient.lastStartTurnParams?.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Access mode: Full Access (full-access)."),
+      },
+      { type: "text", text: "Investigate alert." },
     ]);
 
     await registry.close();

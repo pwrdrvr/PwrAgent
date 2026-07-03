@@ -95,6 +95,7 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
 
       {editorMode ? (
         <AutomationEditor
+          desktopApi={props.desktopApi}
           mode={
             editorMode.kind === "create"
               ? {

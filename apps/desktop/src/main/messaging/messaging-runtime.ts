@@ -3,6 +3,7 @@ import {
   MessagingController,
   type MessagingControllerDeliveryBudgetEvent,
 } from "./core/messaging-controller";
+import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type {
   MessagingAdapter,
@@ -15,6 +16,7 @@ import type {
   AppServerPendingRequestNotification,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
+  InboundPreviewMessage,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
   MessagingDegradationReason,
@@ -72,6 +74,11 @@ import {
 } from "./messaging-config";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
+import {
+  hasActiveInboundPreview,
+  inboundEventToPreviewMessage,
+  publishInboundPreview,
+} from "./inbound-preview-bus";
 import { getDesktopMessagingPairingStore } from "./desktop-messaging-pairing-store";
 import { loadConfiguredMessagingAdapters } from "./provider-loader";
 import {
@@ -89,6 +96,15 @@ export type DesktopMessagingAdapter = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
+  /**
+   * Optional history fetch for the Automations editor live preview. Providers
+   * that can read recent conversation messages (e.g. Slack) implement this;
+   * others omit it and the preview falls back to going-forward capture.
+   */
+  fetchRecentMessages?(request: {
+    conversationId: string;
+    limit?: number;
+  }): Promise<MessagingInboundEvent[]>;
   /**
    * Optional subscription for fatal runtime errors that took the
    * adapter offline after a successful start (e.g. Telegram's 409
@@ -143,6 +159,19 @@ export type DesktopMessagingConfigLoader = (
 ) =>
   | DesktopMessagingConfig
   | Promise<DesktopMessagingConfig>;
+
+export type MessagingAutomationInboundHandler = (
+  event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
+) => Promise<boolean>;
+
+/**
+ * Pure predicate: would any inbound automation's filter match this event? Lets
+ * the runtime keep delivering automation-matched messages even when the
+ * @mention response mode would otherwise drop them. No side effects.
+ */
+export type MessagingAutomationInboundMatcher = (
+  event: MessagingInboundEvent,
+) => boolean;
 
 type RunningMessagingAdapter = {
   adapter: DesktopMessagingAdapter;
@@ -301,6 +330,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         onEvent?: (listener: (event: AgentEvent) => void | Promise<void>) => () => void;
       };
       config: DesktopMessagingConfig | DesktopMessagingConfigLoader;
+      automationInboundHandler?: MessagingAutomationInboundHandler;
+      automationInboundMatches?: MessagingAutomationInboundMatcher;
     },
   ) {}
 
@@ -559,6 +590,46 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       return undefined;
     }
     return this.platformCredentialMetadata.get(platform);
+  }
+
+  /**
+   * Fetch recent messages for the Automations editor live preview. Delegates
+   * to the provider adapter's optional history fetch (Slack today), maps to the
+   * compact preview shape, and filters to the requested conversation scope.
+   * Returns `[]` when the provider has no history support or the call fails.
+   */
+  async fetchRecentPreviewMessages(params: {
+    provider: MessagingChannelKind;
+    conversationId: string;
+    parentId?: string;
+    limit?: number;
+  }): Promise<InboundPreviewMessage[]> {
+    const adapter = this.adapters.find(
+      (entry) => entry.channel === params.provider,
+    );
+    const fetch = adapter?.fetchRecentMessages;
+    if (!adapter || !fetch) return [];
+    let events: MessagingInboundEvent[];
+    try {
+      events = await fetch.call(adapter, {
+        conversationId: params.conversationId,
+        ...(params.limit ? { limit: params.limit } : {}),
+      });
+    } catch {
+      return [];
+    }
+    const messages: InboundPreviewMessage[] = [];
+    for (const event of events) {
+      const message = inboundEventToPreviewMessage(event);
+      if (!message) continue;
+      if (
+        message.conversationId === params.conversationId ||
+        message.parentId === params.conversationId
+      ) {
+        messages.push(message);
+      }
+    }
+    return messages;
   }
 
   /**
@@ -873,11 +944,29 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     if (binding?.targetKind === "thread") {
       return false;
     }
-    return responseModeForChannel(
-      await this.loadConfig(),
-      params.channel,
-      event.channel,
-    ) === "mention_only";
+    if (
+      responseModeForChannel(
+        await this.loadConfig(),
+        params.channel,
+        event.channel,
+      ) !== "mention_only"
+    ) {
+      return false;
+    }
+    // @mention-only mode suppresses the bot's NORMAL replies, but it must not
+    // starve features with their own per-message config. Keep delivering a
+    // message when an editor is live-previewing trigger candidates, or when an
+    // inbound automation's filter (conversation / sender / text) matches it —
+    // the controller's own ambient gate still blocks a normal agent reply.
+    // Check the O(1) preview flag before the automation matcher, which runs a
+    // per-message query.
+    if (hasActiveInboundPreview()) {
+      return false;
+    }
+    if (this.options.automationInboundMatches?.(event)) {
+      return false;
+    }
+    return true;
   }
 
   private async startRunningAdapter(params: {
@@ -902,6 +991,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       adapter,
       attachmentPolicy: config.attachmentPolicy,
       authorizedActorIds,
+      automationInboundHandler: this.options.automationInboundHandler,
+      onInboundPreview: (event) => publishInboundPreview(event),
       backend: this.options.backendBridge,
       channel: adapter.channel,
       deliveryBudget,
@@ -2057,6 +2148,10 @@ export function getDesktopMessagingRuntime(
       adapterFactory: createConfiguredAdapters,
       backendBridge: new DesktopMessagingBackendBridge(),
       config: config ?? (() => loadDesktopMessagingConfig()),
+      automationInboundHandler: (event) =>
+        getDesktopAutomationService().handleMessagingInboundEvent(event),
+      automationInboundMatches: (event) =>
+        getDesktopAutomationService().matchesInboundEvent(event),
     });
   }
 

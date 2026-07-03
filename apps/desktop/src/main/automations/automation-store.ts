@@ -2,11 +2,15 @@ import { randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind,
   AutomationBacklogPolicy,
+  AutomationExecutionProfile,
   AutomationGateConfig,
   AutomationListItemSummary,
   AutomationLoadIssue,
+  AutomationOutputActionDefinition,
+  AutomationOutputActionResult,
   AutomationRunArtifact,
   AutomationRunOutputDecision,
+  AutomationRunSourceMetadata,
   AutomationRunStatus,
   AutomationRunSummary,
   AutomationRunTranscriptEvent,
@@ -14,17 +18,21 @@ import type {
   AutomationRunWindow,
   AutomationScheduleDefinition,
   AutomationStatus,
+  AutomationTriggerDefinition,
   AutomationThreadSummary,
   ThreadIdentifier,
 } from "@pwragent/shared";
 import {
   AUTOMATION_SCHEDULE_KINDS,
   DEFAULT_AUTOMATION_BACKLOG_POLICY,
+  DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
   buildThreadIdentityKey,
   formatAutomationScheduleSummary,
+  resolveAutomationRunsPerHour,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log.js";
 import type { StateDb } from "../state/state-db.js";
+import { mergeTranscriptEvents } from "./transcript-merge.js";
 
 const DEFAULT_RUN_HISTORY_LIMIT = 200;
 
@@ -54,9 +62,14 @@ export type AutomationRecord = {
   taskPrompt: string;
   gate?: AutomationGateConfig;
   status: AutomationStatus;
-  schedule: AutomationScheduleDefinition;
+  triggers: AutomationTriggerDefinition[];
+  schedule?: AutomationScheduleDefinition;
   scheduleSummary: string;
   backlogPolicy: AutomationBacklogPolicy;
+  executionProfile?: AutomationExecutionProfile;
+  outputActions: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   nextRunAt?: number;
   lastRunAt?: number;
   lastRunStatus?: AutomationRunStatus;
@@ -72,8 +85,13 @@ export type CreateAutomationInput = {
   name: string;
   taskPrompt: string;
   gate?: AutomationGateConfig;
-  schedule: AutomationScheduleDefinition;
+  triggers?: AutomationTriggerDefinition[];
+  schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
+  executionProfile?: AutomationExecutionProfile;
+  outputActions?: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   status?: AutomationStatus;
   nextRunAt?: number;
   now?: number;
@@ -85,8 +103,13 @@ export type UpdateAutomationInput = {
   name?: string;
   taskPrompt?: string;
   gate?: AutomationGateConfig | null;
+  triggers?: AutomationTriggerDefinition[];
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
+  executionProfile?: AutomationExecutionProfile | null;
+  outputActions?: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   status?: AutomationStatus;
   nextRunAt?: number | null;
   now?: number;
@@ -99,6 +122,7 @@ export type CreateAutomationRunInput = {
   status?: AutomationRunStatus;
   scheduledFor?: number;
   scheduledWindows?: AutomationRunWindow[];
+  source?: AutomationRunSourceMetadata;
   queuedAt?: number;
   queueEntryId?: string;
   now?: number;
@@ -115,6 +139,7 @@ export type UpsertAutomationRunArtifactInput = {
   finalText?: string;
   errorMessage?: string;
   outputDecision?: AutomationRunOutputDecision;
+  actionResults?: AutomationOutputActionResult[];
   transcriptEvents?: AutomationRunTranscriptEvent[];
   now?: number;
 };
@@ -166,8 +191,13 @@ type AutomationRunArtifactRow = {
 type AutomationPayload = {
   taskPrompt: string;
   gate?: AutomationGateConfig;
-  schedule: AutomationScheduleDefinition;
+  triggers?: AutomationTriggerDefinition[];
+  schedule?: AutomationScheduleDefinition;
   scheduleSummary: string;
+  executionProfile?: AutomationExecutionProfile;
+  outputActions?: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   lastRunStatus?: AutomationRunStatus;
 };
 
@@ -175,12 +205,14 @@ type AutomationRunPayload = {
   scheduledWindows: AutomationRunWindow[];
   backendThreadId?: string;
   errorMessage?: string;
+  source?: AutomationRunSourceMetadata;
 };
 
 type AutomationRunArtifactPayload = {
   finalText?: string;
   errorMessage?: string;
   outputDecision?: AutomationRunOutputDecision;
+  actionResults?: AutomationOutputActionResult[];
   transcriptEvents: AutomationRunTranscriptEvent[];
 };
 
@@ -225,6 +257,11 @@ export class AutomationStore {
 
   createAutomation(input: CreateAutomationInput): AutomationRecord {
     const now = input.now ?? Date.now();
+    const triggers = normalizeAutomationTriggers({
+      schedule: input.schedule,
+      triggers: input.triggers,
+    });
+    const schedule = scheduleFromTriggers(triggers);
     const record: AutomationRecord = {
       id: input.id ?? `automation:${randomUUID()}`,
       backend: input.backend,
@@ -233,9 +270,18 @@ export class AutomationStore {
       taskPrompt: input.taskPrompt,
       gate: input.gate,
       status: input.status ?? "enabled",
-      schedule: input.schedule,
-      scheduleSummary: formatAutomationScheduleSummary(input.schedule),
+      triggers,
+      schedule,
+      scheduleSummary: schedule
+        ? formatAutomationScheduleSummary(schedule)
+        : formatAutomationTriggerSummary(triggers),
       backlogPolicy: input.backlogPolicy ?? DEFAULT_AUTOMATION_BACKLOG_POLICY,
+      executionProfile: input.executionProfile,
+      outputActions: normalizeAutomationOutputActions(input.outputActions),
+      maxRunsPerHour: resolveAutomationRunsPerHour(input.maxRunsPerHour),
+      inboundCoalesceWindowMs: normalizeInboundCoalesceWindowMs(
+        input.inboundCoalesceWindowMs,
+      ),
       nextRunAt: input.nextRunAt,
       createdAt: now,
       updatedAt: now,
@@ -249,7 +295,13 @@ export class AutomationStore {
     const current = this.getAutomation(id, { includeDeleted: true });
     if (!current) return undefined;
     const now = input.now ?? Date.now();
-    const schedule = input.schedule ?? current.schedule;
+    const triggers =
+      input.triggers ?? (
+        input.schedule
+          ? normalizeAutomationTriggers({ schedule: input.schedule })
+          : current.triggers
+      );
+    const schedule = scheduleFromTriggers(triggers);
     const nextRunAt =
       input.nextRunAt === null ? undefined : input.nextRunAt ?? current.nextRunAt;
     const record: AutomationRecord = {
@@ -260,9 +312,25 @@ export class AutomationStore {
       taskPrompt: input.taskPrompt ?? current.taskPrompt,
       gate: input.gate === null ? undefined : input.gate ?? current.gate,
       status: input.status ?? current.status,
+      triggers,
       schedule,
-      scheduleSummary: formatAutomationScheduleSummary(schedule),
+      scheduleSummary: schedule
+        ? formatAutomationScheduleSummary(schedule)
+        : formatAutomationTriggerSummary(triggers),
       backlogPolicy: input.backlogPolicy ?? current.backlogPolicy,
+      executionProfile:
+        input.executionProfile === null
+          ? undefined
+          : input.executionProfile ?? current.executionProfile,
+      outputActions: input.outputActions ?? current.outputActions,
+      maxRunsPerHour:
+        input.maxRunsPerHour === undefined
+          ? current.maxRunsPerHour
+          : resolveAutomationRunsPerHour(input.maxRunsPerHour),
+      inboundCoalesceWindowMs:
+        input.inboundCoalesceWindowMs === undefined
+          ? current.inboundCoalesceWindowMs
+          : normalizeInboundCoalesceWindowMs(input.inboundCoalesceWindowMs),
       nextRunAt,
       updatedAt: now,
     };
@@ -360,6 +428,26 @@ export class AutomationStore {
       );
   }
 
+  /**
+   * Inbound matching runs on every inbound message (a hot path). Pre-filter at
+   * the SQL layer to enabled automations whose payload could carry an inbound
+   * trigger, so the common case (only scheduled automations, or a busy channel)
+   * does not JSON-parse every automation row per message. The LIKE can admit a
+   * false positive (e.g. the literal appears in a task prompt); recordFromRow
+   * plus matchAutomationInboundEvent then ignore non-inbound triggers, so the
+   * resulting match set is identical to filtering listAutomations().
+   */
+  listEnabledInboundAutomations(): AutomationRecord[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automations WHERE status = 'enabled' AND payload LIKE '%inbound_message%' ORDER BY updated_at DESC",
+      )
+      .all() as AutomationRow[];
+    return rows
+      .map((row) => this.recordFromRow(row))
+      .filter((record): record is AutomationRecord => Boolean(record));
+  }
+
   listAutomationsForThread(params: {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
@@ -402,6 +490,7 @@ export class AutomationStore {
       status: input.status ?? "pending",
       scheduledFor: input.scheduledFor ?? scheduledWindows[0]?.scheduledFor,
       scheduledWindows,
+      source: input.source,
       queuedAt: input.queuedAt,
       queueEntryId: input.queueEntryId,
     };
@@ -475,6 +564,20 @@ export class AutomationStore {
         "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued', 'running') ORDER BY updated_at DESC, rowid DESC LIMIT 1",
       )
       .get(automationId) as AutomationRunRow | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
+  findRunBySourceEventKey(params: {
+    automationId: string;
+    sourceEventKey: string;
+  }): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND source_event_key = ? ORDER BY rowid DESC LIMIT 1",
+      )
+      .get(params.automationId, params.sourceEventKey) as
+      | AutomationRunRow
+      | undefined;
     return row ? this.runFromRow(row) : undefined;
   }
 
@@ -593,6 +696,7 @@ export class AutomationStore {
       finalText: input.finalText ?? existingArtifact?.finalText,
       errorMessage: input.errorMessage ?? existingArtifact?.errorMessage,
       outputDecision: input.outputDecision ?? existingArtifact?.outputDecision,
+      actionResults: input.actionResults ?? existingArtifact?.actionResults ?? [],
       transcriptEvents:
         input.transcriptEvents ?? existingArtifact?.transcriptEvents ?? [],
       createdAt: existing?.created_at ?? now,
@@ -723,6 +827,7 @@ export class AutomationStore {
         threadId: automation.threadId,
         name: automation.name,
         status: automation.status,
+        triggers: automation.triggers,
         schedule: automation.schedule,
         scheduleSummary: automation.scheduleSummary,
         backlogPolicy: automation.backlogPolicy,
@@ -809,8 +914,13 @@ export class AutomationStore {
     const payload: AutomationPayload = {
       taskPrompt: record.taskPrompt,
       gate: record.gate,
+      triggers: record.triggers,
       schedule: record.schedule,
       scheduleSummary: record.scheduleSummary,
+      executionProfile: record.executionProfile,
+      outputActions: record.outputActions,
+      inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
+      maxRunsPerHour: record.maxRunsPerHour,
       lastRunStatus: record.lastRunStatus,
     };
     this.stateDb.raw
@@ -871,6 +981,7 @@ export class AutomationStore {
       scheduledWindows: run.scheduledWindows,
       backendThreadId: run.backendThreadId,
       errorMessage: run.errorMessage,
+      source: run.source,
     };
     this.stateDb.raw
       .prepare(
@@ -889,8 +1000,9 @@ export class AutomationStore {
           queue_entry_id,
           created_at,
           updated_at,
+          source_event_key,
           payload
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(run_id) DO UPDATE SET
           status = excluded.status,
           scheduled_for = excluded.scheduled_for,
@@ -900,6 +1012,7 @@ export class AutomationStore {
           backend_turn_id = excluded.backend_turn_id,
           queue_entry_id = excluded.queue_entry_id,
           updated_at = excluded.updated_at,
+          source_event_key = excluded.source_event_key,
           payload = excluded.payload`,
       )
       .run(
@@ -917,6 +1030,7 @@ export class AutomationStore {
         metadata.queueEntryId ?? null,
         metadata.createdAt,
         metadata.updatedAt,
+        run.source?.sourceEventKey ?? null,
         JSON.stringify(payload),
       );
   }
@@ -932,6 +1046,7 @@ export class AutomationStore {
       finalText: artifact.finalText,
       errorMessage: artifact.errorMessage,
       outputDecision: artifact.outputDecision,
+      actionResults: artifact.actionResults,
       transcriptEvents: artifact.transcriptEvents,
     };
     this.stateDb.raw
@@ -969,11 +1084,21 @@ export class AutomationStore {
       this.noteAutomationLoadIssue(row, "The automation's stored data is corrupt.");
       return undefined;
     }
-    if (!isUnderstoodSchedule(payload.schedule)) {
-      // A trigger-only automation, or one using a schedule kind a newer build
-      // introduced. We can't run it safely, so skip it for this process
-      // lifetime rather than dereference a shape we don't understand — and
-      // never throw out of a startup/list pass over an unrelated bad row.
+    const triggers = normalizeAutomationTriggers({
+      schedule: payload.schedule,
+      triggers: payload.triggers,
+    });
+    if (Array.isArray(payload.triggers) && triggers.length === 0) {
+      this.noteAutomationLoadIssue(
+        row,
+        "This automation was created by a newer version of PwrAgent.",
+      );
+      return undefined;
+    }
+    const schedule = scheduleFromTriggers(triggers);
+    if (schedule && !isUnderstoodSchedule(schedule)) {
+      // A schedule using a kind a newer build introduced cannot be run safely.
+      // Inbound-only automations have no schedule and remain loadable.
       this.noteAutomationLoadIssue(
         row,
         "This automation was created by a newer version of PwrAgent.",
@@ -989,9 +1114,20 @@ export class AutomationStore {
       taskPrompt: payload.taskPrompt,
       gate: payload.gate,
       status: row.status,
-      schedule: payload.schedule,
-      scheduleSummary: payload.scheduleSummary,
+      triggers,
+      schedule,
+      scheduleSummary:
+        payload.scheduleSummary ??
+        (schedule
+          ? formatAutomationScheduleSummary(schedule)
+          : formatAutomationTriggerSummary(triggers)),
       backlogPolicy: row.backlog_policy,
+      executionProfile: payload.executionProfile,
+      outputActions: normalizeAutomationOutputActions(payload.outputActions),
+      maxRunsPerHour: resolveAutomationRunsPerHour(payload.maxRunsPerHour),
+      inboundCoalesceWindowMs: normalizeInboundCoalesceWindowMs(
+        payload.inboundCoalesceWindowMs,
+      ),
       nextRunAt: row.next_run_at ?? undefined,
       lastRunAt: row.last_run_at ?? undefined,
       lastRunStatus: payload.lastRunStatus,
@@ -1011,6 +1147,7 @@ export class AutomationStore {
       status: row.status,
       scheduledFor: row.scheduled_for ?? undefined,
       scheduledWindows: payload.scheduledWindows,
+      source: payload.source,
       queuedAt: row.queued_at ?? undefined,
       queueEntryId: row.queue_entry_id ?? undefined,
       startedAt: row.started_at ?? undefined,
@@ -1033,6 +1170,7 @@ export class AutomationStore {
       finalText: payload.finalText,
       errorMessage: payload.errorMessage,
       outputDecision: payload.outputDecision,
+      actionResults: payload.actionResults ?? [],
       transcriptEvents: payload.transcriptEvents ?? [],
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -1105,19 +1243,95 @@ function parseJson<T>(value: string): T | undefined {
   }
 }
 
-function mergeTranscriptEvents(
-  existing: AutomationRunTranscriptEvent[],
-  incoming: AutomationRunTranscriptEvent[],
-): AutomationRunTranscriptEvent[] {
-  const byId = new Map<string, AutomationRunTranscriptEvent>();
-  for (const event of existing) {
-    byId.set(event.id, event);
+function normalizeAutomationTriggers(params: {
+  schedule?: AutomationScheduleDefinition;
+  triggers?: AutomationTriggerDefinition[];
+}): AutomationTriggerDefinition[] {
+  const triggers = Array.isArray(params.triggers)
+    ? params.triggers.filter(isSupportedAutomationTrigger)
+    : [];
+  if (triggers.length > 0) {
+    return triggers;
   }
-  for (const event of incoming) {
-    byId.set(event.id, event);
+  if (params.schedule) {
+    return [
+      {
+        id: "schedule",
+        kind: "schedule",
+        schedule: params.schedule,
+      },
+    ];
   }
-  return [...byId.values()].sort((left, right) => left.at - right.at);
+  return [];
 }
+
+function isSupportedAutomationTrigger(
+  trigger: AutomationTriggerDefinition,
+): trigger is AutomationTriggerDefinition {
+  if (!trigger || typeof trigger !== "object") return false;
+  if (trigger.kind === "schedule") {
+    return isUnderstoodSchedule(trigger.schedule);
+  }
+  if (trigger.kind === "inbound_message") {
+    return Boolean(
+      trigger.id &&
+        trigger.conversation?.channel &&
+        trigger.conversation.conversationId,
+    );
+  }
+  return false;
+}
+
+function scheduleFromTriggers(
+  triggers: AutomationTriggerDefinition[],
+): AutomationScheduleDefinition | undefined {
+  return triggers.find((trigger) => trigger.kind === "schedule")?.schedule;
+}
+
+function formatAutomationTriggerSummary(
+  triggers: AutomationTriggerDefinition[],
+): string {
+  const inbound = triggers.find((trigger) => trigger.kind === "inbound_message");
+  if (inbound?.kind === "inbound_message") {
+    return inbound.name ? `inbound: ${inbound.name}` : "inbound message";
+  }
+  return "not scheduled";
+}
+
+function normalizeInboundCoalesceWindowMs(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS;
+  if (!Number.isFinite(value) || value < 0) {
+    return DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS;
+  }
+  return Math.floor(value);
+}
+
+function normalizeAutomationOutputActions(
+  actions: AutomationOutputActionDefinition[] | undefined,
+): AutomationOutputActionDefinition[] {
+  if (!Array.isArray(actions) || actions.length === 0) {
+    return [{ id: "agent-context", kind: "agent_context" }];
+  }
+  return actions.filter(isSupportedAutomationOutputAction);
+}
+
+function isSupportedAutomationOutputAction(
+  action: AutomationOutputActionDefinition,
+): action is AutomationOutputActionDefinition {
+  if (!action || typeof action !== "object" || !action.id) return false;
+  if (action.kind === "agent_context") return true;
+  if (action.kind === "source_message") {
+    return (
+      action.destination === "source_thread" ||
+      action.destination === "source_channel"
+    );
+  }
+  if (action.kind === "messaging_target") {
+    return Boolean(action.target?.channel && action.target.conversationId);
+  }
+  return false;
+}
+
 
 function minDefined(left: number | undefined, right: number | undefined): number | undefined {
   if (left === undefined) return right;

@@ -13,6 +13,7 @@ import type {
   AutomationRunStatus,
   AutomationRunTranscriptEvent,
   AutomationTimelineCard,
+  AutomationTriggerDefinition,
   CreateAutomationRequest,
   GetAutomationRunArtifactRequest,
   GetAutomationRunArtifactResponse,
@@ -25,19 +26,32 @@ import type {
   RunAutomationNowResponse,
   UpdateAutomationRequest,
 } from "@pwragent/shared";
-import { validateAutomationScheduleDefinition } from "@pwragent/shared";
+import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
+import {
+  automationSuppressesBindingBroadcast,
+  validateAutomationScheduleDefinition,
+} from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
 import { resolveRuntimeAutomationsOverride } from "../runtime-flags.js";
 import { getAppAutomationStore } from "../state/app-state.js";
 import { AutomationInspectionBus } from "./automation-inspection-bus.js";
+import {
+  buildPendingDeliveryActionResults,
+  executeAutomationOutputActions,
+} from "./automation-action-executor.js";
 import { computeNextAutomationRunAt } from "./automation-schedule.js";
 import { ShellAutomationGateRunner } from "./automation-gate-runner.js";
 import { parseAutomationOutputDecision } from "./automation-output-decision.js";
 import { HeadlessAutomationRunner } from "./automation-runner.js";
 import { AutomationScheduler } from "./automation-scheduler.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
+import {
+  anyAutomationInboundMatch,
+  matchAutomationInboundEvent,
+} from "./automation-trigger-matcher.js";
+import { mergeTranscriptEvents } from "./transcript-merge.js";
 
 const automationServiceLog = getMainLogger("pwragent:automations");
 
@@ -246,7 +260,10 @@ export class DesktopAutomationService {
   }
 
   async create(request: CreateAutomationRequest): Promise<AutomationMutationResponse> {
-    this.assertValidSchedule(request.schedule);
+    const schedule = request.schedule ?? scheduleFromTriggers(request.triggers);
+    if (schedule) {
+      this.assertValidSchedule(schedule);
+    }
     await this.assertAgentThreadTarget({
       backend: request.backend,
       threadId: request.threadId,
@@ -258,14 +275,19 @@ export class DesktopAutomationService {
       name: request.name,
       taskPrompt: request.taskPrompt,
       gate: request.gate,
-      schedule: request.schedule,
+      triggers: request.triggers,
+      schedule,
       backlogPolicy: request.backlogPolicy,
+      executionProfile: request.executionProfile,
+      outputActions: request.outputActions,
+      inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
+      maxRunsPerHour: request.maxRunsPerHour,
       status: request.enabled === false ? "paused" : "enabled",
       nextRunAt:
         request.nextRunAt ??
-        (request.enabled === false
+        (request.enabled === false || !schedule
           ? undefined
-          : computeNextAutomationRunAt(request.schedule, now)),
+          : computeNextAutomationRunAt(schedule, now)),
       now,
     });
     await this.notifyThreadAutomationsUpdated(automation);
@@ -278,8 +300,9 @@ export class DesktopAutomationService {
     if (!current) {
       throw new Error("Automation not found.");
     }
-    if (request.schedule) {
-      this.assertValidSchedule(request.schedule);
+    const requestedSchedule = request.schedule ?? scheduleFromTriggers(request.triggers);
+    if (requestedSchedule) {
+      this.assertValidSchedule(requestedSchedule);
     }
     if ((request.backend === undefined) !== (request.threadId === undefined)) {
       throw new Error("Automation Agent reassignment requires backend and threadId.");
@@ -300,21 +323,29 @@ export class DesktopAutomationService {
       await this.assertAgentThreadTarget(reassignment);
     }
     const now = Date.now();
-    const schedule = request.schedule ?? current.schedule;
+    const schedule = requestedSchedule ?? current.schedule;
     const enablingFromPaused = request.enabled === true && current.status !== "enabled";
     const disabling = request.enabled === false;
     const shouldRecomputeNextRun =
       request.nextRunAt === undefined &&
       !disabling &&
-      (enablingFromPaused || (request.schedule !== undefined && current.status === "enabled"));
+      Boolean(schedule) &&
+      (enablingFromPaused ||
+        ((request.schedule !== undefined || request.triggers !== undefined) &&
+          current.status === "enabled"));
     const updated = this.options.store.updateAutomation(request.automationId, {
       backend: reassignment?.backend,
       threadId: reassignment?.threadId,
       name: request.name,
       taskPrompt: request.taskPrompt,
       gate: request.gate,
+      triggers: request.triggers,
       schedule: request.schedule,
       backlogPolicy: request.backlogPolicy,
+      executionProfile: request.executionProfile,
+      outputActions: request.outputActions,
+      inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
+      maxRunsPerHour: request.maxRunsPerHour,
       status:
         request.enabled === undefined
           ? undefined
@@ -327,7 +358,7 @@ export class DesktopAutomationService {
           : disabling
             ? null
             : shouldRecomputeNextRun
-            ? computeNextAutomationRunAt(schedule, now)
+            ? computeNextAutomationRunAt(schedule!, now)
             : undefined,
       now,
     });
@@ -369,7 +400,9 @@ export class DesktopAutomationService {
     const current = this.options.store.getAutomation(request.automationId);
     if (!current) throw new Error("Automation not found.");
     const automation = this.options.store.resumeAutomation(request.automationId, {
-      nextRunAt: computeNextAutomationRunAt(current.schedule, Date.now()),
+      nextRunAt: current.schedule
+        ? computeNextAutomationRunAt(current.schedule, Date.now())
+        : undefined,
     });
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
@@ -406,6 +439,54 @@ export class DesktopAutomationService {
       queueEntryId: result?.entry.id,
       turnId: result?.status === "started" ? result.turnId : undefined,
     };
+  }
+
+  async handleMessagingInboundEvent(event: MessagingInboundEvent): Promise<boolean> {
+    const matches = matchAutomationInboundEvent({
+      automations: this.enabledInboundAutomations(),
+      event,
+    });
+    if (matches.length === 0) {
+      return false;
+    }
+    for (const match of matches) {
+      await this.scheduler.runFromInboundEvent({
+        automation: match.automation,
+        source: match.source,
+      });
+      await this.notifyThreadAutomationsUpdated(match.automation);
+    }
+    this.startSchedulerIfEnabled();
+    return true;
+  }
+
+  /**
+   * Pure predicate: would any enabled inbound automation's filter (conversation
+   * / sender / text) match this event? Used by the messaging runtime to decide
+   * whether a message the @mention response mode would otherwise drop must still
+   * be delivered so the automation can run. No side effects — the actual run
+   * happens in {@link handleMessagingInboundEvent}, which shares the same
+   * candidate set via {@link enabledInboundAutomations} so the two cannot drift.
+   */
+  matchesInboundEvent(event: MessagingInboundEvent): boolean {
+    return anyAutomationInboundMatch({
+      automations: this.enabledInboundAutomations(),
+      event,
+    });
+  }
+
+  /**
+   * The candidate set for inbound matching: enabled automations that carry an
+   * inbound trigger, or none when automations are disabled at runtime. Kept as a
+   * single source of truth so the delivery-gate predicate (matchesInboundEvent)
+   * and the run path (handleMessagingInboundEvent) always agree. The per-event
+   * kind guard lives in the matcher functions.
+   */
+  private enabledInboundAutomations(): AutomationRecord[] {
+    if (this.options.runtime?.disabled) {
+      return [];
+    }
+    return this.options.store.listEnabledInboundAutomations();
   }
 
   buildThreadSummaries() {
@@ -543,7 +624,7 @@ export class DesktopAutomationService {
     });
     if (shouldRecordRunArtifact(params.status)) {
       const existingArtifact = this.options.store.getRunArtifact(run.id);
-      this.options.store.upsertRunArtifact({
+      const artifact = this.options.store.upsertRunArtifact({
         runId: run.id,
         status: run.status,
         finalText: params.finalText,
@@ -559,6 +640,50 @@ export class DesktopAutomationService {
           }),
         ),
       });
+      if (artifact && automation) {
+        // Persist in-flight markers for delivery actions BEFORE posting, so a
+        // crash mid-delivery leaves a "pending" marker that prevents a
+        // duplicate post on restart. We still execute with `artifact` (which
+        // does not carry these just-written markers) so the first attempt
+        // posts normally; only a re-entry sees the persisted "pending".
+        const pendingResults = buildPendingDeliveryActionResults(
+          automation.outputActions,
+          artifact.actionResults ?? [],
+        );
+        if (pendingResults.length > 0) {
+          const pendingIds = new Set(
+            pendingResults.map((result) => result.actionId),
+          );
+          this.options.store.upsertRunArtifact({
+            runId: run.id,
+            status: run.status,
+            finalText: artifact.finalText,
+            errorMessage: artifact.errorMessage,
+            outputDecision: artifact.outputDecision,
+            actionResults: [
+              ...(artifact.actionResults ?? []).filter(
+                (result) => !pendingIds.has(result.actionId),
+              ),
+              ...pendingResults,
+            ],
+            transcriptEvents: artifact.transcriptEvents,
+          });
+        }
+        const actionResults = await executeAutomationOutputActions({
+          actions: automation.outputActions,
+          artifact,
+          source: run.source,
+        });
+        this.options.store.upsertRunArtifact({
+          runId: run.id,
+          status: run.status,
+          finalText: artifact.finalText,
+          errorMessage: artifact.errorMessage,
+          outputDecision: artifact.outputDecision,
+          actionResults,
+          transcriptEvents: artifact.transcriptEvents,
+        });
+      }
     }
     const artifact = this.options.store.getRunArtifact(run.id);
     await this.options.registry.publishLocalEvent({
@@ -573,6 +698,9 @@ export class DesktopAutomationService {
           outputDecision: artifact?.outputDecision,
           runId: params.runId,
           status: run.status,
+          suppressBindingBroadcast: automation
+            ? automationSuppressesBindingBroadcast(automation)
+            : false,
         },
       },
     });
@@ -695,7 +823,7 @@ export class DesktopAutomationService {
         .filter((automation) => automation.status === "enabled" && automation.schedule)
         .map((automation) => [
           automation.id,
-          computeNextAutomationRunAt(automation.schedule, now),
+          computeNextAutomationRunAt(automation.schedule!, now),
         ]),
     );
     this.options.store.reconcileStartup({ now, nextRunAtByAutomationId });
@@ -763,7 +891,7 @@ export class DesktopAutomationService {
     );
   }
 
-  private assertValidSchedule(schedule: CreateAutomationRequest["schedule"]): void {
+  private assertValidSchedule(schedule: NonNullable<CreateAutomationRequest["schedule"]>): void {
     const validation = validateAutomationScheduleDefinition(schedule);
     if (!validation.ok) {
       throw new Error(validation.error);
@@ -828,8 +956,13 @@ function toAutomationDetail(
     gate: record.gate,
     status: record.status,
     schedule: record.schedule,
+    triggers: record.triggers,
     scheduleSummary: record.scheduleSummary,
     backlogPolicy: record.backlogPolicy,
+    executionProfile: record.executionProfile,
+    outputActions: record.outputActions,
+    inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
+    maxRunsPerHour: record.maxRunsPerHour,
     nextRunAt: record.nextRunAt,
     lastRunAt: useLatestRun ? latestRunAt : record.lastRunAt,
     lastRunStatus: useLatestRun ? latestRun.status : record.lastRunStatus,
@@ -841,6 +974,12 @@ function toAutomationDetail(
 
 function automationRunActivityAt(run: AutomationRunSummary): number | undefined {
   return run.completedAt ?? run.startedAt ?? run.queuedAt ?? run.scheduledFor;
+}
+
+function scheduleFromTriggers(
+  triggers: AutomationTriggerDefinition[] | undefined,
+) {
+  return triggers?.find((trigger) => trigger.kind === "schedule")?.schedule;
 }
 
 function shouldRecordRunArtifact(
@@ -957,25 +1096,12 @@ function automationTranscriptEventFromBackendEvent(params: {
   now: number;
 }): AutomationRunTranscriptEvent | undefined {
   const notification = params.event.notification;
+  // Streaming agent-message deltas are intentionally NOT persisted to the run
+  // transcript: each is a partial chunk of the same content captured in full by
+  // item/completed (assistant_final), and recording them rendered fragment
+  // "lifecycle" lines (e.g. "]}") in the run-detail view.
   if (notification.method === "item/agentMessage/delta") {
-    const deltaParams = notification.params as {
-      delta?: unknown;
-      itemId?: unknown;
-      phase?: unknown;
-    };
-    const delta = typeof deltaParams.delta === "string" ? deltaParams.delta.trim() : "";
-    if (!delta) return undefined;
-    return {
-      id: `${params.run.id}:delta:${String(deltaParams.itemId ?? "message")}`,
-      at: params.now,
-      kind: "lifecycle",
-      text: delta,
-      metadata: {
-        phase: deltaParams.phase,
-        source: "item/agentMessage/delta",
-        turnId: params.turnId,
-      },
-    };
+    return undefined;
   }
 
   if (notification.method === "item/completed") {
@@ -1101,20 +1227,6 @@ function automationToolSummary(
     return `${item.success === false ? "Failed" : "Completed"} ${item.type}`;
   }
   return undefined;
-}
-
-function mergeTranscriptEvents(
-  existing: AutomationRunTranscriptEvent[],
-  incoming: AutomationRunTranscriptEvent[],
-): AutomationRunTranscriptEvent[] {
-  const byId = new Map<string, AutomationRunTranscriptEvent>();
-  for (const event of existing) {
-    byId.set(event.id, event);
-  }
-  for (const event of incoming) {
-    byId.set(event.id, event);
-  }
-  return [...byId.values()].sort((left, right) => left.at - right.at);
 }
 
 function buildAutomationTimelineCard(params: {

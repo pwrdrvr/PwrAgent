@@ -15,6 +15,8 @@ import type {
   AppServerBackendKind,
   AppServerThreadPlanEntry,
   AppServerThreadReviewEntry,
+  AutomationMessagingConversationSnapshot,
+  AutomationRunSourceMetadata,
   AutomationRunOutputDecision,
   CodexEnvironmentSetupProgressEvent,
   CodexEnvironmentOption,
@@ -222,6 +224,10 @@ import {
   renderAutomationDecisionForMessaging,
   renderAutomationOutputForMessaging,
 } from "../../automations/automation-output-decision.js";
+import {
+  registerAutomationSourceMessageDeliveryHandler,
+  registerAutomationTargetMessageDeliveryHandler,
+} from "../../automations/automation-action-executor.js";
 const DEFAULT_PENDING_INTENT_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const NEW_THREAD_PROMPT_CAPTURE_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
@@ -230,6 +236,12 @@ const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 // visible message sends. Let them through a little sooner than noisy deltas.
 const TYPING_ACTIVITY_CONTINUATION_REFRESH_MS = 9_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
+// Upper bound on retained automation start/final delivery-dedup keys. Each entry
+// embeds the full rendered message text and is only consulted while a run's
+// terminal events are in flight; oldest-first eviction reclaims keys for runs
+// that completed long ago so a long-lived controller does not grow without
+// bound (one entry per automation run).
+const MAX_DELIVERED_AUTOMATION_KEYS = 1_000;
 const MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS = 15_000;
 const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
 const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
@@ -538,6 +550,17 @@ type PendingNewThreadPromptBundle = {
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
+  automationInboundHandler?: (
+    event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
+  ) => Promise<boolean>;
+  /**
+   * Tap for the Automations editor live preview. Invoked for every authorized
+   * text/media event before trigger matching, regardless of whether a trigger
+   * matches, so operators can see what their filter would catch.
+   */
+  onInboundPreview?: (
+    event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
+  ) => void;
   backend: MessagingBackendBridge;
   channel?: MessagingChannelKind;
   interactionMapper?: MessagingInteractionMapper;
@@ -639,6 +662,8 @@ export class MessagingController {
     string,
     PendingQueueAuditMessage
   >();
+  private readonly unregisterAutomationSourceMessageDeliveryHandler: () => void;
+  private readonly unregisterAutomationTargetMessageDeliveryHandler: () => void;
 
   constructor(private readonly options: MessagingControllerOptions) {
     this.authorizedActorIds = new Set(options.authorizedActorIds);
@@ -663,6 +688,14 @@ export class MessagingController {
         await this.deliverToolUpdateDelivery(delivery);
       },
     });
+    this.unregisterAutomationSourceMessageDeliveryHandler =
+      registerAutomationSourceMessageDeliveryHandler((params) =>
+        this.deliverAutomationSourceMessage(params),
+      );
+    this.unregisterAutomationTargetMessageDeliveryHandler =
+      registerAutomationTargetMessageDeliveryHandler((params) =>
+        this.deliverAutomationTargetMessage(params),
+      );
   }
 
   async handlePwrAgentMessagingRequest(
@@ -759,6 +792,25 @@ export class MessagingController {
       return;
     }
 
+    if (event.kind === "text" || event.kind === "media") {
+      try {
+        this.options.onInboundPreview?.(event);
+      } catch (error) {
+        this.logger.debug?.("messaging inbound preview tap failed", {
+          eventId: event.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (
+      (event.kind === "text" || event.kind === "media") &&
+      this.options.automationInboundHandler &&
+      (await this.options.automationInboundHandler(event))
+    ) {
+      return;
+    }
+
     if (event.kind === "media") {
       await this.handleMedia(event);
       return;
@@ -767,6 +819,122 @@ export class MessagingController {
     if (event.kind === "text") {
       await this.handleText(event);
     }
+  }
+
+  async deliverAutomationSourceMessage(params: {
+    broadcast?: boolean;
+    destination: "source_thread" | "source_channel";
+    intentId: string;
+    source: AutomationRunSourceMetadata;
+    text: string;
+  }): Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }> {
+    if (
+      this.options.channel &&
+      this.options.channel !== params.source.conversation.channel
+    ) {
+      return {
+        ok: false,
+        unsupported: true,
+        errorMessage: "Source-message delivery belongs to another provider.",
+      };
+    }
+    const event = messagingEventFromAutomationSource(params.source);
+    const result = await this.deliver(
+      {
+        id: params.intentId,
+        kind: "message",
+        createdAt: this.now(),
+        role: "assistant",
+        delivery: {
+          sourceRelative: params.destination,
+          broadcastThreadReply: params.broadcast,
+        },
+        parts: [
+          {
+            type: "text",
+            text: params.text,
+            markdown: "markdown",
+          },
+        ],
+      },
+      undefined,
+      event,
+    );
+    return {
+      ok:
+        result.outcome === "presented" ||
+        result.outcome === "presented_new" ||
+        result.outcome === "updated" ||
+        result.outcome === "signaled",
+      unsupported: result.outcome === "unsupported",
+      message: result.outcome,
+      errorMessage: result.errorMessage,
+    };
+  }
+
+  /**
+   * Deliver an automation result to an operator-chosen conversation that may
+   * differ from (or have no) inbound source. Routed to the controller whose
+   * provider matches the target; others report unsupported so the executor can
+   * try the next registered handler.
+   */
+  async deliverAutomationTargetMessage(params: {
+    intentId: string;
+    target: AutomationMessagingConversationSnapshot;
+    text: string;
+  }): Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }> {
+    if (this.options.channel && this.options.channel !== params.target.channel) {
+      return {
+        ok: false,
+        unsupported: true,
+        errorMessage: "Messaging target belongs to another provider.",
+      };
+    }
+    const event: MessagingInboundTextEvent = {
+      id: params.intentId,
+      kind: "text",
+      actor: { platformUserId: "pwragent-automation", isBot: true },
+      channel: {
+        channel: params.target.channel,
+        conversation: {
+          id: params.target.conversationId,
+          kind: params.target.conversationKind ?? "channel",
+          parentId: params.target.parentId,
+          title: params.target.title,
+          parentTitle: params.target.parentTitle,
+          ancestorTitle: params.target.ancestorTitle,
+        },
+      },
+      receivedAt: this.now(),
+      text: "",
+    };
+    const result = await this.deliver(
+      {
+        id: params.intentId,
+        kind: "message",
+        createdAt: this.now(),
+        role: "assistant",
+        parts: [
+          {
+            type: "text",
+            text: params.text,
+            markdown: "markdown",
+          },
+        ],
+      },
+      undefined,
+      event,
+    );
+    return {
+      ok:
+        result.outcome === "presented" ||
+        result.outcome === "presented_new" ||
+        result.outcome === "updated" ||
+        result.outcome === "signaled",
+      unsupported: result.outcome === "unsupported",
+      message: result.outcome,
+      errorMessage: result.errorMessage,
+    };
   }
 
   async handleBackendEvent(event: AgentEvent): Promise<void> {
@@ -848,6 +1016,7 @@ export class MessagingController {
         finalText: automationRunUpdate.finalText,
         outputDecision: automationRunUpdate.outputDecision,
         status: automationRunUpdate.status,
+        suppressBindingBroadcast: automationRunUpdate.suppressBindingBroadcast,
       });
       return;
     }
@@ -865,6 +1034,7 @@ export class MessagingController {
           bindings,
           threadId,
           turnId: turnQueueUpdate.turnId,
+          suppressBindingBroadcast: turnQueueUpdate.suppressBindingBroadcast,
         });
       }
       if (
@@ -880,6 +1050,7 @@ export class MessagingController {
           finalText: turnQueueUpdate.finalText,
           threadId,
           turnId: turnQueueUpdate.turnId,
+          suppressBindingBroadcast: turnQueueUpdate.suppressBindingBroadcast,
         });
       }
       return;
@@ -3505,6 +3676,8 @@ export class MessagingController {
 
   dispose(): void {
     this.disposed = true;
+    this.unregisterAutomationSourceMessageDeliveryHandler();
+    this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
     for (const timer of this.monitorTimersByBindingId.values()) {
       clearTimeout(timer);
@@ -10213,7 +10386,12 @@ export class MessagingController {
     bindings: MessagingBindingRecord[];
     threadId: ThreadIdentifier;
     turnId: string;
+    suppressBindingBroadcast?: boolean;
   }): Promise<void> {
+    // Always remember the turn so its streaming/lifecycle events are recognized
+    // as an automation turn and NOT delivered to bindings as ordinary assistant
+    // output (see `isAutomationTurnEvent`). Only the visible "started" notice is
+    // suppressed when the automation delivers via explicit messaging actions.
     this.rememberAutomationTurn({
       automationName: params.automationName,
       automationRunId: params.automationRunId,
@@ -10221,6 +10399,10 @@ export class MessagingController {
       threadId: params.threadId,
       turnId: params.turnId,
     });
+
+    if (params.suppressBindingBroadcast) {
+      return;
+    }
 
     for (const binding of params.bindings) {
       await this.deliverAutomationStartedMessage(binding, {
@@ -10239,18 +10421,24 @@ export class MessagingController {
     finalText?: string;
     threadId: ThreadIdentifier;
     turnId: string;
+    suppressBindingBroadcast?: boolean;
   }): Promise<void> {
-    for (const binding of params.bindings) {
-      await this.deliverAutomationFinalMessageOnce({
-        binding,
-        event: params.event,
-        finalText: params.finalText,
-        keyParts: [
-          binding.id,
-          params.automationRunId ?? params.threadId,
-          params.automationRunId ? "automation-run" : params.turnId,
-        ],
-      });
+    // Suppress the legacy broadcast for automations that deliver via explicit
+    // messaging actions, but still forget the tracked turn so the map does not
+    // leak.
+    if (!params.suppressBindingBroadcast) {
+      for (const binding of params.bindings) {
+        await this.deliverAutomationFinalMessageOnce({
+          binding,
+          event: params.event,
+          finalText: params.finalText,
+          keyParts: [
+            binding.id,
+            params.automationRunId ?? params.threadId,
+            params.automationRunId ? "automation-run" : params.turnId,
+          ],
+        });
+      }
     }
     this.forgetAutomationTurn(params.backend, params.threadId, params.turnId);
   }
@@ -10262,7 +10450,14 @@ export class MessagingController {
     outputDecision?: AutomationRunOutputDecision;
     runId: string;
     status: string;
+    suppressBindingBroadcast?: boolean;
   }): Promise<void> {
+    // Automations that deliver via explicit messaging actions own their
+    // delivery; the legacy "broadcast to every binding" path would double-post
+    // the source conversation, so skip it entirely here.
+    if (params.suppressBindingBroadcast) {
+      return;
+    }
     if (
       params.status !== "completed" &&
       params.status !== "failed" &&
@@ -10303,7 +10498,7 @@ export class MessagingController {
     if (this.deliveredAutomationFinalKeys.has(key)) {
       return;
     }
-    this.deliveredAutomationFinalKeys.add(key);
+    rememberBoundedKey(this.deliveredAutomationFinalKeys, key);
     await this.deliverAssistantMessage(messageText, params.event, params.binding);
   }
 
@@ -10399,7 +10594,7 @@ export class MessagingController {
     if (this.deliveredAutomationStartKeys.has(key)) {
       return;
     }
-    this.deliveredAutomationStartKeys.add(key);
+    rememberBoundedKey(this.deliveredAutomationStartKeys, key);
 
     const name = params.automationName?.trim();
     const text = [
@@ -13195,6 +13390,7 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
   finalText?: string;
   origin?: string;
   status?: string;
+  suppressBindingBroadcast?: boolean;
   turnId?: string;
 } | undefined {
   if (event.notification.method !== "thread/turnQueue/updated") {
@@ -13206,6 +13402,7 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
     finalText?: unknown;
     origin?: unknown;
     status?: unknown;
+    suppressBindingBroadcast?: unknown;
     turnId?: unknown;
   };
   return {
@@ -13216,6 +13413,7 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
     finalText: typeof params.finalText === "string" ? params.finalText : undefined,
     origin: typeof params.origin === "string" ? params.origin : undefined,
     status: typeof params.status === "string" ? params.status : undefined,
+    suppressBindingBroadcast: params.suppressBindingBroadcast === true,
     turnId: typeof params.turnId === "string" ? params.turnId : undefined,
   };
 }
@@ -13225,6 +13423,7 @@ function automationRunUpdateForBackendEvent(event: AgentEvent): {
   outputDecision?: AutomationRunOutputDecision;
   runId: string;
   status: string;
+  suppressBindingBroadcast?: boolean;
 } | undefined {
   if (event.notification.method !== "automation/run/updated") {
     return undefined;
@@ -13234,6 +13433,7 @@ function automationRunUpdateForBackendEvent(event: AgentEvent): {
     outputDecision?: unknown;
     runId?: unknown;
     status?: unknown;
+    suppressBindingBroadcast?: unknown;
   };
   if (typeof params.runId !== "string" || typeof params.status !== "string") {
     return undefined;
@@ -13245,6 +13445,7 @@ function automationRunUpdateForBackendEvent(event: AgentEvent): {
       : undefined,
     runId: params.runId,
     status: params.status,
+    suppressBindingBroadcast: params.suppressBindingBroadcast === true,
   };
 }
 
@@ -13297,6 +13498,21 @@ function isTerminalTurnLifecycle(
   );
 }
 
+/**
+ * Add `key` to a dedup set, evicting the oldest entries (insertion order) once
+ * the set exceeds MAX_DELIVERED_AUTOMATION_KEYS. Eviction only ever drops keys
+ * for runs whose terminal events fired long ago and will not re-deliver, so the
+ * dedup guarantee for in-flight runs is preserved while retention stays bounded.
+ */
+function rememberBoundedKey(set: Set<string>, key: string): void {
+  set.add(key);
+  while (set.size > MAX_DELIVERED_AUTOMATION_KEYS) {
+    const oldest = set.values().next().value;
+    if (oldest === undefined) break;
+    set.delete(oldest);
+  }
+}
+
 function isSameActiveTurnState(
   previous: MessagingActiveTurnSummary | undefined,
   next: MessagingActiveTurnSummary | undefined,
@@ -13335,6 +13551,35 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
     return false;
   }
   return true;
+}
+
+function messagingEventFromAutomationSource(
+  source: AutomationRunSourceMetadata,
+): MessagingInboundTextEvent {
+  return {
+    id: source.eventId ?? source.sourceEventKey,
+    kind: "text",
+    actor: {
+      platformUserId: source.actor.platformUserId,
+      displayName: source.actor.displayName,
+      username: source.actor.username,
+      isBot: source.actor.isBot,
+    },
+    channel: {
+      channel: source.conversation.channel,
+      conversation: {
+        id: source.conversation.conversationId,
+        kind: source.conversation.conversationKind ?? "channel",
+        parentId: source.conversation.parentId,
+        title: source.conversation.title,
+        parentTitle: source.conversation.parentTitle,
+        ancestorTitle: source.conversation.ancestorTitle,
+      },
+    },
+    receivedAt: source.receivedAt,
+    routingState: source.routingState as MessagingAdapterState | undefined,
+    text: source.message?.text ?? "",
+  };
 }
 
 export function shouldConsumeDeliveryBudget(intent: MessagingSurfaceIntent): boolean {

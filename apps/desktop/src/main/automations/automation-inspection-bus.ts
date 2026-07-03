@@ -351,6 +351,8 @@ function toAutomationDetail(
     taskPrompt: record.taskPrompt,
     gate: record.gate,
     status: record.status,
+    triggers: record.triggers,
+    outputActions: record.outputActions,
     schedule: record.schedule,
     scheduleSummary: record.scheduleSummary,
     backlogPolicy: record.backlogPolicy,

@@ -50,6 +50,8 @@ import type {
   GetThreadFileDiffResponse,
   PersistThreadUsageActivityRequest,
   PersistThreadUsageActivityResponse,
+  DraftAutomationPromptRequest,
+  DraftAutomationPromptResponse,
   GetAutomationRunArtifactRequest,
   GetAutomationRunArtifactResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -96,10 +98,16 @@ import type {
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
   GetMessagingActivitySummaryResponse,
+  InboundPreviewMessage,
+  ListInboundTopicsRequest,
+  ListInboundTopicsResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
+  StartInboundPreviewRequest,
+  StartInboundPreviewResponse,
+  StopInboundPreviewRequest,
   ListThreadMigrationSourceThreadsRequest,
   ListThreadMigrationSourceThreadsResponse,
   ListThreadMigrationSourcesResponse,
@@ -314,6 +322,10 @@ export type DesktopApi = {
     request: GetAutomationRunArtifactRequest,
   ) => Promise<GetAutomationRunArtifactResponse>;
   listAutomationLoadIssues?: () => Promise<ListAutomationLoadIssuesResponse>;
+  /** Draft an automation task prompt from a plain-language description. */
+  draftAutomationPrompt?: (
+    request: DraftAutomationPromptRequest,
+  ) => Promise<DraftAutomationPromptResponse>;
   listPwrAgentProfiles?: () => Promise<ListDesktopPwrAgentProfilesResponse>;
   openPwrAgentProfile?: (
     request: OpenDesktopPwrAgentProfileRequest,
@@ -733,6 +745,21 @@ export type DesktopApi = {
   onMessagingPairingChanged?: (
     callback: (event: { at: number; entry: MessagingPairingEntry }) => void,
   ) => () => void;
+  /**
+   * Start a going-forward live preview of inbound messages for a conversation
+   * so the Automations editor can show what a trigger filter would match.
+   */
+  startInboundPreview?: (
+    request: StartInboundPreviewRequest,
+  ) => Promise<StartInboundPreviewResponse>;
+  stopInboundPreview?: (request: StopInboundPreviewRequest) => Promise<void>;
+  onInboundPreviewMessage?: (
+    callback: (message: InboundPreviewMessage) => void,
+  ) => () => void;
+  /** List known Telegram forum topics within a group, for the topic picker. */
+  listInboundTopics?: (
+    request: ListInboundTopicsRequest,
+  ) => Promise<ListInboundTopicsResponse>;
   /** Spawns or focuses the dedicated Messaging Activity window. */
   openMessagingActivityWindow?: () => Promise<void>;
   /** Shut down the messaging runtime in *this* process and release

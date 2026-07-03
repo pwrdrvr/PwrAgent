@@ -3746,6 +3746,99 @@ describe("MessagingController", () => {
     );
   });
 
+  it("does not broadcast run updates when the automation delivers via messaging actions", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    // suppressBindingBroadcast is set when the automation has an explicit
+    // source_message/messaging_target action, which delivers to the source
+    // conversation itself. The legacy binding broadcast would double-post that
+    // conversation (it is often also a binding), so it must be skipped.
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "automation/run/updated",
+        params: {
+          threadId: "thread-1",
+          automationId: "automation-1",
+          automationName: "Check weather",
+          runId: "run-1",
+          status: "completed",
+          suppressBindingBroadcast: true,
+          outputDecision: {
+            kind: "post_card",
+            summary: "Rain is already underway.",
+            details: "Hourly forecast shows rain through at least 5 AM.",
+          },
+          finalText: JSON.stringify({
+            decision: "post_card",
+            summary: "Rain is already underway.",
+            details: "Hourly forecast shows rain through at least 5 AM.",
+          }),
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "assistant",
+      ),
+    ).toEqual([]);
+  });
+
+  it("omits the automation start notice and final broadcast when delivery is via messaging actions", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "thread-1",
+          queueEntryId: "headless:run-1",
+          origin: "automation",
+          status: "started",
+          turnId: "turn-1",
+          automationRunId: "run-1",
+          automationName: "Batphone",
+          suppressBindingBroadcast: true,
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "thread-1",
+          queueEntryId: "headless:run-1",
+          origin: "automation",
+          status: "terminal",
+          turnId: "turn-1",
+          automationRunId: "run-1",
+          automationName: "Batphone",
+          suppressBindingBroadcast: true,
+          finalText: JSON.stringify({
+            decision: "post_card",
+            summary: "Harold sent the message.",
+          }),
+          terminalStatus: "turn/completed",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter(
+        (intent) =>
+          intent.kind === "message" &&
+          (intent.role === "assistant" || intent.role === "system"),
+      ),
+    ).toEqual([]);
+  });
+
   it("suppresses structured automation quiet output in messaging", async () => {
     const harness = await createHarness();
     await bindThread(harness);

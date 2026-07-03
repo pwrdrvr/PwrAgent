@@ -723,6 +723,13 @@ export type MessagingSurfaceDeliveryPolicy = {
   mode?: MessagingSurfacePresentationMode;
   pin?: boolean;
   replaceMarkup?: boolean;
+  /**
+   * Route relative to the inbound source event when delivery is initiated
+   * without a persisted binding. Providers map this to native thread/channel
+   * fields when supported.
+   */
+  sourceRelative?: "source_thread" | "source_channel";
+  broadcastThreadReply?: boolean;
   unpin?: boolean;
   fallback?: "present_new" | "fail";
 };

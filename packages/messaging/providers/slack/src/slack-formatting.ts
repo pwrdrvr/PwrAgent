@@ -67,6 +67,7 @@ export type SlackBlock = SlackActionsBlock | SlackContextBlock | SlackSectionBlo
 export type SlackPostBody = {
   blocks?: SlackBlock[];
   channel: string;
+  reply_broadcast?: boolean;
   text: string;
   thread_ts?: string;
   unfurl_links?: boolean;

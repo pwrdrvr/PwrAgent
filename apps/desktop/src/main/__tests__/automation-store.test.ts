@@ -214,6 +214,7 @@ describe("AutomationStore", () => {
       finalText: "Nothing urgent.",
       errorMessage: undefined,
       outputDecision: undefined,
+      actionResults: [],
       transcriptEvents: [
         {
           id: "run-1:assistant-final",
@@ -224,6 +225,287 @@ describe("AutomationStore", () => {
       ],
       createdAt: 3_000,
       updatedAt: 3_000,
+    });
+  });
+
+  it("listEnabledInboundAutomations returns only enabled automations with inbound triggers", () => {
+    store.createAutomation({
+      id: "scheduled-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Scheduled",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      now: 1_000,
+    });
+    const enabledInbound = store.createAutomation({
+      id: "inbound-enabled",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Enabled inbound",
+      taskPrompt: "Triage.",
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C1" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 1_000,
+    });
+    const pausedInbound = store.createAutomation({
+      id: "inbound-paused",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Paused inbound",
+      taskPrompt: "Triage.",
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C2" },
+          textFilter: { mode: "contains", text: "WARN" },
+        },
+      ],
+      now: 1_000,
+    });
+    store.updateAutomation(pausedInbound.id, { status: "paused" });
+
+    const ids = store.listEnabledInboundAutomations().map((a) => a.id);
+    expect(ids).toEqual([enabledInbound.id]);
+  });
+
+  it("collapses duplicate assistant_final transcript events with the same text", () => {
+    store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+      now: 1_000,
+    });
+    store.createRun({
+      id: "run-1",
+      automationId: "automation-1",
+      trigger: "manual",
+      now: 2_000,
+    });
+    store.markRunTerminal({
+      runId: "run-1",
+      status: "completed",
+      completedAt: 3_000,
+      now: 3_000,
+    });
+
+    // The run-artifact builder records the final under one id.
+    store.upsertRunArtifact({
+      runId: "run-1",
+      status: "completed",
+      finalText: "Harold sent the message.",
+      transcriptEvents: [
+        {
+          id: "run-1:assistant-final",
+          at: 3_000,
+          kind: "assistant_final",
+          text: "Harold sent the message.",
+        },
+      ],
+      now: 3_000,
+    });
+    // The streamed item/completed event records the same text under a different
+    // id. Without dedup this would surface as two identical assistant rows.
+    store.appendRunTranscriptEvent({
+      runId: "run-1",
+      event: {
+        id: "run-1:assistant:item-9",
+        at: 3_010,
+        kind: "assistant_final",
+        text: "Harold sent the message.",
+      },
+      now: 3_010,
+    });
+
+    const transcript = store.getRunArtifact("run-1")?.transcriptEvents ?? [];
+    expect(
+      transcript.filter((event) => event.kind === "assistant_final"),
+    ).toHaveLength(1);
+  });
+
+  it("defaults legacy scheduled automations and persists inbound trigger metadata", () => {
+    const legacy = store.createAutomation({
+      id: "automation-legacy",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Legacy schedule",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "interval",
+        every: 15,
+        unit: "minutes",
+      },
+      now: 1_000,
+    });
+
+    expect(legacy.triggers).toEqual([
+      {
+        id: "schedule",
+        kind: "schedule",
+        schedule: {
+          kind: "interval",
+          every: 15,
+          unit: "minutes",
+        },
+      },
+    ]);
+    expect(legacy.outputActions).toEqual([
+      { id: "agent-context", kind: "agent_context" },
+    ]);
+
+    const inbound = store.createAutomation({
+      id: "automation-inbound",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate this alert.",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          name: "Datadog ERROR",
+          conversation: {
+            channel: "slack",
+            conversationId: "C123",
+            conversationKind: "channel",
+            title: "alerts",
+          },
+          sender: {
+            platformUserId: "B123",
+            isBot: true,
+          },
+          textFilter: {
+            mode: "contains",
+            text: "ERROR",
+            caseSensitive: false,
+          },
+        },
+      ],
+      executionProfile: {
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+        mcpAllowlist: ["datadog", "aws-readonly"],
+      },
+      outputActions: [
+        { id: "agent-context", kind: "agent_context" },
+        {
+          id: "slack-thread",
+          kind: "source_message",
+          destination: "source_thread",
+          broadcast: true,
+        },
+      ],
+      now: 2_000,
+    });
+
+    expect(inbound.schedule).toBeUndefined();
+    expect(inbound.scheduleSummary).toBe("inbound: Datadog ERROR");
+    expect(store.getAutomation("automation-inbound")).toMatchObject({
+      triggers: inbound.triggers,
+      executionProfile: inbound.executionProfile,
+      outputActions: inbound.outputActions,
+    });
+  });
+
+  it("persists inbound run source metadata and action results", () => {
+    store.createAutomation({
+      id: "automation-inbound",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate this alert.",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          conversation: {
+            channel: "slack",
+            conversationId: "C123",
+          },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 1_000,
+    });
+
+    store.createRun({
+      id: "run-inbound",
+      automationId: "automation-inbound",
+      trigger: "inbound_message",
+      source: {
+        kind: "messaging",
+        eventId: "slack-event-1",
+        sourceEventKey: "slack:C123:171.000:B123",
+        receivedAt: 2_000,
+        matchedTriggerId: "datadog-error",
+        actor: {
+          platformUserId: "B123",
+          isBot: true,
+        },
+        conversation: {
+          channel: "slack",
+          conversationId: "C123",
+          conversationKind: "channel",
+        },
+        message: {
+          text: "ERROR api failed",
+        },
+        routingState: {
+          opaque: {
+            channelId: "C123",
+            ts: "171.000",
+          },
+        },
+      },
+      now: 2_000,
+    });
+
+    expect(store.getRun("run-inbound")).toMatchObject({
+      trigger: "inbound_message",
+      source: {
+        sourceEventKey: "slack:C123:171.000:B123",
+        matchedTriggerId: "datadog-error",
+        actor: {
+          platformUserId: "B123",
+          isBot: true,
+        },
+      },
+    });
+
+    store.upsertRunArtifact({
+      runId: "run-inbound",
+      status: "completed",
+      finalText: "Investigated.",
+      actionResults: [
+        {
+          actionId: "slack-thread",
+          kind: "source_message",
+          status: "completed",
+          completedAt: 3_000,
+        },
+      ],
+      now: 3_000,
+    });
+
+    expect(store.getRunArtifact("run-inbound")).toMatchObject({
+      actionResults: [
+        {
+          actionId: "slack-thread",
+          kind: "source_message",
+          status: "completed",
+          completedAt: 3_000,
+        },
+      ],
     });
   });
 

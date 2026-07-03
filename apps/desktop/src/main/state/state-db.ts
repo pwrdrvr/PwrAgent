@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 22;
+export const CURRENT_STATE_DB_USER_VERSION = 23;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -375,12 +375,17 @@ CREATE TABLE IF NOT EXISTS automation_runs (
   queue_entry_id  TEXT,
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL,
+  source_event_key TEXT,
   payload         TEXT NOT NULL,
   FOREIGN KEY (automation_id) REFERENCES automations(automation_id)
     ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_automation_runs_automation_updated
   ON automation_runs(automation_id, updated_at DESC);
+-- NOTE: idx_automation_runs_source_event is created in the v23 migration
+-- (ensureAutomationRunSourceEventKey), NOT here. ensureCurrentSchema runs
+-- before migrations, and on an existing DB the source_event_key column does
+-- not exist until the migration's ALTER runs — referencing it here would fail.
 CREATE INDEX IF NOT EXISTS idx_automation_runs_thread_updated
   ON automation_runs(backend, thread_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_automation_runs_status
@@ -805,6 +810,16 @@ export class StateDb {
       db.transaction(() => {
         repairOpenAiThreadUsagePricing(db);
         db.pragma("user_version = 22");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 23) {
+      db.transaction(() => {
+        // Inbound-run idempotency: promote source_event_key to a column +
+        // index so duplicate provider deliveries can be deduped. Additive;
+        // the same column/index also live in AUTOMATION_SCHEMA so
+        // re-instantiated dbs converge.
+        ensureAutomationRunSourceEventKey(db);
+        db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
     return new StateDb(db);
@@ -1610,6 +1625,15 @@ function tableExists(
   return Boolean(row);
 }
 
+function ensureAutomationRunSourceEventKey(db: BetterSqlite3.Database): void {
+  if (!tableColumnExists(db, "automation_runs", "source_event_key")) {
+    db.exec("ALTER TABLE automation_runs ADD COLUMN source_event_key TEXT");
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_automation_runs_source_event ON automation_runs(automation_id, source_event_key)",
+  );
+}
+
 function ensurePullRequestProviderColumns(db: BetterSqlite3.Database): void {
   if (!tableColumnExists(db, "pr_status_cache", "provider")) {
     db.exec(
@@ -1644,6 +1668,7 @@ function tableColumnExists(
   db: BetterSqlite3.Database,
   tableName:
     | "app_runtime_instances"
+    | "automation_runs"
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "thread_pricing_summaries"
@@ -1659,6 +1684,7 @@ function readTableInfo(
   db: BetterSqlite3.Database,
   tableName:
     | "app_runtime_instances"
+    | "automation_runs"
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "thread_pricing_summaries"
@@ -1668,6 +1694,10 @@ function readTableInfo(
   switch (tableName) {
     case "app_runtime_instances":
       return db.prepare("PRAGMA table_info(app_runtime_instances)").all() as Array<{
+        name: string;
+      }>;
+    case "automation_runs":
+      return db.prepare("PRAGMA table_info(automation_runs)").all() as Array<{
         name: string;
       }>;
     case "pr_lookup_cache":

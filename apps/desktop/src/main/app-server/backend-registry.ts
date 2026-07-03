@@ -309,6 +309,7 @@ import {
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
+import { XaiEphemeralObjectCaller } from "./ephemeral-object-call";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
@@ -457,6 +458,12 @@ type BackendClient = {
     } | null;
   }): Promise<{ threadId: string }>;
   generateTitle?: ThreadTitleGenerator["generateTitle"];
+  generateStructuredObject?(params: {
+    prompt: string;
+    schema: Record<string, unknown>;
+    isMatch: (record: Record<string, unknown>) => boolean;
+    timeoutMs?: number;
+  }): ReturnType<ThreadTitleGenerator["generateTitle"]>;
   listSkills(params?: {
     cwd?: string;
     cwds?: string[];
@@ -4490,6 +4497,23 @@ function launchpadDefaultsEqual(
   );
 }
 
+function schemaRequiredKeys(schema: Record<string, unknown>): string[] {
+  const required = schema.required;
+  if (Array.isArray(required)) {
+    return required.filter((key): key is string => typeof key === "string");
+  }
+  const properties = schema.properties;
+  if (properties && typeof properties === "object") {
+    return Object.keys(properties as Record<string, unknown>);
+  }
+  return [];
+}
+
+function isNonEmptyStructuredValue(value: unknown): boolean {
+  if (typeof value === "string") return value.trim().length > 0;
+  return value !== undefined && value !== null;
+}
+
 function resolveGrokApiKeyForLiveClient(): string | undefined {
   try {
     return getDesktopSettingsService().resolveGrokApiKeySync();
@@ -4858,6 +4882,7 @@ export class DesktopBackendRegistry {
       automationRunId: string;
       executionMode: ThreadExecutionMode;
       queueEntryId: string;
+      suppressBindingBroadcast?: boolean;
     }
   >();
   /**
@@ -5379,7 +5404,14 @@ export class DesktopBackendRegistry {
     agentThreadId: string;
     automationName?: string;
     automationRunId: string;
+    cwd?: string;
+    executionMode?: ThreadExecutionMode;
+    fastMode?: boolean;
     input: AppServerTurnInputItem[];
+    model?: string;
+    reasoningEffort?: string;
+    serviceTier?: string;
+    suppressBindingBroadcast?: boolean;
   }): Promise<{
     backend: AppServerBackendKind;
     headlessThreadId: string;
@@ -5392,24 +5424,28 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.agentThreadId,
     });
-    const executionMode = overlay?.executionMode ?? "default";
+    const executionMode = params.executionMode ?? overlay?.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const approvalPolicy = "never";
     const sandbox = modeSettings.sandbox;
     const modelSettings = await this.resolveModelSettings(params.backend, {
-      model: overlay?.model,
-      serviceTier: overlay?.serviceTier,
-      reasoningEffort: overlay?.reasoningEffort,
-      fastMode: params.backend === "codex" ? overlay?.fastMode : undefined,
+      model: params.model ?? overlay?.model,
+      serviceTier: params.serviceTier ?? overlay?.serviceTier,
+      reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+      fastMode:
+        params.backend === "codex"
+          ? params.fastMode ?? overlay?.fastMode
+          : undefined,
     });
     const cwd =
-      params.backend === "codex"
+      params.cwd ??
+      (params.backend === "codex"
         ? await this.resolveThreadEnvironmentCwd(
             params.backend,
             params.agentThreadId,
             overlay,
           )
-        : undefined;
+        : undefined);
     const input = prependAutomationRuntimeContext({
       approvalPolicy,
       executionMode,
@@ -5476,6 +5512,7 @@ export class DesktopBackendRegistry {
         automationRunId: params.automationRunId,
         executionMode,
         queueEntryId,
+        suppressBindingBroadcast: params.suppressBindingBroadcast,
       },
     );
     await this.emit({
@@ -5491,6 +5528,7 @@ export class DesktopBackendRegistry {
           status: "started",
           backendThreadId: turn.threadId,
           turnId: turn.turnId,
+          suppressBindingBroadcast: params.suppressBindingBroadcast,
         },
       },
     });
@@ -11026,6 +11064,59 @@ export class DesktopBackendRegistry {
     return resolveModelSettingsFromOptions(backend, launchpadOptions, settings);
   }
 
+  /**
+   * One-shot structured generation using the operator's configured backend
+   * (launchpad default), reusing the existing per-backend one-shot paths. Codex
+   * runs an ephemeral helper turn; Grok uses the xAI ephemeral caller. Backends
+   * without a one-shot path (ACP) return "unavailable" rather than failing.
+   */
+  async generateStructuredObject(params: {
+    system: string;
+    prompt: string;
+    schema: Record<string, unknown>;
+    schemaName?: string;
+    timeoutMs?: number;
+  }): Promise<
+    { status: "ok"; object: unknown } | { status: "unavailable" | "failed"; reason: string }
+  > {
+    const defaults = await this.overlayStore.getLaunchpadDefaults();
+    const backend = await this.resolveLaunchpadBackend(defaults.backend);
+    const requiredKeys = schemaRequiredKeys(params.schema);
+
+    if (backend.kind === "codex" && this.codexClient.generateStructuredObject) {
+      return await this.codexClient.generateStructuredObject({
+        prompt: params.prompt,
+        schema: params.schema,
+        isMatch: (record) =>
+          requiredKeys.every((key) => isNonEmptyStructuredValue(record[key])),
+        timeoutMs: params.timeoutMs,
+      });
+    }
+
+    if (backend.kind === "grok") {
+      const apiKey = resolveGrokApiKeyForLiveClient();
+      if (!apiKey) {
+        return { status: "unavailable", reason: "grok_api_key_unavailable" };
+      }
+      const result = await new XaiEphemeralObjectCaller({ apiKey }).generateObject({
+        schema: params.schema,
+        schemaName: params.schemaName,
+        system: params.system,
+        prompt: params.prompt,
+        timeoutMs: params.timeoutMs,
+      });
+      if (result.status === "ok") {
+        return { status: "ok", object: result.response.object };
+      }
+      return result;
+    }
+
+    return {
+      status: "unavailable",
+      reason: `${backend.kind}_structured_generation_unavailable`,
+    };
+  }
+
   private async resolveLaunchpadBackend(
     preferred: AppServerBackendKind,
   ): Promise<BackendSummary> {
@@ -11311,6 +11402,7 @@ export class DesktopBackendRegistry {
           errorMessage: errorMessageFromTerminalNotification(notification),
           finalText: finalTextFromTerminalNotification(notification),
           terminalStatus: notification.method,
+          suppressBindingBroadcast: run.suppressBindingBroadcast,
         },
       },
     });

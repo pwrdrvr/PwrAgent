@@ -48,6 +48,17 @@ function buildAutomationSummary(
           every: 5,
           unit: "minutes",
         },
+        triggers: [
+          {
+            id: "schedule",
+            kind: "schedule",
+            schedule: {
+              kind: "interval",
+              every: 5,
+              unit: "minutes",
+            },
+          },
+        ],
         scheduleSummary: "every 5 minutes",
         backlogPolicy: "coalesce",
         nextRunAt: 10_000,

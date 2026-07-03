@@ -388,3 +388,57 @@ export type RejectMessagingPairingRequest = {
 export type RejectMessagingPairingResponse = {
   entry: MessagingPairingEntry;
 };
+
+/**
+ * A compact, bounded view of a single inbound message, surfaced live to the
+ * Automations editor so an operator can see which recent messages their
+ * trigger filter would match. Capture is going-forward only (messages that
+ * arrive while the preview is open); provider history backfill is not implied.
+ */
+export type InboundPreviewMessage = {
+  id: string;
+  provider: MessagingChannelKind;
+  conversationId: string;
+  parentId?: string;
+  receivedAt: number;
+  actor: {
+    platformUserId: string;
+    displayName?: string;
+    isBot?: boolean;
+  };
+  text: string;
+};
+
+export type StartInboundPreviewRequest = {
+  subscriptionId: string;
+  provider: MessagingChannelKind;
+  conversationId: string;
+  parentId?: string;
+};
+
+export type StartInboundPreviewResponse = {
+  ok: boolean;
+};
+
+export type StopInboundPreviewRequest = {
+  subscriptionId: string;
+};
+
+/**
+ * Known sub-conversations (Telegram forum topics) within a group, so the
+ * Automations editor can offer a topic picker by name instead of asking the
+ * operator to paste a numeric topic id. Backed by the managed-topic registry.
+ */
+export type ListInboundTopicsRequest = {
+  provider: MessagingChannelKind;
+  groupId: string;
+};
+
+export type InboundTopicOption = {
+  id: string;
+  title: string;
+};
+
+export type ListInboundTopicsResponse = {
+  topics: InboundTopicOption[];
+};

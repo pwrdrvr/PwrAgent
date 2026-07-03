@@ -389,6 +389,364 @@ describe("AutomationScheduler", () => {
     });
   });
 
+  it("serializes inbound message runs behind the automation lane", async () => {
+    const automation = store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate.",
+      // Disable coalescing so each event creates a run immediately; this test
+      // exercises the lane queue, not the coalescing window.
+      inboundCoalesceWindowMs: 0,
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          conversation: {
+            channel: "slack",
+            conversationId: "C123",
+          },
+          textFilter: {
+            mode: "contains",
+            text: "ERROR",
+          },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+
+    now = 1_000;
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: {
+        kind: "messaging",
+        sourceEventKey: "slack:C123:1::B123",
+        receivedAt: 1_000,
+        matchedTriggerId: "datadog-error",
+        actor: {
+          platformUserId: "B123",
+          isBot: true,
+        },
+        conversation: {
+          channel: "slack",
+          conversationId: "C123",
+        },
+        message: {
+          text: "ERROR first",
+        },
+      },
+      now,
+    });
+    const [activeRun] = store.listRunsForAutomation("automation-1");
+
+    now = 2_000;
+    const queued = await scheduler.runFromInboundEvent({
+      automation,
+      source: {
+        kind: "messaging",
+        sourceEventKey: "slack:C123:2::B123",
+        receivedAt: 2_000,
+        matchedTriggerId: "datadog-error",
+        actor: {
+          platformUserId: "B123",
+          isBot: true,
+        },
+        conversation: {
+          channel: "slack",
+          conversationId: "C123",
+        },
+        message: {
+          text: "ERROR second",
+        },
+      },
+      now,
+    });
+
+    expect(queued?.status).toBe("queued");
+    expect(store.listRunsForAutomation("automation-1")).toEqual([
+      expect.objectContaining({
+        trigger: "inbound_message",
+        status: "queued",
+        source: expect.objectContaining({
+          sourceEventKey: "slack:C123:2::B123",
+        }),
+      }),
+      expect.objectContaining({
+        trigger: "inbound_message",
+        status: "running",
+        source: expect.objectContaining({
+          sourceEventKey: "slack:C123:1::B123",
+        }),
+      }),
+    ]);
+
+    now = 3_000;
+    await scheduler.handleTurnQueueUpdate({
+      automationRunId: activeRun?.id,
+      status: "terminal",
+      terminalStatus: "turn/completed",
+      now,
+    });
+
+    expect(queue.submitted).toHaveLength(2);
+    expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
+      trigger: "inbound_message",
+      status: "running",
+      source: {
+        sourceEventKey: "slack:C123:2::B123",
+      },
+    });
+  });
+
+  it("ignores a redelivered inbound event with the same source-event key", async () => {
+    const automation = store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate.",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+
+    const source = {
+      kind: "messaging" as const,
+      sourceEventKey: "slack:C123:1::B123",
+      receivedAt: 1_000,
+      matchedTriggerId: "datadog-error",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR first" },
+    };
+
+    now = 1_000;
+    const first = await scheduler.runFromInboundEvent({ automation, source, now });
+    now = 1_500;
+    const redelivered = await scheduler.runFromInboundEvent({
+      automation,
+      source,
+      now,
+    });
+
+    expect(first).toBeDefined();
+    expect(redelivered).toBeUndefined();
+    expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
+    expect(queue.submitted).toHaveLength(1);
+  });
+
+  it("coalesces an inbound burst into a leading run plus one batched run", async () => {
+    const automation = store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Burst triage",
+      taskPrompt: "Investigate.",
+      inboundCoalesceWindowMs: 60_000,
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    let windowCallback: (() => void) | undefined;
+    const scheduler = new AutomationScheduler({
+      store,
+      runner: new ThreadQueueAutomationRunner(queue),
+      now: () => now,
+      setTimer: ((callback: () => void) => {
+        windowCallback = callback;
+        return 1;
+      }) as unknown as typeof setTimeout,
+      clearTimer: () => undefined,
+    });
+    const src = (key: string, text: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: "t",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text },
+    });
+
+    now = 1_000;
+    await scheduler.runFromInboundEvent({ automation, source: src("k1", "ERROR one"), now });
+    // Leading edge fires immediately.
+    expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
+    expect(queue.submitted).toHaveLength(1);
+
+    // Two more within the window are buffered, not run.
+    now = 1_100;
+    await scheduler.runFromInboundEvent({ automation, source: src("k2", "ERROR two"), now });
+    now = 1_200;
+    await scheduler.runFromInboundEvent({ automation, source: src("k3", "ERROR three"), now });
+    expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
+
+    // Leading run completes so the lane is free.
+    const leading = store.listRunsForAutomation("automation-1")[0];
+    now = 2_000;
+    await scheduler.handleTurnQueueUpdate({
+      automationRunId: leading?.id,
+      status: "terminal",
+      terminalStatus: "turn/completed",
+      now,
+    });
+
+    // Window elapses → one batched run carrying the buffered messages.
+    now = 61_000;
+    windowCallback?.();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const runs = store.listRunsForAutomation("automation-1");
+    expect(runs).toHaveLength(2);
+    expect(queue.submitted).toHaveLength(2);
+    const batched = runs[0];
+    expect(batched?.source?.sourceEventKey).toBe("k2");
+    expect(batched?.source?.batchedEvents).toEqual([
+      expect.objectContaining({ sourceEventKey: "k3" }),
+    ]);
+  });
+
+  it("caps inbound run starts at the per-hour token bucket", async () => {
+    const automation = store.createAutomation({
+      id: "automation-rl",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Rate limited",
+      taskPrompt: "Triage.",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: 5,
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    const src = (key: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: "t",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR" },
+    });
+
+    // 10 distinct messages at the same instant; capacity == rate == 5.
+    now = 1_000;
+    for (let i = 0; i < 10; i += 1) {
+      await scheduler.runFromInboundEvent({ automation, source: src(`k${i}`), now });
+    }
+    expect(store.listRunsForAutomation("automation-rl")).toHaveLength(5);
+
+    // Bucket refills 1 token after 1/5 hour (12 min); one more run starts.
+    now = 1_000 + 12 * 60 * 1000;
+    await scheduler.runFromInboundEvent({ automation, source: src("k-refill"), now });
+    expect(store.listRunsForAutomation("automation-rl")).toHaveLength(6);
+  });
+
+  it("does not spend rate tokens on idempotent redeliveries or duplicate-trigger matches", async () => {
+    const automation = store.createAutomation({
+      id: "automation-rl2",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Rate limited",
+      taskPrompt: "Triage.",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: 2,
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    const src = (key: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: "t",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR" },
+    });
+
+    now = 1_000;
+    // First message starts a run (1 token spent, 1 left).
+    await scheduler.runFromInboundEvent({ automation, source: src("k1"), now });
+    // Three redeliveries of the same key are idempotent: no run, no token spent.
+    for (let i = 0; i < 3; i += 1) {
+      await scheduler.runFromInboundEvent({ automation, source: src("k1"), now });
+    }
+    // A genuinely new message still has its token and starts/queues a run.
+    await scheduler.runFromInboundEvent({ automation, source: src("k2"), now });
+
+    // 2 real runs (k1, k2); the bucket was not drained by the redeliveries. If
+    // tokens were spent before the idempotency check, k2 would have been
+    // throttled and only 1 run would exist.
+    expect(store.listRunsForAutomation("automation-rl2")).toHaveLength(2);
+  });
+
+  it("does not rate-limit inbound runs when the limit is unlimited", async () => {
+    const automation = store.createAutomation({
+      id: "automation-unlimited",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Unlimited",
+      taskPrompt: "Triage.",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: null,
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    const src = (key: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: "t",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR" },
+    });
+
+    now = 1_000;
+    for (let i = 0; i < 30; i += 1) {
+      await scheduler.runFromInboundEvent({ automation, source: src(`k${i}`), now });
+    }
+    expect(store.listRunsForAutomation("automation-unlimited")).toHaveLength(30);
+  });
+
   it("includes successful gate output in the automation run prompt", async () => {
     createIntervalAutomation({
       backend: "codex",

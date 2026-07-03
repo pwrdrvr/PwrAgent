@@ -58,6 +58,7 @@ import {
 import {
   logSlackInvalidIdentifier,
   validateSlackCallbackHandle,
+  validateSlackBotId,
   validateSlackChannelId,
   validateSlackFileId,
   validateSlackMessageTs,
@@ -86,6 +87,10 @@ export type SlackApi = {
   }): Promise<void>;
   authTest(): Promise<SlackAuthTestResult>;
   conversationsInfo?(params: { channel: string }): Promise<SlackConversationInfo | undefined>;
+  conversationsHistory?(params: {
+    channel: string;
+    limit?: number;
+  }): Promise<SlackHistoryMessageInfo[]>;
   conversationsReplies?(params: {
     channel: string;
     limit?: number;
@@ -139,6 +144,15 @@ export type SlackConversationInfo = {
 export type SlackThreadMessageInfo = {
   text?: string;
   ts?: string;
+};
+
+export type SlackHistoryMessageInfo = {
+  bot_id?: string;
+  subtype?: string;
+  text?: string;
+  ts?: string;
+  user?: string;
+  username?: string;
 };
 
 export type SlackFileInfo = {
@@ -324,6 +338,7 @@ export class SlackAdapter implements SlackProviderAdapter {
   >();
   private botAccount: string | undefined;
   private botAccountDetail: string | undefined;
+  private botId: string | undefined;
   private botUserId: string | undefined;
   private assistantThreadStatusDisabled = false;
   private conversationInfoLookupDisabled = false;
@@ -444,6 +459,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (this.started) return;
     this.listener = listener;
     const auth = await this.api.authTest();
+    this.botId = auth.bot_id;
     this.botUserId = auth.user_id;
     this.botAccount = auth.user ?? auth.user_id;
     this.botAccountDetail = auth.team ?? hostFromUrl(auth.url) ?? auth.team_id;
@@ -540,6 +556,9 @@ export class SlackAdapter implements SlackProviderAdapter {
       text: text || intent.fallbackText || "PwrAgent",
       ...(blocks.length > 0 ? { blocks } : {}),
       ...(target.threadTs ? { thread_ts: target.threadTs } : {}),
+      ...(target.threadTs && intent.delivery?.broadcastThreadReply
+        ? { reply_broadcast: true }
+        : {}),
       unfurl_links: false,
       unfurl_media: false,
     };
@@ -671,10 +690,16 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private async handleMessageEvent(event: SlackMessageEvent): Promise<void> {
     if (!this.listener) return;
-    if (event.bot_id || (this.botUserId && event.user === this.botUserId)) return;
+    if (
+      (this.botId && event.bot_id === this.botId) ||
+      (this.botUserId && event.user === this.botUserId)
+    ) {
+      return;
+    }
     if (event.subtype && event.subtype !== "file_share") return;
 
-    const ids = this.validateInboundIds({
+    const ids = this.validateInboundMessageIds({
+      botId: event.bot_id,
       channelId: event.channel,
       teamId: event.team,
       userId: event.user,
@@ -683,7 +708,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (!ids) return;
     if (this.isDuplicateMessageEvent(event, ids)) return;
 
-    const actor = await this.actorForSlackUser(ids.userId);
+    const actor = ids.botId
+      ? this.actorForSlackBot(ids.botId)
+      : await this.actorForSlackUser(ids.userId);
     const channel = await this.channelRefForSlack({
       channelId: ids.channelId,
       channelName: undefined,
@@ -1160,12 +1187,17 @@ export class SlackAdapter implements SlackProviderAdapter {
     const auditChannel = intent.audit?.channel;
     const channelId = surfaceState?.channelId ?? auditChannel?.conversation.id;
     if (!channelId) return undefined;
+    const sourceRelative = intent.delivery?.sourceRelative;
     const threadTs =
-      surfaceState?.threadTs
-      ?? auditChannel?.conversation.parentId
-      ?? (auditChannel?.conversation.kind === "thread"
-        ? auditChannel.conversation.parentId
-        : undefined);
+      sourceRelative === "source_channel"
+        ? undefined
+        : sourceRelative === "source_thread"
+          ? surfaceState?.threadTs ?? surfaceState?.ts ?? auditChannel?.conversation.parentId
+          : surfaceState?.threadTs
+            ?? auditChannel?.conversation.parentId
+            ?? (auditChannel?.conversation.kind === "thread"
+              ? auditChannel.conversation.parentId
+              : undefined);
     return {
       channelId,
       channelRef:
@@ -1374,6 +1406,85 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
+  private validateInboundMessageIds(params: {
+    botId?: unknown;
+    channelId: unknown;
+    teamId?: unknown;
+    ts?: unknown;
+    userId?: unknown;
+  }): { botId?: string; channelId: string; teamId?: string; ts: string; userId: string } | undefined {
+    let senderId: string;
+    if (typeof params.botId === "string" && params.botId) {
+      const botValidation = validateSlackBotId(params.botId);
+      if (!botValidation.ok) {
+        logSlackInvalidIdentifier({
+          field: "bot_id",
+          logger: this.logger,
+          reason: botValidation.reason,
+          value: params.botId,
+        });
+        return undefined;
+      }
+      senderId = params.botId;
+    } else {
+      const userValidation = validateSlackUserId(params.userId);
+      if (!userValidation.ok) {
+        logSlackInvalidIdentifier({
+          field: "user_id",
+          logger: this.logger,
+          reason: userValidation.reason,
+          value: params.userId,
+        });
+        return undefined;
+      }
+      senderId = params.userId as string;
+    }
+
+    const channelValidation = validateSlackChannelId(params.channelId);
+    if (!channelValidation.ok) {
+      logSlackInvalidIdentifier({
+        field: "channel_id",
+        logger: this.logger,
+        reason: channelValidation.reason,
+        value: params.channelId,
+      });
+      return undefined;
+    }
+    if (params.teamId !== undefined) {
+      const teamValidation = validateSlackTeamId(params.teamId);
+      if (!teamValidation.ok) {
+        logSlackInvalidIdentifier({
+          field: "team_id",
+          logger: this.logger,
+          reason: teamValidation.reason,
+          value: params.teamId,
+        });
+        return undefined;
+      }
+    }
+    const ts = typeof params.ts === "string" ? params.ts : `${this.now() / 1000}`;
+    const tsValidation = validateSlackMessageTs(ts);
+    if (!tsValidation.ok) {
+      logSlackInvalidIdentifier({
+        field: "message_ts",
+        logger: this.logger,
+        reason: tsValidation.reason,
+        value: ts,
+      });
+      return undefined;
+    }
+
+    return {
+      channelId: params.channelId as string,
+      ...(params.teamId !== undefined ? { teamId: params.teamId as string } : {}),
+      ts,
+      userId: senderId,
+      ...(typeof params.botId === "string" && params.botId
+        ? { botId: params.botId }
+        : {}),
+    };
+  }
+
   private authorizeInbound(params: {
     actor: MessagingActorIdentity;
     channel: MessagingChannelRef;
@@ -1518,6 +1629,15 @@ export class SlackAdapter implements SlackProviderAdapter {
       platformUserId: userId,
       ...(displayName ? { displayName } : {}),
       ...(username ? { username } : {}),
+    };
+  }
+
+  private actorForSlackBot(botId: string): MessagingActorIdentity {
+    const contact = this.config.authorizedActorIds.find((item) => item.id === botId);
+    return {
+      platformUserId: botId,
+      displayName: contact?.displayName ?? botId,
+      isBot: true,
     };
   }
 
@@ -1671,6 +1791,74 @@ export class SlackAdapter implements SlackProviderAdapter {
       this.threadTitleCache.set(cacheKey, undefined);
       return undefined;
     }
+  }
+
+  /**
+   * Fetch recent channel messages for the Automations editor live preview.
+   * Best-effort: returns `[]` when the bot lacks `conversations.history` scope
+   * or the call fails, so the preview simply falls back to going-forward
+   * capture. Newest-first Slack history is reversed to oldest-first.
+   */
+  async fetchRecentMessages(request: {
+    conversationId: string;
+    limit?: number;
+  }): Promise<MessagingInboundEvent[]> {
+    const history = this.api.conversationsHistory;
+    if (!history) return [];
+    const channelId = request.conversationId;
+    let messages: SlackHistoryMessageInfo[];
+    try {
+      messages = await history({
+        channel: channelId,
+        limit: Math.min(Math.max(request.limit ?? 15, 1), 50),
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (reason.includes("missing_scope")) {
+        this.logger.warn?.("slack history preview unavailable", {
+          reason: "missing_scope",
+          requiredScope: requiredConversationHistoryScope(channelId),
+        });
+      } else {
+        this.logger.warn?.("slack history preview failed", { reason });
+      }
+      return [];
+    }
+    const events: MessagingInboundEvent[] = [];
+    for (const message of messages) {
+      const text = message.text;
+      if (!text) continue;
+      // Mirror the live handleMessageEvent filter so the preview reflects what
+      // a trigger would actually fire on: skip PwrAgent's own posts, and skip
+      // any subtype other than file_share (the only subtype the live tap
+      // accepts). Without this the preview surfaces the bot's own output and
+      // drops file_share messages that triggers DO match.
+      if (
+        (this.botId && message.bot_id === this.botId) ||
+        (this.botUserId && message.user === this.botUserId)
+      ) {
+        continue;
+      }
+      if (message.subtype && message.subtype !== "file_share") continue;
+      const actor = message.bot_id
+        ? this.actorForSlackBot(message.bot_id)
+        : message.user
+          ? await this.actorForSlackUser(message.user, message.username)
+          : undefined;
+      if (!actor) continue;
+      events.push({
+        id: `slack:history:${channelId}:${message.ts ?? this.newEventId("slack-history")}`,
+        kind: "text",
+        actor,
+        channel: {
+          channel: this.channel,
+          conversation: { id: channelId, kind: "channel" },
+        },
+        receivedAt: slackTimestampToMs(message.ts) ?? this.now(),
+        text,
+      });
+    }
+    return events.reverse();
   }
 
   private describeFile(file: SlackFileInfo): MessagingAttachmentDescriptor[] {
@@ -1878,6 +2066,10 @@ export function createSlackApi(botToken: string): SlackApi {
       const response = await client.conversations.info(params);
       return response.channel as SlackConversationInfo | undefined;
     },
+    async conversationsHistory(params) {
+      const response = await client.conversations.history(params);
+      return (response.messages ?? []) as SlackHistoryMessageInfo[];
+    },
     async conversationsReplies(params) {
       const response = await client.conversations.replies(params);
       return (response.messages ?? []) as SlackThreadMessageInfo[];
@@ -1903,10 +2095,14 @@ export function createSlackApi(botToken: string): SlackApi {
       return response.file as SlackFileInfo | undefined;
     },
     async postMessage(params) {
-      return (await client.chat.postMessage(params)) as SlackMessageResult;
+      return (await client.chat.postMessage(
+        params as unknown as Parameters<typeof client.chat.postMessage>[0],
+      )) as SlackMessageResult;
     },
     async updateMessage(params) {
-      return (await client.chat.update(params)) as SlackMessageResult;
+      return (await client.chat.update(
+        params as unknown as Parameters<typeof client.chat.update>[0],
+      )) as SlackMessageResult;
     },
     async usersInfo(params) {
       const response = await client.users.info(params);
@@ -2152,6 +2348,12 @@ function requiredConversationHistoryScope(channelId: string): string {
   if (channelId.startsWith("D")) return "im:history";
   if (channelId.startsWith("G")) return "groups:history or mpim:history";
   return "channels:history/groups:history/im:history/mpim:history";
+}
+
+function slackTimestampToMs(ts: string | undefined): number | undefined {
+  if (!ts) return undefined;
+  const seconds = Number.parseFloat(ts);
+  return Number.isFinite(seconds) ? Math.round(seconds * 1000) : undefined;
 }
 
 function retryAfterMsFromError(error: unknown): number | undefined {

@@ -11742,6 +11742,7 @@ textarea,
 .automation-row__meta,
 .automation-row__schedule,
 .automation-editor__summary,
+.automation-editor__callout,
 .automation-run-history__empty {
   margin: 4px 0 0;
   color: var(--text-secondary);
@@ -11895,6 +11896,296 @@ textarea,
   border-color: var(--accent-border);
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
+}
+
+.automation-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.automation-field__hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.automation-capture {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.automation-capture__start {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
+.automation-capture__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-app);
+}
+
+.automation-capture__lead {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.automation-capture__code-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.automation-capture__code {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Override the app-root user-select:none so the code can be selected. */
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
+.automation-capture__copy {
+  align-self: stretch;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.automation-capture__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.automation-capture__waiting {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.automation-capture__captured {
+  margin: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.automation-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.automation-preview__toggle {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
+.automation-preview__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-app);
+}
+
+.automation-preview__empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.automation-preview__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  list-style: none;
+  /* Override the app-root user-select:none so senders/IDs/text can be copied. */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.automation-preview__item {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.32fr) 1fr auto;
+  gap: 8px;
+  align-items: start;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.automation-preview__item.is-match {
+  border: 1px solid var(--accent-border, var(--accent));
+  background: var(--accent-soft);
+}
+
+.automation-preview__sender {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.automation-preview__sender-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-preview__sender-id {
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-preview__text {
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.automation-preview__row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.automation-preview__badge {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.automation-preview__use-sender {
+  border: 0.5px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  cursor: pointer;
+  /* The button is interactive; keep its label out of text selection. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.automation-preview__use-sender:hover {
+  background: var(--bg-app);
+}
+
+.automation-prompt-field__label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.automation-prompt-field__tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.automation-prompt-field__draft-toggle {
+  border: 0.5px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.automation-prompt-field__draft-toggle:hover {
+  background: var(--bg-app);
+}
+
+.automation-prompt-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 0.5px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-app);
+}
+
+.automation-prompt-draft__input {
+  width: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font: inherit;
+  padding: 8px;
+  resize: vertical;
+}
+
+.automation-prompt-draft__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.automation-advanced {
+  border: 0.5px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.automation-advanced__summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  list-style: revert;
+}
+
+.automation-advanced__hint {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.automation-advanced[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .automation-agent-field {
@@ -12168,6 +12459,10 @@ textarea,
   display: grid;
   grid-template-columns: minmax(72px, 0.8fr) minmax(120px, 1.2fr);
   gap: 10px;
+}
+
+.automation-inline-fields--single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .automation-weekdays {

@@ -107,6 +107,8 @@ export type AutomationInspectionAutomationSummary = Pick<
   | "name"
   | "status"
   | "taskPrompt"
+  | "triggers"
+  | "outputActions"
   | "schedule"
   | "scheduleSummary"
   | "backlogPolicy"

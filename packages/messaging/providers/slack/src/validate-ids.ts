@@ -6,6 +6,7 @@ import type {
 
 export type SlackIdentifierField =
   | "action_id"
+  | "bot_id"
   | "bot_user_id"
   | "callback.value"
   | "channel_id"
@@ -31,6 +32,10 @@ export function validateSlackUserId(value: unknown): IdentifierValidationResult 
 
 export function validateSlackBotUserId(value: unknown): IdentifierValidationResult {
   return validateSlackId(value, ["U", "W"]);
+}
+
+export function validateSlackBotId(value: unknown): IdentifierValidationResult {
+  return validateSlackId(value, ["B"]);
 }
 
 export function validateSlackChannelId(value: unknown): IdentifierValidationResult {

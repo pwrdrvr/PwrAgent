@@ -181,6 +181,249 @@ describe("DesktopAutomationService", () => {
       }),
     );
     expect(registry.submitTurn).not.toHaveBeenCalled();
+    // Agent-context-only automations keep the legacy binding broadcast.
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ suppressBindingBroadcast: false }),
+    );
+  });
+
+  it("suppresses the binding broadcast for automations that reply to their source", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Incident triage",
+      taskPrompt: "Summarize the incident",
+      schedule: {
+        kind: "weekdays",
+        timeOfDay: { hour: 9, minute: 0 },
+      },
+      outputActions: [
+        { id: "agent-context", kind: "agent_context" },
+        {
+          id: "reply-source",
+          kind: "source_message",
+          destination: "source_channel",
+        },
+      ],
+    });
+
+    await service.runNow({ automationId: created.automation.id });
+
+    // The source_message action delivers to the source conversation directly,
+    // so the messaging controller must skip the legacy broadcast to avoid a
+    // double-post on bindings that are also the source.
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ suppressBindingBroadcast: true }),
+    );
+  });
+
+  it("forwards automation execution profile overrides to headless starts", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "weekdays",
+        timeOfDay: { hour: 9, minute: 0 },
+      },
+      executionProfile: {
+        cwd: "/tmp/incident-bot",
+        executionMode: "full-access",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+        serviceTier: "priority",
+        fastMode: true,
+      },
+    });
+
+    await service.runNow({ automationId: created.automation.id });
+
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/tmp/incident-bot",
+        executionMode: "full-access",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+        serviceTier: "priority",
+        fastMode: true,
+      }),
+    );
+  });
+
+  it("matchesInboundEvent is a side-effect-free predicate over inbound triggers", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate.",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+    });
+    const event = (text: string, conversationId = "C123") =>
+      ({
+        id: "slack-text",
+        kind: "text" as const,
+        actor: { platformUserId: "U1", isBot: false },
+        channel: {
+          channel: "slack" as const,
+          conversation: { id: conversationId, kind: "channel" as const },
+        },
+        receivedAt: 1,
+        text,
+      });
+
+    expect(service.matchesInboundEvent(event("ERROR api latency"))).toBe(true);
+    // Text filter misses, wrong channel, and non-text events do not match.
+    expect(service.matchesInboundEvent(event("all good"))).toBe(false);
+    expect(service.matchesInboundEvent(event("ERROR", "C999"))).toBe(false);
+    // Predicate must not have created any runs.
+    const [automation] = service.list({ backend: "codex", threadId: "thread-1" })
+      .automations;
+    expect(store.listRunsForAutomation(automation!.id)).toHaveLength(0);
+  });
+
+  it("starts inbound-triggered runs from matching messaging events", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Datadog alert triage",
+      taskPrompt: "Investigate the alert.",
+      triggers: [
+        {
+          id: "datadog-error",
+          kind: "inbound_message",
+          name: "Datadog ERROR",
+          conversation: {
+            channel: "slack",
+            conversationId: "C123",
+          },
+          sender: {
+            platformUserId: "B123",
+            isBot: true,
+          },
+          textFilter: {
+            mode: "contains",
+            text: "ERROR",
+          },
+        },
+      ],
+      outputActions: [
+        { id: "agent-context", kind: "agent_context" },
+        {
+          id: "slack-thread",
+          kind: "source_message",
+          destination: "source_thread",
+          broadcast: true,
+        },
+      ],
+    });
+
+    await expect(
+      service.handleMessagingInboundEvent({
+        id: "slack-text:local",
+        kind: "text",
+        actor: {
+          platformUserId: "B123",
+          displayName: "Datadog",
+          isBot: true,
+        },
+        channel: {
+          channel: "slack",
+          conversation: {
+            id: "C123",
+            kind: "channel",
+            title: "alerts",
+          },
+        },
+        receivedAt: 2_000,
+        routingState: {
+          opaque: {
+            channelId: "C123",
+            ts: "1712023032.123456",
+          },
+        },
+        text: "ERROR api latency high",
+      }),
+    ).resolves.toBe(true);
+
+    const [run] = store.listRunsForAutomation(
+      service.list({ backend: "codex", threadId: "thread-1" }).automations[0]!.id,
+    );
+    expect(run).toMatchObject({
+      trigger: "inbound_message",
+      status: "running",
+      source: {
+        sourceEventKey: "slack:C123:1712023032.123456::B123",
+        matchedTriggerId: "datadog-error",
+        message: {
+          text: "ERROR api latency high",
+        },
+      },
+    });
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        automationName: "Datadog alert triage",
+        suppressBindingBroadcast: true,
+        input: expect.arrayContaining([
+          expect.objectContaining({
+            text: expect.stringContaining("Inbound source message:"),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("suppresses the binding broadcast for agent-only inbound automations", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Silent inbound triage",
+      taskPrompt: "Just note it.",
+      triggers: [
+        {
+          id: "silent-error",
+          kind: "inbound_message",
+          name: "Silent ERROR",
+          conversation: { channel: "slack", conversationId: "C999" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      // agent_only: no source_message/messaging_target action. Inbound
+      // automations are still governed by the editor's destination choice, so
+      // the legacy broadcast must be suppressed to honor "no message back".
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+    });
+
+    await expect(
+      service.handleMessagingInboundEvent({
+        id: "slack-text:silent",
+        kind: "text",
+        actor: { platformUserId: "U999", isBot: false },
+        channel: {
+          channel: "slack",
+          conversation: { id: "C999", kind: "channel", title: "alerts" },
+        },
+        receivedAt: 2_000,
+        routingState: { opaque: { channelId: "C999", ts: "1712023099.000001" } },
+        text: "ERROR something happened",
+      }),
+    ).resolves.toBe(true);
+
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ suppressBindingBroadcast: true }),
+    );
   });
 
   it("records the submitted automation prompt when a run starts", async () => {
@@ -375,6 +618,24 @@ describe("DesktopAutomationService", () => {
         } as AgentEvent),
       ),
     );
+    // Streaming deltas must not be persisted as transcript events (they showed
+    // up as fragment "lifecycle" lines like "]}").
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: "headless-thread-1",
+              turnId: "turn-1",
+              itemId: "assistant-final-1",
+              delta: "DELTA_FRAGMENT_]}",
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
     await Promise.all(
       registryListeners.map((listener) =>
         listener({
@@ -426,6 +687,13 @@ describe("DesktopAutomationService", () => {
         expect.objectContaining({ kind: "lifecycle" }),
       ]),
     });
+    expect(
+      store
+        .getRunArtifact(runNow.run.id)
+        ?.transcriptEvents.some((entry) =>
+          entry.text?.includes("DELTA_FRAGMENT"),
+        ),
+    ).toBe(false);
     expect(
       service.listCards({
         backend: "codex",

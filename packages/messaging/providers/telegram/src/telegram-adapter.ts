@@ -2015,16 +2015,29 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       );
     }
 
+    const sourceRelative = intent.delivery?.sourceRelative;
     return intent.audit?.channel
-      ? this.telegramStateFromChannel(intent.audit.channel.conversation)
+      ? this.telegramStateFromChannel(intent.audit.channel.conversation, sourceRelative)
       : this.telegramStateFromSurface(intent.targetSurface?.state);
   }
 
-  private telegramStateFromChannel(channel: {
-    id: string;
-    parentId?: string;
-  }): TelegramDeliveryTarget | undefined {
+  private telegramStateFromChannel(
+    channel: {
+      id: string;
+      parentId?: string;
+    },
+    sourceRelative?: "source_thread" | "source_channel",
+  ): TelegramDeliveryTarget | undefined {
     if (channel.parentId) {
+      // The source message lives inside a forum topic: parentId is the
+      // supergroup and id is the topic's message_thread_id. A source_channel
+      // reply targets the supergroup itself (the General topic) instead of the
+      // originating topic; source_thread and the default reply inside the topic.
+      if (sourceRelative === "source_channel") {
+        return {
+          chatId: parseTelegramIdentifier(channel.parentId),
+        };
+      }
       return {
         chatId: parseTelegramIdentifier(channel.parentId),
         messageThreadId: Number(channel.id),

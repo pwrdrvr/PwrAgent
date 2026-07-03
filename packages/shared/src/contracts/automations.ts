@@ -2,7 +2,12 @@ import type {
   AppServerBackendKind,
   AppServerThreadReplay,
   ThreadIdentifier,
+  ThreadExecutionMode,
 } from "./normalized-app-server";
+import type {
+  MessagingChannelKind,
+  MessagingConversationKind,
+} from "./messaging";
 
 export const AUTOMATION_BACKLOG_POLICIES = [
   "coalesce",
@@ -14,6 +19,44 @@ export type AutomationBacklogPolicy =
 
 export const DEFAULT_AUTOMATION_BACKLOG_POLICY: AutomationBacklogPolicy =
   "coalesce";
+
+/**
+ * Default inbound coalescing window. The first matching message fires a run
+ * immediately (leading edge); further messages in the same automation within
+ * this window are batched into a single follow-up run, bounding the cost of a
+ * burst (or a misconfigured firehose / message loop). Set to 0 to disable and
+ * fire one run per message.
+ */
+export const DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS = 60_000;
+
+/**
+ * Default cap on how many inbound-triggered runs an automation may START per
+ * hour. Enforced as a per-automation token bucket (an idle automation may burst
+ * up to the rate, then settles to the steady rate). This is a cost backstop
+ * against a misconfigured trigger on a busy channel kicking off a flood of
+ * ephemeral agent runs. `undefined` inherits this default; `null` is unlimited.
+ */
+export const DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR = 20;
+
+/** Operator-selectable inbound run-rate options surfaced in the editor. */
+export const AUTOMATION_RUN_RATE_PER_HOUR_OPTIONS = [5, 20, 45, 60] as const;
+
+/**
+ * Resolve the effective inbound run-rate for an automation: the number of run
+ * starts allowed per hour, or `null` for unlimited. `undefined` (field absent /
+ * legacy row) falls back to the default; `null` and non-positive / non-finite
+ * values are unlimited. A positive fraction clamps UP to 1/hour so a sub-1 rate
+ * becomes the most restrictive real cap rather than flooring to 0 (a 0-capacity
+ * bucket that would block every run).
+ */
+export function resolveAutomationRunsPerHour(
+  maxRunsPerHour: number | null | undefined,
+): number | null {
+  if (maxRunsPerHour === null) return null;
+  if (maxRunsPerHour === undefined) return DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR;
+  if (!Number.isFinite(maxRunsPerHour) || maxRunsPerHour <= 0) return null;
+  return Math.max(1, Math.floor(maxRunsPerHour));
+}
 
 export const AUTOMATION_STATUSES = ["enabled", "paused", "deleted"] as const;
 
@@ -31,7 +74,11 @@ export const AUTOMATION_RUN_STATUSES = [
 
 export type AutomationRunStatus = (typeof AUTOMATION_RUN_STATUSES)[number];
 
-export const AUTOMATION_RUN_TRIGGERS = ["scheduled", "manual"] as const;
+export const AUTOMATION_RUN_TRIGGERS = [
+  "scheduled",
+  "manual",
+  "inbound_message",
+] as const;
 
 export type AutomationRunTrigger = (typeof AUTOMATION_RUN_TRIGGERS)[number];
 
@@ -95,6 +142,194 @@ export const AUTOMATION_SCHEDULE_KINDS = [
 ] as const;
 export type AutomationScheduleKind = (typeof AUTOMATION_SCHEDULE_KINDS)[number];
 
+export type AutomationScheduleTriggerDefinition = {
+  id: string;
+  kind: "schedule";
+  schedule: AutomationScheduleDefinition;
+};
+
+export const AUTOMATION_INBOUND_TEXT_MATCH_MODES = [
+  "contains",
+  "equals",
+] as const;
+
+export type AutomationInboundTextMatchMode =
+  (typeof AUTOMATION_INBOUND_TEXT_MATCH_MODES)[number];
+
+export type AutomationInboundTextFilter = {
+  mode: AutomationInboundTextMatchMode;
+  text: string;
+  caseSensitive?: boolean;
+};
+
+export type AutomationInboundSenderFilter = {
+  platformUserId?: string;
+  isBot?: boolean;
+};
+
+export type AutomationMessagingConversationSnapshot = {
+  channel: MessagingChannelKind;
+  conversationId: string;
+  conversationKind?: MessagingConversationKind;
+  parentId?: string;
+  title?: string;
+  parentTitle?: string;
+  ancestorTitle?: string;
+};
+
+export type AutomationInboundMessageTriggerDefinition = {
+  id: string;
+  kind: "inbound_message";
+  name?: string;
+  conversation: AutomationMessagingConversationSnapshot;
+  sender?: AutomationInboundSenderFilter;
+  textFilter?: AutomationInboundTextFilter;
+  includeThreadReplies?: boolean;
+};
+
+export type AutomationTriggerDefinition =
+  | AutomationScheduleTriggerDefinition
+  | AutomationInboundMessageTriggerDefinition;
+
+export type AutomationRunSourceActorSnapshot = {
+  platformUserId: string;
+  displayName?: string;
+  username?: string;
+  isBot?: boolean;
+};
+
+export type AutomationRunSourceMessage = {
+  text?: string;
+  textTruncated?: boolean;
+};
+
+export type AutomationRunSourceMetadata = {
+  kind: "messaging";
+  eventId?: string;
+  sourceEventKey: string;
+  receivedAt: number;
+  matchedTriggerId: string;
+  matchedTriggerName?: string;
+  actor: AutomationRunSourceActorSnapshot;
+  conversation: AutomationMessagingConversationSnapshot;
+  message?: AutomationRunSourceMessage;
+  routingState?: Record<string, unknown>;
+  /**
+   * Additional messages coalesced into this run within the inbound coalescing
+   * window. The primary fields above describe the first message; these are the
+   * follow-ups, bounded in count and size.
+   */
+  batchedEvents?: AutomationRunSourceBatchedEntry[];
+};
+
+export type AutomationRunSourceBatchedEntry = {
+  sourceEventKey: string;
+  receivedAt: number;
+  actor: AutomationRunSourceActorSnapshot;
+  message?: AutomationRunSourceMessage;
+};
+
+export type AutomationExecutionProfile = {
+  backend?: AppServerBackendKind;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  executionMode?: ThreadExecutionMode;
+  fastMode?: boolean;
+  cwd?: string;
+  mcpAllowlist?: string[];
+  skillAllowlist?: string[];
+  toolAllowlist?: string[];
+};
+
+export type AutomationSourceMessageDestination =
+  | "source_thread"
+  | "source_channel";
+
+export type AutomationOutputActionDefinition =
+  | {
+      id: string;
+      kind: "agent_context";
+      enabled?: boolean;
+    }
+  | {
+      id: string;
+      kind: "source_message";
+      destination: AutomationSourceMessageDestination;
+      broadcast?: boolean;
+      enabled?: boolean;
+    }
+  | {
+      id: string;
+      kind: "messaging_target";
+      target: AutomationMessagingConversationSnapshot;
+      enabled?: boolean;
+    };
+
+export type AutomationOutputActionStatus =
+  | "pending"
+  | "completed"
+  | "failed"
+  | "unsupported"
+  | "skipped";
+
+export type AutomationOutputActionResult = {
+  actionId: string;
+  kind: AutomationOutputActionDefinition["kind"];
+  status: AutomationOutputActionStatus;
+  attemptedAt?: number;
+  completedAt?: number;
+  message?: string;
+  errorMessage?: string;
+};
+
+/**
+ * True when an automation delivers its result through an explicit messaging
+ * output action (`source_message` or `messaging_target`). Such automations own
+ * their messaging delivery deliberately, so the legacy "broadcast the result to
+ * every binding of the attached Agent thread" path must be suppressed for them
+ * — otherwise the source conversation (which is often also a binding) receives
+ * the result twice. `agent_context`-only automations keep the legacy broadcast.
+ */
+export function automationDeliversViaMessagingActions(
+  outputActions: AutomationOutputActionDefinition[] | undefined,
+): boolean {
+  if (!Array.isArray(outputActions)) {
+    return false;
+  }
+  return outputActions.some(
+    (action) =>
+      action.enabled !== false &&
+      (action.kind === "source_message" || action.kind === "messaging_target"),
+  );
+}
+
+/**
+ * True when an automation's messaging delivery is governed entirely by its
+ * configured output actions, so the legacy "broadcast the result to every
+ * binding of the attached Agent thread" path must be suppressed. This holds
+ * for:
+ *   - inbound-triggered automations, whose result destination is always chosen
+ *     in the editor (reply to source / a different conversation / agent only),
+ *     and
+ *   - any automation with an explicit messaging-delivery action.
+ *
+ * Legacy schedule-only automations that default to `agent_context` keep the
+ * broadcast so they continue to surface in their bound conversations.
+ */
+export function automationSuppressesBindingBroadcast(automation: {
+  outputActions?: AutomationOutputActionDefinition[];
+  triggers?: AutomationTriggerDefinition[];
+}): boolean {
+  if (
+    Array.isArray(automation.triggers) &&
+    automation.triggers.some((trigger) => trigger.kind === "inbound_message")
+  ) {
+    return true;
+  }
+  return automationDeliversViaMessagingActions(automation.outputActions);
+}
+
 export type AutomationScheduleValidationResult =
   | {
       ok: true;
@@ -103,6 +338,14 @@ export type AutomationScheduleValidationResult =
       ok: false;
       error: string;
     };
+
+export type DraftAutomationPromptRequest = {
+  description: string;
+};
+
+export type DraftAutomationPromptResponse =
+  | { status: "generated"; prompt: string }
+  | { status: "unavailable" | "invalid" | "failed"; reason: string };
 
 export type AutomationGateConfig = {
   command: string;
@@ -137,7 +380,8 @@ export type AutomationListItemSummary = AutomationThreadAssignment & {
   id: string;
   name: string;
   status: AutomationStatus;
-  schedule: AutomationScheduleDefinition;
+  triggers: AutomationTriggerDefinition[];
+  schedule?: AutomationScheduleDefinition;
   scheduleSummary: string;
   backlogPolicy: AutomationBacklogPolicy;
   nextRunAt?: number;
@@ -151,6 +395,18 @@ export type AutomationListItemSummary = AutomationThreadAssignment & {
 export type AutomationDetail = AutomationListItemSummary & {
   taskPrompt: string;
   gate?: AutomationGateConfig;
+  executionProfile?: AutomationExecutionProfile;
+  outputActions: AutomationOutputActionDefinition[];
+  /**
+   * Inbound coalescing window in milliseconds. 0 disables coalescing (one run
+   * per matching message). Undefined inherits the default.
+   */
+  inboundCoalesceWindowMs?: number;
+  /**
+   * Cap on inbound-triggered run starts per hour. Undefined inherits the
+   * default; null is unlimited. See {@link resolveAutomationRunsPerHour}.
+   */
+  maxRunsPerHour?: number | null;
   createdAt: number;
   deletedAt?: number;
 };
@@ -185,6 +441,7 @@ export type AutomationRunSummary = {
   backendThreadId?: string;
   backendTurnId?: string;
   errorMessage?: string;
+  source?: AutomationRunSourceMetadata;
 };
 
 export type AutomationRunOutputDecision =
@@ -219,6 +476,7 @@ export type AutomationRunArtifact = {
   finalText?: string;
   errorMessage?: string;
   outputDecision?: AutomationRunOutputDecision;
+  actionResults: AutomationOutputActionResult[];
   transcriptEvents: AutomationRunTranscriptEvent[];
   createdAt: number;
   updatedAt: number;
@@ -245,8 +503,13 @@ export type CreateAutomationRequest = AutomationAgentAssignment & {
   name: string;
   taskPrompt: string;
   gate?: AutomationGateConfig;
-  schedule: AutomationScheduleDefinition;
+  triggers?: AutomationTriggerDefinition[];
+  schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
+  executionProfile?: AutomationExecutionProfile;
+  outputActions?: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   enabled?: boolean;
   nextRunAt?: number;
 };
@@ -258,8 +521,13 @@ export type UpdateAutomationRequest = {
   name?: string;
   taskPrompt?: string;
   gate?: AutomationGateConfig | null;
+  triggers?: AutomationTriggerDefinition[];
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
+  executionProfile?: AutomationExecutionProfile | null;
+  outputActions?: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
   enabled?: boolean;
   nextRunAt?: number | null;
 };

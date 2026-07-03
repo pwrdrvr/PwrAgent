@@ -134,6 +134,7 @@ export const AUTOMATIONS_LIST_CARDS_CHANNEL = "automations:list-cards";
 export const AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL =
   "automations:get-run-artifact";
 export const AUTOMATIONS_LOAD_ISSUES_CHANNEL = "automations:load-issues";
+export const AUTOMATIONS_DRAFT_PROMPT_CHANNEL = "automations:draft-prompt";
 /**
  * Fire-and-forget IPC: opens the dedicated Messaging Activity window
  * (or focuses it if already open). The activity surface is a separate
@@ -190,6 +191,14 @@ export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
  */
 export const MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL =
   "messaging:bindings-changed";
+export const MESSAGING_START_INBOUND_PREVIEW_CHANNEL =
+  "messaging:start-inbound-preview";
+export const MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL =
+  "messaging:stop-inbound-preview";
+export const MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL =
+  "messaging:inbound-preview-event";
+export const MESSAGING_LIST_INBOUND_TOPICS_CHANNEL =
+  "messaging:list-inbound-topics";
 export const NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:ensure-directory-launchpad";
 export const NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL =

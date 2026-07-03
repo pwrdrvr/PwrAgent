@@ -1,7 +1,13 @@
 import type {
+  AutomationRunSourceBatchedEntry,
   AutomationGateRunResult,
+  AutomationRunSourceMetadata,
   AutomationRunStatus,
   AutomationRunWindow,
+} from "@pwragent/shared";
+import {
+  DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
+  resolveAutomationRunsPerHour,
 } from "@pwragent/shared";
 import {
   computeNextAutomationRunAt,
@@ -23,10 +29,31 @@ export type AutomationSchedulerOptions = {
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
 };
 
+type InboundCoalesceWindow = {
+  timer: ReturnType<typeof setTimeout>;
+  sources: AutomationRunSourceMetadata[];
+  totalChars: number;
+};
+
+/**
+ * Per-automation token bucket gating inbound run STARTS. `tokens` refills
+ * continuously toward the configured hourly rate; capacity equals the rate, so
+ * an idle automation can burst up to one hour's allowance and then settles to
+ * the steady rate.
+ */
+type RunStartTokenBucket = { tokens: number; lastRefillAt: number };
+
+const MAX_COALESCED_EVENTS = 100;
+const COALESCE_TOTAL_CHAR_BUDGET = 16_000;
+const COALESCE_SUMMARY_CHARS = 500;
+const HOUR_MS = 60 * 60 * 1000;
+
 export class AutomationScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private readonly sessionStartedAt: number;
+  private readonly coalesceWindows = new Map<string, InboundCoalesceWindow>();
+  private readonly runStartTokenBuckets = new Map<string, RunStartTokenBucket>();
 
   constructor(private readonly options: AutomationSchedulerOptions) {
     this.sessionStartedAt = this.now();
@@ -47,6 +74,10 @@ export class AutomationScheduler {
       this.clearTimer(this.timer);
       this.timer = null;
     }
+    for (const open of this.coalesceWindows.values()) {
+      this.clearTimer(open.timer);
+    }
+    this.coalesceWindows.clear();
   }
 
   async evaluateDueAutomations(): Promise<void> {
@@ -86,6 +117,196 @@ export class AutomationScheduler {
       });
     }
     return await this.submitRun({ automation, runId: run.id, windows: [], now });
+  }
+
+  async runFromInboundEvent(params: {
+    automation: AutomationRecord;
+    source: AutomationRunSourceMetadata;
+    now?: number;
+  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
+    const now = params.now ?? this.now();
+    const windowMs =
+      params.automation.inboundCoalesceWindowMs ??
+      DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS;
+
+    if (windowMs > 0) {
+      const open = this.coalesceWindows.get(params.automation.id);
+      if (open) {
+        // A window is already collecting follow-ups: batch this message into it
+        // (deduped, capped) and fire nothing now. The window timer flushes one
+        // coalesced run when it elapses.
+        if (
+          !this.options.store.findRunBySourceEventKey({
+            automationId: params.automation.id,
+            sourceEventKey: params.source.sourceEventKey,
+          })
+        ) {
+          appendCoalesceSource(open, params.source);
+        }
+        return undefined;
+      }
+      // Leading edge: open an empty window for any follow-ups, then fire this
+      // first message immediately. dispatchInboundRun applies the rate limit.
+      this.openCoalesceWindow(params.automation, windowMs);
+    }
+
+    return await this.dispatchInboundRun({
+      automation: params.automation,
+      source: params.source,
+      now,
+    });
+  }
+
+  private async dispatchInboundRun(params: {
+    automation: AutomationRecord;
+    source: AutomationRunSourceMetadata;
+    now: number;
+  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
+    const { now } = params;
+    // Idempotency: a provider can redeliver the same event (slow ack, retry),
+    // and an automation with two triggers can match one message twice. If a run
+    // already exists for this stable source-event key, skip — before consuming a
+    // rate-limit token — rather than launch a duplicate or burn budget on a
+    // no-op.
+    const existing = this.options.store.findRunBySourceEventKey({
+      automationId: params.automation.id,
+      sourceEventKey: params.source.sourceEventKey,
+    });
+    if (existing) {
+      return undefined;
+    }
+    const active = this.options.store.findActiveRunForAutomation(params.automation.id);
+    const createInboundRun = () =>
+      this.options.store.createRun({
+        automationId: params.automation.id,
+        trigger: "inbound_message",
+        scheduledWindows: [],
+        source: params.source,
+        now,
+      });
+
+    // drop_missed + busy lane records a visible skipped run but starts no
+    // headless turn, so it must NOT consume a rate-limit token.
+    if (active && params.automation.backlogPolicy === "drop_missed") {
+      const dropped = createInboundRun();
+      if (dropped) {
+        this.options.store.markRunTerminal({
+          runId: dropped.id,
+          status: "skipped",
+          completedAt: now,
+          errorMessage:
+            "The automation execution lane was busy when this inbound message arrived.",
+          now,
+        });
+      }
+      return undefined;
+    }
+
+    // The run will start now (lane free) or queue (coalesce backlog) and start
+    // later — either way it consumes exactly one token. Gate here, AFTER the
+    // idempotency and drop_missed checks, so only runs that actually start are
+    // counted, and throttled messages leave no run row.
+    if (!this.tryConsumeRunStartToken(params.automation, now)) {
+      this.noteThrottledInboundRun(params.automation);
+      return undefined;
+    }
+
+    const run = createInboundRun();
+    if (!run) return undefined;
+
+    if (active) {
+      const queued = this.options.store.markRunQueued({
+        runId: run.id,
+        queueEntryId: buildLaneQueueEntryId(run.id),
+        queuedAt: now,
+        now,
+      });
+      return buildLaneQueuedResult({
+        automation: params.automation,
+        run: queued ?? run,
+        position: 1,
+      });
+    }
+
+    return await this.submitRun({
+      automation: params.automation,
+      runId: run.id,
+      windows: [],
+      now,
+    });
+  }
+
+  private openCoalesceWindow(automation: AutomationRecord, windowMs: number): void {
+    const timer = this.setTimer(() => {
+      void this.flushCoalesceWindow(automation.id);
+    }, windowMs);
+    timer.unref?.();
+    this.coalesceWindows.set(automation.id, {
+      timer,
+      sources: [],
+      totalChars: 0,
+    });
+  }
+
+  private async flushCoalesceWindow(automationId: string): Promise<void> {
+    const open = this.coalesceWindows.get(automationId);
+    this.coalesceWindows.delete(automationId);
+    if (!open || open.sources.length === 0) return;
+    const automation = this.options.store.getAutomation(automationId);
+    if (!automation || automation.status !== "enabled") return;
+    const [primary, ...rest] = open.sources;
+    if (!primary) return;
+    const source: AutomationRunSourceMetadata =
+      rest.length > 0
+        ? { ...primary, batchedEvents: rest.map(toBatchedEntry) }
+        : primary;
+    // dispatchInboundRun applies the rate limit; an over-rate flush drops the
+    // (already-merged) batch as a single throttled run.
+    await this.dispatchInboundRun({ automation, source, now: this.now() });
+  }
+
+  /**
+   * Consume one token from the automation's inbound run-start bucket. Returns
+   * false (and starts no run) when the bucket is empty. Unlimited automations
+   * always succeed. The bucket is in-memory: a process restart resets it to
+   * full, which is acceptable for a cost backstop (not a security boundary).
+   */
+  private tryConsumeRunStartToken(
+    automation: AutomationRecord,
+    now: number,
+  ): boolean {
+    const ratePerHour = resolveAutomationRunsPerHour(automation.maxRunsPerHour);
+    if (ratePerHour === null) {
+      return true;
+    }
+    const capacity = ratePerHour;
+    const existing = this.runStartTokenBuckets.get(automation.id);
+    const bucket: RunStartTokenBucket = existing ?? {
+      tokens: capacity,
+      lastRefillAt: now,
+    };
+    if (existing) {
+      const elapsed = Math.max(0, now - existing.lastRefillAt);
+      bucket.tokens = Math.min(
+        capacity,
+        existing.tokens + (elapsed / HOUR_MS) * ratePerHour,
+      );
+      bucket.lastRefillAt = now;
+    }
+    this.runStartTokenBuckets.set(automation.id, bucket);
+    if (bucket.tokens >= 1) {
+      bucket.tokens -= 1;
+      return true;
+    }
+    return false;
+  }
+
+  private noteThrottledInboundRun(automation: AutomationRecord): void {
+    automationSchedulerLog.info("inbound automation run throttled by rate limit", {
+      automationId: automation.id,
+      automationName: automation.name,
+      maxRunsPerHour: resolveAutomationRunsPerHour(automation.maxRunsPerHour),
+    });
   }
 
   async handleTurnQueueUpdate(params: {
@@ -140,6 +361,13 @@ export class AutomationScheduler {
     automation: AutomationRecord,
     now: number,
   ): Promise<void> {
+    if (!automation.schedule) {
+      this.options.store.updateAutomation(automation.id, {
+        nextRunAt: null,
+        now,
+      });
+      return;
+    }
     const firstDueAt = Math.max(automation.nextRunAt ?? now, this.sessionStartedAt);
     const windows = collectDueAutomationWindows({
       schedule: automation.schedule,
@@ -444,6 +672,49 @@ function classifyTerminalStatus(
 
 function buildLaneQueueEntryId(runId: string): string {
   return `automation-lane:${runId}`;
+}
+
+function appendCoalesceSource(
+  window: InboundCoalesceWindow,
+  source: AutomationRunSourceMetadata,
+): void {
+  if (window.sources.length >= MAX_COALESCED_EVENTS) return;
+  if (
+    window.sources.some((entry) => entry.sourceEventKey === source.sourceEventKey)
+  ) {
+    return;
+  }
+  // Once the batch nears its char budget, keep only a short summary of each
+  // further message so a burst can't balloon the prompt/artifact.
+  const bounded =
+    window.totalChars >= COALESCE_TOTAL_CHAR_BUDGET * 0.8
+      ? truncateSourceMessage(source, COALESCE_SUMMARY_CHARS)
+      : source;
+  window.sources.push(bounded);
+  window.totalChars += bounded.message?.text?.length ?? 0;
+}
+
+function truncateSourceMessage(
+  source: AutomationRunSourceMetadata,
+  maxChars: number,
+): AutomationRunSourceMetadata {
+  const text = source.message?.text;
+  if (!text || text.length <= maxChars) return source;
+  return {
+    ...source,
+    message: { text: `${text.slice(0, maxChars)}…`, textTruncated: true },
+  };
+}
+
+function toBatchedEntry(
+  source: AutomationRunSourceMetadata,
+): AutomationRunSourceBatchedEntry {
+  return {
+    sourceEventKey: source.sourceEventKey,
+    receivedAt: source.receivedAt,
+    actor: source.actor,
+    ...(source.message ? { message: source.message } : {}),
+  };
 }
 
 function buildLaneQueuedResult(params: {

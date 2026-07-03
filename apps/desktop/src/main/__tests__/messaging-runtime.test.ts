@@ -26,6 +26,8 @@ import type {
   DesktopMessagingAdapter,
   DesktopMessagingAdapterFactory,
   DesktopMessagingRuntime,
+  MessagingAutomationInboundHandler,
+  MessagingAutomationInboundMatcher,
 } from "../messaging/messaging-runtime";
 
 const messagingLog = {
@@ -345,6 +347,92 @@ describe("DesktopMessagingRuntime", () => {
     expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
       backend: "all",
     });
+  });
+
+  async function startMentionOnlyRuntime(options: {
+    automationInboundHandler: MessagingAutomationInboundHandler;
+    automationInboundMatches: MessagingAutomationInboundMatcher;
+  }): Promise<ReturnType<typeof createAdapter>> {
+    await prepareRuntimeStore();
+    const { resetInboundPreview } = await import(
+      "../messaging/inbound-preview-bus"
+    );
+    resetInboundPreview();
+    const adapter = createAdapter("telegram");
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = trackRuntime(
+      new Runtime({
+        adapterFactory: () => [adapter],
+        backendBridge: bridge,
+        automationInboundHandler: options.automationInboundHandler,
+        automationInboundMatches: options.automationInboundMatches,
+        config: {
+          inputDebounceMs: 0,
+          telegram: {
+            channel: "telegram",
+            botToken: "telegram-token",
+            authorizedActorIds: [{ id: "user-1", displayName: "" }],
+            responseMode: "mention_only",
+          },
+        },
+      }),
+    );
+    await runtime.start();
+    return adapter;
+  }
+
+  const ambientEvent = {
+    id: "ambient-1",
+    kind: "text" as const,
+    actor: { platformUserId: "user-1" },
+    channel: {
+      channel: "telegram" as const,
+      conversation: { id: "chat-ambient", kind: "channel" as const },
+    },
+    receivedAt: 1000,
+    text: "ERROR something happened",
+  };
+
+  it("delivers @mention-only messages an automation filter matches", async () => {
+    const automationInboundHandler = vi.fn(async () => false);
+    // The automation's own filter matches this ambient (non-@mention) message,
+    // so it must be delivered even though the channel is @mention-only.
+    const automationInboundMatches = vi.fn(() => true);
+    const adapter = await startMentionOnlyRuntime({
+      automationInboundHandler,
+      automationInboundMatches,
+    });
+
+    await adapter.listener?.(ambientEvent);
+
+    expect(automationInboundHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "text", text: "ERROR something happened" }),
+    );
+    // @mention-only mode still suppresses a normal agent reply.
+    expect(
+      adapter.delivered.some((intent) => intent.kind === "message"),
+    ).toBe(false);
+  });
+
+  it("drops ambient @mention-only messages no automation filter matches", async () => {
+    const automationInboundHandler = vi.fn(async () => false);
+    const automationInboundMatches = vi.fn(() => false);
+    const adapter = await startMentionOnlyRuntime({
+      automationInboundHandler,
+      automationInboundMatches,
+    });
+
+    await adapter.listener?.(ambientEvent);
+
+    // No automation matches and no preview is active: the message is dropped
+    // before the controller, preserving @mention-only behavior for normal chat.
+    expect(automationInboundHandler).not.toHaveBeenCalled();
+    expect(
+      adapter.delivered.some((intent) => intent.kind === "message"),
+    ).toBe(false);
   });
 
   it("logs inbound controller failures without rejecting the adapter listener", async () => {
