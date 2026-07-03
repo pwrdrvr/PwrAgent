@@ -589,6 +589,52 @@ describe("AutomationStore", () => {
     expect(store.findActiveRunForAutomation("automation-1")).toBeUndefined();
   });
 
+  it("countRecentInboundRuns counts inbound runs in the window, excluding skipped", () => {
+    // The shared store keeps only runHistoryLimit (3) runs, so keep to 3.
+    store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Rate",
+      taskPrompt: "Triage.",
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C1" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const inbound = (id: string, createdAt: number) =>
+      store.createRun({
+        id,
+        automationId: "automation-1",
+        trigger: "inbound_message",
+        now: createdAt,
+      });
+    inbound("r-old", 1_000);
+    inbound("r-mid", 5_000);
+    inbound("r-skip", 6_000);
+    store.markRunTerminal({
+      runId: "r-skip",
+      status: "skipped",
+      completedAt: 6_000,
+      now: 6_000,
+    });
+
+    // From 4_000: only r-mid (r-old is before the window; r-skip is skipped and
+    // never started).
+    expect(
+      store.countRecentInboundRuns({ automationId: "automation-1", sinceMs: 4_000 }),
+    ).toBe(1);
+    // From 0: r-old + r-mid count; the skipped run stays excluded.
+    expect(
+      store.countRecentInboundRuns({ automationId: "automation-1", sinceMs: 0 }),
+    ).toBe(2);
+  });
+
   it("reconciles stale local runs on startup without creating catch-up rows", () => {
     store.createAutomation({
       id: "automation-1",

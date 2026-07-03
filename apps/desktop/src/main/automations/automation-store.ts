@@ -581,6 +581,26 @@ export class AutomationStore {
     return row ? this.runFromRow(row) : undefined;
   }
 
+  /**
+   * Count inbound-triggered runs created for this automation at or after
+   * `sinceMs` that consumed (or will consume) a headless turn — everything
+   * except `skipped` runs (a busy-lane / drop_missed skip never started).
+   * Backs the per-automation inbound run-rate limit: a rolling-hour count from
+   * the run history survives process restarts (unlike an in-memory bucket) and
+   * makes "N per hour" a hard cap rather than a burstable token bucket.
+   */
+  countRecentInboundRuns(params: {
+    automationId: string;
+    sinceMs: number;
+  }): number {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT COUNT(*) AS count FROM automation_runs WHERE automation_id = ? AND trigger = 'inbound_message' AND status != 'skipped' AND created_at >= ?",
+      )
+      .get(params.automationId, params.sinceMs) as { count: number };
+    return row.count;
+  }
+
   findPendingRunForAutomation(automationId: string): AutomationRunSummary | undefined {
     const row = this.stateDb.raw
       .prepare(

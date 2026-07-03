@@ -3,6 +3,7 @@ import type {
   AutomationGateRunResult,
   AutomationRunSourceMetadata,
   AutomationRunStatus,
+  AutomationRunSummary,
   AutomationRunWindow,
 } from "@pwragent/shared";
 import {
@@ -35,25 +36,23 @@ type InboundCoalesceWindow = {
   totalChars: number;
 };
 
-/**
- * Per-automation token bucket gating inbound run STARTS. `tokens` refills
- * continuously toward the configured hourly rate; capacity equals the rate, so
- * an idle automation can burst up to one hour's allowance and then settles to
- * the steady rate.
- */
-type RunStartTokenBucket = { tokens: number; lastRefillAt: number };
-
 const MAX_COALESCED_EVENTS = 100;
 const COALESCE_TOTAL_CHAR_BUDGET = 16_000;
 const COALESCE_SUMMARY_CHARS = 500;
 const HOUR_MS = 60 * 60 * 1000;
+
+// Sentinel error message stamped on the skipped run we record when an inbound
+// message is throttled by the hourly rate limit. Consecutive throttled drops
+// coalesce onto a single run carrying this exact message (matched below), so a
+// chatty channel cannot flood the run history and evict real runs.
+export const RATE_LIMIT_SKIP_MESSAGE =
+  "The automation hit its hourly run limit, so new inbound messages are being dropped.";
 
 export class AutomationScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private readonly sessionStartedAt: number;
   private readonly coalesceWindows = new Map<string, InboundCoalesceWindow>();
-  private readonly runStartTokenBuckets = new Map<string, RunStartTokenBucket>();
 
   constructor(private readonly options: AutomationSchedulerOptions) {
     this.sessionStartedAt = this.now();
@@ -203,11 +202,12 @@ export class AutomationScheduler {
     }
 
     // The run will start now (lane free) or queue (coalesce backlog) and start
-    // later — either way it consumes exactly one token. Gate here, AFTER the
-    // idempotency and drop_missed checks, so only runs that actually start are
-    // counted, and throttled messages leave no run row.
-    if (!this.tryConsumeRunStartToken(params.automation, now)) {
-      this.noteThrottledInboundRun(params.automation);
+    // later. Gate here, AFTER the idempotency and drop_missed checks, so only
+    // runs that actually start count toward the hourly rate. Throttled messages
+    // record a skipped run so the drop is visible in the run list; because it is
+    // skipped it does not count toward the rate (see countRecentInboundRuns).
+    if (!this.isInboundRunWithinRate(params.automation, now)) {
+      this.noteThrottledInboundRun(params.automation, createInboundRun, now);
       return undefined;
     }
 
@@ -266,12 +266,13 @@ export class AutomationScheduler {
   }
 
   /**
-   * Consume one token from the automation's inbound run-start bucket. Returns
-   * false (and starts no run) when the bucket is empty. Unlimited automations
-   * always succeed. The bucket is in-memory: a process restart resets it to
-   * full, which is acceptable for a cost backstop (not a security boundary).
+   * Whether starting an inbound run for this automation now stays within its
+   * configured hourly cap. Counts inbound runs from the last hour in the run
+   * history (excluding skipped runs, which never started a headless turn), so
+   * the limit is a true rolling-hour cap that survives process restarts.
+   * Unlimited automations always pass.
    */
-  private tryConsumeRunStartToken(
+  private isInboundRunWithinRate(
     automation: AutomationRecord,
     now: number,
   ): boolean {
@@ -279,34 +280,55 @@ export class AutomationScheduler {
     if (ratePerHour === null) {
       return true;
     }
-    const capacity = ratePerHour;
-    const existing = this.runStartTokenBuckets.get(automation.id);
-    const bucket: RunStartTokenBucket = existing ?? {
-      tokens: capacity,
-      lastRefillAt: now,
-    };
-    if (existing) {
-      const elapsed = Math.max(0, now - existing.lastRefillAt);
-      bucket.tokens = Math.min(
-        capacity,
-        existing.tokens + (elapsed / HOUR_MS) * ratePerHour,
-      );
-      bucket.lastRefillAt = now;
-    }
-    this.runStartTokenBuckets.set(automation.id, bucket);
-    if (bucket.tokens >= 1) {
-      bucket.tokens -= 1;
-      return true;
-    }
-    return false;
+    const recent = this.options.store.countRecentInboundRuns({
+      automationId: automation.id,
+      sinceMs: now - HOUR_MS,
+    });
+    return recent < ratePerHour;
   }
 
-  private noteThrottledInboundRun(automation: AutomationRecord): void {
+  private noteThrottledInboundRun(
+    automation: AutomationRecord,
+    createInboundRun: () => AutomationRunSummary | undefined,
+    now: number,
+  ): void {
     automationSchedulerLog.info("inbound automation run throttled by rate limit", {
       automationId: automation.id,
       automationName: automation.name,
       maxRunsPerHour: resolveAutomationRunsPerHour(automation.maxRunsPerHour),
     });
+
+    // Surface the drop in the run list. Coalesce onto the automation's most
+    // recent run when it is already an in-window throttle marker so a burst of
+    // dropped messages collapses to a single, freshly-timestamped row instead
+    // of evicting real run history.
+    const latest = this.options.store.getLatestRunForAutomation(automation.id);
+    if (
+      latest &&
+      latest.status === "skipped" &&
+      latest.errorMessage === RATE_LIMIT_SKIP_MESSAGE &&
+      (latest.completedAt ?? 0) >= now - HOUR_MS
+    ) {
+      this.options.store.markRunTerminal({
+        runId: latest.id,
+        status: "skipped",
+        completedAt: now,
+        errorMessage: RATE_LIMIT_SKIP_MESSAGE,
+        now,
+      });
+      return;
+    }
+
+    const dropped = createInboundRun();
+    if (dropped) {
+      this.options.store.markRunTerminal({
+        runId: dropped.id,
+        status: "skipped",
+        completedAt: now,
+        errorMessage: RATE_LIMIT_SKIP_MESSAGE,
+        now,
+      });
+    }
   }
 
   async handleTurnQueueUpdate(params: {

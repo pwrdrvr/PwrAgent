@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
 import { ThreadQueueAutomationRunner } from "../automations/automation-runner";
-import { AutomationScheduler } from "../automations/automation-scheduler";
+import {
+  AutomationScheduler,
+  RATE_LIMIT_SKIP_MESSAGE,
+} from "../automations/automation-scheduler";
 import { AutomationStore } from "../automations/automation-store";
 import type { AutomationGateRunner } from "../automations/automation-gate-runner";
 import { StateDb } from "../state/state-db";
@@ -621,7 +624,7 @@ describe("AutomationScheduler", () => {
     ]);
   });
 
-  it("caps inbound run starts at the per-hour token bucket", async () => {
+  it("caps inbound run starts at the per-hour rolling limit", async () => {
     const automation = store.createAutomation({
       id: "automation-rl",
       backend: "codex",
@@ -651,20 +654,78 @@ describe("AutomationScheduler", () => {
       message: { text: "ERROR" },
     });
 
-    // 10 distinct messages at the same instant; capacity == rate == 5.
+    // Count only runs that actually started; throttled drops record a separate
+    // skipped marker (asserted in its own test below).
+    const started = () =>
+      store
+        .listRunsForAutomation("automation-rl")
+        .filter((run) => run.status !== "skipped");
+
+    // 10 distinct messages at the same instant; the hourly cap is 5.
     now = 1_000;
     for (let i = 0; i < 10; i += 1) {
       await scheduler.runFromInboundEvent({ automation, source: src(`k${i}`), now });
     }
-    expect(store.listRunsForAutomation("automation-rl")).toHaveLength(5);
+    expect(started()).toHaveLength(5);
 
-    // Bucket refills 1 token after 1/5 hour (12 min); one more run starts.
+    // Still capped 12 minutes later — all 5 runs are within the rolling hour,
+    // so this is not a burstable/refilling bucket.
     now = 1_000 + 12 * 60 * 1000;
-    await scheduler.runFromInboundEvent({ automation, source: src("k-refill"), now });
-    expect(store.listRunsForAutomation("automation-rl")).toHaveLength(6);
+    await scheduler.runFromInboundEvent({ automation, source: src("k-12min"), now });
+    expect(started()).toHaveLength(5);
+
+    // Once the first runs age out of the rolling hour, a new run is allowed.
+    now = 1_000 + 60 * 60 * 1000 + 1;
+    await scheduler.runFromInboundEvent({ automation, source: src("k-aged"), now });
+    expect(started()).toHaveLength(6);
   });
 
-  it("does not spend rate tokens on idempotent redeliveries or duplicate-trigger matches", async () => {
+  it("records one coalesced skipped run for throttled inbound messages", async () => {
+    const automation = store.createAutomation({
+      id: "automation-rl",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Rate limited",
+      taskPrompt: "Triage.",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: 1,
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    const src = (key: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: "t",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR" },
+    });
+
+    // One run fits the cap; the next four are throttled.
+    now = 1_000;
+    for (let i = 0; i < 5; i += 1) {
+      await scheduler.runFromInboundEvent({ automation, source: src(`k${i}`), now });
+    }
+
+    const runs = store.listRunsForAutomation("automation-rl");
+    const skipped = runs.filter((run) => run.status === "skipped");
+    // The four drops collapse onto a single throttle marker, not four rows.
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]?.errorMessage).toBe(RATE_LIMIT_SKIP_MESSAGE);
+    // Exactly one started run plus the single throttle marker.
+    expect(runs).toHaveLength(2);
+  });
+
+  it("does not count idempotent redeliveries or duplicate-trigger matches toward the rate", async () => {
     const automation = store.createAutomation({
       id: "automation-rl2",
       backend: "codex",
@@ -695,13 +756,13 @@ describe("AutomationScheduler", () => {
     });
 
     now = 1_000;
-    // First message starts a run (1 token spent, 1 left).
+    // First message starts a run (1 of 2 used).
     await scheduler.runFromInboundEvent({ automation, source: src("k1"), now });
-    // Three redeliveries of the same key are idempotent: no run, no token spent.
+    // Three redeliveries of the same key are idempotent: no run, nothing counted.
     for (let i = 0; i < 3; i += 1) {
       await scheduler.runFromInboundEvent({ automation, source: src("k1"), now });
     }
-    // A genuinely new message still has its token and starts/queues a run.
+    // A genuinely new message is still under the cap and starts/queues a run.
     await scheduler.runFromInboundEvent({ automation, source: src("k2"), now });
 
     // 2 real runs (k1, k2); the bucket was not drained by the redeliveries. If
