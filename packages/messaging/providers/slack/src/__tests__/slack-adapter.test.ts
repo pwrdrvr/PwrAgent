@@ -1824,4 +1824,274 @@ describe("SlackAdapter", () => {
       }),
     ]);
   });
+
+  it("discards stream updates when the thread policy is disabled without calling Slack", async () => {
+    const posted: unknown[] = [];
+    const updated: unknown[] = [];
+    const adapter = new SlackAdapter({
+      // Global streaming on: the per-thread `disabled` policy must still win.
+      config: { ...baseConfig, streamingResponses: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted, updated }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-stream-1",
+        kind: "stream_update",
+        bindingId: "slack-binding-1",
+        createdAt: 1,
+        role: "assistant",
+        markdown: "plain",
+        policy: "disabled",
+        text: "partial answer",
+        stream: { isFinal: false, key: "codex:thread-1:turn-1", sequence: 1 },
+        targetSurface: {
+          channel: "slack",
+          id: "1712023032.123456",
+          state: {
+            opaque: { channelId: "C012ABCDEF0", ts: "1712023032.123456" },
+          },
+        },
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "discarded" });
+
+    expect(posted).toEqual([]);
+    expect(updated).toEqual([]);
+  });
+
+  it("discards stream updates when streaming is globally off and the thread inherits", async () => {
+    const posted: unknown[] = [];
+    const updated: unknown[] = [];
+    const adapter = new SlackAdapter({
+      // No `streamingResponses` in config → global default off. Inherit follows.
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted, updated }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-stream-1",
+        kind: "stream_update",
+        bindingId: "slack-binding-1",
+        createdAt: 1,
+        role: "assistant",
+        markdown: "plain",
+        policy: "inherit",
+        text: "partial answer",
+        stream: { isFinal: false, key: "codex:thread-1:turn-1", sequence: 1 },
+        targetSurface: {
+          channel: "slack",
+          id: "1712023032.123456",
+          state: {
+            opaque: { channelId: "C012ABCDEF0", ts: "1712023032.123456" },
+          },
+        },
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "discarded" });
+
+    expect(posted).toEqual([]);
+    expect(updated).toEqual([]);
+  });
+
+  it("edits the existing surface for stream updates when streaming is enabled", async () => {
+    const posted: unknown[] = [];
+    const updated: Array<{ channel: string; ts: string; text?: string }> = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, streamingResponses: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted, updated }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-stream-1",
+        kind: "stream_update",
+        bindingId: "slack-binding-1",
+        createdAt: 1,
+        role: "assistant",
+        markdown: "plain",
+        policy: "enabled",
+        text: "partial answer",
+        stream: { isFinal: false, key: "codex:thread-1:turn-1", sequence: 1 },
+        targetSurface: {
+          channel: "slack",
+          id: "1712023032.123456",
+          state: {
+            opaque: { channelId: "C012ABCDEF0", ts: "1712023032.123456" },
+          },
+        },
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "updated",
+      surface: { channel: "slack", id: "1712023032.123456" },
+    });
+
+    // Edits the one surface in place — no fresh post that would ping the channel.
+    expect(posted).toEqual([]);
+    expect(updated).toEqual([
+      expect.objectContaining({ channel: "C012ABCDEF0", ts: "1712023032.123456" }),
+    ]);
+  });
+
+  it("posts the first stream chunk then edits it for the rest of the turn", async () => {
+    const posted: Array<{ channel: string; text?: string }> = [];
+    const updated: Array<{ channel: string; ts: string; text?: string }> = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, streamingResponses: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted, updated }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const audit = {
+      actor: { platformUserId: "U012ABCDEF0" },
+      bindingId: "slack-binding-1",
+      channel: {
+        channel: "slack" as const,
+        conversation: { id: "D012ABCDEF0", kind: "dm" as const },
+      },
+      occurredAt: 1,
+    };
+
+    // First chunk has no target surface (the turn hasn't posted yet). Slack has
+    // no create-or-edit call, so it must POST a new message instead of failing
+    // with "Slack stream update target is missing".
+    await expect(
+      adapter.deliver({
+        id: "assistant-stream-1",
+        kind: "stream_update",
+        bindingId: "slack-binding-1",
+        createdAt: 1,
+        role: "assistant",
+        markdown: "plain",
+        policy: "enabled",
+        text: "Partial",
+        stream: { isFinal: false, key: "codex:thread-1:turn-1", sequence: 1 },
+        audit,
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "presented" });
+
+    // Second chunk (same stream key) edits the message the first chunk posted.
+    await expect(
+      adapter.deliver({
+        id: "assistant-stream-2",
+        kind: "stream_update",
+        bindingId: "slack-binding-1",
+        createdAt: 2,
+        role: "assistant",
+        markdown: "plain",
+        policy: "enabled",
+        text: "Partial answer",
+        stream: { isFinal: false, key: "codex:thread-1:turn-1", sequence: 2 },
+        audit,
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "updated" });
+
+    // Final chunk edits the same message and clears the per-stream surface.
+    await expect(
+      adapter.deliver({
+        id: "assistant-stream-final",
+        kind: "stream_update",
+        bindingId: "slack-binding-1",
+        createdAt: 3,
+        role: "assistant",
+        markdown: "markdown",
+        policy: "enabled",
+        text: "Partial answer, done.",
+        stream: { isFinal: true, key: "codex:thread-1:turn-1", sequence: 3 },
+        audit,
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "updated" });
+
+    // Exactly one post (the first chunk) and two edits — one Slack message.
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatchObject({ channel: "D012ABCDEF0" });
+    expect(updated).toHaveLength(2);
+    expect(updated.every((u) => u.ts === "1712023032.123456")).toBe(true);
+  });
+
+  it("rolls a streaming response longer than a section block onto extra messages", async () => {
+    const posted: Array<{ channel: string; text?: string }> = [];
+    const updated: Array<{ channel: string; ts: string; text?: string }> = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, streamingResponses: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted, updated }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    // > 3000 chars (Slack section-block limit) split at sentence boundaries.
+    const longText = "This is a full sentence that keeps going. ".repeat(90);
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-stream-final",
+        kind: "stream_update",
+        bindingId: "slack-binding-1",
+        createdAt: 1,
+        role: "assistant",
+        markdown: "markdown",
+        policy: "enabled",
+        text: longText,
+        stream: { isFinal: true, key: "codex:thread-1:turn-1", sequence: 1 },
+        audit: {
+          actor: { platformUserId: "U012ABCDEF0" },
+          bindingId: "slack-binding-1",
+          channel: {
+            channel: "slack",
+            conversation: { id: "D012ABCDEF0", kind: "dm" },
+          },
+          occurredAt: 1,
+        },
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "presented" });
+
+    // Rolled onto more than one message, and no single block was truncated.
+    expect(posted.length).toBeGreaterThan(1);
+  });
+
+  it("splits a long text-only message across multiple posts", async () => {
+    const posted: Array<{ channel: string; text?: string }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const longText = "This is a full sentence that keeps going. ".repeat(90);
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-message-1",
+        kind: "message",
+        createdAt: 1,
+        role: "assistant",
+        parts: [{ type: "text", text: longText }],
+        audit: {
+          actor: { platformUserId: "U012ABCDEF0" },
+          bindingId: "slack-binding-1",
+          channel: {
+            channel: "slack",
+            conversation: { id: "D012ABCDEF0", kind: "dm" },
+          },
+          occurredAt: 1,
+        },
+      } as unknown as MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "presented" });
+
+    expect(posted.length).toBeGreaterThan(1);
+    for (const post of posted) {
+      expect((post.text ?? "").length).toBeLessThanOrEqual(3000);
+    }
+  });
 });

@@ -734,8 +734,10 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("radio", { name: "Group/supergroup chat" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(6);
-    expect(screen.getAllByText(/reach platform rate limits much sooner/)).toHaveLength(6);
+    // Five providers expose a streaming toggle; LINE has no message-edit API so
+    // it deliberately has none.
+    expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(5);
+    expect(screen.getAllByText(/reach platform rate limits much sooner/)).toHaveLength(5);
     fireEvent.click(
       screen.getAllByRole("switch", { name: "Streaming Responses (Advanced)" })[0]!,
     );

@@ -616,6 +616,20 @@ export function resolveMessagingStreamingResponseMode(
   return binding.preferences?.streamingResponses ?? "inherit";
 }
 
+/**
+ * Resolve a streaming-responses mode to an effective on/off boolean: `"inherit"`
+ * follows the channel default, otherwise the explicit setting wins. Single
+ * source of truth for the on/off decision — the controller (to gate
+ * stream-intent generation) and the new-thread summary both consult it, and it
+ * mirrors the adapter-side `policy` check.
+ */
+export function messagingStreamingResponsesEnabled(
+  mode: MessagingStreamingResponseMode,
+  streamingResponsesDefault: boolean,
+): boolean {
+  return mode === "inherit" ? streamingResponsesDefault : mode === "enabled";
+}
+
 export function nextMessagingStreamingResponseMode(
   mode: MessagingStreamingResponseMode,
   streamingResponsesDefault = false,

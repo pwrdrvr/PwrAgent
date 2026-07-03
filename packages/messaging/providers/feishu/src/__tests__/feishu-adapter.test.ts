@@ -14,6 +14,7 @@ import type {
   MessagingAdapterDiagnosticEvent,
   MessagingInboundEvent,
   MessagingRejectedInboundEvent,
+  MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 
 const baseConfig = {
@@ -115,6 +116,116 @@ describe("FeishuAdapter", () => {
     expect(adapter.clientRateLimitStrategy).toBe("direct");
     expect(adapter.capabilityProfile.actions?.maxActions).toBe(20);
     expect(adapter.capabilityProfile.text.markdownDialect).toBe("feishu-md");
+  });
+
+  function streamIntent(params: {
+    id: string;
+    text: string;
+    isFinal: boolean;
+    sequence: number;
+    policy?: "inherit" | "enabled" | "disabled";
+  }) {
+    return {
+      id: params.id,
+      kind: "stream_update" as const,
+      createdAt: 1,
+      role: "assistant" as const,
+      markdown: params.isFinal ? ("markdown" as const) : ("plain" as const),
+      policy: params.policy ?? ("enabled" as const),
+      text: params.text,
+      stream: {
+        key: "codex:thread-1:turn-1",
+        isFinal: params.isFinal,
+        sequence: params.sequence,
+      },
+      audit: {
+        actor: { platformUserId: "ou_user" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "feishu" as const,
+          conversation: { id: "ou_user", kind: "dm" as const },
+        },
+        occurredAt: 1,
+      },
+    };
+  }
+
+  it("discards stream updates when streaming is off without touching the chat", async () => {
+    const spies: { sent: unknown[]; updated: unknown[] } = { sent: [], updated: [] };
+    const adapter = new FeishuAdapter({
+      config: baseConfig, // streaming off
+      callbackHandleStore: fakeStore(),
+      api: fakeApi(spies),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(
+      adapter.deliver(
+        streamIntent({ id: "s1", text: "partial", isFinal: false, sequence: 1, policy: "inherit" }),
+      ),
+    ).resolves.toMatchObject({ channel: "feishu", outcome: "discarded" });
+    expect(spies.sent).toEqual([]);
+    expect(spies.updated).toEqual([]);
+  });
+
+  it("sends the first stream chunk then updates it for the rest of the turn", async () => {
+    const spies: { sent: unknown[]; updated: Array<{ messageId: string }> } = {
+      sent: [],
+      updated: [],
+    };
+    const adapter = new FeishuAdapter({
+      config: { ...baseConfig, streamingResponses: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi(spies),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(
+      adapter.deliver(streamIntent({ id: "s1", text: "Partial", isFinal: false, sequence: 1 })),
+    ).resolves.toMatchObject({ channel: "feishu", outcome: "presented" });
+    await expect(
+      adapter.deliver(streamIntent({ id: "s2", text: "Partial answer", isFinal: false, sequence: 2 })),
+    ).resolves.toMatchObject({ channel: "feishu", outcome: "updated" });
+    await expect(
+      adapter.deliver(streamIntent({ id: "s3", text: "Partial answer, done.", isFinal: true, sequence: 3 })),
+    ).resolves.toMatchObject({ channel: "feishu", outcome: "updated" });
+
+    // One send (first chunk), two updates — a single Feishu card message.
+    expect(spies.sent).toHaveLength(1);
+    expect(spies.updated).toHaveLength(2);
+    expect(spies.updated.every((u) => u.messageId === "om_sent")).toBe(true);
+  });
+
+  it("splits a long text-only message across multiple sends", async () => {
+    const spies: { sent: unknown[]; updated: unknown[] } = { sent: [], updated: [] };
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi(spies),
+      now: () => 1_700_000_000_000,
+    });
+    const longText = "This is a full sentence that keeps going. ".repeat(900); // ~38k chars
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-message-1",
+        kind: "message",
+        createdAt: 1,
+        role: "assistant",
+        parts: [{ type: "text", text: longText }],
+        audit: {
+          actor: { platformUserId: "ou_user" },
+          bindingId: "binding-1",
+          channel: {
+            channel: "feishu",
+            conversation: { id: "ou_user", kind: "dm" },
+          },
+          occurredAt: 1,
+        },
+      } as unknown as MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "feishu", outcome: "presented" });
+
+    expect(spies.sent.length).toBeGreaterThan(1);
   });
 
   it("sends interactive cards with persisted callback handles", async () => {

@@ -34,7 +34,9 @@ import type {
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
 import {
+  evictStaleStreamAnchors,
   extractMessagingPairingToken,
+  splitTextForDelivery,
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
   SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
   SLACK_DM_ACCESS_MODE_DEFAULT,
@@ -49,6 +51,7 @@ import {
   clampSlackMessage,
   markdownToSlackMrkdwn,
   textForSlackIntent,
+  SLACK_SECTION_TEXT_LIMIT,
   type SlackBlock,
   type SlackPostBody,
 } from "./slack-formatting.ts";
@@ -308,6 +311,17 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly recentInboundMessageEvents = new Map<string, number>();
   private readonly threadTitleCache = new Map<string, string | undefined>();
   private readonly userDisplayNameCache = new Map<string, string | undefined>();
+  // Per-stream posted surfaces, keyed by `intent.stream.key`. Slack has no
+  // "create-or-edit" primitive, so the first chunk posts a new message and
+  // records its `ts` here; later chunks (and the final) edit it in place — the
+  // post-new-then-edit pattern Telegram and Discord use. A response longer than
+  // Slack's 3000-char section block rolls onto additional anchors (element 1,
+  // 2, …); `text` lets us skip re-editing a chunk that hasn't changed. Cleared
+  // when the final stream chunk lands.
+  private readonly streamSurfaces = new Map<
+    string,
+    Array<{ channelId: string; ts: string; threadTs?: string; text: string }>
+  >();
   private botAccount: string | undefined;
   private botAccountDetail: string | undefined;
   private botUserId: string | undefined;
@@ -498,6 +512,24 @@ export class SlackAdapter implements SlackProviderAdapter {
       capabilityProfile: this.capabilityProfile,
       layout: intent.actionLayout,
     });
+    // Long text-only messages: split into several posts at clean boundaries so
+    // the 3000-char section block doesn't truncate the tail. Restricted to the
+    // simple case — a plain message with no buttons, no attachments, and no
+    // in-place edit — which is exactly the assistant-response path.
+    if (
+      intent.kind === "message" &&
+      (actionBlocks?.length ?? 0) === 0 &&
+      intent.delivery?.mode !== "update" &&
+      !intent.parts.some((part) => part.type === "file")
+    ) {
+      const chunks = splitTextForDelivery(markdownToSlackMrkdwn(rawText), {
+        limit: SLACK_SECTION_TEXT_LIMIT,
+        measure: "chars",
+      });
+      if (chunks.length > 1) {
+        return await this.deliverChunkedTextMessage({ intent, target, chunks });
+      }
+    }
     const blocks = buildSlackBlocksForIntent({
       actionBlocks,
       intent,
@@ -916,6 +948,68 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
   }
 
+  /**
+   * Post a long text-only message as several Slack messages, one per chunk, so
+   * the content is never truncated at the 3000-char section-block limit. The
+   * chunks are already boundary-split by the caller. Returns the first message
+   * as the surface (mirrors a single-post delivery).
+   */
+  private async deliverChunkedTextMessage(params: {
+    intent: Extract<MessagingSurfaceIntent, { kind: "message" }>;
+    target: { channelId: string; threadTs?: string };
+    chunks: string[];
+  }): Promise<MessagingDeliveryResult> {
+    let firstSurface: MessagingSurfaceRef | undefined;
+    let deliveredAny = false;
+    try {
+      for (const chunk of params.chunks) {
+        const blocks = buildSlackBlocksForIntent({ intent: params.intent, text: chunk });
+        const result = await this.api.postMessage({
+          channel: params.target.channelId,
+          text: chunk || "PwrAgent",
+          ...(blocks.length > 0 ? { blocks } : {}),
+          ...(params.target.threadTs ? { thread_ts: params.target.threadTs } : {}),
+          unfurl_links: false,
+          unfurl_media: false,
+        });
+        deliveredAny = true;
+        const ts = result.ts;
+        if (ts && !firstSurface) {
+          firstSurface = {
+            channel: this.channel,
+            id: ts,
+            state: {
+              opaque: {
+                channelId: result.channel ?? params.target.channelId,
+                ts,
+                ...(params.target.threadTs ? { threadTs: params.target.threadTs } : {}),
+              },
+            },
+          };
+        }
+      }
+      return {
+        outcome: "presented",
+        channel: this.channel,
+        deliveredAt: this.now(),
+        ...(firstSurface ? { surface: firstSurface } : {}),
+      };
+    } catch (error) {
+      const rateLimit = this.emitRateLimitFromError(
+        error,
+        { channelId: params.target.channelId },
+        { retryable: !deliveredAny },
+      );
+      return {
+        outcome: "failed",
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: error instanceof Error ? error.message : String(error),
+        ...(rateLimit ? { rateLimit } : {}),
+      };
+    }
+  }
+
   private async deliverStreamUpdate(
     intent: Extract<MessagingSurfaceIntent, { kind: "stream_update" }>,
   ): Promise<MessagingDeliveryResult> {
@@ -930,7 +1024,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       };
     }
     const target = this.resolveTarget(intent);
-    if (!target?.ts) {
+    if (!target) {
       return {
         outcome: "failed",
         channel: this.channel,
@@ -938,27 +1032,104 @@ export class SlackAdapter implements SlackProviderAdapter {
         errorMessage: "Slack stream update target is missing",
       };
     }
-    const text = clampSlackMessage(markdownToSlackMrkdwn(intent.text));
-    try {
-      const result = await this.api.updateMessage({
-        channel: target.channelId,
-        ts: target.ts,
-        text,
-        blocks: buildSlackBlocksForIntent({ intent, text: intent.text }),
-        ...(target.threadTs ? { thread_ts: target.threadTs } : {}),
-      });
+    // Split the accumulated stream text at Slack's 3000-char section-block
+    // limit so a long response rolls onto additional messages instead of being
+    // truncated. Greedy splitting keeps prefix chunks stable as text grows, so
+    // only the last chunk is re-edited each tick and new ones are posted as the
+    // response spills over.
+    const chunks = splitTextForDelivery(markdownToSlackMrkdwn(intent.text), {
+      limit: SLACK_SECTION_TEXT_LIMIT,
+      measure: "chars",
+    });
+    if (chunks.length === 0) {
       return {
-        outcome: "updated",
+        outcome: "discarded",
+        channel: this.channel,
+        deliveredAt: this.now(),
+      };
+    }
+    const threadTs = target.threadTs;
+    // Seed anchor 0 from a caller-supplied surface `ts` (restart-safety: the
+    // controller may hand us a surface we no longer have in memory) so the
+    // first chunk edits it rather than posting a duplicate.
+    const anchors =
+      this.streamSurfaces.get(intent.stream.key) ??
+      (target.ts
+        ? [
+            {
+              channelId: target.channelId,
+              ts: target.ts,
+              text: "",
+              ...(threadTs ? { threadTs } : {}),
+            },
+          ]
+        : []);
+    let firstOutcome: "presented" | "updated" | undefined;
+    try {
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index]!;
+        const blocks = buildSlackBlocksForIntent({ intent, text: chunk });
+        const anchor = anchors[index];
+        if (anchor) {
+          if (anchor.text === chunk) {
+            firstOutcome ??= "updated";
+            continue;
+          }
+          await this.api.updateMessage({
+            channel: anchor.channelId,
+            ts: anchor.ts,
+            text: chunk,
+            ...(blocks.length > 0 ? { blocks } : {}),
+            ...(anchor.threadTs ? { thread_ts: anchor.threadTs } : {}),
+          });
+          anchor.text = chunk;
+          firstOutcome ??= "updated";
+        } else {
+          const result = await this.api.postMessage({
+            channel: target.channelId,
+            text: chunk || intent.fallbackText || "PwrAgent",
+            ...(blocks.length > 0 ? { blocks } : {}),
+            ...(threadTs ? { thread_ts: threadTs } : {}),
+            unfurl_links: false,
+            unfurl_media: false,
+          });
+          const ts = result.ts;
+          if (!ts) {
+            return {
+              outcome: "failed",
+              channel: this.channel,
+              deliveredAt: this.now(),
+              errorMessage: "Slack did not return a message timestamp",
+            };
+          }
+          anchors[index] = {
+            channelId: result.channel ?? target.channelId,
+            ts,
+            text: chunk,
+            ...(threadTs ? { threadTs } : {}),
+          };
+          firstOutcome ??= "presented";
+        }
+      }
+      if (intent.stream.isFinal) {
+        this.streamSurfaces.delete(intent.stream.key);
+      } else {
+        this.streamSurfaces.set(intent.stream.key, anchors);
+        evictStaleStreamAnchors(this.streamSurfaces);
+      }
+      const head = anchors[0]!;
+      return {
+        outcome: firstOutcome ?? "updated",
         channel: this.channel,
         deliveredAt: this.now(),
         surface: {
           channel: this.channel,
-          id: result.ts ?? target.ts,
+          id: head.ts,
           state: {
             opaque: {
-              channelId: result.channel ?? target.channelId,
-              ts: result.ts ?? target.ts,
-              ...(target.threadTs ? { threadTs: target.threadTs } : {}),
+              channelId: head.channelId,
+              ts: head.ts,
+              ...(head.threadTs ? { threadTs: head.threadTs } : {}),
             },
           },
         },

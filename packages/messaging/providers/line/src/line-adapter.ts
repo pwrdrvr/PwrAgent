@@ -28,6 +28,7 @@ import type {
 import {
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  splitTextForDelivery,
 } from "@pwragent/messaging-interface";
 import type { LineMessagingConfig } from "./line-config.ts";
 import {
@@ -328,7 +329,8 @@ export class LineAdapter implements LineProviderAdapter {
       };
     }
 
-    const text = clampLineMessage(textForLineIntent(intent));
+    const rawText = textForLineIntent(intent);
+    const text = clampLineMessage(rawText);
     const actions = actionsForLineIntent(intent);
     const callbackHandleWrites: Promise<void>[] = [];
     const messages: LineMessage[] = [];
@@ -343,8 +345,13 @@ export class LineAdapter implements LineProviderAdapter {
     if (intent.kind === "activity") {
       return await this.deliverActivity(intent, target, deliveredAt);
     }
-    if (text) {
-      messages.push({ type: "text", text });
+    // Split long text at LINE's per-message limit into multiple text messages
+    // (LINE has no edit API, so a long reply is simply several messages).
+    for (const chunk of splitTextForDelivery(rawText, {
+      limit: LINE_MESSAGE_TEXT_LIMIT,
+      measure: "chars",
+    })) {
+      messages.push({ type: "text", text: chunk });
     }
     messages.push(...imageMessagesForLineIntent(intent));
     if (shouldDiscardLineStatusUpdate(intent)) {
@@ -382,11 +389,18 @@ export class LineAdapter implements LineProviderAdapter {
     }
 
     try {
-      const result = await this.api.pushMessage({
-        to: target.conversationId,
-        messages: messages.slice(0, 5),
-      });
-      const messageId = result.sentMessages?.find((message) => message.id)?.id
+      // LINE caps a single push at 5 messages, so a long split (several text
+      // chunks + images + an action bubble) is sent across multiple pushes
+      // rather than dropping the overflow.
+      let firstMessageId: string | undefined;
+      for (let index = 0; index < messages.length; index += 5) {
+        const result = await this.api.pushMessage({
+          to: target.conversationId,
+          messages: messages.slice(index, index + 5),
+        });
+        firstMessageId ??= result.sentMessages?.find((message) => message.id)?.id;
+      }
+      const messageId = firstMessageId
         ?? `${target.conversationId}:${intent.id}`;
       return {
         channel: "line",

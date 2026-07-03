@@ -1459,23 +1459,11 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          <ToggleField
-            checked={line.streamingResponses.value}
-            disabled={props.saving}
-            label="Streaming Responses (Advanced)"
-            sub="LINE does not support message edits; leave this off so only final assistant text is posted."
-            help={STREAMING_RESPONSES_WARNING}
-            source={sourceBadge(line.streamingResponses)}
-            onChange={(streamingResponses) => {
-              void props.onSaveLine({
-                ...line,
-                streamingResponses: {
-                  ...line.streamingResponses,
-                  value: streamingResponses,
-                },
-              });
-            }}
-          />
+          {/*
+            No streaming toggle for LINE: the LINE Messaging API has no
+            message-edit primitive, so streaming (edit-in-place) is impossible.
+            LINE always posts the final assistant text as one or more messages.
+          */}
           <AuthorizedListField
             disabled={props.saving}
             lookup={contactLookup(props.desktopApi, "line", "user")}

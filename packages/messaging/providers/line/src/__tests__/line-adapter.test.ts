@@ -6,6 +6,7 @@ import {
   type MessagingCallbackHandleRecord,
   type MessagingInboundEvent,
   type MessagingRejectedInboundEvent,
+  type MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { LineAdapter, verifyLineSignature, type LineApi } from "../line-adapter.ts";
 import type { LineMessagingConfig } from "../line-config.ts";
@@ -165,6 +166,46 @@ describe("LineAdapter", () => {
       outcome: "failed",
       errorMessage: "LINE channel access token is required to send messages",
     });
+  });
+
+  it("splits a long message into multiple text messages across batched pushes", async () => {
+    const api = createApi();
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig(),
+      now: () => 1234,
+    });
+    adapters.push(adapter);
+    // ~30k chars → 6+ chunks at the 5000-char limit → more than one 5-message
+    // push, so nothing is dropped by LINE's per-push cap.
+    const longText = "This is a full sentence that keeps going. ".repeat(720);
+
+    const result = await adapter.deliver({
+      id: "intent-long",
+      kind: "message",
+      role: "assistant",
+      parts: [{ type: "text", text: longText }],
+      audit: {
+        actor: { platformUserId: "U0123456789abcdef0123456789abcdef" },
+        channel: {
+          channel: "line",
+          conversation: { id: "U0123456789abcdef0123456789abcdef", kind: "dm" },
+        },
+        occurredAt: 1234,
+      },
+      createdAt: 1234,
+    } as unknown as MessagingSurfaceIntent);
+
+    expect(result.outcome).toBe("presented");
+    // More than one push (batched), and every text message is within the limit.
+    expect(api.pushMessage.mock.calls.length).toBeGreaterThan(1);
+    const allMessages = api.pushMessage.mock.calls.flatMap(([call]) => call.messages);
+    const textMessages = allMessages.filter((m) => m.type === "text");
+    expect(textMessages.length).toBeGreaterThan(1);
+    for (const message of textMessages) {
+      expect((message as { text: string }).text.length).toBeLessThanOrEqual(5000);
+    }
   });
 
   it("rejects attachment downloads until a channel access token is configured", async () => {

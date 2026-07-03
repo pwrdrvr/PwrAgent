@@ -35,6 +35,7 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
+  evictStaleStreamAnchors,
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
 } from "@pwragent/messaging-interface";
@@ -327,7 +328,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
-  private streamSurfaces = new Map<string, string>();
+  // Per-stream posted messages, keyed by `intent.stream.key`. A response longer
+  // than Discord's 2000-char message limit rolls onto additional messages
+  // (element 1, 2, …); `content` lets us skip re-editing an unchanged chunk.
+  private streamSurfaces = new Map<
+    string,
+    Array<{ messageId: string; content: string }>
+  >();
   private typingSignalSequence = 0;
   private typingSignals = new Map<string, DiscordTypingSignal>();
   private unsubscribeGateway?: () => void;
@@ -642,38 +649,62 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       };
     }
 
+    // Split the accumulated stream text at Discord's 2000-char limit so a long
+    // response rolls onto extra messages instead of being discarded. Greedy
+    // splitting keeps prefix chunks stable, so only the last chunk is re-edited
+    // and new ones are posted as the response spills over.
     const chunks = splitDiscordContent(intent.text || " ");
-    if (chunks.length !== 1) {
-      return {
-        channel: this.channel,
-        deliveredAt: this.now(),
-        outcome: "discarded",
-      };
+    if (chunks.length === 0) {
+      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
     }
-
+    const anchors =
+      this.streamSurfaces.get(intent.stream.key) ??
+      (target.messageId ? [{ messageId: target.messageId, content: "" }] : []);
+    let firstOutcome: "presented" | "updated" | undefined;
     try {
-      const existingMessageId =
-        this.streamSurfaces.get(intent.stream.key) ?? target.messageId;
-      const request: DiscordCreateMessageRequest = {
-        allowed_mentions: defensiveAllowedMentions(),
-        content: chunks[0] ?? " ",
-      };
-      const message = existingMessageId
-        ? await this.api.updateMessage(target.channelId, existingMessageId, request)
-        : await this.api.createMessage(target.channelId, request);
+      for (let index = 0; index < chunks.length; index += 1) {
+        const content = chunks[index] ?? " ";
+        const request: DiscordCreateMessageRequest = {
+          allowed_mentions: defensiveAllowedMentions(),
+          content,
+        };
+        const anchor = anchors[index];
+        if (anchor) {
+          if (anchor.content === content) {
+            firstOutcome ??= "updated";
+            continue;
+          }
+          await this.api.updateMessage(target.channelId, anchor.messageId, request);
+          anchor.content = content;
+          firstOutcome ??= "updated";
+        } else {
+          const message = await this.api.createMessage(target.channelId, request);
+          anchors[index] = { messageId: message.id, content };
+          firstOutcome ??= "presented";
+        }
+      }
       if (intent.stream.isFinal) {
         this.streamSurfaces.delete(intent.stream.key);
       } else {
-        this.streamSurfaces.set(intent.stream.key, message.id);
+        this.streamSurfaces.set(intent.stream.key, anchors);
+        evictStaleStreamAnchors(this.streamSurfaces);
       }
-      this.options.logger?.debug(
-        `discord stream update ${existingMessageId ? "edited" : "sent"} final=${intent.stream.isFinal} sequence=${intent.stream.sequence} channel=${target.channelId} message=${message.id} stream=${intent.stream.key}`,
-      );
+      const head = anchors[0]!;
       return {
         channel: this.channel,
         deliveredAt: this.now(),
-        outcome: existingMessageId ? "updated" : "presented",
-        surface: this.surfaceForMessage(message, target),
+        outcome: firstOutcome ?? "updated",
+        surface: {
+          channel: this.channel,
+          id: head.messageId,
+          state: {
+            opaque: {
+              channelId: target.channelId,
+              guildId: target.guildId ?? null,
+              messageId: head.messageId,
+            },
+          },
+        },
       };
     } catch (error) {
       const rateLimit = this.emitRateLimitFromError(error, target, {
