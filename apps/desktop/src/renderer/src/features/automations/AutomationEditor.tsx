@@ -454,6 +454,20 @@ export function AutomationEditor(props: AutomationEditorProps) {
       if (event.entry.id !== captureEntryId) return;
       if (!event.entry.observedChat) return;
       const chat = event.entry.observedChat;
+      if (chat.kind === "dm") {
+        // A 1:1 DM can't be an inbound trigger source (only you and the bot are
+        // in it), and Slack refuses to authorize a DM as a channel — approving
+        // would throw. Tell the operator instead of silently reporting success.
+        void props.desktopApi
+          ?.rejectMessagingPairing?.({ entryId: event.entry.id })
+          .catch(() => {});
+        setCaptureStatus("error");
+        setCaptureError(
+          "Drop the code in a channel or group, not a direct message.",
+        );
+        setCaptureEntryId(undefined);
+        return;
+      }
       applyObservedChat(chat);
       setCaptureStatus("captured");
       setCaptureMessage(undefined);
@@ -1283,9 +1297,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 ))}
               </select>
             </label>
-            {inboundProvider === "telegram" && telegramGroups.length > 0 ? (
+            {telegramGroups.length > 0 ? (
               <label className="automation-field">
-                <span>Group</span>
+                <span>{conversationPickerLabel(inboundProvider)}</span>
                 <select
                   value={groupSelection}
                   onChange={(event) => {
@@ -1297,42 +1311,24 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     setValidationError(undefined);
                   }}
                 >
-                  <option value="">Choose a group</option>
+                  <option value="">
+                    Choose a {conversationPickerLabel(inboundProvider).toLowerCase()}
+                  </option>
                   {telegramGroups.map((group) => (
                     <option key={group.id} value={group.id}>
                       {group.title}
                     </option>
                   ))}
                   <option value={MANUAL_GROUP_VALUE}>
-                    Enter group ID manually...
+                    Enter {conversationLabel(inboundProvider)} manually...
                   </option>
                 </select>
               </label>
             ) : null}
           </div>
 
-          {inboundProvider === "telegram" ? (
-            telegramGroups.length === 0 ||
-            groupSelection === MANUAL_GROUP_VALUE ? (
-              <div className="automation-field-group">
-                <label className="automation-field">
-                  <span>Group ID</span>
-                  <input
-                    placeholder="e.g. -1001234567890"
-                    value={inboundGroupId}
-                    onChange={(event) => {
-                      setInboundGroupId(event.currentTarget.value);
-                      setValidationError(undefined);
-                    }}
-                  />
-                </label>
-                <p className="automation-field__hint">
-                  The supergroup ID (a negative number). Add the bot to the group
-                  and pair it from Settings &gt; Messaging, then pick it above.
-                </p>
-              </div>
-            ) : null
-          ) : (
+          {telegramGroups.length === 0 ||
+          groupSelection === MANUAL_GROUP_VALUE ? (
             <div className="automation-field-group">
               <label className="automation-field">
                 <span>{conversationLabel(inboundProvider)}</span>
@@ -1349,7 +1345,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 {conversationHint(inboundProvider)}
               </p>
             </div>
-          )}
+          ) : null}
 
           {canCaptureByCode ? (
             <div className="automation-capture">
@@ -2457,19 +2453,31 @@ function buildTriggerConfig(params: {
   };
 }
 
+/** Noun for the conversation-picker dropdown ("Group" / "Channel"). */
+function conversationPickerLabel(provider: MessagingChannelKind): string {
+  if (provider === "telegram") return "Group";
+  if (provider === "slack" || provider === "discord") return "Channel";
+  return "Conversation";
+}
+
 function conversationLabel(provider: MessagingChannelKind): string {
+  if (provider === "telegram") return "Group ID";
   if (provider === "slack") return "Channel ID";
   if (provider === "discord") return "Channel ID";
   return "Conversation ID";
 }
 
 function conversationPlaceholder(provider: MessagingChannelKind): string {
+  if (provider === "telegram") return "e.g. -1001234567890";
   if (provider === "slack") return "e.g. C0123ABCD";
   if (provider === "discord") return "e.g. 123456789012345678";
   return "e.g. a conversation ID";
 }
 
 function conversationHint(provider: MessagingChannelKind): string {
+  if (provider === "telegram") {
+    return "The supergroup ID (a negative number). Add the bot to the group and pair it from Settings > Messaging, then pick it above.";
+  }
   if (provider === "slack") {
     return "The Slack channel ID. In Slack, open the channel details and copy the ID at the bottom, or copy a message link and take the C... segment.";
   }
@@ -2553,13 +2561,16 @@ function readEnabledProviders(
 }
 
 function readProviderGroups(snapshot: DesktopSettingsSnapshot): ProviderGroups {
-  const telegram = snapshot.messaging.telegram.authorizedSupergroups.value.map(
-    (contact) => ({
-      id: contact.id,
-      title: contact.displayName ? `${contact.displayName}` : contact.id,
-    }),
-  );
-  return telegram.length > 0 ? { telegram } : {};
+  const toGroup = (contact: { id: string; displayName?: string }) => ({
+    id: contact.id,
+    title: contact.displayName ? `${contact.displayName}` : contact.id,
+  });
+  const telegram = snapshot.messaging.telegram.authorizedSupergroups.value.map(toGroup);
+  const slack = snapshot.messaging.slack.authorizedChannels.value.map(toGroup);
+  const groups: ProviderGroups = {};
+  if (telegram.length > 0) groups.telegram = telegram;
+  if (slack.length > 0) groups.slack = slack;
+  return groups;
 }
 
 function parseTimeOfDay(value: string): { hour: number; minute: number } | undefined {
