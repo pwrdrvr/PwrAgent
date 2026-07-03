@@ -273,6 +273,37 @@ function patchStageDependencyManifests() {
   }
 }
 
+function stageDesktopVersion() {
+  const manifestPath = join(stageDir, "package.json");
+  if (!existsSync(manifestPath)) {
+    throw new Error(`release-stage package.json is missing at ${manifestPath}`);
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (typeof manifest.version !== "string" || manifest.version.length === 0) {
+    throw new Error("release-stage package.json must contain a non-empty version");
+  }
+  return manifest.version;
+}
+
+function configureStageGithubReleaseType() {
+  const configPath = join(stageDir, "electron-builder.yml");
+  if (!existsSync(configPath)) {
+    throw new Error(`release-stage electron-builder.yml is missing at ${configPath}`);
+  }
+  const version = stageDesktopVersion();
+  const releaseType = version.includes("-") ? "prerelease" : "release";
+  const config = readFileSync(configPath, "utf8");
+  if (!/^\s*releaseType:\s*\w+\s*$/m.test(config)) {
+    throw new Error("electron-builder.yml must contain a publish.releaseType entry");
+  }
+  const updated = config.replace(
+    /^(\s*releaseType:\s*)\w+(\s*)$/m,
+    `$1${releaseType}$2`,
+  );
+  writeFileSync(configPath, updated);
+  console.log(`  configured GitHub releaseType=${releaseType} for ${version}`);
+}
+
 // 1. Decode CI-provided Apple API key (if present) to a real .p8 file.
 function maybeDecodeAppleApiKey() {
   if (process.env.APPLE_API_KEY && existsSync(process.env.APPLE_API_KEY)) {
@@ -333,6 +364,7 @@ if (!signStageOnly) {
     join(desktopRoot, "electron-builder.yml"),
     join(stageDir, "electron-builder.yml"),
   );
+  configureStageGithubReleaseType();
   for (const file of ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"]) {
     copyFileSync(join(repoRoot, file), join(stageDir, file));
   }

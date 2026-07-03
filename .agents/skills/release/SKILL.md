@@ -300,13 +300,12 @@ link to the latest release without knowing the current version. Do not remove
 or replace it with an arch-suffixed DMG.
 
 The workflow replaces electron-builder's empty/default release notes after
-release assets are published. For beta releases that should be offered by the
-normal updater and stable landing-page download URLs, leave GitHub's release
-label as `None` so the release can become Latest; do not mark it as
-`Pre-release`. GitHub excludes pre-release entries from `/releases/latest`,
-which also breaks
-`https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg` and
-the default Electron updater feed.
+release assets are published. Prerelease-tagged versions such as
+`v1.0.0-beta.41` must be born as GitHub `Pre-release`; stable versions such as
+`v1.0.0` must be born as normal releases so they can become Latest. GitHub
+excludes pre-release entries from `/releases/latest`, which also excludes them
+from `https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg`
+and the default Electron updater feed.
 
 This release-note publication is required, not cosmetic. Electron-builder may
 leave the body empty or duplicate the tag name. If the workflow release-notes
@@ -322,8 +321,8 @@ gh release edit v<version> \
   --notes-file .local/release/v<version>/RELEASE_NOTES.md
 ```
 
-Only add `--prerelease` when the user explicitly wants a release hidden from
-normal update checks and latest download links.
+Only use `gh release edit --prerelease` as a corrective fallback if a
+prerelease-tagged version was not born as `Pre-release`.
 
 Verify the final release body before calling the release complete:
 

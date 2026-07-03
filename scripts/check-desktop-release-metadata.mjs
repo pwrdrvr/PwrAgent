@@ -142,6 +142,8 @@ for (const expected of [
   "PwrAgent-linux-x64.deb",
   "PwrAgent-linux-arm64.deb",
   "patchStageDependencyManifests",
+  "configureStageGithubReleaseType",
+  "configured GitHub releaseType=${releaseType}",
   "^@larksuiteoapi\\+node-sdk@",
   "deployedAxios",
 ]) {
@@ -190,6 +192,7 @@ for (const expected of [
   "PwrAgent-linux-x64.deb",
   "PwrAgent-linux-arm64.deb",
   "SHA256SUMS",
+  "born as GitHub `Pre-release`",
 ]) {
   if (!desktopReleaseRunbook.includes(expected)) {
     fail(`docs/desktop-release-runbook.md must contain ${JSON.stringify(expected)}`);

@@ -156,14 +156,18 @@ The environment-gated signing job:
 
 1. Verifies the prepared artifact SHA-256 from the build job output.
 2. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file.
-3. Runs `electron-builder --mac --universal --publish always` from the
+3. Patches the staged electron-builder GitHub `releaseType` from the desktop
+   package version: versions with a prerelease suffix such as `-beta.41` are
+   born as GitHub `Pre-release`, while stable versions are born as normal
+   releases.
+4. Runs `electron-builder --mac --universal --publish always` from the
    downloaded artifact, without invoking `pnpm install`, `npx`, or dependency
    lifecycle scripts. `electron-builder` signs every
    helper bundle individually, signs the main `.app`, submits to Apple's
    notarization service via `notarytool`, staples the ticket, builds the DMG
    and universal updater ZIP, generates `latest-mac.yml`, and uploads
    everything to a GitHub Release on `pwrdrvr/PwrAgent`.
-4. Uploads the stable-name `PwrAgent.dmg` alias for landing-page download
+5. Uploads the stable-name `PwrAgent.dmg` alias for landing-page download
    links.
 
 Cycle time target: ≤ 12 minutes.
@@ -179,10 +183,10 @@ approval gate: after approval, continue watching the run through `Publish
 release notes`, then verify the final GitHub Release body is non-empty. If a
 monitor or handoff stops at the approval gate, resume after approval rather than
 treating the release as done.
-For beta releases that should be offered by normal update checks and stable
-landing-page download links, leave GitHub's release label as `None` so the
-release can become Latest. Mark a release as `Pre-release` only when it should
-be hidden from `/releases/latest`, `PwrAgent.dmg`, and the default Electron
+Prerelease-tagged versions such as `v1.0.0-beta.41` must be born as GitHub
+`Pre-release`, not edited afterward. Stable versions such as `v1.0.0` are born
+as normal releases so they can become Latest. GitHub excludes pre-release
+entries from `/releases/latest`, `PwrAgent.dmg`, and the default Electron
 updater feed.
 
 If the automated release-notes job fails or GitHub temporarily rejects the
