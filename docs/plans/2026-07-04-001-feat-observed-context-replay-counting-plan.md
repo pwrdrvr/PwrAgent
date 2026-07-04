@@ -242,10 +242,12 @@ step.
       `codex-thread-1.json` transcript (§2). To fully validate live, capture a
       heavy turn (many tool round-trips). A **synthetic** capture-shaped fixture
       covering a 6-request turn (2 cold + 4 hot) plus a duplicate-emission dedup
-      case was built (scratchpad `synthetic-codex-replay-capture.jsonl` +
-      `gen_replay_fixture.py`, fully fabricated / no PII) — promote it into the
-      repo test fixtures in Step 6. Verdict: proceed with §5 (observed counting);
-      §6 inference remains the documented fallback for coarse/missed streams.
+      case is committed at
+      `apps/desktop/src/main/__tests__/fixtures/context-replay/`
+      (`generate-replay-capture.py` + `synthetic-codex-replay-capture.jsonl`,
+      fully fabricated / no PII); wire it into the Step 6 tests. Verdict: proceed
+      with §5 (observed counting); §6 inference remains the documented fallback
+      for coarse/missed streams.
 - [ ] **Step 2 — Shared types.** Add observed-replay fields to
       `ThreadUsageLineRecord` in `packages/shared/src/token-usage-pricing.ts`
       (and any pricing-summary aggregation that must carry them).
