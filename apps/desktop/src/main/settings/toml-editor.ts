@@ -15,6 +15,9 @@
  *   - string array e.g. `["a", "b"]`
  *   - inline-table array, with scalar fields per entry, e.g.
  *     `[{ id = "-1", label = "Mom" }, { id = "-2", label = "Work" }]`
+ *   - array-of-tables (`[[section]]`) rows, whose cells may be scalars or
+ *     string arrays, e.g. `permissions = ["read", "write"]` alongside
+ *     `id = "role_oncall"` in the same row.
  *
  * Read-side: tolerates multi-line array formatting, inline comments, and
  * `[[array.of.tables]]` headers. Unknown TOML value kinds (datetimes, hex
@@ -39,7 +42,7 @@ export type TomlEditScalar = string | number | boolean;
 export type TomlEditValue =
   | TomlEditScalar
   | readonly string[]
-  | readonly Record<string, TomlEditScalar>[];
+  | readonly Record<string, TomlEditScalar | readonly string[]>[];
 
 export type TomlEdit =
   | { op: "set"; path: readonly string[]; value: TomlEditValue }
@@ -53,7 +56,7 @@ export type TomlEdit =
   | {
       op: "setTableArray";
       path: readonly string[];
-      value: readonly Record<string, TomlEditScalar>[];
+      value: readonly Record<string, TomlEditScalar | readonly string[]>[];
     }
   | { op: "deleteTableArray"; path: readonly string[] };
 
@@ -63,7 +66,7 @@ export type TomlValue =
   | number
   | boolean
   | string[]
-  | Record<string, TomlEditScalar>[];
+  | Record<string, TomlEditScalar | string[]>[];
 
 /** Map of section name (dotted, "" for top-level) to key→value map. */
 export type TomlTables = Record<string, Record<string, TomlValue>>;
@@ -74,7 +77,10 @@ type ParsedValue =
   | { kind: "float"; value: number }
   | { kind: "boolean"; value: boolean }
   | { kind: "string-array"; value: string[] }
-  | { kind: "inline-table-array"; value: Record<string, TomlEditScalar>[] };
+  | {
+      kind: "inline-table-array";
+      value: Record<string, TomlEditScalar | string[]>[];
+    };
 
 type KeyLocation = {
   name: string;
@@ -146,7 +152,7 @@ export function parseTomlTables(source: string, filePath: string): TomlTables {
           Array.isArray(existing) && isInlineTableArray(existing)
             ? existing
             : [];
-        const entry: Record<string, TomlEditScalar> = {};
+        const entry: Record<string, TomlEditScalar | string[]> = {};
         entries.push(entry);
         parent[keyName] = entries;
         currentTable = name;
@@ -325,7 +331,7 @@ type NewSectionPlan = {
 
 type NewTableArrayPlan = {
   tableName: string;
-  entries: readonly Record<string, TomlEditScalar>[];
+  entries: readonly Record<string, TomlEditScalar | readonly string[]>[];
 };
 
 type EditPlan = {
@@ -552,7 +558,7 @@ function splitArrayTableName(name: string): {
 
 function isInlineTableArray(
   value: unknown,
-): value is Record<string, TomlEditScalar>[] {
+): value is Record<string, TomlEditScalar | string[]>[] {
   return (
     Array.isArray(value)
     && value.every(
