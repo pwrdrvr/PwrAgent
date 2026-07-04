@@ -14,6 +14,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
+import { AccessControlSettings } from "./AccessControlSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { FederationSettings } from "./FederationSettings";
 import { GeneralSettings } from "./GeneralSettings";
@@ -44,6 +45,7 @@ export type SettingsSection =
   | "experimental"
   | "messaging"
   | "federation"
+  | "access-control"
   | "models"
   | "profiles"
   | "pricing"
@@ -61,6 +63,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "models", label: "AI Providers" },
   { id: "pricing", label: "Usage & Pricing" },
   { id: "messaging", label: "Messaging" },
+  { id: "access-control", label: "Access Control" },
   { id: "git", label: "Git" },
   { id: "federation", label: "Federation" },
   { id: "worktrees", label: "Worktrees" },
@@ -89,6 +92,7 @@ const SECTION_LABELS = new Map(
 
 const ORDERED_SECTION_IDS: SettingsSection[] = [
   ...PRIMARY_SECTIONS,
+  "access-control",
   "git",
   "worktrees",
   "thread-management",
@@ -668,6 +672,12 @@ function SettingsSectionBody(props: {
         onWriteConfig={props.settings.writeConfig}
       />
     );
+  }
+
+  if (props.section === "access-control") {
+    return props.desktopApi ? (
+      <AccessControlSettings desktopApi={props.desktopApi} />
+    ) : null;
   }
 
   if (props.section === "archived") {

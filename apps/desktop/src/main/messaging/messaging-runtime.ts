@@ -4,6 +4,7 @@ import {
   MessagingController,
   type MessagingControllerDeliveryBudgetEvent,
 } from "./core/messaging-controller";
+import { getRbacPolicyService } from "./rbac-policy-service";
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type {
@@ -1179,6 +1180,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       adapter,
       attachmentPolicy: config.attachmentPolicy,
       authorizedActorIds,
+      rbacPolicy: getRbacPolicyService().providerFor(adapter.channel),
       automationInboundHandler: this.options.automationInboundHandler,
       onInboundPreview: (event) => publishInboundPreview(event),
       backend: this.options.backendBridge,

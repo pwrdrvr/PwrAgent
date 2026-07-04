@@ -11,6 +11,8 @@ import {
   isAppServerBackendKind,
   isMessagingBindingTargetKind,
   parseCodexTurnErrorMessage,
+  permissionForActionId,
+  permissionForCommandVerb,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
   stripCodexGitActionDirectives,
@@ -44,6 +46,7 @@ import type {
   LaunchpadWorkMode,
   MaterializedDirectoryLaunchpadThread,
   MessagingBindingTargetKind,
+  MessagingPermissionId,
   MessagingToolUpdateMode,
   PwrAgentMessagingBoundThreadSummary,
   PwrAgentMessagingLocationSummary,
@@ -54,12 +57,14 @@ import type {
   NavigationLaunchpadDraft,
   NavigationSnapshot,
   NavigationThreadSummary,
+  RbacResolution,
   ScheduledThreadAction,
   ThreadMessagingBindingTransition,
   ThreadExecutionMode,
   ThreadIdentifier,
   UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
+import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type {
   MessagingBindingRecord,
   MessagingCallbackHandleRecord,
@@ -760,6 +765,12 @@ type MessagingCancellationSignal = MessagingDeliveryGuard & {
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
+  /**
+   * Per-platform RBAC capability resolver. When absent or not enforcing, the
+   * controller runs in legacy-compatible mode: every provider-admitted actor is
+   * implicitly Admin (exactly as before RBAC shipped).
+   */
+  rbacPolicy?: MessagingRbacPolicyProvider;
   automationInboundHandler?: (
     event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
   ) => Promise<boolean>;
@@ -1028,7 +1039,12 @@ export class MessagingController {
   }
 
   async handleInboundEvent(event: MessagingInboundEvent): Promise<void> {
-    if (!this.isAuthorized(event.actor.platformUserId)) {
+    if (!this.authorizeInboundAdmission(event)) {
+      // In enforcing mode this fires for actors with no permission-granting
+      // role (default-deny); record it so operators can see who was inert.
+      if (this.options.rbacPolicy?.isEnforcing()) {
+        this.recordCapabilityDenied(event, "(admission)", [], "admission");
+      }
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("unauthorized"),
@@ -2139,6 +2155,20 @@ export class MessagingController {
     },
   ): Promise<void> {
     const verb = matchMessagingCommandVerb(event.command);
+    // RBAC: gate the verb before dispatching. `help` and unknown commands are
+    // ungated (they only surface the command list). `permissionForCommandVerb`
+    // is the same lookup the render-time button filter uses, so they can't drift.
+    // This stays ABOVE every verb branch so a newly added command cannot slip
+    // in below the gate.
+    if (verb) {
+      const permission = permissionForCommandVerb(verb);
+      if (
+        permission &&
+        !(await this.requirePermission(event, permission, `command:${verb}`))
+      ) {
+        return;
+      }
+    }
     if (verb === "schedule") {
       await this.handleScheduleCommand(event);
       return;
@@ -3099,6 +3129,13 @@ export class MessagingController {
       return;
     }
 
+    // RBAC floor: sending a turn to the agent needs `message.reply`. Silent
+    // drop (no reply) so an under-permissioned sender can't be spammed with
+    // rejections in a shared channel.
+    if (!(await this.requirePermission(event, "message.reply", "message:reply", { notify: false }))) {
+      return;
+    }
+
     await this.turnAdmission.append({ binding, event });
   }
 
@@ -3262,6 +3299,10 @@ export class MessagingController {
     }
 
     if (!await this.shouldHandleAmbientSharedMessage(event, binding)) {
+      return;
+    }
+
+    if (!(await this.requirePermission(event, "message.reply", "media:reply", { notify: false }))) {
       return;
     }
 
@@ -4262,16 +4303,26 @@ export class MessagingController {
           thread.source === bindingTarget.backend &&
           thread.id === bindingTarget.threadId,
       );
-      if (
-        targetThread?.executionMode === "full-access" &&
-        !(await this.canResumeFullAccessThreads())
-      ) {
-        await this.deliverFullAccessPolicyError(
-          undefined,
-          event,
-          "Full Access threads cannot be resumed from messaging with the current settings.",
-        );
-        return;
+      if (targetThread?.executionMode === "full-access") {
+        // RBAC: binding a conversation to a Full Access thread needs the danger
+        // permission, in addition to the global resume-full-access setting.
+        if (
+          !(await this.requirePermission(
+            event,
+            "thread.execution.full_access",
+            "resume:full-access",
+          ))
+        ) {
+          return;
+        }
+        if (!(await this.canResumeFullAccessThreads())) {
+          await this.deliverFullAccessPolicyError(
+            undefined,
+            event,
+            "Full Access threads cannot be resumed from messaging with the current settings.",
+          );
+          return;
+        }
       }
       const binding = await this.bindChannelToThread(event, bindingTarget);
       await this.deliver(
@@ -4300,6 +4351,17 @@ export class MessagingController {
         (candidate) => candidate.id === (event.actionId ?? event.interaction.id),
       );
       if (action && pendingIntent.intent.kind === "approval") {
+        // RBAC: escalation approvals (network / exec / filesystem — the ones
+        // carrying an approval context) require the escalation permission;
+        // context-less approvals require the baseline approval permission.
+        const approvalPermission = approvalIntentIsEscalation(pendingIntent.intent)
+          ? "approval.respond.escalation"
+          : "approval.respond.default";
+        if (
+          !(await this.requirePermission(event, approvalPermission, "approval:respond"))
+        ) {
+          return;
+        }
         if (await this.retireApprovalCallbackIfBackendIdle(pendingIntent, event)) {
           return;
         }
@@ -4320,6 +4382,15 @@ export class MessagingController {
         return;
       }
       if (action && pendingIntent.intent.kind === "questionnaire") {
+        if (
+          !(await this.requirePermission(
+            event,
+            "elicitation.answer",
+            "questionnaire:answer",
+          ))
+        ) {
+          return;
+        }
         await this.handleQuestionnaireAction(pendingIntent, event, action);
         return;
       }
@@ -10457,6 +10528,18 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
     actionId: string,
   ): Promise<void> {
+    // RBAC top-guard: every status/handoff action maps to a permission through
+    // the shared lookup table, so one check covers every mutation method below
+    // without touching each individually. Unmapped actions (skills sub-nav)
+    // fall through ungated. The full-access double-gate is enforced deeper, at
+    // ensureFullAccessEscalationAllowed / ensureAcpRuntimeModeAllowed.
+    const requiredPermission = permissionForActionId(actionId);
+    if (
+      requiredPermission &&
+      !(await this.requirePermission(event, requiredPermission, actionId))
+    ) {
+      return;
+    }
     if (actionId === "status:detach") {
       await this.detachBinding(event);
       return;
@@ -11891,6 +11974,17 @@ export class MessagingController {
     context: AcpRuntimeRiskWarningContext,
     event: MessagingInboundEvent,
   ): Promise<boolean> {
+    // RBAC double-gate: a privileged (full-access-equivalent) ACP runtime needs
+    // the dedicated danger permission on top of the global Full Access toggle.
+    if (
+      !(await this.requirePermission(
+        event,
+        "thread.execution.full_access",
+        "execution:acp-privileged",
+      ))
+    ) {
+      return false;
+    }
     const controls = await this.resolveFullAccessControls();
     if (!controls.allowEscalation) {
       await this.deliverFullAccessPolicyError(
@@ -12012,6 +12106,18 @@ export class MessagingController {
     context: FullAccessEscalationContext,
     event: MessagingInboundEvent,
   ): Promise<boolean> {
+    // RBAC double-gate: escalating a thread to Codex Full Access requires the
+    // dedicated danger permission IN ADDITION to the global Full Access
+    // settings toggle below — the permission is never a bypass of the toggle.
+    if (
+      !(await this.requirePermission(
+        event,
+        "thread.execution.full_access",
+        "execution:full-access",
+      ))
+    ) {
+      return false;
+    }
     const controls = await this.resolveFullAccessControls();
     if (!controls.allowEscalation) {
       await this.recordFullAccessPolicyViolation(context, event);
@@ -16488,6 +16594,146 @@ export class MessagingController {
     return this.authorizedActorIds.has(platformUserId);
   }
 
+  // -------------------------------------------------------------------------
+  // RBAC — capability layer (issue #260). Composes with, never replaces, the
+  // provider admission gate. In legacy-compatible mode (no policy provider, or
+  // enforcement disabled) every method here is a no-op so behavior is identical
+  // to pre-RBAC PwrAgent.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Resolve the triggering actor's effective permissions, or `null` in
+   * legacy-compatible mode (caller should treat null as "allow, Admin-implied").
+   *
+   * The admission-path inference: a caller in `authorizedActorIds` is a *named*
+   * actor (only their named attachments apply); anyone else was admitted by the
+   * provider through a bucket access mode (DM workspace bucket for direct
+   * messages, channel bucket otherwise), so the matching bucket attachment
+   * applies. See #260 §3.
+   */
+  private resolveActorPermissions(
+    event: MessagingInboundEvent,
+  ): RbacResolution | null {
+    const provider = this.options.rbacPolicy;
+    if (!provider || !provider.isEnforcing()) {
+      return null;
+    }
+    const actorId = event.actor.platformUserId;
+    const named = this.authorizedActorIds.has(actorId);
+    const admittedVia = named
+      ? {}
+      : event.channel.conversation.kind === "dm"
+        ? { dmBucket: true }
+        : { channelBucket: true };
+    return provider.resolve({
+      actorId,
+      conversationId: event.channel.conversation.id,
+      admittedVia,
+    });
+  }
+
+  /**
+   * Admission gate replacement. Legacy mode preserves the exact
+   * `authorizedActorIds` membership check. Enforcing mode admits any actor that
+   * resolves to at least one permission-granting role (named or bucket) and
+   * default-denies the rest.
+   */
+  private authorizeInboundAdmission(event: MessagingInboundEvent): boolean {
+    const resolution = this.resolveActorPermissions(event);
+    if (resolution === null) {
+      return this.isAuthorized(event.actor.platformUserId);
+    }
+    return !resolution.rejected;
+  }
+
+  /**
+   * Effective permission set for render-time button filtering, or `undefined`
+   * in legacy mode (→ render the full surface unfiltered). Proactive re-renders
+   * without a triggering actor also get `undefined`.
+   */
+  private effectivePermissionsForEvent(
+    event?: MessagingInboundEvent,
+  ): Set<MessagingPermissionId> | undefined {
+    if (!event) return undefined;
+    const resolution = this.resolveActorPermissions(event);
+    return resolution?.permissions;
+  }
+
+  /**
+   * Gate a single action. Returns true (proceed) in legacy mode or when the
+   * actor holds `permission`; otherwise records an audit row, optionally
+   * notifies the user, and returns false. `notify: false` silently drops (used
+   * for the plain-reply floor to avoid spamming a channel).
+   */
+  private async requirePermission(
+    event: MessagingInboundEvent,
+    permission: MessagingPermissionId,
+    auditAction: string,
+    opts?: { notify?: boolean },
+  ): Promise<boolean> {
+    const resolution = this.resolveActorPermissions(event);
+    if (resolution === null) {
+      return true;
+    }
+    if (resolution.permissions.has(permission)) {
+      return true;
+    }
+    this.recordCapabilityDenied(event, permission, resolution.roleIds, auditAction);
+    if (opts?.notify !== false) {
+      await this.deliverCapabilityDenied(event);
+    }
+    return false;
+  }
+
+  private recordCapabilityDenied(
+    event: MessagingInboundEvent,
+    permission: MessagingPermissionId | "(admission)",
+    roleIds: readonly string[],
+    auditAction: string,
+  ): void {
+    try {
+      const log = this.desktopActivityLog();
+      if (!log) return;
+      const conversation = event.channel.conversation;
+      const who = event.actor.displayName ?? event.actor.platformUserId;
+      log.record({
+        platform: event.channel.channel,
+        kind: "inbound-rejected",
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        actorId: event.actor.platformUserId,
+        actorDisplayName: event.actor.displayName,
+        summary: `Denied ${auditAction}: ${who} lacks ${permission}`,
+        createdAt: this.now(),
+        payload: {
+          reason: "unauthorized-capability",
+          permission,
+          roleIds: [...roleIds],
+          auditAction,
+          conversationKind: conversation.kind,
+        },
+      });
+    } catch {
+      // Activity log is best-effort observability.
+    }
+  }
+
+  private async deliverCapabilityDenied(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("capability-denied"),
+        createdAt: this.now(),
+        title: "Not permitted",
+        body: "You don't have permission to do that.",
+        recoverable: false,
+      }),
+      undefined,
+      event,
+    );
+  }
+
   private newIntentId(prefix: string): string {
     return `${prefix}:${randomUUID()}`;
   }
@@ -16509,6 +16755,26 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
   const actionId = event.actionId ?? event.interaction.id;
   const match = /^command:([a-z0-9_-]+)$/i.exec(actionId);
   return match?.[1]?.toLowerCase();
+}
+
+/**
+ * Whether an approval intent represents a sandbox escalation (network / exec /
+ * filesystem / grant-root) versus a benign confirmation. Pending-request
+ * approvals carry an approval context describing the requested action, path, or
+ * grant root; a populated context marks the request as an escalation.
+ */
+function approvalIntentIsEscalation(
+  intent: Extract<MessagingSurfaceIntent, { kind: "approval" }>,
+): boolean {
+  const context = intent.context;
+  if (!context) return false;
+  return Boolean(
+    context.action ||
+      context.path ||
+      context.grantRoot ||
+      context.diff ||
+      (context.files && context.files.length > 0),
+  );
 }
 
 /**

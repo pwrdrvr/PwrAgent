@@ -138,6 +138,18 @@ import type {
   ListInboundTopicsResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
+  ReadRbacPolicyResponse,
+  ReadRbacKnownSubjectsResponse,
+  WriteRbacRoleRequest,
+  WriteRbacRoleResponse,
+  DeleteRbacRoleRequest,
+  DeleteRbacRoleResponse,
+  WriteRbacAttachmentRequest,
+  WriteRbacAttachmentResponse,
+  DeleteRbacAttachmentRequest,
+  DeleteRbacAttachmentResponse,
+  SetRbacEnforcedRequest,
+  SetRbacEnforcedResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
   ListMessagingRoutesResponse,
@@ -514,6 +526,13 @@ import {
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL,
   MESSAGING_LIST_ACTIVITY_CHANNEL,
+  MESSAGING_RBAC_READ_POLICY_CHANNEL,
+  MESSAGING_RBAC_READ_SUBJECTS_CHANNEL,
+  MESSAGING_RBAC_WRITE_ROLE_CHANNEL,
+  MESSAGING_RBAC_DELETE_ROLE_CHANNEL,
+  MESSAGING_RBAC_WRITE_ATTACHMENT_CHANNEL,
+  MESSAGING_RBAC_DELETE_ATTACHMENT_CHANNEL,
+  MESSAGING_RBAC_SET_ENFORCED_CHANNEL,
   MESSAGING_LIST_INBOUND_TOPICS_CHANNEL,
   MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL,
   MESSAGING_LIST_ROUTES_CHANNEL,
@@ -1892,6 +1911,30 @@ const desktopApi = Object.freeze({
     request?: ListMessagingActivityRequest,
   ): Promise<ListMessagingActivityResponse> =>
     await ipcRenderer.invoke(MESSAGING_LIST_ACTIVITY_CHANNEL, request),
+  readRbacPolicy: async (): Promise<ReadRbacPolicyResponse> =>
+    await ipcRenderer.invoke(MESSAGING_RBAC_READ_POLICY_CHANNEL),
+  readRbacKnownSubjects: async (): Promise<ReadRbacKnownSubjectsResponse> =>
+    await ipcRenderer.invoke(MESSAGING_RBAC_READ_SUBJECTS_CHANNEL),
+  writeRbacRole: async (
+    request: WriteRbacRoleRequest,
+  ): Promise<WriteRbacRoleResponse> =>
+    await ipcRenderer.invoke(MESSAGING_RBAC_WRITE_ROLE_CHANNEL, request),
+  deleteRbacRole: async (
+    request: DeleteRbacRoleRequest,
+  ): Promise<DeleteRbacRoleResponse> =>
+    await ipcRenderer.invoke(MESSAGING_RBAC_DELETE_ROLE_CHANNEL, request),
+  writeRbacAttachment: async (
+    request: WriteRbacAttachmentRequest,
+  ): Promise<WriteRbacAttachmentResponse> =>
+    await ipcRenderer.invoke(MESSAGING_RBAC_WRITE_ATTACHMENT_CHANNEL, request),
+  deleteRbacAttachment: async (
+    request: DeleteRbacAttachmentRequest,
+  ): Promise<DeleteRbacAttachmentResponse> =>
+    await ipcRenderer.invoke(MESSAGING_RBAC_DELETE_ATTACHMENT_CHANNEL, request),
+  setRbacEnforced: async (
+    request: SetRbacEnforcedRequest,
+  ): Promise<SetRbacEnforcedResponse> =>
+    await ipcRenderer.invoke(MESSAGING_RBAC_SET_ENFORCED_CHANNEL, request),
   getMessagingActivitySummary:
     async (): Promise<GetMessagingActivitySummaryResponse> =>
       await ipcRenderer.invoke(MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL),

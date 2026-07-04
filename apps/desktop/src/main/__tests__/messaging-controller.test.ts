@@ -52,6 +52,8 @@ import {
   shouldConsumeDeliveryBudget,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
+import type { MessagingRbacPolicyProvider } from "../messaging/rbac-policy-service";
+import type { MessagingPermissionId } from "@pwragent/shared";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
@@ -21248,6 +21250,76 @@ describe("MessagingController", () => {
   });
 });
 
+function rbacProviderGranting(
+  permissions: MessagingPermissionId[],
+): MessagingRbacPolicyProvider {
+  return {
+    isEnforcing: () => true,
+    resolve: () => ({
+      permissions: new Set(permissions),
+      roleIds: permissions.length ? ["test-role"] : [],
+      matchedSubjects: [],
+      rejected: permissions.length === 0,
+    }),
+  };
+}
+
+describe("RBAC capability enforcement", () => {
+  it("denies a command the actor lacks and delivers a reject notice", async () => {
+    const records: unknown[] = [];
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "elicitation.answer",
+        "thread.status.view",
+      ]), // Chat User: no thread.resume
+      activityLog: () =>
+        ({ record: (entry: unknown) => records.push(entry) }) as never,
+    });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Not permitted",
+    });
+    // An audit row records the capability denial.
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        kind: "inbound-rejected",
+        payload: expect.objectContaining({
+          reason: "unauthorized-capability",
+          permission: "thread.resume",
+        }),
+      }),
+    );
+  });
+
+  it("allows a command the actor holds", async () => {
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "thread.resume",
+        "thread.status.view",
+      ]),
+    });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    // The resume browser is delivered, not a permission error.
+    expect(harness.delivered.at(-1)).not.toMatchObject({
+      kind: "error",
+      title: "Not permitted",
+    });
+    expect(harness.delivered.length).toBeGreaterThan(0);
+  });
+
+  it("admits actors normally when enforcement is off (legacy mode)", async () => {
+    const harness = await createHarness(); // no rbacPolicy → legacy allow-all
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    expect(harness.delivered.at(-1)).not.toMatchObject({
+      kind: "error",
+      title: "Not permitted",
+    });
+  });
+});
+
 async function createHarness(options?: {
   deliveryBudget?: MessagingDeliveryBudget;
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
@@ -21258,6 +21330,7 @@ async function createHarness(options?: {
   handoff?: false;
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
+  rbacPolicy?: MessagingControllerOptions["rbacPolicy"];
   listBackends?: NonNullable<MessagingBackendBridge["listBackends"]>;
   listSkills?: NonNullable<MessagingBackendBridge["listSkills"]> | false;
   navigation?: NavigationSnapshot;
@@ -21813,6 +21886,7 @@ async function createHarness(options?: {
   const controller = new MessagingController({
     adapter,
     authorizedActorIds: ["user-1"],
+    rbacPolicy: options?.rbacPolicy,
     backend,
     channel: options?.channel,
     deliveryBudget: options?.deliveryBudget,

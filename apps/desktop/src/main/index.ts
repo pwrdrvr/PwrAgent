@@ -86,6 +86,7 @@ import {
   disposeMessagingStatusIpcHandlers,
   registerMessagingStatusIpcHandlers,
 } from "./ipc/messaging-status";
+import { registerMessagingRbacIpcHandlers } from "./ipc/messaging-rbac";
 import {
   disposeMcpConnectionIpcHandlers,
   registerMcpConnectionIpcHandlers,
@@ -1191,6 +1192,7 @@ export function bootstrapApp(): void {
     // current snapshot. When messaging is disabled the runtime singleton
     // still exists (default config); status returns []  / never emits.
     registerMessagingStatusIpcHandlers();
+    registerMessagingRbacIpcHandlers();
     recordStartupProfileEvent({ type: "main-window-create:start" });
     const mainWindow = createMainWindow({
       onShown: markMainWindowBooted,
