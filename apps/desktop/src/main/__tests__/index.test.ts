@@ -1018,6 +1018,23 @@ describe("bootstrapApp", () => {
     expect(createMainWindowMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not recreate a window from Dock activation during an update install", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    // The update install closes every window without flipping quitInProgress;
+    // window creation must still be blocked so a Dock click can't boot a fresh
+    // window while Squirrel is swapping the bundle.
+    isUpdateInstallInProgressMock.mockReturnValue(true);
+    getAllWindowsMock.mockReturnValue([]);
+
+    appEventHandlers.get("activate")?.();
+
+    expect(createMainWindowMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not recreate a window from profile focus after quit begins", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 

@@ -442,7 +442,14 @@ function beginQuitWithRelease(source: QuitRequestSource): void {
 }
 
 function isWindowCreationBlocked(): boolean {
-  return quitInProgress || mainProcessResourcesDisposed;
+  // An update install closes every window as it hands off to the updater but
+  // deliberately does NOT flip quitInProgress (see the window-all-closed
+  // handler). Block window creation here too, so a dock activate or
+  // profile-focus request in the teardown window can't boot a fresh window
+  // while Squirrel is swapping the bundle.
+  return (
+    quitInProgress || mainProcessResourcesDisposed || isUpdateInstallInProgress()
+  );
 }
 
 /**
