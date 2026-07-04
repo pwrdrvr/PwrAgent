@@ -17,6 +17,7 @@ import type {
 } from "../shared/app-metadata";
 import { getMainLogger } from "./log";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
+import { markUpdateInstallInProgress } from "./update-install-state";
 
 const log = getMainLogger("pwragent:updater");
 const GITHUB_RELEASES_URL =
@@ -560,6 +561,10 @@ export async function installDownloadedAppUpdate(options?: {
   try {
     log.info("installing downloaded update", { version });
     const performQuit = (): void => {
+      // Hand the quit + relaunch to the native Squirrel.Mac updater. Latch first
+      // so the app's own window-all-closed / before-quit handlers don't race it
+      // with a competing app.quit() that would strand us on the old version.
+      markUpdateInstallInProgress();
       autoUpdater.quitAndInstall();
     };
     if (options?.requestQuit) {
