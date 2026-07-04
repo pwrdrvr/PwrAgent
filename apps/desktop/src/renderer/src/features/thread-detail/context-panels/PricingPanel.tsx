@@ -983,16 +983,21 @@ function formatUsageLineDuration(params: {
   now: number;
 }): string {
   const { isActive, line, now } = params;
+  const start = line.startedAt ?? line.createdAt;
+  // The active turn always shows its running clock: if it's wearing the Live
+  // chip, the duration must agree. Checked before the scope/estimate/historical
+  // guards because a live turn can trip isHistoricalUsageSummary (a >= 1M-token
+  // request with no cumulative snapshot yet), which would otherwise strand the
+  // Live chip with no ticking duration.
+  if (isActive) {
+    return formatRunningDurationMs(Math.max(0, now - start));
+  }
   if (
     line.scope === "monitor" ||
     isEstimatedUsageGap(line) ||
     isHistoricalUsageSummary(line)
   ) {
     return "";
-  }
-  const start = line.startedAt ?? line.createdAt;
-  if (isActive) {
-    return formatRunningDurationMs(Math.max(0, now - start));
   }
   const end = line.completedAt;
   if (end === undefined || end <= start) {

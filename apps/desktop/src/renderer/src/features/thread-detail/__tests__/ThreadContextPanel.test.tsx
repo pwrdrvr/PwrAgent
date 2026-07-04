@@ -1589,6 +1589,57 @@ describe("ThreadContextPanel", () => {
     expect(times?.textContent).toContain("· 1m 5s ·");
   });
 
+  it("keeps the running duration on an active turn that trips the historical-summary heuristic", () => {
+    // A live turn whose first usage event carries no cumulative snapshot and
+    // whose own totalTokens is >= 1M satisfies isHistoricalUsageSummary. It is
+    // still the active turn, so it must keep its Live chip AND running clock.
+    const startedAt = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt + 65_000);
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      activeTurnId: "turn-live",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 0,
+            cachedInputTokens: 1_500_000,
+            createdAt: startedAt,
+            currency: "USD",
+            inputTokens: 1_500_000,
+            outputCostMicros: 0,
+            outputTokens: 10,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 0,
+            scope: "turn",
+            source: "live",
+            startedAt,
+            status: "pending",
+            threadId: "thread-1",
+            totalCostMicros: 1_000,
+            totalTokens: 1_500_010,
+            turnId: "turn-live",
+            uncachedInputCostMicros: 0,
+            uncachedInputTokens: 0,
+            usageLineId: "line-live-huge",
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const activeRow = container.querySelector(".pricing-usage-row--active");
+    expect(activeRow).not.toBeNull();
+    expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+    const times = activeRow?.querySelector(".rail-card__times");
+    expect(times?.textContent).toContain("· 1m 5s ·");
+  });
+
   it("shows a finished duration and no Live chip on a completed turn", () => {
     const startedAt = 1_800_000_000_000;
 
