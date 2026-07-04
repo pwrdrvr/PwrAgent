@@ -7,6 +7,11 @@ import {
   estimateOpenAiTokenUsageCost,
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
+import { useEffect, useState } from "react";
+import {
+  formatDurationMs,
+  formatRunningDurationMs,
+} from "../../../lib/format-duration";
 import { formatTimestamp } from "./context-rail-shared";
 import { formatTokenCount } from "./subagent-format";
 
@@ -43,6 +48,13 @@ export function PricingPanel(props: PricingPanelProps) {
     aggregateSummaries(displaySummaries) ?? aggregateUsageLines(displayLines);
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   const pricingTotals = buildPricingRunningTotals(displayLines);
+  const activeTurnId = props.activeTurnId;
+  const hasActiveTurn = displayLines.some((line) =>
+    isActiveLiveTurnUsageLine({ activeTurnId, line }),
+  );
+  // Only tick while a turn is actually live, so completed threads render
+  // static and never spin a 1s interval in the background.
+  const now = useNowWhileActive(hasActiveTurn);
 
   return (
     <section className="context-panel__section">
@@ -134,12 +146,30 @@ export function PricingPanel(props: PricingPanelProps) {
               line,
             });
             const runningTokens = formatUsageLineRunningTokens(line);
+            const isActive = isActiveLiveTurnUsageLine({ activeTurnId, line });
+            const duration = formatUsageLineDuration({ isActive, line, now });
 
             return (
-              <li key={line.usageLineId} className="rail-card pricing-usage-row">
-                <p className="rail-card__title">
-                  {formatUsageLineTitle(line)}
-                </p>
+              <li
+                key={line.usageLineId}
+                className={`rail-card pricing-usage-row${
+                  isActive ? " pricing-usage-row--active" : ""
+                }`}
+              >
+                <div className="pricing-usage-row__header">
+                  <p className="rail-card__title">
+                    {formatUsageLineTitle(line)}
+                  </p>
+                  {isActive ? (
+                    <span className="rail-chip pricing-usage-row__live">
+                      <span
+                        className="rail-chip__dot rail-chip__dot--active"
+                        aria-hidden="true"
+                      />
+                      Live
+                    </span>
+                  ) : null}
+                </div>
                 <p className="rail-card__model">
                   {line.model ?? "Unknown model"}
                   {line.reasoningEffort ? ` · ${line.reasoningEffort}` : ""}
@@ -154,6 +184,7 @@ export function PricingPanel(props: PricingPanelProps) {
                     : ""}
                 </p>
                 <PricingUsageTimestamp
+                  duration={duration}
                   line={line}
                   onScrollToTurn={props.onScrollToTurn}
                 />
@@ -905,6 +936,7 @@ function isHistoricalUsageSummary(line: ThreadUsageLineRecord): boolean {
 }
 
 function PricingUsageTimestamp(props: {
+  duration?: string;
   line: ThreadUsageLineRecord;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
 }) {
@@ -929,9 +961,66 @@ function PricingUsageTimestamp(props: {
       ) : (
         timestamp
       )}
+      {props.duration ? ` · ${props.duration}` : ""}
       {props.line.turnId ? ` · ${props.line.turnId}` : ""}
     </p>
   );
+}
+
+/**
+ * The start-anchored timestamp on each card carries the "when", so the card
+ * pairs it with a single duration rather than a second minute-resolution stop
+ * stamp (two coarse stamps can't reconstruct a sub-minute turn anyway).
+ *
+ * - Live turn: elapsed since start, ticking once per second.
+ * - Finished turn: completedAt − start, in the coarse `2h 3m 4s` style.
+ * - Estimates / historical summaries / sub-agent rollups: no duration — the
+ *   span isn't a single measurable turn.
+ */
+function formatUsageLineDuration(params: {
+  isActive: boolean;
+  line: PricingUsageLine;
+  now: number;
+}): string {
+  const { isActive, line, now } = params;
+  if (
+    line.scope === "monitor" ||
+    isEstimatedUsageGap(line) ||
+    isHistoricalUsageSummary(line)
+  ) {
+    return "";
+  }
+  const start = line.startedAt ?? line.createdAt;
+  if (isActive) {
+    return formatRunningDurationMs(Math.max(0, now - start));
+  }
+  const end = line.completedAt;
+  if (end === undefined || end <= start) {
+    return "";
+  }
+  return formatDurationMs(end - start);
+}
+
+/**
+ * `Date.now()` that re-renders once per second, but only while a live turn is
+ * present. When nothing is active the interval is torn down, so a settled
+ * pricing panel never keeps a timer running.
+ */
+function useNowWhileActive(enabled: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+    setNow(Date.now());
+    const intervalId = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1_000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [enabled]);
+  return now;
 }
 
 function aggregateSummaries(

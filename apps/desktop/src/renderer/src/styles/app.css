@@ -13000,6 +13000,32 @@ textarea,
   user-select: text;
 }
 
+/* The in-progress turn: a calm accent left-stripe + slightly firmer border,
+   reading as "live" without the background wash that would look like a
+   hover/selection state. Pairs with the Live chip in the card header. */
+.pricing-usage-row--active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+
+/* Title + Live chip share the top row; the title wraps/clamps while the
+   chip stays pinned to the right at its natural width. */
+.pricing-usage-row__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pricing-usage-row__header .rail-card__title {
+  min-width: 0;
+}
+
+.pricing-usage-row__live {
+  flex: 0 0 auto;
+}
+
 .pricing-running-total {
   margin: 0;
   color: var(--text-secondary);

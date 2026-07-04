@@ -1541,6 +1541,100 @@ describe("ThreadContextPanel", () => {
     expect(onScrollToTurn).toHaveBeenCalledWith("turn-1", 1_800_000_000_000);
   });
 
+  it("marks the active live turn with a Live chip and a running duration", () => {
+    const startedAt = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt + 65_000);
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      activeTurnId: "turn-live",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 0,
+            cachedInputTokens: 0,
+            createdAt: startedAt,
+            currency: "USD",
+            inputTokens: 100,
+            outputCostMicros: 0,
+            outputTokens: 10,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 0,
+            scope: "turn",
+            source: "live",
+            startedAt,
+            status: "pending",
+            threadId: "thread-1",
+            totalCostMicros: 1_000,
+            totalTokens: 110,
+            turnId: "turn-live",
+            uncachedInputCostMicros: 0,
+            uncachedInputTokens: 100,
+            usageLineId: "line-live",
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const activeRow = container.querySelector(".pricing-usage-row--active");
+    expect(activeRow).not.toBeNull();
+    expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+    const times = activeRow?.querySelector(".rail-card__times");
+    expect(times?.textContent).toContain("· 1m 5s ·");
+  });
+
+  it("shows a finished duration and no Live chip on a completed turn", () => {
+    const startedAt = 1_800_000_000_000;
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      activeTurnId: "turn-other",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 0,
+            cachedInputTokens: 0,
+            completedAt: startedAt + 125_000,
+            createdAt: startedAt,
+            currency: "USD",
+            inputTokens: 100,
+            outputCostMicros: 0,
+            outputTokens: 10,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 0,
+            scope: "turn",
+            source: "live",
+            startedAt,
+            status: "finalized",
+            threadId: "thread-1",
+            totalCostMicros: 1_000,
+            totalTokens: 110,
+            turnId: "turn-done",
+            uncachedInputCostMicros: 0,
+            uncachedInputTokens: 100,
+            usageLineId: "line-done",
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
+    expect(screen.queryByText("Live")).not.toBeInTheDocument();
+    const times = container.querySelector(".rail-card__times");
+    expect(times?.textContent).toContain("· 2m 5s ·");
+  });
+
   it("summarizes pricing rows when provider summaries are absent", () => {
     renderPanel({
       activeTab: "pricing",
