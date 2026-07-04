@@ -757,6 +757,10 @@ export class SqliteOverlayStore {
             output_cost_micros,
             total_cost_micros,
             cumulative_total_cost_micros,
+            observed_cold_replay_count,
+            observed_cold_replay_uncached_tokens,
+            observed_hot_replay_cached_tokens,
+            observed_hot_replay_count,
             updated_at
           ) VALUES (
             @usageLineId,
@@ -801,6 +805,10 @@ export class SqliteOverlayStore {
             @outputCostMicros,
             @totalCostMicros,
             @cumulativeTotalCostMicros,
+            @observedColdReplayCount,
+            @observedColdReplayUncachedTokens,
+            @observedHotReplayCachedTokens,
+            @observedHotReplayCount,
             @updatedAt
           )
           ON CONFLICT(usage_line_id) DO UPDATE SET
@@ -845,6 +853,10 @@ export class SqliteOverlayStore {
             output_cost_micros = excluded.output_cost_micros,
             total_cost_micros = excluded.total_cost_micros,
             cumulative_total_cost_micros = excluded.cumulative_total_cost_micros,
+            observed_cold_replay_count = excluded.observed_cold_replay_count,
+            observed_cold_replay_uncached_tokens = excluded.observed_cold_replay_uncached_tokens,
+            observed_hot_replay_cached_tokens = excluded.observed_hot_replay_cached_tokens,
+            observed_hot_replay_count = excluded.observed_hot_replay_count,
             updated_at = excluded.updated_at`,
         )
         .run(toThreadUsageLineRowParams(line));
@@ -2315,6 +2327,10 @@ type ThreadUsageLineRow = {
   output_cost_micros: number;
   total_cost_micros: number;
   cumulative_total_cost_micros: number | null;
+  observed_cold_replay_count: number | null;
+  observed_cold_replay_uncached_tokens: number | null;
+  observed_hot_replay_cached_tokens: number | null;
+  observed_hot_replay_count: number | null;
   updated_at: number;
 };
 
@@ -2543,6 +2559,10 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     fastMode: typeof line.fastMode === "boolean" ? (line.fastMode ? 1 : 0) : null,
     inputTokens: line.inputTokens,
     model: line.model ?? null,
+    observedColdReplayCount: line.observedColdReplayCount ?? null,
+    observedColdReplayUncachedTokens: line.observedColdReplayUncachedTokens ?? null,
+    observedHotReplayCachedTokens: line.observedHotReplayCachedTokens ?? null,
+    observedHotReplayCount: line.observedHotReplayCount ?? null,
     outputCostMicros: line.outputCostMicros,
     outputTokens: line.outputTokens,
     parentThreadId: line.parentThreadId ?? null,
@@ -2609,6 +2629,23 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
     ...(row.fast_mode !== null ? { fastMode: Boolean(row.fast_mode) } : {}),
     inputTokens: row.input_tokens,
     ...(row.model ? { model: row.model } : {}),
+    ...(row.observed_cold_replay_count !== null
+      ? { observedColdReplayCount: row.observed_cold_replay_count }
+      : {}),
+    ...(row.observed_cold_replay_uncached_tokens !== null
+      ? {
+          observedColdReplayUncachedTokens:
+            row.observed_cold_replay_uncached_tokens,
+        }
+      : {}),
+    ...(row.observed_hot_replay_cached_tokens !== null
+      ? {
+          observedHotReplayCachedTokens: row.observed_hot_replay_cached_tokens,
+        }
+      : {}),
+    ...(row.observed_hot_replay_count !== null
+      ? { observedHotReplayCount: row.observed_hot_replay_count }
+      : {}),
     outputCostMicros: row.output_cost_micros,
     outputTokens: row.output_tokens,
     ...(row.parent_thread_id ? { parentThreadId: row.parent_thread_id } : {}),

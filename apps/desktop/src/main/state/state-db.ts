@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 23;
+export const CURRENT_STATE_DB_USER_VERSION = 24;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -586,6 +586,10 @@ CREATE TABLE IF NOT EXISTS thread_usage_lines (
   output_cost_micros         INTEGER NOT NULL,
   total_cost_micros          INTEGER NOT NULL,
   cumulative_total_cost_micros INTEGER,
+  observed_cold_replay_count   INTEGER,
+  observed_cold_replay_uncached_tokens INTEGER,
+  observed_hot_replay_cached_tokens    INTEGER,
+  observed_hot_replay_count    INTEGER,
   updated_at                 INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_thread
@@ -819,6 +823,15 @@ export class StateDb {
         // the same column/index also live in AUTOMATION_SCHEMA so
         // re-instantiated dbs converge.
         ensureAutomationRunSourceEventKey(db);
+        db.pragma("user_version = 23");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 24) {
+      db.transaction(() => {
+        // Observed context-replay tallies on live turn usage lines. Additive
+        // columns; the same columns also live in THREAD_USAGE_PRICING_SCHEMA so
+        // re-instantiated dbs converge.
+        ensureThreadUsageObservedReplayColumns(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1212,6 +1225,37 @@ function ensureThreadUsagePricingCumulativeColumns(db: BetterSqlite3.Database): 
     {
       name: "cumulative_total_cost_micros",
       sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_total_cost_micros INTEGER",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_lines", column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
+function ensureThreadUsageObservedReplayColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "observed_cold_replay_count",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_cold_replay_count INTEGER",
+    },
+    {
+      name: "observed_cold_replay_uncached_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_cold_replay_uncached_tokens INTEGER",
+    },
+    {
+      name: "observed_hot_replay_cached_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_hot_replay_cached_tokens INTEGER",
+    },
+    {
+      name: "observed_hot_replay_count",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_hot_replay_count INTEGER",
     },
   ];
   for (const column of columns) {

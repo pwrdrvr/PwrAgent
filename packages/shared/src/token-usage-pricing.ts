@@ -54,6 +54,16 @@ export type ThreadUsageLineRecord = {
   fastMode?: boolean;
   inputTokens: number;
   model?: string;
+  // Observed context-replay tallies for a live turn: one replay per model
+  // request within the turn (each carries a fresh `last` breakdown from the
+  // protocol). A replay is "hot" when its input was predominantly cache-served,
+  // else "cold" (cache miss). These are observation-derived — populated only for
+  // turns whose token-usage stream was watched live — and are distinct from the
+  // cumulative* fields. Absent means "not observed", never "zero".
+  observedColdReplayCount?: number;
+  observedColdReplayUncachedTokens?: number;
+  observedHotReplayCachedTokens?: number;
+  observedHotReplayCount?: number;
   outputCostMicros: number;
   outputTokens: number;
   parentThreadId?: string;
