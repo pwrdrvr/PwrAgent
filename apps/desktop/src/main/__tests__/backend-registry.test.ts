@@ -478,6 +478,31 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setThreadForkOrigin: async (settings: {
+      backend: "codex" | "grok";
+      threadId: string;
+      forkSourceThreadId?: string;
+      forkBaselineCaptured?: boolean;
+    }) => {
+      const key = `${settings.backend}:${settings.threadId}`;
+      const current = overlays.get(key) ?? {
+        backend: settings.backend,
+        threadId: settings.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const forkSourceThreadId =
+        settings.forkSourceThreadId?.trim() || current.forkSourceThreadId;
+      const next = {
+        ...current,
+        ...(forkSourceThreadId ? { forkSourceThreadId } : {}),
+        ...(settings.forkBaselineCaptured !== undefined
+          ? { forkBaselineCaptured: settings.forkBaselineCaptured }
+          : {}),
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     setThreadCodexEnvironmentRuntime: async (settings: {
       backend: "codex" | "grok";
       threadId: string;
@@ -12760,6 +12785,198 @@ command = "pnpm dev"
       uncachedInputTokens: 800,
     });
     expect(pricing.lines[0]?.cumulativeTotalCostMicros).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("records inherited fork context as a zero-cost fork-baseline line, once", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-fork": {
+          backend: "codex",
+          threadId: "thread-fork",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-5.5",
+          serviceTier: "standard",
+          // Marks this thread as a fork of thread-parent: its first observed
+          // `total` already includes the copied-in parent context.
+          forkSourceThreadId: "thread-parent",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    // First observed turn of the fork. `last` is this turn; `total` = inherited
+    // fork context + this turn.
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-fork",
+        turnId: "turn-1",
+        tokenUsage: {
+          last_token_usage: {
+            input_tokens: 160_000,
+            cached_input_tokens: 159_104,
+            output_tokens: 6,
+            reasoning_output_tokens: 0,
+            total_tokens: 160_006,
+          },
+          total_token_usage: {
+            input_tokens: 18_961_393,
+            cached_input_tokens: 17_787_776,
+            output_tokens: 46_000,
+            reasoning_output_tokens: 9_979,
+            total_tokens: 19_017_372,
+          },
+        },
+      },
+    });
+
+    const afterTurn1 = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-fork",
+    });
+
+    const forkLines = afterTurn1.lines.filter(
+      (line) => line.scope === "fork-baseline",
+    );
+    expect(forkLines).toHaveLength(1);
+    // Inherited = total − last, priced at $0 (billed on the parent thread).
+    expect(forkLines[0]).toMatchObject({
+      scope: "fork-baseline",
+      source: "backfill",
+      status: "finalized",
+      priceStatus: "priced",
+      model: "gpt-5.5",
+      uncachedInputTokens: 1_172_721,
+      cachedInputTokens: 17_628_672,
+      outputTokens: 45_994,
+      reasoningOutputTokens: 9_979,
+      totalCostMicros: 0,
+      uncachedInputCostMicros: 0,
+      cachedInputCostMicros: 0,
+      outputCostMicros: 0,
+    });
+    expect(forkLines[0]?.cumulativeCachedInputTokens).toBeUndefined();
+
+    // The live turn line still records only this turn's own usage.
+    const turnLine = afterTurn1.lines.find((line) => line.scope === "turn");
+    expect(turnLine).toMatchObject({
+      turnId: "turn-1",
+      uncachedInputTokens: 896,
+      cachedInputTokens: 159_104,
+      outputTokens: 6,
+    });
+
+    const forkOverlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-fork",
+    });
+    expect(forkOverlay?.forkBaselineCaptured).toBe(true);
+
+    // A later turn must not create a second fork-baseline line.
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-fork",
+        turnId: "turn-2",
+        tokenUsage: {
+          last_token_usage: {
+            input_tokens: 5_000,
+            cached_input_tokens: 4_992,
+            output_tokens: 7,
+            reasoning_output_tokens: 0,
+            total_tokens: 5_007,
+          },
+          total_token_usage: {
+            input_tokens: 18_966_393,
+            cached_input_tokens: 17_792_768,
+            output_tokens: 46_007,
+            reasoning_output_tokens: 9_979,
+            total_tokens: 19_022_379,
+          },
+        },
+      },
+    });
+
+    const afterTurn2 = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-fork",
+    });
+    expect(
+      afterTurn2.lines.filter((line) => line.scope === "fork-baseline"),
+    ).toHaveLength(1);
+
+    await registry.close();
+  });
+
+  it("does not record a fork-baseline line for non-fork threads", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-5.5",
+          serviceTier: "standard",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    // A non-fork thread observed late: `total` far exceeds `last`, but there is
+    // no fork origin, so no fork-baseline line is invented.
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-2",
+        tokenUsage: {
+          last_token_usage: {
+            input_tokens: 1_000,
+            cached_input_tokens: 200,
+            output_tokens: 50,
+            reasoning_output_tokens: 10,
+            total_tokens: 1_060,
+          },
+          total_token_usage: {
+            input_tokens: 11_000,
+            cached_input_tokens: 10_200,
+            output_tokens: 500,
+            reasoning_output_tokens: 100,
+            total_tokens: 11_600,
+          },
+        },
+      },
+    });
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(
+      pricing.lines.filter((line) => line.scope === "fork-baseline"),
+    ).toHaveLength(0);
 
     await registry.close();
   });

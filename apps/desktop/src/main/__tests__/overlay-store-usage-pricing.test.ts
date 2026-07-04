@@ -492,6 +492,67 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       }),
     ]);
   });
+
+  it("persists the fork origin marker and round-trips a fork-baseline line", async () => {
+    await store.setThreadForkOrigin({
+      backend: "codex",
+      threadId: "thread-1",
+      forkSourceThreadId: "thread-parent",
+    });
+    let overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(overlay?.forkSourceThreadId).toBe("thread-parent");
+    expect(overlay?.forkBaselineCaptured).toBeUndefined();
+
+    await store.setThreadForkOrigin({
+      backend: "codex",
+      threadId: "thread-1",
+      forkBaselineCaptured: true,
+    });
+    overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    // The fork source must survive a later capture-flag write.
+    expect(overlay?.forkSourceThreadId).toBe("thread-parent");
+    expect(overlay?.forkBaselineCaptured).toBe(true);
+
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        usageLineId: "codex:thread-1:fork-baseline",
+        scope: "fork-baseline",
+        source: "backfill",
+        sourceItemId: "fork-baseline",
+        turnId: undefined,
+        cachedInputTokens: 17_628_672,
+        uncachedInputTokens: 1_172_721,
+        inputTokens: 18_801_393,
+        outputTokens: 46_199,
+        reasoningOutputTokens: 9_979,
+        totalTokens: 18_847_592,
+        cachedInputCostMicros: 0,
+        uncachedInputCostMicros: 0,
+        outputCostMicros: 0,
+        totalCostMicros: 0,
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const forkLine = pricing.lines.find(
+      (line) => line.scope === "fork-baseline",
+    );
+    expect(forkLine).toMatchObject({
+      scope: "fork-baseline",
+      cachedInputTokens: 17_628_672,
+      uncachedInputTokens: 1_172_721,
+      totalCostMicros: 0,
+    });
+  });
 });
 
 function buildUsageLine(

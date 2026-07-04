@@ -878,6 +878,153 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Running total: $0.049 list price · 1.2 Codex Credits")).toBeInTheDocument();
   });
 
+  it("shows a Fork point card and does not re-bill inherited fork context", () => {
+    // Inherited context copied in at the fork point. Its cost was billed on the
+    // parent thread — recorded here as a zero-cost fork-baseline line.
+    const forkBaselineLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-fork-baseline",
+      threadId: "thread-1",
+      scope: "fork-baseline",
+      source: "backfill",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 18_801_393,
+      uncachedInputTokens: 1_172_721,
+      cachedInputTokens: 17_628_672,
+      outputTokens: 46_199,
+      reasoningOutputTokens: 9_979,
+      totalTokens: 18_847_592,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 0,
+      cachedInputCostMicros: 0,
+      outputCostMicros: 0,
+      totalCostMicros: 0,
+      provider: "openai",
+      createdAt: 1_799_999_999_999,
+    };
+    const forkTurn1: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-fork-turn-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 159_821,
+      uncachedInputTokens: 717,
+      cachedInputTokens: 159_104,
+      outputTokens: 6,
+      reasoningOutputTokens: 0,
+      totalTokens: 159_827,
+      priceStatus: "priced",
+      currency: "USD",
+      // Cumulative already includes the inherited fork context.
+      cumulativeUncachedInputTokens: 1_173_438,
+      cumulativeCachedInputTokens: 17_787_776,
+      cumulativeInputTokens: 18_961_214,
+      cumulativeOutputTokens: 46_205,
+      cumulativeReasoningOutputTokens: 9_979,
+      cumulativeTotalTokens: 19_007_419,
+      uncachedInputCostMicros: 80_000,
+      cachedInputCostMicros: 4_000,
+      outputCostMicros: 6_000,
+      totalCostMicros: 90_000,
+      provider: "openai",
+      createdAt: 1_800_000_030_000,
+    };
+    const forkTurn2: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-fork-turn-2",
+      threadId: "thread-1",
+      turnId: "turn-2",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 159_802,
+      uncachedInputTokens: 154_810,
+      cachedInputTokens: 4_992,
+      outputTokens: 7,
+      reasoningOutputTokens: 0,
+      totalTokens: 159_809,
+      priceStatus: "priced",
+      currency: "USD",
+      cumulativeUncachedInputTokens: 1_328_248,
+      cumulativeCachedInputTokens: 17_792_768,
+      cumulativeInputTokens: 19_121_016,
+      cumulativeOutputTokens: 46_212,
+      cumulativeReasoningOutputTokens: 9_979,
+      cumulativeTotalTokens: 19_167_228,
+      uncachedInputCostMicros: 770_000,
+      cachedInputCostMicros: 2_000,
+      outputCostMicros: 8_000,
+      totalCostMicros: 780_000,
+      provider: "openai",
+      createdAt: 1_800_000_060_000,
+    };
+    // Persisted summary rolls the inherited tokens into INPUT (context size) but
+    // its $0 cost keeps the running total to the two real turns only.
+    const summary: ThreadPricingSummary = {
+      backend: "codex",
+      threadId: "thread-1",
+      currency: "USD",
+      inputTokens: 19_121_016,
+      uncachedInputTokens: 1_328_248,
+      cachedInputTokens: 17_792_768,
+      outputTokens: 46_212,
+      reasoningOutputTokens: 9_979,
+      totalTokens: 19_167_228,
+      totalCostMicros: 870_000,
+      usageLineCount: 3,
+      pricedUsageLineCount: 3,
+      unpricedUsageLineCount: 0,
+      provider: "openai",
+      updatedAt: 1_800_000_060_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [forkBaselineLine, forkTurn1, forkTurn2],
+        summaries: [summary],
+      },
+      pricingDisplayOptions: {
+        codexCredits: false,
+        usd: true,
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    // The inherited context renders as a "Fork point" card, not a priced
+    // "Historical usage estimate".
+    expect(screen.getByText("Fork point")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Historical usage estimate"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Inherited from parent thread — billed there, not re-charged here",
+      ),
+    ).toBeInTheDocument();
+    // The inherited token counts are still shown (attributed, not re-charged).
+    expect(
+      screen.getByText(
+        "1,172,721 uncached in · 17,628,672 cached · 46,199 out (9,979 reasoning)",
+      ),
+    ).toBeInTheDocument();
+    // INPUT reflects the full context, including inherited tokens.
+    expect(
+      screen.getByText("1,328,248 uncached, 17,792,768 cached"),
+    ).toBeInTheDocument();
+    // No fabricated cost for the inherited history anywhere in the panel.
+    expect(screen.queryByText(/estimated list price/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/includes estimates/)).not.toBeInTheDocument();
+  });
+
   it("inserts estimated historical gap rows from unexplained cumulative token jumps", () => {
     const firstObservedLine: ThreadUsageLineRecord = {
       backend: "codex",

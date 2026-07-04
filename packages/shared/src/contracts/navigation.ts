@@ -1130,6 +1130,21 @@ export type ThreadOverlayState = {
    * access to the parent transcript or state.
    */
   parentThreadId?: ThreadIdentifier;
+  /**
+   * Set only when this thread was created by forking another thread
+   * (`thread/fork`). Records the source thread the fork inherited its context
+   * from. Distinct from `parentThreadId`, which is an overloaded UI grouping
+   * marker also set by `startThread` grouping, manual reparent, and sub-agent
+   * rollup. Pricing uses this as the authoritative "this thread inherited a
+   * copied-in history" signal so the fork-point context is not re-billed here.
+   */
+  forkSourceThreadId?: ThreadIdentifier;
+  /**
+   * True once the fork-point inherited-usage line (`scope: "fork-baseline"`)
+   * has been persisted for this fork. Guards one-time capture of the inherited
+   * baseline across restarts. Only meaningful when `forkSourceThreadId` is set.
+   */
+  forkBaselineCaptured?: boolean;
   /** Child thread ids in user-curated order, stored on the parent. */
   subthreadOrder?: ThreadIdentifier[];
   /** Persisted disclosure state for the parent's child section. */

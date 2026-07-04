@@ -3330,6 +3330,78 @@ function buildLiveThreadUsageLine(params: {
   };
 }
 
+/**
+ * Build the zero-cost `scope: "fork-baseline"` line representing the context a
+ * thread inherited at its fork point. Carries the inherited token counts (so the
+ * renderer can show what was copied in and absorb it into accounted tokens,
+ * suppressing the invented "Historical usage estimate" gap) but no cost and no
+ * `cumulative*` fields — its cost was billed on the parent thread, not here.
+ * Returns undefined when there are no inherited tokens to attribute.
+ */
+function buildForkBaselineUsageLine(params: {
+  backend: AppServerBackendKind;
+  fastMode?: boolean;
+  inheritedTokenUsage: TaskMonitorTokenUsageBreakdown;
+  model?: string;
+  serviceTier?: string;
+  threadId: string;
+  usageTiming: { completedAt?: number; createdAt?: number; startedAt?: number };
+}): ThreadUsageLineRecord | undefined {
+  const {
+    cachedInputTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+    uncachedInputTokens,
+  } = normalizeTaskMonitorPricingTokens(params.inheritedTokenUsage);
+  if (
+    cachedInputTokens <= 0 &&
+    uncachedInputTokens <= 0 &&
+    outputTokens <= 0 &&
+    reasoningOutputTokens <= 0
+  ) {
+    return undefined;
+  }
+  // Sort just before the first live turn so the Fork point card renders at the
+  // base of the panel and its tokens are accounted before any turn's gap check.
+  const anchorAt =
+    params.usageTiming.startedAt ??
+    params.usageTiming.createdAt ??
+    params.usageTiming.completedAt ??
+    Date.now();
+  return {
+    backend: params.backend,
+    cachedInputCostMicros: 0,
+    cachedInputTokens,
+    createdAt: Math.max(0, anchorAt - 1),
+    currency: "USD",
+    ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
+    inputTokens,
+    ...(params.model ? { model: params.model } : {}),
+    outputCostMicros: 0,
+    outputTokens,
+    // Known cost: $0 to this thread (billed on the parent). "priced" keeps it
+    // out of the unpriced-rows warning.
+    priceStatus: "priced",
+    provider: "openai",
+    reasoningOutputTokens,
+    scope: "fork-baseline",
+    ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
+    settingsConfidence: params.model ? "fallback" : "unknown",
+    settingsSource: "thread-overlay",
+    source: "backfill",
+    sourceItemId: "fork-baseline",
+    status: "finalized",
+    threadId: params.threadId,
+    totalCostMicros: 0,
+    totalTokens,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens,
+    usageLineId: [params.backend, params.threadId, "fork-baseline"].join(":"),
+  };
+}
+
 function readTurnStatus(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || !("status" in value)) {
     return undefined;
@@ -7903,6 +7975,16 @@ export class DesktopBackendRegistry {
               parentThreadId: request.parentThreadId,
             },
           },
+        });
+      }
+      // Record the fork origin so live-usage pricing knows this thread inherited
+      // a copied-in history from `sourceThreadId` and must not re-bill it. This
+      // is distinct from `parentThreadId` (an overloaded UI grouping marker).
+      if (request.sourceThreadId?.trim()) {
+        await this.overlayStore.setThreadForkOrigin?.({
+          backend,
+          threadId: result.threadId,
+          forkSourceThreadId: request.sourceThreadId,
         });
       }
       await this.updateThreadGitBranchMetadata({
@@ -12575,6 +12657,13 @@ export class DesktopBackendRegistry {
   }): {
     cumulativeTokenUsage?: TaskMonitorTokenUsageBreakdown;
     turnTokenUsage: TaskMonitorTokenUsageBreakdown | unknown;
+    /**
+     * The `total − latest` baseline, set only on the call that first seeds it
+     * for a `(thread, turn)`. For a fork's first observed turn this equals the
+     * context copied in at the fork point, which pricing captures as the
+     * inherited (never re-billed) fork baseline.
+     */
+    seededBaselineTokenUsage?: TaskMonitorTokenUsageBreakdown;
   } {
     const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
     if (!records) {
@@ -12596,6 +12685,7 @@ export class DesktopBackendRegistry {
       "live-token-usage",
     ].join(":");
     let baseline = this.liveThreadUsageBaselines.get(key);
+    let seededBaselineTokenUsage: TaskMonitorTokenUsageBreakdown | undefined;
     if (!baseline && records.latestUsage) {
       baseline = subtractTaskMonitorTokenUsage(
         records.totalUsage,
@@ -12603,6 +12693,7 @@ export class DesktopBackendRegistry {
       );
       if (baseline) {
         this.liveThreadUsageBaselines.set(key, baseline);
+        seededBaselineTokenUsage = baseline;
       }
     }
 
@@ -12616,6 +12707,7 @@ export class DesktopBackendRegistry {
         records.latestUsage ??
         records.currentUsage ??
         records.totalUsage,
+      ...(seededBaselineTokenUsage ? { seededBaselineTokenUsage } : {}),
     };
   }
 
@@ -12697,11 +12789,79 @@ export class DesktopBackendRegistry {
     if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
       logUnpricedThreadUsageLine(line);
       await this.overlayStore.upsertThreadUsageLine({ line });
+      await this.captureForkBaselineUsageLine({
+        backend: event.backend,
+        fastMode,
+        inheritedTokenUsage: derivedUsage.seededBaselineTokenUsage,
+        model,
+        overlay,
+        serviceTier,
+        threadId,
+        usageTiming,
+      });
       await this.emitThreadPricingUpdated({
         backend: event.backend,
         threadId: line.parentThreadId ?? line.threadId,
       });
     }
+  }
+
+  /**
+   * On a fork's first observed turn, persist the context copied in at the fork
+   * point as a zero-cost `scope: "fork-baseline"` usage line. That inherited
+   * history was already billed on the parent thread; recording it as a real
+   * (but $0) line stops the renderer from inventing a priced "Historical usage
+   * estimate" gap for it and gives it an explicit "Fork point" card instead.
+   *
+   * Guarded to run at most once per fork via `forkBaselineCaptured`, and only
+   * for threads with a recorded `forkSourceThreadId` — non-fork threads (whose
+   * cumulative-vs-observed gaps are genuinely their own unobserved usage) are
+   * left untouched.
+   */
+  private async captureForkBaselineUsageLine(params: {
+    backend: AppServerBackendKind;
+    fastMode?: boolean;
+    inheritedTokenUsage?: TaskMonitorTokenUsageBreakdown;
+    model?: string;
+    overlay?: ThreadOverlayState;
+    serviceTier?: string;
+    threadId: string;
+    usageTiming: { completedAt?: number; createdAt?: number; startedAt?: number };
+  }): Promise<void> {
+    if (
+      !params.overlay?.forkSourceThreadId ||
+      params.overlay.forkBaselineCaptured ||
+      !params.inheritedTokenUsage ||
+      typeof this.overlayStore.upsertThreadUsageLine !== "function"
+    ) {
+      return;
+    }
+    const forkLine = buildForkBaselineUsageLine({
+      backend: params.backend,
+      fastMode: params.fastMode,
+      inheritedTokenUsage: params.inheritedTokenUsage,
+      model: params.model,
+      serviceTier: params.serviceTier,
+      threadId: params.threadId,
+      usageTiming: params.usageTiming,
+    });
+    if (!forkLine) {
+      // No inherited tokens to attribute (e.g. a fork with an empty parent
+      // context): nothing to show, but still latch the guard so we don't
+      // re-check every subsequent turn.
+      await this.overlayStore.setThreadForkOrigin?.({
+        backend: params.backend,
+        threadId: params.threadId,
+        forkBaselineCaptured: true,
+      });
+      return;
+    }
+    await this.overlayStore.upsertThreadUsageLine({ line: forkLine });
+    await this.overlayStore.setThreadForkOrigin?.({
+      backend: params.backend,
+      threadId: params.threadId,
+      forkBaselineCaptured: true,
+    });
   }
 
   private async recordCodexNativeSubAgentUsage(event: AgentEvent): Promise<void> {

@@ -586,6 +586,11 @@ function formatUsageLineEstimates(params: {
   line: PricingUsageLine;
   lineTotals: PricingRunningLineTotals | undefined;
 }): string | undefined {
+  // Inherited fork context was billed on the parent thread — show the
+  // attribution, never a dollar figure, so it reads as not-re-charged here.
+  if (isForkBaselineLine(params.line)) {
+    return "Inherited from parent thread — billed there, not re-charged here";
+  }
   const estimates: string[] = [];
   if (params.displayOptions.usd) {
     estimates.push(
@@ -612,6 +617,11 @@ function formatUsageLineRunningTotal(params: {
   line: PricingUsageLine;
   lineTotals: PricingRunningLineTotals | undefined;
 }): string | undefined {
+  // The fork-point card carries no incremental cost, so a running-total row on
+  // it is noise — the attribution line already says it isn't charged here.
+  if (isForkBaselineLine(params.line)) {
+    return undefined;
+  }
   const estimates: string[] = [];
   if (params.displayOptions.usd && params.lineTotals?.runningCostMicros !== undefined) {
     estimates.push(
@@ -899,6 +909,9 @@ function formatUsageLineTitle(line: PricingUsageLine): string {
   if (line.scope === "monitor") {
     return "Sub-agent usage";
   }
+  if (isForkBaselineLine(line)) {
+    return "Fork point";
+  }
   if (isEstimatedUsageGap(line)) {
     return "Historical usage estimate";
   }
@@ -939,6 +952,10 @@ function formatUsageLineCreditSuffix(line: PricingUsageLine): string {
 
 function isEstimatedUsageGap(line: ThreadUsageLineRecord): boolean {
   return "estimatedUsageGap" in line && line.estimatedUsageGap === true;
+}
+
+function isForkBaselineLine(line: ThreadUsageLineRecord): boolean {
+  return line.scope === "fork-baseline";
 }
 
 function isHistoricalUsageSummary(line: ThreadUsageLineRecord): boolean {
@@ -1075,6 +1092,11 @@ function estimateCodexCreditsForLine(line: PricingUsageLine):
     }
   | undefined {
   if (line.provider !== "openai") {
+    return undefined;
+  }
+  // Inherited fork context was billed on the parent thread; never estimate
+  // (and never accumulate) credits for it on the fork.
+  if (isForkBaselineLine(line)) {
     return undefined;
   }
   const estimate = estimateOpenAiCodexCreditUsage({
