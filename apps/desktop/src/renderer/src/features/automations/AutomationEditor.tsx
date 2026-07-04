@@ -371,20 +371,29 @@ export function AutomationEditor(props: AutomationEditorProps) {
     ? initialTargetSnapshot?.parentId
     : initialTargetSnapshot?.conversationId;
   useEffect(() => {
-    // On edit, once the provider's authorized groups load, preselect the saved
-    // destination in the dropdown when it matches one. Otherwise
-    // destGroupSelection stays at MANUAL_GROUP_VALUE, selectedDestGroup is
-    // undefined, and the group's friendly title is dropped on re-save. Runs
-    // once (guarded by the ref) and only while still on the saved provider, so
-    // it never overrides a deliberate manual entry or a provider switch.
+    // On edit, preselect the saved destination in the dropdown once it appears
+    // in the provider's authorized groups (which can arrive after mount, or when
+    // the operator authorizes the group via the in-editor capture flow).
+    // Otherwise destGroupSelection stays at MANUAL_GROUP_VALUE, selectedDestGroup
+    // is undefined, and the group's friendly title is dropped on re-save. We only
+    // mark reconciliation done once we actually match, and bail the moment the
+    // user has changed the destination id, so we never override a deliberate
+    // manual entry or a provider switch.
     if (destSelectionReconciledRef.current) return;
     if (!initialTargetSnapshot || !initialDestGroupId) return;
     if (destProvider !== initialTargetSnapshot.channel) return;
-    if (destGroups.length === 0) return;
+    if (destGroupId !== initialDestGroupId) return;
     const match = destGroups.find((group) => group.id === initialDestGroupId);
-    if (match) setDestGroupSelection(match.id);
+    if (!match) return;
+    setDestGroupSelection(match.id);
     destSelectionReconciledRef.current = true;
-  }, [destGroups, destProvider, initialDestGroupId, initialTargetSnapshot]);
+  }, [
+    destGroups,
+    destGroupId,
+    destProvider,
+    initialDestGroupId,
+    initialTargetSnapshot,
+  ]);
 
   const [topicOptions, setTopicOptions] = useState<InboundTopicOption[]>([]);
   const [topicSelection, setTopicSelection] = useState<string>(

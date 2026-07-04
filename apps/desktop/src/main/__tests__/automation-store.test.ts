@@ -635,7 +635,7 @@ describe("AutomationStore", () => {
     ).toBe(2);
   });
 
-  it("round-trips skip metadata and finds throttle markers by reason and coalesced key", () => {
+  it("round-trips skip metadata through the run payload", () => {
     store.createAutomation({
       id: "automation-1",
       backend: "codex",
@@ -656,15 +656,6 @@ describe("AutomationStore", () => {
       id: "r1",
       automationId: "automation-1",
       trigger: "inbound_message",
-      source: {
-        kind: "messaging",
-        sourceEventKey: "first",
-        receivedAt: 1_000,
-        matchedTriggerId: "t",
-        actor: { platformUserId: "B", isBot: true },
-        conversation: { channel: "slack", conversationId: "C1" },
-        message: { text: "ERROR" },
-      },
       now: 1_000,
     });
     store.markRunTerminal({
@@ -672,46 +663,15 @@ describe("AutomationStore", () => {
       status: "skipped",
       skipReason: "rate_limited",
       errorMessage: "throttled",
-      coalescedEventKeys: ["first", "second"],
+      coalescedCount: 7,
       completedAt: 1_000,
       now: 1_000,
     });
 
-    // skipReason + coalescedEventKeys survive the JSON payload round-trip.
+    // skipReason + coalescedCount survive the JSON payload round-trip.
     const stored = store.getRun("r1");
     expect(stored?.skipReason).toBe("rate_limited");
-    expect(stored?.coalescedEventKeys).toEqual(["first", "second"]);
-
-    // Found structurally by reason, not by matching display copy.
-    expect(
-      store.findRecentInboundSkip({
-        automationId: "automation-1",
-        skipReason: "rate_limited",
-        sinceMs: 0,
-      })?.id,
-    ).toBe("r1");
-    expect(
-      store.findRecentInboundSkip({
-        automationId: "automation-1",
-        skipReason: "lane_busy",
-        sinceMs: 0,
-      }),
-    ).toBeUndefined();
-
-    // A coalesced key (not the row's own source_event_key) resolves via the
-    // fallback, so a redelivery of that drop stays idempotent.
-    expect(
-      store.findRunBySourceEventKey({
-        automationId: "automation-1",
-        sourceEventKey: "second",
-      })?.id,
-    ).toBe("r1");
-    expect(
-      store.findRunBySourceEventKey({
-        automationId: "automation-1",
-        sourceEventKey: "unknown",
-      }),
-    ).toBeUndefined();
+    expect(stored?.coalescedCount).toBe(7);
   });
 
   it("reconciles stale local runs on startup without creating catch-up rows", () => {

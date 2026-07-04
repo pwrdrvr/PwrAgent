@@ -42,12 +42,20 @@ const COALESCE_TOTAL_CHAR_BUDGET = 16_000;
 const COALESCE_SUMMARY_CHARS = 500;
 const HOUR_MS = 60 * 60 * 1000;
 
-// Sentinel error message stamped on the skipped run we record when an inbound
-// message is throttled by the hourly rate limit. Consecutive throttled drops
-// coalesce onto a single run carrying this exact message (matched below), so a
-// chatty channel cannot flood the run history and evict real runs.
-export const RATE_LIMIT_SKIP_MESSAGE =
-  "The automation hit its hourly run limit, so new inbound messages are being dropped.";
+// Throttled inbound drops coalesce onto one visible skipped run per automation
+// per wall-clock hour. The run id is derived deterministically from the hour
+// bucket so a burst is found with an O(1) primary-key lookup (no scan) and can
+// never flood the run history: at most one marker per automation per hour.
+const THROTTLE_MARKER_PREFIX = "automation-throttle:";
+
+function throttleMarkerId(automationId: string, now: number): string {
+  return `${THROTTLE_MARKER_PREFIX}${automationId}:${Math.floor(now / HOUR_MS)}`;
+}
+
+export function throttleSkipMessage(droppedCount: number): string {
+  const noun = droppedCount === 1 ? "message" : "messages";
+  return `The automation hit its hourly run limit; ${droppedCount} inbound ${noun} dropped this hour.`;
+}
 
 export class AutomationScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -203,12 +211,7 @@ export class AutomationScheduler {
     // record a skipped run so the drop is visible in the run list; because it is
     // skipped it does not count toward the rate (see countRecentInboundRuns).
     if (!this.isInboundRunWithinRate(params.automation, now)) {
-      this.noteThrottledInboundRun(
-        params.automation,
-        params.source,
-        createInboundRun,
-        now,
-      );
+      this.noteThrottledInboundRun(params.automation, params.source, now);
       return undefined;
     }
 
@@ -291,7 +294,6 @@ export class AutomationScheduler {
   private noteThrottledInboundRun(
     automation: AutomationRecord,
     source: AutomationRunSourceMetadata,
-    createInboundRun: () => AutomationRunSummary | undefined,
     now: number,
   ): void {
     automationSchedulerLog.info("inbound automation run throttled by rate limit", {
@@ -300,38 +302,31 @@ export class AutomationScheduler {
       maxRunsPerHour: resolveAutomationRunsPerHour(automation.maxRunsPerHour),
     });
 
-    const eventKey = source.sourceEventKey;
-    // Surface the drop in the run list, coalescing onto the automation's active
-    // in-window throttle marker. The marker is found structurally by skipReason
-    // (not by matching display copy) and independently of the newest run overall
-    // (a real run finishing bumps its updated_at above the marker), so a burst
-    // collapses to one freshly-timestamped row rather than spawning a new marker
-    // each time a concurrent run transitions. The marker accumulates every
-    // coalesced message's key so a redelivery of any of them stays idempotent.
-    const marker = this.options.store.findRecentInboundSkip({
-      automationId: automation.id,
-      skipReason: "rate_limited",
-      sinceMs: now - HOUR_MS,
-    });
-    if (marker) {
-      const keys = new Set(marker.coalescedEventKeys ?? []);
-      if (eventKey) keys.add(eventKey);
-      this.options.store.markRunTerminal({
-        runId: marker.id,
-        status: "skipped",
-        skipReason: "rate_limited",
-        errorMessage: RATE_LIMIT_SKIP_MESSAGE,
-        completedAt: now,
-        coalescedEventKeys: [...keys],
+    // Coalesce every drop in this wall-clock hour onto one deterministic marker,
+    // found by primary key (no scan). A bounded count — not a per-message key
+    // list — records the size of the drop. The provider adapters already ack and
+    // dedupe inbound events, so a throttled message is not redelivered to the
+    // scheduler and no per-drop idempotency is needed here.
+    const markerId = throttleMarkerId(automation.id, now);
+    const existing = this.options.store.getRun(markerId);
+    const droppedCount = (existing?.coalescedCount ?? 0) + 1;
+    if (!existing) {
+      const created = this.options.store.createRun({
+        id: markerId,
+        automationId: automation.id,
+        trigger: "inbound_message",
+        source,
         now,
       });
-      return;
+      if (!created) return;
     }
-
-    this.recordInboundSkip(createInboundRun, {
+    this.options.store.markRunTerminal({
+      runId: markerId,
+      status: "skipped",
       skipReason: "rate_limited",
-      errorMessage: RATE_LIMIT_SKIP_MESSAGE,
-      coalescedEventKeys: eventKey ? [eventKey] : undefined,
+      errorMessage: throttleSkipMessage(droppedCount),
+      completedAt: now,
+      coalescedCount: droppedCount,
       now,
     });
   }
@@ -347,7 +342,6 @@ export class AutomationScheduler {
     opts: {
       skipReason: AutomationRunSkipReason;
       errorMessage: string;
-      coalescedEventKeys?: string[];
       now: number;
     },
   ): void {
@@ -359,7 +353,6 @@ export class AutomationScheduler {
       completedAt: opts.now,
       errorMessage: opts.errorMessage,
       skipReason: opts.skipReason,
-      coalescedEventKeys: opts.coalescedEventKeys,
       now: opts.now,
     });
   }

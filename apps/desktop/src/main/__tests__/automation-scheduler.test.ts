@@ -4,10 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
 import { ThreadQueueAutomationRunner } from "../automations/automation-runner";
-import {
-  AutomationScheduler,
-  RATE_LIMIT_SKIP_MESSAGE,
-} from "../automations/automation-scheduler";
+import { AutomationScheduler } from "../automations/automation-scheduler";
 import { AutomationStore } from "../automations/automation-store";
 import type { AutomationGateRunner } from "../automations/automation-gate-runner";
 import { StateDb } from "../state/state-db";
@@ -718,17 +715,17 @@ describe("AutomationScheduler", () => {
 
     const runs = store.listRunsForAutomation("automation-rl");
     const skipped = runs.filter((run) => run.status === "skipped");
-    // The four drops collapse onto a single throttle marker, not four rows.
+    // The four drops collapse onto a single throttle marker carrying the count.
     expect(skipped).toHaveLength(1);
-    expect(skipped[0]?.errorMessage).toBe(RATE_LIMIT_SKIP_MESSAGE);
     expect(skipped[0]?.skipReason).toBe("rate_limited");
+    expect(skipped[0]?.coalescedCount).toBe(4);
     // Exactly one started run plus the single throttle marker.
     expect(runs).toHaveLength(2);
   });
 
   it("keeps coalescing throttle drops after a real run finishes", async () => {
-    // A finished real run has a newer updated_at than the throttle marker, so
-    // coalescing must find the marker by skipReason, not by "newest run".
+    // The marker is keyed by the wall-clock hour, so an intervening finished run
+    // never causes a second marker within the same hour.
     const automation = store.createAutomation({
       id: "automation-rl",
       backend: "codex",
@@ -782,56 +779,7 @@ describe("AutomationScheduler", () => {
       .listRunsForAutomation("automation-rl")
       .filter((run) => run.status === "skipped");
     expect(skipped).toHaveLength(1);
-  });
-
-  it("keeps a redelivered coalesced throttle drop idempotent", async () => {
-    // A coalesced drop never gets its own row, but its key is recorded on the
-    // marker so a redelivery (even after the cap frees up) does not start a run.
-    const automation = store.createAutomation({
-      id: "automation-rl",
-      backend: "codex",
-      threadId: "thread-1",
-      name: "Rate limited",
-      taskPrompt: "Triage.",
-      inboundCoalesceWindowMs: 0,
-      maxRunsPerHour: 1,
-      triggers: [
-        {
-          id: "t",
-          kind: "inbound_message",
-          conversation: { channel: "slack", conversationId: "C123" },
-          textFilter: { mode: "contains", text: "ERROR" },
-        },
-      ],
-      now: 0,
-    });
-    const scheduler = buildScheduler();
-    const src = (key: string) => ({
-      kind: "messaging" as const,
-      sourceEventKey: key,
-      receivedAt: now,
-      matchedTriggerId: "t",
-      actor: { platformUserId: "B123", isBot: true },
-      conversation: { channel: "slack" as const, conversationId: "C123" },
-      message: { text: "ERROR" },
-    });
-
-    now = 1_000;
-    await scheduler.runFromInboundEvent({ automation, source: src("real"), now });
-    await scheduler.runFromInboundEvent({ automation, source: src("drop-1"), now });
-    await scheduler.runFromInboundEvent({ automation, source: src("drop-2"), now });
-    const startedBefore = store
-      .listRunsForAutomation("automation-rl")
-      .filter((run) => run.status !== "skipped").length;
-
-    // Advance past the rolling hour so the cap has freed up, then redeliver the
-    // coalesced drop. Without the coalesced-key check it would start a run.
-    now = 1_000 + 60 * 60 * 1000 + 1;
-    await scheduler.runFromInboundEvent({ automation, source: src("drop-2"), now });
-    const startedAfter = store
-      .listRunsForAutomation("automation-rl")
-      .filter((run) => run.status !== "skipped").length;
-    expect(startedAfter).toBe(startedBefore);
+    expect(skipped[0]?.coalescedCount).toBe(2);
   });
 
   it("does not count idempotent redeliveries or duplicate-trigger matches toward the rate", async () => {

@@ -452,11 +452,11 @@ export type AutomationRunSummary = {
   /** Set on `skipped` runs to explain the skip without matching display copy. */
   skipReason?: AutomationRunSkipReason;
   /**
-   * Source-event keys a `rate_limited` throttle marker has absorbed by
-   * coalescing. Lets a redelivery of any coalesced drop stay idempotent even
-   * though it never got its own run row.
+   * How many inbound messages a `rate_limited` throttle marker has absorbed by
+   * coalescing (a bounded count, not a per-message list). Surfaced in the run
+   * list so the operator sees the size of the drop, e.g. "N messages dropped".
    */
-  coalescedEventKeys?: string[];
+  coalescedCount?: number;
   source?: AutomationRunSourceMetadata;
 };
 
