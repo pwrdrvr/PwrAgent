@@ -24,6 +24,18 @@ The desktop style guide defines:
 - copy rules
 - anti-patterns
 
+## Code Formatting & Linting
+
+ESLint is the correctness linter — run `pnpm lint:eslint` (CI runs it too) and
+fix its errors; **don't run `eslint --fix` to reformat**. There is no
+autoformatter by design: **never run Prettier (`npx prettier` /
+`prettier --write`)** on a renderer or main-process file — no config is
+committed, so `npx` applies tool defaults that fight the hand-maintained house
+style (notably leading binary operators) and reformat untouched code. Match the
+surrounding file by hand. See "Code Formatting & Linting" in the
+[repo-root `AGENTS.md`](../../AGENTS.md) for the full rule and the house-style
+summary.
+
 ## Non-Negotiables
 
 - Inbox, Recents, and Directories live in one thread lens switch; Inbox is the

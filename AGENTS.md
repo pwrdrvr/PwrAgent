@@ -31,6 +31,48 @@
 - To regenerate the README screenshots under `docs/assets/screenshots/`, run `pnpm --filter @pwragent/desktop screenshot:readme`. The full walkthrough (spec, fixtures, state-seeding helpers, native capture utilities) lives in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) under "Capturing README Screenshots". macOS Screen Recording permission is required for whichever terminal/IDE runs the spec.
 - When focusing root Vitest runs through `pnpm test`, pass file paths or filters directly, for example `pnpm test packages/agent-core/src/__tests__/overlay-store.test.ts`. Do not insert a standalone `--` before the focus args; `pnpm test -- packages/...` makes Vitest run the full workspace suite.
 
+## Code Formatting & Linting
+
+**There is a linter (ESLint) but no autoformatter — and that split is
+deliberate. Run ESLint; hand-format; never run Prettier.**
+
+- **ESLint is adopted — as a correctness linter, not a formatter.** Run
+  `pnpm lint:eslint` (CI's `Lint` job runs it too, alongside `lint:sql`,
+  `lint:codex-storage`, `lint:colors`, `licenses:check`, `typecheck`, and
+  `lint:boundaries`). The config is [`eslint.config.mjs`](eslint.config.mjs):
+  typescript-eslint recommended + classic react-hooks (scoped to the renderer),
+  **no stylistic rules**. Fix the errors it reports. A block of pre-existing
+  findings (`no-explicit-any`, `exhaustive-deps`, and intentional patterns) is
+  set to `warn` as a burn-down baseline — CI blocks on errors, not warnings.
+  Do NOT add stylistic/whitespace rules and do NOT run `eslint --fix` to
+  reformat code: formatting is not ESLint's job here.
+- **Prettier is deliberately absent.** No dependency, no `.prettierrc`, no
+  `format` script, no CI formatting step. **Never run `npx prettier` or
+  `prettier --write` on repo files.** Because no config is committed, `npx`
+  downloads Prettier and applies its built-in defaults, which fight this repo's
+  hand-maintained house style and reformat large spans of untouched code. On
+  PR #934 a single `npx prettier --write` on one file rewrote ~90 unrelated
+  lines around a 3-line change, bloating the diff and muddying `git blame`. A
+  full-tree Prettier reformat was evaluated (it touched ~77% of files) and
+  declined; don't reintroduce it ad hoc.
+- **Match the surrounding code by hand.** The house style (verify against
+  neighbors, don't assume): double quotes, 2-space indent, semicolons, trailing
+  commas on multi-line literals, and **leading binary operators** on wrapped
+  expressions — the operator starts the continuation line:
+
+  ```ts
+  const ok =
+    isAllowed(char)
+    || SAFE_PUNCTUATION.has(char)
+    || isDigit(char);
+  ```
+
+  Prettier's default flips these to trailing operators; there are 500+ leading-
+  operator lines in the tree, so a default run is pure churn. Format new code to
+  look like its neighbors.
+- Keep diffs scoped to your actual change. If a file is already inconsistent,
+  leave the untouched lines alone rather than "tidying" them.
+
 ## Agent Instruction Files
 
 - Keep a sibling `CLAUDE.md` symlink next to every `AGENTS.md`, pointing at that `AGENTS.md`, so Codex and Claude read the same local guidance.
