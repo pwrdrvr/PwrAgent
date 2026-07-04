@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.0-beta.42 - 2026-07-04
+
+- Updates - Fixed macOS restart-to-update so Squirrel.Mac can finish swapping the downloaded app before PwrAgent quits or relaunches, preventing relaunch into the old version or exiting without applying the update.
+- Release Publishing - Fixed prerelease-tagged builds so future beta releases are born as GitHub `Pre-release` instead of accidentally becoming Latest before operator promotion.
+- Dependencies - Refreshed production AI and messaging SDK dependencies, including AI SDK, xAI, Feishu/Lark, LINE, and Mattermost packages.
+
 ## v1.0.0-beta.41 - 2026-07-03
 
 - Inbound Automations - Added Slack and Telegram message-triggered automations with provider/conversation pickers, sender and text filters, live preview, task prompts, and reply-to-source or Agent-context-only results.
