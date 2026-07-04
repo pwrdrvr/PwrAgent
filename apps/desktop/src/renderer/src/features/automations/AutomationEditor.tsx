@@ -366,6 +366,26 @@ export function AutomationEditor(props: AutomationEditorProps) {
     (group) => group.id === destGroupSelection,
   );
 
+  const destSelectionReconciledRef = useRef(false);
+  const initialDestGroupId = initialTargetIsTopic
+    ? initialTargetSnapshot?.parentId
+    : initialTargetSnapshot?.conversationId;
+  useEffect(() => {
+    // On edit, once the provider's authorized groups load, preselect the saved
+    // destination in the dropdown when it matches one. Otherwise
+    // destGroupSelection stays at MANUAL_GROUP_VALUE, selectedDestGroup is
+    // undefined, and the group's friendly title is dropped on re-save. Runs
+    // once (guarded by the ref) and only while still on the saved provider, so
+    // it never overrides a deliberate manual entry or a provider switch.
+    if (destSelectionReconciledRef.current) return;
+    if (!initialTargetSnapshot || !initialDestGroupId) return;
+    if (destProvider !== initialTargetSnapshot.channel) return;
+    if (destGroups.length === 0) return;
+    const match = destGroups.find((group) => group.id === initialDestGroupId);
+    if (match) setDestGroupSelection(match.id);
+    destSelectionReconciledRef.current = true;
+  }, [destGroups, destProvider, initialDestGroupId, initialTargetSnapshot]);
+
   const [topicOptions, setTopicOptions] = useState<InboundTopicOption[]>([]);
   const [topicSelection, setTopicSelection] = useState<string>(
     initialIsTopic ? MANUAL_GROUP_VALUE : "",
