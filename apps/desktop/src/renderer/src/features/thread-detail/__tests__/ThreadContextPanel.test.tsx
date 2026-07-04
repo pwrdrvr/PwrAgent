@@ -108,7 +108,6 @@ type PanelOverrides = Partial<
   Pick<
     ComponentProps<typeof ThreadContextPanel>,
     | "activeTab"
-    | "activeTurnId"
     | "backends"
     | "desktopApi"
     | "pinned"
@@ -994,7 +993,7 @@ describe("ThreadContextPanel", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows estimated cold and hot context replay counts on pricing cards", () => {
+  it("renders observed cold and hot context replay counts on pricing cards", () => {
     const line: ThreadUsageLineRecord = {
       backend: "codex",
       usageLineId: "line-context-replays",
@@ -1002,7 +1001,7 @@ describe("ThreadContextPanel", () => {
       turnId: "turn-context-replays",
       scope: "turn",
       source: "live",
-      status: "finalized",
+      status: "pending",
       model: "gpt-5.5",
       inputTokens: 550_000,
       uncachedInputTokens: 100_000,
@@ -1016,44 +1015,31 @@ describe("ThreadContextPanel", () => {
       cachedInputCostMicros: 225_000,
       outputCostMicros: 75_000,
       totalCostMicros: 800_000,
+      observedColdReplayCount: 1,
+      observedColdReplayUncachedTokens: 100_000,
+      observedHotReplayCount: 5,
+      observedHotReplayCachedTokens: 450_000,
       provider: "openai",
       createdAt: 1_800_000_000_000,
     };
 
     renderPanel({
       activeTab: "pricing",
-      activeTurnId: "turn-context-replays",
       pinned: true,
       pricing: {
         lines: [line],
-        summaries: [
-          {
-            backend: "codex",
-            cachedInputTokens: 450_000,
-            currency: "USD",
-            inputTokens: 550_000,
-            outputTokens: 2_000,
-            pricedUsageLineCount: 1,
-            provider: "openai",
-            reasoningOutputTokens: 500,
-            threadId: "thread-1",
-            totalCostMicros: 800_000,
-            totalTokens: 552_500,
-            uncachedInputTokens: 100_000,
-            unpricedUsageLineCount: 0,
-            updatedAt: 1_800_000_000_000,
-            usageLineCount: 1,
-          },
-        ],
+        summaries: [],
       },
       threadPricingSummaryEnabled: true,
     });
 
+    // Single cold replay → attributed-token form, no avg/bucket.
     expect(
       screen.getByText(
         "Estimated cold context replays: 1 (100,000 uncached · $0.50)",
       ),
     ).toBeInTheDocument();
+    // Multiple hot replays → avg + bucket form; avg = tokens / count.
     expect(
       screen.getByText(
         "Estimated hot context replays: 5 (~90,000 cached avg; 450,000 cached bucket · $0.23)",
@@ -1061,12 +1047,63 @@ describe("ThreadContextPanel", () => {
     ).toBeInTheDocument();
   });
 
-  it("hides context replay estimates for inactive persisted pricing rows", () => {
+  it("shows observed replay counts on a completed turn (no active turn needed)", () => {
+    // Regression guard for the #871 complaint: a finished turn keeps the counts
+    // it observed live rather than losing them once it is no longer active.
     const line: ThreadUsageLineRecord = {
       backend: "codex",
-      usageLineId: "line-inactive-context-replays",
+      usageLineId: "line-completed-context-replays",
       threadId: "thread-1",
-      turnId: "turn-inactive-context-replays",
+      turnId: "turn-completed-context-replays",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 159_821,
+      uncachedInputTokens: 717,
+      cachedInputTokens: 159_104,
+      outputTokens: 6,
+      reasoningOutputTokens: 0,
+      totalTokens: 159_827,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 4_000,
+      cachedInputCostMicros: 80_000,
+      outputCostMicros: 100,
+      totalCostMicros: 84_100,
+      observedHotReplayCount: 1,
+      observedHotReplayCachedTokens: 159_104,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(
+      screen.getByText(
+        "Estimated hot context replays: 1 (159,104 cached · $0.080)",
+      ),
+    ).toBeInTheDocument();
+    // No cold replays were observed, so no cold line.
+    expect(
+      screen.queryByText(/Estimated cold context replays/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders no replay estimate for rows without observed replay data", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-unobserved-context-replays",
+      threadId: "thread-1",
+      turnId: "turn-unobserved-context-replays",
       scope: "turn",
       source: "live",
       status: "pending",
@@ -1101,116 +1138,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.queryByText(/Estimated hot context replays/)).not.toBeInTheDocument();
   });
 
-  it("does not add later uncached tail tokens to a cumulative live cold replay estimate", () => {
-    const line: ThreadUsageLineRecord = {
-      backend: "codex",
-      usageLineId: "line-cumulative-live-context-replays",
-      threadId: "thread-1",
-      turnId: "turn-cumulative-live-context-replays",
-      scope: "turn",
-      source: "live",
-      status: "pending",
-      model: "gpt-5.5",
-      inputTokens: 2_014_925,
-      uncachedInputTokens: 205_261,
-      cachedInputTokens: 1_809_664,
-      outputTokens: 2_454,
-      reasoningOutputTokens: 417,
-      totalTokens: 2_017_796,
-      priceStatus: "priced",
-      currency: "USD",
-      cumulativeInputTokens: 7_633_951,
-      cumulativeCachedInputTokens: 7_219_456,
-      cumulativeUncachedInputTokens: 414_495,
-      cumulativeOutputTokens: 9_000,
-      cumulativeReasoningOutputTokens: 1_200,
-      cumulativeTotalTokens: 7_644_151,
-      uncachedInputCostMicros: 2_570_000,
-      cachedInputCostMicros: 905_000,
-      outputCostMicros: 100_000,
-      totalCostMicros: 3_575_000,
-      provider: "openai",
-      createdAt: 1_800_000_000_000,
-    };
-
-    renderPanel({
-      activeTab: "pricing",
-      activeTurnId: "turn-cumulative-live-context-replays",
-      pinned: true,
-      pricing: {
-        lines: [line],
-        summaries: [],
-      },
-      threadPricingSummaryEnabled: true,
-    });
-
-    expect(
-      screen.getByText(
-        "Estimated cold context replays: 1 (201,074 uncached · $2.52)",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Estimated hot context replays: 9 (~201,074 cached avg; 1,809,664 cached bucket · $0.91)",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText(
-        "Estimated cold context replays: 1 (205,261 uncached · $2.57)",
-      ),
-    ).not.toBeInTheDocument();
-  });
-
-  it("splits replay estimates that exceed a plausible context window size", () => {
-    const line: ThreadUsageLineRecord = {
-      backend: "codex",
-      usageLineId: "line-large-context-replays",
-      threadId: "thread-1",
-      turnId: "turn-large-context-replays",
-      scope: "turn",
-      source: "live",
-      status: "finalized",
-      model: "gpt-5.5",
-      inputTokens: 3_714_407,
-      uncachedInputTokens: 453_351,
-      cachedInputTokens: 3_261_056,
-      outputTokens: 13_156,
-      reasoningOutputTokens: 4_891,
-      totalTokens: 3_732_454,
-      priceStatus: "priced",
-      currency: "USD",
-      uncachedInputCostMicros: 2_266_755,
-      cachedInputCostMicros: 1_630_528,
-      outputCostMicros: 543_000,
-      totalCostMicros: 4_440_283,
-      provider: "openai",
-      createdAt: 1_800_000_000_000,
-    };
-
-    renderPanel({
-      activeTab: "pricing",
-      activeTurnId: "turn-large-context-replays",
-      pinned: true,
-      pricing: {
-        lines: [line],
-        summaries: [],
-      },
-      threadPricingSummaryEnabled: true,
-    });
-
-    expect(
-      screen.getByText(
-        "Estimated cold context replays: 2 (~226,676 uncached avg; 453,351 uncached bucket · $2.27)",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Estimated hot context replays: 15 (~217,404 cached avg; 3,261,056 cached bucket · $1.64)",
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it("honors pricing display options for replay estimate costs", () => {
+  it("honors pricing display options for observed replay costs", () => {
     const line: ThreadUsageLineRecord = {
       backend: "codex",
       usageLineId: "line-replay-display-options",
@@ -1232,13 +1160,16 @@ describe("ThreadContextPanel", () => {
       cachedInputCostMicros: 225_000,
       outputCostMicros: 75_000,
       totalCostMicros: 800_000,
+      observedColdReplayCount: 1,
+      observedColdReplayUncachedTokens: 100_000,
+      observedHotReplayCount: 5,
+      observedHotReplayCachedTokens: 450_000,
       provider: "openai",
       createdAt: 1_800_000_000_000,
     };
 
     const { rerender } = renderPanel({
       activeTab: "pricing",
-      activeTurnId: "turn-replay-display-options",
       pinned: true,
       pricing: {
         lines: [line],
@@ -1266,7 +1197,6 @@ describe("ThreadContextPanel", () => {
 
     rerender(
       <ThreadContextPanel
-        activeTurnId="turn-replay-display-options"
         activeTab="pricing"
         backends={[baseBackend]}
         onActiveTabChange={() => {}}

@@ -99,6 +99,31 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("round-trips observed context-replay tallies on usage lines", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        observedColdReplayCount: 2,
+        observedColdReplayUncachedTokens: 322_900,
+        observedHotReplayCachedTokens: 672_200,
+        observedHotReplayCount: 4,
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      observedColdReplayCount: 2,
+      observedColdReplayUncachedTokens: 322_900,
+      observedHotReplayCachedTokens: 672_200,
+      observedHotReplayCount: 4,
+    });
+    // Observation-derived tallies must not leak into the priced summary totals.
+    expect(pricing.summaries[0]).not.toHaveProperty("observedColdReplayCount");
+  });
+
   it("keeps the original usage line timestamp when live usage is updated", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({

@@ -2752,7 +2752,7 @@ type TaskMonitorTokenUsageRecords = {
 // protocol reports it as a fresh `last` breakdown while `total.inputTokens`
 // grows by that request's input. A replay is "hot" when its input was
 // predominantly cache-served, else "cold" (cache miss).
-type ObservedContextReplayTally = {
+export type ObservedContextReplayTally = {
   coldReplayCount: number;
   coldReplayUncachedTokens: number;
   hotReplayCachedTokens: number;
@@ -2765,6 +2765,67 @@ type ObservedContextReplayTally = {
 const MIN_OBSERVED_CONTEXT_REPLAY_INPUT_TOKENS = 32_000;
 // A replay counts as "hot" when at least this fraction of its input was cached.
 const OBSERVED_HOT_CACHE_FRACTION = 0.9;
+
+// Pure core of the context-replay accumulator: fold one token-usage update into
+// a running per-turn tally, given the per-thread high-water `cursor` of
+// cumulative `total.inputTokens`. A replay is counted only when the cumulative
+// input grows past the cursor (so duplicate re-emissions and the inherited
+// baseline of a forked thread are ignored), the growing request meets the
+// replay-size floor, and it is classified hot/cold by its own cache split.
+// Returns a fresh tally so callers can treat state immutably.
+export function foldObservedContextReplay(params: {
+  cursor: number | undefined;
+  tally: ObservedContextReplayTally | undefined;
+  tokenUsage: unknown;
+}): {
+  cursor: number | undefined;
+  tally: ObservedContextReplayTally | undefined;
+} {
+  const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
+  const total = records?.totalUsage;
+  const last = records?.latestUsage;
+  if (
+    !total ||
+    typeof total.inputTokens !== "number" ||
+    !last ||
+    typeof last.inputTokens !== "number"
+  ) {
+    return { cursor: params.cursor, tally: params.tally };
+  }
+
+  const lastInput = last.inputTokens;
+  const cursor = params.cursor ?? Math.max(0, total.inputTokens - lastInput);
+  if (total.inputTokens <= cursor) {
+    // Duplicate re-emission or no new request — cumulative input did not grow.
+    return { cursor, tally: params.tally };
+  }
+  if (lastInput < MIN_OBSERVED_CONTEXT_REPLAY_INPUT_TOKENS) {
+    // A new request, but too small to be a full context replay.
+    return { cursor: total.inputTokens, tally: params.tally };
+  }
+
+  const cached =
+    typeof last.cachedInputTokens === "number"
+      ? Math.min(Math.max(0, last.cachedInputTokens), lastInput)
+      : 0;
+  const uncached = Math.max(0, lastInput - cached);
+  const tally: ObservedContextReplayTally = params.tally
+    ? { ...params.tally }
+    : {
+        coldReplayCount: 0,
+        coldReplayUncachedTokens: 0,
+        hotReplayCachedTokens: 0,
+        hotReplayCount: 0,
+      };
+  if (cached >= OBSERVED_HOT_CACHE_FRACTION * lastInput) {
+    tally.hotReplayCount += 1;
+    tally.hotReplayCachedTokens += cached;
+  } else {
+    tally.coldReplayCount += 1;
+    tally.coldReplayUncachedTokens += uncached;
+  }
+  return { cursor: total.inputTokens, tally };
+}
 
 function buildTaskMonitorUsageSnapshot(params: {
   fastMode?: boolean;
@@ -12678,58 +12739,19 @@ export class DesktopBackendRegistry {
     if (!params.turnId) {
       return undefined;
     }
-    const turnKey = [params.backend, params.threadId, params.turnId].join(":");
-    const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
-    const total = records?.totalUsage;
-    const last = records?.latestUsage;
-    if (
-      !total ||
-      typeof total.inputTokens !== "number" ||
-      !last ||
-      typeof last.inputTokens !== "number"
-    ) {
-      // Not enough breakdown to detect a replay this update; preserve any tally
-      // already accumulated for the turn.
-      return this.liveThreadReplayObservations.get(turnKey);
-    }
-
     const threadKey = [params.backend, params.threadId].join(":");
-    const lastInput = last.inputTokens;
-    const prevCursor =
-      this.liveThreadReplayInputCursor.get(threadKey) ??
-      Math.max(0, total.inputTokens - lastInput);
-    if (total.inputTokens <= prevCursor) {
-      // Duplicate re-emission or no new request — cumulative input did not grow.
-      return this.liveThreadReplayObservations.get(turnKey);
+    const turnKey = [params.backend, params.threadId, params.turnId].join(":");
+    const { cursor, tally } = foldObservedContextReplay({
+      cursor: this.liveThreadReplayInputCursor.get(threadKey),
+      tally: this.liveThreadReplayObservations.get(turnKey),
+      tokenUsage: params.tokenUsage,
+    });
+    if (typeof cursor === "number") {
+      this.liveThreadReplayInputCursor.set(threadKey, cursor);
     }
-    this.liveThreadReplayInputCursor.set(threadKey, total.inputTokens);
-
-    if (lastInput < MIN_OBSERVED_CONTEXT_REPLAY_INPUT_TOKENS) {
-      // A new request, but too small to be a full context replay.
-      return this.liveThreadReplayObservations.get(turnKey);
+    if (tally) {
+      this.liveThreadReplayObservations.set(turnKey, tally);
     }
-
-    const cached =
-      typeof last.cachedInputTokens === "number"
-        ? Math.min(Math.max(0, last.cachedInputTokens), lastInput)
-        : 0;
-    const uncached = Math.max(0, lastInput - cached);
-    const tally =
-      this.liveThreadReplayObservations.get(turnKey) ??
-      ({
-        coldReplayCount: 0,
-        coldReplayUncachedTokens: 0,
-        hotReplayCachedTokens: 0,
-        hotReplayCount: 0,
-      } satisfies ObservedContextReplayTally);
-    if (cached >= OBSERVED_HOT_CACHE_FRACTION * lastInput) {
-      tally.hotReplayCount += 1;
-      tally.hotReplayCachedTokens += cached;
-    } else {
-      tally.coldReplayCount += 1;
-      tally.coldReplayUncachedTokens += uncached;
-    }
-    this.liveThreadReplayObservations.set(turnKey, tally);
     return tally;
   }
 
