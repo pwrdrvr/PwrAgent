@@ -721,8 +721,117 @@ describe("AutomationScheduler", () => {
     // The four drops collapse onto a single throttle marker, not four rows.
     expect(skipped).toHaveLength(1);
     expect(skipped[0]?.errorMessage).toBe(RATE_LIMIT_SKIP_MESSAGE);
+    expect(skipped[0]?.skipReason).toBe("rate_limited");
     // Exactly one started run plus the single throttle marker.
     expect(runs).toHaveLength(2);
+  });
+
+  it("keeps coalescing throttle drops after a real run finishes", async () => {
+    // A finished real run has a newer updated_at than the throttle marker, so
+    // coalescing must find the marker by skipReason, not by "newest run".
+    const automation = store.createAutomation({
+      id: "automation-rl",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Rate limited",
+      taskPrompt: "Triage.",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: 1,
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    const src = (key: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: "t",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR" },
+    });
+
+    now = 1_000;
+    await scheduler.runFromInboundEvent({ automation, source: src("real"), now });
+    await scheduler.runFromInboundEvent({ automation, source: src("drop-1"), now });
+
+    // The real run finishes, bumping its updated_at above the throttle marker.
+    const [realRun] = store
+      .listRunsForAutomation("automation-rl")
+      .filter((run) => run.status !== "skipped");
+    now = 2_000;
+    store.markRunTerminal({
+      runId: realRun.id,
+      status: "completed",
+      completedAt: now,
+      now,
+    });
+
+    // A later drop must still coalesce onto the existing marker, not spawn a new
+    // one just because the finished real run is now the newest row.
+    now = 3_000;
+    await scheduler.runFromInboundEvent({ automation, source: src("drop-2"), now });
+    const skipped = store
+      .listRunsForAutomation("automation-rl")
+      .filter((run) => run.status === "skipped");
+    expect(skipped).toHaveLength(1);
+  });
+
+  it("keeps a redelivered coalesced throttle drop idempotent", async () => {
+    // A coalesced drop never gets its own row, but its key is recorded on the
+    // marker so a redelivery (even after the cap frees up) does not start a run.
+    const automation = store.createAutomation({
+      id: "automation-rl",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Rate limited",
+      taskPrompt: "Triage.",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: 1,
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    const src = (key: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: "t",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR" },
+    });
+
+    now = 1_000;
+    await scheduler.runFromInboundEvent({ automation, source: src("real"), now });
+    await scheduler.runFromInboundEvent({ automation, source: src("drop-1"), now });
+    await scheduler.runFromInboundEvent({ automation, source: src("drop-2"), now });
+    const startedBefore = store
+      .listRunsForAutomation("automation-rl")
+      .filter((run) => run.status !== "skipped").length;
+
+    // Advance past the rolling hour so the cap has freed up, then redeliver the
+    // coalesced drop. Without the coalesced-key check it would start a run.
+    now = 1_000 + 60 * 60 * 1000 + 1;
+    await scheduler.runFromInboundEvent({ automation, source: src("drop-2"), now });
+    const startedAfter = store
+      .listRunsForAutomation("automation-rl")
+      .filter((run) => run.status !== "skipped").length;
+    expect(startedAfter).toBe(startedBefore);
   });
 
   it("does not count idempotent redeliveries or duplicate-trigger matches toward the rate", async () => {

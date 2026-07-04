@@ -10,6 +10,7 @@ import type {
   AutomationOutputActionResult,
   AutomationRunArtifact,
   AutomationRunOutputDecision,
+  AutomationRunSkipReason,
   AutomationRunSourceMetadata,
   AutomationRunStatus,
   AutomationRunSummary,
@@ -205,6 +206,8 @@ type AutomationRunPayload = {
   scheduledWindows: AutomationRunWindow[];
   backendThreadId?: string;
   errorMessage?: string;
+  skipReason?: AutomationRunSkipReason;
+  coalescedEventKeys?: string[];
   source?: AutomationRunSourceMetadata;
 };
 
@@ -578,7 +581,50 @@ export class AutomationStore {
       .get(params.automationId, params.sourceEventKey) as
       | AutomationRunRow
       | undefined;
-    return row ? this.runFromRow(row) : undefined;
+    if (row) return this.runFromRow(row);
+    // Fallback: a rate_limited throttle marker may have coalesced this key from
+    // a drop that never got its own row, so a redelivery must still resolve to
+    // it and stay idempotent. Scan the (few, because coalesced) recent skipped
+    // inbound rows and match the coalesced-key list in JS.
+    const skips = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND trigger = 'inbound_message' AND status = 'skipped' ORDER BY updated_at DESC, rowid DESC LIMIT 50",
+      )
+      .all(params.automationId) as AutomationRunRow[];
+    for (const skip of skips) {
+      const run = this.runFromRow(skip);
+      if (run?.coalescedEventKeys?.includes(params.sourceEventKey)) {
+        return run;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Most recently-updated in-window `skipped` inbound run for this automation
+   * carrying `skipReason`. Backs throttle-drop coalescing: it finds the active
+   * rate_limit marker regardless of what the automation's newest run overall is
+   * (a real run finishing bumps its `updated_at` above the marker), so a burst
+   * of drops collapses onto one row instead of spawning a fresh marker each
+   * time a concurrent run transitions.
+   */
+  findRecentInboundSkip(params: {
+    automationId: string;
+    skipReason: AutomationRunSkipReason;
+    sinceMs: number;
+  }): AutomationRunSummary | undefined {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND trigger = 'inbound_message' AND status = 'skipped' AND updated_at >= ? ORDER BY updated_at DESC, rowid DESC LIMIT 50",
+      )
+      .all(params.automationId, params.sinceMs) as AutomationRunRow[];
+    for (const row of rows) {
+      const run = this.runFromRow(row);
+      if (run?.skipReason === params.skipReason) {
+        return run;
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -645,6 +691,8 @@ export class AutomationStore {
     status: Extract<AutomationRunStatus, "completed" | "failed" | "cancelled" | "skipped">;
     completedAt?: number;
     errorMessage?: string;
+    skipReason?: AutomationRunSkipReason;
+    coalescedEventKeys?: string[];
     now?: number;
   }): AutomationRunSummary | undefined {
     const completedAt = params.completedAt ?? params.now ?? Date.now();
@@ -652,6 +700,8 @@ export class AutomationStore {
       status: params.status,
       completedAt,
       errorMessage: params.errorMessage,
+      skipReason: params.skipReason,
+      coalescedEventKeys: params.coalescedEventKeys,
       now: params.now,
     });
     if (!run) return undefined;
@@ -884,6 +934,8 @@ export class AutomationStore {
       backendTurnId?: string;
       queueEntryId?: string;
       errorMessage?: string;
+      skipReason?: AutomationRunSkipReason;
+      coalescedEventKeys?: string[];
       now?: number;
     },
   ): AutomationRunSummary | undefined {
@@ -901,6 +953,8 @@ export class AutomationStore {
       backendThreadId: input.backendThreadId ?? current.backendThreadId,
       backendTurnId: input.backendTurnId ?? current.backendTurnId,
       errorMessage: input.errorMessage ?? current.errorMessage,
+      skipReason: input.skipReason ?? current.skipReason,
+      coalescedEventKeys: input.coalescedEventKeys ?? current.coalescedEventKeys,
     };
     this.upsertRun(nextRun, {
       backend: row.backend,
@@ -1001,6 +1055,8 @@ export class AutomationStore {
       scheduledWindows: run.scheduledWindows,
       backendThreadId: run.backendThreadId,
       errorMessage: run.errorMessage,
+      skipReason: run.skipReason,
+      coalescedEventKeys: run.coalescedEventKeys,
       source: run.source,
     };
     this.stateDb.raw
@@ -1175,6 +1231,8 @@ export class AutomationStore {
       backendThreadId: payload.backendThreadId,
       backendTurnId: row.backend_turn_id ?? undefined,
       errorMessage: payload.errorMessage,
+      skipReason: payload.skipReason,
+      coalescedEventKeys: payload.coalescedEventKeys,
     };
   }
 

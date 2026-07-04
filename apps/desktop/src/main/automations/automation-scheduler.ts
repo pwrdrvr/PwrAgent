@@ -1,6 +1,7 @@
 import type {
   AutomationRunSourceBatchedEntry,
   AutomationGateRunResult,
+  AutomationRunSkipReason,
   AutomationRunSourceMetadata,
   AutomationRunStatus,
   AutomationRunSummary,
@@ -185,19 +186,14 @@ export class AutomationScheduler {
       });
 
     // drop_missed + busy lane records a visible skipped run but starts no
-    // headless turn, so it must NOT consume a rate-limit token.
+    // headless turn, so it must NOT count toward the rate.
     if (active && params.automation.backlogPolicy === "drop_missed") {
-      const dropped = createInboundRun();
-      if (dropped) {
-        this.options.store.markRunTerminal({
-          runId: dropped.id,
-          status: "skipped",
-          completedAt: now,
-          errorMessage:
-            "The automation execution lane was busy when this inbound message arrived.",
-          now,
-        });
-      }
+      this.recordInboundSkip(createInboundRun, {
+        skipReason: "lane_busy",
+        errorMessage:
+          "The automation execution lane was busy when this inbound message arrived.",
+        now,
+      });
       return undefined;
     }
 
@@ -207,7 +203,12 @@ export class AutomationScheduler {
     // record a skipped run so the drop is visible in the run list; because it is
     // skipped it does not count toward the rate (see countRecentInboundRuns).
     if (!this.isInboundRunWithinRate(params.automation, now)) {
-      this.noteThrottledInboundRun(params.automation, createInboundRun, now);
+      this.noteThrottledInboundRun(
+        params.automation,
+        params.source,
+        createInboundRun,
+        now,
+      );
       return undefined;
     }
 
@@ -289,6 +290,7 @@ export class AutomationScheduler {
 
   private noteThrottledInboundRun(
     automation: AutomationRecord,
+    source: AutomationRunSourceMetadata,
     createInboundRun: () => AutomationRunSummary | undefined,
     now: number,
   ): void {
@@ -298,37 +300,68 @@ export class AutomationScheduler {
       maxRunsPerHour: resolveAutomationRunsPerHour(automation.maxRunsPerHour),
     });
 
-    // Surface the drop in the run list. Coalesce onto the automation's most
-    // recent run when it is already an in-window throttle marker so a burst of
-    // dropped messages collapses to a single, freshly-timestamped row instead
-    // of evicting real run history.
-    const latest = this.options.store.getLatestRunForAutomation(automation.id);
-    if (
-      latest &&
-      latest.status === "skipped" &&
-      latest.errorMessage === RATE_LIMIT_SKIP_MESSAGE &&
-      (latest.completedAt ?? 0) >= now - HOUR_MS
-    ) {
+    const eventKey = source.sourceEventKey;
+    // Surface the drop in the run list, coalescing onto the automation's active
+    // in-window throttle marker. The marker is found structurally by skipReason
+    // (not by matching display copy) and independently of the newest run overall
+    // (a real run finishing bumps its updated_at above the marker), so a burst
+    // collapses to one freshly-timestamped row rather than spawning a new marker
+    // each time a concurrent run transitions. The marker accumulates every
+    // coalesced message's key so a redelivery of any of them stays idempotent.
+    const marker = this.options.store.findRecentInboundSkip({
+      automationId: automation.id,
+      skipReason: "rate_limited",
+      sinceMs: now - HOUR_MS,
+    });
+    if (marker) {
+      const keys = new Set(marker.coalescedEventKeys ?? []);
+      if (eventKey) keys.add(eventKey);
       this.options.store.markRunTerminal({
-        runId: latest.id,
+        runId: marker.id,
         status: "skipped",
-        completedAt: now,
+        skipReason: "rate_limited",
         errorMessage: RATE_LIMIT_SKIP_MESSAGE,
+        completedAt: now,
+        coalescedEventKeys: [...keys],
         now,
       });
       return;
     }
 
+    this.recordInboundSkip(createInboundRun, {
+      skipReason: "rate_limited",
+      errorMessage: RATE_LIMIT_SKIP_MESSAGE,
+      coalescedEventKeys: eventKey ? [eventKey] : undefined,
+      now,
+    });
+  }
+
+  /**
+   * Record a dropped inbound message as a visible `skipped` run (which never
+   * started a headless turn, so it does not count toward the hourly rate). The
+   * structured `skipReason` lets callers tell drop kinds apart without matching
+   * display copy.
+   */
+  private recordInboundSkip(
+    createInboundRun: () => AutomationRunSummary | undefined,
+    opts: {
+      skipReason: AutomationRunSkipReason;
+      errorMessage: string;
+      coalescedEventKeys?: string[];
+      now: number;
+    },
+  ): void {
     const dropped = createInboundRun();
-    if (dropped) {
-      this.options.store.markRunTerminal({
-        runId: dropped.id,
-        status: "skipped",
-        completedAt: now,
-        errorMessage: RATE_LIMIT_SKIP_MESSAGE,
-        now,
-      });
-    }
+    if (!dropped) return;
+    this.options.store.markRunTerminal({
+      runId: dropped.id,
+      status: "skipped",
+      completedAt: opts.now,
+      errorMessage: opts.errorMessage,
+      skipReason: opts.skipReason,
+      coalescedEventKeys: opts.coalescedEventKeys,
+      now: opts.now,
+    });
   }
 
   async handleTurnQueueUpdate(params: {
