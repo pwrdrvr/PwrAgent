@@ -66,6 +66,11 @@ vi.mock("../log", () => ({
   })),
 }));
 
+const markUpdateInstallInProgressMock = vi.fn();
+vi.mock("../update-install-state", () => ({
+  markUpdateInstallInProgress: () => markUpdateInstallInProgressMock(),
+}));
+
 async function importAutoUpdater() {
   return await import("../auto-updater");
 }
@@ -143,6 +148,7 @@ describe("auto updater", () => {
     autoUpdaterMock.logger = undefined;
     autoUpdaterMock.on.mockClear();
     autoUpdaterMock.quitAndInstall.mockReset();
+    markUpdateInstallInProgressMock.mockReset();
   });
 
   afterEach(() => {
@@ -373,6 +379,43 @@ describe("auto updater", () => {
     await expect(install?.()).resolves.toEqual({ status: "restarting" });
     expect(requestQuit).toHaveBeenCalledTimes(1);
     expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("latches update-install-in-progress before handing off to quitAndInstall", async () => {
+    const updater = await importAutoUpdater();
+    const callOrder: string[] = [];
+    markUpdateInstallInProgressMock.mockImplementation(() => {
+      callOrder.push("mark");
+    });
+    autoUpdaterMock.quitAndInstall.mockImplementation(() => {
+      callOrder.push("quitAndInstall");
+    });
+    const requestQuit = vi.fn(async (performQuit: () => void) => {
+      performQuit();
+      return true;
+    });
+
+    updater.initAutoUpdater();
+    updater.registerAppUpdateIpcHandlers({ requestQuit });
+    updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
+    const install = ipcHandlers.get("app:install-update");
+
+    await expect(install?.()).resolves.toEqual({ status: "restarting" });
+    // The latch must be set before quitAndInstall so window-all-closed sees it.
+    expect(callOrder).toEqual(["mark", "quitAndInstall"]);
+  });
+
+  it("does not latch update-install-in-progress when quit is cancelled", async () => {
+    const updater = await importAutoUpdater();
+    const requestQuit = vi.fn(async () => false);
+
+    updater.initAutoUpdater();
+    updater.registerAppUpdateIpcHandlers({ requestQuit });
+    updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
+    const install = ipcHandlers.get("app:install-update");
+
+    await install?.();
+    expect(markUpdateInstallInProgressMock).not.toHaveBeenCalled();
   });
 
   it("does not install a downloaded update when quit confirmation is cancelled", async () => {

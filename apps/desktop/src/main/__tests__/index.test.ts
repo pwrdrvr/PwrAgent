@@ -232,6 +232,11 @@ vi.mock("../auto-updater", () => ({
   initAutoUpdater: initAutoUpdaterMock,
 }));
 
+const isUpdateInstallInProgressMock = vi.fn(() => false);
+vi.mock("../update-install-state", () => ({
+  isUpdateInstallInProgress: () => isUpdateInstallInProgressMock(),
+}));
+
 vi.mock("../app-log-window", () => ({
   showAppLogWindow: showAppLogWindowMock,
 }));
@@ -476,6 +481,8 @@ describe("bootstrapApp", () => {
     allowImmediateQuitMock.mockReset();
     isQuitAllowedMock.mockReset();
     isQuitAllowedMock.mockReturnValue(true);
+    isUpdateInstallInProgressMock.mockReset();
+    isUpdateInstallInProgressMock.mockReturnValue(false);
     mainLogInfoMock.mockReset();
     mainLogWarnMock.mockReset();
     mainLogErrorMock.mockReset();
@@ -733,6 +740,24 @@ describe("bootstrapApp", () => {
     });
   });
 
+  it("lets the updater drive relaunch when window-all-closed fires during an update install", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    // quitAndInstall() closes every window as the first step of the Squirrel.Mac
+    // relaunch. If we answered that window-all-closed with our own app.quit()
+    // we would race the native teardown and strand the app on the old version.
+    isUpdateInstallInProgressMock.mockReturnValue(true);
+    requestQuitMock.mockClear();
+
+    appEventHandlers.get("window-all-closed")?.();
+    await flushMicrotasks();
+
+    expect(requestQuitMock).not.toHaveBeenCalled();
+  });
+
   it("creates a main window when a profile focus request arrives without one", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
@@ -988,6 +1013,23 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     appEventHandlers.get("before-quit")?.();
+    appEventHandlers.get("activate")?.();
+
+    expect(createMainWindowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not recreate a window from Dock activation during an update install", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    // The update install closes every window without flipping quitInProgress;
+    // window creation must still be blocked so a Dock click can't boot a fresh
+    // window while Squirrel is swapping the bundle.
+    isUpdateInstallInProgressMock.mockReturnValue(true);
+    getAllWindowsMock.mockReturnValue([]);
+
     appEventHandlers.get("activate")?.();
 
     expect(createMainWindowMock).toHaveBeenCalledTimes(1);
