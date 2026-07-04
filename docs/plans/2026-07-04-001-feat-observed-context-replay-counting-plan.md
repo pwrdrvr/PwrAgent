@@ -286,8 +286,22 @@ step.
   whether observed replays apply to them or only to primary thread turns.
 - **O4** — Persistence: do observed fields round-trip through
   `overlay-store-sqlite` `thread_usage_lines`, or stay transient on the live
-  line only? (Ties to whether completed turns should keep counts across app
-  restart. Leaning: persist the frozen final counts.)
+  line only? **Resolved during implementation:** they must round-trip through
+  `thread_usage_lines` because the renderer reads persisted lines (not the
+  in-memory line), so persistence is required even for the active-turn display.
+  Implemented as four columns + a migration to `user_version` 24.
+  **Known limitation discovered:** `readThread` (every thread open/refresh)
+  calls `persistReplayUsageLines`, which upserts transcript-**hydration** lines
+  that supersede the `source: "live"` line for the same turn
+  (`overlay-store-sqlite` supersede clause). The observed tally is derived data
+  not present in the Codex transcript, so hydration cannot reproduce it and
+  actively hides the line that holds it. Net behavior shipped: observed counts
+  show for the **active turn** and for **completed turns while the thread stays
+  open**, but do **not** survive a thread re-read / app restart. Durable
+  retention would require carrying the tally onto the per-turn record
+  (`thread_usage_turns`, which hydration updates in place) or preserving
+  observed fields through the supersede — tracked as a follow-up, not done in
+  this increment.
 
 ---
 
