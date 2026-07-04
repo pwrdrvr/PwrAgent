@@ -93,11 +93,12 @@ export function MessagingStatusBar(props: {
     () => withConfiguredSettingsStatuses(statuses, settingsSnapshot),
     [settingsSnapshot, statuses],
   );
-  const messagingOn = sessionOverride
-    ?? runtimeMessagingEnabled
-    ?? inferMessagingEnabled(displayStatuses);
+  const messagingOn =
+    sessionOverride ??
+    runtimeMessagingEnabled ??
+    inferMessagingEnabled(displayStatuses);
   const activePlatforms = displayStatuses.filter((status) =>
-    hasRecentActivity(status, activeAtByPlatform[status.platform])
+    hasRecentActivity(status, activeAtByPlatform[status.platform]),
   );
   const hasDegradation = displayStatuses.some(
     (status) => (status.degradationReasons ?? []).length > 0,
@@ -122,17 +123,20 @@ export function MessagingStatusBar(props: {
 
   useEffect(() => {
     if (
-      !props.desktopApi?.getMessagingPlatformStatuses
-      || !props.desktopApi?.readSettings
+      !props.desktopApi?.getMessagingPlatformStatuses ||
+      !props.desktopApi?.readSettings
     ) {
       return;
     }
     let cancelled = false;
-    void props.desktopApi.readSettings({}).then((response) => {
-      if (!cancelled) setSettingsSnapshot(response.snapshot);
-    }).catch(() => {
-      // Settings screen owns user-facing errors; keep this controller quiet.
-    });
+    void props.desktopApi
+      .readSettings({})
+      .then((response) => {
+        if (!cancelled) setSettingsSnapshot(response.snapshot);
+      })
+      .catch(() => {
+        // Settings screen owns user-facing errors; keep this controller quiet.
+      });
     return () => {
       cancelled = true;
     };
@@ -140,18 +144,21 @@ export function MessagingStatusBar(props: {
 
   useEffect(() => {
     if (
-      !open
-      || !props.desktopApi?.getMessagingPlatformStatuses
-      || !props.desktopApi?.readSettings
+      !open ||
+      !props.desktopApi?.getMessagingPlatformStatuses ||
+      !props.desktopApi?.readSettings
     ) {
       return;
     }
     let cancelled = false;
-    void props.desktopApi.readSettings({}).then((response) => {
-      if (!cancelled) setSettingsSnapshot(response.snapshot);
-    }).catch(() => {
-      // Settings screen owns user-facing errors; keep this controller quiet.
-    });
+    void props.desktopApi
+      .readSettings({})
+      .then((response) => {
+        if (!cancelled) setSettingsSnapshot(response.snapshot);
+      })
+      .catch(() => {
+        // Settings screen owns user-facing errors; keep this controller quiet.
+      });
     return () => {
       cancelled = true;
     };
@@ -164,7 +171,9 @@ export function MessagingStatusBar(props: {
       try {
         const response = await props.desktopApi!.getMessagingActivitySummary!();
         if (!cancelled) {
-          setActivityByPlatform(summarizeActivityByPlatform(response.summaries));
+          setActivityByPlatform(
+            summarizeActivityByPlatform(response.summaries),
+          );
         }
       } catch {
         // Activity is best-effort; the full Activity window surfaces errors.
@@ -222,9 +231,9 @@ export function MessagingStatusBar(props: {
       setSessionOverride(result.enabled);
       if (nextEnabled && !result.enabled) {
         setToggleError(
-          result.disabledReason
-            ?? result.overrideReason
-            ?? "Messaging could not be started.",
+          result.disabledReason ??
+            result.overrideReason ??
+            "Messaging could not be started.",
         );
       }
     } catch (error) {
@@ -317,7 +326,10 @@ export function MessagingStatusBar(props: {
             <PlatformGlyph
               key={status.platform}
               status={status}
-              active={hasRecentActivity(status, activeAtByPlatform[status.platform])}
+              active={hasRecentActivity(
+                status,
+                activeAtByPlatform[status.platform],
+              )}
               forcedOff={!messagingOn}
             />
           ))}
@@ -330,73 +342,80 @@ export function MessagingStatusBar(props: {
           role="dialog"
           aria-label="Messaging platforms"
         >
-          <div className="messaging-status-popover__head">
-            <div>
-              <div className="messaging-status-popover__title">
-                Messaging platforms
+          <div className="messaging-status-popover__panel">
+            <div className="messaging-status-popover__head">
+              <div>
+                <div className="messaging-status-popover__title">
+                  Messaging platforms
+                </div>
+                <div className="messaging-status-popover__summary">
+                  {summary}
+                </div>
               </div>
-              <div className="messaging-status-popover__summary">
-                {summary}
-              </div>
+              <button
+                type="button"
+                className={`settings-switch messaging-status-popover__switch${
+                  messagingOn ? " is-on" : ""
+                }`}
+                aria-pressed={messagingOn}
+                disabled={togglePending}
+                onClick={() => {
+                  void handleToggleMessaging();
+                }}
+              >
+                <span aria-hidden="true" className="settings-switch__track">
+                  <span className="settings-switch__thumb" />
+                </span>
+                <span>
+                  {togglePending ? "..." : messagingOn ? "On" : "Off"}
+                </span>
+              </button>
             </div>
-            <button
-              type="button"
-              className={`settings-switch messaging-status-popover__switch${
-                messagingOn ? " is-on" : ""
-              }`}
-              aria-pressed={messagingOn}
-              disabled={togglePending}
-              onClick={() => {
-                void handleToggleMessaging();
-              }}
-            >
-              <span aria-hidden="true" className="settings-switch__track">
-                <span className="settings-switch__thumb" />
-              </span>
-              <span>{togglePending ? "..." : messagingOn ? "On" : "Off"}</span>
-            </button>
+            <div className="messaging-status-popover__rows">
+              {displayStatuses.map((status) => (
+                <PlatformStatusRow
+                  key={status.platform}
+                  status={status}
+                  active={hasRecentActivity(
+                    status,
+                    activeAtByPlatform[status.platform],
+                  )}
+                  activity={activityByPlatform[status.platform]}
+                  forcedOff={!messagingOn}
+                  platformEnabled={platformEnabledFromSnapshot(
+                    settingsSnapshot,
+                    status.platform,
+                  )}
+                  platformTogglePending={
+                    configurablePlatform(status.platform)
+                      ? platformTogglePending[status.platform] === true
+                      : false
+                  }
+                  platformToggleDisabled={!messagingOn}
+                  now={now}
+                  onTogglePlatform={handleTogglePlatform}
+                />
+              ))}
+            </div>
+            {toggleError || platformToggleError ? (
+              <p className="messaging-status-popover__error" role="alert">
+                {toggleError ?? platformToggleError}
+              </p>
+            ) : null}
+            {props.onOpenActivity ? (
+              <button
+                type="button"
+                className="messaging-status-popover__activity"
+                onClick={() => {
+                  setOpen(false);
+                  setPinned(false);
+                  props.onOpenActivity?.();
+                }}
+              >
+                Open Messaging Activity
+              </button>
+            ) : null}
           </div>
-          <div className="messaging-status-popover__rows">
-            {displayStatuses.map((status) => (
-              <PlatformStatusRow
-                key={status.platform}
-                status={status}
-                active={hasRecentActivity(status, activeAtByPlatform[status.platform])}
-                activity={activityByPlatform[status.platform]}
-                forcedOff={!messagingOn}
-                platformEnabled={platformEnabledFromSnapshot(
-                  settingsSnapshot,
-                  status.platform,
-                )}
-                platformTogglePending={
-                  configurablePlatform(status.platform)
-                    ? platformTogglePending[status.platform] === true
-                    : false
-                }
-                platformToggleDisabled={!messagingOn}
-                now={now}
-                onTogglePlatform={handleTogglePlatform}
-              />
-            ))}
-          </div>
-          {toggleError || platformToggleError ? (
-            <p className="messaging-status-popover__error" role="alert">
-              {toggleError ?? platformToggleError}
-            </p>
-          ) : null}
-          {props.onOpenActivity ? (
-            <button
-              type="button"
-              className="messaging-status-popover__activity"
-              onClick={() => {
-                setOpen(false);
-                setPinned(false);
-                props.onOpenActivity?.();
-              }}
-            >
-              Open Messaging Activity
-            </button>
-          ) : null}
         </div>
       ) : null}
     </div>
@@ -455,13 +474,14 @@ function PlatformStatusRow(props: {
   const configurable = configurablePlatform(status.platform)
     ? status.platform
     : undefined;
-  const platformEnabled = props.platformEnabled ?? status.health !== "suspended";
-  const statusLabel = forcedOff || platformEnabled === false
-    ? "Off"
-    : HEALTH_LABEL[status.health];
-  const stateHealth = forcedOff || platformEnabled === false
-    ? "suspended"
-    : status.health;
+  const platformEnabled =
+    props.platformEnabled ?? status.health !== "suspended";
+  const statusLabel =
+    forcedOff || platformEnabled === false
+      ? "Off"
+      : HEALTH_LABEL[status.health];
+  const stateHealth =
+    forcedOff || platformEnabled === false ? "suspended" : status.health;
   const subline = forcedOff
     ? "Globally disabled"
     : formatPlatformSubline(status, now);
@@ -476,8 +496,7 @@ function PlatformStatusRow(props: {
     ...formatPlatformActivity(props.activity, now),
     status.reason,
     ...formatDegradationReasons(status.degradationReasons ?? [], now),
-  ]
-    .filter((line): line is string => Boolean(line));
+  ].filter((line): line is string => Boolean(line));
 
   return (
     <div className="messaging-status-popover__row">
@@ -509,7 +528,9 @@ function PlatformStatusRow(props: {
             }`}
             aria-label={`${platformEnabled ? "Disable" : "Enable"} ${formatMessagingPlatformName(status.platform)}`}
             aria-pressed={platformEnabled}
-            disabled={props.platformTogglePending || props.platformToggleDisabled}
+            disabled={
+              props.platformTogglePending || props.platformToggleDisabled
+            }
             onClick={() => {
               void props.onTogglePlatform(configurable, !platformEnabled);
             }}
@@ -537,8 +558,9 @@ function withConfiguredSettingsStatuses(
 ): MessagingPlatformStatus[] {
   if (!snapshot) return [...runtimeStatuses];
   const seen = new Set(runtimeStatuses.map((status) => status.platform));
-  const configuredFromSettings = CONFIGURABLE_MESSAGING_PLATFORMS
-    .filter((platform) => !seen.has(platform))
+  const configuredFromSettings = CONFIGURABLE_MESSAGING_PLATFORMS.filter(
+    (platform) => !seen.has(platform),
+  )
     .filter((platform) => platformConfiguredFromSnapshot(snapshot, platform))
     .map((platform): MessagingPlatformStatus => ({
       platform,
@@ -613,7 +635,8 @@ function platformEnabledPatch(
 function summarizeActivityByPlatform(
   summaries: readonly MessagingPlatformActivitySummary[],
 ): Partial<Record<MessagingChannelKind, PlatformActivitySummary>> {
-  const next: Partial<Record<MessagingChannelKind, PlatformActivitySummary>> = {};
+  const next: Partial<Record<MessagingChannelKind, PlatformActivitySummary>> =
+    {};
   for (const summary of summaries) {
     next[summary.platform] = {
       lastRequestAt: summary.lastRequestAt,
@@ -707,13 +730,13 @@ function formatPlatformSubline(
   if (status.health === "enabled") {
     return status.lastActivityAt
       ? `Last activity ${formatRelativeTime(status.lastActivityAt, now)}`
-      : status.detail ?? status.account ?? "Listening";
+      : (status.detail ?? status.account ?? "Listening");
   }
   if (status.health === "degraded") {
     const firstReason = status.degradationReasons?.[0];
     return firstReason
       ? formatDegradationReason(firstReason, now)
-      : status.reason ?? "Temporarily constrained";
+      : (status.reason ?? "Temporarily constrained");
   }
   if (status.health === "errored") {
     return status.reason ?? "Connection error";
@@ -737,9 +760,10 @@ function formatDegradationReason(
 ): string {
   const scopeLabel = reason.scope?.label ? ` (${reason.scope.label})` : "";
   const started = `since ${formatClockTime(reason.startedAt)}`;
-  const remaining = "expiresAt" in reason && reason.expiresAt
-    ? `, ${formatRemaining(reason.expiresAt, now)} remaining`
-    : "";
+  const remaining =
+    "expiresAt" in reason && reason.expiresAt
+      ? `, ${formatRemaining(reason.expiresAt, now)} remaining`
+      : "";
   switch (reason.kind) {
     case "rate-limited":
       return `Rate limited${scopeLabel}; ${started}${remaining}${formatRetry(reason.retryAfterMs)}`;

@@ -1396,17 +1396,29 @@ textarea,
 
 .messaging-status-popover {
   position: absolute;
-  top: calc(100% + 8px);
+  /* Anchor flush to the controller (top: 100%) and render the 8px visual gap
+     as transparent padding *inside* this element rather than as a positioning
+     offset. The offset version left an 8px dead zone the pointer crossed on its
+     way down, firing onPointerLeave and closing the popover before the cursor
+     reached it. Keeping the gap inside the box means the hover path stays
+     continuous — and, because this element matches `.messaging-status-bar *`,
+     the strip is already `-webkit-app-region: no-drag`, so it never falls back
+     to the OS title-bar drag region (see the .messaging-status-bar svg note). */
+  top: 100%;
   right: 0;
   z-index: 60;
   width: min(420px, calc(100vw - 32px));
+  padding-top: 8px;
+  text-align: left;
+}
+
+.messaging-status-popover__panel {
   padding: 10px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
   color: var(--text-primary);
-  text-align: left;
 }
 
 .messaging-status-popover__head {
