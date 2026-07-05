@@ -10747,6 +10747,145 @@ describe("MessagingController", () => {
     expect(proseIndex).toBeLessThan(questionnaireIndex);
   });
 
+  it("only flushes setup prose captured under the elicitation's own turn", async () => {
+    const harness = await createHarness({ toolUpdateDefaultMode: "show_none" });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    // Prose is captured under turn-1...
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "msg-setup",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Setup context for turn one.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    // ...but the elicitation belongs to a different turn, so its flush must not
+    // surface turn-1's prose (correlation is by turnId).
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-2",
+        requestId: "request-1",
+        questions: [
+          {
+            id: "q1",
+            header: "Choice",
+            question: "Which one?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Option A", description: "A" },
+              { label: "Option B", description: "B" },
+            ],
+          },
+        ],
+      },
+    } satisfies AppServerPendingRequestNotification);
+
+    expect(
+      harness.delivered.some((intent) => intent.kind === "questionnaire"),
+    ).toBe(true);
+    expect(JSON.stringify(harness.delivered)).not.toContain(
+      "Setup context for turn one.",
+    );
+  });
+
+  it("does not permanently mark setup prose delivered when its flush is skipped", async () => {
+    let dropNextProse = true;
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_none",
+      deliver: async (intent) => {
+        // Simulate a budget skip (no surface) for the FIRST setup-prose flush.
+        if (intent.id.startsWith("assistant-prose") && dropNextProse) {
+          dropNextProse = false;
+          return {
+            channel: "telegram" as const,
+            deliveredAt: 1000,
+            outcome: "discarded" as const,
+          };
+        }
+        delivered.push(intent);
+        return {
+          channel: "telegram" as const,
+          deliveredAt: 1000,
+          outcome: "presented" as const,
+          surface: { channel: "telegram" as const, id: `surface:${intent.id}` },
+        };
+      },
+    });
+    await bindThread(harness);
+    delivered.length = 0;
+    dropNextProse = true;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "msg-setup",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Setup context needing a retry.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    // First elicitation: the prose flush is budget-skipped and must be rolled
+    // back (not recorded as delivered)...
+    for (const requestId of ["request-1", "request-2"] as const) {
+      await harness.controller.handleBackendPendingRequest("codex", {
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId,
+          questions: [
+            {
+              id: "q1",
+              header: "Choice",
+              question: "Which one?",
+              isOther: false,
+              isSecret: false,
+              options: [
+                { label: "Option A", description: "A" },
+                { label: "Option B", description: "B" },
+              ],
+            },
+          ],
+        },
+      } satisfies AppServerPendingRequestNotification);
+    }
+
+    // ...so the second elicitation's flush retries and the setup prose reaches
+    // the channel exactly once. Without the rollback it would be marked
+    // delivered on the skipped attempt and never sent at all.
+    const proseDeliveries = delivered.filter((intent) => {
+      const entry = JSON.stringify(intent);
+      return (
+        entry.includes("Setup context needing a retry.") &&
+        entry.includes('"role":"assistant"')
+      );
+    });
+    expect(proseDeliveries).toHaveLength(1);
+  });
+
   it("does not re-post setup prose the dial already delivered", async () => {
     const harness = await createHarness({ toolUpdateDefaultMode: "show_all" });
     await bindThread(harness);

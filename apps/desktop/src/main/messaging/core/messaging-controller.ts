@@ -245,7 +245,13 @@ const DEFAULT_INPUT_DEBOUNCE_MS = 500;
 // that completed long ago so a long-lived controller does not grow without
 // bound (one entry per automation run).
 const MAX_DELIVERED_AUTOMATION_KEYS = 1_000;
+const MAX_TRACKED_TURN_PROSE = 256;
 const MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS = 15_000;
+
+type MessagingTurnProseState = {
+  latest?: { activityId: string; text: string };
+  deliveredIds: Set<string>;
+};
 const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
 const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
   "You are an Agent thread created from messaging. Keep shared context for the attached messaging surfaces and use available Agent tools when they are relevant.";
@@ -574,7 +580,7 @@ export type MessagingControllerOptions = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   store: MessagingStoreLike;
   streamingResponsesDefault?: boolean;
-  showStreamingOption?: boolean;
+  showStreamingOption?: boolean | (() => boolean | Promise<boolean>);
   responseModeForConversation?: (
     channel: MessagingChannelRef,
   ) => Promise<MessagingResponseMode> | MessagingResponseMode;
@@ -632,19 +638,21 @@ export class MessagingController {
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly logger: MessagingControllerLogger;
   private readonly streamingResponsesDefault: boolean;
-  private readonly showStreamingOption: boolean;
+  private readonly showStreamingOptionConfig:
+    | boolean
+    | (() => boolean | Promise<boolean>);
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
-  // Un-gated per-turn capture of the agent's most recent in-turn (non-final)
-  // prose, keyed by `${bindingId}\0${turnId}`. Written before the Working
-  // Updates dial decides delivery, so an elicitation can flush its setup
-  // message (U7) even when the dial suppressed it. `deliveredProseIds` tracks
-  // which prose activity ids already reached the channel so the flush stays
-  // idempotent.
-  private readonly turnProseCapture = new Map<
-    string,
-    { activityId: string; text: string }
-  >();
-  private readonly deliveredProseIds = new Map<string, Set<string>>();
+  // Per-turn in-turn (non-final) prose bookkeeping, keyed by
+  // `${bindingId}\0${turnId}`:
+  //   - `latest` is the most-recent captured prose block, written before the
+  //     Working Updates dial decides delivery so U7 can flush an elicitation's
+  //     setup message even when the dial (None) suppressed it.
+  //   - `deliveredIds` records which prose activity ids already reached the
+  //     channel (individually, in a batch, or via the flush) so the flush stays
+  //     idempotent and a later batch does not re-post pre-flushed prose.
+  // Bounded so a turn that ends without a clean terminal event to clear it
+  // cannot grow the map without limit.
+  private readonly turnProse = new Map<string, MessagingTurnProseState>();
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
   private readonly pendingFullAccessNewThreadPrompts = new Map<
@@ -691,7 +699,7 @@ export class MessagingController {
     this.deliveryBudget = options.deliveryBudget;
     this.logger = options.logger ?? messagingControllerLog;
     this.streamingResponsesDefault = options.streamingResponsesDefault ?? false;
-    this.showStreamingOption = options.showStreamingOption ?? false;
+    this.showStreamingOptionConfig = options.showStreamingOption ?? false;
     this.turnAdmission = new MessagingTurnAdmission({
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
       now: this.now,
@@ -4998,7 +5006,7 @@ export class MessagingController {
       (await this.resolveToolUpdateDefaultMode());
     const showStreaming = shouldShowStreamingControl(
       effectiveSession.preferences?.streamingResponses ?? "inherit",
-      this.showStreamingOption,
+      await this.resolveShowStreamingOption(),
     );
     await this.options.store.upsertBrowseSession(effectiveSession);
     const intent = buildConfirmationIntent({
@@ -9898,6 +9906,24 @@ export class MessagingController {
     }
   }
 
+  /**
+   * Resolve the global "show streaming option on thread cards" setting. Resolved
+   * live (like {@link resolveToolUpdateDefaultMode}) rather than snapshotted at
+   * construction, so toggling it in Settings takes effect on the next status
+   * render instead of only after a messaging restart.
+   */
+  private async resolveShowStreamingOption(): Promise<boolean> {
+    const configured = this.showStreamingOptionConfig;
+    try {
+      return typeof configured === "function" ? await configured() : configured;
+    } catch (error) {
+      this.logger.debug?.("messaging show-streaming-option resolution failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
   private async retireBindingStatus(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent | undefined,
@@ -10006,7 +10032,7 @@ export class MessagingController {
         ? handoffContextForBinding(binding, snapshot)
         : undefined,
       streamingResponsesDefault: this.streamingResponsesDefault,
-      showStreamingOption: this.showStreamingOption,
+      showStreamingOption: await this.resolveShowStreamingOption(),
       threadState: resolveMessagingThreadState({
         activeTurn,
         binding,
@@ -11405,10 +11431,10 @@ export class MessagingController {
       status: "completed",
       title: assistantText,
     };
-    this.turnProseCapture.set(this.turnProseKey(binding.id, turnId), {
+    this.ensureTurnProseState(this.turnProseKey(binding.id, turnId)).latest = {
       activityId: activity.id,
       text: assistantText,
-    });
+    };
 
     const mode = resolveMessagingToolUpdateMode(
       binding,
@@ -11429,6 +11455,24 @@ export class MessagingController {
     return `${bindingId}\0${turnId}`;
   }
 
+  private ensureTurnProseState(key: string): MessagingTurnProseState {
+    let state = this.turnProse.get(key);
+    if (!state) {
+      state = { deliveredIds: new Set() };
+      this.turnProse.set(key, state);
+      // Backstop the terminal-event cleanup: evict the oldest turn(s) so a run
+      // that ends without a clean terminal event cannot grow the map unbounded.
+      while (this.turnProse.size > MAX_TRACKED_TURN_PROSE) {
+        const oldest = this.turnProse.keys().next().value;
+        if (oldest === undefined) {
+          break;
+        }
+        this.turnProse.delete(oldest);
+      }
+    }
+    return state;
+  }
+
   private markProseActivitiesDelivered(
     delivery: MessagingToolUpdatePolicyDelivery,
   ): void {
@@ -11438,21 +11482,16 @@ export class MessagingController {
     if (proseIds.length === 0) {
       return;
     }
-    const key = this.turnProseKey(delivery.bindingId, delivery.turnId);
-    let delivered = this.deliveredProseIds.get(key);
-    if (!delivered) {
-      delivered = new Set();
-      this.deliveredProseIds.set(key, delivered);
-    }
+    const state = this.ensureTurnProseState(
+      this.turnProseKey(delivery.bindingId, delivery.turnId),
+    );
     for (const id of proseIds) {
-      delivered.add(id);
+      state.deliveredIds.add(id);
     }
   }
 
   private clearTurnProse(bindingId: string, turnId: string): void {
-    const key = this.turnProseKey(bindingId, turnId);
-    this.turnProseCapture.delete(key);
-    this.deliveredProseIds.delete(key);
+    this.turnProse.delete(this.turnProseKey(bindingId, turnId));
   }
 
   private async flushToolUpdatesForBinding(
@@ -11509,14 +11548,15 @@ export class MessagingController {
   private filterUndeliveredProseActivities(
     delivery: MessagingToolUpdatePolicyDelivery,
   ): MessagingToolActivity[] {
-    const delivered = this.deliveredProseIds.get(
+    const state = this.turnProse.get(
       this.turnProseKey(delivery.bindingId, delivery.turnId),
     );
-    if (!delivered) {
+    if (!state) {
       return delivery.activities;
     }
     return delivery.activities.filter(
-      (activity) => activity.kind !== "prose" || !delivered.has(activity.id),
+      (activity) =>
+        activity.kind !== "prose" || !state.deliveredIds.has(activity.id),
     );
   }
 
@@ -11534,33 +11574,31 @@ export class MessagingController {
     if (!turnId) {
       return;
     }
-    const key = this.turnProseKey(binding.id, turnId);
-    const captured = this.turnProseCapture.get(key);
-    if (!captured) {
+    const state = this.turnProse.get(this.turnProseKey(binding.id, turnId));
+    const latest = state?.latest;
+    if (!state || !latest || state.deliveredIds.has(latest.activityId)) {
       return;
-    }
-    let delivered = this.deliveredProseIds.get(key);
-    if (delivered?.has(captured.activityId)) {
-      return;
-    }
-    if (!delivered) {
-      delivered = new Set();
-      this.deliveredProseIds.set(key, delivered);
     }
     // Mark before delivering so a re-entrant elicitation for the same turn does
-    // not double-post the setup message.
-    delivered.add(captured.activityId);
-    await this.deliver(
+    // not double-post the setup message...
+    state.deliveredIds.add(latest.activityId);
+    const result = await this.deliver(
       {
         id: this.newIntentId("assistant-prose"),
         kind: "message",
         bindingId: binding.id,
         createdAt: this.now(),
         role: "assistant",
-        parts: [{ type: "text", text: captured.text, markdown: "markdown" }],
+        parts: [{ type: "text", text: latest.text, markdown: "markdown" }],
       },
       binding,
     );
+    // ...but if the delivery was skipped (e.g. budget-exhausted), roll the mark
+    // back so the setup prose can still ride the turn's coalesced batch rather
+    // than being silently recorded as delivered and filtered out.
+    if (!result.surface) {
+      state.deliveredIds.delete(latest.activityId);
+    }
   }
 
   private async attachThreadHereFromAgentMessagingOrigin(
