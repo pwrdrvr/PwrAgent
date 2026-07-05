@@ -2,7 +2,6 @@ import {
   type ReactNode,
   type ClipboardEvent,
   type DragEvent,
-  type FormEvent as ReactFormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type Ref,
   useEffect,

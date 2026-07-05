@@ -26,7 +26,6 @@ import {
   buildPinnedRanks,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
-  comparePinnedThreads,
   compareThreadsByCreatedAtDesc,
   insertSubthreadIdAfter,
   shortenDerivedThreadTitle,

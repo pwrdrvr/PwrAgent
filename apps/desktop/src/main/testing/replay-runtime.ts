@@ -179,7 +179,7 @@ type ReplayRuntimeClient = {
 };
 
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __PWRAGENT_REPLAY_DRIVER__: ReplayDriver | undefined;
 }
 

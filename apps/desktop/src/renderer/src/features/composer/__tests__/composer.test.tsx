@@ -1497,7 +1497,7 @@ describe("Composer", () => {
   it("keeps the reply input focusable while the send request is pending", async () => {
     let resolveStartTurn: ((value: StartTurnResponse) => void) | undefined;
     const startTurn = vi.fn(
-      (request: StartTurnRequest) =>
+      (_request: StartTurnRequest) =>
         new Promise<StartTurnResponse>((resolve) => {
           resolveStartTurn = resolve;
         })

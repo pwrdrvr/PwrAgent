@@ -98,7 +98,7 @@ export class IntegratedTerminalService {
         shell: shell.file,
         threadKey,
       });
-      throw new Error(message);
+      throw new Error(message, { cause: error });
     }
     const session: TerminalSession = {
       sessionId: randomUUID(),

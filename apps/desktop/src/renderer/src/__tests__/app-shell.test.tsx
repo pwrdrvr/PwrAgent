@@ -1263,27 +1263,6 @@ describe("App", () => {
         turnId: "turn-1"
       })
     );
-    const readThread = vi.fn(
-      async ({
-        backend,
-        threadId
-      }: {
-        backend: "codex" | "grok";
-        threadId: string;
-      }) => ({
-        backend,
-        fetchedAt: Date.now(),
-        threadId,
-        replay: {
-          entries: [],
-          messages: [],
-          pagination: {
-            supportsPagination: false,
-            hasPreviousPage: false
-          }
-        }
-      })
-    );
     let launchpadState = {
       directoryKey: "workspace:new-thread",
       directoryKind: "workspace" as const,

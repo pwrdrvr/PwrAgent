@@ -211,7 +211,7 @@ export class ReplayClient {
     return asThreadReplay(this.controller.consumeResponse("thread/read").result);
   }
 
-  async archiveThread(params: {
+  async archiveThread(_params: {
     threadId: string;
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();

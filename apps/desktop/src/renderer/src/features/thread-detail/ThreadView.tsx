@@ -49,7 +49,6 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import type { PendingForkEnvironmentSetup } from "../../lib/useThreadNavigation";
 import { formatBackendLabel } from "../../lib/backend-label";
-import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer } from "../composer/Composer";
@@ -2927,12 +2926,6 @@ export function ThreadView(props: ThreadViewProps) {
     </section>
   );
 }
-
-function executionModeLabel(mode: ThreadExecutionMode): string {
-  if (mode === "full-access") return "Full Access";
-  return "Default Access";
-}
-
 
 function formatDirectorySync(directory: NavigationDirectorySummary): string | undefined {
   const status = directory.gitStatus;

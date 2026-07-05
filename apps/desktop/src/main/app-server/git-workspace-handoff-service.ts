@@ -11,7 +11,6 @@ import type {
   ThreadWorkspaceHandoffDirection,
   ThreadWorkspaceHandoffStrategy,
   ThreadWorkspaceHandoffStashSummary,
-  WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
 import { computeWorktreePath } from "./git-directory-service";

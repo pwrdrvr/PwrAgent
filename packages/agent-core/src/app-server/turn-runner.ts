@@ -81,7 +81,7 @@ export class TurnRunner {
   ): Promise<void> {
     switch (event.type) {
       case "item_started":
-      case "item_completed":
+      case "item_completed": {
         const item: ThreadReplayItem = stripUndefined({
           id: event.item.id,
           type: event.item.type,
@@ -106,6 +106,7 @@ export class TurnRunner {
           },
         });
         return;
+      }
       case "item_command_output_delta":
         await this.emit({
           method: "item/commandExecution/outputDelta",

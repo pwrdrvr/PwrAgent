@@ -67,7 +67,6 @@ import {
   type DesktopMessagingConfigLoadOptions,
   classifyDesktopMessagingChannelConfigUpdate,
   loadDesktopMessagingConfig,
-  redactDesktopMessagingConfig,
   type DesktopMessagingConfig,
   type DesktopMessagingConfigChannel,
   type DesktopMessagingChannelConfigUpdate,

@@ -300,7 +300,8 @@ function readFocusedDiffTestOverride(
     throw new Error(
       `${FOCUSED_DIFF_TEST_RESPONSE_ENV} must be valid JSON: ${
         error instanceof Error ? error.message : String(error)
-      }`
+      }`,
+      { cause: error }
     );
   }
 

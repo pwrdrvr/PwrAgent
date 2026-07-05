@@ -153,6 +153,7 @@ async function convertWithSips(params: {
       `HEIC/HEIF conversion failed: ${
         error instanceof Error ? error.message : String(error)
       }`,
+      { cause: error },
     );
   } finally {
     await rm(tempDir, { force: true, recursive: true });

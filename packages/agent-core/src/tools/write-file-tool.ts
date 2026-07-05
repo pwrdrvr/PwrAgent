@@ -6,7 +6,7 @@ import {
   readRequiredString,
   requestToolApproval,
 } from "./tool-contract.js";
-import { InvalidToolArgumentsError, ToolExecutionFailure } from "./tool-errors.js";
+import { InvalidToolArgumentsError } from "./tool-errors.js";
 import { resolveWorkspaceFilePath } from "./workspace-paths.js";
 
 const TOOL_NAME = "write_file";

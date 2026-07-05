@@ -550,7 +550,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       try {
         await api.writeSecretsToProfile({ profile: targetProfile, secrets: nonEmpty });
       } catch (caught) {
-        // eslint-disable-next-line no-console
+         
         console.warn(
           `Onboarding: writeSecretsToProfile failed for "${targetProfile}"`,
           caught,
@@ -599,7 +599,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         try {
           await api.shutdownMessagingRuntime();
         } catch (caught) {
-          // eslint-disable-next-line no-console
+           
           console.warn(
             "Onboarding: shutdownMessagingRuntime failed before spawn — "
               + "child process may collide with stale adapters",
@@ -619,7 +619,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       // straight into it. Production builds relaunch reliably, so they
       // keep the spawn-and-switch path below.
       if (import.meta.env.DEV && props.bootInfo?.mode === "bootstrap") {
-        // eslint-disable-next-line no-console
+         
         console.info(
           `Onboarding: profile "${targetProfile}" is set up and ready. Dev mode `
             + "can't open a second app instance, so PwrAgent will exit now — "
@@ -631,7 +631,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           try {
             await api.quitApp();
           } catch (caught) {
-            // eslint-disable-next-line no-console
+             
             console.warn(
               "Onboarding: quitApp after graduation (dev) failed",
               caught,
@@ -643,7 +643,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       try {
         await api.openPwrAgentProfile({ profile: targetProfile });
       } catch (caught) {
-        // eslint-disable-next-line no-console
+         
         console.warn(
           `Onboarding: failed to auto-switch into "${targetProfile}"`,
           caught,
@@ -662,14 +662,14 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             // alive gives the operator a fallback window if the
             // spawn never came up. Bad outcome, but better than
             // both windows gone.
-            // eslint-disable-next-line no-console
+             
             console.warn(
               `Onboarding: spawned "${targetProfile}" didn't report alive within timeout; keeping bootstrap window open`,
             );
             return;
           }
         } catch (caught) {
-          // eslint-disable-next-line no-console
+           
           console.warn(
             "Onboarding: waitForProfileAlive failed; skipping quit",
             caught,
@@ -693,7 +693,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         try {
           await api.quitApp();
         } catch (caught) {
-          // eslint-disable-next-line no-console
+           
           console.warn("Onboarding: quitApp after graduation failed", caught);
         }
       }
@@ -799,7 +799,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
                   targetProfile: switchTo,
                 });
               } catch (caught) {
-                // eslint-disable-next-line no-console
+                 
                 console.warn(
                   `Onboarding: graduateBootstrapConfigToProfile failed for "${switchTo}"`,
                   caught,
@@ -851,7 +851,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               }
               await openTargetAndQuitBootstrapIfNeeded(defaultName);
             } catch (caught) {
-              // eslint-disable-next-line no-console
+               
               console.warn(
                 "Onboarding: shared-default provisioning failed",
                 caught,
@@ -933,7 +933,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       }
       await openTargetAndQuitBootstrapIfNeeded(defaultName);
     } catch (caught) {
-      // eslint-disable-next-line no-console
+       
       console.warn("Onboarding: skipAndUseDefault failed", caught);
     } finally {
       setSubmitting(false);
@@ -1723,7 +1723,7 @@ function BackendRequirementsStep(props: {
     try {
       await props.desktopApi.refreshCodexDiscovery({});
     } catch (caught) {
-      // eslint-disable-next-line no-console
+       
       console.warn("Onboarding: refreshCodexDiscovery failed", caught);
     } finally {
       setRefreshing(false);

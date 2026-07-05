@@ -27,7 +27,6 @@ import type {
   MessagingInboundCallbackEvent,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
-  MessagingJsonValue,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,

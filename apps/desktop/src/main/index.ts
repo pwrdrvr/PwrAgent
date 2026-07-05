@@ -654,7 +654,7 @@ function rejectDevOnlyEnvVarsInProduction(): void {
   ];
   for (const name of devOnlyVars) {
     if (process.env[name] !== undefined) {
-      // eslint-disable-next-line no-console
+       
       console.error(
         `[pwragent] Refusing to honor dev-only env var ${name} in a packaged build. Unsetting.`,
       );

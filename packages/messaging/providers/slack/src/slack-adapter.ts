@@ -22,7 +22,6 @@ import type {
   MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
   MessagingDeliveryScope,
-  MessagingFilePart,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
   MessagingJsonValue,
@@ -52,7 +51,6 @@ import {
   markdownToSlackMrkdwn,
   textForSlackIntent,
   SLACK_SECTION_TEXT_LIMIT,
-  type SlackBlock,
   type SlackPostBody,
 } from "./slack-formatting.ts";
 import {

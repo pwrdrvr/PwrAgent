@@ -167,7 +167,7 @@ describe("ThreadView", () => {
   });
 
   it("renders a directory-less thread with transcript history and context", () => {
-    const { rerender } = render(
+    render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[
@@ -1178,7 +1178,7 @@ describe("ThreadView", () => {
       }
     });
 
-    const { rerender } = render(
+    render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[

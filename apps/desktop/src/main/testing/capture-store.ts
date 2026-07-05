@@ -78,6 +78,7 @@ export async function readProtocolCaptureFile(
     } catch (error) {
       throw new Error(
         `Invalid JSONL record ${index + 1} in ${filePath}: ${String(error)}`,
+        { cause: error },
       );
     }
 
@@ -339,6 +340,7 @@ function parseProtocolCaptureEnvelope(
   } catch (error) {
     throw new Error(
       `Invalid JSON-RPC envelope for sequence ${sequence} in ${filePath}: ${String(error)}`,
+      { cause: error },
     );
   }
 

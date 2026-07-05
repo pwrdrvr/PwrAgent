@@ -11,7 +11,6 @@ import type {
   MessagingSingleSelectIntent,
   MessagingSurfaceDeliveryPolicy,
   MessagingSurfaceRef,
-  MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {

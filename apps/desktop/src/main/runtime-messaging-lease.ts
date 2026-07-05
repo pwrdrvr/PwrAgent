@@ -19,10 +19,7 @@ import type {
   DesktopMessagingConfigLoader,
   DesktopMessagingRuntime,
 } from "./messaging/messaging-runtime";
-import {
-  resolveRuntimeMessagingOverride,
-  type RuntimeMessagingOverride,
-} from "./runtime-flags";
+import { resolveRuntimeMessagingOverride } from "./runtime-flags";
 import { getMainLogger } from "./log";
 
 export const MESSAGING_LEASE_TTL_MS = 30_000;

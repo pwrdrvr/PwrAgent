@@ -19,8 +19,6 @@ type MainProcessHeapReading = {
   peakMallocedMemory: number;
 };
 
-type SessionStub = ReturnType<typeof createSessionStub>;
-
 function createMonitorConfig(
   overrides?: Partial<Extract<ReturnType<typeof resolveHeapMonitorConfig>, { enabled: true }>>,
 ) {

@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { JsonRpcObserver } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";

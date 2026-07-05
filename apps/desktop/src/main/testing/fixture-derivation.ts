@@ -3,7 +3,6 @@ import path from "node:path";
 import type { AppServerNotification } from "@pwragent/shared";
 import {
   readProtocolCaptureFile,
-  type CapturedProtocolEnvelopeRecord,
   type ProtocolCaptureEnvelope,
   type ProtocolCaptureEventRecord,
   type ProtocolCaptureStringReplacement,
@@ -279,7 +278,7 @@ async function readCaptureIndex(
     contents = await fs.readFile(indexPath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(`Capture index not found at ${indexPath}`);
+      throw new Error(`Capture index not found at ${indexPath}`, { cause: error });
     }
     throw error;
   }
@@ -288,7 +287,7 @@ async function readCaptureIndex(
   try {
     parsed = JSON.parse(contents) as unknown;
   } catch (error) {
-    throw new Error(`Invalid capture index ${indexPath}: ${String(error)}`);
+    throw new Error(`Invalid capture index ${indexPath}: ${String(error)}`, { cause: error });
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {

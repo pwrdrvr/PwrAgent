@@ -78,7 +78,6 @@ import type {
   MessagingSurfaceAction,
   MessagingSurfaceRef,
   MessagingSurfaceIntent,
-  MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalItem,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";

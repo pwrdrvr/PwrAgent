@@ -114,7 +114,6 @@ import {
   type CancelThreadExecutionModeQueueResponse,
   type ThreadMessagingBindingTransition,
   type ThreadPermissionTransition,
-  type ThreadPermissionTransitionStatus,
   type ThreadTurnFailure,
   type ThreadAgentMetadata,
   type MessagingThreadBindingSummary,
@@ -161,9 +160,7 @@ import {
   type TrustCodexProjectRequest,
   type TrustCodexProjectResponse,
   type ThreadExecutionMode,
-  type ThreadIdentifier,
   type ThreadOverlayState,
-  type ThreadPricingSummary,
   type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
   type ThreadUsageLineRecord,
@@ -244,7 +241,6 @@ import {
   findUnsupportedCodexExecSessionReference,
   handleTaskMonitorDynamicToolCall,
   isTaskMonitorDynamicToolCall,
-  normalizeHeartbeatIntervalSeconds,
   normalizePollIntervalSeconds,
   normalizePreferredMonitorModel,
   normalizePreferredMonitorReasoningEffort,
@@ -341,7 +337,6 @@ import {
 } from "./codex-environment-hydration-store";
 import {
   ThreadTurnQueue,
-  type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
   type ThreadTurnQueueOrigin,
   type ThreadTurnQueueSubmissionResult,

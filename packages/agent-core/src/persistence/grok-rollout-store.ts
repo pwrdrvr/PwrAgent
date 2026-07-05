@@ -347,7 +347,9 @@ function readRolloutFile(filePath: string): {
     try {
       record = JSON.parse(line) as RolloutRecord;
     } catch (error) {
-      throw new Error(`Invalid JSONL record ${index + 1} in ${filePath}: ${String(error)}`);
+      throw new Error(`Invalid JSONL record ${index + 1} in ${filePath}: ${String(error)}`, {
+        cause: error,
+      });
     }
 
     if (record.type === "message") {

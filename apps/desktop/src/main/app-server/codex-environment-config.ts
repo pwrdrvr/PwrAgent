@@ -286,7 +286,7 @@ function parseMultilineString(
   filePath: string,
 ): { value: string; nextLine: number } {
   const delimiter = rawValue.startsWith("'''") ? "'''" : '"""';
-  let remainder = rawValue.slice(3);
+  const remainder = rawValue.slice(3);
   const sameLineEnd = remainder.indexOf(delimiter);
   if (sameLineEnd >= 0) {
     return {
