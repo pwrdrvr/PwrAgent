@@ -2,7 +2,6 @@ import type {
   MessagingDeliveryScope,
   MessagingRateLimitInfo,
 } from "@pwragent/messaging-interface";
-import { coalesceBackoffMs } from "./messaging-coalesce-backoff.js";
 
 export type MessagingDeliveryPriority =
   | "critical_interactive"
@@ -36,14 +35,6 @@ export type MessagingDeliveryAdmission =
 type ScopeState = {
   coolOffUntil?: number;
   slowModeUntil?: number;
-  // Slow-mode coalescing gate for droppable (routine/tool/stream-partial)
-  // traffic. Rather than dropping every such update while a scope is throttled,
-  // one is released per exponential-backoff window and the rest are coalesced
-  // away. `slowModeReleaseAt` is the next time a droppable update may be
-  // released; `slowModeReleaseCount` drives the backoff. Both reset when slow
-  // mode ends. See {@link coalesceBackoffMs}.
-  slowModeReleaseAt?: number;
-  slowModeReleaseCount: number;
   timestamps: number[];
 };
 
@@ -101,25 +92,6 @@ export class MessagingDeliveryBudget {
     }
 
     if (slowMode && SLOW_MODE_DROP_PRIORITIES.has(request.priority)) {
-      // Coalesce droppable traffic instead of dropping it outright: release one
-      // update per exponential-backoff window (~400ms → 1s → 2s → ... → 16s)
-      // and buffer/drop the rest. This keeps periodic progress flowing during
-      // slow mode without re-tripping the provider rate limit. Non-capacity
-      // probes (consumeCapacity === false) only observe — they neither open the
-      // coalescing window nor consume a release.
-      if (request.consumeCapacity !== false) {
-        if (state.slowModeReleaseAt !== undefined && state.slowModeReleaseAt <= now) {
-          state.slowModeReleaseCount += 1;
-          state.slowModeReleaseAt = now + coalesceBackoffMs(state.slowModeReleaseCount);
-          state.timestamps.push(now);
-          return { outcome: "admitted", slowMode };
-        }
-        if (state.slowModeReleaseAt === undefined) {
-          // First droppable update since slow mode armed: open the coalescing
-          // window. It is buffered (dropped) until the initial window elapses.
-          state.slowModeReleaseAt = now + coalesceBackoffMs(0);
-        }
-      }
       return { outcome: "dropped", reason: "slow-mode", slowMode };
     }
 
@@ -178,7 +150,7 @@ export class MessagingDeliveryBudget {
   private stateFor(scope: MessagingDeliveryScope): ScopeState {
     let state = this.scopes.get(scope.id);
     if (!state) {
-      state = { slowModeReleaseCount: 0, timestamps: [] };
+      state = { timestamps: [] };
       this.scopes.set(scope.id, state);
     }
     return state;
@@ -197,10 +169,6 @@ export class MessagingDeliveryBudget {
     }
     if (state.slowModeUntil !== undefined && state.slowModeUntil <= now) {
       state.slowModeUntil = undefined;
-      // Slow mode ended: reset the coalescing gate so the next episode starts
-      // fresh at the initial window rather than at a stale backoff step.
-      state.slowModeReleaseAt = undefined;
-      state.slowModeReleaseCount = 0;
     }
   }
 
