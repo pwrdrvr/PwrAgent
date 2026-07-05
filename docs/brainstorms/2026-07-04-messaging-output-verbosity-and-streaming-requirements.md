@@ -171,6 +171,19 @@ it's part of the same conceptual model.
 - Apply the same coalescing to **non-streaming** updates whenever **slow mode**
   is active. We don't do any of this today.
 
+### D6 — Nudge to reveal the streaming control when a provider enables streaming
+
+The global "show streaming option on thread cards" setting (D3) defaults off, so
+an operator who turns on provider-level streaming would otherwise have no way to
+pick it per-thread. When provider-level streaming is switched on in Settings, and
+the global show-option is off **and** no other provider already has streaming
+enabled, prompt once offering to turn the global show-option on. Suppress the
+prompt if the global option is already on or another provider already streams —
+this surfaces the advanced control to operators who signal interest without
+nagging repeat-togglers. Complements the D3 anti-stranding rule; it does not
+reintroduce the rejected "hide unless a provider streams" heuristic — the control
+stays gated by the explicit global setting, this only *offers* to flip it.
+
 ## Explanatory copy
 
 **Activity dial editor (picker header):**
@@ -207,6 +220,8 @@ it's part of the same conceptual model.
 - [ ] Add global Messaging setting "Show streaming option on thread cards"
       (default Off) gating the per-thread streaming control, with the
       "OR any binding has it enabled" safety rule. (D3)
+- [ ] Prompt once to offer flipping that global setting on when a provider
+      enables streaming, guarded so it doesn't nag. (D6)
 - [ ] Attach the two explanatory notes to the respective editors.
 - [ ] Flush the preceding in-turn message before an elicitation if unsent. (D4)
 - [ ] **[separate worktree]** Streaming/slow-mode coalescing with exponential
@@ -214,7 +229,9 @@ it's part of the same conceptual model.
 
 ## Open questions / deferrals
 
-- Exact label: "Activity updates" vs "Working updates" vs "Progress." TBD.
+- Label resolved: the dial is named **"Working Updates"** (chosen over "Activity
+  updates" / "Progress"). Prose above predates the decision and still reads
+  "Activity dial" in places; "Working Updates" is authoritative for shipped copy.
 - Whether `show_less` vs `show_some` vs `show_more` thresholds need retuning
   now that prose shares the buffer (more content per window).
 - Migration for existing bindings with `streamingResponses: enabled` once the
