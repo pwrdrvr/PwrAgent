@@ -91,6 +91,14 @@ export type ThreadUsageLineRecord = {
   totalCostMicros: number;
   totalTokens: number;
   turnId?: string;
+  // Whether this row's token totals are a real measurement of THIS turn.
+  // Set by the live builder: `true` when usage was attributed to the turn (a
+  // per-turn delta or a per-request "last" snapshot), `false` when the builder
+  // had to fall back to a whole-thread/undecomposed total and the row is really
+  // a summary. `undefined` = not computed (hydration/backfill rows, or rows
+  // persisted before this field existed). The renderer treats `false` as a
+  // historical summary instead of guessing from raw token counts.
+  turnUsageAttributed?: boolean;
   uncachedInputCostMicros: number;
   uncachedInputTokens: number;
   usageLineId: string;

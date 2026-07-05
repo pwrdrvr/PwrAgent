@@ -797,6 +797,102 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       totalCostMicros: 0,
     });
   });
+
+  it("round-trips the turnUsageAttributed flag through sqlite", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        turnId: "turn-attributed",
+        turnUsageAttributed: true,
+        usageLineId: "line-attributed",
+      }),
+    });
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        turnId: "turn-unattributed",
+        turnUsageAttributed: false,
+        usageLineId: "line-unattributed",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const byId = new Map(pricing.lines.map((line) => [line.usageLineId, line]));
+    expect(byId.get("line-attributed")?.turnUsageAttributed).toBe(true);
+    expect(byId.get("line-unattributed")?.turnUsageAttributed).toBe(false);
+    // A line that never set the flag stays undefined, not coerced to a boolean.
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({ turnId: "turn-plain", usageLineId: "line-plain" }),
+    });
+    const after = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(
+      after.lines.find((line) => line.usageLineId === "line-plain")
+        ?.turnUsageAttributed,
+    ).toBeUndefined();
+  });
+
+  it("backfills legacy live summary rows to turnUsageAttributed=false on migration", async () => {
+    // Legacy whole-thread summary masquerading as a turn (no cumulative
+    // breakdown, >= 1M tokens), plus controls that must stay untouched.
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        scope: "turn",
+        source: "live",
+        status: "pending",
+        totalTokens: 2_000_000,
+        turnId: "turn-legacy",
+        usageLineId: "legacy-summary",
+      }),
+    });
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        cumulativeTotalTokens: 2_000_000,
+        scope: "turn",
+        source: "live",
+        status: "pending",
+        totalTokens: 2_000_000,
+        turnId: "turn-modern",
+        usageLineId: "modern-turn",
+      }),
+    });
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        scope: "turn",
+        source: "live",
+        status: "pending",
+        totalTokens: 500_000,
+        turnId: "turn-small",
+        usageLineId: "small-live-turn",
+      }),
+    });
+
+    // Force the user_version 26 migration to run against the seeded rows, then
+    // reassign the module handle so afterEach closes the reopened db.
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.raw.pragma("user_version = 25");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+
+    const flagById = new Map(
+      (
+        stateDb.raw
+          .prepare(
+            "SELECT usage_line_id, turn_usage_attributed FROM thread_usage_lines",
+          )
+          .all() as {
+          turn_usage_attributed: number | null;
+          usage_line_id: string;
+        }[]
+      ).map((row) => [row.usage_line_id, row.turn_usage_attributed]),
+    );
+    expect(flagById.get("legacy-summary")).toBe(0);
+    expect(flagById.get("modern-turn")).toBeNull();
+    expect(flagById.get("small-live-turn")).toBeNull();
+  });
 });
 
 function buildUsageLine(

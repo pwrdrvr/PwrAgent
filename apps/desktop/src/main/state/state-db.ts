@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 25;
+export const CURRENT_STATE_DB_USER_VERSION = 26;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -565,6 +565,7 @@ CREATE TABLE IF NOT EXISTS thread_usage_lines (
   reasoning_effort           TEXT,
   service_tier               TEXT,
   fast_mode                  INTEGER,
+  turn_usage_attributed      INTEGER,
   settings_source            TEXT,
   settings_confidence        TEXT,
   input_tokens               INTEGER NOT NULL,
@@ -854,6 +855,12 @@ export class StateDb {
         // THREAD_USAGE_PRICING_SCHEMA; the ALTERs are guarded by tableColumnExists
         // so a fresh db (schema already carries them) no-ops.
         ensureThreadUsageTurnObservedReplayColumns(db);
+        db.pragma("user_version = 25");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 26) {
+      db.transaction(() => {
+        ensureThreadUsageAttributedColumn(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1323,6 +1330,34 @@ function ensureThreadUsageTurnObservedReplayColumns(db: BetterSqlite3.Database):
       db.exec(column.sql);
     }
   }
+}
+
+// Adds the turn_usage_attributed column and backfills the finite set of legacy
+// pre-attribution rows. Live rows built before this field existed recorded no
+// attribution; the ones that were whole-thread summaries masquerading as turns
+// are the live/pending rows with no cumulative breakdown and a >= 1M-token
+// total. This one-shot backfill over already-persisted rows is the ONLY place
+// the old token-count guess still runs — new live rows record attribution
+// explicitly at build time, so the renderer never re-derives it.
+function ensureThreadUsageAttributedColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+  if (!tableColumnExists(db, "thread_usage_lines", "turn_usage_attributed")) {
+    db.exec(
+      "ALTER TABLE thread_usage_lines ADD COLUMN turn_usage_attributed INTEGER",
+    );
+  }
+  db.exec(`
+UPDATE thread_usage_lines
+SET turn_usage_attributed = 0
+WHERE turn_usage_attributed IS NULL
+  AND source = 'live'
+  AND status = 'pending'
+  AND cumulative_total_tokens IS NULL
+  AND total_tokens >= 1000000
+`);
 }
 
 function ensureThreadSearchFtsThreadIdColumn(db: BetterSqlite3.Database): void {
