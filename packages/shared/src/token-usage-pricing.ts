@@ -33,7 +33,11 @@ export type ThreadUsageLineScope =
   | "latest-request"
   | "total"
   | "monitor"
-  | "backfill";
+  | "backfill"
+  // Context a thread inherited at a fork point. Its cost was already billed on
+  // the parent thread, so a fork-baseline line carries the inherited token
+  // counts but zero cost — it is shown as a "Fork point" card, never re-charged.
+  | "fork-baseline";
 
 export type ThreadUsageLineStatus = "pending" | "finalized" | "superseded";
 

@@ -1037,6 +1037,40 @@ export class SqliteOverlayStore {
   }
 
   /**
+   * Record that this thread was created by forking `forkSourceThreadId`, and/or
+   * flip the one-time `forkBaselineCaptured` guard once the fork-point
+   * inherited-usage line has been persisted. Pricing reads `forkSourceThreadId`
+   * as the authoritative "this thread inherited a copied-in history" signal so
+   * the fork-point context is never re-billed on the fork. See
+   * `ThreadOverlayState.forkSourceThreadId`.
+   */
+  async setThreadForkOrigin(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    forkSourceThreadId?: string;
+    forkBaselineCaptured?: boolean;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const forkSourceThreadId =
+      params.forkSourceThreadId?.trim() || current.forkSourceThreadId;
+    const nextState: ThreadOverlayState = {
+      ...current,
+      ...(forkSourceThreadId ? { forkSourceThreadId } : {}),
+      ...(params.forkBaselineCaptured !== undefined
+        ? { forkBaselineCaptured: params.forkBaselineCaptured }
+        : {}),
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  /**
    * Reorder pinned threads globally across backends. `threadKeys` is the
    * complete pinned order (thread identity keys); ranks are assigned by global
    * index so Codex and ACP pins interleave in any order. Unparseable keys are
@@ -2472,6 +2506,28 @@ function repriceOpenAiUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRec
   if (line.provider !== "openai") {
     return line;
   }
+  // Fork-baseline lines carry inherited context that was billed on the parent
+  // thread. Their cost is $0 to this thread by definition — never re-price them
+  // from their (large) inherited token counts. Strip catalog/rate/reason fields
+  // (as the normal repricing path does) so a $0 "priced" line never carries a
+  // stale rate id or priceUnavailableReason.
+  if (line.scope === "fork-baseline") {
+    const {
+      priceUnavailableReason: _forkPriceUnavailableReason,
+      pricingCatalogId: _forkPricingCatalogId,
+      pricingCatalogVersion: _forkPricingCatalogVersion,
+      pricingRateId: _forkPricingRateId,
+      ...forkBaseLine
+    } = line;
+    return {
+      ...forkBaseLine,
+      cachedInputCostMicros: 0,
+      outputCostMicros: 0,
+      priceStatus: "priced",
+      totalCostMicros: 0,
+      uncachedInputCostMicros: 0,
+    };
+  }
 
   const cost = estimateOpenAiTokenUsageCost({
     at: line.createdAt,
@@ -2684,6 +2740,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadParent"
   | "setThreadAgent"
   | "setThreadHandoffOrigin"
+  | "setThreadForkOrigin"
   | "reorderThreadPins"
   | "updateSubthreadOrder"
   | "setSubthreadsCollapsed"
