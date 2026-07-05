@@ -66,6 +66,7 @@ describe("desktop messaging config", () => {
       "inputDebounceMs",
       "line",
       "mattermost",
+      "showStreamingOption",
       "slack",
       "telegram",
       "toolUpdateDefaultMode",
@@ -499,6 +500,7 @@ describe("desktop messaging config", () => {
       enabled: true,
       inputDebounceMs: 500,
       toolUpdateDefaultMode: "show_some",
+      showStreamingOption: false,
       attachmentPolicy: {
         imageProfile: "medium",
         maxAttachmentBytes: 10485760,

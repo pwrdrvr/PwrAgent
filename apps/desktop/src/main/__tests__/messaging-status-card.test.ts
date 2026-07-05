@@ -47,6 +47,7 @@ describe("buildBindingStatusIntent", () => {
     const navigation = buildNavigationSnapshot();
     const intent = buildBindingStatusIntent({
       id: "status-1",
+      showStreamingOption: true,
       backendSummary: {
         kind: "codex",
         label: "Codex",
@@ -462,6 +463,7 @@ describe("buildBindingStatusIntent", () => {
       createdAt: 1000,
       binding,
       streamingResponsesDefault: true,
+      showStreamingOption: true,
       threadState: resolveMessagingThreadState({ binding, navigation }),
     });
 
