@@ -19,13 +19,14 @@ import { sourceBadge } from "./settings-fields";
  * specific model overrides that — every condensation request will use
  * the chosen model regardless of which backend is active.
  */
-const DIFF_CONDENSATION_MODEL_OPTIONS: Array<{ label: string; value: string }> = [
-  { label: "Auto (match backend)", value: "auto" },
-  { label: "grok-4-fast-reasoning", value: "grok-4-fast-reasoning" },
-  { label: "grok-4-fast", value: "grok-4-fast" },
-  { label: "grok-3-mini", value: "grok-3-mini" },
-  { label: "grok-3", value: "grok-3" },
-];
+const DIFF_CONDENSATION_MODEL_OPTIONS: Array<{ label: string; value: string }> =
+  [
+    { label: "Auto (match backend)", value: "auto" },
+    { label: "grok-4-fast-reasoning", value: "grok-4-fast-reasoning" },
+    { label: "grok-4-fast", value: "grok-4-fast" },
+    { label: "grok-3-mini", value: "grok-3-mini" },
+    { label: "grok-3", value: "grok-3" },
+  ];
 
 const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
   value: false,
@@ -72,42 +73,43 @@ export function ExperimentalSettings(props: {
   onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
-  onCodexDefaultModeRequestUserInputChange: (
-    enabled: boolean,
-  ) => Promise<void>;
+  onCodexDefaultModeRequestUserInputChange: (enabled: boolean) => Promise<void>;
   onAgentCoreGrokChange: (enabled: boolean) => Promise<void>;
 }) {
   const condensation = props.snapshot.experimental.diffCondensation;
   const liveTranscriptEventFiltering =
-    props.snapshot.experimental.liveTranscriptEventFiltering ??
-    DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
+    props.snapshot.experimental.liveTranscriptEventFiltering
+    ?? DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
   const lightweightNavigationRefresh =
-    props.snapshot.experimental.lightweightNavigationRefresh ??
-    DEFAULT_LIGHTWEIGHT_NAVIGATION_REFRESH;
+    props.snapshot.experimental.lightweightNavigationRefresh
+    ?? DEFAULT_LIGHTWEIGHT_NAVIGATION_REFRESH;
   const threadPricingSummary =
-    props.snapshot.experimental.threadPricingSummary ??
-    DEFAULT_THREAD_PRICING_SUMMARY;
+    props.snapshot.experimental.threadPricingSummary
+    ?? DEFAULT_THREAD_PRICING_SUMMARY;
   const threadPricingDisplayUsd =
-    props.snapshot.experimental.threadPricingDisplayUsd ??
-    DEFAULT_THREAD_PRICING_DISPLAY_USD;
+    props.snapshot.experimental.threadPricingDisplayUsd
+    ?? DEFAULT_THREAD_PRICING_DISPLAY_USD;
   const threadPricingDisplayCodexCredits =
-    props.snapshot.experimental.threadPricingDisplayCodexCredits ??
-    DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
+    props.snapshot.experimental.threadPricingDisplayCodexCredits
+    ?? DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
   const codexDefaultModeRequestUserInput =
-    props.snapshot.experimental.codexDefaultModeRequestUserInput ??
-    DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
+    props.snapshot.experimental.codexDefaultModeRequestUserInput
+    ?? DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
   const agentCoreGrok =
     props.snapshot.experimental.agentCoreGrok ?? DEFAULT_AGENT_CORE_GROK;
   const knownCondensationModel = DIFF_CONDENSATION_MODEL_OPTIONS.some(
     (option) => option.value === condensation.model.value,
   );
   const discontinuedEnabledCount =
-    (condensation.enabled.value ? 1 : 0) +
-    (agentCoreGrok.value ? 1 : 0) +
-    (liveTranscriptEventFiltering.value ? 1 : 0);
+    (condensation.enabled.value ? 1 : 0)
+    + (agentCoreGrok.value ? 1 : 0)
+    + (liveTranscriptEventFiltering.value ? 1 : 0);
 
   return (
-    <SettingsSectionStack paneId="experimental" aria-label="Experimental settings">
+    <SettingsSectionStack
+      paneId="experimental"
+      aria-label="Experimental settings"
+    >
       <SettingsPanelHead
         eyebrow="Experimental"
         title="Experimental features"
@@ -231,7 +233,11 @@ export function ExperimentalSettings(props: {
         eyebrow="Deprecated"
         title="Soon to be discontinued"
         description="These features are being phased out and may be removed in a future release."
-        chip={discontinuedEnabledCount > 0 ? `${discontinuedEnabledCount} on` : "All off"}
+        chip={
+          discontinuedEnabledCount > 0
+            ? `${discontinuedEnabledCount} on`
+            : "All off"
+        }
         chipKind={discontinuedEnabledCount > 0 ? "ok" : "default"}
         defaultCollapsed
         aria-label="Soon to be discontinued experimental settings"
@@ -277,7 +283,9 @@ export function ExperimentalSettings(props: {
                       key={option.value}
                       aria-checked={condensation.model.value === option.value}
                       className={`settings-segmented__button${
-                        condensation.model.value === option.value ? " is-active" : ""
+                        condensation.model.value === option.value
+                          ? " is-active"
+                          : ""
                       }`}
                       disabled={props.saving || !condensation.enabled.value}
                       role="radio"

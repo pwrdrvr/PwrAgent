@@ -53,32 +53,43 @@ describe("AutomationStore", () => {
       backlogPolicy: "drop_missed",
       now: 2_000,
     });
-    expect(store.listAutomationsForThread({ backend: "codex", threadId: "thread-1" }))
-      .toEqual([]);
-    expect(store.listAutomationsForThread({ backend: "codex", threadId: "thread-2" }))
-      .toEqual([
-        expect.objectContaining({
-          threadId: "thread-2",
-          name: "Review inbox",
-          backlogPolicy: "drop_missed",
-          updatedAt: 2_000,
-        }),
-      ]);
+    expect(
+      store.listAutomationsForThread({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).toEqual([]);
+    expect(
+      store.listAutomationsForThread({
+        backend: "codex",
+        threadId: "thread-2",
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        threadId: "thread-2",
+        name: "Review inbox",
+        backlogPolicy: "drop_missed",
+        updatedAt: 2_000,
+      }),
+    ]);
 
     expect(store.pauseAutomation("automation-1", 3_000)).toMatchObject({
       status: "paused",
     });
-    expect(store.resumeAutomation("automation-1", { nextRunAt: 20_000, now: 4_000 }))
-      .toMatchObject({
-        status: "enabled",
-        nextRunAt: 20_000,
-      });
+    expect(
+      store.resumeAutomation("automation-1", { nextRunAt: 20_000, now: 4_000 }),
+    ).toMatchObject({
+      status: "enabled",
+      nextRunAt: 20_000,
+    });
     expect(store.deleteAutomation("automation-1", 5_000)).toMatchObject({
       status: "deleted",
       deletedAt: 5_000,
     });
     expect(store.getAutomation("automation-1")).toBeUndefined();
-    expect(store.getAutomation("automation-1", { includeDeleted: true })).toMatchObject({
+    expect(
+      store.getAutomation("automation-1", { includeDeleted: true }),
+    ).toMatchObject({
       status: "deleted",
     });
   });
@@ -539,10 +550,7 @@ describe("AutomationStore", () => {
       }),
     ).toMatchObject({
       id: "run-1",
-      scheduledWindows: [
-        { scheduledFor: 10_000 },
-        { scheduledFor: 15_000 },
-      ],
+      scheduledWindows: [{ scheduledFor: 10_000 }, { scheduledFor: 15_000 }],
     });
     expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
     expect(store.buildThreadSummaries()["codex:thread-1"]).toMatchObject({
@@ -626,7 +634,8 @@ describe("AutomationStore", () => {
         id: "run-1",
         status: "cancelled",
         completedAt: 20_000,
-        errorMessage: "PwrAgent restarted before this local automation run completed.",
+        errorMessage:
+          "PwrAgent restarted before this local automation run completed.",
       }),
     ]);
     expect(store.getAutomation("automation-1")).toMatchObject({
@@ -660,8 +669,9 @@ describe("AutomationStore", () => {
       });
     }
 
-    expect(store.listRunsForAutomation("automation-1", 10).map((run) => run.id))
-      .toEqual(["run-4", "run-3", "run-2"]);
+    expect(
+      store.listRunsForAutomation("automation-1", 10).map((run) => run.id),
+    ).toEqual(["run-4", "run-3", "run-2"]);
   });
 
   it("handles malformed persisted payloads as recoverable read omissions", () => {
@@ -718,9 +728,7 @@ describe("AutomationStore", () => {
       scheduleSummary: "weekdays at 9 AM",
     });
     expect(
-      stateDb.raw
-        .prepare("SELECT COUNT(*) AS count FROM automations")
-        .get(),
+      stateDb.raw.prepare("SELECT COUNT(*) AS count FROM automations").get(),
     ).toEqual({ count: 1 });
   });
 

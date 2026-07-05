@@ -49,8 +49,16 @@ const enterprisePrPassing: PrSummary = pr({
 });
 
 function pr(
-  value: Omit<PrSummary, "checkState" | "lifecycleState" | "reviewState" | "mergeState">
-    & Partial<Pick<PrSummary, "checkState" | "lifecycleState" | "reviewState" | "mergeState">>,
+  value: Omit<
+    PrSummary,
+    "checkState" | "lifecycleState" | "reviewState" | "mergeState"
+  >
+    & Partial<
+      Pick<
+        PrSummary,
+        "checkState" | "lifecycleState" | "reviewState" | "mergeState"
+      >
+    >,
 ): PrSummary {
   const checkState = value.checkState ?? normalizeCheckState(value.state);
   return {
@@ -58,12 +66,16 @@ function pr(
     state: checkState,
     checkState,
     lifecycleState: value.lifecycleState ?? legacyLifecycleState(value.state),
-    reviewState: value.reviewState ?? (value.state === "draft" ? "draft" : "ready_for_review"),
+    reviewState:
+      value.reviewState
+      ?? (value.state === "draft" ? "draft" : "ready_for_review"),
     mergeState: value.mergeState ?? "unknown",
   };
 }
 
-function normalizeCheckState(state: PrSummary["state"]): NonNullable<PrSummary["checkState"]> {
+function normalizeCheckState(
+  state: PrSummary["state"],
+): NonNullable<PrSummary["checkState"]> {
   if (
     state === "passing"
     || state === "failing"
@@ -75,7 +87,9 @@ function normalizeCheckState(state: PrSummary["state"]): NonNullable<PrSummary["
   return "unknown";
 }
 
-function legacyLifecycleState(state: PrSummary["state"]): NonNullable<PrSummary["lifecycleState"]> {
+function legacyLifecycleState(
+  state: PrSummary["state"],
+): NonNullable<PrSummary["lifecycleState"]> {
   if (state === "merged" || state === "closed") {
     return state;
   }
@@ -290,7 +304,8 @@ describe("SqliteOverlayStore — thread PRs", () => {
 
   it("persists branch lookup cache rows across reopen", async () => {
     await store.writePrLookupCacheEntry({
-      lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
+      lookupKey:
+        '{"lookupVersion":2,"provider":"github.com","branch":"feat/pr-chip","directoryPaths":["/repo"]}',
       provider: "github.com",
       branch: "feat/pr-chip",
       directoryPaths: ["/repo"],
@@ -304,14 +319,16 @@ describe("SqliteOverlayStore — thread PRs", () => {
     const reopened = StateDb.open(dbPath);
     const reopenedStore = new SqliteOverlayStore(reopened);
     await expect(reopenedStore.readPrLookupCache()).resolves.toEqual({
-      "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}": {
-        lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
-        provider: "github.com",
-        branch: "feat/pr-chip",
-        directoryPaths: ["/repo"],
-        fetchedAt: 2345,
-        prs: [prPassing],
-      },
+      '{"lookupVersion":2,"provider":"github.com","branch":"feat/pr-chip","directoryPaths":["/repo"]}':
+        {
+          lookupKey:
+            '{"lookupVersion":2,"provider":"github.com","branch":"feat/pr-chip","directoryPaths":["/repo"]}',
+          provider: "github.com",
+          branch: "feat/pr-chip",
+          directoryPaths: ["/repo"],
+          fetchedAt: 2345,
+          prs: [prPassing],
+        },
     });
     reopened.close();
 
@@ -321,7 +338,8 @@ describe("SqliteOverlayStore — thread PRs", () => {
 
   it("preserves PR providers inside branch lookup cache payloads", async () => {
     await store.writePrLookupCacheEntry({
-      lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
+      lookupKey:
+        '{"lookupVersion":2,"provider":"github.com","branch":"feat/pr-chip","directoryPaths":["/repo"]}',
       provider: "github.com",
       branch: "feat/pr-chip",
       directoryPaths: ["/repo"],
@@ -332,14 +350,16 @@ describe("SqliteOverlayStore — thread PRs", () => {
     const entries = await store.readPrLookupCache();
 
     expect(entries).toEqual({
-      "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}": {
-        lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
-        provider: "github.com",
-        branch: "feat/pr-chip",
-        directoryPaths: ["/repo"],
-        fetchedAt: 2345,
-        prs: [enterprisePrPassing],
-      },
+      '{"lookupVersion":2,"provider":"github.com","branch":"feat/pr-chip","directoryPaths":["/repo"]}':
+        {
+          lookupKey:
+            '{"lookupVersion":2,"provider":"github.com","branch":"feat/pr-chip","directoryPaths":["/repo"]}',
+          provider: "github.com",
+          branch: "feat/pr-chip",
+          directoryPaths: ["/repo"],
+          fetchedAt: 2345,
+          prs: [enterprisePrPassing],
+        },
     });
   });
 });

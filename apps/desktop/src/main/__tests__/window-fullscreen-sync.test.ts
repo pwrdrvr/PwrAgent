@@ -61,9 +61,12 @@ describe("window fullscreen sync", () => {
 
     window.emitWindowEvent("enter-full-screen");
 
-    expect(window.sendMock).toHaveBeenCalledWith(WINDOW_FULLSCREEN_SYNC_CHANNEL, {
-      isFullScreen: true,
-    });
+    expect(window.sendMock).toHaveBeenCalledWith(
+      WINDOW_FULLSCREEN_SYNC_CHANNEL,
+      {
+        isFullScreen: true,
+      },
+    );
   });
 
   it("pushes fullscreen=false on leave-full-screen", () => {
@@ -72,9 +75,12 @@ describe("window fullscreen sync", () => {
 
     window.emitWindowEvent("leave-full-screen");
 
-    expect(window.sendMock).toHaveBeenCalledWith(WINDOW_FULLSCREEN_SYNC_CHANNEL, {
-      isFullScreen: false,
-    });
+    expect(window.sendMock).toHaveBeenCalledWith(
+      WINDOW_FULLSCREEN_SYNC_CHANNEL,
+      {
+        isFullScreen: false,
+      },
+    );
   });
 
   it("re-emits the live fullscreen state on every renderer load", () => {

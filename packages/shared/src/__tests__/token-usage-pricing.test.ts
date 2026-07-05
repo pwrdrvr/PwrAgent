@@ -135,7 +135,9 @@ describe("token usage pricing", () => {
         uncachedInputTokens: 100,
       }),
     ).toBeUndefined();
-    expect(resolveOpenAiPricingServiceTier({ serviceTier: "flex" })).toBeUndefined();
+    expect(
+      resolveOpenAiPricingServiceTier({ serviceTier: "flex" }),
+    ).toBeUndefined();
   });
 
   it("exposes catalog rates with currency-specific metadata", () => {

@@ -6,10 +6,10 @@ export function selectableNewThreadBackends(
 ): BackendSummary[] {
   return backends.filter(
     (backend) =>
-      backend.available &&
-      backend.capabilities.createThread &&
-      (backend.source === "acp" ||
-        backend.executionModes.some((mode) => mode.available)),
+      backend.available
+      && backend.capabilities.createThread
+      && (backend.source === "acp"
+        || backend.executionModes.some((mode) => mode.available)),
   );
 }
 
@@ -19,8 +19,8 @@ export function resolveNewThreadBackend(
 ): BackendSummary | undefined {
   const selectable = selectableNewThreadBackends(backends);
   return (
-    selectable.find((backend) => backend.kind === preferredBackend) ??
-    selectable.find((backend) => backend.kind === "codex") ??
-    selectable[0]
+    selectable.find((backend) => backend.kind === preferredBackend)
+    ?? selectable.find((backend) => backend.kind === "codex")
+    ?? selectable[0]
   );
 }

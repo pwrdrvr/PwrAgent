@@ -18,11 +18,15 @@ export function normalizeAcpRuntimeCapabilities(params: {
     return params.initialize;
   }
 
-  const configOptions = readConfigOptions(record.configOptions ?? record.config_options);
+  const configOptions = readConfigOptions(
+    record.configOptions ?? record.config_options,
+  );
   const modes = readModes(record.modes);
   const models = readModels(record.models);
   const agentCapabilities = readAgentCapabilities(
-    record.agentCapabilities ?? record.agent_capabilities ?? record.capabilities,
+    record.agentCapabilities
+      ?? record.agent_capabilities
+      ?? record.capabilities,
     record.sessionCapabilities ?? record.session_capabilities,
   );
   const agentInfo = readAgentInfo(record.agentInfo ?? record.agent_info);
@@ -31,15 +35,15 @@ export function normalizeAcpRuntimeCapabilities(params: {
       ? record.protocolVersion
       : typeof record.protocol_version === "number"
         ? record.protocol_version
-      : params.initialize?.protocolVersion;
+        : params.initialize?.protocolVersion;
 
   const hasRuntimeData =
-    configOptions.length > 0 ||
-    Boolean(modes) ||
-    Boolean(models) ||
-    Boolean(agentCapabilities) ||
-    Boolean(agentInfo) ||
-    typeof protocolVersion === "number";
+    configOptions.length > 0
+    || Boolean(modes)
+    || Boolean(models)
+    || Boolean(agentCapabilities)
+    || Boolean(agentInfo)
+    || typeof protocolVersion === "number";
 
   if (!hasRuntimeData && !params.initialize) {
     return undefined;
@@ -52,10 +56,10 @@ export function normalizeAcpRuntimeCapabilities(params: {
     checkedAt: params.now,
     source: params.source,
     ...(typeof protocolVersion === "number" ? { protocolVersion } : {}),
-    ...(agentInfo ?? params.initialize?.agentInfo
+    ...((agentInfo ?? params.initialize?.agentInfo)
       ? { agentInfo: { ...params.initialize?.agentInfo, ...agentInfo } }
       : {}),
-    ...(agentCapabilities ?? params.initialize?.agentCapabilities
+    ...((agentCapabilities ?? params.initialize?.agentCapabilities)
       ? {
           agentCapabilities: {
             ...params.initialize?.agentCapabilities,
@@ -68,8 +72,16 @@ export function normalizeAcpRuntimeCapabilities(params: {
       : params.initialize?.configOptions
         ? { configOptions: params.initialize.configOptions }
         : {}),
-    ...(modes ? { modes } : params.initialize?.modes ? { modes: params.initialize.modes } : {}),
-    ...(models ? { models } : params.initialize?.models ? { models: params.initialize.models } : {}),
+    ...(modes
+      ? { modes }
+      : params.initialize?.modes
+        ? { modes: params.initialize.modes }
+        : {}),
+    ...(models
+      ? { models }
+      : params.initialize?.models
+        ? { models: params.initialize.models }
+        : {}),
   };
 }
 
@@ -81,12 +93,11 @@ export function acpSessionRuntimeStateFromCapabilities(
     return undefined;
   }
   const configValues = Object.fromEntries(
-    (capabilities.configOptions ?? [])
-      .flatMap((option) =>
-        typeof option.currentValue === "string"
-          ? [[option.id, option.currentValue] as const]
-          : [],
-      ),
+    (capabilities.configOptions ?? []).flatMap((option) =>
+      typeof option.currentValue === "string"
+        ? [[option.id, option.currentValue] as const]
+        : [],
+    ),
   );
   const state: BackendAcpSessionRuntimeState = {
     updatedAt: now,
@@ -125,22 +136,23 @@ export function acpSessionRuntimeStateFromUpdate(
   }
   if (kind === "current_mode_update") {
     const currentModeId =
-      readString(update, "currentModeId") ??
-      readString(update, "current_mode_id") ??
-      readString(update, "modeId") ??
-      readString(update, "mode_id") ??
-      readString(update, "id");
+      readString(update, "currentModeId")
+      ?? readString(update, "current_mode_id")
+      ?? readString(update, "modeId")
+      ?? readString(update, "mode_id")
+      ?? readString(update, "id");
     return currentModeId ? { currentModeId, updatedAt: now } : undefined;
   }
   if (kind === "config_option_update") {
-    const configOption = asRecord(update.configOption ?? update.config_option) ?? update;
+    const configOption =
+      asRecord(update.configOption ?? update.config_option) ?? update;
     const id =
-      readString(configOption, "id") ??
-      readString(configOption, "configOptionId") ??
-      readString(configOption, "configId");
+      readString(configOption, "id")
+      ?? readString(configOption, "configOptionId")
+      ?? readString(configOption, "configId");
     const value =
-      readString(configOption, "currentValue") ??
-      readString(configOption, "value");
+      readString(configOption, "currentValue")
+      ?? readString(configOption, "value");
     return id && value
       ? { configValues: { [id]: value }, updatedAt: now }
       : undefined;
@@ -148,7 +160,9 @@ export function acpSessionRuntimeStateFromUpdate(
   return undefined;
 }
 
-function readModeUpdateMarker(update: Record<string, unknown>): string | undefined {
+function readModeUpdateMarker(
+  update: Record<string, unknown>,
+): string | undefined {
   const text = readString(update, "content") ?? readString(update, "text");
   const match = text?.trim().match(/^\[MODE_UPDATE\]\s*([A-Za-z0-9_-]+)\s*$/);
   return match?.[1];
@@ -161,9 +175,9 @@ function readConfigOptions(value: unknown): BackendAcpRuntimeConfigOption[] {
   return value.flatMap((item) => {
     const record = asRecord(item);
     const id =
-      readString(record, "id") ??
-      readString(record, "configOptionId") ??
-      readString(record, "configId");
+      readString(record, "id")
+      ?? readString(record, "configOptionId")
+      ?? readString(record, "configId");
     if (!record || !id) {
       return [];
     }
@@ -175,32 +189,33 @@ function readConfigOptions(value: unknown): BackendAcpRuntimeConfigOption[] {
       {
         id,
         label:
-          readString(record, "name") ??
-          readString(record, "label") ??
-          readString(record, "title") ??
-          id,
+          readString(record, "name")
+          ?? readString(record, "label")
+          ?? readString(record, "title")
+          ?? id,
         description: readString(record, "description"),
         type: "select",
         category: readString(record, "category"),
         currentValue:
-          readString(record, "currentValue") ??
-          readString(record, "value"),
+          readString(record, "currentValue") ?? readString(record, "value"),
         values,
       } satisfies BackendAcpRuntimeConfigOption,
     ];
   });
 }
 
-function readConfigOptionValues(value: unknown): BackendAcpRuntimeConfigOptionValue[] {
+function readConfigOptionValues(
+  value: unknown,
+): BackendAcpRuntimeConfigOptionValue[] {
   if (!Array.isArray(value)) {
     return [];
   }
   return value.flatMap((item) => {
     const record = asRecord(item);
     const optionValue =
-      readString(record, "value") ??
-      readString(record, "id") ??
-      readString(record, "optionId");
+      readString(record, "value")
+      ?? readString(record, "id")
+      ?? readString(record, "optionId");
     if (!record || !optionValue) {
       return [];
     }
@@ -208,9 +223,9 @@ function readConfigOptionValues(value: unknown): BackendAcpRuntimeConfigOptionVa
       {
         value: optionValue,
         label:
-          readString(record, "name") ??
-          readString(record, "label") ??
-          readString(record, "title"),
+          readString(record, "name")
+          ?? readString(record, "label")
+          ?? readString(record, "title"),
         description: readString(record, "description"),
       },
     ];
@@ -254,8 +269,7 @@ function readModels(value: unknown): BackendAcpRuntimeCapabilities["models"] {
     ? {
         availableModels: models,
         currentModelId:
-          readString(record, "currentModelId") ??
-          readString(record, "modelId"),
+          readString(record, "currentModelId") ?? readString(record, "modelId"),
       }
     : undefined;
 }
@@ -287,29 +301,29 @@ function readAgentCapabilities(
     return undefined;
   }
   const loadSession =
-    readBoolean(record, "loadSession") ??
-    readBoolean(record, "load_session") ??
-    readBoolean(asRecord(record?.session), "load");
+    readBoolean(record, "loadSession")
+    ?? readBoolean(record, "load_session")
+    ?? readBoolean(asRecord(record?.session), "load");
   const close = readBoolean(asRecord(record?.session), "close");
   const cancel = readBoolean(asRecord(record?.session), "cancel");
   const sessionHistoryReplay =
-    readBoolean(kimiMeta, "sessionHistoryReplay") ??
-    readBoolean(kimiMeta, "session_history_replay");
+    readBoolean(kimiMeta, "sessionHistoryReplay")
+    ?? readBoolean(kimiMeta, "session_history_replay");
   // ACP advertises prompt content support under `promptCapabilities`
   // (image / audio / embeddedContext). Some agents nest it under `prompt`.
   const promptRecord =
-    asRecord(record?.promptCapabilities) ??
-    asRecord(record?.prompt_capabilities) ??
-    asRecord(record?.prompt);
+    asRecord(record?.promptCapabilities)
+    ?? asRecord(record?.prompt_capabilities)
+    ?? asRecord(record?.prompt);
   const promptImage = readBoolean(promptRecord, "image");
   const promptAudio = readBoolean(promptRecord, "audio");
   const promptEmbeddedContext =
-    readBoolean(promptRecord, "embeddedContext") ??
-    readBoolean(promptRecord, "embedded_context");
+    readBoolean(promptRecord, "embeddedContext")
+    ?? readBoolean(promptRecord, "embedded_context");
   const prompt =
-    promptImage !== undefined ||
-    promptAudio !== undefined ||
-    promptEmbeddedContext !== undefined
+    promptImage !== undefined
+    || promptAudio !== undefined
+    || promptEmbeddedContext !== undefined
       ? {
           ...(promptImage !== undefined ? { image: promptImage } : {}),
           ...(promptAudio !== undefined ? { audio: promptAudio } : {}),
@@ -319,17 +333,22 @@ function readAgentCapabilities(
         }
       : undefined;
   const hasData =
-    loadSession !== undefined ||
-    close !== undefined ||
-    cancel !== undefined ||
-    sessionHistoryReplay !== undefined ||
-    prompt !== undefined;
+    loadSession !== undefined
+    || close !== undefined
+    || cancel !== undefined
+    || sessionHistoryReplay !== undefined
+    || prompt !== undefined;
   return hasData
     ? {
         ...(loadSession !== undefined ? { loadSession } : {}),
         ...(sessionHistoryReplay !== undefined ? { sessionHistoryReplay } : {}),
         ...(close !== undefined || cancel !== undefined
-          ? { session: { ...(close !== undefined ? { close } : {}), ...(cancel !== undefined ? { cancel } : {}) } }
+          ? {
+              session: {
+                ...(close !== undefined ? { close } : {}),
+                ...(cancel !== undefined ? { cancel } : {}),
+              },
+            }
           : {}),
         ...(prompt !== undefined ? { prompt } : {}),
         raw: record ?? sessionCapabilities,
@@ -337,7 +356,9 @@ function readAgentCapabilities(
     : { raw: record ?? sessionCapabilities };
 }
 
-function readAgentInfo(value: unknown): BackendAcpRuntimeCapabilities["agentInfo"] {
+function readAgentInfo(
+  value: unknown,
+): BackendAcpRuntimeCapabilities["agentInfo"] {
   const record = asRecord(value);
   if (!record) {
     return undefined;

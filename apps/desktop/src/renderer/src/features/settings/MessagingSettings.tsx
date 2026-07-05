@@ -43,7 +43,14 @@ import {
   type MessagingPairingScope,
   type MessagingToolUpdateMode,
 } from "@pwragent/shared";
-import { DiscordIcon, FeishuIcon, LineIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
+import {
+  DiscordIcon,
+  FeishuIcon,
+  LineIcon,
+  MattermostIcon,
+  SlackIcon,
+  TelegramIcon,
+} from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import {
   SLACK_APPROVAL_TARGET_LABELS,
@@ -77,7 +84,9 @@ export function MessagingSettings(props: {
     value: string,
   ) => Promise<boolean>;
   onToolUpdateModeChange: (mode: MessagingToolUpdateMode) => Promise<void>;
-  onImageProfileChange: (profile: DesktopMessagingImageProfile) => Promise<void>;
+  onImageProfileChange: (
+    profile: DesktopMessagingImageProfile,
+  ) => Promise<void>;
   onInputDebounceMsChange: (value: number) => Promise<void>;
   onMessagingEnabledChange: (enabled: boolean) => Promise<void>;
   onFullAccessEscalationChange: (enabled: boolean) => Promise<void>;
@@ -139,7 +148,9 @@ export function MessagingSettings(props: {
         runtimeMessaging.leaseHolder.processId
           ? `pid ${runtimeMessaging.leaseHolder.processId}`
           : undefined,
-      ].filter(Boolean).join(" - ")
+      ]
+        .filter(Boolean)
+        .join(" - ")
     : undefined;
   const runtimeWarningTitle =
     runtimeMessaging.disabledReasonKind === "lease_held"
@@ -159,16 +170,17 @@ export function MessagingSettings(props: {
       />
 
       {runtimeMessaging.overrideActive && runtimeMessaging.disabled ? (
-        <section className="settings-panel settings-panel--warning" role="status">
+        <section
+          className="settings-panel settings-panel--warning"
+          role="status"
+        >
           <div className="settings-panel__header">
             <div>
               <p className="eyebrow">Runtime Override</p>
               <h2>{runtimeWarningTitle}</h2>
             </div>
           </div>
-          <p className="settings-row__description">
-            {runtimeWarningBody}
-          </p>
+          <p className="settings-row__description">{runtimeWarningBody}</p>
         </section>
       ) : null}
 
@@ -352,11 +364,7 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
-            lookup={contactLookup(
-              props.desktopApi,
-              "telegram",
-              "user",
-            )}
+            lookup={contactLookup(props.desktopApi, "telegram", "user")}
             label="Authorized User IDs"
             sub="Telegram user IDs that can DM the bot."
             help="Numeric peer ID, e.g. 5550199999. Rejected Telegram DMs show the peer ID in Messaging Activity; use the numeric form, not @username."
@@ -376,11 +384,7 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
-            lookup={contactLookup(
-              props.desktopApi,
-              "telegram",
-              "supergroup",
-            )}
+            lookup={contactLookup(props.desktopApi, "telegram", "supergroup")}
             label="Authorized Groups / Supergroups"
             sub="Telegram group or supergroup IDs that may host bound threads."
             help="Use the negative chat ID shown in Messaging Activity for the Telegram group or supergroup."
@@ -485,11 +489,7 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
-            lookup={contactLookup(
-              props.desktopApi,
-              "discord",
-              "user",
-            )}
+            lookup={contactLookup(props.desktopApi, "discord", "user")}
             label="Authorized User IDs"
             sub="Discord user IDs that can DM the bot."
             help="Snowflake (17-19 digit number), e.g. 1177378744822943744. Rejected Discord messages show the user ID in Messaging Activity."
@@ -509,11 +509,7 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
-            lookup={contactLookup(
-              props.desktopApi,
-              "discord",
-              "guild",
-            )}
+            lookup={contactLookup(props.desktopApi, "discord", "guild")}
             label="Authorized Guilds"
             sub="Discord guild (server) IDs that may host bound threads."
             help="Snowflake (17-19 digit number), e.g. 1480554271907905731. Rejected server messages show the guild ID in Messaging Activity."
@@ -572,7 +568,8 @@ export function MessagingSettings(props: {
                 <br />
                 <code>http://127.0.0.1:8065/</code> (local, Docker on same host)
                 <br />
-                <code>https://chat.example.com</code> (Cloudflare Tunnel / Tailscale Funnel)
+                <code>https://chat.example.com</code> (Cloudflare Tunnel /
+                Tailscale Funnel)
               </>
             }
             source={optionalStringSourceBadge(mattermost.serverUrl)}
@@ -628,11 +625,13 @@ export function MessagingSettings(props: {
               <>
                 Examples:
                 <br />
-                <code>https://mm-callback.example.com/</code> (Cloudflare Tunnel / Tailscale Funnel)
+                <code>https://mm-callback.example.com/</code> (Cloudflare Tunnel
+                / Tailscale Funnel)
                 <br />
                 <code>http://localhost:47821/</code> (local)
                 <br />
-                <code>http://host.docker.internal:47821/</code> (Mattermost in Docker on the same host)
+                <code>http://host.docker.internal:47821/</code> (Mattermost in
+                Docker on the same host)
               </>
             }
             source={optionalStringSourceBadge(mattermost.callbackBaseUrl)}
@@ -654,8 +653,8 @@ export function MessagingSettings(props: {
             help={
               <>
                 Click <strong>Generate</strong> to fill the field with a fresh
-                256-bit secret (then click Save to commit), <em>or</em> run
-                this in a terminal if you'd rather generate it yourself:
+                256-bit secret (then click Save to commit), <em>or</em> run this
+                in a terminal if you'd rather generate it yourself:
                 <br />
                 <code>openssl rand -hex 32</code>
               </>
@@ -700,11 +699,7 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
-            lookup={contactLookup(
-              props.desktopApi,
-              "mattermost",
-              "user",
-            )}
+            lookup={contactLookup(props.desktopApi, "mattermost", "user")}
             label="Authorized User IDs"
             sub="Mattermost user IDs that can DM the bot."
             help="26-character lowercase a-z0-9 ID. Rejected Mattermost messages show the user ID in Messaging Activity."
@@ -857,11 +852,7 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
-            lookup={contactLookup(
-              props.desktopApi,
-              "slack",
-              "user",
-            )}
+            lookup={contactLookup(props.desktopApi, "slack", "user")}
             label="Authorized User IDs"
             sub="Slack user IDs that count as authorized users below. An authorized user can also reach the bot in a group DM (the bot replies when @mentioned there)."
             help="Slack user IDs start with U or W, e.g. U012ABCDEF0. Rejected Slack messages show the user ID in Messaging Activity."
@@ -930,11 +921,7 @@ export function MessagingSettings(props: {
           <div className="settings-subfield">
             <AuthorizedListField
               disabled={props.saving}
-              lookup={contactLookup(
-                props.desktopApi,
-                "slack",
-                "workspace",
-              )}
+              lookup={contactLookup(props.desktopApi, "slack", "workspace")}
               label="Authorized Team IDs"
               sub="Broad allowlist for Slack teams. Add a Team ID only when every channel or group DM in that team where the bot is present should be approved."
               help="Slack team IDs start with T, e.g. T012ABCDEF0. These are not channel IDs, and the Workspace URL is only display text."
@@ -972,11 +959,7 @@ export function MessagingSettings(props: {
           <div className="settings-subfield">
             <AuthorizedListField
               disabled={props.saving}
-              lookup={contactLookup(
-                props.desktopApi,
-                "slack",
-                "channel",
-              )}
+              lookup={contactLookup(props.desktopApi, "slack", "channel")}
               label="Authorized Channels"
               sub="Slack channel, private channel, DM, or group DM IDs approved individually."
               help="Slack conversation IDs start with C, G, or D, e.g. C012ABCDEF0. Use Channel pairing to add one from chat, or add a row here to override that channel's response mode."
@@ -1041,7 +1024,11 @@ export function MessagingSettings(props: {
             sub="Socket Mode keeps Slack callbacks on an outbound WebSocket. Events API is reserved for a future HTTP callback path."
             options={SLACK_INBOUND_MODE_OPTIONS}
             source={sourceBadge(slack.inboundMode)}
-            value={slack.inboundMode.value === "events" ? "socket" : slack.inboundMode.value}
+            value={
+              slack.inboundMode.value === "events"
+                ? "socket"
+                : slack.inboundMode.value
+            }
             onChange={(inboundMode) => {
               void props.onSaveSlack({
                 ...slack,
@@ -1213,7 +1200,11 @@ export function MessagingSettings(props: {
               disabled={props.saving}
               label="Local Webhook Listener"
               sub="Only used when Webhook is selected for Event subscription."
-              help={<>Default: <code>http://127.0.0.1:47823</code></>}
+              help={
+                <>
+                  Default: <code>http://127.0.0.1:47823</code>
+                </>
+              }
               source={optionalStringSourceBadge(feishu.callbackBaseUrl)}
               value={feishu.callbackBaseUrl.value}
               onSave={(callbackBaseUrl) => {
@@ -1621,9 +1612,7 @@ const FULL_ACCESS_WARNING_USER_POLICY_OPTIONS: Array<{
 const SLACK_INBOUND_MODE_OPTIONS: Array<{
   label: string;
   value: "socket" | "events";
-}> = [
-  { label: "Socket Mode", value: "socket" },
-];
+}> = [{ label: "Socket Mode", value: "socket" }];
 
 const FEISHU_TENANT_REGION_OPTIONS: Array<{
   label: string;
@@ -1841,7 +1830,9 @@ function PairingTokenField(props: {
 }) {
   const [scope, setScope] = useState<MessagingPairingScope>("user_dm");
   const [message, setMessage] = useState<string | undefined>(undefined);
-  const [messageEntryId, setMessageEntryId] = useState<string | undefined>(undefined);
+  const [messageEntryId, setMessageEntryId] = useState<string | undefined>(
+    undefined,
+  );
   const messageEntryIdRef = useRef<string | undefined>(undefined);
   const [entries, setEntries] = useState<MessagingPairingEntry[]>([]);
   const [busyId, setBusyId] = useState<string | undefined>(undefined);
@@ -1879,7 +1870,10 @@ function PairingTokenField(props: {
     void refresh();
     return props.desktopApi?.onMessagingPairingChanged?.((event) => {
       if (event.entry.platform !== props.platform) return;
-      if (event.entry.id === messageEntryIdRef.current && event.entry.status !== "pending") {
+      if (
+        event.entry.id === messageEntryIdRef.current
+        && event.entry.status !== "pending"
+      ) {
         setGeneratedMessage(undefined, undefined);
       }
       void refresh();
@@ -1891,12 +1885,17 @@ function PairingTokenField(props: {
     setGeneratedMessage(undefined, undefined);
   };
 
-  const observedEntries = entries.filter((entry) => entry.status === "observed");
-  const scopeOptions = props.scopeOptions ?? defaultPairingScopeOptions(props.platform);
+  const observedEntries = entries.filter(
+    (entry) => entry.status === "observed",
+  );
+  const scopeOptions =
+    props.scopeOptions ?? defaultPairingScopeOptions(props.platform);
   const availableScopeOptions = props.supportsBucket
     ? scopeOptions
     : scopeOptions.filter((option) => option.value !== "bucket");
-  const selectedScope = availableScopeOptions.some((option) => option.value === scope)
+  const selectedScope = availableScopeOptions.some(
+    (option) => option.value === scope,
+  )
     ? scope
     : (availableScopeOptions[0]?.value ?? scope);
 
@@ -1944,7 +1943,9 @@ function PairingTokenField(props: {
           await props.onSettingsChanged?.();
         }
       } else {
-        const result = await props.desktopApi?.rejectMessagingPairing?.({ entryId: entry.id });
+        const result = await props.desktopApi?.rejectMessagingPairing?.({
+          entryId: entry.id,
+        });
         if (result?.entry.id === messageEntryId) {
           setGeneratedMessage(undefined, undefined);
         }
@@ -1960,7 +1961,10 @@ function PairingTokenField(props: {
   // "Approve all" — apply every applicable target for a Slack observed
   // request, consuming the request on the final target so the card clears.
   const approveAll = async (entry: MessagingPairingEntry) => {
-    const steps = slackApprovalSequence(entry.observedChat, entry.approvedTargets ?? []);
+    const steps = slackApprovalSequence(
+      entry.observedChat,
+      entry.approvedTargets ?? [],
+    );
     setBusyId(entry.id);
     setError(undefined);
     try {
@@ -1985,10 +1989,7 @@ function PairingTokenField(props: {
     }
   };
 
-  const copyMessage = async (
-    text?: string,
-    options?: { silent?: boolean },
-  ) => {
+  const copyMessage = async (text?: string, options?: { silent?: boolean }) => {
     const value = text ?? message;
     if (!value) return;
     if (!options?.silent) setError(undefined);
@@ -2160,7 +2161,9 @@ const TELEGRAM_PAIRING_SCOPE_OPTIONS: PairingScopeOption[] = [
   { label: "Group/supergroup chat", value: "bucket" },
 ];
 
-function defaultPairingScopeOptions(platform: MessagingChannelKind): PairingScopeOption[] {
+function defaultPairingScopeOptions(
+  platform: MessagingChannelKind,
+): PairingScopeOption[] {
   if (platform === "discord") {
     return [
       { label: "User via DM", value: "user_dm" },
@@ -2169,9 +2172,7 @@ function defaultPairingScopeOptions(platform: MessagingChannelKind): PairingScop
     ];
   }
   if (platform === "slack") {
-    return [
-      { label: "Pair from Slack", value: "observed" },
-    ];
+    return [{ label: "Pair from Slack", value: "observed" }];
   }
   if (platform === "line") {
     return [
@@ -2310,7 +2311,9 @@ function AuthorizedListField(props: {
   const showColumnHeaders = Boolean(
     props.fullAccessWarningPolicy || props.responseModePolicy,
   );
-  const [rows, setRowsState] = useState<DesktopAuthorizedContact[]>(props.value);
+  const [rows, setRowsState] = useState<DesktopAuthorizedContact[]>(
+    props.value,
+  );
   const rowsRef = useRef<DesktopAuthorizedContact[]>(props.value);
   const [lookupState, setLookupState] = useState<
     Record<number, { loading?: boolean; message?: string }>
@@ -2334,7 +2337,9 @@ function AuthorizedListField(props: {
                 : undefined,
         }))
         .filter(
-          (result): result is { entry: string; index: number; message: string } =>
+          (
+            result,
+          ): result is { entry: string; index: number; message: string } =>
             Boolean(result.message),
         )
     : [];
@@ -2353,8 +2358,8 @@ function AuthorizedListField(props: {
   const saveIfValid = (nextRows: DesktopAuthorizedContact[]) => {
     const normalized = nextRows.map(normalizeAuthorizedContactRow);
     if (
-      props.validateEntry &&
-      normalized.some(
+      props.validateEntry
+      && normalized.some(
         (row) =>
           (row.id.length > 0 && props.validateEntry?.(row.id))
           || (row.id.length === 0 && row.displayName.length > 0),
@@ -2392,10 +2397,12 @@ function AuthorizedListField(props: {
   ) => {
     const lookup = props.lookup;
     if (!lookup) return;
-    const row = normalizeAuthorizedContactRow(candidateRows[indexToLookup] ?? {
-      id: "",
-      displayName: "",
-    });
+    const row = normalizeAuthorizedContactRow(
+      candidateRows[indexToLookup] ?? {
+        id: "",
+        displayName: "",
+      },
+    );
     if (!row.id || props.validateEntry?.(row.id)) return;
 
     setLookupState((current) => ({
@@ -2490,7 +2497,7 @@ function AuthorizedListField(props: {
                       ? " settings-authorized-list__row--with-warning"
                       : props.responseModePolicy
                         ? " settings-authorized-list__row--with-response-mode"
-                      : ""
+                        : ""
                   }`}
                 >
                   <div className="settings-authorized-list__field">
@@ -2592,11 +2599,13 @@ function AuthorizedListField(props: {
                           })
                         }
                       >
-                        {FULL_ACCESS_WARNING_USER_POLICY_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
+                        {FULL_ACCESS_WARNING_USER_POLICY_OPTIONS.map(
+                          (option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ),
+                        )}
                       </select>
                     </div>
                   ) : null}
@@ -2629,8 +2638,8 @@ function AuthorizedListField(props: {
                             responseMode:
                               event.currentTarget.value === ""
                                 ? undefined
-                                : event.currentTarget
-                                  .value as DesktopMessagingResponseMode,
+                                : (event.currentTarget
+                                    .value as DesktopMessagingResponseMode),
                           })
                         }
                       >
@@ -2740,7 +2749,9 @@ function contactLookup(
   desktopApi: DesktopApi | undefined,
   platform: DesktopMessagingContactLookupPlatform,
   kind: DesktopMessagingContactLookupKind,
-): ((id: string) => Promise<DesktopMessagingContactLookupResponse>) | undefined {
+):
+  | ((id: string) => Promise<DesktopMessagingContactLookupResponse>)
+  | undefined {
   const lookup = desktopApi?.resolveMessagingContact;
   if (!lookup) {
     return undefined;
@@ -2776,15 +2787,15 @@ function normalizeAuthorizedContactRow(
   return {
     id: contact.id.trim(),
     displayName: sanitizeMessagingContactLabel(contact.displayName),
-    ...(contact.fullAccessWarningOverride &&
-    contact.fullAccessWarningOverride !== "default"
+    ...(contact.fullAccessWarningOverride
+    && contact.fullAccessWarningOverride !== "default"
       ? { fullAccessWarningOverride: contact.fullAccessWarningOverride }
       : {}),
     ...(contact.fullAccessWarningDismissed === true
       ? { fullAccessWarningDismissed: true }
       : {}),
-    ...(contact.responseMode === "every_message" ||
-    contact.responseMode === "mention_only"
+    ...(contact.responseMode === "every_message"
+    || contact.responseMode === "mention_only"
       ? { responseMode: contact.responseMode }
       : {}),
   };
@@ -2822,19 +2833,27 @@ function validateTelegramGroupChatEntry(value: string): string | undefined {
 function validateDiscordUserIdEntry(value: string): string | undefined {
   return validationMessage(validateDiscordSnowflake(value), "Discord user ID", {
     format: "Use the numeric Discord snowflake, e.g. 1177378744822943744.",
-    future: "That snowflake timestamp is in the future. Copy the user ID from Messaging Activity.",
+    future:
+      "That snowflake timestamp is in the future. Copy the user ID from Messaging Activity.",
     length: "Discord IDs are snowflakes: 17-19 digits.",
     range: "Use a positive Discord snowflake, e.g. 1177378744822943744.",
   });
 }
 
 function validateDiscordGuildIdEntry(value: string): string | undefined {
-  return validationMessage(validateDiscordSnowflake(value), "Discord guild ID", {
-    format: "Use the numeric Discord guild snowflake, e.g. 1480554271907905731.",
-    future: "That snowflake timestamp is in the future. Copy the guild ID from Messaging Activity.",
-    length: "Discord guild IDs are snowflakes: 17-19 digits.",
-    range: "Use a positive Discord guild snowflake, e.g. 1480554271907905731.",
-  });
+  return validationMessage(
+    validateDiscordSnowflake(value),
+    "Discord guild ID",
+    {
+      format:
+        "Use the numeric Discord guild snowflake, e.g. 1480554271907905731.",
+      future:
+        "That snowflake timestamp is in the future. Copy the guild ID from Messaging Activity.",
+      length: "Discord guild IDs are snowflakes: 17-19 digits.",
+      range:
+        "Use a positive Discord guild snowflake, e.g. 1480554271907905731.",
+    },
+  );
 }
 
 function validateMattermostUserIdEntry(value: string): string | undefined {
@@ -2851,11 +2870,19 @@ function validateMattermostTeamIdEntry(value: string): string | undefined {
   });
 }
 
-function validateMattermostConversationIdEntry(value: string): string | undefined {
-  return validationMessage(validateMattermostId(value), "Mattermost conversation ID", {
-    format: "Use the 26-character lowercase a-z0-9 Mattermost channel or group DM ID.",
-    length: "Mattermost conversation IDs are exactly 26 lowercase a-z0-9 characters.",
-  });
+function validateMattermostConversationIdEntry(
+  value: string,
+): string | undefined {
+  return validationMessage(
+    validateMattermostId(value),
+    "Mattermost conversation ID",
+    {
+      format:
+        "Use the 26-character lowercase a-z0-9 Mattermost channel or group DM ID.",
+      length:
+        "Mattermost conversation IDs are exactly 26 lowercase a-z0-9 characters.",
+    },
+  );
 }
 
 function validateSlackUserIdEntry(value: string): string | undefined {
@@ -2874,50 +2901,69 @@ function validateSlackWorkspaceIdEntry(value: string): string | undefined {
 
 function validateSlackChannelIdEntry(value: string): string | undefined {
   return validationMessage(validateSlackChannelId(value), "Slack channel ID", {
-    format: "Use a Slack channel/conversation ID starting with C, G, or D, e.g. C012ABCDEF0.",
+    format:
+      "Use a Slack channel/conversation ID starting with C, G, or D, e.g. C012ABCDEF0.",
     length: "Slack channel IDs must be 64 characters or fewer.",
   });
 }
 
 function validateFeishuOpenIdEntry(value: string): string | undefined {
-  return validationMessage(validateFeishuOpenId(value), "Feishu / Lark open ID", {
-    format: "Use a Feishu / Lark open_id starting with ou_.",
-    length: "Feishu / Lark open IDs must be 128 characters or fewer.",
-  });
+  return validationMessage(
+    validateFeishuOpenId(value),
+    "Feishu / Lark open ID",
+    {
+      format: "Use a Feishu / Lark open_id starting with ou_.",
+      length: "Feishu / Lark open IDs must be 128 characters or fewer.",
+    },
+  );
 }
 
 function validateFeishuChatIdEntry(value: string): string | undefined {
-  return validationMessage(validateFeishuChatId(value), "Feishu / Lark chat ID", {
-    format: "Use a Feishu / Lark chat_id starting with oc_.",
-    length: "Feishu / Lark chat IDs must be 128 characters or fewer.",
-  });
+  return validationMessage(
+    validateFeishuChatId(value),
+    "Feishu / Lark chat ID",
+    {
+      format: "Use a Feishu / Lark chat_id starting with oc_.",
+      length: "Feishu / Lark chat IDs must be 128 characters or fewer.",
+    },
+  );
 }
 
 function validateFeishuTenantKeyEntry(value: string): string | undefined {
-  return validationMessage(validateFeishuTenantKey(value), "Feishu / Lark tenant key", {
-    format: "Use the tenant key shown in Messaging Activity.",
-    length: "Feishu / Lark tenant keys must be 64 characters or fewer.",
-  });
+  return validationMessage(
+    validateFeishuTenantKey(value),
+    "Feishu / Lark tenant key",
+    {
+      format: "Use the tenant key shown in Messaging Activity.",
+      length: "Feishu / Lark tenant keys must be 64 characters or fewer.",
+    },
+  );
 }
 
 function validateLineUserIdEntry(value: string): string | undefined {
   return validationMessage(validateLineUserId(value), "LINE user ID", {
-    format: "Use a LINE user ID starting with U followed by 32 lowercase hex characters.",
-    length: "LINE user IDs are exactly 33 characters: U plus 32 lowercase hex characters.",
+    format:
+      "Use a LINE user ID starting with U followed by 32 lowercase hex characters.",
+    length:
+      "LINE user IDs are exactly 33 characters: U plus 32 lowercase hex characters.",
   });
 }
 
 function validateLineGroupIdEntry(value: string): string | undefined {
   return validationMessage(validateLineGroupId(value), "LINE group ID", {
-    format: "Use a LINE group ID starting with C followed by 32 lowercase hex characters.",
-    length: "LINE group IDs are exactly 33 characters: C plus 32 lowercase hex characters.",
+    format:
+      "Use a LINE group ID starting with C followed by 32 lowercase hex characters.",
+    length:
+      "LINE group IDs are exactly 33 characters: C plus 32 lowercase hex characters.",
   });
 }
 
 function validateLineRoomIdEntry(value: string): string | undefined {
   return validationMessage(validateLineRoomId(value), "LINE room ID", {
-    format: "Use a LINE room ID starting with R followed by 32 lowercase hex characters.",
-    length: "LINE room IDs are exactly 33 characters: R plus 32 lowercase hex characters.",
+    format:
+      "Use a LINE room ID starting with R followed by 32 lowercase hex characters.",
+    length:
+      "LINE room IDs are exactly 33 characters: R plus 32 lowercase hex characters.",
   });
 }
 
@@ -2956,7 +3002,10 @@ function SecretField(props: {
   const [value, setValue] = useState("");
   const dirty = value.length > 0;
   const status = props.state.configured ? "Set" : "Not set";
-  const source = formatSourceLabel(props.state.source, props.state.overriddenByEnv);
+  const source = formatSourceLabel(
+    props.state.source,
+    props.state.overriddenByEnv,
+  );
 
   return (
     <SettingsField
@@ -2994,11 +3043,13 @@ function SecretField(props: {
             type="button"
             onClick={() => {
               const nextValue = value.trim();
-              void props.onReplaceSecret(props.secret, nextValue).then((saved) => {
-                if (saved) {
-                  setValue("");
-                }
-              });
+              void props
+                .onReplaceSecret(props.secret, nextValue)
+                .then((saved) => {
+                  if (saved) {
+                    setValue("");
+                  }
+                });
             }}
           >
             Save
@@ -3038,5 +3089,7 @@ function SecretField(props: {
 function generateHmacSecretHex(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
 }

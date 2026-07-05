@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { SlackAdapter, type SlackApi, type SlackSocketClient } from "../slack-adapter.ts";
+import {
+  SlackAdapter,
+  type SlackApi,
+  type SlackSocketClient,
+} from "../slack-adapter.ts";
 import type {
   MessagingChannelRef,
   MessagingCallbackHandleRecord,
@@ -33,9 +37,10 @@ function fakeStore(): MessagingCallbackHandleStore & {
     resolveCallbackHandle: async (params) =>
       records.find(
         (record) =>
-          record.handle === params.handle &&
-          record.allowedActorIds.includes(params.actorId) &&
-          conversationKey(record.channel) === conversationKey(params.channel),
+          record.handle === params.handle
+          && record.allowedActorIds.includes(params.actorId)
+          && conversationKey(record.channel)
+            === conversationKey(params.channel),
       ),
     upsertCallbackHandle: async (record) => {
       records.push(record);
@@ -55,14 +60,21 @@ function conversationKey(channel: MessagingChannelRef): string {
 
 function fakeApi(spies: {
   assistantStatusError?: Error;
-  assistantStatuses?: Array<{ channelId: string; status: string; threadTs: string }>;
+  assistantStatuses?: Array<{
+    channelId: string;
+    status: string;
+    threadTs: string;
+  }>;
   conversations?: Record<string, string>;
   mpimChannels?: string[];
   deleted?: Array<{ channel: string; ts: string }>;
   posted?: unknown[];
   replies?: Record<string, string>;
   updated?: unknown[];
-  users?: Record<string, { displayName?: string; realName?: string; username?: string }>;
+  users?: Record<
+    string,
+    { displayName?: string; realName?: string; username?: string }
+  >;
 }): SlackApi {
   return {
     authTest: async () => ({
@@ -83,10 +95,12 @@ function fakeApi(spies: {
       name: spies.conversations?.[params.channel],
       is_mpim: spies.mpimChannels?.includes(params.channel) ?? false,
     }),
-    conversationsReplies: async (params) => [{
-      ts: params.ts,
-      text: spies.replies?.[`${params.channel}:${params.ts}`],
-    }],
+    conversationsReplies: async (params) => [
+      {
+        ts: params.ts,
+        text: spies.replies?.[`${params.channel}:${params.ts}`],
+      },
+    ],
     deleteMessage: async (params) => {
       spies.deleted?.push(params);
     },
@@ -119,7 +133,10 @@ function fakeApi(spies: {
 function fakeSocket(): SlackSocketClient & {
   emitEvent(event: string, payload: unknown): Promise<void>;
 } {
-  const listeners = new Map<string, (payload: unknown) => void | Promise<void>>();
+  const listeners = new Map<
+    string,
+    (payload: unknown) => void | Promise<void>
+  >();
   return {
     on: (event, listener) => {
       listeners.set(event, listener);
@@ -153,7 +170,11 @@ describe("SlackAdapter", () => {
   });
 
   it("signals Slack Assistant thread status for active typing activity", async () => {
-    const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
+    const assistantStatuses: Array<{
+      channelId: string;
+      status: string;
+      threadTs: string;
+    }> = [];
     const adapter = new SlackAdapter({
       config: baseConfig,
       callbackHandleStore: fakeStore(),
@@ -162,38 +183,46 @@ describe("SlackAdapter", () => {
       now: () => 1_700_000_000_000,
     });
 
-    await expect(adapter.deliver({
-      id: "activity-1",
-      kind: "activity",
-      activity: "typing",
-      createdAt: 1,
-      leaseMs: 10_000,
-      state: "active",
-      targetSurface: {
-        channel: "slack",
-        id: "binding-1",
-        state: {
-          opaque: {
-            channelId: "C012ABCDEF0",
-            threadTs: "1712023030.000000",
+    await expect(
+      adapter.deliver({
+        id: "activity-1",
+        kind: "activity",
+        activity: "typing",
+        createdAt: 1,
+        leaseMs: 10_000,
+        state: "active",
+        targetSurface: {
+          channel: "slack",
+          id: "binding-1",
+          state: {
+            opaque: {
+              channelId: "C012ABCDEF0",
+              threadTs: "1712023030.000000",
+            },
           },
         },
-      },
-    })).resolves.toMatchObject({
+      }),
+    ).resolves.toMatchObject({
       channel: "slack",
       deliveredAt: 1_700_000_000_000,
       outcome: "signaled",
     });
 
-    expect(assistantStatuses).toEqual([{
-      channelId: "C012ABCDEF0",
-      status: "is working on your request...",
-      threadTs: "1712023030.000000",
-    }]);
+    expect(assistantStatuses).toEqual([
+      {
+        channelId: "C012ABCDEF0",
+        status: "is working on your request...",
+        threadTs: "1712023030.000000",
+      },
+    ]);
   });
 
   it("clears Slack Assistant thread status for idle typing activity", async () => {
-    const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
+    const assistantStatuses: Array<{
+      channelId: string;
+      status: string;
+      threadTs: string;
+    }> = [];
     const adapter = new SlackAdapter({
       config: baseConfig,
       callbackHandleStore: fakeStore(),
@@ -201,36 +230,44 @@ describe("SlackAdapter", () => {
       socketClient: fakeSocket(),
     });
 
-    await expect(adapter.deliver({
-      id: "activity-2",
-      kind: "activity",
-      activity: "typing",
-      createdAt: 1,
-      state: "idle",
-      targetSurface: {
-        channel: "slack",
-        id: "binding-1",
-        state: {
-          opaque: {
-            channelId: "C012ABCDEF0",
-            ts: "1712023030.000000",
+    await expect(
+      adapter.deliver({
+        id: "activity-2",
+        kind: "activity",
+        activity: "typing",
+        createdAt: 1,
+        state: "idle",
+        targetSurface: {
+          channel: "slack",
+          id: "binding-1",
+          state: {
+            opaque: {
+              channelId: "C012ABCDEF0",
+              ts: "1712023030.000000",
+            },
           },
         },
-      },
-    })).resolves.toMatchObject({
+      }),
+    ).resolves.toMatchObject({
       channel: "slack",
       outcome: "signaled",
     });
 
-    expect(assistantStatuses).toEqual([{
-      channelId: "C012ABCDEF0",
-      status: "",
-      threadTs: "1712023030.000000",
-    }]);
+    expect(assistantStatuses).toEqual([
+      {
+        channelId: "C012ABCDEF0",
+        status: "",
+        threadTs: "1712023030.000000",
+      },
+    ]);
   });
 
   it("discards Slack typing activity when no thread timestamp is available", async () => {
-    const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
+    const assistantStatuses: Array<{
+      channelId: string;
+      status: string;
+      threadTs: string;
+    }> = [];
     const adapter = new SlackAdapter({
       config: baseConfig,
       callbackHandleStore: fakeStore(),
@@ -238,22 +275,24 @@ describe("SlackAdapter", () => {
       socketClient: fakeSocket(),
     });
 
-    await expect(adapter.deliver({
-      id: "activity-3",
-      kind: "activity",
-      activity: "typing",
-      createdAt: 1,
-      state: "active",
-      targetSurface: {
-        channel: "slack",
-        id: "binding-1",
-        state: {
-          opaque: {
-            channelId: "C012ABCDEF0",
+    await expect(
+      adapter.deliver({
+        id: "activity-3",
+        kind: "activity",
+        activity: "typing",
+        createdAt: 1,
+        state: "active",
+        targetSurface: {
+          channel: "slack",
+          id: "binding-1",
+          state: {
+            opaque: {
+              channelId: "C012ABCDEF0",
+            },
           },
         },
-      },
-    })).resolves.toMatchObject({
+      }),
+    ).resolves.toMatchObject({
       channel: "slack",
       outcome: "discarded",
     });
@@ -311,10 +350,12 @@ describe("SlackAdapter", () => {
       channel: "slack",
       outcome: "discarded",
     });
-    await expect(adapter.deliver({
-      ...activity,
-      id: "activity-after-disable",
-    })).resolves.toMatchObject({
+    await expect(
+      adapter.deliver({
+        ...activity,
+        id: "activity-after-disable",
+      }),
+    ).resolves.toMatchObject({
       channel: "slack",
       outcome: "discarded",
     });
@@ -349,22 +390,24 @@ describe("SlackAdapter", () => {
       observed.push(info);
     });
 
-    await expect(adapter.deliver({
-      id: "message-1",
-      kind: "message",
-      createdAt: 1,
-      role: "assistant",
-      parts: [{ type: "text", text: "Final answer" }],
-      audit: {
-        actor: { platformUserId: "U012ABCDEF0" },
-        bindingId: "slack-binding-1",
-        channel: {
-          channel: "slack",
-          conversation: { id: "C012ABCDEF0", kind: "channel" },
+    await expect(
+      adapter.deliver({
+        id: "message-1",
+        kind: "message",
+        createdAt: 1,
+        role: "assistant",
+        parts: [{ type: "text", text: "Final answer" }],
+        audit: {
+          actor: { platformUserId: "U012ABCDEF0" },
+          bindingId: "slack-binding-1",
+          channel: {
+            channel: "slack",
+            conversation: { id: "C012ABCDEF0", kind: "channel" },
+          },
+          occurredAt: 1,
         },
-        occurredAt: 1,
-      },
-    })).resolves.toMatchObject({
+      }),
+    ).resolves.toMatchObject({
       channel: "slack",
       deliveredAt: 1_700_000_000_000,
       errorMessage: "rate_limited",
@@ -410,22 +453,24 @@ describe("SlackAdapter", () => {
       now: () => 1_700_000_000_000,
     });
 
-    await expect(adapter.deliver({
-      id: "message-1",
-      kind: "message",
-      createdAt: 1,
-      role: "assistant",
-      parts: [{ type: "text", text: "Final answer" }],
-      audit: {
-        actor: { platformUserId: "U012ABCDEF0" },
-        bindingId: "slack-binding-1",
-        channel: {
-          channel: "slack",
-          conversation: { id: "D012ABCDEF0", kind: "dm" },
+    await expect(
+      adapter.deliver({
+        id: "message-1",
+        kind: "message",
+        createdAt: 1,
+        role: "assistant",
+        parts: [{ type: "text", text: "Final answer" }],
+        audit: {
+          actor: { platformUserId: "U012ABCDEF0" },
+          bindingId: "slack-binding-1",
+          channel: {
+            channel: "slack",
+            conversation: { id: "D012ABCDEF0", kind: "dm" },
+          },
+          occurredAt: 1,
         },
-        occurredAt: 1,
-      },
-    })).resolves.toMatchObject({
+      }),
+    ).resolves.toMatchObject({
       outcome: "failed",
       rateLimit: {
         scope: {
@@ -454,30 +499,32 @@ describe("SlackAdapter", () => {
       now: () => 1_700_000_000_000,
     });
 
-    await expect(adapter.deliver({
-      id: "message-1",
-      kind: "message",
-      createdAt: 1,
-      role: "assistant",
-      parts: [
-        { type: "text", text: "Final answer" },
-        {
-          type: "file",
-          data: new Uint8Array([1, 2, 3]),
-          mimeType: "text/plain",
-          name: "answer.txt",
+    await expect(
+      adapter.deliver({
+        id: "message-1",
+        kind: "message",
+        createdAt: 1,
+        role: "assistant",
+        parts: [
+          { type: "text", text: "Final answer" },
+          {
+            type: "file",
+            data: new Uint8Array([1, 2, 3]),
+            mimeType: "text/plain",
+            name: "answer.txt",
+          },
+        ],
+        audit: {
+          actor: { platformUserId: "U012ABCDEF0" },
+          bindingId: "slack-binding-1",
+          channel: {
+            channel: "slack",
+            conversation: { id: "C012ABCDEF0", kind: "channel" },
+          },
+          occurredAt: 1,
         },
-      ],
-      audit: {
-        actor: { platformUserId: "U012ABCDEF0" },
-        bindingId: "slack-binding-1",
-        channel: {
-          channel: "slack",
-          conversation: { id: "C012ABCDEF0", kind: "channel" },
-        },
-        occurredAt: 1,
-      },
-    })).resolves.toMatchObject({
+      }),
+    ).resolves.toMatchObject({
       channel: "slack",
       outcome: "failed",
       rateLimit: {
@@ -595,7 +642,12 @@ describe("SlackAdapter", () => {
         ...fakeApi({}),
         conversationsHistory: async () => [
           { ts: "1712023032.000200", text: "newest", bot_id: "B012DATADOG" },
-          { ts: "1712023032.000100", text: "older", user: "U2", username: "alice" },
+          {
+            ts: "1712023032.000100",
+            text: "older",
+            user: "U2",
+            username: "alice",
+          },
           { ts: "1712023032.000050", subtype: "channel_join", text: "joined" },
         ],
       },
@@ -650,8 +702,16 @@ describe("SlackAdapter", () => {
       api: {
         ...fakeApi({}),
         conversationsHistory: async () => [
-          { ts: "1712023032.000500", text: "own bot post", bot_id: "B0PWRAGENT" },
-          { ts: "1712023032.000400", text: "own user post", user: "U0BOTUSERID" },
+          {
+            ts: "1712023032.000500",
+            text: "own bot post",
+            bot_id: "B0PWRAGENT",
+          },
+          {
+            ts: "1712023032.000400",
+            text: "own user post",
+            user: "U0BOTUSERID",
+          },
           {
             ts: "1712023032.000300",
             subtype: "bot_message",
@@ -665,7 +725,12 @@ describe("SlackAdapter", () => {
             user: "U2",
             username: "alice",
           },
-          { ts: "1712023032.000100", text: "normal message", user: "U3", username: "bob" },
+          {
+            ts: "1712023032.000100",
+            text: "normal message",
+            user: "U3",
+            username: "bob",
+          },
         ],
       },
       socketClient: fakeSocket(),
@@ -2012,7 +2077,8 @@ describe("SlackAdapter", () => {
           G012ABCDEF0: "agents-private",
         },
         replies: {
-          "G012ABCDEF0:1712023030.000000": ":thread: Root message for this Slack thread",
+          "G012ABCDEF0:1712023030.000000":
+            ":thread: Root message for this Slack thread",
         },
       }),
       socketClient: socket,
@@ -2165,7 +2231,10 @@ describe("SlackAdapter", () => {
     // Edits the one surface in place — no fresh post that would ping the channel.
     expect(posted).toEqual([]);
     expect(updated).toEqual([
-      expect.objectContaining({ channel: "C012ABCDEF0", ts: "1712023032.123456" }),
+      expect.objectContaining({
+        channel: "C012ABCDEF0",
+        ts: "1712023032.123456",
+      }),
     ]);
   });
 

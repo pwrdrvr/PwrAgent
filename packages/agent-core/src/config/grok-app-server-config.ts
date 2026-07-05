@@ -33,26 +33,36 @@ function readPwragentHomeFromOptions(options?: {
   pwragentHome?: string;
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
-  if (options?.pwragentHome?.trim()) return path.resolve(options.pwragentHome.trim());
+  if (options?.pwragentHome?.trim())
+    return path.resolve(options.pwragentHome.trim());
   const env = options?.env ?? process.env;
   const value = env[PWRAGENT_HOME_ENV]?.trim();
   return value ? path.resolve(value) : undefined;
 }
 
-export function defaultGrokAppServerConfigDir(options?: ConfigDirOptions): string {
+export function defaultGrokAppServerConfigDir(
+  options?: ConfigDirOptions,
+): string {
   const pwragentHome = readPwragentHomeFromOptions(options);
   if (pwragentHome) return path.join(pwragentHome, "grok-app-server");
   const homeDir = options?.homeDir ?? os.homedir();
   const xdgConfigHome =
     options?.xdgConfigHome?.trim() || process.env.XDG_CONFIG_HOME?.trim();
-  return path.join(xdgConfigHome || path.join(homeDir, ".config"), "grok-app-server");
+  return path.join(
+    xdgConfigHome || path.join(homeDir, ".config"),
+    "grok-app-server",
+  );
 }
 
-export function defaultGrokAppServerConfigPath(options?: ConfigDirOptions): string {
+export function defaultGrokAppServerConfigPath(
+  options?: ConfigDirOptions,
+): string {
   return path.join(defaultGrokAppServerConfigDir(options), "config.toml");
 }
 
-export function defaultGrokAppServerStateDir(options?: StateDirOptions): string {
+export function defaultGrokAppServerStateDir(
+  options?: StateDirOptions,
+): string {
   const pwragentHome = readPwragentHomeFromOptions(options);
   if (pwragentHome) return path.join(pwragentHome, "grok-app-server");
   const homeDir = options?.homeDir ?? os.homedir();
@@ -92,7 +102,9 @@ export function resolveGrokAppServerRuntimeConfig(
   };
 }
 
-function readConfigToml(configPath: string): Record<string, string | number | boolean> {
+function readConfigToml(
+  configPath: string,
+): Record<string, string | number | boolean> {
   if (!fs.existsSync(configPath)) {
     return {};
   }
@@ -123,7 +135,9 @@ function readLegacyEnvConfig(
 function parseLegacyEnvFile(
   filePath: string,
 ): Partial<Record<"XAI_API_KEY" | "XAI_BASE_URL" | "GROK_MODEL", string>> {
-  const values: Partial<Record<"XAI_API_KEY" | "XAI_BASE_URL" | "GROK_MODEL", string>> = {};
+  const values: Partial<
+    Record<"XAI_API_KEY" | "XAI_BASE_URL" | "GROK_MODEL", string>
+  > = {};
   const contents = fs.readFileSync(filePath, "utf8");
 
   for (const [index, rawLine] of contents.split(/\r?\n/).entries()) {
@@ -139,7 +153,11 @@ function parseLegacyEnvFile(
 
     const key = line.slice(0, separatorIndex).trim();
     const value = line.slice(separatorIndex + 1).trim();
-    if (key === "XAI_API_KEY" || key === "XAI_BASE_URL" || key === "GROK_MODEL") {
+    if (
+      key === "XAI_API_KEY"
+      || key === "XAI_BASE_URL"
+      || key === "GROK_MODEL"
+    ) {
       values[key] = value;
     }
   }
@@ -147,6 +165,8 @@ function parseLegacyEnvFile(
   return values;
 }
 
-function readString(value: string | number | boolean | undefined): string | undefined {
+function readString(
+  value: string | number | boolean | undefined,
+): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

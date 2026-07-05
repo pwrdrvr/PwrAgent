@@ -30,7 +30,9 @@ function fileDiffDetail(params: {
     path: params.path,
     fileDiff: {
       kind,
-      diff: params.diffRefKey ? "" : `diff for ${params.path} (#${detailCounter})`,
+      diff: params.diffRefKey
+        ? ""
+        : `diff for ${params.path} (#${detailCounter})`,
       ...(params.diffRefKey
         ? {
             diffRef: {
@@ -275,7 +277,9 @@ describe("flattenEditedFileGroups", () => {
         activityEntry({
           id: "a1",
           turnId: "turn-1",
-          details: [fileDiffDetail({ path: "src/a.ts", additions: 2, removals: 1 })],
+          details: [
+            fileDiffDetail({ path: "src/a.ts", additions: 2, removals: 1 }),
+          ],
         }),
         activityEntry({
           id: "a2",
@@ -307,7 +311,9 @@ describe("summarizeEditedFileGroups", () => {
         activityEntry({
           id: "a1",
           turnId: "turn-1",
-          details: [fileDiffDetail({ path: "src/a.ts", additions: 2, removals: 1 })],
+          details: [
+            fileDiffDetail({ path: "src/a.ts", additions: 2, removals: 1 }),
+          ],
         }),
         activityEntry({
           id: "a2",
@@ -325,7 +331,9 @@ describe("summarizeEditedFileGroups", () => {
         activityEntry({
           id: "a1",
           turnId: "turn-1",
-          details: [fileDiffDetail({ path: "src/a.ts", additions: 2, removals: 1 })],
+          details: [
+            fileDiffDetail({ path: "src/a.ts", additions: 2, removals: 1 }),
+          ],
         }),
       ],
     });

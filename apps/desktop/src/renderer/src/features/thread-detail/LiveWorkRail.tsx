@@ -82,7 +82,8 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
   const sectionLabels: string[] = [];
   if (props.planEntry) sectionLabels.push("Plan");
   if (editedSummary) sectionLabels.push(editedSummary);
-  if (props.changedFilesEntry) sectionLabels.push(props.changedFilesEntry.summary);
+  if (props.changedFilesEntry)
+    sectionLabels.push(props.changedFilesEntry.summary);
   const railTitle = sectionLabels.join(" · ");
   const railAriaLabel = props.pinned ? `${railTitle} (last turn)` : railTitle;
 
@@ -166,9 +167,7 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
   );
 }
 
-function ChangedFilesSection(props: {
-  entry: AppServerThreadActivityEntry;
-}) {
+function ChangedFilesSection(props: { entry: AppServerThreadActivityEntry }) {
   // No inner `aria-label` — the rail-level complementary landmark
   // already names the surface with the section summary.
   return (

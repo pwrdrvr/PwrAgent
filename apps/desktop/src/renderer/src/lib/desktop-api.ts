@@ -253,7 +253,10 @@ import type {
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type { WindowPointerSnapshot } from "../../../shared/window-pointer";
 import type { WindowShowThreadRequest } from "../../../shared/window-show-thread";
-import type { AppMenuTopLevel, AppMenuPopupRequest } from "../../../shared/app-menu";
+import type {
+  AppMenuTopLevel,
+  AppMenuPopupRequest,
+} from "../../../shared/app-menu";
 import type {
   AppChangelogDocument,
   AppLogEntry,
@@ -286,7 +289,9 @@ export type DesktopApi = {
   checkForAppUpdates?: () => Promise<AppUpdateCheckResult>;
   readAppUpdateStatus?: () => Promise<AppUpdateStatus>;
   readAppUpdateReleaseVersions?: () => Promise<AppUpdateReleaseVersions>;
-  onAppUpdateStatus?: (callback: (status: AppUpdateStatus) => void) => () => void;
+  onAppUpdateStatus?: (
+    callback: (status: AppUpdateStatus) => void,
+  ) => () => void;
   onHotCpuProfileCaptured?: (
     callback: (event: HotCpuProfileCapturedEvent) => void,
   ) => () => void;
@@ -378,13 +383,13 @@ export type DesktopApi = {
   ) => Promise<WaitForDesktopProfileAliveResponse>;
   ping?: () => string;
   listSkills?: (
-    request?: AppServerListSkillsRequest
+    request?: AppServerListSkillsRequest,
   ) => Promise<AppServerListSkillsResponse>;
   analyzeFocusedDiff?: (
-    request: FocusedDiffAnalysisRequest
+    request: FocusedDiffAnalysisRequest,
   ) => Promise<FocusedDiffAnalysisResponse>;
   readThread?: (
-    request: AppServerReadThreadRequest
+    request: AppServerReadThreadRequest,
   ) => Promise<AppServerReadThreadResponse>;
   getThreadFileDiff?: (
     request: GetThreadFileDiffRequest,
@@ -393,10 +398,10 @@ export type DesktopApi = {
     request: PersistThreadUsageActivityRequest,
   ) => Promise<PersistThreadUsageActivityResponse>;
   archiveThread?: (
-    request: ArchiveThreadRequest
+    request: ArchiveThreadRequest,
   ) => Promise<ArchiveThreadResponse>;
   restoreThread?: (
-    request: RestoreThreadRequest
+    request: RestoreThreadRequest,
   ) => Promise<RestoreThreadResponse>;
   listThreadMigrationSources?: () => Promise<ListThreadMigrationSourcesResponse>;
   listThreadMigrationSourceThreads?: (
@@ -409,30 +414,30 @@ export type DesktopApi = {
     request: RetryThreadMigrationRequest,
   ) => Promise<StartThreadMigrationResponse>;
   archiveWorktree?: (
-    request: ArchiveWorktreeRequest
+    request: ArchiveWorktreeRequest,
   ) => Promise<ArchiveWorktreeResponse>;
   restoreWorktree?: (
-    request: RestoreWorktreeRequest
+    request: RestoreWorktreeRequest,
   ) => Promise<RestoreWorktreeResponse>;
   handoffThreadWorkspace?: (
-    request: HandoffThreadWorkspaceRequest
+    request: HandoffThreadWorkspaceRequest,
   ) => Promise<HandoffThreadWorkspaceResponse>;
   renameThread?: (
-    request: RenameThreadRequest
+    request: RenameThreadRequest,
   ) => Promise<RenameThreadResponse>;
   startThread?: (request: StartThreadRequest) => Promise<StartThreadResponse>;
   forkThread?: (request: ForkThreadRequest) => Promise<ForkThreadResponse>;
   startReview?: (request: StartReviewRequest) => Promise<StartReviewResponse>;
   compactThread?: (
-    request: CompactThreadRequest
+    request: CompactThreadRequest,
   ) => Promise<CompactThreadResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
   interruptTurn?: (
-    request: InterruptTurnRequest
+    request: InterruptTurnRequest,
   ) => Promise<InterruptTurnResponse>;
   steerTurn?: (request: SteerTurnRequest) => Promise<SteerTurnResponse>;
   setThreadExecutionMode?: (
-    request: SetThreadExecutionModeRequest
+    request: SetThreadExecutionModeRequest,
   ) => Promise<SetThreadExecutionModeResponse>;
   queueThreadExecutionMode?: (
     request: QueueThreadExecutionModeRequest,
@@ -444,19 +449,19 @@ export type DesktopApi = {
     request: SetAcpSessionRuntimeOptionRequest,
   ) => Promise<SetAcpSessionRuntimeOptionResponse>;
   setThreadModelSettings?: (
-    request: SetThreadModelSettingsRequest
+    request: SetThreadModelSettingsRequest,
   ) => Promise<SetThreadModelSettingsResponse>;
   checkThreadBranchDrift?: (
-    request: CheckThreadBranchDriftRequest
+    request: CheckThreadBranchDriftRequest,
   ) => Promise<CheckThreadBranchDriftResponse>;
   updateThreadExpectedBranch?: (
-    request: UpdateThreadExpectedBranchRequest
+    request: UpdateThreadExpectedBranchRequest,
   ) => Promise<UpdateThreadExpectedBranchResponse>;
   retainThreadBranchDrift?: (
-    request: RetainThreadBranchDriftRequest
+    request: RetainThreadBranchDriftRequest,
   ) => Promise<RetainThreadBranchDriftResponse>;
   materializeDirectoryLaunchpad?: (
-    request: MaterializeDirectoryLaunchpadRequest
+    request: MaterializeDirectoryLaunchpadRequest,
   ) => Promise<MaterializeDirectoryLaunchpadResponse>;
   runCodexEnvironmentAction?: (
     request: RunCodexEnvironmentActionRequest,
@@ -468,38 +473,38 @@ export type DesktopApi = {
     request: SetCodexThreadEnvironmentRequest,
   ) => Promise<SetCodexThreadEnvironmentResponse>;
   submitServerRequest?: (
-    request: SubmitServerRequestRequest
+    request: SubmitServerRequestRequest,
   ) => Promise<SubmitServerRequestResponse>;
   trustCodexProject?: (
     request: TrustCodexProjectRequest,
   ) => Promise<TrustCodexProjectResponse>;
   getLatestCodexConfigWarning?: () => Promise<LatestCodexConfigWarningResponse>;
   getNavigationSnapshot?: (
-    request?: GetNavigationSnapshotRequest
+    request?: GetNavigationSnapshotRequest,
   ) => Promise<NavigationSnapshot>;
   setNavigationBrowseMode?: (
     request: SetNavigationBrowseModeRequest,
   ) => Promise<SetNavigationBrowseModeResponse>;
   listBackends?: (
-    request?: ListBackendsRequest
+    request?: ListBackendsRequest,
   ) => Promise<ListBackendsResponse>;
   listAcpAgents?: (
-    request?: ListAcpAgentSettingsRequest
+    request?: ListAcpAgentSettingsRequest,
   ) => Promise<ListAcpAgentSettingsResponse>;
   readSettings?: (
-    request?: ReadDesktopSettingsRequest
+    request?: ReadDesktopSettingsRequest,
   ) => Promise<ReadDesktopSettingsResponse>;
   writeSettingsConfig?: (
-    request: WriteDesktopSettingsConfigRequest
+    request: WriteDesktopSettingsConfigRequest,
   ) => Promise<DesktopSettingsWriteResponse>;
   replaceSettingsSecret?: (
-    request: ReplaceDesktopSettingsSecretRequest
+    request: ReplaceDesktopSettingsSecretRequest,
   ) => Promise<DesktopSettingsWriteResponse>;
   clearSettingsSecret?: (
-    request: ClearDesktopSettingsSecretRequest
+    request: ClearDesktopSettingsSecretRequest,
   ) => Promise<DesktopSettingsWriteResponse>;
   refreshCodexDiscovery?: (
-    request?: RefreshDesktopCodexDiscoveryRequest
+    request?: RefreshDesktopCodexDiscoveryRequest,
   ) => Promise<ReadDesktopSettingsResponse>;
   createCodexAuthProfile?: (
     request: CreateDesktopCodexAuthProfileRequest,
@@ -529,28 +534,28 @@ export type DesktopApi = {
   /** Read the last-known credential-test result without firing a new
    *  probe. Used by the test-block primitive to render the previous
    *  status on settings-pane mount. */
-  readLastSettingsCredentialTest?: (
-    request: { kind: SettingsCredentialTestKind },
-  ) => Promise<SettingsCredentialTestResult | undefined>;
+  readLastSettingsCredentialTest?: (request: {
+    kind: SettingsCredentialTestKind;
+  }) => Promise<SettingsCredentialTestResult | undefined>;
   resolveMessagingContact?: (
     request: DesktopMessagingContactLookupRequest,
   ) => Promise<DesktopMessagingContactLookupResponse>;
   openApplication?: (
-    request: OpenDesktopApplicationRequest
+    request: OpenDesktopApplicationRequest,
   ) => Promise<OpenDesktopApplicationResponse>;
   openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   revealPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   readMarkdownFile?: (
-    request: ReadMarkdownFileRequest
+    request: ReadMarkdownFileRequest,
   ) => Promise<ReadMarkdownFileResponse>;
   openMarkdownFileViewer?: (
-    request: OpenMarkdownFileViewerRequest
+    request: OpenMarkdownFileViewerRequest,
   ) => Promise<OpenMarkdownFileViewerResponse>;
   readMarkdownFileViewerSnapshot?: (
-    request: ReadMarkdownFileViewerSnapshotRequest
+    request: ReadMarkdownFileViewerSnapshotRequest,
   ) => Promise<ReadMarkdownFileViewerSnapshotResponse>;
   onMarkdownFileViewerSnapshotChanged?: (
-    callback: (snapshot: ReadMarkdownFileViewerSnapshotResponse) => void
+    callback: (snapshot: ReadMarkdownFileViewerSnapshotResponse) => void,
   ) => () => void;
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
@@ -574,32 +579,32 @@ export type DesktopApi = {
     callback: (event: IntegratedTerminalErrorEvent) => void,
   ) => () => void;
   listThreads?: (
-    request?: AppServerListThreadsRequest
+    request?: AppServerListThreadsRequest,
   ) => Promise<AppServerListThreadsResponse>;
   searchThreads?: (
     request?: ThreadSearchRequest,
   ) => Promise<ThreadSearchResponse>;
   markThreadSeen?: (request: MarkThreadSeenRequest) => Promise<unknown>;
   setThreadReaction?: (
-    request: SetThreadReactionRequest
+    request: SetThreadReactionRequest,
   ) => Promise<SetThreadReactionResponse>;
   setThreadPin?: (
-    request: SetThreadPinRequest
+    request: SetThreadPinRequest,
   ) => Promise<SetThreadPinResponse>;
   setThreadAgent?: (
-    request: SetThreadAgentRequest
+    request: SetThreadAgentRequest,
   ) => Promise<SetThreadAgentResponse>;
   reorderThreadPins?: (
-    request: ReorderThreadPinsRequest
+    request: ReorderThreadPinsRequest,
   ) => Promise<ReorderThreadPinsResponse>;
   setThreadParent?: (
-    request: SetThreadParentRequest
+    request: SetThreadParentRequest,
   ) => Promise<SetThreadParentResponse>;
   updateSubthreadOrder?: (
-    request: UpdateSubthreadOrderRequest
+    request: UpdateSubthreadOrderRequest,
   ) => Promise<UpdateSubthreadOrderResponse>;
   setSubthreadsCollapsed?: (
-    request: SetSubthreadsCollapsedRequest
+    request: SetSubthreadsCollapsedRequest,
   ) => Promise<SetSubthreadsCollapsedResponse>;
   /**
    * Directory pin IPC (plan 2026-05-09-002, Unit H). Mirror of
@@ -608,38 +613,38 @@ export type DesktopApi = {
    * starts with "directory:" (rejecting workspace/unlinked).
    */
   setDirectoryPin?: (
-    request: SetDirectoryPinRequest
+    request: SetDirectoryPinRequest,
   ) => Promise<SetDirectoryPinResponse>;
   reorderDirectoryPins?: (
-    request: ReorderDirectoryPinsRequest
+    request: ReorderDirectoryPinsRequest,
   ) => Promise<ReorderDirectoryPinsResponse>;
   refreshThreadPullRequests?: (
-    request: RefreshThreadPullRequestsRequest
+    request: RefreshThreadPullRequestsRequest,
   ) => Promise<RefreshThreadPullRequestsResponse>;
   detachThreadPullRequest?: (
-    request: DetachThreadPullRequestRequest
+    request: DetachThreadPullRequestRequest,
   ) => Promise<DetachThreadPullRequestResponse>;
   refreshDirectoryGitStatuses?: (
-    request: RefreshDirectoryGitStatusesRequest
+    request: RefreshDirectoryGitStatusesRequest,
   ) => Promise<RefreshDirectoryGitStatusesResponse>;
   resolveEditCommitStates?: (
-    request: ResolveEditCommitStatesRequest
+    request: ResolveEditCommitStatesRequest,
   ) => Promise<ResolveEditCommitStatesResponse>;
   listWorktreeOtherChanges?: (
-    request: ListWorktreeOtherChangesRequest
+    request: ListWorktreeOtherChangesRequest,
   ) => Promise<ListWorktreeOtherChangesResponse>;
   getWorktreeOtherChangeDiff?: (
-    request: GetWorktreeOtherChangeDiffRequest
+    request: GetWorktreeOtherChangeDiffRequest,
   ) => Promise<GetWorktreeOtherChangeDiffResponse>;
   getGhStatus?: (request?: GetGhStatusRequest) => Promise<GhStatus>;
   ensureDirectoryLaunchpad?: (
-    request: EnsureDirectoryLaunchpadRequest
+    request: EnsureDirectoryLaunchpadRequest,
   ) => Promise<EnsureDirectoryLaunchpadResponse>;
   updateDirectoryLaunchpad?: (
-    request: UpdateDirectoryLaunchpadRequest
+    request: UpdateDirectoryLaunchpadRequest,
   ) => Promise<UpdateDirectoryLaunchpadResponse>;
   resetDirectoryLaunchpad?: (
-    request: ResetDirectoryLaunchpadRequest
+    request: ResetDirectoryLaunchpadRequest,
   ) => Promise<ResetDirectoryLaunchpadResponse>;
   saveComposerDraft?: (
     request: SaveComposerDraftRequest,
@@ -673,12 +678,14 @@ export type DesktopApi = {
     request: DetachDirectoryFromThreadRequest,
   ) => Promise<DetachDirectoryFromThreadResponse>;
   normalizeImageForUpload?: (
-    request: ImageUploadFallbackRequest
+    request: ImageUploadFallbackRequest,
   ) => Promise<ImageUploadFallbackResponse>;
   recordImageUploadNormalization?: (
-    request: ImageUploadNormalizationLogRequest
+    request: ImageUploadNormalizationLogRequest,
   ) => Promise<void>;
-  logRendererDiagnostic?: (request: RendererDiagnosticLogRequest) => Promise<void>;
+  logRendererDiagnostic?: (
+    request: RendererDiagnosticLogRequest,
+  ) => Promise<void>;
   recordStartupProfileEvent?: (
     type: string,
     detail?: Record<string, unknown>,
@@ -728,8 +735,7 @@ export type DesktopApi = {
   listMessagingActivity?: (
     request?: ListMessagingActivityRequest,
   ) => Promise<ListMessagingActivityResponse>;
-  getMessagingActivitySummary?: () =>
-    Promise<GetMessagingActivitySummaryResponse>;
+  getMessagingActivitySummary?: () => Promise<GetMessagingActivitySummaryResponse>;
   generateMessagingPairingToken?: (
     request: GenerateMessagingPairingTokenRequest,
   ) => Promise<GenerateMessagingPairingTokenResponse>;
@@ -831,7 +837,7 @@ export function getDesktopApi(): DesktopApi | undefined {
 
 export function useDesktopApi(): DesktopApi | undefined {
   const [desktopApi, setDesktopApi] = useState<DesktopApi | undefined>(() =>
-    getDesktopApi()
+    getDesktopApi(),
   );
 
   useEffect(() => {

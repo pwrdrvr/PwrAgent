@@ -19,7 +19,9 @@ const ADVERSARIAL_STRINGS = [
 
 describe("Discord identifier validators", () => {
   it("accepts known-good identifiers", () => {
-    expect(validateDiscordSnowflake("1480556454498009352")).toEqual({ ok: true });
+    expect(validateDiscordSnowflake("1480556454498009352")).toEqual({
+      ok: true,
+    });
     expect(validateDiscordCustomId("dc:abcdefghijklmnopqrstuvwx")).toEqual({
       ok: true,
     });
@@ -56,8 +58,12 @@ describe("Discord identifier validators", () => {
   });
 
   it("rejects attachment URLs outside Discord media hosts", () => {
-    expect(validateDiscordAttachmentUrl("https://example.com/file.png").ok).toBe(false);
-    expect(validateDiscordAttachmentUrl("http://cdn.discordapp.com/file.png").ok).toBe(false);
+    expect(
+      validateDiscordAttachmentUrl("https://example.com/file.png").ok,
+    ).toBe(false);
+    expect(
+      validateDiscordAttachmentUrl("http://cdn.discordapp.com/file.png").ok,
+    ).toBe(false);
   });
 
   it("keeps adversarial validation linear-time", () => {

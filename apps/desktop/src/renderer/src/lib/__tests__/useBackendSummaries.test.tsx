@@ -328,7 +328,9 @@ describe("useBackendSummaries", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.backends[0]?.launchpadOptions?.models?.[0]).toMatchObject({
+      expect(
+        result.current.backends[0]?.launchpadOptions?.models?.[0],
+      ).toMatchObject({
         id: "kimi-code/kimi-for-coding,thinking",
         label: "kimi-for-coding (thinking)",
       });

@@ -1,7 +1,4 @@
-import {
-  spawn,
-  type ChildProcessWithoutNullStreams,
-} from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
@@ -39,9 +36,9 @@ function isJsonRpcResponseEnvelope(message: string): boolean {
     }
     const record = envelope as Record<string, unknown>;
     return (
-      record.id !== undefined &&
-      typeof record.method !== "string" &&
-      ("result" in record || "error" in record)
+      record.id !== undefined
+      && typeof record.method !== "string"
+      && ("result" in record || "error" in record)
     );
   } catch {
     return false;
@@ -74,10 +71,10 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
 
     const env = this.options.resolveEnv
       ? await this.options.resolveEnv()
-      : this.options.env ?? process.env;
+      : (this.options.env ?? process.env);
     const args = this.options.resolveArgs
       ? await this.options.resolveArgs(env)
-      : this.options.args ?? [];
+      : (this.options.args ?? []);
     const command = await resolveCodexCommand({
       command: this.options.command,
       env,

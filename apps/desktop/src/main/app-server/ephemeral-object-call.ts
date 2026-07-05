@@ -57,11 +57,12 @@ export class XaiEphemeralObjectCaller {
     this.configuredBaseUrl = options.baseUrl?.trim() || undefined;
     this.configuredClient = options.client;
     this.configuredModel = options.model?.trim() || undefined;
-    this.resolveRuntimeConfig = options.resolveRuntimeConfig ?? resolveGrokAppServerRuntimeConfig;
+    this.resolveRuntimeConfig =
+      options.resolveRuntimeConfig ?? resolveGrokAppServerRuntimeConfig;
   }
 
   async generateObject(
-    request: XaiEphemeralObjectCallRequest
+    request: XaiEphemeralObjectCallRequest,
   ): Promise<XaiEphemeralObjectCallResult> {
     const client = this.getClient();
     if (!client) {

@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { Client4, WebSocketClient, type WebSocketMessage } from "@mattermost/client";
+import {
+  Client4,
+  WebSocketClient,
+  type WebSocketMessage,
+} from "@mattermost/client";
 
 // Note on `window` access in `@mattermost/client`'s `WebSocketClient`: prior
 // to @mattermost/client@11.4.0 the WS code touched bare `window` references
@@ -142,11 +146,15 @@ export type MattermostProviderAdapter = {
   channel: "mattermost";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
-  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  resolveDeliveryScope?(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined;
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
-  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateAuthorization?(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void>;
   updateRenderingPreferences?(
     update: MessagingAdapterRenderingPreferencesUpdate,
   ): Promise<void>;
@@ -176,7 +184,9 @@ export type MattermostProviderAdapter = {
     title: string;
     updatedAt: number;
   }>;
-  start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
+  start(
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void>;
   stop(): Promise<void>;
 };
 
@@ -190,7 +200,9 @@ export type MattermostAdapterOptions = {
   websocketClient?: WebSocketClient;
 };
 
-type MattermostInboundListener = (event: MessagingInboundEvent) => Promise<void>;
+type MattermostInboundListener = (
+  event: MessagingInboundEvent,
+) => Promise<void>;
 
 /**
  * Internal post-state we persist in `MessagingAdapterState.opaque` so the
@@ -361,7 +373,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    */
   private readonly responseUrlPostIds = new Set<string>();
   private readonly unauthorizedConversationLogKeys = new Set<string>();
-  private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  private readonly inboundRejectedListeners =
+    new Set<MessagingInboundRejectedListener>();
   /**
    * Last reconciliation result per team, kept for diagnostics + future
    * re-reconcile passes (e.g. on team-membership change).
@@ -390,8 +403,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     this.websocketClient = options.websocketClient ?? new WebSocketClient();
 
     this.callbackServer =
-      options.callbackServer ??
-      createMattermostCallbackServer({
+      options.callbackServer
+      ?? createMattermostCallbackServer({
         port: bindPortFromCallbackUrl(options.config.callbackBaseUrl),
         hmacSecret:
           options.config.callbackHmacSecret ?? generateMattermostHmacSecret(),
@@ -417,7 +430,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     };
   }
 
-  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+  async updateAuthorization(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void> {
     this.authorizedActorIdsValue = [...update.authorizedActorIds];
     this.config.authorizedActorIds = mattermostContactsFromIds(
       update.authorizedActorIds,
@@ -449,7 +464,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     await this.callbackServer.start();
 
     try {
-      const me = (await this.client.getMe()) as { id: string; username?: string };
+      const me = (await this.client.getMe()) as {
+        id: string;
+        username?: string;
+      };
       this.botUserId = me.id;
       this.botUsername = me.username;
     } catch (error) {
@@ -622,7 +640,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     }
   }
 
-  async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
+  async deliver(
+    intent: MessagingSurfaceIntent,
+  ): Promise<MessagingDeliveryResult> {
     try {
       switch (intent.kind) {
         case "activity":
@@ -668,12 +688,16 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     }
   }
 
-  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
-    const targetSurface = (intent as { targetSurface?: MessagingSurfaceRef }).targetSurface;
+  resolveDeliveryScope(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined {
+    const targetSurface = (intent as { targetSurface?: MessagingSurfaceRef })
+      .targetSurface;
     const targetOpaque = targetSurface?.state?.opaque as
       | MattermostSurfaceOpaqueState
       | undefined;
-    const audit = (intent as { audit?: { channel?: MessagingChannelRef } }).audit;
+    const audit = (intent as { audit?: { channel?: MessagingChannelRef } })
+      .audit;
     const channelRef = audit?.channel;
     const channelId = targetOpaque?.channelId ?? channelRef?.conversation.id;
     if (!channelId) {
@@ -703,9 +727,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   async downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult> {
-    const opaque = (request.attachment.state?.opaque ?? null) as
-      | { fileId?: string }
-      | null;
+    const opaque = (request.attachment.state?.opaque ?? null) as {
+      fileId?: string;
+    } | null;
     const fileId = opaque?.fileId;
     if (!fileId) {
       throw new Error("mattermost attachment missing opaque fileId");
@@ -725,7 +749,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     }
     const arrayBuffer = await response.arrayBuffer();
     const data = new Uint8Array(arrayBuffer);
-    const maxBytes = this.capabilityProfile.inboundAttachments?.maxDownloadBytes;
+    const maxBytes =
+      this.capabilityProfile.inboundAttachments?.maxDownloadBytes;
     if (typeof maxBytes === "number" && data.byteLength > maxBytes) {
       throw new Error(
         `mattermost attachment exceeds inbound size limit (${data.byteLength} > ${maxBytes})`,
@@ -771,7 +796,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         updatedAt: this.now(),
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       this.logger.warn("mattermost patchChannel failed", {
         channelId,
         error: errorMessage,
@@ -855,10 +881,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     // regardless of post.user_id.
     const fromWebhook = (post.props ?? {})["from_webhook"];
     if (fromWebhook === "true" || fromWebhook === true) {
-      this.logger.debug?.("mattermost: ignoring webhook-attributed posted event", {
-        postId: post.id,
-        userId: post.user_id,
-      });
+      this.logger.debug?.(
+        "mattermost: ignoring webhook-attributed posted event",
+        {
+          postId: post.id,
+          userId: post.user_id,
+        },
+      );
       return;
     }
     const messageText = post.message ?? "";
@@ -957,7 +986,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (!channelId) {
       return;
     }
-    if (!this.validateIdentifier("channel_id", channelId, validateMattermostId)) {
+    if (
+      !this.validateIdentifier("channel_id", channelId, validateMattermostId)
+    ) {
       return;
     }
     await this.listener({
@@ -984,10 +1015,18 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   ): boolean {
     return (
       this.validateIdentifier("post_id", post.id, validateMattermostId)
-      && this.validateIdentifier("channel_id", post.channel_id, validateMattermostId)
+      && this.validateIdentifier(
+        "channel_id",
+        post.channel_id,
+        validateMattermostId,
+      )
       && this.validateIdentifier("user_id", post.user_id, validateMattermostId)
       && (post.root_id === undefined
-        || this.validateIdentifier("root_id", post.root_id, validateMattermostId))
+        || this.validateIdentifier(
+          "root_id",
+          post.root_id,
+          validateMattermostId,
+        ))
       && this.validateFileIds(post.file_ids ?? [])
     );
   }
@@ -1029,13 +1068,15 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   ): void {
     const messageText = post.message ?? "";
     const actionable =
-      messageText.startsWith("/") ||
-      stripBotMention(messageText, this.botUsername) !== undefined;
+      messageText.startsWith("/")
+      || stripBotMention(messageText, this.botUsername) !== undefined;
     const isDm = data.channel_type === "D";
     if (!isDm && !actionable) {
       return;
     }
-    const key = isDm ? `dm:${post.channel_id}:${post.user_id}` : `action:${post.id}`;
+    const key = isDm
+      ? `dm:${post.channel_id}:${post.user_id}`
+      : `action:${post.id}`;
     if (this.unauthorizedConversationLogKeys.has(key)) {
       return;
     }
@@ -1076,13 +1117,29 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     void rawBody;
     if (
       !this.validateIdentifier("user_id", body.user_id, validateMattermostId)
-      || !this.validateIdentifier("channel_id", body.channel_id, validateMattermostId)
+      || !this.validateIdentifier(
+        "channel_id",
+        body.channel_id,
+        validateMattermostId,
+      )
       || (body.team_id !== undefined
-        && !this.validateIdentifier("team_id", body.team_id, validateMattermostId))
+        && !this.validateIdentifier(
+          "team_id",
+          body.team_id,
+          validateMattermostId,
+        ))
       || (body.post_id !== undefined
-        && !this.validateIdentifier("post_id", body.post_id, validateMattermostId))
+        && !this.validateIdentifier(
+          "post_id",
+          body.post_id,
+          validateMattermostId,
+        ))
       || (body.trigger_id !== undefined
-        && !this.validateIdentifier("trigger_id", body.trigger_id, validateMattermostId))
+        && !this.validateIdentifier(
+          "trigger_id",
+          body.trigger_id,
+          validateMattermostId,
+        ))
     ) {
       return;
     }
@@ -1146,15 +1203,19 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     const contextKind = stringField((body.context ?? {})["channelKind"]);
     const conversationKind: MessagingConversationKind =
       contextKind === "dm"
-        || contextKind === "channel"
-        || contextKind === "thread"
-        || contextKind === "topic"
+      || contextKind === "channel"
+      || contextKind === "thread"
+      || contextKind === "topic"
         ? contextKind
         : "channel";
     const contextRootId = stringField((body.context ?? {})["rootId"]);
     if (
       contextRootId
-      && !this.validateIdentifier("root_id", contextRootId, validateMattermostId)
+      && !this.validateIdentifier(
+        "root_id",
+        contextRootId,
+        validateMattermostId,
+      )
     ) {
       return;
     }
@@ -1287,7 +1348,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async reconcileSlashCommandsAcrossTeams(): Promise<void> {
     let teams: Array<{ id: string; name?: string }> = [];
     try {
-      teams = (await this.client.getMyTeams()) as Array<{ id: string; name?: string }>;
+      teams = (await this.client.getMyTeams()) as Array<{
+        id: string;
+        name?: string;
+      }>;
     } catch (error) {
       this.logger.warn("mattermost commands: getMyTeams failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -1369,12 +1433,24 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     }
     if (
       !this.validateIdentifier("team_id", body.team_id, validateMattermostId)
-      || !this.validateIdentifier("channel_id", body.channel_id, validateMattermostId)
+      || !this.validateIdentifier(
+        "channel_id",
+        body.channel_id,
+        validateMattermostId,
+      )
       || !this.validateIdentifier("user_id", body.user_id, validateMattermostId)
       || (body.root_id !== undefined
-        && !this.validateIdentifier("root_id", body.root_id, validateMattermostId))
+        && !this.validateIdentifier(
+          "root_id",
+          body.root_id,
+          validateMattermostId,
+        ))
       || (body.trigger_id !== undefined
-        && !this.validateIdentifier("trigger_id", body.trigger_id, validateMattermostId))
+        && !this.validateIdentifier(
+          "trigger_id",
+          body.trigger_id,
+          validateMattermostId,
+        ))
     ) {
       return;
     }
@@ -1440,9 +1516,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     // (typically the picker) renders in-thread instead of escaping
     // to the parent channel.
     const isThread = Boolean(body.root_id);
-    const rootSummary = isThread && body.root_id
-      ? await this.fetchThreadRootSummary(body.root_id)
-      : undefined;
+    const rootSummary =
+      isThread && body.root_id
+        ? await this.fetchThreadRootSummary(body.root_id)
+        : undefined;
     // Slash-command bodies have `channel_name` (slug) but no
     // `channel_type` field — we can't disambiguate DM vs channel
     // here without an extra `getChannel` call. Treat non-thread
@@ -1484,9 +1561,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       sanitizeMattermostCommandPrefix(this.config.slashCommandPrefix),
     );
     const cmdToken = baseTrigger ? `/${baseTrigger}` : body.command;
-    const rawText = body.text.length > 0
-      ? `${cmdToken} ${body.text}`
-      : cmdToken;
+    const rawText =
+      body.text.length > 0 ? `${cmdToken} ${body.text}` : cmdToken;
 
     // Stash `response_url` on the inbound event's `routingState` so the
     // controller propagates it onto the FIRST outbound intent's
@@ -1640,7 +1716,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         height?: number;
       };
       const isImage =
-        typeof info.mime_type === "string" && info.mime_type.startsWith("image/");
+        typeof info.mime_type === "string"
+        && info.mime_type.startsWith("image/");
       const descriptor: MessagingAttachmentDescriptor = {
         id: fileId,
         kind: isImage ? "image" : "file",
@@ -1671,9 +1748,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async deliverPostIntent(
     intent: Exclude<
       MessagingSurfaceIntent,
-      | { kind: "activity" }
-      | { kind: "dismiss" }
-      | { kind: "stream_update" }
+      { kind: "activity" } | { kind: "dismiss" } | { kind: "stream_update" }
     >,
   ): Promise<MessagingDeliveryResult> {
     const target = await this.resolveTarget(intent);
@@ -1681,9 +1756,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       this.logger.warn("mattermost deliver: no channel resolved for intent", {
         intentKind: intent.kind,
         intentId: intent.id,
-        hasAudit: Boolean(
-          (intent as { audit?: unknown }).audit,
-        ),
+        hasAudit: Boolean((intent as { audit?: unknown }).audit),
         hasTargetSurface: Boolean(
           (intent as { targetSurface?: unknown }).targetSurface,
         ),
@@ -1728,11 +1801,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     // case — a plain message, no buttons/attachments, not an edit or a
     // response_url delivery — which is the assistant-response path.
     if (
-      intent.kind === "message" &&
-      !buttons &&
-      fileIds.length === 0 &&
-      !(target.existingPostId && target.canUpdate) &&
-      !target.responseUrl
+      intent.kind === "message"
+      && !buttons
+      && fileIds.length === 0
+      && !(target.existingPostId && target.canUpdate)
+      && !target.responseUrl
     ) {
       const chunks = splitTextForDelivery(rawText, {
         limit: MATTERMOST_MESSAGE_TEXT_LIMIT,
@@ -1746,7 +1819,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
             message: chunk,
             ...(target.rootId ? { root_id: target.rootId } : {}),
           });
-          firstSurface ??= surfaceRefForPost(created.id, target.channelId, target.rootId);
+          firstSurface ??= surfaceRefForPost(
+            created.id,
+            target.channelId,
+            target.rootId,
+          );
         }
         return {
           channel: this.channel,
@@ -1772,14 +1849,15 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       // `props: { attachments: [] }` to clear them. This mirrors
       // Telegram (`reply_markup: { inline_keyboard: [] }`) and Discord
       // (`components: []`).
-      const replaceMarkup =
-        Boolean((intent as { delivery?: { replaceMarkup?: boolean } }).delivery?.replaceMarkup);
-      const propsForPatch =
-        post.props
-          ? post.props
-          : replaceMarkup
-            ? { attachments: [] as MattermostMessageAttachment[] }
-            : undefined;
+      const replaceMarkup = Boolean(
+        (intent as { delivery?: { replaceMarkup?: boolean } }).delivery
+          ?.replaceMarkup,
+      );
+      const propsForPatch = post.props
+        ? post.props
+        : replaceMarkup
+          ? { attachments: [] as MattermostMessageAttachment[] }
+          : undefined;
       const patched = await this.client.patchPost({
         id: target.existingPostId,
         message: post.message,
@@ -1826,10 +1904,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         // to createPost so the picker still renders, just in the
         // parent channel (the v10.11 channel-scoped behavior). User
         // sees something rather than nothing.
-        this.logger.warn("mattermost response_url delivery failed; falling back to createPost", {
-          intentId: intent.id,
-          intentKind: intent.kind,
-        });
+        this.logger.warn(
+          "mattermost response_url delivery failed; falling back to createPost",
+          {
+            intentId: intent.id,
+            intentKind: intent.kind,
+          },
+        );
       } else {
         const surface: MessagingSurfaceRef = surfaceRefForPost(
           recovered.postId,
@@ -1928,7 +2009,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
      * call path; shouldn't fire in production).
      */
     invokerUserId?: string;
-  }): Promise<{ postId: string; channelId: string; rootId?: string } | undefined> {
+  }): Promise<
+    { postId: string; channelId: string; rootId?: string } | undefined
+  > {
     const payload: Record<string, unknown> = {
       // `in_channel` makes the response visible to everyone (vs.
       // `ephemeral` = invoker only). Pickers and status surfaces
@@ -1974,7 +2057,18 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       const list = (await this.client.getPostsSince(
         params.channelId,
         since,
-      )) as { posts?: Record<string, { id: string; user_id: string; root_id?: string; create_at: number; props?: Record<string, unknown> }> };
+      )) as {
+        posts?: Record<
+          string,
+          {
+            id: string;
+            user_id: string;
+            root_id?: string;
+            create_at: number;
+            props?: Record<string, unknown>;
+          }
+        >;
+      };
       const expectedUserId = params.invokerUserId ?? this.botUserId;
       const candidates = Object.values(list.posts ?? {})
         .filter((p) => p.user_id === expectedUserId)
@@ -1985,12 +2079,15 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         .filter((p) => (p.props ?? {})["from_webhook"] === "true");
       const ours = candidates.sort((a, b) => b.create_at - a.create_at)[0];
       if (!ours) {
-        this.logger.warn("mattermost response_url getPostsSince found no matching post", {
-          channelId: params.channelId,
-          since,
-          expectedUserId,
-          candidateCount: Object.keys(list.posts ?? {}).length,
-        });
+        this.logger.warn(
+          "mattermost response_url getPostsSince found no matching post",
+          {
+            channelId: params.channelId,
+            since,
+            expectedUserId,
+            candidateCount: Object.keys(list.posts ?? {}).length,
+          },
+        );
         return undefined;
       }
       // Track the post id for the WS echo dedup. Lazy eviction
@@ -2003,7 +2100,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return {
         postId: ours.id,
         channelId: params.channelId,
-        rootId: ours.root_id && ours.root_id.length > 0 ? ours.root_id : undefined,
+        rootId:
+          ours.root_id && ours.root_id.length > 0 ? ours.root_id : undefined,
       };
     } catch (error) {
       this.logger.warn("mattermost response_url getPostsSince failed", {
@@ -2029,12 +2127,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     // `targetSurface`); the opaque slot is the fallback for typing on
     // an existing surface. Reading only the opaque slot was a silent
     // no-op (mirrors regression f0974752 on the post path).
-    const auditChannelId = (intent as { audit?: { channel?: MessagingChannelRef } })
-      .audit?.channel?.conversation.id;
-    const opaqueChannelId =
-      ((intent.targetSurface as MessagingSurfaceRef | undefined)?.state?.opaque as
-        | { channelId?: string }
-        | undefined)?.channelId;
+    const auditChannelId = (
+      intent as { audit?: { channel?: MessagingChannelRef } }
+    ).audit?.channel?.conversation.id;
+    const opaqueChannelId = (
+      (intent.targetSurface as MessagingSurfaceRef | undefined)?.state
+        ?.opaque as { channelId?: string } | undefined
+    )?.channelId;
     const channelId = auditChannelId ?? opaqueChannelId;
     if (intent.state === "active" && channelId) {
       try {
@@ -2059,7 +2158,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     intent: MessagingSurfaceIntent & { kind: "dismiss" },
   ): Promise<MessagingDeliveryResult> {
     const target = intent.targetSurface;
-    const opaque = target.state?.opaque as MattermostSurfaceOpaqueState | undefined;
+    const opaque = target.state?.opaque as
+      | MattermostSurfaceOpaqueState
+      | undefined;
     if (!opaque?.postId) {
       return {
         channel: this.channel,
@@ -2098,8 +2199,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     intent: MessagingSurfaceIntent & { kind: "stream_update" },
   ): Promise<MessagingDeliveryResult> {
     if (
-      intent.policy === "disabled" ||
-      (this.config.streamingResponses !== true && intent.policy !== "enabled")
+      intent.policy === "disabled"
+      || (this.config.streamingResponses !== true
+        && intent.policy !== "enabled")
     ) {
       return {
         channel: this.channel,
@@ -2109,7 +2211,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     }
     const streamKey = intent.stream.key;
     const target = intent.targetSurface as MessagingSurfaceRef | undefined;
-    const opaque = target?.state?.opaque as MattermostSurfaceOpaqueState | undefined;
+    const opaque = target?.state?.opaque as
+      | MattermostSurfaceOpaqueState
+      | undefined;
     // Split the accumulated stream text at Mattermost's per-post limit so a
     // long response rolls onto extra posts instead of being truncated. Greedy
     // splitting keeps prefix chunks stable, so only the last is re-patched.
@@ -2118,12 +2222,16 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       measure: "chars",
     });
     if (chunks.length === 0) {
-      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
     }
     // Seed anchor 0 from a caller-supplied surface (restart-safety).
     const anchors =
-      this.streamSurfaces.get(streamKey) ??
-      (opaque?.postId && opaque.channelId
+      this.streamSurfaces.get(streamKey)
+      ?? (opaque?.postId && opaque.channelId
         ? [
             {
               channelId: opaque.channelId,
@@ -2144,7 +2252,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
           // don't drive from the stream — fall back to a regular message (only
           // when we still have nothing posted).
           if (anchors.length === 0) {
-            return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+            return {
+              channel: this.channel,
+              deliveredAt: this.now(),
+              outcome: "discarded",
+            };
           }
           resolved = undefined;
         }
@@ -2249,13 +2361,17 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     const targetOpaque = targetSurface?.state?.opaque as
       | MattermostSurfaceOpaqueState
       | undefined;
-    const auditChannel = (intent as { audit?: { channel?: MessagingChannelRef; actor?: MessagingActorIdentity } })
-      .audit;
+    const auditChannel = (
+      intent as {
+        audit?: {
+          channel?: MessagingChannelRef;
+          actor?: MessagingActorIdentity;
+        };
+      }
+    ).audit;
     const channelRefFromAudit = auditChannel?.channel;
     const actorId =
-      auditChannel?.actor?.platformUserId
-      ?? this.authorizedActorIds[0]
-      ?? "";
+      auditChannel?.actor?.platformUserId ?? this.authorizedActorIds[0] ?? "";
 
     // (1) response_url path: stash from slash command, fresh delivery.
     // The audit channel must also be present (controller always sets
@@ -2278,19 +2394,19 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     // (2) post-tracking path: existing surface, follow-up update.
     if (targetOpaque?.channelId) {
       const canUpdate =
-        ((intent as { delivery?: { mode?: string } }).delivery?.mode === "update");
+        (intent as { delivery?: { mode?: string } }).delivery?.mode
+        === "update";
       return {
         channelId: targetOpaque.channelId,
         rootId: targetOpaque.rootId,
         actorId,
-        channelRef:
-          channelRefFromAudit ?? {
-            channel: this.channel,
-            conversation: {
-              id: targetOpaque.channelId,
-              kind: "channel",
-            },
+        channelRef: channelRefFromAudit ?? {
+          channel: this.channel,
+          conversation: {
+            id: targetOpaque.channelId,
+            kind: "channel",
           },
+        },
         existingPostId: targetOpaque.postId,
         canUpdate,
       };
@@ -2390,7 +2506,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return [];
     }
     const fileParts = params.intent.parts.filter(
-      (part): part is import("@pwragent/messaging-interface").MessagingFilePart =>
+      (
+        part,
+      ): part is import("@pwragent/messaging-interface").MessagingFilePart =>
         part.type === "file",
     );
     if (fileParts.length === 0) {
@@ -2431,7 +2549,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         new Uint8Array(buffer).set(bytes);
         formData.append(
           "files",
-          new Blob([buffer], { type: part.mimeType ?? "application/octet-stream" }),
+          new Blob([buffer], {
+            type: part.mimeType ?? "application/octet-stream",
+          }),
           part.name,
         );
         const response = await this.client.uploadFile(formData);
@@ -2659,15 +2779,23 @@ export function summarizeThreadRoot(text: string): string {
 
 function isArtifactFileDelivery(intent: MessagingSurfaceIntent): boolean {
   return (
-    intent.kind === "message" &&
-    "artifactDelivery" in intent &&
-    intent.parts.some((part) => part.type === "file")
+    intent.kind === "message"
+    && "artifactDelivery" in intent
+    && intent.parts.some((part) => part.type === "file")
   );
 }
 
-function parseEmbeddedPost(
-  raw: string | undefined,
-): { id: string; channel_id: string; user_id: string; message: string; root_id?: string; file_ids?: string[]; props?: Record<string, unknown> } | undefined {
+function parseEmbeddedPost(raw: string | undefined):
+  | {
+      id: string;
+      channel_id: string;
+      user_id: string;
+      message: string;
+      root_id?: string;
+      file_ids?: string[];
+      props?: Record<string, unknown>;
+    }
+  | undefined {
   if (!raw) {
     return undefined;
   }
@@ -2730,7 +2858,9 @@ function mattermostContactsFromIds(
   ids: readonly string[],
   previous: readonly { id: string; displayName: string }[] | undefined,
 ): { id: string; displayName: string }[] {
-  const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
+  const previousById = new Map(
+    (previous ?? []).map((contact) => [contact.id, contact]),
+  );
   return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 

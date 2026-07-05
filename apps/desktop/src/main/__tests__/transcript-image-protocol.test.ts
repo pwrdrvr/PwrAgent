@@ -25,7 +25,9 @@ describe("transcript image protocol", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-transcript-images-"));
+    tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-transcript-images-"),
+    );
     protocolHandleMock.mockReset();
     protocolRegisterSchemesAsPrivilegedMock.mockReset();
   });
@@ -35,9 +37,8 @@ describe("transcript image protocol", () => {
   });
 
   it("registers a secure custom image protocol", async () => {
-    const { registerTranscriptImageProtocolScheme } = await import(
-      "../transcript-image-protocol"
-    );
+    const { registerTranscriptImageProtocolScheme } =
+      await import("../transcript-image-protocol");
 
     registerTranscriptImageProtocolScheme();
 
@@ -54,9 +55,8 @@ describe("transcript image protocol", () => {
   });
 
   it("resolves raster images from any PwrAgent profile under the configured root", async () => {
-    const { resolveTranscriptImageProtocolRequest } = await import(
-      "../transcript-image-protocol"
-    );
+    const { resolveTranscriptImageProtocolRequest } =
+      await import("../transcript-image-protocol");
     const pwragentHome = path.join(tempDir, "pwragent-home");
     const imagePath = path.join(
       pwragentHome,
@@ -64,7 +64,7 @@ describe("transcript image protocol", () => {
       "test-profile",
       "state",
       "image-inputs",
-      "image.png"
+      "image.png",
     );
     await mkdir(path.dirname(imagePath), { recursive: true });
     await writeFile(imagePath, Buffer.from([1, 2, 3]));
@@ -74,7 +74,7 @@ describe("transcript image protocol", () => {
       {
         env: { PWRAGENT_HOME: pwragentHome } as NodeJS.ProcessEnv,
         homeDir: path.join(tempDir, "home"),
-      }
+      },
     );
 
     expect(result).toEqual({
@@ -85,10 +85,10 @@ describe("transcript image protocol", () => {
   });
 
   it("rewrites file image URLs in thread/read responses before they reach the renderer", async () => {
-    const { rewriteTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
-    );
-    const fileUrl = "file:///Users/test/.pwragent/profiles/dev/state/image-inputs/image.png";
+    const { rewriteTranscriptImageUrlsForRenderer } =
+      await import("../transcript-image-protocol");
+    const fileUrl =
+      "file:///Users/test/.pwragent/profiles/dev/state/image-inputs/image.png";
     const dataUrl = "data:image/png;base64,AQID";
 
     const response = rewriteTranscriptImageUrlsForRenderer({
@@ -129,21 +129,26 @@ describe("transcript image protocol", () => {
     expect(response.replay.entries[0]).toMatchObject({
       parts: [
         { type: "text", text: "what's in this?" },
-        { type: "image", url: `pwragent-image://file/${encodeURIComponent(fileUrl)}` },
+        {
+          type: "image",
+          url: `pwragent-image://file/${encodeURIComponent(fileUrl)}`,
+        },
       ],
     });
     expect(response.replay.messages[0]).toMatchObject({
       parts: [
-        { type: "image", url: `pwragent-image://file/${encodeURIComponent(fileUrl)}` },
+        {
+          type: "image",
+          url: `pwragent-image://file/${encodeURIComponent(fileUrl)}`,
+        },
         { type: "image", url: dataUrl },
       ],
     });
   });
 
   it("materializes data image URLs into thread-scoped files before renderer IPC", async () => {
-    const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
-    );
+    const { materializeTranscriptImageUrlsForRenderer } =
+      await import("../transcript-image-protocol");
     const dataUrl = "data:image/png;base64,AQID";
     const writes: string[] = [];
 
@@ -191,12 +196,13 @@ describe("transcript image protocol", () => {
           writes.push(filePath);
           await writeFile(filePath, data);
         },
-      }
+      },
     );
 
-    const entryPart = response.replay.entries[0]?.type === "message"
-      ? response.replay.entries[0].parts?.[1]
-      : undefined;
+    const entryPart =
+      response.replay.entries[0]?.type === "message"
+        ? response.replay.entries[0].parts?.[1]
+        : undefined;
     const messagePart = response.replay.messages[0]?.parts?.[0];
     expect(entryPart).toMatchObject({
       type: "image",
@@ -207,16 +213,17 @@ describe("transcript image protocol", () => {
     const materializedPath =
       entryPart?.type === "image" ? filePathFromProtocolUrl(entryPart.url) : "";
     expect(materializedPath).toContain(
-      path.join("thread-images", "codex", "codex%3Athread%2Fimages")
+      path.join("thread-images", "codex", "codex%3Athread%2Fimages"),
     );
     expect(path.basename(materializedPath)).toMatch(/^[a-f0-9]{64}\.png$/);
-    await expect(readFile(materializedPath)).resolves.toEqual(Buffer.from([1, 2, 3]));
+    await expect(readFile(materializedPath)).resolves.toEqual(
+      Buffer.from([1, 2, 3]),
+    );
   });
 
   it("keeps data image URLs when materialization writes fail", async () => {
-    const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
-    );
+    const { materializeTranscriptImageUrlsForRenderer } =
+      await import("../transcript-image-protocol");
     const dataUrl = "data:image/png;base64,AQID";
 
     const response = await materializeTranscriptImageUrlsForRenderer(
@@ -245,7 +252,7 @@ describe("transcript image protocol", () => {
         writeFile: async () => {
           throw new Error("disk full");
         },
-      }
+      },
     );
 
     expect(response.replay.messages[0]?.parts).toEqual([
@@ -254,9 +261,8 @@ describe("transcript image protocol", () => {
   });
 
   it("leaves unsupported and malformed data image URLs unchanged", async () => {
-    const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
-    );
+    const { materializeTranscriptImageUrlsForRenderer } =
+      await import("../transcript-image-protocol");
     const unsupportedDataUrl = "data:image/svg+xml;base64,PHN2Zy8+";
     const malformedDataUrl = "data:image/png;base64,!!!!";
 
@@ -286,7 +292,7 @@ describe("transcript image protocol", () => {
       },
       {
         resolveRoot: () => path.join(tempDir, "unused"),
-      }
+      },
     );
 
     expect(response.replay.messages[0]?.parts).toEqual([
@@ -296,18 +302,20 @@ describe("transcript image protocol", () => {
   });
 
   it("resolves raster images from the default Codex home", async () => {
-    const { resolveTranscriptImageProtocolRequest } = await import(
-      "../transcript-image-protocol"
-    );
+    const { resolveTranscriptImageProtocolRequest } =
+      await import("../transcript-image-protocol");
     const homeDir = path.join(tempDir, "home");
     const imagePath = path.join(homeDir, ".codex", "sessions", "image.webp");
     await mkdir(path.dirname(imagePath), { recursive: true });
     await writeFile(imagePath, Buffer.from([1, 2, 3]));
 
-    const result = await resolveTranscriptImageProtocolRequest(toProtocolUrl(imagePath), {
-      env: {} as NodeJS.ProcessEnv,
-      homeDir,
-    });
+    const result = await resolveTranscriptImageProtocolRequest(
+      toProtocolUrl(imagePath),
+      {
+        env: {} as NodeJS.ProcessEnv,
+        homeDir,
+      },
+    );
 
     expect(result).toEqual({
       ok: true,
@@ -317,9 +325,8 @@ describe("transcript image protocol", () => {
   });
 
   it("rejects non-image files under allowed roots", async () => {
-    const { resolveTranscriptImageProtocolRequest } = await import(
-      "../transcript-image-protocol"
-    );
+    const { resolveTranscriptImageProtocolRequest } =
+      await import("../transcript-image-protocol");
     const pwragentHome = path.join(tempDir, "pwragent-home");
     const textPath = path.join(pwragentHome, "profiles", "dev", "state.db");
     await mkdir(path.dirname(textPath), { recursive: true });
@@ -329,7 +336,7 @@ describe("transcript image protocol", () => {
       resolveTranscriptImageProtocolRequest(toProtocolUrl(textPath), {
         env: { PWRAGENT_HOME: pwragentHome } as NodeJS.ProcessEnv,
         homeDir: path.join(tempDir, "home"),
-      })
+      }),
     ).resolves.toMatchObject({
       ok: false,
       status: 415,
@@ -337,9 +344,8 @@ describe("transcript image protocol", () => {
   });
 
   it("rejects image files outside PwrAgent and Codex roots", async () => {
-    const { resolveTranscriptImageProtocolRequest } = await import(
-      "../transcript-image-protocol"
-    );
+    const { resolveTranscriptImageProtocolRequest } =
+      await import("../transcript-image-protocol");
     const imagePath = path.join(tempDir, "outside", "image.png");
     await mkdir(path.dirname(imagePath), { recursive: true });
     await writeFile(imagePath, Buffer.from([1, 2, 3]));
@@ -348,7 +354,7 @@ describe("transcript image protocol", () => {
       resolveTranscriptImageProtocolRequest(toProtocolUrl(imagePath), {
         env: {} as NodeJS.ProcessEnv,
         homeDir: path.join(tempDir, "home"),
-      })
+      }),
     ).resolves.toMatchObject({
       ok: false,
       status: 403,

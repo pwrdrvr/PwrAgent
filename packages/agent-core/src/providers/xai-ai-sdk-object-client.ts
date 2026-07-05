@@ -44,7 +44,9 @@ export class XaiAiSdkObjectClient {
     this.defaultModel = options.model?.trim() || undefined;
   }
 
-  async generateObject(params: XaiAiSdkObjectRequest): Promise<XaiAiSdkObjectResult> {
+  async generateObject(
+    params: XaiAiSdkObjectRequest,
+  ): Promise<XaiAiSdkObjectResult> {
     const provider = createXai({
       apiKey: this.apiKey,
       baseURL: this.baseUrl,
@@ -52,7 +54,9 @@ export class XaiAiSdkObjectClient {
       fetch: createPromptCacheFetch(this.fetchImpl, params.promptCacheKey),
     });
     const result = await generateObject({
-      model: provider.responses(params.model?.trim() || this.defaultModel || DEFAULT_GROK_MODEL),
+      model: provider.responses(
+        params.model?.trim() || this.defaultModel || DEFAULT_GROK_MODEL,
+      ),
       system: params.system,
       prompt: params.prompt,
       schema: jsonSchema(params.schema as Parameters<typeof jsonSchema>[0]),
@@ -84,7 +88,10 @@ function createPromptCacheFetch(
     }
 
     const body = tryInjectPromptCacheKey(init.body, trimmedPromptCacheKey);
-    return await fetchImpl(input, body === init.body ? init : { ...init, body });
+    return await fetchImpl(
+      input,
+      body === init.body ? init : { ...init, body },
+    );
   }) as typeof fetch;
 }
 
@@ -94,10 +101,10 @@ function isResponsesRequest(input: Parameters<typeof fetch>[0]): boolean {
       ? input
       : input instanceof URL
         ? input.toString()
-        : typeof input === "object" &&
-            input !== null &&
-            "url" in input &&
-            typeof input.url === "string"
+        : typeof input === "object"
+            && input !== null
+            && "url" in input
+            && typeof input.url === "string"
           ? input.url
           : "";
   return url.endsWith("/responses");

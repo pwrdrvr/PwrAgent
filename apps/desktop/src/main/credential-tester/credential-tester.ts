@@ -146,10 +146,8 @@ export class CredentialTester {
       resolveCodexCommand: dependencies.resolveCodexCommand,
       validateMessagingCredentials: dependencies.validateMessagingCredentials,
       fetch:
-        dependencies.fetch
-        ?? ((input, init) => globalThis.fetch(input, init)),
-      runCodexVersion:
-        dependencies.runCodexVersion ?? defaultRunCodexVersion,
+        dependencies.fetch ?? ((input, init) => globalThis.fetch(input, init)),
+      runCodexVersion: dependencies.runCodexVersion ?? defaultRunCodexVersion,
       timeoutMs: dependencies.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
     };
   }
@@ -222,7 +220,9 @@ export class CredentialTester {
         return await this.testLine(startedAt);
       default: {
         const exhaustive: never = kind;
-        throw new Error(`unknown credential test kind: ${exhaustive as string}`);
+        throw new Error(
+          `unknown credential test kind: ${exhaustive as string}`,
+        );
       }
     }
   }
@@ -327,11 +327,12 @@ export class CredentialTester {
     // or equivalent. Per the user's clause "use the real library
     // unless the real library does not expose a simple non-disruptive
     // method", a direct `GET /v1/models` is the right call here.
-    const { json, status, durationMs } = await this.fetchJson<GrokModelsResponse>({
-      url: "https://api.x.ai/v1/models",
-      method: "GET",
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
+    const { json, status, durationMs } =
+      await this.fetchJson<GrokModelsResponse>({
+        url: "https://api.x.ai/v1/models",
+        method: "GET",
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
     const testedAt = Date.now();
     if (status === 200 && Array.isArray(json?.data)) {
       const ids = json.data
@@ -340,7 +341,8 @@ export class CredentialTester {
       const detail =
         ids.length === 0
           ? "no models reported"
-          : ids.slice(0, 3).join(", ") + (ids.length > 3 ? `, +${ids.length - 3} more` : "");
+          : ids.slice(0, 3).join(", ")
+            + (ids.length > 3 ? `, +${ids.length - 3} more` : "");
       return {
         kind: "grok",
         status: "ok",

@@ -165,7 +165,9 @@ export function actionsForMattermostIntent(
  */
 export function buildMattermostActions(params: {
   actions: MessagingSurfaceAction[];
-  buildCallbackContext: (action: MessagingSurfaceAction) => Record<string, unknown>;
+  buildCallbackContext: (
+    action: MessagingSurfaceAction,
+  ) => Record<string, unknown>;
   callbackUrl: string;
   capabilityProfile: MessagingCapabilityProfile;
   layout?: MessagingActionLayoutPolicy;
@@ -232,7 +234,9 @@ export function buildMattermostActions(params: {
  * parts as-is. Image/file parts are stripped from the body (they ride out
  * via `file_ids` / attachment `image_url`).
  */
-export function textForMattermostIntent(intent: MessagingSurfaceIntent): string {
+export function textForMattermostIntent(
+  intent: MessagingSurfaceIntent,
+): string {
   switch (intent.kind) {
     case "message":
       return renderContentParts(intent.parts);

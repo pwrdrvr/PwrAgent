@@ -416,9 +416,14 @@ describe("TelegramAdapter inbound security boundary", () => {
 });
 
 function fakeBot(): TelegramBotLike & {
-  api: TelegramBotLike["api"] & { answerCallbackQuery: ReturnType<typeof vi.fn> };
+  api: TelegramBotLike["api"] & {
+    answerCallbackQuery: ReturnType<typeof vi.fn>;
+  };
 } {
-  const sentMessage = { chat: { id: 42, type: "private" as const }, message_id: 1 };
+  const sentMessage = {
+    chat: { id: 42, type: "private" as const },
+    message_id: 1,
+  };
   return {
     api: {
       answerCallbackQuery: vi.fn(async () => true),
@@ -437,7 +442,11 @@ function fakeBot(): TelegramBotLike & {
         can_manage_topics: true,
         status: "administrator" as const,
       })),
-      getMe: vi.fn(async () => ({ id: 999, is_bot: true, username: "PwrAgentBot" })),
+      getMe: vi.fn(async () => ({
+        id: 999,
+        is_bot: true,
+        username: "PwrAgentBot",
+      })),
       getWebhookInfo: vi.fn(async () => ({ url: "" })),
       pinChatMessage: vi.fn(async () => true),
       sendChatAction: vi.fn(async () => true),

@@ -1,5 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppNoticeToast } from "../AppNoticeToast";
 
@@ -12,8 +18,10 @@ describe("AppNoticeToast", () => {
   const notice = {
     id: "notice-1",
     title: "Worktree kept",
-    message: "Thread archived. The worktree was kept because another active thread is still using it.",
-    detail: "/repo/.worktrees/shared: Worktree is still used by another active thread.",
+    message:
+      "Thread archived. The worktree was kept because another active thread is still using it.",
+    detail:
+      "/repo/.worktrees/shared: Worktree is still used by another active thread.",
   };
 
   it("renders selectable notice text with copy and dismiss controls", () => {
@@ -61,8 +69,12 @@ describe("AppNoticeToast", () => {
       />,
     );
 
-    expect(screen.getByText("Session: hot-cpu-2026-06-10-2211-bd972c")).toBeInTheDocument();
-    expect(screen.queryByText(/Heap snapshot start path/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Session: hot-cpu-2026-06-10-2211-bd972c"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Heap snapshot start path/),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy notice" }));
     expect(copyText).toHaveBeenCalledWith(handoff);

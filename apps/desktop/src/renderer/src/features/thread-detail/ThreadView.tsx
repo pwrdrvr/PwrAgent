@@ -119,8 +119,8 @@ function applyLaunchpadEnvironmentSetupProgress(
   event: CodexEnvironmentSetupProgressEvent,
 ): LaunchpadEnvironmentSetupProgress {
   const base =
-    current?.directoryKey === event.directoryKey &&
-    current.environmentId === event.environmentId
+    current?.directoryKey === event.directoryKey
+    && current.environmentId === event.environmentId
       ? current
       : {
           command: event.command,
@@ -164,12 +164,20 @@ function applyLaunchpadEnvironmentSetupProgress(
   };
 }
 
-function formatSetupStatus(progress?: LaunchpadEnvironmentSetupProgress): string {
-  if (!progress || progress.status === "starting" || progress.status === "running") {
+function formatSetupStatus(
+  progress?: LaunchpadEnvironmentSetupProgress,
+): string {
+  if (
+    !progress
+    || progress.status === "starting"
+    || progress.status === "running"
+  ) {
     return "running";
   }
   if (progress.status === "completed") {
-    return progress.exitCode === undefined ? "completed" : `exit ${progress.exitCode}`;
+    return progress.exitCode === undefined
+      ? "completed"
+      : `exit ${progress.exitCode}`;
   }
   return "failed";
 }
@@ -235,7 +243,10 @@ function LaunchpadEnvironmentSetupPending(props: {
             {error ? "Output and errors" : "Output"}
           </div>
           <pre ref={outputRef}>
-            <code>{`${output}${error ? `\n${error}` : ""}` || "Waiting for output..."}</code>
+            <code>
+              {`${output}${error ? `\n${error}` : ""}`
+                || "Waiting for output..."}
+            </code>
           </pre>
         </div>
       </div>
@@ -293,13 +304,16 @@ function EnvironmentSetupFailureChoice(props: {
   onContinue: () => void | Promise<void>;
 }) {
   const label =
-    props.phase === "action" ? "Environment action failed" : "Environment setup failed";
-  const commandLabel = props.phase === "action" ? "action command" : "setup command";
+    props.phase === "action"
+      ? "Environment action failed"
+      : "Environment setup failed";
+  const commandLabel =
+    props.phase === "action" ? "action command" : "setup command";
   const trimmedOutput = props.output?.trim();
   const hasDetails =
-    Boolean(props.command?.trim()) ||
-    Boolean(trimmedOutput) ||
-    typeof props.exitCode === "number";
+    Boolean(props.command?.trim())
+    || Boolean(trimmedOutput)
+    || typeof props.exitCode === "number";
   return (
     <section className="environment-setup-choice" aria-label={label}>
       <div className="environment-setup-choice__body">
@@ -319,11 +333,15 @@ function EnvironmentSetupFailureChoice(props: {
           <details className="environment-setup-choice__details" open>
             <summary>
               Show command output
-              {typeof props.exitCode === "number" ? ` (exit ${props.exitCode})` : ""}
+              {typeof props.exitCode === "number"
+                ? ` (exit ${props.exitCode})`
+                : ""}
             </summary>
             {props.command?.trim() ? (
               <div className="environment-setup-choice__field">
-                <div className="environment-setup-choice__field-label">Command</div>
+                <div className="environment-setup-choice__field-label">
+                  Command
+                </div>
                 <pre className="environment-setup-choice__pre">
                   <code>{`$ ${props.command.trim()}`}</code>
                 </pre>
@@ -331,12 +349,18 @@ function EnvironmentSetupFailureChoice(props: {
             ) : null}
             {props.cwd?.trim() ? (
               <div className="environment-setup-choice__field">
-                <div className="environment-setup-choice__field-label">Path</div>
-                <code className="environment-setup-choice__path">{props.cwd}</code>
+                <div className="environment-setup-choice__field-label">
+                  Path
+                </div>
+                <code className="environment-setup-choice__path">
+                  {props.cwd}
+                </code>
               </div>
             ) : null}
             <div className="environment-setup-choice__field">
-              <div className="environment-setup-choice__field-label">Output</div>
+              <div className="environment-setup-choice__field-label">
+                Output
+              </div>
               <pre className="environment-setup-choice__pre environment-setup-choice__pre--output">
                 <code>{trimmedOutput || "(no output captured)"}</code>
               </pre>
@@ -387,7 +411,7 @@ function buildInputFromOptimisticUserMessage(
 
 function arePlanEntriesEquivalent(
   left: AppServerThreadPlanEntry,
-  right: AppServerThreadPlanEntry
+  right: AppServerThreadPlanEntry,
 ): boolean {
   const leftMarkdown = (left.markdown ?? "").trim();
   const rightMarkdown = (right.markdown ?? "").trim();
@@ -409,16 +433,18 @@ function arePlanEntriesEquivalent(
   });
 }
 
-function getPlanNotificationItemId(params: Record<string, unknown>): string | undefined {
+function getPlanNotificationItemId(
+  params: Record<string, unknown>,
+): string | undefined {
   if (typeof params.itemId === "string") {
     return params.itemId;
   }
 
   if (
-    typeof params.item === "object" &&
-    params.item !== null &&
-    "id" in params.item &&
-    typeof params.item.id === "string"
+    typeof params.item === "object"
+    && params.item !== null
+    && "id" in params.item
+    && typeof params.item.id === "string"
   ) {
     return params.item.id;
   }
@@ -426,7 +452,9 @@ function getPlanNotificationItemId(params: Record<string, unknown>): string | un
   return undefined;
 }
 
-function getPlanNotificationTurnId(params: Record<string, unknown>): string | undefined {
+function getPlanNotificationTurnId(
+  params: Record<string, unknown>,
+): string | undefined {
   return typeof params.turnId === "string"
     ? params.turnId
     : typeof params.turnId === "string"
@@ -438,15 +466,17 @@ function isCompletedPlanItem(params: Record<string, unknown>): params is {
   item: { type: string; text?: unknown; markdown?: unknown };
 } {
   return (
-    typeof params.item === "object" &&
-    params.item !== null &&
-    "type" in params.item &&
-    typeof params.item.type === "string" &&
-    params.item.type.trim().toLowerCase() === "plan"
+    typeof params.item === "object"
+    && params.item !== null
+    && "type" in params.item
+    && typeof params.item.type === "string"
+    && params.item.type.trim().toLowerCase() === "plan"
   );
 }
 
-function readCompletedPlanMarkdown(params: Record<string, unknown>): string | undefined {
+function readCompletedPlanMarkdown(
+  params: Record<string, unknown>,
+): string | undefined {
   if (!isCompletedPlanItem(params)) {
     return undefined;
   }
@@ -461,7 +491,10 @@ function readCompletedPlanMarkdown(params: Record<string, unknown>): string | un
   return trimmed || undefined;
 }
 
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+function readString(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -480,7 +513,9 @@ function buildMcpProtocolActivityEntry(
   };
 }
 
-function summarizeMcpProtocolActivity(details: AppServerThreadActivityDetail[]): string {
+function summarizeMcpProtocolActivity(
+  details: AppServerThreadActivityDetail[],
+): string {
   if (details.length === 1 && details[0]) {
     return details[0].label;
   }
@@ -498,12 +533,15 @@ function mergeMcpProtocolActivityEntry(
 
   return buildMcpProtocolActivityEntry(
     mergeActivityDetails(current.details, next.details),
-    current.createdAt ?? next.createdAt
+    current.createdAt ?? next.createdAt,
   );
 }
 
-function buildMcpServerStatusActivityEntry(params: Record<string, unknown>): AppServerThreadActivityEntry | undefined {
-  const serverName = readString(params, "name") ?? readString(params, "serverName");
+function buildMcpServerStatusActivityEntry(
+  params: Record<string, unknown>,
+): AppServerThreadActivityEntry | undefined {
+  const serverName =
+    readString(params, "name") ?? readString(params, "serverName");
   const status = readString(params, "status") ?? "updated";
   if (!serverName) {
     return undefined;
@@ -532,8 +570,11 @@ function buildMcpServerStatusActivityEntry(params: Record<string, unknown>): App
   ]);
 }
 
-function buildMcpOauthActivityEntry(params: Record<string, unknown>): AppServerThreadActivityEntry | undefined {
-  const serverName = readString(params, "name") ?? readString(params, "serverName");
+function buildMcpOauthActivityEntry(
+  params: Record<string, unknown>,
+): AppServerThreadActivityEntry | undefined {
+  const serverName =
+    readString(params, "name") ?? readString(params, "serverName");
   if (!serverName) {
     return undefined;
   }
@@ -543,7 +584,9 @@ function buildMcpOauthActivityEntry(params: Record<string, unknown>): AppServerT
   const label = success
     ? `MCP ${serverName} login completed`
     : `MCP ${serverName} login failed${error ? `: ${error}` : ""}`;
-  const status: AppServerThreadActivityDetail["status"] = success ? "completed" : "failed";
+  const status: AppServerThreadActivityDetail["status"] = success
+    ? "completed"
+    : "failed";
 
   return buildMcpProtocolActivityEntry([
     {
@@ -566,13 +609,16 @@ function normalizeLivePlanSteps(value: unknown): AppServerThreadPlanStep[] {
     }
 
     const stepRecord = entry as Record<string, unknown>;
-    const step = typeof stepRecord.step === "string" ? stepRecord.step.trim() : "";
+    const step =
+      typeof stepRecord.step === "string" ? stepRecord.step.trim() : "";
     if (!step) {
       return [];
     }
 
     const rawStatus =
-      typeof stepRecord.status === "string" ? stepRecord.status.trim().toLowerCase() : "";
+      typeof stepRecord.status === "string"
+        ? stepRecord.status.trim().toLowerCase()
+        : "";
     const status: AppServerThreadPlanStep["status"] =
       rawStatus === "completed"
         ? "completed"
@@ -617,9 +663,13 @@ function buildLiveTurnMetadata(params: {
   return {
     id: params.turnId,
     status: params.status ?? "in_progress",
-    ...(params.activeTurnStartedAt ? { startedAt: params.activeTurnStartedAt } : {}),
+    ...(params.activeTurnStartedAt
+      ? { startedAt: params.activeTurnStartedAt }
+      : {}),
     ...(params.completedAt ? { completedAt: params.completedAt } : {}),
-    ...(typeof params.durationMs === "number" ? { durationMs: params.durationMs } : {}),
+    ...(typeof params.durationMs === "number"
+      ? { durationMs: params.durationMs }
+      : {}),
   };
 }
 
@@ -632,7 +682,9 @@ function normalizeNotificationTimestamp(value: unknown): number | undefined {
 }
 
 function normalizeNotificationDuration(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function buildCompletedLiveTurnMetadata(params: {
@@ -653,8 +705,10 @@ function buildCompletedLiveTurnMetadata(params: {
   return buildLiveTurnMetadata({
     turnId,
     activeTurnStartedAt:
-      normalizeNotificationTimestamp(params.turn?.startedAt) ?? params.activeTurnStartedAt,
-    completedAt: normalizeNotificationTimestamp(params.turn?.completedAt) ?? Date.now(),
+      normalizeNotificationTimestamp(params.turn?.startedAt)
+      ?? params.activeTurnStartedAt,
+    completedAt:
+      normalizeNotificationTimestamp(params.turn?.completedAt) ?? Date.now(),
     durationMs: normalizeNotificationDuration(params.turn?.durationMs),
     status: "completed",
   });
@@ -662,7 +716,7 @@ function buildCompletedLiveTurnMetadata(params: {
 
 function activityContainsDiff(
   candidate: AppServerThreadActivityEntry,
-  pendingEntry: AppServerThreadActivityEntry
+  pendingEntry: AppServerThreadActivityEntry,
 ): boolean {
   return pendingEntry.details.every((pendingDetail) => {
     const pendingFileDiff = pendingDetail.fileDiff;
@@ -689,16 +743,18 @@ function activityContainsDiff(
           ? pendingDetail.path === detail.path
           : pendingDetail.label === detail.label;
       return (
-        sameFile &&
-        candidateFileDiff.kind === pendingFileDiff.kind &&
-        candidateFileDiff.additions === pendingFileDiff.additions &&
-        candidateFileDiff.removals === pendingFileDiff.removals
+        sameFile
+        && candidateFileDiff.kind === pendingFileDiff.kind
+        && candidateFileDiff.additions === pendingFileDiff.additions
+        && candidateFileDiff.removals === pendingFileDiff.removals
       );
     });
   });
 }
 
-function activityHasFileDiff(entry: AppServerThreadActivityEntry | undefined): boolean {
+function activityHasFileDiff(
+  entry: AppServerThreadActivityEntry | undefined,
+): boolean {
   return Boolean(entry?.details.some((detail) => detail.fileDiff));
 }
 
@@ -708,7 +764,7 @@ export type ThreadViewProps = {
   addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage: (
     text: string,
-    imageParts?: AppServerThreadImagePart[]
+    imageParts?: AppServerThreadImagePart[],
   ) => string;
   backendError?: string;
   backends: BackendSummary[];
@@ -829,17 +885,17 @@ export type ThreadViewProps = {
     directoryKey: string,
     input?: AppServerTurnInputItem[],
     collaborationMode?: AppServerCollaborationModeRequest,
-    reviewTarget?: AppServerReviewTarget
+    reviewTarget?: AppServerReviewTarget,
   ) => Promise<void>;
   onCancelLaunchpad?: (directoryKey: string) => void;
   onPendingStatusChange?: (status?: string) => void;
   onUpdatePendingUserInput?: (
     requestId: string,
-    updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+    updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState,
   ) => void;
   onUpdatePendingMcpInteraction?: (
     requestId: string,
-    updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
+    updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState,
   ) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
   onSetAcpRuntimeOption?: (params: {
@@ -849,24 +905,24 @@ export type ThreadViewProps = {
   }) => Promise<void>;
   onCancelExecutionModeQueue?: () => Promise<void>;
   onHandoffThreadWorkspace?: (
-    request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
+    request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">,
   ) => Promise<void>;
   onSetThreadModelSettings?: (
     patch: Partial<
       Pick<
-      NavigationThreadSummary,
-      "model" | "reasoningEffort" | "serviceTier" | "fastMode"
+        NavigationThreadSummary,
+        "model" | "reasoningEffort" | "serviceTier" | "fastMode"
       >
-    >
+    >,
   ) => Promise<void>;
   onArchiveWorktree?: (
     thread: NavigationThreadSummary,
-    directory: NavigationThreadSummary["linkedDirectories"][number]
+    directory: NavigationThreadSummary["linkedDirectories"][number],
   ) => Promise<void>;
   onRestoreWorktree?: (
     thread: NavigationThreadSummary,
     snapshotRef: string,
-    worktreePath: string
+    worktreePath: string,
   ) => Promise<void>;
   onTranscriptViewportChange?: (viewport?: {
     distanceFromBottom: number;
@@ -892,7 +948,7 @@ export type ThreadViewProps = {
         | "imageAttachments"
       >
     >,
-    options?: { stickySettingsChanged?: boolean }
+    options?: { stickySettingsChanged?: boolean },
   ) => Promise<void>;
   removeOptimisticMessage: (id: string) => void;
   transcriptViewport?: {
@@ -933,21 +989,25 @@ export function ThreadView(props: ThreadViewProps) {
   // Refs mirror the pending state so the turn/completed handler can read
   // the latest values to snapshot, then clear via setState without
   // racing or queuing extra micro-renders.
-  const pendingActivityEntryRef = useRef<AppServerThreadActivityEntry | undefined>(
-    undefined,
-  );
+  const pendingActivityEntryRef = useRef<
+    AppServerThreadActivityEntry | undefined
+  >(undefined);
   const pendingProtocolActivityEntryRef = useRef<
     AppServerThreadActivityEntry | undefined
   >(undefined);
-  const pendingUsageActivityEntryRef = useRef<AppServerThreadActivityEntry | undefined>(
+  const pendingUsageActivityEntryRef = useRef<
+    AppServerThreadActivityEntry | undefined
+  >(undefined);
+  const pendingPlanEntryRef = useRef<AppServerThreadPlanEntry | undefined>(
     undefined,
   );
-  const pendingPlanEntryRef = useRef<AppServerThreadPlanEntry | undefined>(undefined);
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
-  const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
+  const [expandedImage, setExpandedImage] =
+    useState<AppServerThreadImagePart>();
   const [contextRailResizing, setContextRailResizing] = useState(false);
-  const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
+  const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] =
+    useState(0);
   const [contextRailWidth, setContextRailWidth] = useState(380);
   const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
   const [terminalOpenByThread, setTerminalOpenByThread] = useState<
@@ -982,7 +1042,7 @@ export function ThreadView(props: ThreadViewProps) {
   const activeContextTab =
     !threadPricingSummaryEnabled && props.activeContextTab === "pricing"
       ? DEFAULT_CONTEXT_TAB
-      : props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
+      : (props.activeContextTab ?? DEFAULT_CONTEXT_TAB);
   const editedFilesDock = props.editedFilesDock ?? DEFAULT_EDITED_FILES_DOCK;
   const actionRunsDock = props.actionRunsDock ?? DEFAULT_ACTION_RUNS_DOCK;
   const sidebarHidden = props.sidebarHidden ?? false;
@@ -1033,7 +1093,9 @@ export function ThreadView(props: ThreadViewProps) {
   // turn so the LiveWorkRail reflects the in-flight turn's work, not
   // stale history. Triggered by activeTurnId transitioning to a new
   // non-empty value (turn/started fired upstream).
-  const lastSeenActiveTurnIdRef = useRef<string | undefined>(props.activeTurnId);
+  const lastSeenActiveTurnIdRef = useRef<string | undefined>(
+    props.activeTurnId,
+  );
   useEffect(() => {
     const previous = lastSeenActiveTurnIdRef.current;
     lastSeenActiveTurnIdRef.current = props.activeTurnId;
@@ -1052,7 +1114,9 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadBackend = useMemo(
     () =>
       selectedThread
-        ? props.backends.find((backend) => backend.kind === selectedThread.source)
+        ? props.backends.find(
+            (backend) => backend.kind === selectedThread.source,
+          )
         : undefined,
     [props.backends, selectedThread],
   );
@@ -1061,7 +1125,8 @@ export function ThreadView(props: ThreadViewProps) {
 
   useEffect(() => {
     const directoryKey =
-      selectedLaunchpad?.directoryKey ?? pendingForkEnvironmentSetup?.directoryKey;
+      selectedLaunchpad?.directoryKey
+      ?? pendingForkEnvironmentSetup?.directoryKey;
     if (!directoryKey || !props.desktopApi?.onCodexEnvironmentSetupProgress) {
       return;
     }
@@ -1089,15 +1154,17 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadKey = selectedThread
     ? `${selectedThread.source}:${selectedThread.id}`
     : undefined;
-  const fileViewerContext = useMemo<MarkdownFileViewerContext | undefined>(() => {
+  const fileViewerContext = useMemo<
+    MarkdownFileViewerContext | undefined
+  >(() => {
     if (!selectedThread || !selectedThreadKey) {
       return undefined;
     }
 
     const projectPath =
-      selectedThread.projectKey ??
-      selectedThread.linkedDirectories[0]?.worktreePath ??
-      selectedThread.linkedDirectories[0]?.path;
+      selectedThread.projectKey
+      ?? selectedThread.linkedDirectories[0]?.worktreePath
+      ?? selectedThread.linkedDirectories[0]?.path;
 
     return {
       key: selectedThreadKey,
@@ -1145,29 +1212,39 @@ export function ThreadView(props: ThreadViewProps) {
       return next;
     });
   }, []);
-  const closeTerminalByThread = useCallback((threadKey: string) => {
-    hideTerminalByThread(threadKey);
-    removeRetainedTerminalByThread(threadKey);
-    void props.desktopApi?.closeIntegratedTerminal?.({
-      threadKey,
-    });
-  }, [hideTerminalByThread, props.desktopApi, removeRetainedTerminalByThread]);
-  const handleTerminalExitByThread = useCallback((threadKey: string) => {
-    hideTerminalByThread(threadKey);
-    removeRetainedTerminalByThread(threadKey);
-  }, [hideTerminalByThread, removeRetainedTerminalByThread]);
-  const setTerminalHeightForThread = useCallback((threadKey: string, height: number) => {
-    setTerminalHeightByThread((current) => ({
-      ...current,
-      [threadKey]: height,
-    }));
-  }, []);
+  const closeTerminalByThread = useCallback(
+    (threadKey: string) => {
+      hideTerminalByThread(threadKey);
+      removeRetainedTerminalByThread(threadKey);
+      void props.desktopApi?.closeIntegratedTerminal?.({
+        threadKey,
+      });
+    },
+    [hideTerminalByThread, props.desktopApi, removeRetainedTerminalByThread],
+  );
+  const handleTerminalExitByThread = useCallback(
+    (threadKey: string) => {
+      hideTerminalByThread(threadKey);
+      removeRetainedTerminalByThread(threadKey);
+    },
+    [hideTerminalByThread, removeRetainedTerminalByThread],
+  );
+  const setTerminalHeightForThread = useCallback(
+    (threadKey: string, height: number) => {
+      setTerminalHeightByThread((current) => ({
+        ...current,
+        [threadKey]: height,
+      }));
+    },
+    [],
+  );
   const suppressBranchDriftDialogRef = useRef(
-    props.suppressBranchDriftDialog ?? false
+    props.suppressBranchDriftDialog ?? false,
   );
 
   useEffect(() => {
-    suppressBranchDriftDialogRef.current = props.suppressBranchDriftDialog ?? false;
+    suppressBranchDriftDialogRef.current =
+      props.suppressBranchDriftDialog ?? false;
     if (props.suppressBranchDriftDialog) {
       setBranchDriftDialog(undefined);
       setBranchDriftError(undefined);
@@ -1185,7 +1262,9 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadLatestFailedActionRun = [...selectedThreadActionRuns]
     .reverse()
     .find((run) => run.status === "failed");
-  const selectedThreadActionFailed = Boolean(selectedThreadLatestFailedActionRun);
+  const selectedThreadActionFailed = Boolean(
+    selectedThreadLatestFailedActionRun,
+  );
   const selectedThreadWorktree = selectedThread?.linkedDirectories.find(
     (directory) =>
       directory.kind === "worktree" || Boolean(directory.worktreePath?.trim()),
@@ -1193,14 +1272,15 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadOptimisticLaunchpadInput =
     buildInputFromOptimisticUserMessage(selectedThread?.optimisticUserMessage);
   const hasOnlyOptimisticLaunchpadMessage =
-    props.messageCount === 1 && selectedThreadOptimisticLaunchpadInput.length > 0;
+    props.messageCount === 1
+    && selectedThreadOptimisticLaunchpadInput.length > 0;
   const showSetupFailureChoice = Boolean(
-    selectedThread &&
-      selectedThreadKey &&
-      (props.messageCount === 0 || hasOnlyOptimisticLaunchpadMessage) &&
-      !props.activeTurnId &&
-      (selectedThreadSetupFailed || selectedThreadActionFailed) &&
-      !setupFailureDismissedThreadKeys.has(selectedThreadKey),
+    selectedThread
+    && selectedThreadKey
+    && (props.messageCount === 0 || hasOnlyOptimisticLaunchpadMessage)
+    && !props.activeTurnId
+    && (selectedThreadSetupFailed || selectedThreadActionFailed)
+    && !setupFailureDismissedThreadKeys.has(selectedThreadKey),
   );
   const selectedThreadEnvironmentFailurePhase = selectedThreadActionFailed
     ? "action"
@@ -1234,9 +1314,10 @@ export function ThreadView(props: ThreadViewProps) {
         model: selectedThread.model,
         reasoningEffort: selectedThread.reasoningEffort,
         serviceTier: selectedThread.serviceTier,
-        fastMode: selectedThread.source === "codex"
-          ? selectedThread.fastMode
-          : undefined,
+        fastMode:
+          selectedThread.source === "codex"
+            ? selectedThread.fastMode
+            : undefined,
       });
       props.onActiveTurnIdChange?.(response.turnId);
       setSetupFailureDismissedThreadKeys((current) => {
@@ -1280,13 +1361,15 @@ export function ThreadView(props: ThreadViewProps) {
     if (expectedBranch === "HEAD") return false;
     return (thread.retainedBranchDriftPairs ?? []).some(
       (pair) =>
-        pair.expectedBranch === expectedBranch &&
-        pair.observedBranch === observedBranch,
+        pair.expectedBranch === expectedBranch
+        && pair.observedBranch === observedBranch,
     );
   };
 
-  const canWarnForBranchDrift = (expectedBranch?: string, observedBranch?: string): boolean =>
-    isBranchDrifted(expectedBranch, observedBranch);
+  const canWarnForBranchDrift = (
+    expectedBranch?: string,
+    observedBranch?: string,
+  ): boolean => isBranchDrifted(expectedBranch, observedBranch);
 
   const showBranchDriftDialog = (
     thread: NavigationThreadSummary,
@@ -1330,7 +1413,13 @@ export function ThreadView(props: ThreadViewProps) {
     if (suppressBranchDriftDialogRef.current) {
       return false;
     }
-    return showBranchDriftDialog(thread, expectedBranch, observedBranch, reason, checkedAt);
+    return showBranchDriftDialog(
+      thread,
+      expectedBranch,
+      observedBranch,
+      reason,
+      checkedAt,
+    );
   };
 
   const checkSelectedThreadBranchDrift = async (
@@ -1359,10 +1448,10 @@ export function ThreadView(props: ThreadViewProps) {
         }
       }
       if (
-        !result.drifted ||
-        !result.expectedBranch ||
-        !result.observedBranch ||
-        !canWarnForBranchDrift(result.expectedBranch, result.observedBranch)
+        !result.drifted
+        || !result.expectedBranch
+        || !result.observedBranch
+        || !canWarnForBranchDrift(result.expectedBranch, result.observedBranch)
       ) {
         setBranchDriftDialog((current) =>
           current?.threadKey === startedThreadKey ? undefined : current,
@@ -1398,14 +1487,16 @@ export function ThreadView(props: ThreadViewProps) {
     const expectedBranch = thread?.gitBranch;
     const observedBranch = thread?.observedGitBranch;
     if (
-      !thread ||
-      !expectedBranch ||
-      !observedBranch ||
-      !canWarnForBranchDrift(expectedBranch, observedBranch)
+      !thread
+      || !expectedBranch
+      || !observedBranch
+      || !canWarnForBranchDrift(expectedBranch, observedBranch)
     ) {
       if (thread) {
         setBranchDriftDialog((current) =>
-          current?.threadKey === `${thread.source}:${thread.id}` ? undefined : current,
+          current?.threadKey === `${thread.source}:${thread.id}`
+            ? undefined
+            : current,
         );
       }
       return;
@@ -1430,10 +1521,10 @@ export function ThreadView(props: ThreadViewProps) {
     previousTurnRef.current = current;
 
     if (
-      previous.threadKey === current.threadKey &&
-      previous.threadKey !== undefined &&
-      previous.activeTurnId !== undefined &&
-      current.activeTurnId === undefined
+      previous.threadKey === current.threadKey
+      && previous.threadKey !== undefined
+      && previous.activeTurnId !== undefined
+      && current.activeTurnId === undefined
     ) {
       void checkSelectedThreadBranchDrift("focus");
     }
@@ -1454,17 +1545,20 @@ export function ThreadView(props: ThreadViewProps) {
     };
   }, [props.desktopApi, selectedLaunchpad, selectedThreadKey]);
 
-  const deferLiveTranscriptEntry = useCallback(<T extends AppServerThreadEntry,>(entry: T): T => {
-    queueMicrotask(() => {
-      props.onLiveTranscriptEntry?.(entry);
-    });
-    return entry;
-  }, [props.onLiveTranscriptEntry]);
+  const deferLiveTranscriptEntry = useCallback(
+    <T extends AppServerThreadEntry>(entry: T): T => {
+      queueMicrotask(() => {
+        props.onLiveTranscriptEntry?.(entry);
+      });
+      return entry;
+    },
+    [props.onLiveTranscriptEntry],
+  );
 
   const liveNotificationTurnId = useCallback(
     (notificationTurnId?: string): string | undefined =>
       props.activeTurnId ?? notificationTurnId,
-    [props.activeTurnId]
+    [props.activeTurnId],
   );
 
   // The latest `item/fileChange/outputDelta` activity entry (after #493
@@ -1478,8 +1572,8 @@ export function ThreadView(props: ThreadViewProps) {
     let latest: AppServerThreadActivityEntry | undefined;
     for (const entry of props.transcriptEntries) {
       if (
-        entry.type !== "activity" ||
-        !entry.id.startsWith("live-file-change-")
+        entry.type !== "activity"
+        || !entry.id.startsWith("live-file-change-")
       ) {
         continue;
       }
@@ -1497,8 +1591,8 @@ export function ThreadView(props: ThreadViewProps) {
       const latestCreatedAt =
         typeof latest.createdAt === "number" ? latest.createdAt : undefined;
       if (
-        typeof entryCreatedAt === "number" &&
-        typeof latestCreatedAt === "number"
+        typeof entryCreatedAt === "number"
+        && typeof latestCreatedAt === "number"
       ) {
         if (entryCreatedAt > latestCreatedAt) {
           latest = entry;
@@ -1516,9 +1610,9 @@ export function ThreadView(props: ThreadViewProps) {
       const entrySequence = readRendererSequence(entry);
       const latestSequence = readRendererSequence(latest);
       if (
-        typeof entrySequence === "number" &&
-        typeof latestSequence === "number" &&
-        entrySequence > latestSequence
+        typeof entrySequence === "number"
+        && typeof latestSequence === "number"
+        && entrySequence > latestSequence
       ) {
         latest = entry;
       }
@@ -1628,7 +1722,9 @@ export function ThreadView(props: ThreadViewProps) {
       }
       if (!target && typeof turnTimeMs === "number") {
         let bestDelta = Infinity;
-        for (const candidate of container.querySelectorAll("[data-turn-time]")) {
+        for (const candidate of container.querySelectorAll(
+          "[data-turn-time]",
+        )) {
           const time = Number((candidate as HTMLElement).dataset.turnTime);
           if (!Number.isFinite(time)) {
             continue;
@@ -1723,7 +1819,8 @@ export function ThreadView(props: ThreadViewProps) {
 
     const persistedActivity = props.transcriptEntries.find(
       (entry): entry is AppServerThreadActivityEntry =>
-        entry.type === "activity" && activityContainsDiff(entry, pendingActivityEntry)
+        entry.type === "activity"
+        && activityContainsDiff(entry, pendingActivityEntry),
     );
     if (persistedActivity) {
       setPendingActivityEntry(undefined);
@@ -1737,7 +1834,8 @@ export function ThreadView(props: ThreadViewProps) {
 
     const persistedPlan = props.transcriptEntries.find(
       (entry): entry is AppServerThreadPlanEntry =>
-        entry.type === "plan" && arePlanEntriesEquivalent(entry, pendingPlanEntry)
+        entry.type === "plan"
+        && arePlanEntriesEquivalent(entry, pendingPlanEntry),
     );
     if (persistedPlan) {
       setPendingPlanEntry(undefined);
@@ -1751,8 +1849,8 @@ export function ThreadView(props: ThreadViewProps) {
 
     return props.desktopApi.onAgentEvent((event) => {
       const notificationThreadId =
-        "threadId" in event.notification.params &&
-        typeof event.notification.params.threadId === "string"
+        "threadId" in event.notification.params
+        && typeof event.notification.params.threadId === "string"
           ? event.notification.params.threadId
           : undefined;
 
@@ -1760,24 +1858,24 @@ export function ThreadView(props: ThreadViewProps) {
       // it a thread owner, show it where the user is looking without treating it
       // as persisted thread history.
       const isGlobalMcpStatus =
-        notificationThreadId == null &&
-        (event.notification.method === "mcpServer/startupStatus/updated" ||
-          event.notification.method === "mcpServer/oauthLogin/completed");
+        notificationThreadId == null
+        && (event.notification.method === "mcpServer/startupStatus/updated"
+          || event.notification.method === "mcpServer/oauthLogin/completed");
 
       if (
-        event.backend !== selectedThread.source ||
-        (notificationThreadId !== selectedThread.id && !isGlobalMcpStatus)
+        event.backend !== selectedThread.source
+        || (notificationThreadId !== selectedThread.id && !isGlobalMcpStatus)
       ) {
         return;
       }
 
       if (event.notification.method === "mcpServer/startupStatus/updated") {
         const entry = buildMcpServerStatusActivityEntry(
-          event.notification.params as Record<string, unknown>
+          event.notification.params as Record<string, unknown>,
         );
         if (entry) {
           setPendingProtocolActivityEntry((current) =>
-            mergeMcpProtocolActivityEntry(current, entry)
+            mergeMcpProtocolActivityEntry(current, entry),
           );
         }
         return;
@@ -1785,19 +1883,19 @@ export function ThreadView(props: ThreadViewProps) {
 
       if (event.notification.method === "mcpServer/oauthLogin/completed") {
         const entry = buildMcpOauthActivityEntry(
-          event.notification.params as Record<string, unknown>
+          event.notification.params as Record<string, unknown>,
         );
         if (entry) {
           setPendingProtocolActivityEntry((current) =>
-            mergeMcpProtocolActivityEntry(current, entry)
+            mergeMcpProtocolActivityEntry(current, entry),
           );
         }
         return;
       }
 
       if (
-        event.notification.method === "turn/failed" ||
-        event.notification.method === "turn/cancelled"
+        event.notification.method === "turn/failed"
+        || event.notification.method === "turn/cancelled"
       ) {
         // A failed/cancelled turn still made real file edits before it
         // stopped (turn/diff/updated only carries actual changes). Defer
@@ -1818,15 +1916,15 @@ export function ThreadView(props: ThreadViewProps) {
 
       if (event.notification.method === "turn/completed") {
         const completedTurnRecord =
-          typeof event.notification.params.turn === "object" &&
-          event.notification.params.turn !== null
+          typeof event.notification.params.turn === "object"
+          && event.notification.params.turn !== null
             ? event.notification.params.turn
             : undefined;
         const turn = buildCompletedLiveTurnMetadata({
           activeTurnStartedAt: props.activeTurnStartedAt,
           fallbackTurnId:
-            props.activeTurnId ??
-            (typeof event.notification.params.turnId === "string"
+            props.activeTurnId
+            ?? (typeof event.notification.params.turnId === "string"
               ? event.notification.params.turnId
               : undefined),
           turn: completedTurnRecord,
@@ -1836,9 +1934,12 @@ export function ThreadView(props: ThreadViewProps) {
             ? { ...turn, id: props.activeTurnId }
             : turn;
         if (liveTurn) {
-          const completeEntryTurn = <T extends { turn?: AppServerThreadTurnMetadata }>(
-            entry: T | undefined
-          ): T | undefined => (entry ? { ...entry, turn: liveTurn } : undefined);
+          const completeEntryTurn = <
+            T extends { turn?: AppServerThreadTurnMetadata },
+          >(
+            entry: T | undefined,
+          ): T | undefined =>
+            entry ? { ...entry, turn: liveTurn } : undefined;
           // Defer each live entry into the persistent transcript via
           // optimisticEntries, snapshot the rail-owned ones (Edited
           // Files, Plan) for the LiveWorkRail's "pinned to last turn"
@@ -1847,7 +1948,9 @@ export function ThreadView(props: ThreadViewProps) {
           // from issue #495). pendingProtocolActivityEntry holds MCP
           // status / warnings, which the rail doesn't own — we still
           // clear it to fix the duplicate, but don't snapshot.
-          const completedActivity = completeEntryTurn(pendingActivityEntryRef.current);
+          const completedActivity = completeEntryTurn(
+            pendingActivityEntryRef.current,
+          );
           if (completedActivity) {
             deferLiveTranscriptEntry(completedActivity);
           }
@@ -1888,7 +1991,7 @@ export function ThreadView(props: ThreadViewProps) {
           buildWarningActivityEntry({
             id: `live-warning-${selectedThread.id}`,
             message,
-          })
+          }),
         );
         return;
       }
@@ -1899,12 +2002,11 @@ export function ThreadView(props: ThreadViewProps) {
         }
 
         const turn = buildLiveTurnMetadata({
-          turnId:
-            liveNotificationTurnId(
-              typeof event.notification.params.turnId === "string"
-                ? event.notification.params.turnId
-                : undefined
-            ),
+          turnId: liveNotificationTurnId(
+            typeof event.notification.params.turnId === "string"
+              ? event.notification.params.turnId
+              : undefined,
+          ),
           activeTurnStartedAt: props.activeTurnStartedAt,
         });
         setPendingActivityEntry({
@@ -1923,9 +2025,9 @@ export function ThreadView(props: ThreadViewProps) {
 
         const itemId = getPlanNotificationItemId(params);
         const turnId =
-          liveNotificationTurnId(getPlanNotificationTurnId(params)) ??
-          itemId ??
-          selectedThread.id;
+          liveNotificationTurnId(getPlanNotificationTurnId(params))
+          ?? itemId
+          ?? selectedThread.id;
         const turn = buildLiveTurnMetadata({
           turnId,
           activeTurnStartedAt: props.activeTurnStartedAt,
@@ -1934,7 +2036,7 @@ export function ThreadView(props: ThreadViewProps) {
           type: "plan",
           id: `live-plan-${turnId}`,
           createdAt: current?.createdAt ?? Date.now(),
-          ...(current?.turn ?? turn ? { turn: current?.turn ?? turn } : {}),
+          ...((current?.turn ?? turn) ? { turn: current?.turn ?? turn } : {}),
           ...(current?.explanation ? { explanation: current.explanation } : {}),
           markdown: `${current?.markdown ?? ""}${delta}`,
           steps: current?.steps ?? [],
@@ -1948,9 +2050,9 @@ export function ThreadView(props: ThreadViewProps) {
         if (markdown) {
           const itemId = getPlanNotificationItemId(params);
           const turnId =
-            liveNotificationTurnId(getPlanNotificationTurnId(params)) ??
-            itemId ??
-            selectedThread.id;
+            liveNotificationTurnId(getPlanNotificationTurnId(params))
+            ?? itemId
+            ?? selectedThread.id;
           const turn = buildLiveTurnMetadata({
             turnId,
             activeTurnStartedAt: props.activeTurnStartedAt,
@@ -1959,8 +2061,10 @@ export function ThreadView(props: ThreadViewProps) {
             type: "plan",
             id: `live-plan-${turnId}`,
             createdAt: current?.createdAt ?? Date.now(),
-            ...(current?.turn ?? turn ? { turn: current?.turn ?? turn } : {}),
-            ...(current?.explanation ? { explanation: current.explanation } : {}),
+            ...((current?.turn ?? turn) ? { turn: current?.turn ?? turn } : {}),
+            ...(current?.explanation
+              ? { explanation: current.explanation }
+              : {}),
             markdown,
             steps: current?.steps ?? [],
           }));
@@ -1974,8 +2078,8 @@ export function ThreadView(props: ThreadViewProps) {
       }
 
       const planRecord =
-        typeof event.notification.params.plan === "object" &&
-        event.notification.params.plan !== null
+        typeof event.notification.params.plan === "object"
+        && event.notification.params.plan !== null
           ? (event.notification.params.plan as {
               explanation?: unknown;
               steps?: unknown;
@@ -1987,7 +2091,8 @@ export function ThreadView(props: ThreadViewProps) {
       }
 
       const explanation =
-        typeof planRecord.explanation === "string" && planRecord.explanation.trim()
+        typeof planRecord.explanation === "string"
+        && planRecord.explanation.trim()
           ? planRecord.explanation.trim()
           : undefined;
       const steps = normalizeLivePlanSteps(planRecord.steps);
@@ -1996,7 +2101,7 @@ export function ThreadView(props: ThreadViewProps) {
         liveNotificationTurnId(
           typeof event.notification.params.turnId === "string"
             ? event.notification.params.turnId
-            : undefined
+            : undefined,
         ) ?? selectedThread.id;
       const turn = buildLiveTurnMetadata({
         turnId,
@@ -2006,7 +2111,7 @@ export function ThreadView(props: ThreadViewProps) {
         type: "plan",
         id: `live-plan-${turnId}`,
         createdAt: current?.createdAt ?? Date.now(),
-        ...(current?.turn ?? turn ? { turn: current?.turn ?? turn } : {}),
+        ...((current?.turn ?? turn) ? { turn: current?.turn ?? turn } : {}),
         ...(explanation ? { explanation } : {}),
         ...(current?.markdown ? { markdown: current.markdown } : {}),
         steps,
@@ -2021,9 +2126,17 @@ export function ThreadView(props: ThreadViewProps) {
     selectedThread,
   ]);
 
-  async function respondToPendingRequest(action: PendingRequestAction): Promise<void> {
-    if (!props.desktopApi?.submitServerRequest || !selectedThread || !props.pendingRequest) {
-      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
+  async function respondToPendingRequest(
+    action: PendingRequestAction,
+  ): Promise<void> {
+    if (
+      !props.desktopApi?.submitServerRequest
+      || !selectedThread
+      || !props.pendingRequest
+    ) {
+      setPendingRequestError(
+        "Desktop bridge is missing submitServerRequest().",
+      );
       return;
     }
 
@@ -2043,27 +2156,29 @@ export function ThreadView(props: ThreadViewProps) {
       });
       props.clearPendingRequest(
         props.pendingRequest.params.requestId,
-        (
-          action.decision === "accept" ||
-          action.decision === "accept_for_session" ||
-          action.decision === "accept_with_execpolicy_amendment" ||
-          action.decision === "apply_network_policy_amendment"
-        )
+        action.decision === "accept"
+          || action.decision === "accept_for_session"
+          || action.decision === "accept_with_execpolicy_amendment"
+          || action.decision === "apply_network_policy_amendment"
           ? "Thinking"
           : undefined,
       );
     } catch (error) {
-      setPendingRequestError(error instanceof Error ? error.message : String(error));
+      setPendingRequestError(
+        error instanceof Error ? error.message : String(error),
+      );
     } finally {
       setPendingRequestBusy(false);
     }
   }
 
   async function submitPendingUserInput(
-    pendingUserInput: PendingQuestionnaireState
+    pendingUserInput: PendingQuestionnaireState,
   ): Promise<void> {
     if (!props.desktopApi?.submitServerRequest || !selectedThread) {
-      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
+      setPendingRequestError(
+        "Desktop bridge is missing submitServerRequest().",
+      );
       return;
     }
 
@@ -2080,7 +2195,9 @@ export function ThreadView(props: ThreadViewProps) {
       });
       props.clearPendingRequest(pendingUserInput.requestId, "Thinking");
     } catch (error) {
-      setPendingRequestError(error instanceof Error ? error.message : String(error));
+      setPendingRequestError(
+        error instanceof Error ? error.message : String(error),
+      );
     } finally {
       setPendingRequestBusy(false);
     }
@@ -2088,10 +2205,12 @@ export function ThreadView(props: ThreadViewProps) {
 
   async function submitPendingMcpInteraction(
     pendingMcpInteraction: PendingMcpInteractionState,
-    action: "accept" | "decline" | "cancel"
+    action: "accept" | "decline" | "cancel",
   ): Promise<void> {
     if (!props.desktopApi?.submitServerRequest || !selectedThread) {
-      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
+      setPendingRequestError(
+        "Desktop bridge is missing submitServerRequest().",
+      );
       return;
     }
 
@@ -2111,10 +2230,12 @@ export function ThreadView(props: ThreadViewProps) {
       });
       props.clearPendingRequest(
         pendingMcpInteraction.requestId,
-        action === "accept" ? "Thinking" : undefined
+        action === "accept" ? "Thinking" : undefined,
       );
     } catch (error) {
-      setPendingRequestError(error instanceof Error ? error.message : String(error));
+      setPendingRequestError(
+        error instanceof Error ? error.message : String(error),
+      );
     } finally {
       setPendingRequestBusy(false);
     }
@@ -2128,7 +2249,10 @@ export function ThreadView(props: ThreadViewProps) {
             <div className="thread-header__eyebrow-row">
               <p className="eyebrow">Forking thread</p>
               <span className="chip chip--backend">
-                {formatBackendLabel(pendingForkEnvironmentSetup.backend, props.backends)}
+                {formatBackendLabel(
+                  pendingForkEnvironmentSetup.backend,
+                  props.backends,
+                )}
               </span>
             </div>
             <h2 className="thread-header__title">
@@ -2156,12 +2280,15 @@ export function ThreadView(props: ThreadViewProps) {
 
         <div className="thread-view__launchpad-composer">
           <LaunchpadEnvironmentSetupPending
-            command={launchpadSetupProgress?.command ?? pendingForkEnvironmentSetup.command}
+            command={
+              launchpadSetupProgress?.command
+              ?? pendingForkEnvironmentSetup.command
+            }
             cwd={launchpadSetupProgress?.cwd ?? pendingForkEnvironmentSetup.cwd}
             directoryLabel={pendingForkEnvironmentSetup.directoryLabel}
             environmentName={
-              launchpadSetupProgress?.environmentName ??
-              pendingForkEnvironmentSetup.environmentName
+              launchpadSetupProgress?.environmentName
+              ?? pendingForkEnvironmentSetup.environmentName
             }
             progress={launchpadSetupProgress}
           />
@@ -2202,7 +2329,7 @@ export function ThreadView(props: ThreadViewProps) {
 
   if (selectedLaunchpad && props.selectedDirectory) {
     const launchpadBackend = props.backends.find(
-      (backend) => backend.kind === selectedLaunchpad.backend
+      (backend) => backend.kind === selectedLaunchpad.backend,
     );
     const syncLabel = formatDirectorySync(props.selectedDirectory);
     const sameWorktreeSubthread = isSameWorktreeSubthreadLaunchpad(
@@ -2210,7 +2337,8 @@ export function ThreadView(props: ThreadViewProps) {
     );
     const launchpadIsSubthread = Boolean(selectedLaunchpad.parentThreadId);
     const launchpadCurrentBranch =
-      props.selectedDirectory.gitStatus?.currentBranch ?? selectedLaunchpad.branchName;
+      props.selectedDirectory.gitStatus?.currentBranch
+      ?? selectedLaunchpad.branchName;
     const workspaceLabel =
       props.selectedDirectory.kind === "workspace"
         ? "Workspace"
@@ -2225,31 +2353,34 @@ export function ThreadView(props: ThreadViewProps) {
         : selectedLaunchpad.directoryLabel;
     const launchpadBranchLabel =
       selectedLaunchpad.workMode === "worktree"
-        ? selectedLaunchpad.branchName ??
-          props.selectedDirectory.gitStatus?.currentBranch ??
-          "Pick one"
-        : launchpadCurrentBranch ?? "Not attached";
+        ? (selectedLaunchpad.branchName
+          ?? props.selectedDirectory.gitStatus?.currentBranch
+          ?? "Pick one")
+        : (launchpadCurrentBranch ?? "Not attached");
     const launchpadBranchDetailLabel =
-      selectedLaunchpad.workMode === "worktree" ? "Base branch" : "Current branch";
+      selectedLaunchpad.workMode === "worktree"
+        ? "Base branch"
+        : "Current branch";
     const launchpadBranchDetailValue =
       selectedLaunchpad.workMode === "worktree"
         ? launchpadBranchLabel
-        : launchpadCurrentBranch ??
-          (props.selectedDirectory.gitStatus?.syncState === "status-unavailable"
+        : (launchpadCurrentBranch
+          ?? (props.selectedDirectory.gitStatus?.syncState
+          === "status-unavailable"
             ? "Unavailable"
-            : "Not a Git repo");
-    const launchpadStatusValue =
-      launchpadIsSubthread
-        ? "Starts empty"
-        : syncLabel ?? "Directory context only";
+            : "Not a Git repo"));
+    const launchpadStatusValue = launchpadIsSubthread
+      ? "Starts empty"
+      : (syncLabel ?? "Directory context only");
     const launchpadDirectoryStatusValue =
-      syncLabel ??
-      (sameWorktreeSubthread && selectedLaunchpad.branchName
+      syncLabel
+      ?? (sameWorktreeSubthread && selectedLaunchpad.branchName
         ? "Git worktree"
         : "Directory context only");
     const selectedLaunchpadCodexEnvironment =
       selectedLaunchpad.codexEnvironmentOptions?.find(
-        (environment) => environment.id === selectedLaunchpad.codexEnvironmentId,
+        (environment) =>
+          environment.id === selectedLaunchpad.codexEnvironmentId,
       );
     const launchpadRunningCodexEnvironmentSetup = Boolean(
       selectedLaunchpadCodexEnvironment?.setupScript,
@@ -2268,11 +2399,11 @@ export function ThreadView(props: ThreadViewProps) {
           directoryKey,
           input,
           collaborationMode,
-          reviewTarget
+          reviewTarget,
         );
       } catch (error) {
         setLaunchpadMaterializeError(
-          error instanceof Error ? error.message : String(error)
+          error instanceof Error ? error.message : String(error),
         );
         throw error;
       }
@@ -2326,9 +2457,13 @@ export function ThreadView(props: ThreadViewProps) {
               <div>
                 <span className="launchpad-panel__label">Grouped under</span>
                 <strong
-                  title={selectedLaunchpad.parentThreadTitle ?? selectedLaunchpad.parentThreadId}
+                  title={
+                    selectedLaunchpad.parentThreadTitle
+                    ?? selectedLaunchpad.parentThreadId
+                  }
                 >
-                  {selectedLaunchpad.parentThreadTitle ?? selectedLaunchpad.parentThreadId}
+                  {selectedLaunchpad.parentThreadTitle
+                    ?? selectedLaunchpad.parentThreadId}
                 </strong>
               </div>
             ) : null}
@@ -2351,7 +2486,10 @@ export function ThreadView(props: ThreadViewProps) {
             </div>
             <div>
               <dt>Upstream</dt>
-              <dd>{props.selectedDirectory.gitStatus?.upstreamBranch ?? "Not tracking"}</dd>
+              <dd>
+                {props.selectedDirectory.gitStatus?.upstreamBranch
+                  ?? "Not tracking"}
+              </dd>
             </div>
             <div>
               <dt>Status</dt>
@@ -2370,17 +2508,20 @@ export function ThreadView(props: ThreadViewProps) {
                 setLaunchpadMaterializeError(undefined);
               }}
             />
-          ) : launchpadMaterializing && launchpadRunningCodexEnvironmentSetup ? (
+          ) : launchpadMaterializing
+            && launchpadRunningCodexEnvironmentSetup ? (
             <LaunchpadEnvironmentSetupPending
               command={
-                launchpadSetupProgress?.command ??
-                selectedLaunchpadCodexEnvironment?.setupScript
+                launchpadSetupProgress?.command
+                ?? selectedLaunchpadCodexEnvironment?.setupScript
               }
-              cwd={launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath}
+              cwd={
+                launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath
+              }
               directoryLabel={selectedLaunchpad.directoryLabel}
               environmentName={
-                launchpadSetupProgress?.environmentName ??
-                selectedLaunchpadCodexEnvironment?.name
+                launchpadSetupProgress?.environmentName
+                ?? selectedLaunchpadCodexEnvironment?.name
               }
               progress={launchpadSetupProgress}
             />
@@ -2392,7 +2533,10 @@ export function ThreadView(props: ThreadViewProps) {
               <div className="launchpad-pending">
                 <p className="eyebrow">Preparing transcript</p>
                 <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
-                <p>Your prompt was sent. The transcript will appear here when the thread is ready.</p>
+                <p>
+                  Your prompt was sent. The transcript will appear here when the
+                  thread is ready.
+                </p>
               </div>
             </section>
           ) : (
@@ -2421,7 +2565,9 @@ export function ThreadView(props: ThreadViewProps) {
               onCancelLaunchpad={props.onCancelLaunchpad}
               onUpdateLaunchpad={props.onUpdateLaunchpad}
               onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
-              onSelectNoDirectoryFromPicker={props.onSelectNoDirectoryFromPicker}
+              onSelectNoDirectoryFromPicker={
+                props.onSelectNoDirectoryFromPicker
+              }
               onPickAndRegisterDirectory={props.onPickAndRegisterDirectory}
               onPickAndAttachDirectoryToThread={
                 props.onPickAndAttachDirectoryToThread
@@ -2481,29 +2627,29 @@ export function ThreadView(props: ThreadViewProps) {
               command={
                 selectedThreadEnvironmentFailurePhase === "action"
                   ? selectedThreadLatestFailedActionRun?.command
-                  : selectedThread.codexEnvironmentRuntime?.setupCommand ??
-                    launchpadSetupProgress?.command
+                  : (selectedThread.codexEnvironmentRuntime?.setupCommand
+                    ?? launchpadSetupProgress?.command)
               }
               cwd={
-                selectedThread.codexEnvironmentRuntime?.cwd ??
-                launchpadSetupProgress?.cwd
+                selectedThread.codexEnvironmentRuntime?.cwd
+                ?? launchpadSetupProgress?.cwd
               }
               environmentName={
-                selectedThread.codexEnvironmentRuntime?.environmentName ??
-                "Environment"
+                selectedThread.codexEnvironmentRuntime?.environmentName
+                ?? "Environment"
               }
               error={props.archiveThreadError ?? setupFailureContinueError}
               exitCode={
                 selectedThreadEnvironmentFailurePhase === "setup"
-                  ? selectedThread.codexEnvironmentRuntime?.setupExitCode ??
-                    launchpadSetupProgress?.exitCode
+                  ? (selectedThread.codexEnvironmentRuntime?.setupExitCode
+                    ?? launchpadSetupProgress?.exitCode)
                   : undefined
               }
               hasWorktree={Boolean(selectedThreadWorktree)}
               output={
                 selectedThreadEnvironmentFailurePhase === "setup"
-                  ? selectedThread.codexEnvironmentRuntime?.setupOutput ??
-                    launchpadSetupProgress?.output
+                  ? (selectedThread.codexEnvironmentRuntime?.setupOutput
+                    ?? launchpadSetupProgress?.output)
                   : undefined
               }
               phase={selectedThreadEnvironmentFailurePhase}
@@ -2527,8 +2673,8 @@ export function ThreadView(props: ThreadViewProps) {
               initialQuery={props.findInitialQuery}
               turnId={props.findTurnId}
               hasMoreHistory={Boolean(
-                props.transcriptPagination?.supportsPagination &&
-                  props.transcriptPagination.hasPreviousPage,
+                props.transcriptPagination?.supportsPagination
+                && props.transcriptPagination.hasPreviousPage,
               )}
               loadingMore={props.loadingMore}
               onLoadOlder={props.onLoadOlder}
@@ -2582,7 +2728,10 @@ export function ThreadView(props: ThreadViewProps) {
               onOpenImage={setExpandedImage}
               onRespondToPendingRequest={respondToPendingRequest}
               onPendingMcpInteractionChange={(state) => {
-                props.onUpdatePendingMcpInteraction?.(state.requestId, () => state);
+                props.onUpdatePendingMcpInteraction?.(
+                  state.requestId,
+                  () => state,
+                );
               }}
               onSubmitPendingMcpInteraction={submitPendingMcpInteraction}
               onPendingUserInputChange={(state) => {
@@ -2609,14 +2758,13 @@ export function ThreadView(props: ThreadViewProps) {
             onScrollToTurn={handleScrollToTurn}
             pinned={!props.activeTurnId}
             planEntry={
-              pendingPlanEntry ??
-              (props.activeTurnId ? undefined : lastCompletedPlanEntry)
+              pendingPlanEntry
+              ?? (props.activeTurnId ? undefined : lastCompletedPlanEntry)
             }
             onMoveEditedFilesToSidebar={
               editedFilesDock === "above" ? moveEditedFilesToSidebar : undefined
             }
           />
-
 
           <Composer
             activeTurnId={props.activeTurnId}
@@ -2644,7 +2792,8 @@ export function ThreadView(props: ThreadViewProps) {
             onRefreshNavigation={props.onRefreshNavigation}
             onHandoffThreadWorkspace={props.onHandoffThreadWorkspace}
             onBeforeStartTurn={
-              selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
+              selectedThread?.gitBranch
+              && props.desktopApi?.checkThreadBranchDrift
                 ? async () => !(await checkSelectedThreadBranchDrift("turn"))
                 : undefined
             }
@@ -2666,7 +2815,7 @@ export function ThreadView(props: ThreadViewProps) {
             onSetThreadModelSettings={props.onSetThreadModelSettings}
             pendingRequestActive={Boolean(props.pendingRequest)}
             pendingUserInputActive={Boolean(
-              props.pendingUserInput || props.pendingMcpInteraction
+              props.pendingUserInput || props.pendingMcpInteraction,
             )}
             pastedImageMaxPatches={props.pastedImageMaxPatches}
             removeOptimisticMessage={props.removeOptimisticMessage}
@@ -2683,8 +2832,8 @@ export function ThreadView(props: ThreadViewProps) {
 
           {Object.values(retainedTerminalByThread).map((terminal) => {
             const terminalVisible =
-              terminal.threadKey === selectedThreadKey &&
-              terminalOpenByThread[terminal.threadKey] === true;
+              terminal.threadKey === selectedThreadKey
+              && terminalOpenByThread[terminal.threadKey] === true;
             return (
               <Suspense key={terminal.threadKey} fallback={null}>
                 <LazyIntegratedTerminal
@@ -2780,8 +2929,8 @@ export function ThreadView(props: ThreadViewProps) {
               </button>
             </div>
             <p>
-              The worktree is already on a different branch. PwrAgent will not change git state
-              for you.
+              The worktree is already on a different branch. PwrAgent will not
+              change git state for you.
             </p>
             <dl className="workspace-handoff-dialog__branch-path">
               <div>
@@ -2792,7 +2941,10 @@ export function ThreadView(props: ThreadViewProps) {
                   </code>
                 </dd>
               </div>
-              <span aria-hidden="true" className="workspace-handoff-dialog__branch-arrow">
+              <span
+                aria-hidden="true"
+                className="workspace-handoff-dialog__branch-arrow"
+              >
                 -&gt;
               </span>
               <div>
@@ -2806,10 +2958,13 @@ export function ThreadView(props: ThreadViewProps) {
             </dl>
             <p>
               If earlier turns made commits on{" "}
-              <code>{branchDriftDialog.expectedBranch}</code>, those commits may not be visible
-              on <code>{branchDriftDialog.observedBranch}</code>.
+              <code>{branchDriftDialog.expectedBranch}</code>, those commits may
+              not be visible on <code>{branchDriftDialog.observedBranch}</code>.
             </p>
-            <div className="workspace-handoff-dialog__comparison" aria-label="Branch choices">
+            <div
+              className="workspace-handoff-dialog__comparison"
+              aria-label="Branch choices"
+            >
               <div className="workspace-handoff-dialog__choice">
                 <section className="workspace-handoff-dialog__choice-copy">
                   <h3>I'll switch back</h3>
@@ -2817,9 +2972,7 @@ export function ThreadView(props: ThreadViewProps) {
                     Keep the warning. This thread will continue to expect{" "}
                     <code>{branchDriftDialog.expectedBranch}</code>.
                   </p>
-                  <p>
-                    Next: switch the worktree back yourself.
-                  </p>
+                  <p>Next: switch the worktree back yourself.</p>
                 </section>
                 <button
                   aria-label={
@@ -2841,7 +2994,10 @@ export function ThreadView(props: ThreadViewProps) {
                       return;
                     }
 
-                    if (!props.desktopApi?.retainThreadBranchDrift || !selectedThread) {
+                    if (
+                      !props.desktopApi?.retainThreadBranchDrift
+                      || !selectedThread
+                    ) {
                       setBranchDriftDialog(undefined);
                       return;
                     }
@@ -2858,16 +3014,22 @@ export function ThreadView(props: ThreadViewProps) {
                       await props.onRefreshNavigation?.();
                       setBranchDriftDialog(undefined);
                     } catch (error) {
-                      setBranchDriftError(error instanceof Error ? error.message : String(error));
+                      setBranchDriftError(
+                        error instanceof Error ? error.message : String(error),
+                      );
                     } finally {
                       setBranchDriftBusy(false);
                     }
                   }}
                 >
                   <span>
-                    {branchDriftDialog.reason === "turn" ? "Cancel Turn" : "Keep Warning"}
+                    {branchDriftDialog.reason === "turn"
+                      ? "Cancel Turn"
+                      : "Keep Warning"}
                   </span>
-                  <small>I'll switch back to {branchDriftDialog.expectedBranch}</small>
+                  <small>
+                    I'll switch back to {branchDriftDialog.expectedBranch}
+                  </small>
                 </button>
               </div>
               <div className="workspace-handoff-dialog__choice">
@@ -2877,9 +3039,7 @@ export function ThreadView(props: ThreadViewProps) {
                     Update this thread so it expects{" "}
                     <code>{branchDriftDialog.observedBranch}</code> from now on.
                   </p>
-                  <p>
-                    Next: start the next turn with no warning.
-                  </p>
+                  <p>Next: start the next turn with no warning.</p>
                 </section>
                 <button
                   aria-label={`Accept current branch as correct. Continue working on ${branchDriftDialog.observedBranch} without further warnings`}
@@ -2887,7 +3047,10 @@ export function ThreadView(props: ThreadViewProps) {
                   disabled={branchDriftBusy}
                   type="button"
                   onClick={async () => {
-                    if (!props.desktopApi?.updateThreadExpectedBranch || !selectedThread) {
+                    if (
+                      !props.desktopApi?.updateThreadExpectedBranch
+                      || !selectedThread
+                    ) {
                       return;
                     }
 
@@ -2902,7 +3065,9 @@ export function ThreadView(props: ThreadViewProps) {
                       await props.onRefreshNavigation?.();
                       setBranchDriftDialog(undefined);
                     } catch (error) {
-                      setBranchDriftError(error instanceof Error ? error.message : String(error));
+                      setBranchDriftError(
+                        error instanceof Error ? error.message : String(error),
+                      );
                     } finally {
                       setBranchDriftBusy(false);
                     }
@@ -2910,20 +3075,20 @@ export function ThreadView(props: ThreadViewProps) {
                 >
                   <span>Accept Current Branch as Correct</span>
                   <small>
-                    Continue working on {branchDriftDialog.observedBranch} without further
-                    warnings
+                    Continue working on {branchDriftDialog.observedBranch}{" "}
+                    without further warnings
                   </small>
                 </button>
               </div>
             </div>
             {branchDriftError ? (
-              <p className="workspace-handoff-dialog__error">{branchDriftError}</p>
+              <p className="workspace-handoff-dialog__error">
+                {branchDriftError}
+              </p>
             ) : null}
           </div>
         </div>
       ) : null}
-
-
     </section>
   );
 }
@@ -2933,8 +3098,9 @@ function executionModeLabel(mode: ThreadExecutionMode): string {
   return "Default Access";
 }
 
-
-function formatDirectorySync(directory: NavigationDirectorySummary): string | undefined {
+function formatDirectorySync(
+  directory: NavigationDirectorySummary,
+): string | undefined {
   const status = directory.gitStatus;
   if (!status) {
     return undefined;
@@ -2970,16 +3136,18 @@ function threadDirectoryPaths(thread: NavigationThreadSummary): string[] {
     }
     return paths;
   });
-  return thread.projectKey ? [thread.projectKey, ...linkedDirectoryPaths] : linkedDirectoryPaths;
+  return thread.projectKey
+    ? [thread.projectKey, ...linkedDirectoryPaths]
+    : linkedDirectoryPaths;
 }
 
 function resolveThreadTerminalCwd(
   thread: NavigationThreadSummary,
 ): string | undefined {
   const directory =
-    thread.linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
-    thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
-    thread.linkedDirectories[0];
+    thread.linkedDirectories.find((candidate) => candidate.kind === "worktree")
+    ?? thread.linkedDirectories.find((candidate) => candidate.kind === "local")
+    ?? thread.linkedDirectories[0];
 
   return directory?.worktreePath ?? directory?.path ?? thread.projectKey;
 }

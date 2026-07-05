@@ -19,10 +19,10 @@ export function isEditableTarget(event: KeyboardEvent): boolean {
     return false;
   }
   return (
-    target.tagName === "INPUT" ||
-    target.tagName === "TEXTAREA" ||
-    target.tagName === "SELECT" ||
-    target.isContentEditable
+    target.tagName === "INPUT"
+    || target.tagName === "TEXTAREA"
+    || target.tagName === "SELECT"
+    || target.isContentEditable
   );
 }
 
@@ -39,9 +39,9 @@ export function isEditableTarget(event: KeyboardEvent): boolean {
 export function isAccelLetter(event: KeyboardEvent, letter: string): boolean {
   const upper = letter.toUpperCase();
   return (
-    event.code === `Key${upper}` ||
-    event.key === upper ||
-    event.key === upper.toLowerCase()
+    event.code === `Key${upper}`
+    || event.key === upper
+    || event.key === upper.toLowerCase()
   );
 }
 
@@ -101,11 +101,11 @@ export function matchHistoryNavChord(
     return null;
   }
   if (
-    event.altKey &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !isEditableTarget(event)
+    event.altKey
+    && !event.metaKey
+    && !event.ctrlKey
+    && !event.shiftKey
+    && !isEditableTarget(event)
   ) {
     if (event.key === "ArrowLeft") {
       return "back";

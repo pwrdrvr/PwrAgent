@@ -67,10 +67,18 @@ describe("buildMonitorStatusIntent", () => {
     );
     expect(intent.text).toContain("Pins: 5 | Recent: 5");
     expect(intent.text).toContain("Status: inline | Snippet: off");
-    expect(intent.text).toContain("Pins\nP1. Pinned release watch (codex) - idle - updated just now - PwrAgent");
-    expect(intent.text).toContain("Recent\n1. Fix messaging monitor (codex) - idle - updated 2m ago - PwrAgent");
-    expect(intent.text).toContain("2. Review provider commands (grok) - queued permissions - updated just now - Messaging");
-    expect(intent.text).toContain(`Interval: ${MESSAGING_MONITOR_INTERVAL_MS / 60_000} min`);
+    expect(intent.text).toContain(
+      "Pins\nP1. Pinned release watch (codex) - idle - updated just now - PwrAgent",
+    );
+    expect(intent.text).toContain(
+      "Recent\n1. Fix messaging monitor (codex) - idle - updated 2m ago - PwrAgent",
+    );
+    expect(intent.text).toContain(
+      "2. Review provider commands (grok) - queued permissions - updated just now - Messaging",
+    );
+    expect(intent.text).toContain(
+      `Interval: ${MESSAGING_MONITOR_INTERVAL_MS / 60_000} min`,
+    );
     expect(intent.text).not.toContain("undefined");
   });
 

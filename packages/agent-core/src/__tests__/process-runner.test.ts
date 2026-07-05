@@ -46,7 +46,10 @@ describe("process runner", () => {
 
     const result = await runProcess({
       command: process.execPath,
-      args: ["-e", "process.stdout.write('first'); process.stdout.write('second');"],
+      args: [
+        "-e",
+        "process.stdout.write('first'); process.stdout.write('second');",
+      ],
       outputLimitBytes: 8,
       onOutputDelta: (delta) => {
         deltas.push(`${delta.stream}:${delta.text}`);

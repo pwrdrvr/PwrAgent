@@ -27,7 +27,10 @@ type NativeNotificationAction = {
  */
 export class DesktopNotificationService {
   private readonly attentionKeys = new Set<string>();
-  private readonly attentionNotifications = new Map<string, Set<Notification>>();
+  private readonly attentionNotifications = new Map<
+    string,
+    Set<Notification>
+  >();
   private readonly liveNotifications = new Set<Notification>();
 
   clearAttentionKey(key: string): void {
@@ -137,11 +140,15 @@ export class DesktopNotificationService {
   }
 
   private isAppInactive(): boolean {
-    const windows = BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
+    const windows = BrowserWindow.getAllWindows().filter(
+      (window) => !window.isDestroyed(),
+    );
     if (windows.length === 0) {
       return true;
     }
-    return windows.every((window) => window.isMinimized() || !window.isFocused());
+    return windows.every(
+      (window) => window.isMinimized() || !window.isFocused(),
+    );
   }
 
   private show(params: {
@@ -153,7 +160,9 @@ export class DesktopNotificationService {
   }): void {
     try {
       const actions =
-        params.actions && params.actions.length > 0 && this.supportsActionButtons()
+        params.actions
+        && params.actions.length > 0
+        && this.supportsActionButtons()
           ? params.actions
           : undefined;
       const notification = new Notification({
@@ -170,7 +179,9 @@ export class DesktopNotificationService {
       });
       this.liveNotifications.add(notification);
       if (params.attentionKey) {
-        let notifications = this.attentionNotifications.get(params.attentionKey);
+        let notifications = this.attentionNotifications.get(
+          params.attentionKey,
+        );
         if (!notifications) {
           notifications = new Set<Notification>();
           this.attentionNotifications.set(params.attentionKey, notifications);
@@ -180,7 +191,9 @@ export class DesktopNotificationService {
       const cleanup = () => {
         this.liveNotifications.delete(notification);
         if (params.attentionKey) {
-          const notifications = this.attentionNotifications.get(params.attentionKey);
+          const notifications = this.attentionNotifications.get(
+            params.attentionKey,
+          );
           notifications?.delete(notification);
           if (notifications?.size === 0) {
             this.attentionNotifications.delete(params.attentionKey);
@@ -203,7 +216,10 @@ export class DesktopNotificationService {
           if (handled) {
             return;
           }
-          const actionIndex = notificationActionIndex(event, deprecatedActionIndex);
+          const actionIndex = notificationActionIndex(
+            event,
+            deprecatedActionIndex,
+          );
           const action = actions[actionIndex];
           if (!action) {
             return;
@@ -230,8 +246,14 @@ function nativeApprovalActions(
   },
 ): NativeNotificationAction[] | undefined {
   const actions: NativeNotificationAction[] = [];
-  const accept = intent.decisions.find((action) => action.decision === "accept");
-  if (accept && callbacks.onDecision && nativeApprovalCanApproveInline(intent)) {
+  const accept = intent.decisions.find(
+    (action) => action.decision === "accept",
+  );
+  if (
+    accept
+    && callbacks.onDecision
+    && nativeApprovalCanApproveInline(intent)
+  ) {
     actions.push({
       text: "Approve",
       run: () => callbacks.onDecision?.(accept.decision),
@@ -240,10 +262,13 @@ function nativeApprovalActions(
   return actions.length > 0 ? actions : undefined;
 }
 
-function nativeApprovalCanApproveInline(intent: MessagingApprovalIntent): boolean {
+function nativeApprovalCanApproveInline(
+  intent: MessagingApprovalIntent,
+): boolean {
   return (
-    nativeApprovalBodyLines(intent).length > 0 &&
-    nativeApprovalBodyFullText(intent).length <= NATIVE_NOTIFICATION_BODY_MAX_LENGTH
+    nativeApprovalBodyLines(intent).length > 0
+    && nativeApprovalBodyFullText(intent).length
+      <= NATIVE_NOTIFICATION_BODY_MAX_LENGTH
   );
 }
 

@@ -34,9 +34,11 @@ describe("DbBackedSafeStorageSecretStore", () => {
     let ciphertext: Buffer<ArrayBufferLike> = Buffer.from("old");
     const stateDb = {
       getSecret: vi.fn(() => ciphertext),
-      setSecret: vi.fn((_name: string, nextCiphertext: Buffer<ArrayBufferLike>) => {
-        ciphertext = nextCiphertext;
-      }),
+      setSecret: vi.fn(
+        (_name: string, nextCiphertext: Buffer<ArrayBufferLike>) => {
+          ciphertext = nextCiphertext;
+        },
+      ),
       deleteSecret: vi.fn(),
     };
     const safeStorage = {

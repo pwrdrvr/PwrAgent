@@ -305,7 +305,9 @@ function parseDraftPayload(
   }
 }
 
-function hashDraftContent(draft: Pick<ComposerDraftSnapshotRecord, "text">): string {
+function hashDraftContent(
+  draft: Pick<ComposerDraftSnapshotRecord, "text">,
+): string {
   let hash = 5381;
   for (let index = 0; index < draft.text.length; index += 1) {
     hash = (hash * 33) ^ draft.text.charCodeAt(index);
@@ -406,8 +408,8 @@ function shouldReplacePreviousUnsentDraft(
   const previousText = previous.text.trimEnd();
   const nextText = next.text.trimEnd();
   return (
-    previousText.length > 0 &&
-    nextText.length > previousText.length &&
-    nextText.startsWith(previousText)
+    previousText.length > 0
+    && nextText.length > previousText.length
+    && nextText.startsWith(previousText)
   );
 }

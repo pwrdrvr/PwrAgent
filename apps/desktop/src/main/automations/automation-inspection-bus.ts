@@ -32,7 +32,11 @@ export class AutomationInspectionBus {
     const operation = request.operation;
     try {
       if (!isAutomationInspectionOperationName(operation)) {
-        return failure(operation, "unsupported_operation", "Unsupported automation inspection operation.");
+        return failure(
+          operation,
+          "unsupported_operation",
+          "Unsupported automation inspection operation.",
+        );
       }
       switch (operation) {
         case "list_automations":
@@ -61,12 +65,18 @@ export class AutomationInspectionBus {
             this.getAutomationRunArtifact(request.context, request.args),
           );
         default:
-          return failure(operation, "unsupported_operation", "Unsupported automation inspection operation.");
+          return failure(
+            operation,
+            "unsupported_operation",
+            "Unsupported automation inspection operation.",
+          );
       }
     } catch (error) {
       return failure(
         operation,
-        error instanceof AutomationInspectionError ? error.code : "internal_error",
+        error instanceof AutomationInspectionError
+          ? error.code
+          : "internal_error",
         error instanceof Error ? error.message : String(error),
       );
     }
@@ -82,7 +92,10 @@ export class AutomationInspectionBus {
         backend: context.backend,
         threadId: context.threadId,
       })
-      .filter((automation) => args.includePaused !== false || automation.status !== "paused");
+      .filter(
+        (automation) =>
+          args.includePaused !== false || automation.status !== "paused",
+      );
     return {
       automations: automations
         .slice(0, limit)
@@ -160,7 +173,10 @@ export class AutomationInspectionBus {
     const run = this.getScopedRun(args.runId, context);
     const artifact = this.store.getRunArtifact(run.id);
     if (!artifact) {
-      throw new AutomationInspectionError("not_found", "Automation run artifact not found.");
+      throw new AutomationInspectionError(
+        "not_found",
+        "Automation run artifact not found.",
+      );
     }
     const automation = this.getScopedAutomation(run.automationId, context);
     return {
@@ -187,7 +203,10 @@ export class AutomationInspectionBus {
     if (!automation) {
       throw new AutomationInspectionError("not_found", "Automation not found.");
     }
-    if (automation.backend !== context.backend || automation.threadId !== context.threadId) {
+    if (
+      automation.backend !== context.backend
+      || automation.threadId !== context.threadId
+    ) {
       throw new AutomationInspectionError(
         "forbidden",
         "Automation is not attached to this Agent thread.",
@@ -202,7 +221,10 @@ export class AutomationInspectionBus {
   ): AutomationRunSummary {
     const run = this.store.getRun(runId);
     if (!run) {
-      throw new AutomationInspectionError("not_found", "Automation run not found.");
+      throw new AutomationInspectionError(
+        "not_found",
+        "Automation run not found.",
+      );
     }
     if (!this.isRunInScope(run, context)) {
       throw new AutomationInspectionError(
@@ -219,9 +241,9 @@ export class AutomationInspectionBus {
   ): boolean {
     const automation = this.store.getAutomation(run.automationId);
     return Boolean(
-      automation &&
-        automation.backend === context.backend &&
-        automation.threadId === context.threadId,
+      automation
+      && automation.backend === context.backend
+      && automation.threadId === context.threadId,
     );
   }
 
@@ -235,7 +257,9 @@ export class AutomationInspectionBus {
     };
   }
 
-  private toRunSummary(run: AutomationRunSummary): AutomationInspectionRunSummary {
+  private toRunSummary(
+    run: AutomationRunSummary,
+  ): AutomationInspectionRunSummary {
     const automation = this.store.getAutomation(run.automationId);
     const artifact = this.store.getRunArtifact(run.id);
     return {
@@ -248,7 +272,9 @@ export class AutomationInspectionBus {
     };
   }
 
-  private toRunDetail(run: AutomationRunSummary): AutomationInspectionRunDetail {
+  private toRunDetail(
+    run: AutomationRunSummary,
+  ): AutomationInspectionRunDetail {
     const automation = this.store.getAutomation(run.automationId);
     return {
       ...this.toRunSummary(run),
@@ -267,7 +293,10 @@ export class AutomationInspectionBus {
       0,
       params.eventLimit,
     );
-    const finalText = truncateText(params.artifact.finalText, params.textLimitChars);
+    const finalText = truncateText(
+      params.artifact.finalText,
+      params.textLimitChars,
+    );
     const details = truncateText(
       params.artifact.outputDecision?.details,
       params.textLimitChars,
@@ -287,7 +316,8 @@ export class AutomationInspectionBus {
       ...boundedArtifact,
       transcriptEvents,
       transcriptEventsTruncated:
-        params.artifact.transcriptEvents.length > transcriptEvents.length || undefined,
+        params.artifact.transcriptEvents.length > transcriptEvents.length
+        || undefined,
       finalTextTruncated: finalText.truncated || undefined,
       detailsTextTruncated: details.truncated || undefined,
       card: buildAutomationTimelineCard({
@@ -340,9 +370,9 @@ function toAutomationDetail(
 ): AutomationDetail {
   const latestRunAt = latestRun ? runActivityAt(latestRun) : undefined;
   const useLatestRun =
-    latestRun !== undefined &&
-    latestRunAt !== undefined &&
-    (record.lastRunAt === undefined || latestRunAt >= record.lastRunAt);
+    latestRun !== undefined
+    && latestRunAt !== undefined
+    && (record.lastRunAt === undefined || latestRunAt >= record.lastRunAt);
   return {
     id: record.id,
     backend: record.backend,
@@ -374,8 +404,12 @@ function summarizeStatus(
   if (automations.length === 0) {
     return "No automations are attached to this Agent thread.";
   }
-  const enabled = automations.filter((automation) => automation.status === "enabled").length;
-  const paused = automations.filter((automation) => automation.status === "paused").length;
+  const enabled = automations.filter(
+    (automation) => automation.status === "enabled",
+  ).length;
+  const paused = automations.filter(
+    (automation) => automation.status === "paused",
+  ).length;
   const running = recentRuns.filter((run) => run.status === "running").length;
   const latest = recentRuns[0];
   return [
@@ -396,10 +430,10 @@ function summarizeRunOutput(
   artifact: AutomationRunArtifact | undefined,
 ): string | undefined {
   return (
-    artifact?.outputDecision?.summary ??
-    firstLine(artifact?.finalText) ??
-    artifact?.errorMessage ??
-    run.errorMessage
+    artifact?.outputDecision?.summary
+    ?? firstLine(artifact?.finalText)
+    ?? artifact?.errorMessage
+    ?? run.errorMessage
   );
 }
 
@@ -409,12 +443,13 @@ function buildAutomationTimelineCard(params: {
   run: AutomationRunSummary;
 }): AutomationTimelineCard | undefined {
   const notable =
-    params.run.trigger === "manual" ||
-    params.run.status === "failed" ||
-    params.run.status === "cancelled" ||
-    params.artifact?.outputDecision?.kind === "post_card" ||
-    params.artifact?.outputDecision?.kind === "parse_failed" ||
-    (!params.artifact?.outputDecision && Boolean(params.artifact?.finalText));
+    params.run.trigger === "manual"
+    || params.run.status === "failed"
+    || params.run.status === "cancelled"
+    || params.artifact?.outputDecision?.kind === "post_card"
+    || params.artifact?.outputDecision?.kind === "parse_failed"
+    || (!params.artifact?.outputDecision
+      && Boolean(params.artifact?.finalText));
   if (!notable) return undefined;
   return {
     id: `automation-card:${params.run.id}`,
@@ -427,11 +462,11 @@ function buildAutomationTimelineCard(params: {
     summary: summarizeAutomationCard(params),
     details: params.artifact?.outputDecision?.details,
     occurredAt:
-      params.run.completedAt ??
-      params.run.startedAt ??
-      params.run.queuedAt ??
-      params.run.scheduledFor ??
-      Date.now(),
+      params.run.completedAt
+      ?? params.run.startedAt
+      ?? params.run.queuedAt
+      ?? params.run.scheduledFor
+      ?? Date.now(),
   };
 }
 

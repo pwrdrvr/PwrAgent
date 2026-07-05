@@ -52,7 +52,15 @@ describe("desktop config path", () => {
         env: {} as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe(path.join("/Users/tester", ".pwragent", "profiles", "default", "config.toml"));
+    ).toBe(
+      path.join(
+        "/Users/tester",
+        ".pwragent",
+        "profiles",
+        "default",
+        "config.toml",
+      ),
+    );
   });
 
   it("uses --profile for the profile path", () => {
@@ -62,6 +70,14 @@ describe("desktop config path", () => {
         env: {} as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe(path.join("/Users/tester", ".pwragent", "profiles", "work", "config.toml"));
+    ).toBe(
+      path.join(
+        "/Users/tester",
+        ".pwragent",
+        "profiles",
+        "work",
+        "config.toml",
+      ),
+    );
   });
 });

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { MessagingCapabilityProfile, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
+import type {
+  MessagingCapabilityProfile,
+  MessagingSurfaceIntent,
+} from "@pwragent/messaging-interface";
 import {
   buildSlackActionBlocks,
   markdownToSlackMrkdwn,
@@ -34,14 +37,16 @@ const profile: MessagingCapabilityProfile = {
 describe("Slack formatting", () => {
   it("translates common Markdown to Slack mrkdwn", () => {
     expect(
-      markdownToSlackMrkdwn("Read **this** at [PwrAgent](https://example.com?a=1&b=2) <ok>"),
-    ).toBe(
-      "Read *this* at <https://example.com?a=1&b=2|PwrAgent> &lt;ok&gt;",
-    );
+      markdownToSlackMrkdwn(
+        "Read **this** at [PwrAgent](https://example.com?a=1&b=2) <ok>",
+      ),
+    ).toBe("Read *this* at <https://example.com?a=1&b=2|PwrAgent> &lt;ok&gt;");
   });
 
   it("sanitizes action IDs for Block Kit", () => {
-    expect(sanitizeSlackActionId("command:resume/thread")).toBe("command_resume_thread");
+    expect(sanitizeSlackActionId("command:resume/thread")).toBe(
+      "command_resume_thread",
+    );
     expect(sanitizeSlackActionId("!!!")).toBe("act_3");
   });
 
@@ -60,16 +65,12 @@ describe("Slack formatting", () => {
       {
         type: "actions",
         block_id: "actions_0",
-        elements: [
-          expect.objectContaining({ action_id: "a_0", value: "a" }),
-        ],
+        elements: [expect.objectContaining({ action_id: "a_0", value: "a" })],
       },
       {
         type: "actions",
         block_id: "actions_1",
-        elements: [
-          expect.objectContaining({ action_id: "b_1", value: "b" }),
-        ],
+        elements: [expect.objectContaining({ action_id: "b_1", value: "b" })],
       },
     ]);
   });

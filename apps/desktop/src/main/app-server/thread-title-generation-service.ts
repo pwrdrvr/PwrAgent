@@ -53,7 +53,9 @@ export type ThreadTitleAdapterResult =
     };
 
 export type ThreadTitleGenerator = {
-  generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult>;
+  generateTitle(
+    params: ThreadTitleAdapterParams,
+  ): Promise<ThreadTitleAdapterResult>;
 };
 
 export type ThreadTitleGenerationResult =
@@ -75,7 +77,9 @@ export type ThreadTitleGenerationResult =
 
 export type ThreadTitleGenerationServiceOptions = {
   generators?: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
-  generatorResolver?: (backend: AppServerBackendKind) => ThreadTitleGenerator | undefined;
+  generatorResolver?: (
+    backend: AppServerBackendKind,
+  ) => ThreadTitleGenerator | undefined;
   timeoutMs?: number;
 };
 
@@ -89,8 +93,12 @@ export type GrokThreadTitleGeneratorOptions = {
 };
 
 export class ThreadTitleGenerationService {
-  private readonly generators: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
-  private readonly generatorResolver?: (backend: AppServerBackendKind) => ThreadTitleGenerator | undefined;
+  private readonly generators: Partial<
+    Record<AppServerBackendKind, ThreadTitleGenerator>
+  >;
+  private readonly generatorResolver?: (
+    backend: AppServerBackendKind,
+  ) => ThreadTitleGenerator | undefined;
   private readonly timeoutMs: number;
 
   constructor(options: ThreadTitleGenerationServiceOptions = {}) {
@@ -122,7 +130,8 @@ export class ThreadTitleGenerationService {
     }
 
     const generator =
-      this.generators[params.backend] ?? this.generatorResolver?.(params.backend);
+      this.generators[params.backend]
+      ?? this.generatorResolver?.(params.backend);
     if (!generator) {
       return {
         status: "unavailable",
@@ -154,13 +163,21 @@ export class ThreadTitleGenerationService {
     return {
       status: "generated",
       title: normalized.title,
-      ...(result.cachedTokens !== undefined ? { cachedTokens: result.cachedTokens } : {}),
-      ...(result.helperThreadId ? { helperThreadId: result.helperThreadId } : {}),
+      ...(result.cachedTokens !== undefined
+        ? { cachedTokens: result.cachedTokens }
+        : {}),
+      ...(result.helperThreadId
+        ? { helperThreadId: result.helperThreadId }
+        : {}),
       ...(result.helperTurnId ? { helperTurnId: result.helperTurnId } : {}),
       ...(result.model ? { model: result.model } : {}),
-      ...(result.reasoningEffort ? { reasoningEffort: result.reasoningEffort } : {}),
+      ...(result.reasoningEffort
+        ? { reasoningEffort: result.reasoningEffort }
+        : {}),
       ...(result.serviceTier ? { serviceTier: result.serviceTier } : {}),
-      ...(result.tokenUsage !== undefined ? { tokenUsage: result.tokenUsage } : {}),
+      ...(result.tokenUsage !== undefined
+        ? { tokenUsage: result.tokenUsage }
+        : {}),
     };
   }
 }
@@ -183,7 +200,7 @@ export class GrokThreadTitleGenerator implements ThreadTitleGenerator {
   }
 
   async generateTitle(
-    params: ThreadTitleAdapterParams
+    params: ThreadTitleAdapterParams,
   ): Promise<ThreadTitleAdapterResult> {
     const result = await this.caller.generateObject({
       model: this.model,
@@ -216,7 +233,7 @@ export class GrokThreadTitleGenerator implements ThreadTitleGenerator {
 
 function normalizeThreadTitleObject(
   object: unknown,
-  userPrompt: string
+  userPrompt: string,
 ): { title?: string; reason: string } {
   if (!object || typeof object !== "object" || Array.isArray(object)) {
     return { reason: "title_payload_must_be_object" };
@@ -282,7 +299,7 @@ function preservesTicketReferences(userPrompt: string, title: string): boolean {
 
   const normalizedTitle = normalizeReferenceText(title);
   return promptRefs.every((reference) =>
-    normalizedTitle.includes(normalizeReferenceText(reference))
+    normalizedTitle.includes(normalizeReferenceText(reference)),
   );
 }
 

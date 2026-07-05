@@ -42,10 +42,7 @@ export interface AppServerSessionStore {
     message: StoredMessage;
     item: ThreadReplayItem;
   }): void;
-  appendItem(params: {
-    threadId: string;
-    item: ThreadReplayItem;
-  }): void;
+  appendItem(params: { threadId: string; item: ThreadReplayItem }): void;
 }
 
 type RolloutRecord =
@@ -83,7 +80,11 @@ export class GrokRolloutStore implements AppServerSessionStore {
         ...(archived ? { archived: true } : {}),
       };
       threads.push(thread);
-      lastTimestamp = Math.max(lastTimestamp, thread.createdAt ?? 0, thread.updatedAt ?? 0);
+      lastTimestamp = Math.max(
+        lastTimestamp,
+        thread.createdAt ?? 0,
+        thread.updatedAt ?? 0,
+      );
 
       const previousResponseId = readPreviousResponseId(threadPath);
       if (previousResponseId) {
@@ -157,17 +158,17 @@ export class GrokRolloutStore implements AppServerSessionStore {
     });
   }
 
-  appendItem(params: {
-    threadId: string;
-    item: ThreadReplayItem;
-  }): void {
+  appendItem(params: { threadId: string; item: ThreadReplayItem }): void {
     this.appendRecord(params.threadId, {
       type: "item",
       item: params.item,
     });
   }
 
-  private listThreadDirectories(): Array<{ archived: boolean; threadDir: string }> {
+  private listThreadDirectories(): Array<{
+    archived: boolean;
+    threadDir: string;
+  }> {
     return [
       ...this.listThreadDirectoriesInRoot(this.activeThreadsRoot(), false),
       ...this.listThreadDirectoriesInRoot(this.archivedThreadsRoot(), true),
@@ -334,10 +335,16 @@ function readRolloutFile(filePath: string): {
   const messages: StoredMessage[] = [];
   const itemOrder: string[] = [];
   const itemMap = new Map<string, ThreadReplayItem>();
-  const itemOccurrences = new Map<string, { resolvedId: string; lastMessageCount: number }>();
+  const itemOccurrences = new Map<
+    string,
+    { resolvedId: string; lastMessageCount: number }
+  >();
   let messageCount = 0;
 
-  for (const [index, rawLine] of fs.readFileSync(filePath, "utf8").split(/\r?\n/).entries()) {
+  for (const [index, rawLine] of fs
+    .readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .entries()) {
     const line = rawLine.trim();
     if (!line) {
       continue;
@@ -347,7 +354,9 @@ function readRolloutFile(filePath: string): {
     try {
       record = JSON.parse(line) as RolloutRecord;
     } catch (error) {
-      throw new Error(`Invalid JSONL record ${index + 1} in ${filePath}: ${String(error)}`);
+      throw new Error(
+        `Invalid JSONL record ${index + 1} in ${filePath}: ${String(error)}`,
+      );
     }
 
     if (record.type === "message") {
@@ -445,11 +454,15 @@ function asRequiredString(
   return value.trim();
 }
 
-function asOptionalString(value: string | number | boolean | undefined): string | undefined {
+function asOptionalString(
+  value: string | number | boolean | undefined,
+): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function asOptionalNumber(value: string | number | boolean | undefined): number | undefined {
+function asOptionalNumber(
+  value: string | number | boolean | undefined,
+): number | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
   }

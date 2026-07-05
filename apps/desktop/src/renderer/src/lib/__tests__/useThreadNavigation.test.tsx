@@ -22,9 +22,11 @@ describe("useThreadNavigation", () => {
   });
 
   afterEach(() => {
-    delete (window as unknown as {
-      __pwragentNavigationPreferences?: unknown;
-    }).__pwragentNavigationPreferences;
+    delete (
+      window as unknown as {
+        __pwragentNavigationPreferences?: unknown;
+      }
+    ).__pwragentNavigationPreferences;
     vi.restoreAllMocks();
   });
 
@@ -125,7 +127,9 @@ describe("useThreadNavigation", () => {
   });
 
   it("refreshes selected thread directory git status on demand", async () => {
-    const refreshDirectoryGitStatuses = vi.fn(async () => ({ scheduledCount: 1 }));
+    const refreshDirectoryGitStatuses = vi.fn(async () => ({
+      scheduledCount: 1,
+    }));
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -278,13 +282,13 @@ describe("useThreadNavigation", () => {
     const listeners = new Set<(event: any) => void>();
     const markThreadSeen = vi.fn(
       async (
-        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]
+        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0],
       ) => ({
         backend: request.backend,
         threadId: request.threadId,
         seenAt: Date.now(),
         seenUpdatedAt: request.seenUpdatedAt,
-      })
+      }),
     );
     let refreshed = false;
     const getNavigationSnapshot = vi.fn(async () => ({
@@ -396,9 +400,7 @@ describe("useThreadNavigation", () => {
       seenUpdatedAt?: number;
     }>();
     const markThreadSeen = vi.fn(
-      (
-        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]
-      ) => {
+      (request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]) => {
         const response = {
           backend: request.backend,
           threadId: request.threadId,
@@ -409,7 +411,7 @@ describe("useThreadNavigation", () => {
         return request.seenUpdatedAt === 2_000
           ? delayedSeen.promise
           : Promise.resolve(response);
-      }
+      },
     );
     let refreshed = false;
     const getNavigationSnapshot = vi.fn(async () => ({
@@ -537,13 +539,13 @@ describe("useThreadNavigation", () => {
     const listeners = new Set<(event: any) => void>();
     const markThreadSeen = vi.fn(
       async (
-        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]
+        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0],
       ) => ({
         backend: request.backend,
         threadId: request.threadId,
         seenAt: Date.now(),
         seenUpdatedAt: request.seenUpdatedAt,
-      })
+      }),
     );
     let refreshed = false;
     const getNavigationSnapshot = vi.fn(async () => ({
@@ -655,13 +657,13 @@ describe("useThreadNavigation", () => {
     const listeners = new Set<(event: any) => void>();
     const markThreadSeen = vi.fn(
       async (
-        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]
+        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0],
       ) => ({
         backend: request.backend,
         threadId: request.threadId,
         seenAt: Date.now(),
         seenUpdatedAt: request.seenUpdatedAt,
-      })
+      }),
     );
     let refreshed = false;
     const getNavigationSnapshot = vi.fn(async () => ({
@@ -727,7 +729,7 @@ describe("useThreadNavigation", () => {
         initialProps: {
           threadViewVisible: true,
         },
-      }
+      },
     );
 
     await waitFor(() => {
@@ -891,7 +893,11 @@ describe("useThreadNavigation", () => {
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      for (const method of ["turn/completed", "turn/failed", "turn/cancelled"] as const) {
+      for (const method of [
+        "turn/completed",
+        "turn/failed",
+        "turn/cancelled",
+      ] as const) {
         for (const listener of listeners) {
           listener({
             backend: "codex",
@@ -915,13 +921,16 @@ describe("useThreadNavigation", () => {
   it("uses broad forced background polling by default", async () => {
     let intervalHandler: (() => void) | undefined;
     const originalSetInterval = globalThis.setInterval;
-    vi.spyOn(globalThis, "setInterval").mockImplementation((handler, timeout, ...args) => {
-      if (timeout !== 5 * 60_000) {
-        return originalSetInterval(handler, timeout, ...args);
-      }
-      intervalHandler = typeof handler === "function" ? () => handler() : undefined;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    });
+    vi.spyOn(globalThis, "setInterval").mockImplementation(
+      (handler, timeout, ...args) => {
+        if (timeout !== 5 * 60_000) {
+          return originalSetInterval(handler, timeout, ...args);
+        }
+        intervalHandler =
+          typeof handler === "function" ? () => handler() : undefined;
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      },
+    );
 
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
@@ -953,7 +962,9 @@ describe("useThreadNavigation", () => {
       getNavigationSnapshot,
     };
 
-    const { result, unmount } = renderHook(() => useThreadNavigation(desktopApi));
+    const { result, unmount } = renderHook(() =>
+      useThreadNavigation(desktopApi),
+    );
 
     await waitFor(() => {
       expect(result.current.selectedThread?.id).toBe("thread-1");
@@ -980,13 +991,16 @@ describe("useThreadNavigation", () => {
   it("uses a cheap active-recent refresh for opt-in foreground background polling", async () => {
     let intervalHandler: (() => void) | undefined;
     const originalSetInterval = globalThis.setInterval;
-    vi.spyOn(globalThis, "setInterval").mockImplementation((handler, timeout, ...args) => {
-      if (timeout !== 5 * 60_000) {
-        return originalSetInterval(handler, timeout, ...args);
-      }
-      intervalHandler = typeof handler === "function" ? () => handler() : undefined;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    });
+    vi.spyOn(globalThis, "setInterval").mockImplementation(
+      (handler, timeout, ...args) => {
+        if (timeout !== 5 * 60_000) {
+          return originalSetInterval(handler, timeout, ...args);
+        }
+        intervalHandler =
+          typeof handler === "function" ? () => handler() : undefined;
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      },
+    );
 
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
@@ -1048,13 +1062,16 @@ describe("useThreadNavigation", () => {
   it("pauses opt-in foreground background polling while navigation is idle", async () => {
     let intervalHandler: (() => void) | undefined;
     const originalSetInterval = globalThis.setInterval;
-    vi.spyOn(globalThis, "setInterval").mockImplementation((handler, timeout, ...args) => {
-      if (timeout !== 5 * 60_000) {
-        return originalSetInterval(handler, timeout, ...args);
-      }
-      intervalHandler = typeof handler === "function" ? () => handler() : undefined;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    });
+    vi.spyOn(globalThis, "setInterval").mockImplementation(
+      (handler, timeout, ...args) => {
+        if (timeout !== 5 * 60_000) {
+          return originalSetInterval(handler, timeout, ...args);
+        }
+        intervalHandler =
+          typeof handler === "function" ? () => handler() : undefined;
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      },
+    );
     const dateNowSpy = vi.spyOn(Date, "now");
     dateNowSpy.mockReturnValue(1_000_000);
 
@@ -1160,7 +1177,9 @@ describe("useThreadNavigation", () => {
       },
     };
 
-    const { result, unmount } = renderHook(() => useThreadNavigation(desktopApi));
+    const { result, unmount } = renderHook(() =>
+      useThreadNavigation(desktopApi),
+    );
 
     await waitFor(() => {
       expect(result.current.selectedThread?.id).toBe("thread-1");
@@ -1839,7 +1858,8 @@ describe("useThreadNavigation", () => {
             worktreePath: "/repo/.worktrees/shared",
             removedWorktree: false,
             deletedBranch: false,
-            skippedReason: "Worktree is still used by another active thread: thread-parent.",
+            skippedReason:
+              "Worktree is still used by another active thread: thread-parent.",
           },
         ],
       };
@@ -1944,10 +1964,9 @@ describe("useThreadNavigation", () => {
       });
     });
 
-    expect(archiveThread.mock.calls.map(([request]) => request.threadId)).toEqual([
-      "thread-child",
-      "thread-parent",
-    ]);
+    expect(
+      archiveThread.mock.calls.map(([request]) => request.threadId),
+    ).toEqual(["thread-child", "thread-parent"]);
     await waitFor(() => {
       expect(result.current.threads).toEqual([]);
     });
@@ -1983,7 +2002,12 @@ describe("useThreadNavigation", () => {
       updatedAt: 2_000,
       createdAt: 2_000,
     };
-    const childB = { ...childA, id: "thread-b", title: "Child B", createdAt: 3_000 };
+    const childB = {
+      ...childA,
+      id: "thread-b",
+      title: "Child B",
+      createdAt: 3_000,
+    };
 
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
@@ -2035,7 +2059,9 @@ describe("useThreadNavigation", () => {
       ]);
     });
 
-    const sourceChild = result.current.threads.find((thread) => thread.id === "thread-a")!;
+    const sourceChild = result.current.threads.find(
+      (thread) => thread.id === "thread-a",
+    )!;
     await act(async () => {
       await result.current.forkThread(sourceChild, "same-worktree");
     });
@@ -2178,7 +2204,10 @@ describe("useThreadNavigation", () => {
     });
 
     await act(async () => {
-      await result.current.renameThread(result.current.threads[0]!, "  Renamed thread  ");
+      await result.current.renameThread(
+        result.current.threads[0]!,
+        "  Renamed thread  ",
+      );
     });
 
     expect(renameThread).toHaveBeenCalledWith({
@@ -2244,13 +2273,13 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(result.current.directories[0]?.launchpad?.directoryKey).toBe(
-        "directory:/Users/huntharo/github/PwrAgent"
+        "directory:/Users/huntharo/github/PwrAgent",
       );
     });
 
     await act(async () => {
       await result.current.materializeDirectoryLaunchpad(
-        "directory:/Users/huntharo/github/PwrAgent"
+        "directory:/Users/huntharo/github/PwrAgent",
       );
     });
 
@@ -2266,46 +2295,50 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.id).toBe("thread-new");
     expect(result.current.selectedThread?.gitBranch).toBe("HEAD");
     expect(result.current.selectedThread?.observedGitBranch).toBe("HEAD");
-    expect(result.current.directories[0]?.threadKeys).toEqual(["codex:thread-new"]);
+    expect(result.current.directories[0]?.threadKeys).toEqual([
+      "codex:thread-new",
+    ]);
     expect(result.current.directories[0]?.needsAttentionCount).toBe(1);
   });
 
   it("carries the started review turn from launchpad materialization", async () => {
     const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
-    const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
-      backend: "all",
-      fetchedAt: Date.now(),
-      unchanged: false,
-      inboxThreadKeys: [],
-      threads: [],
-      directories: [
-        {
-          key: directoryKey,
-          kind: "directory",
-          label: "PwrAgent",
-          path: "/Users/huntharo/github/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
-          launchpad: {
-            directoryKey,
-            directoryKind: "directory",
-            directoryLabel: "PwrAgent",
-            directoryPath: "/Users/huntharo/github/PwrAgent",
-            backend: "codex",
-            executionMode: "default",
-            prompt: "/review main",
-            workMode: "worktree",
-            branchName: "main",
-            createdAt: 1,
-            updatedAt: 1,
+    const getNavigationSnapshot = vi.fn(
+      async (): Promise<NavigationSnapshot> => ({
+        backend: "all",
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [],
+        directories: [
+          {
+            key: directoryKey,
+            kind: "directory",
+            label: "PwrAgent",
+            path: "/Users/huntharo/github/PwrAgent",
+            threadKeys: [],
+            needsAttentionCount: 0,
+            launchpad: {
+              directoryKey,
+              directoryKind: "directory",
+              directoryLabel: "PwrAgent",
+              directoryPath: "/Users/huntharo/github/PwrAgent",
+              backend: "codex",
+              executionMode: "default",
+              prompt: "/review main",
+              workMode: "worktree",
+              branchName: "main",
+              createdAt: 1,
+              updatedAt: 1,
+            },
           },
+        ],
+        launchpadDefaults: {
+          backend: "codex",
+          executionMode: "default",
         },
-      ],
-      launchpadDefaults: {
-        backend: "codex",
-        executionMode: "default",
-      },
-    }));
+      }),
+    );
     const materializeDirectoryLaunchpad = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-review",
@@ -2323,7 +2356,9 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.directories[0]?.launchpad?.prompt).toBe("/review main");
+      expect(result.current.directories[0]?.launchpad?.prompt).toBe(
+        "/review main",
+      );
     });
 
     await act(async () => {
@@ -2331,7 +2366,7 @@ describe("useThreadNavigation", () => {
         directoryKey,
         undefined,
         undefined,
-        { type: "baseBranch", branch: "main" }
+        { type: "baseBranch", branch: "main" },
       );
     });
 
@@ -2352,7 +2387,9 @@ describe("useThreadNavigation", () => {
         reviewDisplayText: "Review changes against main",
       },
     });
-    expect(result.current.selectedThread?.optimisticUserMessage).toBeUndefined();
+    expect(
+      result.current.selectedThread?.optimisticUserMessage,
+    ).toBeUndefined();
   });
 
   it("keeps launchpad review turn metadata when hydration races materialization", async () => {
@@ -2432,7 +2469,9 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.directories[0]?.launchpad?.prompt).toBe("/review main");
+      expect(result.current.directories[0]?.launchpad?.prompt).toBe(
+        "/review main",
+      );
     });
 
     await act(async () => {
@@ -2440,7 +2479,7 @@ describe("useThreadNavigation", () => {
         directoryKey,
         undefined,
         undefined,
-        { type: "baseBranch", branch: "main" }
+        { type: "baseBranch", branch: "main" },
       );
     });
 
@@ -2512,7 +2551,7 @@ describe("useThreadNavigation", () => {
 
     await act(async () => {
       await expect(
-        result.current.materializeDirectoryLaunchpad(directoryKey)
+        result.current.materializeDirectoryLaunchpad(directoryKey),
       ).rejects.toThrow("spawn gemini ENOENT");
     });
 
@@ -2697,7 +2736,9 @@ describe("useThreadNavigation", () => {
     });
 
     expect(result.current.selectedThread?.id).toBe(threadId);
-    expect(result.current.selectedThread?.title).toBe(shortenDerivedThreadTitle(prompt));
+    expect(result.current.selectedThread?.title).toBe(
+      shortenDerivedThreadTitle(prompt),
+    );
     expect(result.current.selectedThread?.titleSource).toBe("derived");
     expect(result.current.selectedThread?.title).not.toBe(threadId);
   });
@@ -2795,7 +2836,7 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(result.current.directories[0]?.launchpad?.prompt).toBe(
-        "Fix the failed setup"
+        "Fix the failed setup",
       );
     });
 
@@ -2805,7 +2846,7 @@ describe("useThreadNavigation", () => {
 
     expect(result.current.selectedThread?.id).toBe(threadId);
     expect(result.current.selectedThread?.optimisticUserMessage?.text).toBe(
-      "Fix the failed setup"
+      "Fix the failed setup",
     );
   });
 
@@ -2868,7 +2909,7 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(result.current.directories[0]?.launchpad?.prompt).toBe(
-        "Fix the model setting"
+        "Fix the model setting",
       );
     });
 
@@ -2877,13 +2918,18 @@ describe("useThreadNavigation", () => {
     });
 
     expect(result.current.selectedThread?.id).toBe(threadId);
-    expect(result.current.selectedThread?.optimisticUserMessage).toBeUndefined();
+    expect(
+      result.current.selectedThread?.optimisticUserMessage,
+    ).toBeUndefined();
     expect(result.current.launchpadError).toBe("invalid model");
   });
 
   it("does not let a materialized thread refresh override a newer user thread selection", async () => {
     const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
-    const refreshedSnapshot = createDeferred<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>>>();
+    const refreshedSnapshot =
+      createDeferred<
+        Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>>
+      >();
     const initialSnapshot = {
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -2956,7 +3002,8 @@ describe("useThreadNavigation", () => {
 
     let materializePromise: Promise<void> | undefined;
     act(() => {
-      materializePromise = result.current.materializeDirectoryLaunchpad(directoryKey);
+      materializePromise =
+        result.current.materializeDirectoryLaunchpad(directoryKey);
     });
 
     await waitFor(() => {
@@ -2965,7 +3012,9 @@ describe("useThreadNavigation", () => {
 
     act(() => {
       result.current.selectThread(
-        result.current.threads.find((thread) => thread.id === "thread-existing")!,
+        result.current.threads.find(
+          (thread) => thread.id === "thread-existing",
+        )!,
       );
     });
     expect(result.current.selectedThread?.id).toBe("thread-existing");
@@ -3097,11 +3146,13 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad).toBeUndefined();
 
     await act(async () => {
-      await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+      await result.current.openDirectoryLaunchpad(
+        result.current.directories[0]!,
+      );
     });
 
     expect(result.current.selectedLaunchpad?.directoryKey).toBe(
-      "directory:/Users/huntharo/github/PwrAgent"
+      "directory:/Users/huntharo/github/PwrAgent",
     );
 
     await act(async () => {
@@ -3178,7 +3229,7 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(result.current.selectedLaunchpad?.directoryKey).toBe(
-        "directory:/Users/huntharo/github/PwrAgent"
+        "directory:/Users/huntharo/github/PwrAgent",
       );
     });
 
@@ -3248,7 +3299,8 @@ describe("useThreadNavigation", () => {
         {
           id: "environment",
           name: "PwrAgnt",
-          sourcePath: "/Users/huntharo/github/PwrAgent/.codex/environments/environment.toml",
+          sourcePath:
+            "/Users/huntharo/github/PwrAgent/.codex/environments/environment.toml",
           setupScript: "pnpm install",
           actions: [
             {
@@ -3266,7 +3318,9 @@ describe("useThreadNavigation", () => {
       defaults: typeof defaults;
       launchpad: typeof launchpad;
     }>();
-    const updateDirectoryLaunchpad = vi.fn().mockReturnValueOnce(promptUpdate.promise);
+    const updateDirectoryLaunchpad = vi
+      .fn()
+      .mockReturnValueOnce(promptUpdate.promise);
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -3295,7 +3349,9 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.selectedLaunchpad?.codexEnvironmentId).toBe("environment");
+      expect(result.current.selectedLaunchpad?.codexEnvironmentId).toBe(
+        "environment",
+      );
     });
 
     let update: Promise<void> | undefined;
@@ -3355,7 +3411,9 @@ describe("useThreadNavigation", () => {
       defaults: typeof defaults;
       launchpad: NavigationLaunchpadDraft;
     }>();
-    const updateDirectoryLaunchpad = vi.fn().mockReturnValueOnce(stickyUpdate.promise);
+    const updateDirectoryLaunchpad = vi
+      .fn()
+      .mockReturnValueOnce(stickyUpdate.promise);
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -3492,16 +3550,18 @@ describe("useThreadNavigation", () => {
       preferredBackend: undefined,
     });
     expect(result.current.selectedItemKey).toBe(
-      "launchpad:workspace:/Users/test/.pwragent/projects"
+      "launchpad:workspace:/Users/test/.pwragent/projects",
     );
     expect(result.current.selectedDirectory?.label).toBe("Workspaces");
     expect(result.current.selectedLaunchpad?.directoryKind).toBe("workspace");
-    expect(result.current.directories.map((directory) => directory.label)).toEqual([
-      "Workspaces",
-    ]);
-    expect(result.current.directories.some((directory) => directory.kind === "unlinked")).toBe(
-      false
-    );
+    expect(
+      result.current.directories.map((directory) => directory.label),
+    ).toEqual(["Workspaces"]);
+    expect(
+      result.current.directories.some(
+        (directory) => directory.kind === "unlinked",
+      ),
+    ).toBe(false);
   });
 
   it("opens masthead new-thread drafts while the initial navigation snapshot is loading", async () => {
@@ -3571,7 +3631,7 @@ describe("useThreadNavigation", () => {
     });
     await waitFor(() => {
       expect(result.current.selectedLaunchpad?.directoryKey).toBe(
-        "workspace:new-thread"
+        "workspace:new-thread",
       );
       expect(result.current.selectedDirectory?.kind).toBe("workspace");
     });
@@ -3836,7 +3896,9 @@ describe("useThreadNavigation", () => {
       currentBranch: undefined,
       preferredBackend: undefined,
     });
-    expect(result.current.selectedItemKey).toBe("launchpad:workspace:new-thread");
+    expect(result.current.selectedItemKey).toBe(
+      "launchpad:workspace:new-thread",
+    );
   });
 
   it("reuses the selected directory launchpad context for new threads", async () => {
@@ -3913,7 +3975,9 @@ describe("useThreadNavigation", () => {
     });
 
     await act(async () => {
-      await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+      await result.current.openDirectoryLaunchpad(
+        result.current.directories[0]!,
+      );
       await result.current.createThread();
     });
 
@@ -4007,7 +4071,7 @@ describe("useThreadNavigation", () => {
       preferredBackend: undefined,
     });
     expect(result.current.selectedLaunchpad?.directoryKey).toBe(
-      "workspace:/Users/test/.pwragent/projects"
+      "workspace:/Users/test/.pwragent/projects",
     );
   });
 
@@ -4073,7 +4137,7 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(result.current.directories[0]?.launchpad?.prompt).toBe(
-        "Build the feature"
+        "Build the feature",
       );
     });
 
@@ -4361,7 +4425,9 @@ describe("useThreadNavigation", () => {
       forkPromise = result.current.forkThread(parentThread, "new-worktree");
     });
 
-    expect(result.current.creatingThread?.pendingForkEnvironmentSetup).toMatchObject({
+    expect(
+      result.current.creatingThread?.pendingForkEnvironmentSetup,
+    ).toMatchObject({
       backend: "codex",
       command: "pnpm install",
       directoryKey: "fork:codex:thread-parent:new-worktree",
@@ -4371,7 +4437,8 @@ describe("useThreadNavigation", () => {
     });
     expect(forkThread).toHaveBeenCalledWith(
       expect.objectContaining({
-        codexEnvironmentSetupProgressKey: "fork:codex:thread-parent:new-worktree",
+        codexEnvironmentSetupProgressKey:
+          "fork:codex:thread-parent:new-worktree",
         workMode: "worktree",
       }),
     );
@@ -4831,7 +4898,8 @@ describe("useThreadNavigation", () => {
             titleSource: "explicit" as const,
             summary: "Test branch chip refresh",
             source: "codex" as const,
-            gitBranch: navigationCallCount === 1 ? undefined : "fix/branch-pill",
+            gitBranch:
+              navigationCallCount === 1 ? undefined : "fix/branch-pill",
             observedGitBranch:
               navigationCallCount === 1 ? undefined : "fix/branch-pill",
             linkedDirectories: [],
@@ -4884,7 +4952,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.selectedThread?.gitBranch).toBe("fix/branch-pill");
       expect(result.current.selectedThread?.observedGitBranch).toBe(
-        "fix/branch-pill"
+        "fix/branch-pill",
       );
     });
   });
@@ -4936,7 +5004,7 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(result.current.selectedThread?.id).toBe(
-        "019e0755-ac96-7be2-a94d-78a6912eccb6"
+        "019e0755-ac96-7be2-a94d-78a6912eccb6",
       );
     });
     expect(result.current.selectedThread?.reactions).toEqual([]);
@@ -5098,7 +5166,10 @@ describe("useThreadNavigation", () => {
     });
 
     await act(async () => {
-      await result.current.renameThread(result.current.threads[0]!, "Broken rename");
+      await result.current.renameThread(
+        result.current.threads[0]!,
+        "Broken rename",
+      );
     });
 
     await waitFor(() => {
@@ -5367,7 +5438,9 @@ describe("useThreadNavigation", () => {
     Object.defineProperty(unrelatedPr, "provider", {
       configurable: true,
       get: () => {
-        throw new Error("unrelated PR should not be scanned during status fanout");
+        throw new Error(
+          "unrelated PR should not be scanned during status fanout",
+        );
       },
     });
 
@@ -5387,12 +5460,16 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.threads.find((thread) => thread.id === "thread-1")?.prs)
-        .toEqual([updatedPr]);
-      expect(result.current.threads.find((thread) => thread.id === "thread-2")?.prs)
-        .toEqual([updatedPr]);
-      expect(result.current.threads.find((thread) => thread.id === "thread-3")?.prs?.[0])
-        .toBe(unrelatedPr);
+      expect(
+        result.current.threads.find((thread) => thread.id === "thread-1")?.prs,
+      ).toEqual([updatedPr]);
+      expect(
+        result.current.threads.find((thread) => thread.id === "thread-2")?.prs,
+      ).toEqual([updatedPr]);
+      expect(
+        result.current.threads.find((thread) => thread.id === "thread-3")
+          ?.prs?.[0],
+      ).toBe(unrelatedPr);
     });
     await waitFor(() => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
@@ -5528,7 +5605,9 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.selectedThread?.queuedExecutionMode).toBeUndefined();
+      expect(
+        result.current.selectedThread?.queuedExecutionMode,
+      ).toBeUndefined();
       expect(
         result.current.selectedThread?.queuedExecutionModeAt,
       ).toBeUndefined();
@@ -5646,7 +5725,9 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.selectedThread?.id).toBe("thread-1");
     });
-    expect(result.current.selectedThread?.codexEnvironmentRuntime).toBeUndefined();
+    expect(
+      result.current.selectedThread?.codexEnvironmentRuntime,
+    ).toBeUndefined();
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -5782,14 +5863,16 @@ describe("useThreadNavigation", () => {
         navigationCallCount === 1
           ? [
               {
-                bindingId: "binding:telegram:topic:-1003841603622:5642:codex:thread-1",
+                bindingId:
+                  "binding:telegram:topic:-1003841603622:5642:codex:thread-1",
                 platform: "telegram" as const,
                 conversationKind: "topic" as const,
                 conversationTitle: "Knock Knock Rock",
                 parentTitle: "PwrDrvr",
               },
               {
-                bindingId: "binding:discord:channel:1480554271907905731:1501244021886943405:codex:thread-1",
+                bindingId:
+                  "binding:discord:channel:1480554271907905731:1501244021886943405:codex:thread-1",
                 platform: "discord" as const,
                 conversationKind: "channel" as const,
                 conversationTitle: "knock-knock-rock",
@@ -5798,7 +5881,8 @@ describe("useThreadNavigation", () => {
             ]
           : [
               {
-                bindingId: "binding:discord:channel:1480554271907905731:1501244021886943405:codex:thread-1",
+                bindingId:
+                  "binding:discord:channel:1480554271907905731:1501244021886943405:codex:thread-1",
                 platform: "discord" as const,
                 conversationKind: "channel" as const,
                 conversationTitle: "knock-knock-rock",
@@ -5842,7 +5926,9 @@ describe("useThreadNavigation", () => {
     const desktopApi: DesktopApi = {
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
-      onMessagingBindingsChanged: (callback: (event: { at: number }) => void) => {
+      onMessagingBindingsChanged: (
+        callback: (event: { at: number }) => void,
+      ) => {
         bindingsListeners.add(callback);
         return () => {
           bindingsListeners.delete(callback);
@@ -6084,11 +6170,9 @@ describe("useThreadNavigation", () => {
         await result.current.pickAndRegisterDirectory();
       });
 
-      expect(result.current.directories.map((directory) => directory.label)).toEqual([
-        "infra",
-        "kube-manifests",
-        "web-app",
-      ]);
+      expect(
+        result.current.directories.map((directory) => directory.label),
+      ).toEqual(["infra", "kube-manifests", "web-app"]);
       expect(result.current.selectedItemKey).toBe(
         "launchpad:directory:/Users/me/repos/kube-manifests",
       );

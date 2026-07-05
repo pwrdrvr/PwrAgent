@@ -115,11 +115,13 @@ export function calculateBoundedDimensions(params: {
   };
 }
 
-function chooseOutputMimeType(mimeType: string | undefined): "image/jpeg" | "image/png" {
+function chooseOutputMimeType(
+  mimeType: string | undefined,
+): "image/jpeg" | "image/png" {
   const normalized = mimeType?.trim().toLowerCase();
-  return normalized === "image/png" ||
-    normalized === "image/gif" ||
-    normalized === "image/svg+xml"
+  return normalized === "image/png"
+    || normalized === "image/gif"
+    || normalized === "image/svg+xml"
     ? "image/png"
     : "image/jpeg";
 }

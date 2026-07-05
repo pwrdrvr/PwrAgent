@@ -28,7 +28,9 @@ export function validateLineUserId(value: unknown): IdentifierValidationResult {
   return validateLinePrefixedHexId(value, "U");
 }
 
-export function validateLineGroupId(value: unknown): IdentifierValidationResult {
+export function validateLineGroupId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateLinePrefixedHexId(value, "C");
 }
 
@@ -36,7 +38,9 @@ export function validateLineRoomId(value: unknown): IdentifierValidationResult {
   return validateLinePrefixedHexId(value, "R");
 }
 
-export function validateLineConversationId(value: unknown): IdentifierValidationResult {
+export function validateLineConversationId(
+  value: unknown,
+): IdentifierValidationResult {
   if (typeof value !== "string") return { ok: false, reason: "type" };
   if (value.startsWith("U")) return validateLineUserId(value);
   if (value.startsWith("C")) return validateLineGroupId(value);
@@ -44,10 +48,13 @@ export function validateLineConversationId(value: unknown): IdentifierValidation
   return { ok: false, reason: value.length === 0 ? "empty" : "format" };
 }
 
-export function validateLineMessageId(value: unknown): IdentifierValidationResult {
+export function validateLineMessageId(
+  value: unknown,
+): IdentifierValidationResult {
   if (typeof value !== "string") return { ok: false, reason: "type" };
   if (value.length === 0) return { ok: false, reason: "empty" };
-  if (value.length > LINE_MESSAGE_ID_MAX_LENGTH) return { ok: false, reason: "length" };
+  if (value.length > LINE_MESSAGE_ID_MAX_LENGTH)
+    return { ok: false, reason: "length" };
   for (let index = 0; index < value.length; index += 1) {
     if (!isAsciiDigit(value.charCodeAt(index))) {
       return { ok: false, reason: "format" };
@@ -82,12 +89,16 @@ export function validateLineCallbackHandle(
     return { ok: false, reason: "format" };
   }
   if (
-    value.length !==
-      LINE_CALLBACK_HANDLE_PREFIX.length + LINE_CALLBACK_HANDLE_HASH_LENGTH
+    value.length
+    !== LINE_CALLBACK_HANDLE_PREFIX.length + LINE_CALLBACK_HANDLE_HASH_LENGTH
   ) {
     return { ok: false, reason: "length" };
   }
-  for (let index = LINE_CALLBACK_HANDLE_PREFIX.length; index < value.length; index += 1) {
+  for (
+    let index = LINE_CALLBACK_HANDLE_PREFIX.length;
+    index < value.length;
+    index += 1
+  ) {
     if (!isBase64UrlChar(value.charCodeAt(index))) {
       return { ok: false, reason: "format" };
     }
@@ -131,10 +142,7 @@ function isAsciiDigit(code: number): boolean {
 }
 
 function isLowercaseHex(code: number): boolean {
-  return (
-    (code >= 0x30 && code <= 0x39)
-    || (code >= 0x61 && code <= 0x66)
-  );
+  return (code >= 0x30 && code <= 0x39) || (code >= 0x61 && code <= 0x66);
 }
 
 function isBase64UrlChar(code: number): boolean {

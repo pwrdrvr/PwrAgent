@@ -87,9 +87,7 @@ describe("MessagingActivityLog", () => {
       .get("sql_injection_sentinel") as { value: string };
     expect(sentinel.value).toBe("intact");
     expect(
-      stateDb.raw
-        .prepare("SELECT COUNT(*) AS count FROM bindings")
-        .get(),
+      stateDb.raw.prepare("SELECT COUNT(*) AS count FROM bindings").get(),
     ).toEqual({ count: 0 });
     expect(log.list()).toEqual([
       expect.objectContaining({
@@ -229,8 +227,16 @@ describe("MessagingActivityLog", () => {
 
   it("evicts to the per-platform cap on cleanupExpired", () => {
     for (let i = 0; i < 7; i += 1) {
-      log.record({ platform: "telegram", kind: "diagnostic", summary: `t-${i}` });
-      log.record({ platform: "discord", kind: "diagnostic", summary: `d-${i}` });
+      log.record({
+        platform: "telegram",
+        kind: "diagnostic",
+        summary: `t-${i}`,
+      });
+      log.record({
+        platform: "discord",
+        kind: "diagnostic",
+        summary: `d-${i}`,
+      });
     }
     // Synthetic small cap via cleanupExpired uses the file-level cap (500).
     // Verify that calling cleanup is a no-op below the cap.

@@ -121,7 +121,8 @@ function createWebSearchTool(params: {
         },
         includeImages: {
           type: "boolean",
-          description: "Enable image understanding for pages/images found during search.",
+          description:
+            "Enable image understanding for pages/images found during search.",
         },
       },
       required: ["query"],
@@ -157,7 +158,9 @@ function createWebSearchTool(params: {
             },
           });
           const text = readTextResult(result);
-          const sources = normalizeAiSdkSources(readResultArray(result, "sources"));
+          const sources = normalizeAiSdkSources(
+            readResultArray(result, "sources"),
+          );
           return buildSearchOutput({ text, sources });
         },
       });
@@ -186,8 +189,14 @@ function createXSearchTool(params: {
           items: { type: "string" },
           description: "Exclude posts from these handles, max 10.",
         },
-        fromDate: { type: "string", description: "Start date in YYYY-MM-DD format." },
-        toDate: { type: "string", description: "End date in YYYY-MM-DD format." },
+        fromDate: {
+          type: "string",
+          description: "Start date in YYYY-MM-DD format.",
+        },
+        toDate: {
+          type: "string",
+          description: "End date in YYYY-MM-DD format.",
+        },
         includeImages: {
           type: "boolean",
           description: "Enable analysis of images in X posts.",
@@ -233,7 +242,9 @@ function createXSearchTool(params: {
             },
           });
           const text = readTextResult(result);
-          const sources = normalizeAiSdkSources(readResultArray(result, "sources"));
+          const sources = normalizeAiSdkSources(
+            readResultArray(result, "sources"),
+          );
           return buildSearchOutput({ text, sources });
         },
       });
@@ -248,7 +259,10 @@ async function executeSearchTool(params: {
   signal?: AbortSignal;
   timeoutMs: number;
   emit: EmitProviderEvent;
-  run: (args: Record<string, any>, signal: AbortSignal | undefined) => Promise<SearchToolOutput>;
+  run: (
+    args: Record<string, any>,
+    signal: AbortSignal | undefined,
+  ) => Promise<SearchToolOutput>;
 }): Promise<SearchToolOutput> {
   const arguments_ = asRecord(params.input);
   const startedAt = Date.now();
@@ -335,7 +349,10 @@ async function runSearchWithTimeout(params: {
   args: Record<string, any>;
   signal?: AbortSignal;
   timeoutMs: number;
-  run: (args: Record<string, any>, signal: AbortSignal | undefined) => Promise<SearchToolOutput>;
+  run: (
+    args: Record<string, any>,
+    signal: AbortSignal | undefined,
+  ) => Promise<SearchToolOutput>;
 }): Promise<SearchToolOutput> {
   if (!params.timeoutMs) {
     return await params.run(params.args, params.signal);
@@ -375,7 +392,9 @@ class SearchToolTimeoutError extends Error {
   readonly code = "search_tool_timeout";
 
   constructor(toolName: string, timeoutMs: number) {
-    super(`${toolName} timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+    super(
+      `${toolName} timed out after ${Math.round(timeoutMs / 1000)} seconds`,
+    );
     this.name = "SearchToolTimeoutError";
   }
 }
@@ -391,7 +410,10 @@ type SearchToolOutput = {
   errorCode?: string;
 };
 
-function buildSearchOutput(params: { text: string; sources: ProviderSource[] }): SearchToolOutput {
+function buildSearchOutput(params: {
+  text: string;
+  sources: ProviderSource[];
+}): SearchToolOutput {
   return {
     success: true,
     output: params.text,
@@ -483,7 +505,9 @@ function toJsonSchema(schema: ToolInputSchema): Record<string, unknown> {
   };
 }
 
-function itemTypeForToolName(name: string): "dynamicToolCall" | "commandExecution" {
+function itemTypeForToolName(
+  name: string,
+): "dynamicToolCall" | "commandExecution" {
   return name === "shell_command" ? "commandExecution" : "dynamicToolCall";
 }
 
@@ -509,7 +533,9 @@ function buildNestedSearchPrompt(query: string): string {
   ].join("\n");
 }
 
-function extractCommand(arguments_: Record<string, unknown> | undefined): string | undefined {
+function extractCommand(
+  arguments_: Record<string, unknown> | undefined,
+): string | undefined {
   const value = arguments_?.command;
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -534,15 +560,24 @@ function readResultArray(value: unknown, key: string): unknown[] {
   return Array.isArray(array) ? array : [];
 }
 
-function readRequiredString(args: Record<string, unknown>, key: string): string {
+function readRequiredString(
+  args: Record<string, unknown>,
+  key: string,
+): string {
   const value = args[key];
   if (typeof value !== "string" || !value.trim()) {
-    throw new ToolError("invalid_tool_arguments", `"${key}" must be a non-empty string`);
+    throw new ToolError(
+      "invalid_tool_arguments",
+      `"${key}" must be a non-empty string`,
+    );
   }
   return value.trim();
 }
 
-function readOptionalString(args: Record<string, unknown>, key: string): string | undefined {
+function readOptionalString(
+  args: Record<string, unknown>,
+  key: string,
+): string | undefined {
   const value = args[key];
   if (value == null) {
     return undefined;
@@ -553,7 +588,10 @@ function readOptionalString(args: Record<string, unknown>, key: string): string 
   return value.trim() || undefined;
 }
 
-function readOptionalBoolean(args: Record<string, unknown>, key: string): boolean | undefined {
+function readOptionalBoolean(
+  args: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
   const value = args[key];
   if (value == null) {
     return undefined;
@@ -579,7 +617,10 @@ function readOptionalStringArray(
   const normalized: string[] = [];
   for (const entry of value) {
     if (typeof entry !== "string") {
-      throw new ToolError("invalid_tool_arguments", `"${key}" entries must be strings`);
+      throw new ToolError(
+        "invalid_tool_arguments",
+        `"${key}" entries must be strings`,
+      );
     }
     const trimmed = entry.trim();
     if (trimmed) {
@@ -587,7 +628,10 @@ function readOptionalStringArray(
     }
   }
   if (normalized.length > max) {
-    throw new ToolError("invalid_tool_arguments", `"${key}" cannot contain more than ${max} entries`);
+    throw new ToolError(
+      "invalid_tool_arguments",
+      `"${key}" cannot contain more than ${max} entries`,
+    );
   }
   return normalized.length > 0 ? normalized : undefined;
 }

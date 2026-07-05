@@ -56,9 +56,7 @@ export function getBootDecision(): ProfileBootDecision | null {
   return currentBootDecision;
 }
 
-export function initializeAppState(
-  mode: AppStateMode = "active-profile",
-): {
+export function initializeAppState(mode: AppStateMode = "active-profile"): {
   stateDb: StateDb;
   messagingStore: SqliteMessagingStore;
   overlayStore: SqliteOverlayStore;
@@ -131,22 +129,34 @@ export function getAppStateMode(): AppStateMode | null {
 }
 
 export function getAppStateDb(): StateDb {
-  if (!stateDb) throw new Error("App state not initialized. Call initializeAppState() first.");
+  if (!stateDb)
+    throw new Error(
+      "App state not initialized. Call initializeAppState() first.",
+    );
   return stateDb;
 }
 
 export function getAppMessagingStore(): SqliteMessagingStore {
-  if (!messagingStore) throw new Error("App state not initialized. Call initializeAppState() first.");
+  if (!messagingStore)
+    throw new Error(
+      "App state not initialized. Call initializeAppState() first.",
+    );
   return messagingStore;
 }
 
 export function getAppOverlayStore(): SqliteOverlayStore {
-  if (!overlayStore) throw new Error("App state not initialized. Call initializeAppState() first.");
+  if (!overlayStore)
+    throw new Error(
+      "App state not initialized. Call initializeAppState() first.",
+    );
   return overlayStore;
 }
 
 export function getAppRuntimeInstanceStore(): AppRuntimeInstanceStore {
-  if (!runtimeInstanceStore) throw new Error("App state not initialized. Call initializeAppState() first.");
+  if (!runtimeInstanceStore)
+    throw new Error(
+      "App state not initialized. Call initializeAppState() first.",
+    );
   return runtimeInstanceStore;
 }
 
@@ -155,7 +165,10 @@ export function isAppStateInitialized(): boolean {
 }
 
 export function getAppAutomationStore(): AutomationStore {
-  if (!automationStore) throw new Error("App state not initialized. Call initializeAppState() first.");
+  if (!automationStore)
+    throw new Error(
+      "App state not initialized. Call initializeAppState() first.",
+    );
   return automationStore;
 }
 

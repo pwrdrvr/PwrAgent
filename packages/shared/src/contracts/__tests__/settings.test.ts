@@ -231,10 +231,16 @@ describe("desktop settings contracts", () => {
           workspaceUrl: { value: "", source: "default" },
           inboundMode: { value: "socket", source: "default" },
           teamAuthorizationMode: { value: "approved_only", source: "default" },
-          channelAuthorizationMode: { value: "approved_only", source: "default" },
+          channelAuthorizationMode: {
+            value: "approved_only",
+            source: "default",
+          },
           dmAccessMode: { value: "authorized_users", source: "default" },
           groupDmAccessMode: { value: "none", source: "default" },
-          channelUserAccessMode: { value: "authorized_users", source: "default" },
+          channelUserAccessMode: {
+            value: "authorized_users",
+            source: "default",
+          },
           slashCommandPrefix: { value: "pwragent_", source: "default" },
           registerSlashCommands: { value: false, source: "default" },
           authorizedUserIds: { value: [], source: "default" },
@@ -247,7 +253,11 @@ describe("desktop settings contracts", () => {
           appId: { configured: false, source: "unset", writable: true },
           appSecret: { configured: false, source: "unset", writable: true },
           encryptKey: { configured: false, source: "unset", writable: true },
-          verificationToken: { configured: false, source: "unset", writable: true },
+          verificationToken: {
+            configured: false,
+            source: "unset",
+            writable: true,
+          },
           inboundMode: { value: "persistent", source: "default" },
           tenantRegion: { value: "feishu", source: "default" },
           tenantUrl: { value: "", source: "default" },
@@ -348,7 +358,9 @@ describe("desktop settings contracts", () => {
   it("validates the active composer option", () => {
     expect(isDesktopChatReplyComposer("textarea")).toBe(false);
     expect(isDesktopChatReplyComposer("tiptap-chips")).toBe(false);
-    expect(isDesktopChatReplyComposer("tiptap-wysiwyg-markdown-chips")).toBe(true);
+    expect(isDesktopChatReplyComposer("tiptap-wysiwyg-markdown-chips")).toBe(
+      true,
+    );
     expect(isDesktopChatReplyComposer("custom-widget-chips")).toBe(false);
     expect(isDesktopChatReplyComposer("markdown")).toBe(false);
   });

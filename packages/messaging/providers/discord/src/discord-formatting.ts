@@ -174,7 +174,9 @@ export function buildDiscordComponents(
 
 function assertOpaqueDiscordCustomId(customId: string): void {
   if (!/^dc:[A-Za-z0-9_-]{24}$/.test(customId)) {
-    throw new Error("Discord component custom_id must be an opaque persisted handle.");
+    throw new Error(
+      "Discord component custom_id must be an opaque persisted handle.",
+    );
   }
 }
 

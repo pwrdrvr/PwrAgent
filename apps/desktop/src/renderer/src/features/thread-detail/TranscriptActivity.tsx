@@ -15,7 +15,10 @@ type TranscriptActivityProps = {
   applications?: DesktopApplicationsSnapshot;
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    | "copyText"
+    | "openApplication"
+    | "openMarkdownFileViewer"
+    | "readMarkdownFile"
   >;
   entry: AppServerThreadActivityEntry;
   fileViewerContext?: MarkdownFileViewerContext;
@@ -25,7 +28,9 @@ type TranscriptActivityProps = {
 export function TranscriptActivity(props: TranscriptActivityProps) {
   const detailsId = useId();
   const [isExpanded, setIsExpanded] = useState(false);
-  const [expandedDetailIds, setExpandedDetailIds] = useState(() => new Set<string>());
+  const [expandedDetailIds, setExpandedDetailIds] = useState(
+    () => new Set<string>(),
+  );
   const hasDetails = props.entry.details.length > 0;
   const activityCopyText = buildActivityCopyText(props.entry);
   const className =
@@ -47,8 +52,13 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                 setIsExpanded((current) => !current);
               }}
             >
-              <span className="transcript-activity__chevron" aria-hidden="true" />
-              <span className="transcript-activity__label">{props.entry.summary}</span>
+              <span
+                className="transcript-activity__chevron"
+                aria-hidden="true"
+              />
+              <span className="transcript-activity__label">
+                {props.entry.summary}
+              </span>
             </button>
             <span className="transcript-activity__header-actions">
               <TranscriptCopyButton
@@ -64,7 +74,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                     month: "short",
                     day: "numeric",
                     hour: "numeric",
-                    minute: "2-digit"
+                    minute: "2-digit",
                   }).format(props.entry.createdAt)}
                 </time>
               ) : null}
@@ -72,7 +82,9 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
           </>
         ) : (
           <>
-            <span className="transcript-activity__label">{props.entry.summary}</span>
+            <span className="transcript-activity__label">
+              {props.entry.summary}
+            </span>
             <span className="transcript-activity__header-actions">
               <TranscriptCopyButton
                 className="transcript-copy-button--activity"
@@ -87,7 +99,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                     month: "short",
                     day: "numeric",
                     hour: "numeric",
-                    minute: "2-digit"
+                    minute: "2-digit",
                   }).format(props.entry.createdAt)}
                 </time>
               ) : null}
@@ -115,18 +127,21 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                   variant="summary"
                 />
               ) : null;
-            const label = detail.url && !hasNestedDetails ? (
-              <a
-                className="transcript-activity__detail-label"
-                href={detail.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {detail.label}
-              </a>
-            ) : (
-              <span className="transcript-activity__detail-label">{detail.label}</span>
-            );
+            const label =
+              detail.url && !hasNestedDetails ? (
+                <a
+                  className="transcript-activity__detail-label"
+                  href={detail.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {detail.label}
+                </a>
+              ) : (
+                <span className="transcript-activity__detail-label">
+                  {detail.label}
+                </span>
+              );
 
             return (
               <li key={detail.id} className="transcript-activity__detail">
@@ -152,14 +167,20 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                           });
                         }}
                       >
-                        <span className="transcript-activity__chevron" aria-hidden="true" />
+                        <span
+                          className="transcript-activity__chevron"
+                          aria-hidden="true"
+                        />
                         {label}
                       </button>
                     ) : (
-                      markdownContent ?? label
+                      (markdownContent ?? label)
                     )}
                     {detail.fileDiff ? (
-                      <span className="transcript-activity__detail-stats" aria-label="File diff summary">
+                      <span
+                        className="transcript-activity__detail-stats"
+                        aria-label="File diff summary"
+                      >
                         <span className="transcript-activity__detail-stat transcript-activity__detail-stat--removed">
                           -{detail.fileDiff.removals.toLocaleString()}
                         </span>
@@ -172,7 +193,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                       <span
                         className={[
                           "transcript-activity__detail-status",
-                          `transcript-activity__detail-status--${detail.status}`
+                          `transcript-activity__detail-status--${detail.status}`,
                         ].join(" ")}
                       >
                         {formatActivityDetailStatus(detail.status)}
@@ -181,9 +202,16 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                   </div>
                 )}
                 {hasNestedDetails && isDetailExpanded ? (
-                  <div id={nestedId} className="transcript-activity__detail-body">
-                    {detail.fileDiff ? <TranscriptDiff detail={detail} /> : null}
-                    {detail.command ? <TranscriptCommandOutput detail={detail} /> : null}
+                  <div
+                    id={nestedId}
+                    className="transcript-activity__detail-body"
+                  >
+                    {detail.fileDiff ? (
+                      <TranscriptDiff detail={detail} />
+                    ) : null}
+                    {detail.command ? (
+                      <TranscriptCommandOutput detail={detail} />
+                    ) : null}
                   </div>
                 ) : null}
               </li>
@@ -202,7 +230,7 @@ function buildActivityCopyText(entry: AppServerThreadActivityEntry): string {
 }
 
 function formatActivityDetailStatus(
-  status: NonNullable<AppServerThreadActivityEntry["status"]>
+  status: NonNullable<AppServerThreadActivityEntry["status"]>,
 ): string {
   if (status === "in_progress") {
     return "Running";
@@ -210,5 +238,7 @@ function formatActivityDetailStatus(
   if (status === "completed") {
     return "Done";
   }
-  return status[0]?.toUpperCase() ? `${status[0].toUpperCase()}${status.slice(1)}` : status;
+  return status[0]?.toUpperCase()
+    ? `${status[0].toUpperCase()}${status.slice(1)}`
+    : status;
 }

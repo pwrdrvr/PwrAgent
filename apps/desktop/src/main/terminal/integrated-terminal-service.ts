@@ -115,7 +115,9 @@ export class IntegratedTerminalService {
     this.subscribe(session, webContents);
     session.disposables.push(
       ptyProcess.onData((data) => this.handleOutput(session, data)),
-      ptyProcess.onExit((event) => this.handleExit(session, event.exitCode, event.signal)),
+      ptyProcess.onExit((event) =>
+        this.handleExit(session, event.exitCode, event.signal),
+      ),
     );
     this.logger.info("started", {
       cwd,
@@ -141,8 +143,10 @@ export class IntegratedTerminalService {
 
   close(request: IntegratedTerminalCloseRequest): void {
     const session =
-      (request.sessionId ? this.sessionsById.get(request.sessionId) : undefined) ??
-      (request.threadKey ? this.sessionsByThread.get(request.threadKey) : undefined);
+      (request.sessionId ? this.sessionsById.get(request.sessionId) : undefined)
+      ?? (request.threadKey
+        ? this.sessionsByThread.get(request.threadKey)
+        : undefined);
     if (!session) return;
     this.killSession(session);
   }
@@ -225,7 +229,11 @@ export class IntegratedTerminalService {
     session.subscribers.clear();
   }
 
-  private send(session: TerminalSession, channel: string, payload: unknown): void {
+  private send(
+    session: TerminalSession,
+    channel: string,
+    payload: unknown,
+  ): void {
     for (const webContents of Array.from(session.subscribers)) {
       if (webContents.isDestroyed()) {
         session.subscribers.delete(webContents);

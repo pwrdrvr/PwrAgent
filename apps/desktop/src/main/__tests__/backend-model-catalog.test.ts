@@ -6,7 +6,9 @@ function createClient(params?: {
   models?: BackendModelOption[];
   errors?: Error[];
 }) {
-  const diagnostics: Array<{ callerReason?: string; ownerId?: string } | undefined> = [];
+  const diagnostics: Array<
+    { callerReason?: string; ownerId?: string } | undefined
+  > = [];
   let callCount = 0;
 
   return {
@@ -31,10 +33,10 @@ function createClient(params?: {
 
 describe("BackendModelCatalog", () => {
   it("coalesces concurrent model reads for one backend", async () => {
-    let resolveModels:
-      | ((models: BackendModelOption[]) => void)
-      | undefined;
-    const diagnostics: Array<{ callerReason?: string; ownerId?: string } | undefined> = [];
+    let resolveModels: ((models: BackendModelOption[]) => void) | undefined;
+    const diagnostics: Array<
+      { callerReason?: string; ownerId?: string } | undefined
+    > = [];
     let callCount = 0;
     const grokClient = {
       get callCount() {
@@ -81,8 +83,12 @@ describe("BackendModelCatalog", () => {
       grok: grokClient,
     });
 
-    await expect(catalog.readModels("grok", "backend-summary")).resolves.toEqual([]);
-    await expect(catalog.readModels("grok", "thread-start-defaults")).resolves.toEqual([]);
+    await expect(
+      catalog.readModels("grok", "backend-summary"),
+    ).resolves.toEqual([]);
+    await expect(
+      catalog.readModels("grok", "thread-start-defaults"),
+    ).resolves.toEqual([]);
 
     expect(grokClient.callCount).toBe(1);
   });
@@ -100,9 +106,9 @@ describe("BackendModelCatalog", () => {
     await expect(catalog.readModels("grok", "backend-summary")).rejects.toThrow(
       "Grok is still starting",
     );
-    await expect(catalog.readModels("grok", "thread-start-defaults")).resolves.toEqual([
-      { id: "grok-4", label: "Grok 4" },
-    ]);
+    await expect(
+      catalog.readModels("grok", "thread-start-defaults"),
+    ).resolves.toEqual([{ id: "grok-4", label: "Grok 4" }]);
 
     expect(grokClient.callCount).toBe(2);
   });

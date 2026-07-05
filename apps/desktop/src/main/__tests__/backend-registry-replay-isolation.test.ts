@@ -79,7 +79,7 @@ vi.mock("../codex-app-server/client", () => ({
     async interruptTurn() {
       return { threadId: "noop-thread", turnId: "noop-turn" };
     }
-  }
+  },
 }));
 
 const settingsState = vi.hoisted(() => ({
@@ -90,7 +90,8 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => ({
     resolveCodexCommandPreference: () => undefined,
     resolveCodexSpawnEnv: () => settingsState.codexEnv,
-    resolveCodexSpawnEnvAsync: async () => settingsState.codexEnv ?? process.env,
+    resolveCodexSpawnEnvAsync: async () =>
+      settingsState.codexEnv ?? process.env,
     resolveWorktreeStorage: () => "in-repo",
   }),
 }));
@@ -147,7 +148,7 @@ vi.mock("../grok-app-server/client", () => ({
     async interruptTurn() {
       return { threadId: "noop-thread", turnId: "noop-turn" };
     }
-  }
+  },
 }));
 
 const tempDirs: string[] = [];
@@ -213,7 +214,7 @@ describe("DesktopBackendRegistry replay isolation", () => {
     process.env[REPLAY_FIXTURE_PATH_ENV] = writeFixture({
       metadata: {
         backend: "codex",
-        scenario: "registry-replay-codex"
+        scenario: "registry-replay-codex",
       },
       steps: [
         {
@@ -223,25 +224,27 @@ describe("DesktopBackendRegistry replay isolation", () => {
           result: {
             serverInfo: {
               name: "Replay Codex",
-              version: "1.0.0"
+              version: "1.0.0",
             },
-            methods: ["thread/list"]
-          }
+            methods: ["thread/list"],
+          },
         },
         {
           id: "list-1",
           kind: "response",
           method: "thread/list",
-          result: []
-        }
-      ]
+          result: [],
+        },
+      ],
     });
 
     const registry = new DesktopBackendRegistry({
       overlayStore: createOverlayStoreMock(),
     });
 
-    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([]);
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual(
+      [],
+    );
     expect(constructorState.codexCount).toBe(0);
     expect(constructorState.grokCount).toBe(0);
 
@@ -252,7 +255,7 @@ describe("DesktopBackendRegistry replay isolation", () => {
     process.env[REPLAY_FIXTURE_PATH_ENV] = writeFixture({
       metadata: {
         backend: "grok",
-        scenario: "registry-replay-grok"
+        scenario: "registry-replay-grok",
       },
       steps: [
         {
@@ -262,25 +265,27 @@ describe("DesktopBackendRegistry replay isolation", () => {
           result: {
             serverInfo: {
               name: "Replay Grok",
-              version: "1.0.0"
+              version: "1.0.0",
             },
-            methods: ["thread/list"]
-          }
+            methods: ["thread/list"],
+          },
         },
         {
           id: "list-1",
           kind: "response",
           method: "thread/list",
-          result: []
-        }
-      ]
+          result: [],
+        },
+      ],
     });
 
     const registry = new DesktopBackendRegistry({
       overlayStore: createOverlayStoreMock(),
     });
 
-    await expect(registry.listThreads({ backend: "grok" })).resolves.toEqual([]);
+    await expect(registry.listThreads({ backend: "grok" })).resolves.toEqual(
+      [],
+    );
     expect(constructorState.codexCount).toBe(0);
     expect(constructorState.grokCount).toBe(0);
 
@@ -318,7 +323,9 @@ describe("DesktopBackendRegistry replay isolation", () => {
 
     expect(constructorState.codexCount).toBe(1);
     expect(constructorState.codexEnvs[0]?.CODEX_HOME).toBe(codexHome);
-    await expect(constructorState.codexResolveEnvs[0]?.()).resolves.toMatchObject({
+    await expect(
+      constructorState.codexResolveEnvs[0]?.(),
+    ).resolves.toMatchObject({
       CODEX_HOME: codexHome,
     });
 
@@ -335,7 +342,9 @@ describe("DesktopBackendRegistry replay isolation", () => {
     });
 
     const resolvedEnv = await constructorState.codexResolveEnvs[0]?.();
-    const resolvedArgs = await constructorState.codexResolveArgs[0]?.(resolvedEnv ?? {});
+    const resolvedArgs = await constructorState.codexResolveArgs[0]?.(
+      resolvedEnv ?? {},
+    );
     expect(resolvedArgs).toContain(
       'shell_environment_policy.set.PATH="/opt/homebrew/bin:/usr/bin:/bin"',
     );
@@ -345,7 +354,9 @@ describe("DesktopBackendRegistry replay isolation", () => {
 });
 
 function writeFixture(fixture: unknown): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-registry-replay-"));
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pwragent-registry-replay-"),
+  );
   tempDirs.push(tempDir);
 
   const fixturePath = path.join(tempDir, "replay.fixture.json");

@@ -21,7 +21,10 @@ function buildThreadDiffRef(params: {
   detailId: string;
   diff: string;
 }): AppServerThreadFileDiffRef {
-  const hash = createHash("sha256").update(params.diff).digest("hex").slice(0, 16);
+  const hash = createHash("sha256")
+    .update(params.diff)
+    .digest("hex")
+    .slice(0, 16);
   return {
     source: "thread",
     key: `thread:${params.backend}:${params.threadId}:${params.entryId}:${params.detailId}:${hash}`,
@@ -32,7 +35,10 @@ function buildThreadDiffRef(params: {
   };
 }
 
-function rememberThreadDiff(ref: AppServerThreadFileDiffRef, diff: string): void {
+function rememberThreadDiff(
+  ref: AppServerThreadFileDiffRef,
+  diff: string,
+): void {
   const existing = threadDiffCache.get(ref.key);
   if (existing) {
     threadDiffCacheChars -= existing.diff.length;
@@ -41,8 +47,8 @@ function rememberThreadDiff(ref: AppServerThreadFileDiffRef, diff: string): void
   threadDiffCacheChars += diff.length;
 
   if (
-    threadDiffCache.size <= MAX_THREAD_DIFF_CACHE_ENTRIES &&
-    threadDiffCacheChars <= MAX_THREAD_DIFF_CACHE_CHARS
+    threadDiffCache.size <= MAX_THREAD_DIFF_CACHE_ENTRIES
+    && threadDiffCacheChars <= MAX_THREAD_DIFF_CACHE_CHARS
   ) {
     return;
   }
@@ -52,8 +58,8 @@ function rememberThreadDiff(ref: AppServerThreadFileDiffRef, diff: string): void
   );
   for (const [key, value] of entriesByAge) {
     if (
-      threadDiffCache.size <= MAX_THREAD_DIFF_CACHE_ENTRIES &&
-      threadDiffCacheChars <= MAX_THREAD_DIFF_CACHE_CHARS
+      threadDiffCache.size <= MAX_THREAD_DIFF_CACHE_ENTRIES
+      && threadDiffCacheChars <= MAX_THREAD_DIFF_CACHE_CHARS
     ) {
       break;
     }

@@ -37,9 +37,7 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
-export function ArchivedThreadsSettings(props: {
-  desktopApi?: DesktopApi;
-}) {
+export function ArchivedThreadsSettings(props: { desktopApi?: DesktopApi }) {
   const [state, setState] = useState<ArchivedThreadsState>({
     loading: true,
     threads: [],
@@ -70,7 +68,9 @@ export function ArchivedThreadsSettings(props: {
         threads: sortArchivedThreads(
           response.threads.filter(
             (thread) =>
-              !restoredThreadKeysRef.current.has(buildArchivedThreadKey(thread)),
+              !restoredThreadKeysRef.current.has(
+                buildArchivedThreadKey(thread),
+              ),
           ),
         ),
         workspaceRoots: response.workspaceRoots ?? [],
@@ -136,7 +136,10 @@ export function ArchivedThreadsSettings(props: {
   };
 
   return (
-    <SettingsSectionStack paneId="archived" aria-label="Archived Threads settings">
+    <SettingsSectionStack
+      paneId="archived"
+      aria-label="Archived Threads settings"
+    >
       <SettingsPanelHead
         eyebrow="Archived Threads"
         title="Archived threads"
@@ -155,10 +158,10 @@ export function ArchivedThreadsSettings(props: {
         }
       />
 
-      {(state.loading && state.threads.length === 0) ||
-      (!state.loading && projectGroups.length === 0) ||
-      restoreMessage ||
-      state.error ? (
+      {(state.loading && state.threads.length === 0)
+      || (!state.loading && projectGroups.length === 0)
+      || restoreMessage
+      || state.error ? (
         <SettingsSection
           eyebrow="Archived Threads"
           title="Project folders"
@@ -252,10 +255,10 @@ function ArchivedThreadRow(props: {
   const activityLabel = archivedAt
     ? `Archived ${formatTimestamp(archivedAt)}`
     : thread.updatedAt
-    ? `Updated ${formatTimestamp(thread.updatedAt)}`
-    : thread.createdAt
-      ? `Created ${formatTimestamp(thread.createdAt)}`
-      : "No timestamp";
+      ? `Updated ${formatTimestamp(thread.updatedAt)}`
+      : thread.createdAt
+        ? `Created ${formatTimestamp(thread.createdAt)}`
+        : "No timestamp";
 
   return (
     <article className="settings-archive-row">
@@ -351,13 +354,13 @@ function resolveArchivedProject(
   if (repositoryDirectory) {
     return {
       key:
-        repositoryDirectory.path ||
-        repositoryDirectory.id ||
-        repositoryDirectory.label,
+        repositoryDirectory.path
+        || repositoryDirectory.id
+        || repositoryDirectory.label,
       label:
-        repositoryDirectory.label ||
-        pathBaseName(repositoryDirectory.path) ||
-        "Project",
+        repositoryDirectory.label
+        || pathBaseName(repositoryDirectory.path)
+        || "Project",
       latestArchiveTimestamp: resolveArchiveSortTimestamp(thread),
       path: repositoryDirectory.path,
     };
@@ -449,7 +452,9 @@ function activeWorkspaceRoot(
   );
 }
 
-function matchScratchProjectsRoot(pathname: string | undefined): string | undefined {
+function matchScratchProjectsRoot(
+  pathname: string | undefined,
+): string | undefined {
   const normalized = normalizePath(pathname);
   if (!normalized) {
     return undefined;
@@ -466,9 +471,9 @@ function resolveRepositoryLinkedDirectory(
 ): AppServerThreadSummary["linkedDirectories"][number] | undefined {
   const localDirectory = thread.linkedDirectories.find(
     (candidate) =>
-      candidate.kind === "local" &&
-      candidate.path.trim() &&
-      !isManagedWorktreePath(candidate.path),
+      candidate.kind === "local"
+      && candidate.path.trim()
+      && !isManagedWorktreePath(candidate.path),
   );
   if (localDirectory) {
     return localDirectory;
@@ -486,8 +491,8 @@ function resolveRepositoryLinkedDirectory(
 
     const worktreePath = candidate.worktreePath?.trim();
     return (
-      !worktreePath ||
-      normalizePath(directoryPath) !== normalizePath(worktreePath)
+      !worktreePath
+      || normalizePath(directoryPath) !== normalizePath(worktreePath)
     );
   });
 }
@@ -498,8 +503,8 @@ function resolveSnapshotRepositoryPath(
   return [...(thread.worktreeSnapshots ?? [])]
     .sort(
       (left, right) =>
-        (right.archivedAt ?? right.createdAt) -
-        (left.archivedAt ?? left.createdAt),
+        (right.archivedAt ?? right.createdAt)
+        - (left.archivedAt ?? left.createdAt),
     )
     .map((snapshot) => snapshot.repositoryPath.trim())
     .find((repositoryPath) => {
@@ -508,7 +513,8 @@ function resolveSnapshotRepositoryPath(
       }
       return !(thread.worktreeSnapshots ?? []).some(
         (snapshot) =>
-          normalizePath(snapshot.worktreePath) === normalizePath(repositoryPath),
+          normalizePath(snapshot.worktreePath)
+          === normalizePath(repositoryPath),
       );
     });
 }
@@ -519,8 +525,10 @@ function resolveManagedWorktreeProject(
   const managedPath =
     thread.linkedDirectories
       .flatMap((directory) => [directory.worktreePath, directory.path])
-      .find((candidate) => candidate && isManagedWorktreePath(candidate)) ??
-    (isManagedWorktreePath(thread.projectKey) ? thread.projectKey : undefined);
+      .find((candidate) => candidate && isManagedWorktreePath(candidate))
+    ?? (isManagedWorktreePath(thread.projectKey)
+      ? thread.projectKey
+      : undefined);
   if (!managedPath) {
     return undefined;
   }
@@ -528,9 +536,9 @@ function resolveManagedWorktreeProject(
   const label =
     thread.linkedDirectories
       .find((directory) => directory.label.trim())
-      ?.label.trim() ||
-    pathBaseName(managedPath) ||
-    "Project";
+      ?.label.trim()
+    || pathBaseName(managedPath)
+    || "Project";
   return {
     key: `managed-worktree:${label}`,
     label,
@@ -541,10 +549,7 @@ function resolveManagedWorktreeProject(
 
 function resolveArchiveSortTimestamp(thread: AppServerThreadSummary): number {
   return (
-    resolveArchiveTimestamp(thread) ??
-    thread.updatedAt ??
-    thread.createdAt ??
-    0
+    resolveArchiveTimestamp(thread) ?? thread.updatedAt ?? thread.createdAt ?? 0
   );
 }
 

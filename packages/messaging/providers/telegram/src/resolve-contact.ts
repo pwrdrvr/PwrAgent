@@ -58,20 +58,26 @@ export async function resolveContact(
   }
 }
 
-function formatTelegramDisplayName(chat: TelegramLookupChat): string | undefined {
+function formatTelegramDisplayName(
+  chat: TelegramLookupChat,
+): string | undefined {
   const handle = formatContactHandle(chat.username);
   const name =
     [
       sanitizeOptionalContactLabel(chat.first_name),
       sanitizeOptionalContactLabel(chat.last_name),
-    ].filter(Boolean).join(" ")
+    ]
+      .filter(Boolean)
+      .join(" ")
     || sanitizeOptionalContactLabel(chat.title)
     || undefined;
   if (name && handle) return `${name} (${handle})`;
   return name ?? handle;
 }
 
-function sanitizeOptionalContactLabel(value: string | undefined): string | undefined {
+function sanitizeOptionalContactLabel(
+  value: string | undefined,
+): string | undefined {
   const sanitized = sanitizeMessagingContactLabel(value);
   return sanitized || undefined;
 }
@@ -81,7 +87,10 @@ function formatContactHandle(value: string | undefined): string | undefined {
   return sanitized ? `@${sanitized}` : undefined;
 }
 
-function lookupFailure(id: string, error: unknown): MessagingContactLookupResult {
+function lookupFailure(
+  id: string,
+  error: unknown,
+): MessagingContactLookupResult {
   const message = error instanceof Error ? error.message : String(error);
   const status = /\b(400|403|404)\b|not found|chat not found/i.test(message)
     ? "not_found"

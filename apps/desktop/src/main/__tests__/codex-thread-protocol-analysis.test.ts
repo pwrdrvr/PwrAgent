@@ -6,7 +6,9 @@ import { analyzeCodexThreadProtocolCapture } from "../testing/codex-thread-proto
 
 describe("analyzeCodexThreadProtocolCapture", () => {
   it("characterizes thread list payloads and identity fields", async () => {
-    const captureDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-protocol-"));
+    const captureDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-protocol-"),
+    );
     const capturePath = path.join(captureDir, "thread-list.jsonl");
     try {
       await fs.writeFile(
@@ -188,7 +190,9 @@ describe("analyzeCodexThreadProtocolCapture", () => {
   });
 
   it("reports chronological thread message and tool order from thread/read and notifications", async () => {
-    const captureDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-protocol-"));
+    const captureDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-protocol-"),
+    );
     const capturePath = path.join(captureDir, "temporal-order.jsonl");
     try {
       await fs.writeFile(

@@ -15,7 +15,7 @@ console.error = (...args: unknown[]) => {
 function isReactActWarning(args: unknown[]): boolean {
   const [first] = args;
   return (
-    typeof first === "string" &&
-    first.includes("inside a test was not wrapped in act(...)")
+    typeof first === "string"
+    && first.includes("inside a test was not wrapped in act(...)")
   );
 }

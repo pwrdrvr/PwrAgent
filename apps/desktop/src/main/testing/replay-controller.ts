@@ -49,7 +49,7 @@ export class ReplayController {
         throw new Error(
           `Replay response error (${matchedStep.error.code ?? "unknown"}): ${
             matchedStep.error.message ?? "unknown error"
-          }`
+          }`,
         );
       }
 
@@ -67,22 +67,24 @@ export class ReplayController {
 
     if (nextStep.kind !== "response") {
       throw new Error(
-        `Replay fixture expected live step ${nextStep.id} before response ${method}`
+        `Replay fixture expected live step ${nextStep.id} before response ${method}`,
       );
     }
 
     throw new Error(
-      `Replay fixture expected ${nextStep.method} before ${method}`
+      `Replay fixture expected ${nextStep.method} before ${method}`,
     );
   }
 
-  advance(params: {
-    stepId?: string;
-    override?: ReplayStepOverride;
-  } = {}): ReplayLiveStep {
+  advance(
+    params: {
+      stepId?: string;
+      override?: ReplayStepOverride;
+    } = {},
+  ): ReplayLiveStep {
     if (this.pendingRequest) {
       throw new Error(
-        `Replay is waiting for request ${this.pendingRequest.request.params.requestId}`
+        `Replay is waiting for request ${this.pendingRequest.request.params.requestId}`,
       );
     }
 
@@ -92,11 +94,13 @@ export class ReplayController {
     }
     if (nextStep.kind === "response") {
       throw new Error(
-        `Replay fixture expected response ${nextStep.method} before live step ${params.stepId ?? "advance"}`
+        `Replay fixture expected response ${nextStep.method} before live step ${params.stepId ?? "advance"}`,
       );
     }
     if (params.stepId && nextStep.id !== params.stepId) {
-      throw new Error(`Replay expected step ${nextStep.id} before ${params.stepId}`);
+      throw new Error(
+        `Replay expected step ${nextStep.id} before ${params.stepId}`,
+      );
     }
 
     const merged = applyOverride(nextStep, params.override);
@@ -114,7 +118,10 @@ export class ReplayController {
   }
 
   resolvePendingRequest(requestId: string): ReplayRequestStep {
-    if (!this.pendingRequest || this.pendingRequest.request.params.requestId !== requestId) {
+    if (
+      !this.pendingRequest
+      || this.pendingRequest.request.params.requestId !== requestId
+    ) {
       throw new Error(`Replay has no pending request ${requestId}`);
     }
 
@@ -124,7 +131,11 @@ export class ReplayController {
   }
 
   private findResponseIndex(method: ReplayResponseMethod): number {
-    for (let candidateIndex = this.index; candidateIndex < this.steps.length; candidateIndex += 1) {
+    for (
+      let candidateIndex = this.index;
+      candidateIndex < this.steps.length;
+      candidateIndex += 1
+    ) {
       const step = this.steps[candidateIndex];
       if (step.kind !== "response") {
         break;
@@ -140,7 +151,7 @@ export class ReplayController {
 
 function applyOverride(
   step: ReplayLiveStep,
-  override?: ReplayStepOverride
+  override?: ReplayStepOverride,
 ): ReplayLiveStep {
   if (!override) {
     return step;
@@ -156,13 +167,13 @@ function applyOverride(
       ...requestOverride,
       params: {
         ...(step.request.params as Record<string, unknown>),
-        ...(requestParamsOverride ?? {})
-      } as ReplayRequestStep["request"]["params"]
+        ...(requestParamsOverride ?? {}),
+      } as ReplayRequestStep["request"]["params"],
     };
 
     return {
       ...step,
-      request
+      request,
     };
   }
 
@@ -176,18 +187,18 @@ function applyOverride(
       ...notificationOverride,
       params: {
         ...(step.notification.params as Record<string, unknown>),
-        ...(notificationParamsOverride ?? {})
-      }
+        ...(notificationParamsOverride ?? {}),
+      },
     } as ReplayNotificationStep["notification"];
 
     return {
       ...step,
-      notification
+      notification,
     };
   }
 
   return {
     ...step,
-    ...override
+    ...override,
   } as ReplayLiveStep;
 }

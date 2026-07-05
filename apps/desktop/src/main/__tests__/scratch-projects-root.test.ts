@@ -51,7 +51,13 @@ describe("resolveScratchProjectsRoot", () => {
         homeDir: "/Users/tester",
       }),
     ).toEqual([
-      path.join("/Users/tester", ".pwragent", "profiles", "default", "projects"),
+      path.join(
+        "/Users/tester",
+        ".pwragent",
+        "profiles",
+        "default",
+        "projects",
+      ),
       path.join("/Users/tester", ".pwragent", "projects"),
       path.join("/Users/tester", ".pwragnt", "projects"),
     ]);

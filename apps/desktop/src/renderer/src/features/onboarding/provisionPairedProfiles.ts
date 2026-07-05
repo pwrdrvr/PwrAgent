@@ -1,7 +1,4 @@
-import {
-  isCanonicalProfileName,
-  normalizeProfileName,
-} from "@pwragent/shared";
+import { isCanonicalProfileName, normalizeProfileName } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 export { normalizeProfileName };
@@ -39,9 +36,9 @@ export async function provisionPairedProfiles(
   names: readonly string[],
 ): Promise<string[]> {
   if (
-    !api?.createPwrAgentProfile ||
-    !api.createCodexAuthProfile ||
-    !api.setPwrAgentProfileCodexProfile
+    !api?.createPwrAgentProfile
+    || !api.createCodexAuthProfile
+    || !api.setPwrAgentProfileCodexProfile
   ) {
     return [];
   }
@@ -65,7 +62,6 @@ export async function provisionPairedProfiles(
       });
       created.push(name);
     } catch (caught) {
-      // eslint-disable-next-line no-console
       console.warn(
         `Onboarding: failed to provision paired profile "${name}"`,
         caught,

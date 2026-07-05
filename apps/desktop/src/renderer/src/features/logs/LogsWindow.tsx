@@ -7,7 +7,10 @@ import {
   type MutableRefObject,
   type ReactNode,
 } from "react";
-import type { AppLogEntry, AppLogSnapshot } from "../../../../shared/app-metadata";
+import type {
+  AppLogEntry,
+  AppLogSnapshot,
+} from "../../../../shared/app-metadata";
 import { CopyIcon, FolderIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
@@ -99,7 +102,9 @@ export function LogsWindow() {
     setLogFilePath(value.logFilePath ?? readBootstrapLogFilePath());
     confirmedDebugCollectionRef.current = value.debugCollectionEnabled;
     setDebugCollectionEnabled(value.debugCollectionEnabled);
-    setTruncated(value.truncated || value.entries.length > MAX_RENDERED_LOG_ENTRIES);
+    setTruncated(
+      value.truncated || value.entries.length > MAX_RENDERED_LOG_ENTRIES,
+    );
     setError(undefined);
   }, []);
 
@@ -110,9 +115,7 @@ export function LogsWindow() {
     }
 
     const desiredDebugCollectionEnabled = desiredDebugCollectionRef.current;
-    if (
-      confirmedDebugCollectionRef.current === desiredDebugCollectionEnabled
-    ) {
+    if (confirmedDebugCollectionRef.current === desiredDebugCollectionEnabled) {
       return;
     }
 
@@ -185,7 +188,10 @@ export function LogsWindow() {
       if (!followingRef.current) {
         return;
       }
-      const droppedEntry = appendRenderedLogEntry(entryBufferRef.current, entry);
+      const droppedEntry = appendRenderedLogEntry(
+        entryBufferRef.current,
+        entry,
+      );
       if (droppedEntry) {
         setTruncated(true);
       }
@@ -293,12 +299,15 @@ export function LogsWindow() {
     [rendered.matchCount, setFollowingMode],
   );
 
-  const handleSearchChange = useCallback((value: string) => {
-    setQuery(value);
-    if (value.trim()) {
-      setFollowingMode(false);
-    }
-  }, [setFollowingMode]);
+  const handleSearchChange = useCallback(
+    (value: string) => {
+      setQuery(value);
+      if (value.trim()) {
+        setFollowingMode(false);
+      }
+    },
+    [setFollowingMode],
+  );
 
   const handleLogLevelToggle = useCallback(
     (value: LogLevelFilter) => {
@@ -349,7 +358,9 @@ export function LogsWindow() {
   }, [desktopApi, logFilePath]);
 
   const activeMatchLabel =
-    rendered.matchCount > 0 ? `${activeMatchIndex + 1} / ${rendered.matchCount}` : "0";
+    rendered.matchCount > 0
+      ? `${activeMatchIndex + 1} / ${rendered.matchCount}`
+      : "0";
 
   return (
     <div className="document-window document-window--logs">
@@ -391,9 +402,9 @@ export function LogsWindow() {
                   aria-pressed={selectedLevels.includes(option.value)}
                   className="log-window__level-option"
                   data-debug-collection={
-                    option.value === "debug" &&
-                    selectedLevels.includes("debug") &&
-                    !debugCollectionEnabled
+                    option.value === "debug"
+                    && selectedLevels.includes("debug")
+                    && !debugCollectionEnabled
                       ? "off"
                       : undefined
                   }
@@ -444,10 +455,14 @@ export function LogsWindow() {
                 type="button"
                 data-copied={copiedLogFilePath ? "true" : undefined}
                 aria-label={
-                  copiedLogFilePath ? "Copied log file path" : "Copy log file path"
+                  copiedLogFilePath
+                    ? "Copied log file path"
+                    : "Copy log file path"
                 }
                 title={
-                  copiedLogFilePath ? "Copied log file path" : "Copy log file path"
+                  copiedLogFilePath
+                    ? "Copied log file path"
+                    : "Copy log file path"
                 }
                 onClick={handleCopyLogFilePath}
               >
@@ -469,15 +484,15 @@ export function LogsWindow() {
 
           <div className="log-window__status">
             <span className="log-window__status-text">
-              {following
-                ? "Live app log stream"
-                : "Paused app log stream"}
+              {following ? "Live app log stream" : "Paused app log stream"}
             </span>
             {truncated ? (
               <span className="log-window__status-note">Showing tail</span>
             ) : null}
             {debugCollectionEnabled ? (
-              <span className="log-window__status-note">Debug collection on</span>
+              <span className="log-window__status-note">
+                Debug collection on
+              </span>
             ) : null}
           </div>
 
@@ -636,20 +651,26 @@ function renderLogLinePart(params: {
 }
 
 function classNameForLinePart(part: LogLinePart): string | undefined {
-  return part.tone ? `log-window__part log-window__part--${part.tone}` : undefined;
+  return part.tone
+    ? `log-window__part log-window__part--${part.tone}`
+    : undefined;
 }
 
 function selectionTouchesElement(element: HTMLElement): boolean {
   const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || selection.toString().length === 0) {
+  if (
+    !selection
+    || selection.isCollapsed
+    || selection.toString().length === 0
+  ) {
     return false;
   }
 
   const anchorNode = selection.anchorNode;
   const focusNode = selection.focusNode;
   return Boolean(
-    (anchorNode && element.contains(anchorNode)) ||
-      (focusNode && element.contains(focusNode)),
+    (anchorNode && element.contains(anchorNode))
+    || (focusNode && element.contains(focusNode)),
   );
 }
 
@@ -683,10 +704,17 @@ function renderLogLine(
   const parts: LogLinePart[] = [];
   for (const token of tokens.parts) {
     const tokenParts = normalizedQuery
-      ? splitLineMatches(token.text, normalizedQuery, nextMatchIndex, token.tone)
+      ? splitLineMatches(
+          token.text,
+          normalizedQuery,
+          nextMatchIndex,
+          token.tone,
+        )
       : [token];
     parts.push(...tokenParts);
-    nextMatchIndex += tokenParts.filter((part) => part.matchIndex !== undefined).length;
+    nextMatchIndex += tokenParts.filter(
+      (part) => part.matchIndex !== undefined,
+    ).length;
   }
 
   return {
@@ -700,7 +728,9 @@ export function tokenizeLogLine(line: string): {
   level?: LogLevel;
   parts: LogLinePart[];
 } {
-  const match = line.match(/^(\[[^\]]+\])(\s+)(\[[^\]]+\])(\s+)(\([^)]+\))(\s*)(.*)$/);
+  const match = line.match(
+    /^(\[[^\]]+\])(\s+)(\[[^\]]+\])(\s+)(\([^)]+\))(\s*)(.*)$/,
+  );
   if (!match) {
     return { parts: [{ text: line }] };
   }
@@ -724,19 +754,21 @@ export function tokenizeLogLine(line: string): {
 function normalizeLogLevel(levelToken: string): LogLevel | undefined {
   const value = levelToken.replace(/[[\]\s]/g, "").toLowerCase();
   if (
-    value === "error" ||
-    value === "warn" ||
-    value === "info" ||
-    value === "debug" ||
-    value === "trace" ||
-    value === "verbose"
+    value === "error"
+    || value === "warn"
+    || value === "info"
+    || value === "debug"
+    || value === "trace"
+    || value === "verbose"
   ) {
     return value;
   }
   return undefined;
 }
 
-function toneForLogLevel(level: LogLevel | undefined): LogLinePartTone | undefined {
+function toneForLogLevel(
+  level: LogLevel | undefined,
+): LogLinePartTone | undefined {
   if (level === "error") return "level-error";
   if (level === "warn") return "level-warn";
   if (level === "info") return "level-info";

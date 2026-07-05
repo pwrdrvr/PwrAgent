@@ -28,13 +28,19 @@ function createSession(): StartupCpuProfileSession {
     id: "abc123",
     directoryName: "startup-cpu-2026-04-19-0930-abc123",
     directoryPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123",
-    manifestPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/session.json",
+    manifestPath:
+      "/repo/.local/startup-cpu-2026-04-19-0930-abc123/session.json",
     eventsPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/events.ndjson",
-    mainProfilePath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/main.cpuprofile",
-    rendererProfilePath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/renderer.cpuprofile",
-    mainHeapSnapshotPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/main.heapsnapshot",
-    rendererHeapSnapshotPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/renderer.heapsnapshot",
-    analysisPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/analysis.json",
+    mainProfilePath:
+      "/repo/.local/startup-cpu-2026-04-19-0930-abc123/main.cpuprofile",
+    rendererProfilePath:
+      "/repo/.local/startup-cpu-2026-04-19-0930-abc123/renderer.cpuprofile",
+    mainHeapSnapshotPath:
+      "/repo/.local/startup-cpu-2026-04-19-0930-abc123/main.heapsnapshot",
+    rendererHeapSnapshotPath:
+      "/repo/.local/startup-cpu-2026-04-19-0930-abc123/renderer.heapsnapshot",
+    analysisPath:
+      "/repo/.local/startup-cpu-2026-04-19-0930-abc123/analysis.json",
     summaryPath: "/repo/.local/startup-cpu-2026-04-19-0930-abc123/summary.md",
     appendEvent: vi.fn(async () => undefined),
     markProfileCaptured: vi.fn(async () => undefined),
@@ -113,7 +119,8 @@ describe("StartupCpuProfiler", () => {
     const { window, emitWebContents } = createWindowTarget();
     const now = vi.fn(() => new Date("2026-04-19T13:30:00.000Z"));
 
-    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const { StartupCpuProfiler } =
+      await import("../diagnostics/startup-cpu-profiler");
     const profiler = new StartupCpuProfiler({
       config: createEnabledConfig(),
       logger,
@@ -133,14 +140,18 @@ describe("StartupCpuProfiler", () => {
     expect(mainProfiler.start).toHaveBeenCalledTimes(1);
     expect(rendererProfiler.start).toHaveBeenCalledTimes(1);
     expect(mainProfiler.stop).toHaveBeenCalledWith("startup-window-complete");
-    expect(rendererProfiler.stop).toHaveBeenCalledWith("startup-window-complete");
+    expect(rendererProfiler.stop).toHaveBeenCalledWith(
+      "startup-window-complete",
+    );
     expect(analyzeSession).toHaveBeenCalledWith({
       sessionDirectoryPath: session.directoryPath,
       repoRoot: "/repo",
       analysisPath: session.analysisPath,
       summaryPath: session.summaryPath,
     });
-    expect(session.markAnalysisGenerated).toHaveBeenCalledWith("2026-04-19T13:30:00.000Z");
+    expect(session.markAnalysisGenerated).toHaveBeenCalledWith(
+      "2026-04-19T13:30:00.000Z",
+    );
     expect(session.complete).toHaveBeenCalledWith({
       status: "completed",
       completedAt: "2026-04-19T13:30:00.000Z",
@@ -170,7 +181,8 @@ describe("StartupCpuProfiler", () => {
     const { window, emitWebContents } = createWindowTarget();
     const writeMainHeapSnapshot = vi.fn(() => session.mainHeapSnapshotPath);
 
-    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const { StartupCpuProfiler } =
+      await import("../diagnostics/startup-cpu-profiler");
     const profiler = new StartupCpuProfiler({
       config: {
         ...createEnabledConfig(),
@@ -198,12 +210,18 @@ describe("StartupCpuProfiler", () => {
     emitWebContents("did-finish-load");
     await vi.advanceTimersByTimeAsync(5000);
 
-    expect(writeMainHeapSnapshot).toHaveBeenCalledWith(session.mainHeapSnapshotPath);
+    expect(writeMainHeapSnapshot).toHaveBeenCalledWith(
+      session.mainHeapSnapshotPath,
+    );
     expect(window.webContents.takeHeapSnapshot).toHaveBeenCalledWith(
       session.rendererHeapSnapshotPath,
     );
-    expect(session.registerHeapSnapshot).toHaveBeenCalledWith("main.heapsnapshot");
-    expect(session.registerHeapSnapshot).toHaveBeenCalledWith("renderer.heapsnapshot");
+    expect(session.registerHeapSnapshot).toHaveBeenCalledWith(
+      "main.heapsnapshot",
+    );
+    expect(session.registerHeapSnapshot).toHaveBeenCalledWith(
+      "renderer.heapsnapshot",
+    );
   });
 
   it("quits the app after capture when requested by profiling config", async () => {
@@ -211,7 +229,8 @@ describe("StartupCpuProfiler", () => {
     const session = createSession();
     const { window, emitWebContents } = createWindowTarget();
 
-    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const { StartupCpuProfiler } =
+      await import("../diagnostics/startup-cpu-profiler");
     const profiler = new StartupCpuProfiler({
       config: {
         ...createEnabledConfig(),
@@ -254,7 +273,8 @@ describe("StartupCpuProfiler", () => {
     const analyzeSession = vi.fn(async () => ({ ok: true }));
     const { window } = createWindowTarget();
 
-    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const { StartupCpuProfiler } =
+      await import("../diagnostics/startup-cpu-profiler");
     const profiler = new StartupCpuProfiler({
       config: {
         ...createEnabledConfig(),

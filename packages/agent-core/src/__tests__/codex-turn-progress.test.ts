@@ -210,7 +210,9 @@ describe("Codex turn progress", () => {
       });
 
       expect(
-        sessionState.readThread("thread-1").items.find((item) => item.id === "command-1"),
+        sessionState
+          .readThread("thread-1")
+          .items.find((item) => item.id === "command-1"),
       ).toEqual({
         id: "command-1",
         type: "commandExecution",
@@ -218,7 +220,10 @@ describe("Codex turn progress", () => {
         command: "yes",
       });
       await expect(
-        fs.readFile(path.join(temp.path, "threads/thread-1/rollout.jsonl"), "utf8"),
+        fs.readFile(
+          path.join(temp.path, "threads/thread-1/rollout.jsonl"),
+          "utf8",
+        ),
       ).resolves.not.toContain("NOISY_OUTPUT");
     } finally {
       await temp.cleanup();

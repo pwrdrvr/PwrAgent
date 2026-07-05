@@ -60,7 +60,9 @@ describe("useNavigationHistory", () => {
   });
 
   it("records thread-to-thread navigation and walks back/forward", () => {
-    const { hook, navigate, restore, settle } = renderHistory(thread("codex:a"));
+    const { hook, navigate, restore, settle } = renderHistory(
+      thread("codex:a"),
+    );
     navigate(thread("codex:b"));
     expect(hook.result.current.canGoBack).toBe(true);
 
@@ -78,7 +80,9 @@ describe("useNavigationHistory", () => {
   });
 
   it("supports the search round-trip: thread → search → result → back → next result", () => {
-    const { hook, navigate, restore, settle } = renderHistory(thread("codex:a"));
+    const { hook, navigate, restore, settle } = renderHistory(
+      thread("codex:a"),
+    );
     navigate(SEARCH);
     navigate(thread("codex:b"));
 
@@ -118,7 +122,9 @@ describe("useNavigationHistory", () => {
   });
 
   it("returns to the last tracked location from an untracked surface without consuming an entry", () => {
-    const { hook, navigate, restore, settle } = renderHistory(thread("codex:a"));
+    const { hook, navigate, restore, settle } = renderHistory(
+      thread("codex:a"),
+    );
     navigate(thread("codex:b"));
     navigate(undefined); // launchpad in front
     expect(hook.result.current.canGoBack).toBe(true);
@@ -133,7 +139,9 @@ describe("useNavigationHistory", () => {
   });
 
   it("keeps the forward stack usable from an untracked surface", () => {
-    const { hook, navigate, restore, settle } = renderHistory(thread("codex:a"));
+    const { hook, navigate, restore, settle } = renderHistory(
+      thread("codex:a"),
+    );
     navigate(thread("codex:b"));
     act(() => hook.result.current.goBack());
     settle(); // at a, forward = [b]
@@ -202,7 +210,9 @@ describe("useNavigationHistory", () => {
   });
 
   it("leaves history alone while liveThreadKeys is undefined (snapshot loading)", () => {
-    const { hook, navigate, setLiveThreadKeys } = renderHistory(thread("codex:a"));
+    const { hook, navigate, setLiveThreadKeys } = renderHistory(
+      thread("codex:a"),
+    );
     navigate(thread("codex:b"));
     setLiveThreadKeys(new Set(["codex:a", "codex:b"]));
     setLiveThreadKeys(undefined); // e.g. transient empty snapshot
@@ -210,7 +220,9 @@ describe("useNavigationHistory", () => {
   });
 
   it("caps the back stack at 50 entries", () => {
-    const { hook, navigate, restore, settle } = renderHistory(thread("codex:t0"));
+    const { hook, navigate, restore, settle } = renderHistory(
+      thread("codex:t0"),
+    );
     for (let index = 1; index <= 60; index += 1) {
       navigate(thread(`codex:t${index}`));
     }

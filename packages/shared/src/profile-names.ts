@@ -4,8 +4,8 @@ const RESERVED_PROFILE_NAMES = new Set(["con", "nul", "aux", "prn", ".", ".."]);
 export function normalizeProfileName(value: string): string {
   const trimmed = value.trim();
   if (
-    CANONICAL_PROFILE_NAME_REGEX.test(trimmed) &&
-    !RESERVED_PROFILE_NAMES.has(trimmed)
+    CANONICAL_PROFILE_NAME_REGEX.test(trimmed)
+    && !RESERVED_PROFILE_NAMES.has(trimmed)
   ) {
     return trimmed;
   }
@@ -32,8 +32,8 @@ export function normalizeProfileName(value: string): string {
 
 export function isCanonicalProfileName(value: string): boolean {
   return (
-    CANONICAL_PROFILE_NAME_REGEX.test(value) &&
-    !RESERVED_PROFILE_NAMES.has(value) &&
-    normalizeProfileName(value) === value
+    CANONICAL_PROFILE_NAME_REGEX.test(value)
+    && !RESERVED_PROFILE_NAMES.has(value)
+    && normalizeProfileName(value) === value
   );
 }

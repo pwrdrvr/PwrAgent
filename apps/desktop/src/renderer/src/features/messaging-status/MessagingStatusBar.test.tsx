@@ -1,5 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopSettingsSnapshot,
@@ -29,15 +35,21 @@ describe("MessagingStatusBar", () => {
       onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
     };
 
-    const { container } = render(<MessagingStatusBar desktopApi={desktopApi} />);
+    const { container } = render(
+      <MessagingStatusBar desktopApi={desktopApi} />,
+    );
 
     await waitFor(() => {
       expect(
         screen.getByRole("button", { name: /1 online/ }),
       ).toBeInTheDocument();
     });
-    expect(container.querySelector(".messaging-status-chip img")).not.toBeNull();
-    expect(container.querySelector(".messaging-status-chip__fallback")).toBeNull();
+    expect(
+      container.querySelector(".messaging-status-chip img"),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(".messaging-status-chip__fallback"),
+    ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /Feishu \/ Lark/ }));
 
@@ -87,9 +99,7 @@ describe("MessagingStatusBar", () => {
       name: "Messaging platforms",
     });
     await waitFor(() => {
-      expect(
-        screen.getByText("Telegram"),
-      ).toBeInTheDocument();
+      expect(screen.getByText("Telegram")).toBeInTheDocument();
     });
     expect(popover).toHaveTextContent("Rate limited");
     expect(popover).toHaveTextContent("Telegram group -100123");
@@ -108,8 +118,9 @@ describe("MessagingStatusBar", () => {
         detail: "api.telegram.org",
       },
     ] satisfies MessagingPlatformStatus[];
-    let emitStatusEvent: ((event: MessagingPlatformStatusEvent) => void) | null =
-      null;
+    let emitStatusEvent:
+      | ((event: MessagingPlatformStatusEvent) => void)
+      | null = null;
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => statuses),
       onMessagingPlatformStatusEvent: vi.fn((listener) => {
@@ -454,24 +465,27 @@ describe("MessagingStatusBar", () => {
   });
 });
 
-function messagingSettingsSnapshot(enabled: {
-  telegram?: boolean;
-  discord?: boolean;
-  mattermost?: boolean;
-  slack?: boolean;
-  feishu?: boolean;
-  line?: boolean;
-}, options: {
-  configured?: {
+function messagingSettingsSnapshot(
+  enabled: {
     telegram?: boolean;
     discord?: boolean;
     mattermost?: boolean;
     slack?: boolean;
     feishu?: boolean;
     line?: boolean;
-  };
-  runtimeMessagingDisabled?: boolean;
-} = {}): DesktopSettingsSnapshot {
+  },
+  options: {
+    configured?: {
+      telegram?: boolean;
+      discord?: boolean;
+      mattermost?: boolean;
+      slack?: boolean;
+      feishu?: boolean;
+      line?: boolean;
+    };
+    runtimeMessagingDisabled?: boolean;
+  } = {},
+): DesktopSettingsSnapshot {
   const setting = (value: boolean) => ({ value, source: "config" });
   const secret = (configured: boolean | undefined) => ({
     configured: configured ?? false,

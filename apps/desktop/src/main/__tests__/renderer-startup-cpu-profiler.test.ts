@@ -53,16 +53,20 @@ function createTarget(options?: {
 
       return {};
     }),
-    on: vi.fn((event: "detach", listener: (event: unknown, reason: string) => void) => {
-      if (event === "detach") {
-        detachListeners.add(listener);
-      }
-    }),
-    off: vi.fn((event: "detach", listener: (event: unknown, reason: string) => void) => {
-      if (event === "detach") {
-        detachListeners.delete(listener);
-      }
-    }),
+    on: vi.fn(
+      (event: "detach", listener: (event: unknown, reason: string) => void) => {
+        if (event === "detach") {
+          detachListeners.add(listener);
+        }
+      },
+    ),
+    off: vi.fn(
+      (event: "detach", listener: (event: unknown, reason: string) => void) => {
+        if (event === "detach") {
+          detachListeners.delete(listener);
+        }
+      },
+    ),
   };
 
   return {
@@ -122,8 +126,14 @@ describe("RendererStartupCpuProfiler", () => {
     await expect(profiler.stop("startup-window-complete")).resolves.toBe(true);
 
     expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
-    expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(1, "Profiler.enable");
-    expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(2, "Profiler.start");
+    expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(
+      1,
+      "Profiler.enable",
+    );
+    expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(
+      2,
+      "Profiler.start",
+    );
     expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(3, "Profiler.stop");
     expect(debuggerApi.detach).toHaveBeenCalledTimes(1);
 
@@ -170,9 +180,7 @@ describe("RendererStartupCpuProfiler", () => {
     await expect(profiler.start()).resolves.toBe(false);
     await expect(profiler.stop("startup-window-complete")).resolves.toBe(false);
 
-    const events = (
-      await fs.readFile(sessionResult.session.eventsPath, "utf8")
-    )
+    const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
@@ -226,7 +234,9 @@ describe("RendererStartupCpuProfiler", () => {
     emitDetach("devtools-opened");
     await expect(profiler.stop("startup-window-complete")).resolves.toBe(false);
 
-    await expect(fs.readFile(sessionResult.session.rendererProfilePath, "utf8")).rejects.toMatchObject({
+    await expect(
+      fs.readFile(sessionResult.session.rendererProfilePath, "utf8"),
+    ).rejects.toMatchObject({
       code: "ENOENT",
     });
   });

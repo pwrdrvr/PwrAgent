@@ -17,9 +17,10 @@ function normalizeTestPath(value: string): string {
   return path.resolve(value).replace(/\\/g, "/");
 }
 
-function fakeGit(
-  responder: (args: string[]) => string | undefined,
-): { runGit: (cwd: string, args: string[]) => Promise<string>; calls: GitCall[] } {
+function fakeGit(responder: (args: string[]) => string | undefined): {
+  runGit: (cwd: string, args: string[]) => Promise<string>;
+  calls: GitCall[];
+} {
   const calls: GitCall[] = [];
   const runGit = async (cwd: string, args: string[]): Promise<string> => {
     calls.push({ cwd, args });
@@ -144,7 +145,8 @@ describe("probeWorktreeWorkingState", () => {
       }
       if (args.includes("merge-base")) {
         const target = args[args.length - 1];
-        if (target === "origin/main" || target === "main") return `${mainBase}\n`;
+        if (target === "origin/main" || target === "main")
+          return `${mainBase}\n`;
         if (target === "releases/4.3" || target === "origin/releases/4.3") {
           return `${releaseBase}\n`;
         }
@@ -152,13 +154,16 @@ describe("probeWorktreeWorkingState", () => {
       if (args.includes("rev-list") && args.includes("--count")) {
         const range = args[args.length - 1];
         if (range === "HEAD") return "0\n";
-        if (range === `${mainBase}..origin/main` || range === `${mainBase}..main`) {
+        if (
+          range === `${mainBase}..origin/main`
+          || range === `${mainBase}..main`
+        ) {
           return "7\n";
         }
         if (range === `${mainBase}..HEAD`) return "30\n";
         if (
-          range === `${releaseBase}..releases/4.3` ||
-          range === `${releaseBase}..origin/releases/4.3`
+          range === `${releaseBase}..releases/4.3`
+          || range === `${releaseBase}..origin/releases/4.3`
         ) {
           return "2\n";
         }
@@ -196,12 +201,14 @@ describe("probeWorktreeWorkingState", () => {
       }
       if (args.includes("rev-list") && args.includes("--count")) return "0\n";
       if (
-        args.includes("config") ||
-        args.includes("symbolic-ref") ||
-        args.includes("for-each-ref") ||
-        args.includes("merge-base")
+        args.includes("config")
+        || args.includes("symbolic-ref")
+        || args.includes("for-each-ref")
+        || args.includes("merge-base")
       ) {
-        throw new Error(`base inference should short-circuit before ${args.join(" ")}`);
+        throw new Error(
+          `base inference should short-circuit before ${args.join(" ")}`,
+        );
       }
       return undefined;
     });
@@ -252,14 +259,19 @@ describe("probeWorktreeWorkingState", () => {
 
   it("returns undefined when the directory is not a git checkout", async () => {
     const { runGit } = fakeGit(() => undefined);
-    expect(await probeWorktreeWorkingState("/not/a/repo", { runGit })).toBeUndefined();
+    expect(
+      await probeWorktreeWorkingState("/not/a/repo", { runGit }),
+    ).toBeUndefined();
   });
 
   it("includes cheap untracked text additions in the dirty working-state totals", async () => {
     const tmpRoot = await mkdtemp(makeTempPrefix());
     try {
       await writeFile(path.join(tmpRoot, "note.txt"), "alpha\nbeta\n", "utf8");
-      await writeFile(path.join(tmpRoot, "archive.zip"), Buffer.from([0, 1, 2, 3]));
+      await writeFile(
+        path.join(tmpRoot, "archive.zip"),
+        Buffer.from([0, 1, 2, 3]),
+      );
       const { runGit } = fakeGit((args) => {
         if (args.includes("--numstat")) return "3\t1\tsrc/a.ts\n";
         if (args.includes("status")) {
@@ -405,8 +417,8 @@ describe("GitWorkingStateService", () => {
     expect(
       calls.some(
         (call) =>
-          call.args.includes("status") &&
-          call.args.includes("--untracked-files=normal"),
+          call.args.includes("status")
+          && call.args.includes("--untracked-files=normal"),
       ),
     ).toBe(true);
     expect(calls.some((call) => call.args.includes("ls-files"))).toBe(true);
@@ -445,7 +457,9 @@ describe("GitWorkingStateService", () => {
     });
     const service = new GitWorkingStateService({ runGit });
 
-    const response = await service.listOtherChanges(worktreePath, { maxFiles: 2 });
+    const response = await service.listOtherChanges(worktreePath, {
+      maxFiles: 2,
+    });
 
     expect(response.changes).toEqual([
       {
@@ -507,7 +521,8 @@ describe("GitWorkingStateService", () => {
   it("caps displayed changes from any single top-level directory", async () => {
     const worktreePath = "/repo/wt";
     const { runGit } = fakeGit((args) => {
-      if (args.includes("status")) return "?? node_modules/\0?? src/readme.md\0";
+      if (args.includes("status"))
+        return "?? node_modules/\0?? src/readme.md\0";
       if (args.includes("ls-files")) {
         return Array.from(
           { length: 25 },
@@ -560,7 +575,10 @@ describe("GitWorkingStateService", () => {
     const tmpRoot = await mkdtemp(makeTempPrefix());
     try {
       await writeFile(path.join(tmpRoot, "note.txt"), "alpha\nbeta\n", "utf8");
-      await writeFile(path.join(tmpRoot, "archive.zip"), Buffer.from([0, 1, 2, 3]));
+      await writeFile(
+        path.join(tmpRoot, "archive.zip"),
+        Buffer.from([0, 1, 2, 3]),
+      );
       const { runGit } = fakeGit((args) => {
         if (args.includes("status")) return "?? note.txt\0?? archive.zip\0";
         if (args.includes("--numstat")) return "";
@@ -680,8 +698,10 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
     }
     if (args.includes("log")) {
       const paths = args.slice(args.indexOf("--") + 1);
-      if (paths.some((p) => p.endsWith("/src/b.ts"))) return `${"b".repeat(40)}\n`;
-      if (paths.some((p) => p.endsWith("/src/c.ts"))) return `${"c".repeat(40)}\n`;
+      if (paths.some((p) => p.endsWith("/src/b.ts")))
+        return `${"b".repeat(40)}\n`;
+      if (paths.some((p) => p.endsWith("/src/c.ts")))
+        return `${"c".repeat(40)}\n`;
       return "";
     }
     if (args.includes("rev-list")) {
@@ -787,7 +807,9 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
 
     expect(states["g-b"]).toMatchObject({ committed: true, pushed: true });
     expect(states["g-b2"]).toMatchObject({ committed: true, pushed: true });
-    expect(calls.filter((call) => call.args.includes("rev-list"))).toHaveLength(1);
+    expect(calls.filter((call) => call.args.includes("rev-list"))).toHaveLength(
+      1,
+    );
   });
 
   it("treats commits attached to merged PRs as pushed even when no remote ref contains them", async () => {
@@ -820,7 +842,9 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
     const { runGit, calls } = fakeGit(respondCommitStates);
     const service = new GitWorkingStateService({ runGit });
 
-    expect(await service.resolveEditCommitStates("", [{ key: "g", paths: ["/x"] }])).toEqual({});
+    expect(
+      await service.resolveEditCommitStates("", [{ key: "g", paths: ["/x"] }]),
+    ).toEqual({});
     expect(await service.resolveEditCommitStates("/repo/wt", [])).toEqual({});
     expect(calls).toHaveLength(0);
   });

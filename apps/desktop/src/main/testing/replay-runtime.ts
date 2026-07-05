@@ -129,21 +129,19 @@ type ReplayRuntimeClient = {
   }): Promise<AppServerListSkillsResponse["data"]>;
   listModels?(): Promise<BackendModelOption[]>;
   onNotification(
-    listener: (notification: AppServerNotification) => void | Promise<void>
+    listener: (notification: AppServerNotification) => void | Promise<void>,
   ): () => void;
   onRequest(
     listener: (
-      request: AppServerPendingRequestNotification
-    ) => Promise<unknown> | unknown
+      request: AppServerPendingRequestNotification,
+    ) => Promise<unknown> | unknown,
   ): () => void;
   readThread(params: {
     threadId: string;
     before?: string;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
-  archiveThread?(params: {
-    threadId: string;
-  }): Promise<{ threadId: string }>;
+  archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   startThread(params: {
     cwd?: string;
     model?: string;
@@ -179,7 +177,6 @@ type ReplayRuntimeClient = {
 };
 
 declare global {
-  // eslint-disable-next-line no-var
   var __PWRAGENT_REPLAY_DRIVER__: ReplayDriver | undefined;
 }
 
@@ -247,7 +244,7 @@ export function createReplayClientsFromEnv():
         backend: params.backend,
       });
       await client.respondToPendingRequest?.(params.requestId);
-    }
+    },
   };
 
   return clients;
@@ -283,7 +280,7 @@ function getReplayClient(
   },
   params: {
     backend?: AppServerBackendKind;
-  }
+  },
 ): ReplayRuntimeClient {
   const backend = params.backend ?? clients.defaultBackend;
   if (backend === "grok") {
@@ -302,7 +299,7 @@ function loadReplayFixture(filePath: string): ReplayFixture {
 
 function createUnavailableReplayClient(
   backend: AppServerBackendKind,
-  activeBackend: AppServerBackendKind
+  activeBackend: AppServerBackendKind,
 ): ReplayRuntimeClient {
   const message = `Replay fixture backend is ${activeBackend}; ${backend} is unavailable in replay mode.`;
 

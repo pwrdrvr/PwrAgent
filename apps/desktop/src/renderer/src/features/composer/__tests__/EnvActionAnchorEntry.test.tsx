@@ -1,5 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { CodexEnvironmentActionRun } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -46,13 +52,9 @@ describe("EnvActionAnchorEntry", () => {
           onDismiss={() => {}}
         />,
       );
-      expect(
-        screen.getByLabelText("Env action running"),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText("Env action running")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
-      expect(
-        screen.getByRole("button", { name: "Stop" }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Terminate" }),
       ).toBeInTheDocument();
@@ -76,9 +78,7 @@ describe("EnvActionAnchorEntry", () => {
           onDismiss={() => {}}
         />,
       );
-      expect(
-        screen.getByLabelText("Env action exited"),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText("Env action exited")).toBeInTheDocument();
       expect(screen.getByText(/exit 0/)).toBeInTheDocument();
       // Duration formatter rounds to integer seconds (4321ms → 4s).
       expect(screen.getByText(/ran 4s/)).toBeInTheDocument();
@@ -102,13 +102,9 @@ describe("EnvActionAnchorEntry", () => {
           onDismiss={() => {}}
         />,
       );
-      expect(
-        screen.getByLabelText("Env action failed"),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText("Env action failed")).toBeInTheDocument();
       expect(screen.getByText(/exit 1/)).toBeInTheDocument();
-      expect(
-        screen.getByText(/ERR_PNPM_IGNORED_BUILDS/),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/ERR_PNPM_IGNORED_BUILDS/)).toBeInTheDocument();
       // Sub-second durations format in ms.
       expect(screen.getByText(/ran 750ms/)).toBeInTheDocument();
     });
@@ -156,9 +152,7 @@ describe("EnvActionAnchorEntry", () => {
           onDismiss={() => {}}
         />,
       );
-      expect(
-        screen.getByText("(no output captured)"),
-      ).toBeInTheDocument();
+      expect(screen.getByText("(no output captured)")).toBeInTheDocument();
     });
 
     it("appends live output without moving an existing text selection", () => {
@@ -229,9 +223,13 @@ describe("EnvActionAnchorEntry", () => {
       const stopButton = screen.getByRole("button", { name: "Stop" });
       expect(stopButton).not.toHaveAttribute("title");
       fireEvent.mouseEnter(stopButton);
-      expect(await screen.findByRole("tooltip")).toHaveClass("viewport-tooltip");
+      expect(await screen.findByRole("tooltip")).toHaveClass(
+        "viewport-tooltip",
+      );
       expect(screen.getByRole("tooltip")).toHaveTextContent("Stop gracefully");
-      expect(screen.getByRole("tooltip")).toHaveTextContent("Sends SIGTERM first");
+      expect(screen.getByRole("tooltip")).toHaveTextContent(
+        "Sends SIGTERM first",
+      );
 
       fireEvent.mouseLeave(stopButton);
       await waitFor(() => {
@@ -241,7 +239,9 @@ describe("EnvActionAnchorEntry", () => {
       const terminateButton = screen.getByRole("button", { name: "Terminate" });
       expect(terminateButton).not.toHaveAttribute("title");
       fireEvent.mouseEnter(terminateButton);
-      expect(await screen.findByRole("tooltip")).toHaveClass("viewport-tooltip");
+      expect(await screen.findByRole("tooltip")).toHaveClass(
+        "viewport-tooltip",
+      );
       expect(screen.getByRole("tooltip")).toHaveTextContent("Terminate now");
       expect(screen.getByRole("tooltip")).toHaveTextContent("Force-kills");
 
@@ -255,7 +255,9 @@ describe("EnvActionAnchorEntry", () => {
       });
       expect(sidebarButton).not.toHaveAttribute("title");
       fireEvent.mouseEnter(sidebarButton);
-      expect(await screen.findByRole("tooltip")).toHaveClass("viewport-tooltip");
+      expect(await screen.findByRole("tooltip")).toHaveClass(
+        "viewport-tooltip",
+      );
       expect(screen.getByRole("tooltip")).toHaveTextContent("Show in sidebar");
       expect(screen.getByRole("tooltip")).toHaveTextContent("Actions panel");
     });
@@ -300,9 +302,7 @@ describe("EnvActionAnchorEntry", () => {
           onDismiss={() => {}}
         />,
       );
-      expect(
-        screen.getByText(/E2E Tests · PwrAgnt/),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/E2E Tests · PwrAgnt/)).toBeInTheDocument();
     });
 
     it("omits the env-name when undefined", () => {
@@ -365,9 +365,7 @@ describe("EnvActionAnchorEntry", () => {
           onDismiss={() => {}}
         />,
       );
-      expect(
-        screen.getByLabelText("Env action failed"),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText("Env action failed")).toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Dismiss" }),
       ).toBeInTheDocument();
@@ -413,11 +411,7 @@ describe("EnvActionAnchorList", () => {
           }),
         ],
       };
-      const { rerender } = render(
-        <EnvActionAnchorList
-          runtime={runtime}
-        />,
-      );
+      const { rerender } = render(<EnvActionAnchorList runtime={runtime} />);
 
       expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
       rerender(
@@ -438,7 +432,9 @@ describe("EnvActionAnchorList", () => {
       fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
       await waitFor(() => {
-        expect(screen.queryByLabelText("Env action running")).not.toBeInTheDocument();
+        expect(
+          screen.queryByLabelText("Env action running"),
+        ).not.toBeInTheDocument();
         expect(clearIntervalSpy).toHaveBeenCalled();
       });
     } finally {
@@ -512,10 +508,12 @@ describe("formatDurationMs", () => {
       expect(formatDurationMs(118_000, { coarseAfterMinute: true })).toBe("1m");
       expect(formatDurationMs(119_499, { coarseAfterMinute: true })).toBe("1m");
       expect(formatDurationMs(119_500, { coarseAfterMinute: true })).toBe("2m");
-      expect(formatDurationMs(6 * 60_000 + 23_000, { coarseAfterMinute: true }))
-        .toBe("6m");
-      expect(formatDurationMs(66 * 60_000 + 23_000, { coarseAfterMinute: true }))
-        .toBe("1h 6m");
+      expect(
+        formatDurationMs(6 * 60_000 + 23_000, { coarseAfterMinute: true }),
+      ).toBe("6m");
+      expect(
+        formatDurationMs(66 * 60_000 + 23_000, { coarseAfterMinute: true }),
+      ).toBe("1h 6m");
     });
 
     it("does not affect sub-minute formatting", () => {
@@ -560,8 +558,9 @@ describe("formatRunningDurationMs", () => {
 
   it("formats hour- and day-plus live elapsed values with larger units", () => {
     expect(formatRunningDurationMs(60 * 60_000)).toBe("1h");
-    expect(formatRunningDurationMs(17 * 60 * 60_000 + 18 * 60_000 + 24_000))
-      .toBe("17h 18m");
+    expect(
+      formatRunningDurationMs(17 * 60 * 60_000 + 18 * 60_000 + 24_000),
+    ).toBe("17h 18m");
     expect(formatRunningDurationMs(26 * 60 * 60_000 + 12_000)).toBe("1d 2h");
   });
 });

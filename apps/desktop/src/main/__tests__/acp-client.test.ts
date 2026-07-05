@@ -456,7 +456,8 @@ describe("AcpAgentClient", () => {
 
   it("surfaces ACP permission requests and returns the selected option", async () => {
     const transport = new FakeAcpAgentTransport();
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const requests: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
     const client = new AcpAgentClient({
       backendId: "acp:kimi",
       agentDisplayName: "Kimi Code CLI",
@@ -536,7 +537,8 @@ describe("AcpAgentClient", () => {
 
   it("extracts Kimi shell commands from nested ACP permission content", async () => {
     const transport = new FakeAcpAgentTransport();
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const requests: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
     const client = new AcpAgentClient({
       backendId: "acp:kimi",
       agentDisplayName: "Kimi Code CLI",
@@ -573,7 +575,7 @@ describe("AcpAgentClient", () => {
               type: "content",
               content: {
                 type: "text",
-                text: "{\"command\": \"node --version && pnpm --version\"}",
+                text: '{"command": "node --version && pnpm --version"}',
               },
             },
           ],
@@ -596,7 +598,8 @@ describe("AcpAgentClient", () => {
 
   it("extracts Kimi shell commands from approval prompt text", async () => {
     const transport = new FakeAcpAgentTransport();
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const requests: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
     const client = new AcpAgentClient({
       backendId: "acp:kimi",
       agentDisplayName: "Kimi Code CLI",
@@ -829,7 +832,10 @@ describe("AcpAgentClient", () => {
         models: {
           currentModelId: "gemini-3-flash-preview",
           availableModels: [
-            { modelId: "gemini-3-flash-preview", name: "Gemini 3 Flash Preview" },
+            {
+              modelId: "gemini-3-flash-preview",
+              name: "Gemini 3 Flash Preview",
+            },
             { modelId: "gemini-3-pro-preview", name: "Gemini 3 Pro Preview" },
           ],
         },
@@ -1053,7 +1059,9 @@ describe("AcpAgentClient", () => {
       ],
     });
 
-    expect(store.getSession("acp:kimi", "session-1")?.availableCommands).toEqual([
+    expect(
+      store.getSession("acp:kimi", "session-1")?.availableCommands,
+    ).toEqual([
       {
         name: "skill:frontend-design",
         description: "Load frontend-design",
@@ -1069,9 +1077,9 @@ describe("AcpAgentClient", () => {
         source: "provider",
       },
     ]);
-    expect(readRawAcpSessionPayload("acp:kimi", "session-1")?.availableCommands).toEqual(
-      store.getSession("acp:kimi", "session-1")?.availableCommands,
-    );
+    expect(
+      readRawAcpSessionPayload("acp:kimi", "session-1")?.availableCommands,
+    ).toEqual(store.getSession("acp:kimi", "session-1")?.availableCommands);
   });
 
   it("loads ACP transcript replay from provider session/load without storing it in the DB", async () => {
@@ -1113,8 +1121,12 @@ describe("AcpAgentClient", () => {
     });
 
     await client.initialize();
-    const firstReplay = await client.loadSession(store.getSession("acp:gemini", "session-1")!);
-    const secondReplay = await client.loadSession(store.getSession("acp:gemini", "session-1")!);
+    const firstReplay = await client.loadSession(
+      store.getSession("acp:gemini", "session-1")!,
+    );
+    const secondReplay = await client.loadSession(
+      store.getSession("acp:gemini", "session-1")!,
+    );
 
     expect(firstReplay.messages.map((message) => message.text)).toEqual([
       "first",
@@ -1499,7 +1511,8 @@ describe("AcpAgentClient", () => {
       "initialize",
     ]);
     expect(
-      readRawAcpSessionPayload("acp:kimi", session.sessionId)?.transcriptUpdates,
+      readRawAcpSessionPayload("acp:kimi", session.sessionId)
+        ?.transcriptUpdates,
     ).toBeUndefined();
   });
 
@@ -1613,7 +1626,10 @@ describe("AcpAgentClient", () => {
       prompt: "keep going",
     });
     const activeReplay = client.readReplay(session.sessionId);
-    const persistedSession = store.getSession("acp:codex-acp", session.sessionId);
+    const persistedSession = store.getSession(
+      "acp:codex-acp",
+      session.sessionId,
+    );
     await client.cancelSession(session.sessionId);
 
     expect(prompt).toEqual({
@@ -1961,7 +1977,8 @@ describe("AcpAgentClient", () => {
     const transport = new FakeAcpAgentTransport();
     const quotaError =
       "json-rpc error (500): You have exhausted your capacity on this model. Your quota will reset after 22h38m3s.";
-    const errors: Array<{ sessionId: string; turnId: string; error: unknown }> = [];
+    const errors: Array<{ sessionId: string; turnId: string; error: unknown }> =
+      [];
     const sessionUpdateKinds: string[] = [];
     const client = new AcpAgentClient({
       backendId: "acp:codex-acp",
@@ -2296,9 +2313,12 @@ describe("AcpAgentClient", () => {
       hasConversationHistory: true,
     });
     expect(
-      readRawAcpSessionPayload("acp:kimi", session.sessionId)?.transcriptUpdates,
+      readRawAcpSessionPayload("acp:kimi", session.sessionId)
+        ?.transcriptUpdates,
     ).toBeUndefined();
-    expect(client.readReplay(session.sessionId).lastAssistantMessage).toBe("Hello");
+    expect(client.readReplay(session.sessionId).lastAssistantMessage).toBe(
+      "Hello",
+    );
     expect(upsertCountAfterStart).toBeGreaterThan(0);
 
     promptResponse.resolve({ turnId: "turn-1" });
@@ -2316,8 +2336,8 @@ describe("AcpAgentClient", () => {
       now: () => 1000,
       onSessionUpdate: ({ assistantMessageItemId, update }) => {
         if (
-          (update.sessionUpdate ?? update.session_update ?? update.kind) ===
-          "agent_message_chunk"
+          (update.sessionUpdate ?? update.session_update ?? update.kind)
+          === "agent_message_chunk"
         ) {
           assistantMessageItemIds.push(assistantMessageItemId);
         }

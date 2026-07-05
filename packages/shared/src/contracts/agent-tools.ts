@@ -19,10 +19,12 @@ export type AgentToolCatalogSummary = {
   fingerprint?: string;
 };
 
-export function isAgentToolCatalogId(value: unknown): value is AgentToolCatalogId {
+export function isAgentToolCatalogId(
+  value: unknown,
+): value is AgentToolCatalogId {
   return (
-    typeof value === "string" &&
-    AGENT_TOOL_CATALOG_IDS.includes(value as AgentToolCatalogId)
+    typeof value === "string"
+    && AGENT_TOOL_CATALOG_IDS.includes(value as AgentToolCatalogId)
   );
 }
 

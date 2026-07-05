@@ -21,13 +21,17 @@ type AutomationState = {
 };
 
 export type UseAutomationsResult = AutomationState & {
-  createAutomation: (request: CreateAutomationRequest) => Promise<AutomationDetail>;
+  createAutomation: (
+    request: CreateAutomationRequest,
+  ) => Promise<AutomationDetail>;
   deleteAutomation: (request: AutomationIdRequest) => Promise<AutomationDetail>;
   pauseAutomation: (request: AutomationIdRequest) => Promise<AutomationDetail>;
   refresh: () => Promise<void>;
   resumeAutomation: (request: AutomationIdRequest) => Promise<AutomationDetail>;
   runAutomationNow: (request: AutomationIdRequest) => Promise<void>;
-  updateAutomation: (request: UpdateAutomationRequest) => Promise<AutomationDetail>;
+  updateAutomation: (
+    request: UpdateAutomationRequest,
+  ) => Promise<AutomationDetail>;
 };
 
 export function useAutomations(
@@ -87,8 +91,8 @@ export function useAutomations(
 
     return desktopApi.onAgentEvent((event) => {
       if (
-        event.notification.method === "thread/automations/updated" ||
-        event.notification.method === "automation/run/updated"
+        event.notification.method === "thread/automations/updated"
+        || event.notification.method === "automation/run/updated"
       ) {
         void refresh();
       }
@@ -96,8 +100,10 @@ export function useAutomations(
   }, [desktopApi, refresh]);
 
   const mutate = useCallback(
-    async <TRequest,>(
-      action: ((request: TRequest) => Promise<{ automation: AutomationDetail }>) | undefined,
+    async <TRequest>(
+      action:
+        | ((request: TRequest) => Promise<{ automation: AutomationDetail }>)
+        | undefined,
       request: TRequest,
       fallback: string,
     ): Promise<AutomationDetail> => {
@@ -122,27 +128,47 @@ export function useAutomations(
 
   const createAutomation = useCallback(
     (createRequest: CreateAutomationRequest) =>
-      mutate(desktopApi?.createAutomation, createRequest, "Automation could not be created."),
+      mutate(
+        desktopApi?.createAutomation,
+        createRequest,
+        "Automation could not be created.",
+      ),
     [desktopApi, mutate],
   );
   const updateAutomation = useCallback(
     (updateRequest: UpdateAutomationRequest) =>
-      mutate(desktopApi?.updateAutomation, updateRequest, "Automation could not be updated."),
+      mutate(
+        desktopApi?.updateAutomation,
+        updateRequest,
+        "Automation could not be updated.",
+      ),
     [desktopApi, mutate],
   );
   const deleteAutomation = useCallback(
     (deleteRequest: AutomationIdRequest) =>
-      mutate(desktopApi?.deleteAutomation, deleteRequest, "Automation could not be deleted."),
+      mutate(
+        desktopApi?.deleteAutomation,
+        deleteRequest,
+        "Automation could not be deleted.",
+      ),
     [desktopApi, mutate],
   );
   const pauseAutomation = useCallback(
     (pauseRequest: AutomationIdRequest) =>
-      mutate(desktopApi?.pauseAutomation, pauseRequest, "Automation could not be paused."),
+      mutate(
+        desktopApi?.pauseAutomation,
+        pauseRequest,
+        "Automation could not be paused.",
+      ),
     [desktopApi, mutate],
   );
   const resumeAutomation = useCallback(
     (resumeRequest: AutomationIdRequest) =>
-      mutate(desktopApi?.resumeAutomation, resumeRequest, "Automation could not be resumed."),
+      mutate(
+        desktopApi?.resumeAutomation,
+        resumeRequest,
+        "Automation could not be resumed.",
+      ),
     [desktopApi, mutate],
   );
   const runAutomationNow = useCallback(
@@ -156,7 +182,10 @@ export function useAutomations(
       } catch (error) {
         setState((current) => ({
           ...current,
-          error: formatAutomationError(error, "Automation could not be queued."),
+          error: formatAutomationError(
+            error,
+            "Automation could not be queued.",
+          ),
         }));
         throw error;
       }
@@ -205,7 +234,12 @@ export function useAutomationRuns(
       });
       setRuns(response.runs);
     } catch (candidate) {
-      setError(formatAutomationError(candidate, "Automation runs could not be loaded."));
+      setError(
+        formatAutomationError(
+          candidate,
+          "Automation runs could not be loaded.",
+        ),
+      );
     } finally {
       setLoading(false);
     }
@@ -225,7 +259,9 @@ export function useAutomationRuns(
         return;
       }
 
-      const params = event.notification.params as Record<string, unknown> | undefined;
+      const params = event.notification.params as
+        | Record<string, unknown>
+        | undefined;
       if (params?.automationId === automationId) {
         void refresh();
       }
@@ -269,7 +305,12 @@ export function useAutomationRunArtifact(
       })
       .catch((candidate) => {
         if (!cancelled) {
-          setError(formatAutomationError(candidate, "Automation artifact could not be loaded."));
+          setError(
+            formatAutomationError(
+              candidate,
+              "Automation artifact could not be loaded.",
+            ),
+          );
         }
       })
       .finally(() => {
@@ -293,7 +334,10 @@ export function sameAutomationThread(
   return automation.backend === backend && automation.threadId === threadId;
 }
 
-function formatAutomationError(error: unknown, fallback = "Automation request failed."): string {
+function formatAutomationError(
+  error: unknown,
+  fallback = "Automation request failed.",
+): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message;
   }

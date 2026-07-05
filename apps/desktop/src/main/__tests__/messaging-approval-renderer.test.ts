@@ -35,7 +35,9 @@ describe("buildApprovalIntent", () => {
       ]),
     });
     expect(intent.body).toContain("Run the focused tests?");
-    expect(intent.body).toContain("```shell\npnpm test -- messaging-controller\n```");
+    expect(intent.body).toContain(
+      "```shell\npnpm test -- messaging-controller\n```",
+    );
   });
 
   it("renders normalized Kimi shell approvals with the actual command", () => {
@@ -56,7 +58,9 @@ describe("buildApprovalIntent", () => {
     });
 
     expect(intent.body).toContain("Kimi Code CLI wants to run Bash");
-    expect(intent.body).toContain("```shell\nnode --version && pnpm --version\n```");
+    expect(intent.body).toContain(
+      "```shell\nnode --version && pnpm --version\n```",
+    );
     expect(intent.body).not.toContain("```shell\nBash\n```");
   });
 
@@ -76,7 +80,9 @@ describe("buildApprovalIntent", () => {
       },
     });
 
-    expect(intent.body).toContain("Requesting approval to Running: npm view pnpm");
+    expect(intent.body).toContain(
+      "Requesting approval to Running: npm view pnpm",
+    );
     expect(intent.body).toContain("```shell\nnpm view pnpm\n```");
     expect(intent.body).not.toContain("```shell\nBash\n```");
   });
@@ -237,7 +243,9 @@ describe("buildApprovalIntent", () => {
       displayPath: "pwragent-pr-refresh-body.md",
       diff: "@@ -0,0 +1 @@\n+Draft PR body",
     });
-    expect(intent.body).toContain("Context:\nAction: add\nFile: pwragent-pr-refresh-body.md");
+    expect(intent.body).toContain(
+      "Context:\nAction: add\nFile: pwragent-pr-refresh-body.md",
+    );
     expect(intent.body).toContain("Diff: 1 file, +1 -0");
     expect(intent.body).not.toContain("```diff");
     expect(intent.body).not.toContain("Draft PR body");

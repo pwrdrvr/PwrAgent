@@ -36,9 +36,9 @@ export function isAutomationInspectionDynamicToolCall(
   tool: AutomationInspectionOperationName;
 } {
   return (
-    call.namespace === AUTOMATION_INSPECTION_TOOL_NAMESPACE ||
-    (call.namespace === PWRAGENT_TOOL_NAMESPACE &&
-      AUTOMATION_INSPECTION_OPERATION_NAMES.includes(
+    call.namespace === AUTOMATION_INSPECTION_TOOL_NAMESPACE
+    || (call.namespace === PWRAGENT_TOOL_NAMESPACE
+      && AUTOMATION_INSPECTION_OPERATION_NAMES.includes(
         call.tool as AutomationInspectionOperationName,
       ))
   );
@@ -52,7 +52,9 @@ export async function handleAutomationInspectionDynamicToolCall(params: {
   const call = isAutomationInspectionDynamicToolCall(params.call)
     ? { ...params.call, namespace: PWRAGENT_TOOL_NAMESPACE }
     : params.call;
-  return await buildAutomationInspectionToolRouter(params.handler).handleDynamicToolCall({
+  return await buildAutomationInspectionToolRouter(
+    params.handler,
+  ).handleDynamicToolCall({
     backend: params.backend,
     call,
   });
@@ -70,11 +72,9 @@ export function buildAutomationInspectionDynamicToolErrorResponse(params: {
   });
 }
 
-export function readAutomationInspectionDynamicToolCall(
-  request: {
-    method: string;
-    params: Record<string, unknown>;
-  },
-): DynamicToolCallParams | undefined {
+export function readAutomationInspectionDynamicToolCall(request: {
+  method: string;
+  params: Record<string, unknown>;
+}): DynamicToolCallParams | undefined {
   return readAgentDynamicToolCall(request);
 }

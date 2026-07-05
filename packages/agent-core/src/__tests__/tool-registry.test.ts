@@ -47,7 +47,11 @@ describe("tool registry", () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
     await fs.mkdir(path.join(workspace.path, "src"), { recursive: true });
-    await fs.writeFile(path.join(workspace.path, "src", "app.ts"), "export const marker = 1;\n", "utf8");
+    await fs.writeFile(
+      path.join(workspace.path, "src", "app.ts"),
+      "export const marker = 1;\n",
+      "utf8",
+    );
     const executor = new LocalToolExecutor(createDefaultToolRegistry());
 
     const result = await executor.executeTool(
@@ -95,7 +99,8 @@ describe("tool registry", () => {
       toolName: "read_file",
       arguments: { path: 42 },
       success: false,
-      output: 'Invalid arguments for read_file: "path" must be a non-empty string',
+      output:
+        'Invalid arguments for read_file: "path" must be a non-empty string',
       errorCode: "invalid_arguments",
       item: {
         type: "dynamicToolCall",

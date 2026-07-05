@@ -39,7 +39,9 @@ describe("Codex thread compaction", () => {
     expect(provider.runs[1]?.input).toEqual([
       {
         type: "text",
-        text: expect.stringContaining("Summarize this thread so it can be compacted"),
+        text: expect.stringContaining(
+          "Summarize this thread so it can be compacted",
+        ),
       },
     ]);
     expect(provider.runs[1]?.input[0]).toEqual({
@@ -48,7 +50,9 @@ describe("Codex thread compaction", () => {
     });
     expect(provider.runs[1]?.input[0]).toEqual({
       type: "text",
-      text: expect.stringContaining("ASSISTANT: I investigated the Grok app server."),
+      text: expect.stringContaining(
+        "ASSISTANT: I investigated the Grok app server.",
+      ),
     });
     expect(notifications).toEqual([
       {

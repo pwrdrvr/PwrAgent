@@ -28,12 +28,16 @@ function formatConfidence(value: number | undefined): string | undefined {
   return `${Math.round(value * 100)}% confidence`;
 }
 
-function formatPath(path: string, directoryPaths: string[] | undefined): string {
+function formatPath(
+  path: string,
+  directoryPaths: string[] | undefined,
+): string {
   const normalized = normalizePath(path);
   const matchingDirectory = normalizedDirectoryPaths(directoryPaths)
     .filter(
       (directoryPath) =>
-        normalized === directoryPath || normalized.startsWith(`${directoryPath}/`)
+        normalized === directoryPath
+        || normalized.startsWith(`${directoryPath}/`),
     )
     .sort((left, right) => right.length - left.length)[0];
 
@@ -41,7 +45,9 @@ function formatPath(path: string, directoryPaths: string[] | undefined): string 
     return normalized || path;
   }
 
-  return normalized.slice(matchingDirectory.length).replace(/^\//, "") || normalized;
+  return (
+    normalized.slice(matchingDirectory.length).replace(/^\//, "") || normalized
+  );
 }
 
 function priorityLabel(priority: number | undefined): string {
@@ -60,9 +66,9 @@ function priorityClassName(priority: number | undefined): string {
 function shouldHideReviewBody(summary: string, review: string): boolean {
   const trimmedReview = review.trim();
   return (
-    trimmedReview === "" ||
-    trimmedReview === summary.trim() ||
-    normalizeReviewDisplayText(trimmedReview) === summary.trim()
+    trimmedReview === ""
+    || trimmedReview === summary.trim()
+    || normalizeReviewDisplayText(trimmedReview) === summary.trim()
   );
 }
 
@@ -71,7 +77,7 @@ function parsePlainReview(review: string): {
   findings: AppServerReviewFinding[];
 } {
   const [rawExplanation, rawComments] = review.split(
-    /\n\s*(?:Full\s+)?Review comments?:\s*\n/i
+    /\n\s*(?:Full\s+)?Review comments?:\s*\n/i,
   );
   if (!rawComments) {
     return {
@@ -93,12 +99,12 @@ function parsePlainReview(review: string): {
     const body = match[6]?.trim();
 
     if (
-      !title ||
-      !absoluteFilePath ||
-      !body ||
-      !Number.isInteger(priority) ||
-      !Number.isInteger(start) ||
-      !Number.isInteger(end)
+      !title
+      || !absoluteFilePath
+      || !body
+      || !Number.isInteger(priority)
+      || !Number.isInteger(start)
+      || !Number.isInteger(end)
     ) {
       continue;
     }
@@ -129,16 +135,19 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     () =>
       props.applications?.editors.find(
         (application) =>
-          application.canOpenWorkspace &&
-          application.id === props.applications?.preferredEditorId.value
-      ) ?? props.applications?.editors.find((application) => application.canOpenWorkspace),
-    [props.applications]
+          application.canOpenWorkspace
+          && application.id === props.applications?.preferredEditorId.value,
+      )
+      ?? props.applications?.editors.find(
+        (application) => application.canOpenWorkspace,
+      ),
+    [props.applications],
   );
   const openLocalFile = useCallback(
     (
       event: MouseEvent<HTMLAnchorElement>,
       targetPath: string,
-      targetLine: number
+      targetLine: number,
     ): void => {
       if (!editorApplication || !props.desktopApi?.openApplication) {
         return;
@@ -156,22 +165,22 @@ export function TranscriptReview(props: TranscriptReviewProps) {
           console.error("Failed to open review file link", error);
         });
     },
-    [editorApplication, props.desktopApi]
+    [editorApplication, props.desktopApi],
   );
   const output = props.entry.output;
   const plainReview = output ? undefined : parsePlainReview(props.entry.review);
   const findings = output?.findings ?? plainReview?.findings ?? [];
   const findingCount = output?.findings.length;
   const summary =
-    props.entry.displayText ??
-    (findingCount === undefined
+    props.entry.displayText
+    ?? (findingCount === undefined
       ? "Code review"
       : `${findingCount} review ${findingCount === 1 ? "finding" : "findings"}`);
   const body =
-    output?.overall_explanation ??
-    (shouldHideReviewBody(summary, props.entry.review)
+    output?.overall_explanation
+    ?? (shouldHideReviewBody(summary, props.entry.review)
       ? ""
-      : plainReview?.explanation ?? props.entry.review);
+      : (plainReview?.explanation ?? props.entry.review));
   const confidence = formatConfidence(output?.overall_confidence_score);
   const correctness =
     output?.overall_correctness === "patch is correct"
@@ -213,7 +222,9 @@ export function TranscriptReview(props: TranscriptReviewProps) {
           {correctness ? (
             <span
               className={`transcript-review__badge transcript-review__badge--${
-                output.overall_correctness === "patch is correct" ? "success" : "danger"
+                output.overall_correctness === "patch is correct"
+                  ? "success"
+                  : "danger"
               }`}
             >
               {correctness}
@@ -232,8 +243,13 @@ export function TranscriptReview(props: TranscriptReviewProps) {
         <ol className="transcript-review__findings">
           {findings.map((finding, index) => {
             const range = finding.code_location.line_range;
-            const absoluteFilePath = normalizePath(finding.code_location.absolute_file_path);
-            const displayPath = formatPath(absoluteFilePath, props.directoryPaths);
+            const absoluteFilePath = normalizePath(
+              finding.code_location.absolute_file_path,
+            );
+            const displayPath = formatPath(
+              absoluteFilePath,
+              props.directoryPaths,
+            );
             return (
               <li
                 className="transcript-review__finding"

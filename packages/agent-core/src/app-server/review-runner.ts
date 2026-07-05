@@ -1,7 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragent/shared";
-import type { AppServerNotification, ThreadState } from "./internal-contract.js";
+import type {
+  AppServerReviewOutput,
+  AppServerReviewTarget,
+} from "@pwragent/shared";
+import type {
+  AppServerNotification,
+  ThreadState,
+} from "./internal-contract.js";
 import { AppServerSessionState } from "./session-state.js";
 import { TurnRunner } from "./turn-runner.js";
 import { readReviewPrompt } from "./review-prompt.js";
@@ -78,7 +84,9 @@ export class ReviewRunner {
           text: context.prompt,
         },
       ],
-      previousResponseId: this.state.getPreviousResponseId(params.thread.threadId),
+      previousResponseId: this.state.getPreviousResponseId(
+        params.thread.threadId,
+      ),
       tools: this.tools,
     });
     this.state.createRun({
@@ -176,8 +184,8 @@ function normalizeReviewTarget(value: unknown): AppServerReviewTarget {
   }
   if (rawType === "baseBranch" || rawType === "base_branch") {
     const branch =
-      firstNonEmptyString(record.branch, record.baseBranch, record.base_branch) ??
-      "main";
+      firstNonEmptyString(record.branch, record.baseBranch, record.base_branch)
+      ?? "main";
     return {
       type: "baseBranch",
       branch,
@@ -194,8 +202,8 @@ function normalizeReviewTarget(value: unknown): AppServerReviewTarget {
     return {
       type: "custom",
       instructions:
-        firstNonEmptyString(record.instructions, record.prompt) ??
-        "Review the requested code changes.",
+        firstNonEmptyString(record.instructions, record.prompt)
+        ?? "Review the requested code changes.",
     };
   }
   return { type: "uncommittedChanges" };
@@ -267,7 +275,8 @@ async function buildTargetPrompt(
 
   return {
     displayText: "Review current changes",
-    prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.",
+    prompt:
+      "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.",
   };
 }
 
@@ -279,17 +288,23 @@ async function findMergeBase(
     return undefined;
   }
   try {
-    const { stdout } = await execFileAsync("git", ["merge-base", "HEAD", branch], {
-      cwd,
-      timeout: 10_000,
-    });
+    const { stdout } = await execFileAsync(
+      "git",
+      ["merge-base", "HEAD", branch],
+      {
+        cwd,
+        timeout: 10_000,
+      },
+    );
     return stdout.trim() || undefined;
   } catch {
     return undefined;
   }
 }
 
-function parseReviewOutput(text: string | undefined): AppServerReviewOutput | undefined {
+function parseReviewOutput(
+  text: string | undefined,
+): AppServerReviewOutput | undefined {
   if (!text?.trim()) {
     return undefined;
   }
@@ -310,57 +325,60 @@ function parseReviewOutput(text: string | undefined): AppServerReviewOutput | un
   const overallExplanation = record.overall_explanation;
   const overallConfidence = record.overall_confidence_score;
   if (
-    (overallCorrectness !== "patch is correct" &&
-      overallCorrectness !== "patch is incorrect") ||
-    typeof overallExplanation !== "string" ||
-    typeof overallConfidence !== "number"
+    (overallCorrectness !== "patch is correct"
+      && overallCorrectness !== "patch is incorrect")
+    || typeof overallExplanation !== "string"
+    || typeof overallConfidence !== "number"
   ) {
     return undefined;
   }
 
-  const findings = record.findings.flatMap((finding): AppServerReviewOutput["findings"] => {
-    if (!finding || typeof finding !== "object" || Array.isArray(finding)) {
-      return [];
-    }
-    const item = finding as Record<string, unknown>;
-    const location =
-      item.code_location &&
-      typeof item.code_location === "object" &&
-      !Array.isArray(item.code_location)
-        ? item.code_location as Record<string, unknown>
-        : undefined;
-    const lineRange =
-      location?.line_range &&
-      typeof location.line_range === "object" &&
-      !Array.isArray(location.line_range)
-        ? location.line_range as Record<string, unknown>
-        : undefined;
-    if (
-      typeof item.title !== "string" ||
-      typeof item.body !== "string" ||
-      typeof item.confidence_score !== "number" ||
-      typeof location?.absolute_file_path !== "string" ||
-      typeof lineRange?.start !== "number" ||
-      typeof lineRange?.end !== "number"
-    ) {
-      return [];
-    }
-    return [
-      {
-        title: item.title,
-        body: item.body,
-        confidence_score: item.confidence_score,
-        priority: typeof item.priority === "number" ? item.priority : undefined,
-        code_location: {
-          absolute_file_path: location.absolute_file_path,
-          line_range: {
-            start: lineRange.start,
-            end: lineRange.end,
+  const findings = record.findings.flatMap(
+    (finding): AppServerReviewOutput["findings"] => {
+      if (!finding || typeof finding !== "object" || Array.isArray(finding)) {
+        return [];
+      }
+      const item = finding as Record<string, unknown>;
+      const location =
+        item.code_location
+        && typeof item.code_location === "object"
+        && !Array.isArray(item.code_location)
+          ? (item.code_location as Record<string, unknown>)
+          : undefined;
+      const lineRange =
+        location?.line_range
+        && typeof location.line_range === "object"
+        && !Array.isArray(location.line_range)
+          ? (location.line_range as Record<string, unknown>)
+          : undefined;
+      if (
+        typeof item.title !== "string"
+        || typeof item.body !== "string"
+        || typeof item.confidence_score !== "number"
+        || typeof location?.absolute_file_path !== "string"
+        || typeof lineRange?.start !== "number"
+        || typeof lineRange?.end !== "number"
+      ) {
+        return [];
+      }
+      return [
+        {
+          title: item.title,
+          body: item.body,
+          confidence_score: item.confidence_score,
+          priority:
+            typeof item.priority === "number" ? item.priority : undefined,
+          code_location: {
+            absolute_file_path: location.absolute_file_path,
+            line_range: {
+              start: lineRange.start,
+              end: lineRange.end,
+            },
           },
         },
-      },
-    ];
-  });
+      ];
+    },
+  );
 
   return {
     findings,
@@ -382,7 +400,8 @@ function formatReviewOutput(output: AppServerReviewOutput): string {
 
   for (const finding of output.findings) {
     const range = finding.code_location.line_range;
-    const priority = finding.priority === undefined ? "P?" : `P${finding.priority}`;
+    const priority =
+      finding.priority === undefined ? "P?" : `P${finding.priority}`;
     lines.push(
       `- [${priority}] ${finding.title} (${finding.code_location.absolute_file_path}:${range.start}-${range.end})`,
       `  ${finding.body}`,

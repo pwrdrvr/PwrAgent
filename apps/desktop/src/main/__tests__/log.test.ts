@@ -48,9 +48,9 @@ describe("main logger compact formatting", () => {
   });
 
   it("drops empty structured payloads after undefined fields are omitted", () => {
-    expect(compactStructuredLogData(["message", { turnId: undefined }])).toEqual([
-      "message",
-    ]);
+    expect(
+      compactStructuredLogData(["message", { turnId: undefined }]),
+    ).toEqual(["message"]);
   });
 
   it("keeps non-object arguments as passthrough data", () => {
@@ -66,8 +66,12 @@ describe("main logger compact formatting", () => {
     expect(resolveMainLogFileNameForProfile("default")).toBe(
       "profile-default.main.log",
     );
-    expect(resolveMainLogFileNameForProfile("dev")).toBe("profile-dev.main.log");
-    expect(resolveMainLogFileNameForProfile("work")).toBe("profile-work.main.log");
+    expect(resolveMainLogFileNameForProfile("dev")).toBe(
+      "profile-dev.main.log",
+    );
+    expect(resolveMainLogFileNameForProfile("work")).toBe(
+      "profile-work.main.log",
+    );
   });
 
   it("derives the log profile from the startup boot decision", () => {

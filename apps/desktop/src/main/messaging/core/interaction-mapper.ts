@@ -21,5 +21,7 @@ export type MessagingInteractionMapper = {
   mapText(params: {
     intent: MessagingSurfaceIntent;
     text: string;
-  }): Promise<MessagingInteractionMapperResult> | MessagingInteractionMapperResult;
+  }):
+    | Promise<MessagingInteractionMapperResult>
+    | MessagingInteractionMapperResult;
 };

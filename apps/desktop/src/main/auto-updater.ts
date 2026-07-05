@@ -67,7 +67,9 @@ function setUpdateStatus(nextStatus: AppUpdateStatus): void {
 }
 
 function downloadedVersion(): string | undefined {
-  return updateStatus.status === "downloaded" ? updateStatus.version : undefined;
+  return updateStatus.status === "downloaded"
+    ? updateStatus.version
+    : undefined;
 }
 
 export function readAppUpdateStatus(): AppUpdateStatus {
@@ -134,17 +136,17 @@ function preserveDownloadedStatus(nextStatus: AppUpdateStatus): boolean {
     return false;
   }
   return (
-    nextStatus.status === "checking" ||
-    nextStatus.status === "no-update" ||
-    nextStatus.status === "error"
+    nextStatus.status === "checking"
+    || nextStatus.status === "no-update"
+    || nextStatus.status === "error"
   );
 }
 
 function setUpdateStatusUnlessDownloaded(nextStatus: AppUpdateStatus): void {
   const currentStatus = updateStatus;
   if (
-    currentStatus.status === "downloaded" &&
-    preserveDownloadedStatus(nextStatus)
+    currentStatus.status === "downloaded"
+    && preserveDownloadedStatus(nextStatus)
   ) {
     log.info("keeping downloaded update status during follow-up check", {
       currentVersion: currentStatus.version,
@@ -159,8 +161,8 @@ function downloadedUpdateMatchesChannel(
   updateChannel: "latest" | "prerelease",
 ): Extract<AppUpdateCheckResult, { status: "downloaded" }> | undefined {
   if (
-    updateStatus.status !== "downloaded" ||
-    downloadedUpdateChannel !== updateChannel
+    updateStatus.status !== "downloaded"
+    || downloadedUpdateChannel !== updateChannel
   ) {
     return undefined;
   }
@@ -214,7 +216,10 @@ export async function checkForAppUpdatesNow(
       const release = await readAppUpdateReleaseForChannel(updateChannel);
       const currentVersion = autoUpdater.currentVersion?.version ?? "unknown";
       if (!release?.tag_name) {
-        const result = { status: "no-update", version: currentVersion } as const;
+        const result = {
+          status: "no-update",
+          version: currentVersion,
+        } as const;
         setUpdateStatusUnlessDownloaded(result);
         log.info("skipping app update check; no valid GitHub release found", {
           trigger,
@@ -224,7 +229,10 @@ export async function checkForAppUpdatesNow(
       }
       const selectedVersion = release.tag_name.replace(/^v/i, "");
       if (compareSemver(selectedVersion, currentVersion) <= 0) {
-        const result = { status: "no-update", version: currentVersion } as const;
+        const result = {
+          status: "no-update",
+          version: currentVersion,
+        } as const;
         setUpdateStatusUnlessDownloaded(result);
         log.info("skipping app update check; selected release is not newer", {
           currentVersion,
@@ -238,9 +246,13 @@ export async function checkForAppUpdatesNow(
       updateCheckChannelInFlight = updateChannel;
       const result = await autoUpdater.checkForUpdates();
       if (result?.updateInfo?.version !== currentVersion) {
-        recordPendingDownloadChannel(result?.updateInfo?.version, updateChannel);
+        recordPendingDownloadChannel(
+          result?.updateInfo?.version,
+          updateChannel,
+        );
       }
-      const matchingDownloadedResult = downloadedUpdateMatchesChannel(updateChannel);
+      const matchingDownloadedResult =
+        downloadedUpdateMatchesChannel(updateChannel);
       if (matchingDownloadedResult) {
         return matchingDownloadedResult;
       }
@@ -323,7 +335,10 @@ function parseSemver(tag: string | undefined): ParsedSemver | undefined {
 // Semver 2.0.0 precedence. Returns positive if a > b, negative if a < b.
 // Unparseable tags sort below any valid version so they cannot win a "highest"
 // selection over a real release.
-export function compareSemver(a: string | undefined, b: string | undefined): number {
+export function compareSemver(
+  a: string | undefined,
+  b: string | undefined,
+): number {
   const pa = parseSemver(a);
   const pb = parseSemver(b);
   if (!pa && !pb) return 0;
@@ -363,14 +378,17 @@ export function compareSemver(a: string | undefined, b: string | undefined): num
 // prerelease channel never advertises a version older than `latest`. When no
 // newer prerelease exists, both slots show the same version, which truthfully
 // reflects what the updater would install.
-export function selectChannelReleases(
-  releases: GitHubRelease[],
-): { latest: GitHubRelease | undefined; prerelease: GitHubRelease | undefined } {
+export function selectChannelReleases(releases: GitHubRelease[]): {
+  latest: GitHubRelease | undefined;
+  prerelease: GitHubRelease | undefined;
+} {
   const publicReleases = releases.filter((release) => release.draft !== true);
   const byPrecedenceDesc = [...publicReleases].sort((a, b) =>
     compareSemver(b.tag_name, a.tag_name),
   );
-  const latest = byPrecedenceDesc.find((release) => release.prerelease !== true);
+  const latest = byPrecedenceDesc.find(
+    (release) => release.prerelease !== true,
+  );
   const prerelease = byPrecedenceDesc[0];
   return { latest, prerelease };
 }
@@ -394,18 +412,22 @@ function hasMacUpdateAssets(release: GitHubRelease): boolean {
     release,
     (name) => name === MAC_UPDATE_CHANNEL_FILE,
   );
-  const hasZip = hasUploadedReleaseAsset(release, (name) => name.endsWith(".zip"));
+  const hasZip = hasUploadedReleaseAsset(release, (name) =>
+    name.endsWith(".zip"),
+  );
   return hasChannelFile && hasZip;
 }
 
-export function selectAppUpdateReleases(
-  releases: GitHubRelease[],
-): { latest: GitHubRelease | undefined; prerelease: GitHubRelease | undefined } {
+export function selectAppUpdateReleases(releases: GitHubRelease[]): {
+  latest: GitHubRelease | undefined;
+  prerelease: GitHubRelease | undefined;
+} {
   return selectChannelReleases(releases.filter(hasMacUpdateAssets));
 }
 
 function githubReleaseHeaders(): HeadersInit {
-  const token = process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim();
+  const token =
+    process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim();
   return {
     Accept: "application/vnd.github+json",
     "User-Agent": "PwrAgent",
@@ -413,7 +435,9 @@ function githubReleaseHeaders(): HeadersInit {
   };
 }
 
-async function fetchGitHubReleases(signal?: AbortSignal): Promise<GitHubRelease[]> {
+async function fetchGitHubReleases(
+  signal?: AbortSignal,
+): Promise<GitHubRelease[]> {
   const response = await fetch(GITHUB_RELEASES_URL, {
     headers: githubReleaseHeaders(),
     ...(signal ? { signal } : {}),
@@ -423,8 +447,9 @@ async function fetchGitHubReleases(signal?: AbortSignal): Promise<GitHubRelease[
   }
   const payload = await response.json();
   return Array.isArray(payload)
-    ? payload.filter((release): release is GitHubRelease =>
-        typeof release === "object" && release !== null,
+    ? payload.filter(
+        (release): release is GitHubRelease =>
+          typeof release === "object" && release !== null,
       )
     : [];
 }
@@ -433,11 +458,16 @@ async function readAppUpdateReleaseForChannel(
   updateChannel: "latest" | "prerelease",
 ): Promise<GitHubRelease | undefined> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), RELEASE_FETCH_TIMEOUT_MS);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    RELEASE_FETCH_TIMEOUT_MS,
+  );
   try {
     const releases = await fetchGitHubReleases(controller.signal);
     const selected = selectAppUpdateReleases(releases);
-    return updateChannel === "prerelease" ? selected.prerelease : selected.latest;
+    return updateChannel === "prerelease"
+      ? selected.prerelease
+      : selected.latest;
   } finally {
     clearTimeout(timeout);
   }
@@ -445,7 +475,10 @@ async function readAppUpdateReleaseForChannel(
 
 export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVersions> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), RELEASE_FETCH_TIMEOUT_MS);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    RELEASE_FETCH_TIMEOUT_MS,
+  );
   try {
     const releases = await fetchGitHubReleases(controller.signal);
     const { latest, prerelease } = selectAppUpdateReleases(releases);
@@ -511,7 +544,10 @@ export function initAutoUpdater(): void {
   });
   autoUpdater.on("update-not-available", (info) => {
     log.info("update-not-available", { version: info.version });
-    setUpdateStatusUnlessDownloaded({ status: "no-update", version: info.version });
+    setUpdateStatusUnlessDownloaded({
+      status: "no-update",
+      version: info.version,
+    });
   });
   autoUpdater.on("download-progress", (progress) => {
     log.info("download-progress", {
@@ -520,7 +556,8 @@ export function initAutoUpdater(): void {
       total: progress.total,
     });
     const version =
-      updateStatus.status === "available" || updateStatus.status === "downloading"
+      updateStatus.status === "available"
+      || updateStatus.status === "downloading"
         ? updateStatus.version
         : "unknown";
     setUpdateStatus({

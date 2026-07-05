@@ -15,7 +15,9 @@ describe("messaging contracts", () => {
   });
 
   it("normalizes unknown binding target kinds to ordinary threads", () => {
-    expect(normalizeMessagingBindingTargetKind("agent_thread")).toBe("agent_thread");
+    expect(normalizeMessagingBindingTargetKind("agent_thread")).toBe(
+      "agent_thread",
+    );
     expect(normalizeMessagingBindingTargetKind(undefined)).toBe("thread");
     expect(normalizeMessagingBindingTargetKind("")).toBe("thread");
   });

@@ -59,7 +59,9 @@ export class AcpAgentAllowlist {
       return { allowed: false, reason: "banned" };
     }
 
-    const matchingRules = this.rules.filter((rule) => rule.registryId === agent.id);
+    const matchingRules = this.rules.filter(
+      (rule) => rule.registryId === agent.id,
+    );
     if (matchingRules.length === 0) {
       return { allowed: false, reason: "not-allowlisted" };
     }
@@ -86,7 +88,9 @@ export class AcpAgentAllowlist {
       return { allowed: false, reason: "banned" };
     }
 
-    const matchingRules = this.rules.filter((rule) => rule.registryId === agent.id);
+    const matchingRules = this.rules.filter(
+      (rule) => rule.registryId === agent.id,
+    );
     if (matchingRules.length === 0) {
       return { allowed: false, reason: "not-allowlisted" };
     }
@@ -120,7 +124,10 @@ function evaluateRule(
   rule: AcpAgentAllowlistRule,
   agent: AcpRegistryAgent,
 ): string | undefined {
-  if (rule.versions && (!agent.version || !rule.versions.includes(agent.version))) {
+  if (
+    rule.versions
+    && (!agent.version || !rule.versions.includes(agent.version))
+  ) {
     return "version-not-allowed";
   }
 
@@ -153,17 +160,17 @@ function evaluateDistributionRule(
   options: { skipAgentChecks?: boolean } = {},
 ): string | undefined {
   if (
-    !options.skipAgentChecks &&
-    rule.versions &&
-    (!agent.version || !rule.versions.includes(agent.version))
+    !options.skipAgentChecks
+    && rule.versions
+    && (!agent.version || !rule.versions.includes(agent.version))
   ) {
     return "version-not-allowed";
   }
 
   if (
-    !options.skipAgentChecks &&
-    isGplFamilyLicense(agent.license) &&
-    !rule.allowGplFamilyLicense
+    !options.skipAgentChecks
+    && isGplFamilyLicense(agent.license)
+    && !rule.allowGplFamilyLicense
   ) {
     return "license-not-allowed";
   }
@@ -184,8 +191,8 @@ function distributionAllowedByKind(
   distribution: AcpRegistryDistribution,
 ): boolean {
   return (
-    !rule.distributionKinds ||
-    rule.distributionKinds.includes(distribution.kind)
+    !rule.distributionKinds
+    || rule.distributionKinds.includes(distribution.kind)
   );
 }
 
@@ -195,8 +202,8 @@ function distributionSourceAllowed(
 ): boolean {
   if (distribution.kind === "npx" || distribution.kind === "uvx") {
     return (
-      !rule.allowedPackageNames ||
-      rule.allowedPackageNames.includes(distribution.packageName)
+      !rule.allowedPackageNames
+      || rule.allowedPackageNames.includes(distribution.packageName)
     );
   }
 
@@ -209,7 +216,9 @@ function distributionSourceAllowed(
   }
 
   try {
-    return rule.allowedArchiveHosts.includes(new URL(distribution.archiveUrl).host);
+    return rule.allowedArchiveHosts.includes(
+      new URL(distribution.archiveUrl).host,
+    );
   } catch {
     return false;
   }

@@ -60,7 +60,7 @@ describe("useThreadSkills", () => {
           createdAt: 1,
           updatedAt: 1,
         },
-      })
+      }),
     );
 
     await act(async () => {
@@ -114,7 +114,7 @@ describe("useThreadSkills", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         },
-      })
+      }),
     );
 
     await act(async () => {
@@ -128,9 +128,9 @@ describe("useThreadSkills", () => {
 
     await waitFor(() => {
       expect(result.current.skills).toEqual([]);
-      expect(result.current.providerCommands.map((command) => command.name)).toEqual([
-        "skill:frontend-design",
-      ]);
+      expect(
+        result.current.providerCommands.map((command) => command.name),
+      ).toEqual(["skill:frontend-design"]);
     });
   });
 
@@ -196,7 +196,7 @@ describe("useThreadSkills", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         },
-      })
+      }),
     );
 
     await act(async () => {
@@ -387,7 +387,7 @@ describe("useThreadSkills", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         },
-      })
+      }),
     );
 
     await act(async () => {
@@ -418,9 +418,9 @@ describe("useThreadSkills", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.providerCommands.map((command) => command.name)).toEqual([
-        "skill:frontend-design",
-      ]);
+      expect(
+        result.current.providerCommands.map((command) => command.name),
+      ).toEqual(["skill:frontend-design"]);
     });
     expect(listSkills).toHaveBeenCalledTimes(1);
   });

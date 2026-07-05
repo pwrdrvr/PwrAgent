@@ -213,14 +213,9 @@ export type CheckThreadPullRequestStatusResult =
     directoryPaths: string[];
   };
 
-export type ThreadMutationField =
-  | "title"
-  | "model_settings"
-  | "execution_mode";
+export type ThreadMutationField = "title" | "model_settings" | "execution_mode";
 
-export type ThreadMutationChangeStatus =
-  | "would_apply"
-  | "applied";
+export type ThreadMutationChangeStatus = "would_apply" | "applied";
 
 export type ThreadMutationAppliedChange = {
   field: ThreadMutationField;

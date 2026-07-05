@@ -25,7 +25,10 @@ export type AutomationSchedulerOptions = {
   runner: AutomationRunner;
   gateRunner?: AutomationGateRunner;
   now?: () => number;
-  setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+  setTimer?: (
+    callback: () => void,
+    delayMs: number,
+  ) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
 };
 
@@ -53,7 +56,10 @@ export class AutomationScheduler {
   private running = false;
   private readonly sessionStartedAt: number;
   private readonly coalesceWindows = new Map<string, InboundCoalesceWindow>();
-  private readonly runStartTokenBuckets = new Map<string, RunStartTokenBucket>();
+  private readonly runStartTokenBuckets = new Map<
+    string,
+    RunStartTokenBucket
+  >();
 
   constructor(private readonly options: AutomationSchedulerOptions) {
     this.sessionStartedAt = this.now();
@@ -116,7 +122,12 @@ export class AutomationScheduler {
         position: 1,
       });
     }
-    return await this.submitRun({ automation, runId: run.id, windows: [], now });
+    return await this.submitRun({
+      automation,
+      runId: run.id,
+      windows: [],
+      now,
+    });
   }
 
   async runFromInboundEvent(params: {
@@ -126,8 +137,8 @@ export class AutomationScheduler {
   }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
     const now = params.now ?? this.now();
     const windowMs =
-      params.automation.inboundCoalesceWindowMs ??
-      DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS;
+      params.automation.inboundCoalesceWindowMs
+      ?? DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS;
 
     if (windowMs > 0) {
       const open = this.coalesceWindows.get(params.automation.id);
@@ -175,7 +186,9 @@ export class AutomationScheduler {
     if (existing) {
       return undefined;
     }
-    const active = this.options.store.findActiveRunForAutomation(params.automation.id);
+    const active = this.options.store.findActiveRunForAutomation(
+      params.automation.id,
+    );
     const createInboundRun = () =>
       this.options.store.createRun({
         automationId: params.automation.id,
@@ -236,7 +249,10 @@ export class AutomationScheduler {
     });
   }
 
-  private openCoalesceWindow(automation: AutomationRecord, windowMs: number): void {
+  private openCoalesceWindow(
+    automation: AutomationRecord,
+    windowMs: number,
+  ): void {
     const timer = this.setTimer(() => {
       void this.flushCoalesceWindow(automation.id);
     }, windowMs);
@@ -302,11 +318,14 @@ export class AutomationScheduler {
   }
 
   private noteThrottledInboundRun(automation: AutomationRecord): void {
-    automationSchedulerLog.info("inbound automation run throttled by rate limit", {
-      automationId: automation.id,
-      automationName: automation.name,
-      maxRunsPerHour: resolveAutomationRunsPerHour(automation.maxRunsPerHour),
-    });
+    automationSchedulerLog.info(
+      "inbound automation run throttled by rate limit",
+      {
+        automationId: automation.id,
+        automationName: automation.name,
+        maxRunsPerHour: resolveAutomationRunsPerHour(automation.maxRunsPerHour),
+      },
+    );
   }
 
   async handleTurnQueueUpdate(params: {
@@ -368,7 +387,10 @@ export class AutomationScheduler {
       });
       return;
     }
-    const firstDueAt = Math.max(automation.nextRunAt ?? now, this.sessionStartedAt);
+    const firstDueAt = Math.max(
+      automation.nextRunAt ?? now,
+      this.sessionStartedAt,
+    );
     const windows = collectDueAutomationWindows({
       schedule: automation.schedule,
       firstDueAt,
@@ -410,9 +432,15 @@ export class AutomationScheduler {
         });
         return;
       }
-      await this.enqueueScheduledRun({ automation, windows: [windows[0]!], now });
+      await this.enqueueScheduledRun({
+        automation,
+        windows: [windows[0]!],
+        now,
+      });
     } else {
-      const existing = this.options.store.findPendingScheduledRun(automation.id);
+      const existing = this.options.store.findPendingScheduledRun(
+        automation.id,
+      );
       if (existing) {
         const coalesced = this.options.store.coalescePendingScheduledRun({
           automationId: automation.id,
@@ -552,7 +580,9 @@ export class AutomationScheduler {
     now: number;
   }): Promise<AutomationGateRunResult | undefined> {
     if (!params.automation.gate) return undefined;
-    const gateResult = await this.options.gateRunner?.runGate(params.automation.gate);
+    const gateResult = await this.options.gateRunner?.runGate(
+      params.automation.gate,
+    );
     if (!gateResult) {
       return undefined;
     }
@@ -578,7 +608,10 @@ export class AutomationScheduler {
       outputDecision:
         gateResult.status === "skip"
           ? { kind: "quiet", summary: "Automation gate skipped this run." }
-          : { kind: "post_card", summary: gateResult.errorMessage ?? "Gate failed." },
+          : {
+              kind: "post_card",
+              summary: gateResult.errorMessage ?? "Gate failed.",
+            },
       transcriptEvents: [
         {
           id: `${params.runId}:gate`,
@@ -607,7 +640,8 @@ export class AutomationScheduler {
     if (!automationId) return;
     const automation = this.options.store.getAutomation(automationId);
     if (!automation) return;
-    const pending = this.options.store.findPendingRunForAutomation(automationId);
+    const pending =
+      this.options.store.findPendingRunForAutomation(automationId);
     if (!pending) return;
     await this.submitRun({
       automation,
@@ -645,7 +679,10 @@ export class AutomationScheduler {
     callback: () => void,
     delayMs: number,
   ): ReturnType<typeof setTimeout> {
-    return this.options.setTimer?.(callback, delayMs) ?? setTimeout(callback, delayMs);
+    return (
+      this.options.setTimer?.(callback, delayMs)
+      ?? setTimeout(callback, delayMs)
+    );
   }
 
   private clearTimer(timer: ReturnType<typeof setTimeout>): void {
@@ -680,7 +717,9 @@ function appendCoalesceSource(
 ): void {
   if (window.sources.length >= MAX_COALESCED_EVENTS) return;
   if (
-    window.sources.some((entry) => entry.sourceEventKey === source.sourceEventKey)
+    window.sources.some(
+      (entry) => entry.sourceEventKey === source.sourceEventKey,
+    )
   ) {
     return;
   }

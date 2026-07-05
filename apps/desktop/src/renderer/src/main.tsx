@@ -102,7 +102,8 @@ if (importMetaHot) {
 }
 
 const ChangelogWindow = lazy(async () => ({
-  default: (await import("./features/changelog/ChangelogWindow")).ChangelogWindow,
+  default: (await import("./features/changelog/ChangelogWindow"))
+    .ChangelogWindow,
 }));
 const LogsWindow = lazy(async () => ({
   default: (await import("./features/logs/LogsWindow")).LogsWindow,
@@ -112,8 +113,9 @@ const LicenseDocumentWindow = lazy(async () => ({
     .LicenseDocumentWindow,
 }));
 const MessagingActivityWindow = lazy(async () => ({
-  default: (await import("./features/messaging-activity/MessagingActivityWindow"))
-    .MessagingActivityWindow,
+  default: (
+    await import("./features/messaging-activity/MessagingActivityWindow")
+  ).MessagingActivityWindow,
 }));
 const MarkdownFilesWindow = lazy(async () => ({
   default: (await import("./features/thread-detail/MarkdownFilesWindow"))

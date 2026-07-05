@@ -673,9 +673,9 @@ export class StateDb {
       db.transaction(() => {
         db.exec(SCHEMA_V1);
         if (options?.profileName) {
-          db.prepare("UPDATE meta SET value = ? WHERE key = 'profile_name'").run(
-            options.profileName,
-          );
+          db.prepare(
+            "UPDATE meta SET value = ? WHERE key = 'profile_name'",
+          ).run(options.profileName);
         }
         db.pragma("user_version = 1");
       })();
@@ -988,7 +988,9 @@ CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
 `);
 }
 
-function ensureThreadUsagePricingProviderScope(db: BetterSqlite3.Database): void {
+function ensureThreadUsagePricingProviderScope(
+  db: BetterSqlite3.Database,
+): void {
   const hasUsageLines = tableExists(db, "thread_usage_lines");
   const hasPricingSummaries = tableExists(db, "thread_pricing_summaries");
   if (!hasUsageLines || !hasPricingSummaries) {
@@ -1174,11 +1176,15 @@ SELECT
 FROM thread_pricing_summaries
 `);
   db.exec("DROP TABLE thread_pricing_summaries");
-  db.exec("ALTER TABLE thread_pricing_summaries_v2 RENAME TO thread_pricing_summaries");
+  db.exec(
+    "ALTER TABLE thread_pricing_summaries_v2 RENAME TO thread_pricing_summaries",
+  );
   db.exec(THREAD_USAGE_PRICING_SCHEMA);
 }
 
-function ensureThreadUsagePricingCumulativeColumns(db: BetterSqlite3.Database): void {
+function ensureThreadUsagePricingCumulativeColumns(
+  db: BetterSqlite3.Database,
+): void {
   if (!tableExists(db, "thread_usage_lines")) {
     db.exec(THREAD_USAGE_PRICING_SCHEMA);
     return;
@@ -1227,8 +1233,8 @@ function ensureThreadSearchFtsThreadIdColumn(db: BetterSqlite3.Database): void {
     return;
   }
   if (
-    tableExists(db, "thread_search_fts") &&
-    tableColumnExists(db, "thread_search_fts", "thread_id")
+    tableExists(db, "thread_search_fts")
+    && tableColumnExists(db, "thread_search_fts", "thread_id")
   ) {
     return;
   }
@@ -1281,7 +1287,9 @@ function ensureThreadSearchFtsThreadIdColumn(db: BetterSqlite3.Database): void {
       row.project_key ?? "",
       directories.map((directory) => directory.label).join(" "),
       directories
-        .flatMap((directory) => [directory.path, directory.worktreePath].filter(Boolean))
+        .flatMap((directory) =>
+          [directory.path, directory.worktreePath].filter(Boolean),
+        )
         .join(" "),
       row.git_branch ?? "",
       row.git_origin_url ?? "",
@@ -1331,9 +1339,9 @@ function parseThreadSearchLinkedDirectories(value: string): Array<{
 
 function repairThreadUsageLineCreatedAt(db: BetterSqlite3.Database): void {
   if (
-    !tableExists(db, "thread_usage_lines") ||
-    !tableExists(db, "thread_usage_turns") ||
-    !tableColumnExists(db, "thread_usage_lines", "usage_turn_id")
+    !tableExists(db, "thread_usage_lines")
+    || !tableExists(db, "thread_usage_turns")
+    || !tableColumnExists(db, "thread_usage_lines", "usage_turn_id")
   ) {
     return;
   }
@@ -1380,8 +1388,8 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
 
 function repairOpenAiThreadUsagePricing(db: BetterSqlite3.Database): void {
   if (
-    !tableExists(db, "thread_usage_lines") ||
-    !tableExists(db, "thread_pricing_summaries")
+    !tableExists(db, "thread_usage_lines")
+    || !tableExists(db, "thread_pricing_summaries")
   ) {
     return;
   }
@@ -1405,18 +1413,18 @@ function repairOpenAiThreadUsagePricing(db: BetterSqlite3.Database): void {
        WHERE provider = 'openai'`,
     )
     .all() as Array<{
-      cached_input_tokens: number;
-      created_at: number;
-      currency: string;
-      fast_mode: number | null;
-      model: string | null;
-      output_tokens: number;
-      price_status: string;
-      reasoning_output_tokens: number;
-      service_tier: string | null;
-      uncached_input_tokens: number;
-      usage_line_id: string;
-    }>;
+    cached_input_tokens: number;
+    created_at: number;
+    currency: string;
+    fast_mode: number | null;
+    model: string | null;
+    output_tokens: number;
+    price_status: string;
+    reasoning_output_tokens: number;
+    service_tier: string | null;
+    uncached_input_tokens: number;
+    usage_line_id: string;
+  }>;
   const updateLine = db.prepare(
     `UPDATE thread_usage_lines
      SET
@@ -1453,14 +1461,15 @@ function repairOpenAiThreadUsagePricing(db: BetterSqlite3.Database): void {
       fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
       serviceTier: row.service_tier ?? undefined,
     });
-    const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | null =
-      cost
-        ? null
-        : !row.model
-          ? "missing-model"
-          : pricingServiceTier === undefined
-            ? "unsupported-service-tier"
-            : "missing-rate";
+    const priceUnavailableReason:
+      | ThreadUsageLineRecord["priceUnavailableReason"]
+      | null = cost
+      ? null
+      : !row.model
+        ? "missing-model"
+        : pricingServiceTier === undefined
+          ? "unsupported-service-tier"
+          : "missing-rate";
 
     updateLine.run({
       cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
@@ -1481,7 +1490,10 @@ function repairOpenAiThreadUsagePricing(db: BetterSqlite3.Database): void {
   rebuildThreadPricingSummaries(db, now);
 }
 
-function rebuildThreadPricingSummaries(db: BetterSqlite3.Database, updatedAt: number): void {
+function rebuildThreadPricingSummaries(
+  db: BetterSqlite3.Database,
+  updatedAt: number,
+): void {
   db.exec("DELETE FROM thread_pricing_summaries");
   const rollups = db
     .prepare(
@@ -1494,11 +1506,11 @@ function rebuildThreadPricingSummaries(db: BetterSqlite3.Database, updatedAt: nu
        WHERE status != 'superseded'`,
     )
     .all() as Array<{
-      backend: string;
-      currency: string;
-      provider: string;
-      thread_id: string;
-    }>;
+    backend: string;
+    currency: string;
+    provider: string;
+    thread_id: string;
+  }>;
   const readAggregate = db.prepare(
     `SELECT
        COUNT(*) AS usage_line_count,
@@ -1615,10 +1627,7 @@ function rebuildThreadPricingSummaries(db: BetterSqlite3.Database, updatedAt: nu
   }
 }
 
-function tableExists(
-  db: BetterSqlite3.Database,
-  tableName: string,
-): boolean {
+function tableExists(db: BetterSqlite3.Database, tableName: string): boolean {
   const row = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
     .get(tableName) as { 1: number } | undefined;
@@ -1693,7 +1702,9 @@ function readTableInfo(
 ): Array<{ name: string }> {
   switch (tableName) {
     case "app_runtime_instances":
-      return db.prepare("PRAGMA table_info(app_runtime_instances)").all() as Array<{
+      return db
+        .prepare("PRAGMA table_info(app_runtime_instances)")
+        .all() as Array<{
         name: string;
       }>;
     case "automation_runs":
@@ -1709,7 +1720,9 @@ function readTableInfo(
         name: string;
       }>;
     case "thread_pricing_summaries":
-      return db.prepare("PRAGMA table_info(thread_pricing_summaries)").all() as Array<{
+      return db
+        .prepare("PRAGMA table_info(thread_pricing_summaries)")
+        .all() as Array<{
         name: string;
       }>;
     case "thread_search_fts":
@@ -1717,7 +1730,9 @@ function readTableInfo(
         name: string;
       }>;
     case "thread_usage_lines":
-      return db.prepare("PRAGMA table_info(thread_usage_lines)").all() as Array<{
+      return db
+        .prepare("PRAGMA table_info(thread_usage_lines)")
+        .all() as Array<{
         name: string;
       }>;
   }

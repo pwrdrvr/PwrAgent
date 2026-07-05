@@ -122,7 +122,9 @@ export function pruneCodexEnvironmentActionMap(
   }
   return Object.fromEntries(
     Object.entries(map).filter(([environmentId, actionId]) => {
-      const environment = options.find((candidate) => candidate.id === environmentId);
+      const environment = options.find(
+        (candidate) => candidate.id === environmentId,
+      );
       return Boolean(
         environment?.actions.some((action) => action.id === actionId),
       );
@@ -135,12 +137,16 @@ export function resolveCodexEnvironmentActionId(params: {
   environment: CodexEnvironmentOption;
   selectedActionIdByEnvironmentId: Record<string, string>;
 }): string | undefined {
-  if (params.environment.actions.some((action) => action.id === params.actionId)) {
+  if (
+    params.environment.actions.some((action) => action.id === params.actionId)
+  ) {
     return params.actionId;
   }
   const mappedActionId =
     params.selectedActionIdByEnvironmentId[params.environment.id];
-  if (params.environment.actions.some((action) => action.id === mappedActionId)) {
+  if (
+    params.environment.actions.some((action) => action.id === mappedActionId)
+  ) {
     return mappedActionId;
   }
   return params.environment.actions[0]?.id;
@@ -199,7 +205,9 @@ export function parseCodexEnvironmentToml(
 
     const keyMatch = KEY_LINE.exec(line);
     if (!keyMatch) {
-      throw new Error(`Invalid Codex environment TOML line ${i + 1} in ${filePath}`);
+      throw new Error(
+        `Invalid Codex environment TOML line ${i + 1} in ${filePath}`,
+      );
     }
 
     const key = keyMatch[1]!;
@@ -286,7 +294,7 @@ function parseMultilineString(
   filePath: string,
 ): { value: string; nextLine: number } {
   const delimiter = rawValue.startsWith("'''") ? "'''" : '"""';
-  let remainder = rawValue.slice(3);
+  const remainder = rawValue.slice(3);
   const sameLineEnd = remainder.indexOf(delimiter);
   if (sameLineEnd >= 0) {
     return {
@@ -391,11 +399,13 @@ function makeUniqueEnvironmentId(
 }
 
 function titleizeEnvironmentId(id: string): string {
-  return id
-    .split(/[-_]+/)
-    .filter(Boolean)
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join(" ") || "Environment";
+  return (
+    id
+      .split(/[-_]+/)
+      .filter(Boolean)
+      .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+      .join(" ") || "Environment"
+  );
 }
 
 function slugify(value: string): string {
@@ -411,7 +421,7 @@ function stripComment(value: string): string {
   for (let i = 0; i < value.length; i += 1) {
     const char = value[i];
     if ((char === "'" || char === '"') && value[i - 1] !== "\\") {
-      quote = quote === char ? undefined : quote ?? char;
+      quote = quote === char ? undefined : (quote ?? char);
       continue;
     }
     if (char === "#" && !quote) {

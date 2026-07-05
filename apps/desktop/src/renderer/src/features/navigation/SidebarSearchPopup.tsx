@@ -26,7 +26,9 @@ type SidebarSearchPopupProps = {
  * Filters the in-memory thread set by title, PR number, branch, and linked
  * directory; ↑/↓ move the active row, Enter (or click) jumps, Escape closes.
  */
-export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement {
+export function SidebarSearchPopup(
+  props: SidebarSearchPopupProps,
+): ReactElement {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -93,7 +95,12 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
 
   const trimmed = query.trim();
   return (
-    <div className="sidebar-search" ref={rootRef} role="dialog" aria-label="Jump to thread">
+    <div
+      className="sidebar-search"
+      ref={rootRef}
+      role="dialog"
+      aria-label="Jump to thread"
+    >
       <div className="sidebar-search__field">
         <span className="sidebar-search__icon" aria-hidden>
           <SearchIcon size={14} />
@@ -125,7 +132,9 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
                   onMouseEnter={() => setActiveIndex(index)}
                   onClick={() => jump(thread)}
                 >
-                  <span className="sidebar-search__result-title">{thread.title}</span>
+                  <span className="sidebar-search__result-title">
+                    {thread.title}
+                  </span>
                   {describeThread(thread) ? (
                     <span className="sidebar-search__result-meta">
                       {describeThread(thread)}

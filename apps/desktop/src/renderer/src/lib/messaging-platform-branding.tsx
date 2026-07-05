@@ -21,16 +21,19 @@ export const MESSAGING_PLATFORM_ICONS: Partial<
   line: ({ size }) => <LineIcon size={size} />,
 };
 
-const MESSAGING_PLATFORM_LABELS: Partial<Record<MessagingChannelKind, string>> = {
-  discord: "Discord",
-  feishu: "Feishu / Lark",
-  line: "LINE",
-  mattermost: "Mattermost",
-  slack: "Slack",
-  telegram: "Telegram",
-};
+const MESSAGING_PLATFORM_LABELS: Partial<Record<MessagingChannelKind, string>> =
+  {
+    discord: "Discord",
+    feishu: "Feishu / Lark",
+    line: "LINE",
+    mattermost: "Mattermost",
+    slack: "Slack",
+    telegram: "Telegram",
+  };
 
-export function formatMessagingPlatformName(platform: MessagingChannelKind): string {
+export function formatMessagingPlatformName(
+  platform: MessagingChannelKind,
+): string {
   return MESSAGING_PLATFORM_LABELS[platform] ?? fallbackPlatformName(platform);
 }
 

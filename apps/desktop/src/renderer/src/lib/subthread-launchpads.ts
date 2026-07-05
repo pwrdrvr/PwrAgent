@@ -38,6 +38,8 @@ export function getParentThreadIdFromSubthreadLaunchpadKey(
   }
 }
 
-export function isSameWorktreeSubthreadLaunchpad(directoryKey: string): boolean {
+export function isSameWorktreeSubthreadLaunchpad(
+  directoryKey: string,
+): boolean {
   return getSubthreadLaunchpadMode(directoryKey) === "same-worktree";
 }

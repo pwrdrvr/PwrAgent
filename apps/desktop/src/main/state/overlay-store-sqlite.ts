@@ -76,8 +76,10 @@ export type PrLookupCacheEntry = {
 };
 
 function normalizePullRequestProvider(provider: string | undefined): string {
-  return (provider ?? DEFAULT_PULL_REQUEST_PROVIDER).trim().toLowerCase()
-    || DEFAULT_PULL_REQUEST_PROVIDER;
+  return (
+    (provider ?? DEFAULT_PULL_REQUEST_PROVIDER).trim().toLowerCase()
+    || DEFAULT_PULL_REQUEST_PROVIDER
+  );
 }
 
 function normalizePrSummary(pr: PrSummary): PrSummary {
@@ -97,14 +99,15 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
 function normalizeDetachedPrKeys(keys: string[] | undefined): string[] {
   return [
     ...new Set(
-      (keys ?? [])
-        .map((key) => key.trim().toLowerCase())
-        .filter(Boolean),
+      (keys ?? []).map((key) => key.trim().toLowerCase()).filter(Boolean),
     ),
   ].sort((left, right) => left.localeCompare(right));
 }
 
-function filterDetachedPrs(prs: PrSummary[], detachedPrKeys: string[]): PrSummary[] {
+function filterDetachedPrs(
+  prs: PrSummary[],
+  detachedPrKeys: string[],
+): PrSummary[] {
   if (detachedPrKeys.length === 0) {
     return prs;
   }
@@ -137,12 +140,16 @@ function mergePrSummariesByStatusKey(
     byKey.set(buildPullRequestStatusKey(normalized), normalized);
   }
   const merged = [...byKey.values()].sort((left, right) =>
-    buildPullRequestStatusKey(left).localeCompare(buildPullRequestStatusKey(right)),
+    buildPullRequestStatusKey(left).localeCompare(
+      buildPullRequestStatusKey(right),
+    ),
   );
   return merged.length > 0 ? merged : undefined;
 }
 
-function normalizeCommitShas(commitShas: string[] | undefined): string[] | undefined {
+function normalizeCommitShas(
+  commitShas: string[] | undefined,
+): string[] | undefined {
   const normalized = [
     ...new Set(
       (commitShas ?? [])
@@ -167,14 +174,18 @@ function normalizePrCheckState(
   return "unknown";
 }
 
-function legacyPrLifecycleState(state: string | undefined): PrSummary["lifecycleState"] {
+function legacyPrLifecycleState(
+  state: string | undefined,
+): PrSummary["lifecycleState"] {
   if (state === "merged" || state === "closed") {
     return state;
   }
   return "open";
 }
 
-function legacyPrReviewState(state: string | undefined): PrSummary["reviewState"] {
+function legacyPrReviewState(
+  state: string | undefined,
+): PrSummary["reviewState"] {
   return state === "draft" ? "draft" : "ready_for_review";
 }
 
@@ -191,8 +202,11 @@ function getPrLookupCacheKey(entry: {
     lookupVersion: 2,
     provider: normalizePullRequestProvider(entry.provider),
     branch: entry.branch.trim(),
-    directoryPaths: [...new Set(entry.directoryPaths.map((path) => path.trim()).filter(Boolean))]
-      .sort((left, right) => left.localeCompare(right)),
+    directoryPaths: [
+      ...new Set(
+        entry.directoryPaths.map((path) => path.trim()).filter(Boolean),
+      ),
+    ].sort((left, right) => left.localeCompare(right)),
   });
 }
 
@@ -238,8 +252,8 @@ function normalizeLaunchpadDefaults(
 
   if (codexProviderSettings) {
     if (
-      codexProviderSettings.serviceTier === "fast" ||
-      codexProviderSettings.serviceTier === "priority"
+      codexProviderSettings.serviceTier === "fast"
+      || codexProviderSettings.serviceTier === "priority"
     ) {
       delete codexProviderSettings.serviceTier;
     }
@@ -260,8 +274,8 @@ function normalizeLaunchpadDefaults(
   }
 
   if (
-    next.backend === "codex" &&
-    (next.serviceTier === "fast" || next.serviceTier === "priority")
+    next.backend === "codex"
+    && (next.serviceTier === "fast" || next.serviceTier === "priority")
   ) {
     delete next.serviceTier;
   }
@@ -288,7 +302,10 @@ export class SqliteOverlayStore {
   async reconcileNavigationSnapshot(params: {
     backend: AppServerBackendScope;
     fetchedAt: number;
-    gitStatusByDirectoryKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
+    gitStatusByDirectoryKey?: Record<
+      string,
+      NavigationDirectoryGitStatus | undefined
+    >;
     /**
      * Active messaging bindings per thread, keyed by thread identity key.
      * Sourced from the desktop messaging sqlite store. Optional so tests
@@ -298,7 +315,10 @@ export class SqliteOverlayStore {
       string,
       MessagingThreadBindingSummary[] | undefined
     >;
-    automationsByThreadKey?: Record<string, AutomationThreadSummary | undefined>;
+    automationsByThreadKey?: Record<
+      string,
+      AutomationThreadSummary | undefined
+    >;
     /**
      * In-memory permission-mode queue map keyed by thread identity. The queue
      * lives on the registry (not in sqlite) but must be merged onto the
@@ -324,7 +344,8 @@ export class SqliteOverlayStore {
           ...(current ?? {}),
           backend: thread.source,
           threadId: thread.id,
-          executionMode: current?.executionMode ?? thread.executionMode ?? "default",
+          executionMode:
+            current?.executionMode ?? thread.executionMode ?? "default",
           model: current?.model ?? thread.model,
           reasoningEffort: current?.reasoningEffort ?? thread.reasoningEffort,
           serviceTier: current?.serviceTier ?? thread.serviceTier,
@@ -347,8 +368,7 @@ export class SqliteOverlayStore {
           subthreadOrder: current?.subthreadOrder,
           subthreadsCollapsed: current?.subthreadsCollapsed,
           permissionTransitionLog: current?.permissionTransitionLog,
-          messagingBindingTransitionLog:
-            current?.messagingBindingTransitionLog,
+          messagingBindingTransitionLog: current?.messagingBindingTransitionLog,
           turnFailureLog: current?.turnFailureLog,
         });
       }
@@ -470,7 +490,8 @@ export class SqliteOverlayStore {
       ...current,
       extraLinkedDirectories: [
         ...current.extraLinkedDirectories.filter(
-          (directory) => !linkedDirectoriesEquivalent(directory, params.directory),
+          (directory) =>
+            !linkedDirectoriesEquivalent(directory, params.directory),
         ),
         params.directory,
       ],
@@ -494,7 +515,8 @@ export class SqliteOverlayStore {
     const nextState: ThreadOverlayState = {
       ...current,
       extraLinkedDirectories: current.extraLinkedDirectories.filter(
-        (directory) => !linkedDirectoriesEquivalent(directory, params.directory),
+        (directory) =>
+          !linkedDirectoriesEquivalent(directory, params.directory),
       ),
     };
     this.putThread(threadKey, nextState);
@@ -581,7 +603,9 @@ export class SqliteOverlayStore {
   async persistThreadUsageActivity(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
-    activity: NonNullable<ThreadOverlayState["immutableUsageActivities"]>[number];
+    activity: NonNullable<
+      ThreadOverlayState["immutableUsageActivities"]
+    >[number];
   }): Promise<{ overlay: ThreadOverlayState; persisted: boolean }> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey) ?? {
@@ -591,24 +615,25 @@ export class SqliteOverlayStore {
       extraLinkedDirectories: [],
     };
     if (
-      !params.activity.id.startsWith("live-turn-usage-") &&
-      !params.activity.summary.startsWith("Turn usage:") &&
-      !params.activity.summary.startsWith("Monitor usage:")
+      !params.activity.id.startsWith("live-turn-usage-")
+      && !params.activity.summary.startsWith("Turn usage:")
+      && !params.activity.summary.startsWith("Monitor usage:")
     ) {
       return { overlay: current, persisted: false };
     }
 
     const existingActivities = current.immutableUsageActivities ?? [];
-    if (existingActivities.some((activity) => activity.id === params.activity.id)) {
+    if (
+      existingActivities.some((activity) => activity.id === params.activity.id)
+    ) {
       return { overlay: current, persisted: false };
     }
 
     const nextState: ThreadOverlayState = {
       ...current,
-      immutableUsageActivities: [
-        ...existingActivities,
-        params.activity,
-      ].slice(-MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES),
+      immutableUsageActivities: [...existingActivities, params.activity].slice(
+        -MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
+      ),
     };
     this.putThread(threadKey, nextState);
     return { overlay: nextState, persisted: true };
@@ -618,15 +643,17 @@ export class SqliteOverlayStore {
     line: ThreadUsageLineRecord;
   }): Promise<{ line: ThreadUsageLineRecord; summary: ThreadPricingSummary }> {
     const now = Date.now();
-    let line = repriceOpenAiUsageLine(normalizeThreadUsageLine(params.line, now));
+    let line = repriceOpenAiUsageLine(
+      normalizeThreadUsageLine(params.line, now),
+    );
     const upsert = this.stateDb.raw.transaction(() => {
       const existing = this.readThreadUsageLineSync(line.usageLineId);
       if (existing) {
         line = mergeThreadUsageLineForUpsert(line, existing);
       }
       if (
-        (line.source === "hydration" || line.source === "backfill") &&
-        line.turnId
+        (line.source === "hydration" || line.source === "backfill")
+        && line.turnId
       ) {
         this.stateDb.raw
           .prepare(
@@ -850,13 +877,14 @@ export class SqliteOverlayStore {
         .run(toThreadUsageLineRowParams(line));
 
       if (existing) {
-        const existingRollupThreadId = existing.parentThreadId ?? existing.threadId;
+        const existingRollupThreadId =
+          existing.parentThreadId ?? existing.threadId;
         const nextRollupThreadId = line.parentThreadId ?? line.threadId;
         if (
-          existing.backend !== line.backend ||
-          existing.provider !== line.provider ||
-          existingRollupThreadId !== nextRollupThreadId ||
-          existing.currency !== line.currency
+          existing.backend !== line.backend
+          || existing.provider !== line.provider
+          || existingRollupThreadId !== nextRollupThreadId
+          || existing.currency !== line.currency
         ) {
           this.recomputeThreadPricingSummarySync({
             backend: existing.backend,
@@ -883,7 +911,10 @@ export class SqliteOverlayStore {
   async readThreadPricing(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
-  }): Promise<{ lines: ThreadUsageLineRecord[]; summaries: ThreadPricingSummary[] }> {
+  }): Promise<{
+    lines: ThreadUsageLineRecord[];
+    summaries: ThreadPricingSummary[];
+  }> {
     const lineRows = this.stateDb.raw
       .prepare(
         `SELECT *
@@ -965,7 +996,9 @@ export class SqliteOverlayStore {
     };
     const existing = current.reactions ?? [];
     const filtered = existing.filter((emoji) => emoji !== params.emoji);
-    const nextReactions = params.present ? [...filtered, params.emoji] : filtered;
+    const nextReactions = params.present
+      ? [...filtered, params.emoji]
+      : filtered;
     const nextState: ThreadOverlayState = {
       ...current,
       reactions: nextReactions,
@@ -1010,7 +1043,9 @@ export class SqliteOverlayStore {
     };
     const nextState: ThreadOverlayState = {
       ...current,
-      agent: params.agent ? normalizeThreadAgent(params.agent, params.now) : undefined,
+      agent: params.agent
+        ? normalizeThreadAgent(params.agent, params.now)
+        : undefined,
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -1105,7 +1140,9 @@ export class SqliteOverlayStore {
       this.putThread(parentKey, {
         ...parent,
         subthreadOrder: [
-          ...(parent.subthreadOrder ?? []).filter((id) => id !== params.threadId),
+          ...(parent.subthreadOrder ?? []).filter(
+            (id) => id !== params.threadId,
+          ),
           params.threadId,
         ],
       });
@@ -1118,7 +1155,10 @@ export class SqliteOverlayStore {
     parentThreadId: string;
     threadIds: string[];
   }): Promise<string[]> {
-    const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
+    const parentKey = buildThreadIdentityKey(
+      params.backend,
+      params.parentThreadId,
+    );
     const parent = this.getThread(parentKey) ?? {
       backend: params.backend,
       threadId: params.parentThreadId,
@@ -1143,7 +1183,10 @@ export class SqliteOverlayStore {
     parentThreadId: string;
     collapsed: boolean;
   }): Promise<ThreadOverlayState> {
-    const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
+    const parentKey = buildThreadIdentityKey(
+      params.backend,
+      params.parentThreadId,
+    );
     const parent = this.getThread(parentKey) ?? {
       backend: params.backend,
       threadId: params.parentThreadId,
@@ -1205,7 +1248,9 @@ export class SqliteOverlayStore {
     return this.getDirectoryOverlay(params.directoryKey);
   }
 
-  async readAllDirectoryOverlays(): Promise<Record<string, DirectoryOverlayState>> {
+  async readAllDirectoryOverlays(): Promise<
+    Record<string, DirectoryOverlayState>
+  > {
     return this.readAllDirectoryOverlaysSync();
   }
 
@@ -1232,7 +1277,9 @@ export class SqliteOverlayStore {
       ...current,
       detachedPrKeys,
       detachedPrs,
-      prs: filterDetachedPrs(params.prs, detachedPrKeys).map(normalizePrSummary),
+      prs: filterDetachedPrs(params.prs, detachedPrKeys).map(
+        normalizePrSummary,
+      ),
       prsFetchedAt: params.fetchedAt ?? Date.now(),
       prsRefreshKey: params.refreshKey,
     };
@@ -1287,9 +1334,9 @@ export class SqliteOverlayStore {
     };
     const normalizedPr = normalizePrSummary(params.pr);
     const prKey = buildPullRequestStatusKey(normalizedPr);
-    const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys).filter(
-      (key) => key !== prKey,
-    );
+    const detachedPrKeys = normalizeDetachedPrKeys(
+      current.detachedPrKeys,
+    ).filter((key) => key !== prKey);
     const detachedPrs = mergePrSummariesByStatusKey(
       undefined,
       (current.detachedPrs ?? []).filter(
@@ -1314,16 +1361,18 @@ export class SqliteOverlayStore {
          FROM pr_status_cache`,
       )
       .all() as Array<{
-        pr_key: string;
-        provider: string | null;
-        fetched_at: number;
-        payload: string;
-      }>;
+      pr_key: string;
+      provider: string | null;
+      fetched_at: number;
+      payload: string;
+    }>;
 
     const entries: Record<string, PrStatusCacheEntry> = {};
     for (const row of rows) {
       try {
-        const provider = normalizePullRequestProvider(row.provider ?? undefined);
+        const provider = normalizePullRequestProvider(
+          row.provider ?? undefined,
+        );
         const pr = normalizePrSummary({
           ...(JSON.parse(row.payload) as PrSummary),
           provider,
@@ -1342,7 +1391,9 @@ export class SqliteOverlayStore {
     return entries;
   }
 
-  async writePrStatusCacheEntries(entries: PrStatusCacheEntry[]): Promise<void> {
+  async writePrStatusCacheEntries(
+    entries: PrStatusCacheEntry[],
+  ): Promise<void> {
     if (entries.length === 0) {
       return;
     }
@@ -1380,18 +1431,20 @@ export class SqliteOverlayStore {
          FROM pr_lookup_cache`,
       )
       .all() as Array<{
-        lookup_key: string;
-        provider: string | null;
-        branch: string;
-        directory_paths: string;
-        fetched_at: number;
-        payload: string;
-      }>;
+      lookup_key: string;
+      provider: string | null;
+      branch: string;
+      directory_paths: string;
+      fetched_at: number;
+      payload: string;
+    }>;
 
     const entries: Record<string, PrLookupCacheEntry> = {};
     for (const row of rows) {
       try {
-        const provider = normalizePullRequestProvider(row.provider ?? undefined);
+        const provider = normalizePullRequestProvider(
+          row.provider ?? undefined,
+        );
         const directoryPaths = JSON.parse(row.directory_paths) as string[];
         const lookupKey = getPrLookupCacheKey({
           provider,
@@ -1651,8 +1704,8 @@ export class SqliteOverlayStore {
       observedGitBranch: params.branch,
       retainedBranchDriftPairs: (current.retainedBranchDriftPairs ?? []).filter(
         (pair) =>
-          pair.expectedBranch !== params.branch &&
-          pair.observedBranch !== params.branch,
+          pair.expectedBranch !== params.branch
+          && pair.observedBranch !== params.branch,
       ),
     };
     this.putThread(threadKey, nextState);
@@ -1675,17 +1728,20 @@ export class SqliteOverlayStore {
     const previousObservedBranch = current.observedGitBranch?.trim();
     const nextObservedBranch = params.branch?.trim();
     const fallbackExpectedBranch =
-      !current.gitBranch?.trim() &&
-      previousObservedBranch &&
-      nextObservedBranch &&
-      previousObservedBranch !== nextObservedBranch
+      !current.gitBranch?.trim()
+      && previousObservedBranch
+      && nextObservedBranch
+      && previousObservedBranch !== nextObservedBranch
         ? previousObservedBranch
         : undefined;
     const requestedExpectedBranch = params.expectedBranch?.trim() || undefined;
     const nextState: ThreadOverlayState = {
       ...current,
-      gitBranch: requestedExpectedBranch
-        ?? (current.gitBranch?.trim() ? current.gitBranch : fallbackExpectedBranch),
+      gitBranch:
+        requestedExpectedBranch
+        ?? (current.gitBranch?.trim()
+          ? current.gitBranch
+          : fallbackExpectedBranch),
       observedGitBranch: params.branch,
     };
     this.putThread(threadKey, nextState);
@@ -1709,8 +1765,8 @@ export class SqliteOverlayStore {
     const retainedBranchDriftPairs = [
       ...(current.retainedBranchDriftPairs ?? []).filter(
         (pair) =>
-          pair.expectedBranch !== params.expectedBranch ||
-          pair.observedBranch !== params.observedBranch,
+          pair.expectedBranch !== params.expectedBranch
+          || pair.observedBranch !== params.observedBranch,
       ),
       {
         expectedBranch: params.expectedBranch,
@@ -1718,7 +1774,10 @@ export class SqliteOverlayStore {
         retainedAt: params.retainedAt ?? Date.now(),
       },
     ];
-    const nextState: ThreadOverlayState = { ...current, retainedBranchDriftPairs };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      retainedBranchDriftPairs,
+    };
     this.putThread(threadKey, nextState);
     return nextState;
   }
@@ -1760,7 +1819,9 @@ export class SqliteOverlayStore {
     directoryKey: string;
   }): Promise<DirectoryLaunchpadOverlayState | undefined> {
     const row = this.stateDb.raw
-      .prepare("SELECT payload FROM directory_launchpads WHERE directory_path = ?")
+      .prepare(
+        "SELECT payload FROM directory_launchpads WHERE directory_path = ?",
+      )
       .get(params.directoryKey) as { payload: string } | undefined;
     return row
       ? projectNavigationLaunchpadProviderSettings(
@@ -1807,7 +1868,9 @@ export class SqliteOverlayStore {
     return next;
   }
 
-  async resetDirectoryLaunchpad(params: { directoryKey: string }): Promise<void> {
+  async resetDirectoryLaunchpad(params: {
+    directoryKey: string;
+  }): Promise<void> {
     this.stateDb.raw
       .prepare("DELETE FROM directory_launchpads WHERE directory_path = ?")
       .run(params.directoryKey);
@@ -1822,12 +1885,12 @@ export class SqliteOverlayStore {
          FROM directory_git_status`,
       )
       .all() as Array<{
-        directory_key: string;
-        directory_path: string | null;
-        directory_updated_at: number | null;
-        fetched_at: number;
-        payload: string | null;
-      }>;
+      directory_key: string;
+      directory_path: string | null;
+      directory_updated_at: number | null;
+      fetched_at: number;
+      payload: string | null;
+    }>;
 
     return Object.fromEntries(
       rows.map((row) => {
@@ -1877,10 +1940,10 @@ export class SqliteOverlayStore {
          FROM thread_git_working_state`,
       )
       .all() as Array<{
-        worktree_path: string;
-        fetched_at: number;
-        payload: string | null;
-      }>;
+      worktree_path: string;
+      fetched_at: number;
+      payload: string | null;
+    }>;
 
     return Object.fromEntries(
       rows.map((row) => {
@@ -1964,7 +2027,8 @@ export class SqliteOverlayStore {
       )
       .run(
         threadKey,
-        (persistable as Record<string, unknown>).directoryPath as string ?? null,
+        ((persistable as Record<string, unknown>).directoryPath as string)
+          ?? null,
         persistable.lastSeenAt ?? null,
         persistable.dismissedAt ?? null,
         persistable.snoozedUntil ?? null,
@@ -2012,7 +2076,9 @@ export class SqliteOverlayStore {
 
   private writeLaunchpadDefaults(defaults: NavigationLaunchpadDefaults): void {
     const normalizedDefaults = normalizeLaunchpadDefaults(defaults);
-    const deleteStmt = this.stateDb.raw.prepare("DELETE FROM launchpad_defaults");
+    const deleteStmt = this.stateDb.raw.prepare(
+      "DELETE FROM launchpad_defaults",
+    );
     const insertStmt = this.stateDb.raw.prepare(
       "INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)",
     );
@@ -2027,7 +2093,10 @@ export class SqliteOverlayStore {
     write();
   }
 
-  private readAllDirectoryLaunchpads(): Record<string, DirectoryLaunchpadOverlayState> {
+  private readAllDirectoryLaunchpads(): Record<
+    string,
+    DirectoryLaunchpadOverlayState
+  > {
     const rows = this.stateDb.raw
       .prepare("SELECT directory_path, payload FROM directory_launchpads")
       .all() as { directory_path: string; payload: string }[];
@@ -2049,7 +2118,9 @@ export class SqliteOverlayStore {
    * `readAllDirectoryOverlays` can return a self-contained
    * `DirectoryOverlayState` without re-deriving the key.
    */
-  private getDirectoryOverlay(directoryKey: string): DirectoryOverlayState | undefined {
+  private getDirectoryOverlay(
+    directoryKey: string,
+  ): DirectoryOverlayState | undefined {
     const row = this.stateDb.raw
       .prepare("SELECT payload FROM directory_overlay WHERE directory_key = ?")
       .get(directoryKey) as { payload: string } | undefined;
@@ -2068,12 +2139,18 @@ export class SqliteOverlayStore {
       .run(directoryKey, JSON.stringify(state));
   }
 
-  private readAllDirectoryOverlaysSync(): Record<string, DirectoryOverlayState> {
+  private readAllDirectoryOverlaysSync(): Record<
+    string,
+    DirectoryOverlayState
+  > {
     const rows = this.stateDb.raw
       .prepare("SELECT directory_key, payload FROM directory_overlay")
       .all() as { directory_key: string; payload: string }[];
     return Object.fromEntries(
-      rows.map((r) => [r.directory_key, JSON.parse(r.payload) as DirectoryOverlayState]),
+      rows.map((r) => [
+        r.directory_key,
+        JSON.parse(r.payload) as DirectoryOverlayState,
+      ]),
     );
   }
 
@@ -2223,8 +2300,8 @@ export class SqliteOverlayStore {
 /** Check whether a linked directory was created by the handoff service. */
 function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
   return (
-    directory.id.startsWith("pwragent-handoff:") ||
-    directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
+    directory.id.startsWith("pwragent-handoff:")
+    || directory.id.startsWith("pwragnt-handoff:") // legacy prefix from pre-rebrand data
   );
 }
 
@@ -2238,16 +2315,21 @@ function linkedDirectoriesEquivalent(
   if (left.kind !== right.kind) {
     return false;
   }
-  if (normalizeLinkedDirectoryPath(left.path) !== normalizeLinkedDirectoryPath(right.path)) {
+  if (
+    normalizeLinkedDirectoryPath(left.path)
+    !== normalizeLinkedDirectoryPath(right.path)
+  ) {
     return false;
   }
   return (
-    normalizeLinkedDirectoryPath(left.worktreePath) ===
-    normalizeLinkedDirectoryPath(right.worktreePath)
+    normalizeLinkedDirectoryPath(left.worktreePath)
+    === normalizeLinkedDirectoryPath(right.worktreePath)
   );
 }
 
-function normalizeLinkedDirectoryPath(value: string | undefined): string | undefined {
+function normalizeLinkedDirectoryPath(
+  value: string | undefined,
+): string | undefined {
   const normalized = value?.trim();
   return normalized ? path.resolve(normalized) : undefined;
 }
@@ -2261,7 +2343,9 @@ function normalizeThreadAgent(
     throw new Error("Agent thread name is required.");
   }
   const instructions = input.instructions?.trim();
-  const instructionLineCount = instructions ? instructions.split(/\r?\n/).length : 0;
+  const instructionLineCount = instructions
+    ? instructions.split(/\r?\n/).length
+    : 0;
   return {
     name,
     instructions: instructions || undefined,
@@ -2305,7 +2389,9 @@ type ThreadUsageLineRow = {
   cumulative_reasoning_output_tokens: number | null;
   cumulative_total_tokens: number | null;
   price_status: ThreadUsageLineRecord["priceStatus"];
-  price_unavailable_reason: ThreadUsageLineRecord["priceUnavailableReason"] | null;
+  price_unavailable_reason:
+    | ThreadUsageLineRecord["priceUnavailableReason"]
+    | null;
   currency: string;
   pricing_catalog_id: string | null;
   pricing_catalog_version: string | null;
@@ -2346,7 +2432,10 @@ function normalizeThreadUsageLine(
   updatedAt: number,
 ): ThreadUsageLineRecord {
   const inputTokens = clampTokenCount(line.inputTokens);
-  const cachedInputTokens = Math.min(inputTokens, clampTokenCount(line.cachedInputTokens));
+  const cachedInputTokens = Math.min(
+    inputTokens,
+    clampTokenCount(line.cachedInputTokens),
+  );
   const uncachedInputTokens = Math.max(
     0,
     line.uncachedInputTokens ?? inputTokens - cachedInputTokens,
@@ -2364,7 +2453,11 @@ function normalizeThreadUsageLine(
     createdAt: line.createdAt || updatedAt,
     currency: line.currency || "USD",
     ...(line.cumulativeCachedInputTokens !== undefined
-      ? { cumulativeCachedInputTokens: clampTokenCount(line.cumulativeCachedInputTokens) }
+      ? {
+          cumulativeCachedInputTokens: clampTokenCount(
+            line.cumulativeCachedInputTokens,
+          ),
+        }
       : {}),
     ...(line.cumulativeInputTokens !== undefined
       ? { cumulativeInputTokens: clampTokenCount(line.cumulativeInputTokens) }
@@ -2404,8 +2497,8 @@ function normalizeThreadUsageLine(
     uncachedInputTokens,
     provider: line.provider || "openai",
     usageTurnId:
-      line.usageTurnId ||
-      [
+      line.usageTurnId
+      || [
         line.provider || "openai",
         line.backend,
         line.threadId,
@@ -2426,7 +2519,11 @@ function mergeThreadUsageLineForUpsert(
       : existing.fastMode !== undefined
         ? { fastMode: existing.fastMode }
         : {}),
-    ...(line.model ? { model: line.model } : existing.model ? { model: existing.model } : {}),
+    ...(line.model
+      ? { model: line.model }
+      : existing.model
+        ? { model: existing.model }
+        : {}),
     ...(line.reasoningEffort
       ? { reasoningEffort: line.reasoningEffort }
       : existing.reasoningEffort
@@ -2468,7 +2565,9 @@ function mergeUsageSettingValue<T extends string>(
   return next;
 }
 
-function repriceOpenAiUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRecord {
+function repriceOpenAiUsageLine(
+  line: ThreadUsageLineRecord,
+): ThreadUsageLineRecord {
   if (line.provider !== "openai") {
     return line;
   }
@@ -2487,14 +2586,15 @@ function repriceOpenAiUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRec
     fastMode: line.fastMode,
     serviceTier: line.serviceTier,
   });
-  const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
-    cost
-      ? undefined
-      : !line.model
-        ? "missing-model"
-        : pricingServiceTier === undefined
-          ? "unsupported-service-tier"
-          : "missing-rate";
+  const priceUnavailableReason:
+    | ThreadUsageLineRecord["priceUnavailableReason"]
+    | undefined = cost
+    ? undefined
+    : !line.model
+      ? "missing-model"
+      : pricingServiceTier === undefined
+        ? "unsupported-service-tier"
+        : "missing-rate";
   const {
     priceUnavailableReason: _discardedPriceUnavailableReason,
     pricingCatalogId: _discardedPricingCatalogId,
@@ -2511,9 +2611,13 @@ function repriceOpenAiUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRec
     priceStatus: cost ? "priced" : "unpriced",
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
-    ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
+    ...(cost?.catalogVersion
+      ? { pricingCatalogVersion: cost.catalogVersion }
+      : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
-    ...(cost?.serviceTier && !line.serviceTier ? { serviceTier: cost.serviceTier } : {}),
+    ...(cost?.serviceTier && !line.serviceTier
+      ? { serviceTier: cost.serviceTier }
+      : {}),
     totalCostMicros: cost?.totalCostMicros ?? 0,
     uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
   };
@@ -2525,7 +2629,9 @@ function clampTokenCount(value: number | undefined): number {
     : 0;
 }
 
-function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string, unknown> {
+function toThreadUsageLineRowParams(
+  line: ThreadUsageLineRecord,
+): Record<string, unknown> {
   return {
     backend: line.backend,
     cachedInputCostMicros: line.cachedInputCostMicros,
@@ -2535,12 +2641,14 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     cumulativeCachedInputTokens: line.cumulativeCachedInputTokens ?? null,
     cumulativeInputTokens: line.cumulativeInputTokens ?? null,
     cumulativeOutputTokens: line.cumulativeOutputTokens ?? null,
-    cumulativeReasoningOutputTokens: line.cumulativeReasoningOutputTokens ?? null,
+    cumulativeReasoningOutputTokens:
+      line.cumulativeReasoningOutputTokens ?? null,
     cumulativeTotalCostMicros: line.cumulativeTotalCostMicros ?? null,
     cumulativeTotalTokens: line.cumulativeTotalTokens ?? null,
     cumulativeUncachedInputTokens: line.cumulativeUncachedInputTokens ?? null,
     currency: line.currency,
-    fastMode: typeof line.fastMode === "boolean" ? (line.fastMode ? 1 : 0) : null,
+    fastMode:
+      typeof line.fastMode === "boolean" ? (line.fastMode ? 1 : 0) : null,
     inputTokens: line.inputTokens,
     model: line.model ?? null,
     outputCostMicros: line.outputCostMicros,
@@ -2574,7 +2682,9 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
   };
 }
 
-function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord {
+function threadUsageLineFromRow(
+  row: ThreadUsageLineRow,
+): ThreadUsageLineRecord {
   return {
     backend: row.backend,
     cachedInputCostMicros: row.cached_input_cost_micros,
@@ -2617,7 +2727,9 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
       ? { priceUnavailableReason: row.price_unavailable_reason }
       : {}),
     provider: row.provider || "openai",
-    ...(row.pricing_catalog_id ? { pricingCatalogId: row.pricing_catalog_id } : {}),
+    ...(row.pricing_catalog_id
+      ? { pricingCatalogId: row.pricing_catalog_id }
+      : {}),
     ...(row.pricing_catalog_version
       ? { pricingCatalogVersion: row.pricing_catalog_version }
       : {}),
@@ -2644,7 +2756,9 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
   };
 }
 
-function threadPricingSummaryFromRow(row: ThreadPricingSummaryRow): ThreadPricingSummary {
+function threadPricingSummaryFromRow(
+  row: ThreadPricingSummaryRow,
+): ThreadPricingSummary {
   return {
     backend: row.backend,
     cachedInputTokens: row.cached_input_tokens,

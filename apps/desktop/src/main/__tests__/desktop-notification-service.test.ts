@@ -2,99 +2,100 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagingApprovalIntent } from "@pwragent/messaging-interface";
 import { DesktopNotificationService } from "../notifications/desktop-notification-service";
 
-const {
-  shownNotifications,
-  getAllWindows,
-  MockNotification,
-} = vi.hoisted(() => {
-  const shown: Array<{
-    title: string;
-    body: string;
-    actions?: Array<{ type: string; text: string }>;
-    instance: NotificationMock;
-  }> = [];
-  const windows = vi.fn(() => [] as Array<{
-    isDestroyed: () => boolean;
-    isFocused: () => boolean;
-    isMinimized: () => boolean;
-  }>);
+const { shownNotifications, getAllWindows, MockNotification } = vi.hoisted(
+  () => {
+    const shown: Array<{
+      title: string;
+      body: string;
+      actions?: Array<{ type: string; text: string }>;
+      instance: NotificationMock;
+    }> = [];
+    const windows = vi.fn(
+      () =>
+        [] as Array<{
+          isDestroyed: () => boolean;
+          isFocused: () => boolean;
+          isMinimized: () => boolean;
+        }>,
+    );
 
-  class NotificationMock {
-    static isSupported = vi.fn(() => true);
-    private actionHandler?: (
-      details: { actionIndex?: number; preventDefault?: () => void },
-      actionIndex: number,
-      selectionIndex: number,
-    ) => void;
-    private clickHandler?: () => void;
-    private closeHandler?: () => void;
-
-    constructor(
-      private readonly payload: {
-        title: string;
-        body: string;
-        actions?: Array<{ type: string; text: string }>;
-      },
-    ) {}
-
-    on(
-      event: "action" | "click" | "close",
-      handler: (
+    class NotificationMock {
+      static isSupported = vi.fn(() => true);
+      private actionHandler?: (
         details: { actionIndex?: number; preventDefault?: () => void },
         actionIndex: number,
         selectionIndex: number,
-      ) => void,
-    ): void {
-      if (event === "action") {
-        this.actionHandler = handler;
-        return;
+      ) => void;
+      private clickHandler?: () => void;
+      private closeHandler?: () => void;
+
+      constructor(
+        private readonly payload: {
+          title: string;
+          body: string;
+          actions?: Array<{ type: string; text: string }>;
+        },
+      ) {}
+
+      on(
+        event: "action" | "click" | "close",
+        handler: (
+          details: { actionIndex?: number; preventDefault?: () => void },
+          actionIndex: number,
+          selectionIndex: number,
+        ) => void,
+      ): void {
+        if (event === "action") {
+          this.actionHandler = handler;
+          return;
+        }
+        if (event === "click") {
+          this.clickHandler = () => {
+            (handler as unknown as () => void)();
+          };
+          return;
+        }
+        if (event === "close") {
+          this.closeHandler = () => {
+            (handler as unknown as () => void)();
+          };
+        }
       }
-      if (event === "click") {
-        this.clickHandler = () => {
-          (handler as unknown as () => void)();
-        };
-        return;
+
+      show(): void {
+        shown.push({
+          title: this.payload.title,
+          body: this.payload.body,
+          actions: this.payload.actions,
+          instance: this,
+        });
       }
-      if (event === "close") {
-        this.closeHandler = () => {
-          (handler as unknown as () => void)();
-        };
+
+      emitAction(actionIndex: number): void {
+        const event = { actionIndex, preventDefault: vi.fn() };
+        this.actionHandler?.(event, actionIndex, -1);
+      }
+
+      emitClick(): void {
+        this.clickHandler?.();
+      }
+
+      emitClose(): void {
+        this.closeHandler?.();
+      }
+
+      close(): void {
+        this.emitClose();
       }
     }
 
-    show(): void {
-      shown.push({
-        title: this.payload.title,
-        body: this.payload.body,
-        actions: this.payload.actions,
-        instance: this,
-      });
-    }
-
-    emitAction(actionIndex: number): void {
-      const event = { actionIndex, preventDefault: vi.fn() };
-      this.actionHandler?.(event, actionIndex, -1);
-    }
-
-    emitClick(): void {
-      this.clickHandler?.();
-    }
-
-    emitClose(): void {
-      this.closeHandler?.();
-    }
-
-    close(): void {
-      this.emitClose();
-    }
-  }
-
-  return {
-    shownNotifications: shown,
-    getAllWindows: windows,
-    MockNotification: NotificationMock,
-  };
-});
+    return {
+      shownNotifications: shown,
+      getAllWindows: windows,
+      MockNotification: NotificationMock,
+    };
+  },
+);
 
 vi.mock("electron", () => ({
   Notification: MockNotification,
@@ -113,34 +114,33 @@ function approvalIntent(params?: {
     createdAt: 1000,
     title: "Command Approval",
     body:
-      params?.body ??
-      [
+      params?.body
+      ?? [
         "Run command?",
         "Command:",
         "```shell",
         "npm view eslint",
         "```",
-        "Reply with \"1\", \"2\", \"yes\", \"yes for this session\", \"no\", or use a button.",
+        'Reply with "1", "2", "yes", "yes for this session", "no", or use a button.',
       ].join("\n"),
-    fallbackText: "Reply yes, yes for this session, no, cancel, or a choice number.",
-    decisions:
-      params?.decisions ??
-      [
-        {
-          id: "approval:accept",
-          label: "Approve Once",
-          decision: "accept",
-          style: "primary",
-          fallbackText: "1",
-        },
-        {
-          id: "approval:decline",
-          label: "Decline",
-          decision: "decline",
-          style: "danger",
-          fallbackText: "no",
-        },
-      ],
+    fallbackText:
+      "Reply yes, yes for this session, no, cancel, or a choice number.",
+    decisions: params?.decisions ?? [
+      {
+        id: "approval:accept",
+        label: "Approve Once",
+        decision: "accept",
+        style: "primary",
+        fallbackText: "1",
+      },
+      {
+        id: "approval:decline",
+        label: "Decline",
+        decision: "decline",
+        style: "danger",
+        fallbackText: "no",
+      },
+    ],
   };
 }
 
@@ -154,7 +154,11 @@ describe("DesktopNotificationService", () => {
   it("emits attention notifications only once per key", () => {
     const service = new DesktopNotificationService();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => false,
+        isMinimized: () => false,
+      },
     ]);
 
     service.notifyAttention({
@@ -183,7 +187,11 @@ describe("DesktopNotificationService", () => {
   it("does not emit notifications while app is focused", () => {
     const service = new DesktopNotificationService();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => true, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => true,
+        isMinimized: () => false,
+      },
     ]);
 
     service.notifyTerminal({
@@ -198,7 +206,11 @@ describe("DesktopNotificationService", () => {
   it("does not emit attention notifications while a window is focused", () => {
     const service = new DesktopNotificationService();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => true, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => true,
+        isMinimized: () => false,
+      },
     ]);
 
     service.notifyAttention({
@@ -214,7 +226,11 @@ describe("DesktopNotificationService", () => {
   it("does not emit approval notifications while a window is focused", () => {
     const service = new DesktopNotificationService();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => true, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => true,
+        isMinimized: () => false,
+      },
     ]);
 
     service.notifyApproval({
@@ -231,7 +247,11 @@ describe("DesktopNotificationService", () => {
     const service = new DesktopNotificationService();
     const onShow = vi.fn();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => false,
+        isMinimized: () => false,
+      },
     ]);
     const serviceWithActionButtons = service as unknown as {
       supportsActionButtons: () => boolean;
@@ -240,10 +260,9 @@ describe("DesktopNotificationService", () => {
       attentionKeys: Set<string>;
       liveNotifications: Set<unknown>;
     };
-    vi.spyOn(
-      serviceWithActionButtons,
-      "supportsActionButtons",
-    ).mockReturnValue(true);
+    vi.spyOn(serviceWithActionButtons, "supportsActionButtons").mockReturnValue(
+      true,
+    );
 
     service.notifyTerminal({
       enabled: true,
@@ -293,15 +312,18 @@ describe("DesktopNotificationService", () => {
     const onDecision = vi.fn();
     const onShow = vi.fn();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => false,
+        isMinimized: () => false,
+      },
     ]);
     const serviceWithActionButtons = service as unknown as {
       supportsActionButtons: () => boolean;
     };
-    vi.spyOn(
-      serviceWithActionButtons,
-      "supportsActionButtons",
-    ).mockReturnValue(true);
+    vi.spyOn(serviceWithActionButtons, "supportsActionButtons").mockReturnValue(
+      true,
+    );
 
     service.notifyApproval({
       enabled: true,
@@ -343,15 +365,18 @@ describe("DesktopNotificationService", () => {
     const service = new DesktopNotificationService();
     const onDecision = vi.fn();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => false,
+        isMinimized: () => false,
+      },
     ]);
     const serviceWithActionButtons = service as unknown as {
       supportsActionButtons: () => boolean;
     };
-    vi.spyOn(
-      serviceWithActionButtons,
-      "supportsActionButtons",
-    ).mockReturnValue(true);
+    vi.spyOn(serviceWithActionButtons, "supportsActionButtons").mockReturnValue(
+      true,
+    );
 
     service.notifyApproval({
       enabled: true,
@@ -363,7 +388,7 @@ describe("DesktopNotificationService", () => {
           "```shell",
           "npm view eslint",
           "```",
-          "Reply with \"1\", \"2\", \"yes\", \"yes for this session\", \"no\", or use a button.",
+          'Reply with "1", "2", "yes", "yes for this session", "no", or use a button.',
         ].join("\n\n"),
       }),
       onDecision,
@@ -381,15 +406,18 @@ describe("DesktopNotificationService", () => {
     const onDecision = vi.fn();
     const onShow = vi.fn();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => false,
+        isMinimized: () => false,
+      },
     ]);
     const serviceWithActionButtons = service as unknown as {
       supportsActionButtons: () => boolean;
     };
-    vi.spyOn(
-      serviceWithActionButtons,
-      "supportsActionButtons",
-    ).mockReturnValue(true);
+    vi.spyOn(serviceWithActionButtons, "supportsActionButtons").mockReturnValue(
+      true,
+    );
 
     service.notifyApproval({
       enabled: true,
@@ -401,7 +429,7 @@ describe("DesktopNotificationService", () => {
           "```shell",
           `npm run deploy -- --target production ${"x".repeat(260)} --dangerous-flag`,
           "```",
-          "Reply with \"1\", \"2\", \"yes\", \"yes for this session\", \"no\", or use a button.",
+          'Reply with "1", "2", "yes", "yes for this session", "no", or use a button.',
         ].join("\n"),
       }),
       onDecision,
@@ -421,7 +449,11 @@ describe("DesktopNotificationService", () => {
     const service = new DesktopNotificationService();
     const onDecision = vi.fn();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => false,
+        isMinimized: () => false,
+      },
     ]);
     const serviceWithActionButtons = service as unknown as {
       supportsActionButtons: () => boolean;
@@ -429,7 +461,9 @@ describe("DesktopNotificationService", () => {
     const serviceWithLiveNotifications = service as unknown as {
       liveNotifications: Set<unknown>;
     };
-    vi.spyOn(serviceWithActionButtons, "supportsActionButtons").mockReturnValue(true);
+    vi.spyOn(serviceWithActionButtons, "supportsActionButtons").mockReturnValue(
+      true,
+    );
 
     service.notifyApproval({
       enabled: true,
@@ -458,7 +492,11 @@ describe("DesktopNotificationService", () => {
   it("closes a live attention notification when its key is cleared", () => {
     const service = new DesktopNotificationService();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => false,
+        isMinimized: () => false,
+      },
     ]);
     const serviceWithLiveNotifications = service as unknown as {
       liveNotifications: Set<unknown>;
@@ -491,7 +529,11 @@ describe("DesktopNotificationService", () => {
     const service = new DesktopNotificationService();
     const onShow = vi.fn();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => false,
+        isMinimized: () => false,
+      },
     ]);
 
     service.notifyAttention({
@@ -511,15 +553,18 @@ describe("DesktopNotificationService", () => {
     const service = new DesktopNotificationService();
     const onDecision = vi.fn();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => false,
+        isMinimized: () => false,
+      },
     ]);
     const serviceWithActionButtons = service as unknown as {
       supportsActionButtons: () => boolean;
     };
-    vi.spyOn(
-      serviceWithActionButtons,
-      "supportsActionButtons",
-    ).mockReturnValue(false);
+    vi.spyOn(serviceWithActionButtons, "supportsActionButtons").mockReturnValue(
+      false,
+    );
 
     service.notifyApproval({
       enabled: true,
@@ -538,15 +583,18 @@ describe("DesktopNotificationService", () => {
     const onDecision = vi.fn();
     const onShow = vi.fn();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => false,
+        isMinimized: () => false,
+      },
     ]);
     const serviceWithActionButtons = service as unknown as {
       supportsActionButtons: () => boolean;
     };
-    vi.spyOn(
-      serviceWithActionButtons,
-      "supportsActionButtons",
-    ).mockReturnValue(true);
+    vi.spyOn(serviceWithActionButtons, "supportsActionButtons").mockReturnValue(
+      true,
+    );
 
     service.notifyApproval({
       enabled: true,
@@ -554,7 +602,7 @@ describe("DesktopNotificationService", () => {
       intent: approvalIntent({
         body: [
           "Approve this action?",
-          "Reply with \"1\", \"2\", \"yes\", \"yes for this session\", \"no\", or use a button.",
+          'Reply with "1", "2", "yes", "yes for this session", "no", or use a button.',
         ].join("\n\n"),
       }),
       onDecision,
@@ -576,7 +624,11 @@ describe("DesktopNotificationService", () => {
     const onDecision = vi.fn();
     const onShow = vi.fn();
     getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+      {
+        isDestroyed: () => false,
+        isFocused: () => false,
+        isMinimized: () => false,
+      },
     ]);
 
     service.notifyApproval({

@@ -22,10 +22,7 @@ function rawMergedPr() {
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
     mergedAt: "2026-05-05T00:06:31Z",
-    commits: [
-      { oid: "a".repeat(40) },
-      { oid: "b".repeat(40) },
-    ],
+    commits: [{ oid: "a".repeat(40) }, { oid: "b".repeat(40) }],
     headRefName: "feat/desktop-thread-reactions-and-pr-chips",
     headRepository: { name: "PwrAgent" },
     headRepositoryOwner: { login: "pwrdrvr" },
@@ -59,9 +56,9 @@ describe("parseGhPrPayload", () => {
   });
 
   it("omits blank titles from PrSummary", () => {
-    expect(parseGhPrPayload({ ...rawMergedPr(), title: " " })).not.toHaveProperty(
-      "title",
-    );
+    expect(
+      parseGhPrPayload({ ...rawMergedPr(), title: " " }),
+    ).not.toHaveProperty("title");
   });
 
   it("falls back to empty strings for missing repo/owner", () => {
@@ -183,7 +180,13 @@ describe("derive PR states", () => {
   });
 
   it("returns failing when any check FAILED / CANCELLED / TIMED_OUT", () => {
-    for (const conclusion of ["FAILURE", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"]) {
+    for (const conclusion of [
+      "FAILURE",
+      "CANCELLED",
+      "TIMED_OUT",
+      "STARTUP_FAILURE",
+      "ACTION_REQUIRED",
+    ]) {
       expect(
         deriveChipState({
           ...rawMergedPr(),
@@ -329,11 +332,13 @@ describe("parseGhAuthStatus", () => {
 });
 
 describe("GithubPrFetcher", () => {
-  function buildFetcher(overrides: {
-    stdout?: string;
-    error?: Error;
-    ghAvailable?: boolean;
-  } = {}) {
+  function buildFetcher(
+    overrides: {
+      stdout?: string;
+      error?: Error;
+      ghAvailable?: boolean;
+    } = {},
+  ) {
     const exec = vi.fn(async (_cwd: string, _args: string[]) => {
       if (overrides.error) throw overrides.error;
       return { stdout: overrides.stdout ?? "[]", stderr: "" };

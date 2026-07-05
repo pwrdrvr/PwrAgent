@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { classifyShellCommand, splitShellWords } from "../tools/shell-safety.js";
+import {
+  classifyShellCommand,
+  splitShellWords,
+} from "../tools/shell-safety.js";
 
 describe("shell safety", () => {
   it("classifies safe read-only commands", () => {

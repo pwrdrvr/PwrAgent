@@ -70,21 +70,35 @@ describe("buildAiSdkMessages", () => {
     try {
       const messages = await buildAiSdkMessages({
         input: [
-          { type: "image", name: "pasted-screenshot.png", url: "data:image/png;base64,AQID" },
-          { type: "localImage", name: "materialized-screenshot.png", path: imagePath },
+          {
+            type: "image",
+            name: "pasted-screenshot.png",
+            url: "data:image/png;base64,AQID",
+          },
+          {
+            type: "localImage",
+            name: "materialized-screenshot.png",
+            path: imagePath,
+          },
         ],
       });
       expect(messages).toEqual([
         {
           role: "user",
           content: [
-            { type: "text", text: "Attached image filename: pasted-screenshot.png" },
+            {
+              type: "text",
+              text: "Attached image filename: pasted-screenshot.png",
+            },
             {
               type: "image",
               image: new URL("data:image/png;base64,AQID"),
               mediaType: "image/png",
             },
-            { type: "text", text: "Attached image filename: materialized-screenshot.png" },
+            {
+              type: "text",
+              text: "Attached image filename: materialized-screenshot.png",
+            },
             {
               type: "image",
               image: Buffer.from([4, 5, 6]),

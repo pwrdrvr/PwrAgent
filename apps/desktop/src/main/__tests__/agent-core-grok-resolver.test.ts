@@ -20,7 +20,9 @@ describe("resolveAgentCoreGrokEnabled", () => {
   let priorFlagEnv: string | undefined;
 
   beforeEach(() => {
-    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-agent-core-grok-"));
+    tmpHome = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-agent-core-grok-"),
+    );
     priorHomeEnv = process.env.HOME;
     priorProfileEnv = process.env[PWRAGENT_HOME_ENV];
     priorFlagEnv = process.env[AGENT_CORE_GROK_ENV];

@@ -1,4 +1,7 @@
-import type { AcpBackendId, BackendAcpDistributionKind } from "@pwragent/shared";
+import type {
+  AcpBackendId,
+  BackendAcpDistributionKind,
+} from "@pwragent/shared";
 
 export type AcpLaunchDescriptor = {
   backendId: AcpBackendId;
@@ -14,7 +17,10 @@ export type AcpLaunchDescriptor = {
 export function normalizeAcpLaunchDescriptor(
   descriptor: AcpLaunchDescriptor,
 ): AcpLaunchDescriptor {
-  if (descriptor.registryId !== "gemini" || !descriptor.args.includes("--acp")) {
+  if (
+    descriptor.registryId !== "gemini"
+    || !descriptor.args.includes("--acp")
+  ) {
     return descriptor;
   }
 

@@ -17,10 +17,7 @@ import {
 } from "../useThreadSessionState";
 import { readRendererSequence } from "../../features/thread-detail/live-transcript-activity";
 
-function buildThread(params: {
-  id: string;
-  updatedAt: number;
-}): any {
+function buildThread(params: { id: string; updatedAt: number }): any {
   return {
     id: params.id,
     title: `Thread ${params.id}`,
@@ -41,7 +38,7 @@ function transcriptLabels(entries: AppServerThreadEntry[]): string[] {
       ? `message:${entry.text}`
       : entry.type === "activity" && "summary" in entry
         ? `activity:${entry.summary}`
-        : entry.type
+        : entry.type,
   );
 }
 
@@ -78,7 +75,7 @@ function readThreadResponse(params: {
       messages: params.entries
         .filter(
           (entry): entry is AppServerThreadMessageEntry =>
-            entry.type === "message"
+            entry.type === "message",
         )
         .map(({ type: _type, ...message }) => message),
       pagination: {
@@ -122,7 +119,7 @@ function diffActivity(params: {
 
 async function waitForThreadHydration(
   result: { current: { response?: AppServerReadThreadResponse } },
-  threadId = "thread-1"
+  threadId = "thread-1",
 ): Promise<void> {
   await waitFor(() => {
     expect(result.current.response?.threadId).toBe(threadId);
@@ -188,7 +185,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     expect(result.current.threadBusy).toBe(false);
@@ -234,7 +231,7 @@ describe("useThreadSessionState", () => {
         desktopApi,
         initialHistoryLimit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -289,7 +286,7 @@ describe("useThreadSessionState", () => {
         }),
       {
         initialProps: { updatedAt: 1_000 },
-      }
+      },
     );
 
     await waitForThreadHydration(result);
@@ -311,7 +308,7 @@ describe("useThreadSessionState", () => {
       ]);
     });
     expect(result.current.response?.replay.pagination.previousCursor).toBe(
-      "oldest-page"
+      "oldest-page",
     );
 
     rerender({ updatedAt: 2_000 });
@@ -335,7 +332,7 @@ describe("useThreadSessionState", () => {
       ]);
     });
     expect(result.current.response?.replay.pagination.previousCursor).toBe(
-      "oldest-page"
+      "oldest-page",
     );
   });
 
@@ -370,7 +367,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           initialHistoryLimit: undefined as number | undefined,
         },
-      }
+      },
     );
 
     await waitForThreadHydration(result);
@@ -427,7 +424,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -461,8 +458,8 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(
         result.current.entries.map((entry) =>
-          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-        )
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+        ),
       ).toContain("assistant:First turn finished late.");
     });
     expect(result.current.activeTurnId).toBe("turn-2");
@@ -512,7 +509,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -527,7 +524,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -535,7 +532,9 @@ describe("useThreadSessionState", () => {
     });
 
     act(() => {
-      result.current.addOptimisticUserMessage("Please fix transcript ordering.");
+      result.current.addOptimisticUserMessage(
+        "Please fix transcript ordering.",
+      );
     });
 
     await act(async () => {
@@ -557,8 +556,8 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(
         result.current.entries.map((entry) =>
-          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-        )
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+        ),
       ).toEqual([
         "assistant:Loaded thread-1",
         "user:Please fix transcript ordering.",
@@ -568,8 +567,8 @@ describe("useThreadSessionState", () => {
 
     expect(
       result.current.response?.replay.messages.map(
-        (message) => `${message.role}:${message.text}`
-      )
+        (message) => `${message.role}:${message.text}`,
+      ),
     ).toEqual([
       "assistant:Loaded thread-1",
       "user:Please fix transcript ordering.",
@@ -616,13 +615,15 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
 
     act(() => {
-      result.current.addOptimisticUserMessage("Please fix transcript ordering.");
+      result.current.addOptimisticUserMessage(
+        "Please fix transcript ordering.",
+      );
     });
 
     act(() => {
@@ -681,8 +682,10 @@ describe("useThreadSessionState", () => {
 
     expect(
       result.current.entries.map((entry) =>
-        entry.type === "message" ? `${entry.id}:${entry.role}:${entry.text}` : entry.type
-      )
+        entry.type === "message"
+          ? `${entry.id}:${entry.role}:${entry.text}`
+          : entry.type,
+      ),
     ).toEqual([
       "user-message-1:user:Please fix transcript ordering.",
       "assistant-message-1:assistant:Working on it.",
@@ -690,9 +693,9 @@ describe("useThreadSessionState", () => {
     expect(
       result.current.response?.replay.messages.filter(
         (message) =>
-          message.role === "user" &&
-          message.text === "Please fix transcript ordering."
-      )
+          message.role === "user"
+          && message.text === "Please fix transcript ordering.",
+      ),
     ).toEqual([
       expect.objectContaining({
         id: "user-message-1",
@@ -738,7 +741,7 @@ describe("useThreadSessionState", () => {
             },
           },
         };
-      }
+      },
     );
     const desktopApi: DesktopApi = { readThread };
 
@@ -753,22 +756,24 @@ describe("useThreadSessionState", () => {
             imageParts: [{ type: "image", url: "data:image/png;base64,AQID" }],
           },
         },
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
     await waitFor(() => {
       expect(
         result.current.entries.map((entry) =>
-          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-        )
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+        ),
       ).toEqual([
         "user:What's in this image?",
         "assistant:It is a screenshot of PwrAgent.",
       ]);
     });
     expect(
-      result.current.messages.map((message) => `${message.role}:${message.text}`)
+      result.current.messages.map(
+        (message) => `${message.role}:${message.text}`,
+      ),
     ).toEqual([
       "user:What's in this image?",
       "assistant:It is a screenshot of PwrAgent.",
@@ -798,7 +803,10 @@ describe("useThreadSessionState", () => {
                 parts: [
                   { type: "text" as const, text: "What's in this image?" },
                   { type: "text" as const, text: "<image name=[Image #1]>" },
-                  { type: "image" as const, url: "file:///tmp/materialized.png" },
+                  {
+                    type: "image" as const,
+                    url: "file:///tmp/materialized.png",
+                  },
                   { type: "text" as const, text: "</image>" },
                 ],
                 createdAt: 2_000,
@@ -820,7 +828,10 @@ describe("useThreadSessionState", () => {
                 parts: [
                   { type: "text" as const, text: "What's in this image?" },
                   { type: "text" as const, text: "<image name=[Image #1]>" },
-                  { type: "image" as const, url: "file:///tmp/materialized.png" },
+                  {
+                    type: "image" as const,
+                    url: "file:///tmp/materialized.png",
+                  },
                   { type: "text" as const, text: "</image>" },
                 ],
                 createdAt: 2_000,
@@ -838,7 +849,7 @@ describe("useThreadSessionState", () => {
             },
           },
         };
-      }
+      },
     );
     const desktopApi: DesktopApi = { readThread };
 
@@ -853,15 +864,15 @@ describe("useThreadSessionState", () => {
             imageParts: [{ type: "image", url: "data:image/png;base64,AQID" }],
           },
         },
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
     await waitFor(() => {
       expect(
         result.current.entries.map((entry) =>
-          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-        )
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+        ),
       ).toEqual([
         "user:What's in this image?",
         "assistant:It is a screenshot of PwrAgent.",
@@ -930,7 +941,7 @@ describe("useThreadSessionState", () => {
             },
           },
         };
-      }
+      },
     );
     const desktopApi: DesktopApi = { readThread };
 
@@ -945,15 +956,15 @@ describe("useThreadSessionState", () => {
             imageParts: [{ type: "image", url: "data:image/png;base64,AQID" }],
           },
         },
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
     await waitFor(() => {
       expect(
         result.current.entries.map((entry) =>
-          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-        )
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+        ),
       ).toEqual([
         "user:what's in this?",
         "assistant:It is a screenshot of PwrAgent.",
@@ -1013,7 +1024,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -1028,7 +1039,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -1065,12 +1076,9 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(
         result.current.entries.map((entry) =>
-          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-        )
-      ).toEqual([
-        "assistant:Loaded thread-1",
-        "user:Steer while thinking.",
-      ]);
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+        ),
+      ).toEqual(["assistant:Loaded thread-1", "user:Steer while thinking."]);
     });
 
     await act(async () => {
@@ -1092,8 +1100,8 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(
         result.current.entries.map((entry) =>
-          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-        )
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+        ),
       ).toEqual([
         "assistant:Loaded thread-1",
         "user:Steer while thinking.",
@@ -1131,7 +1139,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -1146,7 +1154,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -1183,8 +1191,8 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(
         result.current.entries.map((entry) =>
-          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-        )
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+        ),
       ).toEqual(["user:What's in this image?"]);
     });
     const [entry] = result.current.entries;
@@ -1243,7 +1251,7 @@ describe("useThreadSessionState", () => {
               hasPreviousPage: false,
             },
           },
-        })
+        }),
       )
       .mockImplementationOnce(
         async ({
@@ -1287,7 +1295,7 @@ describe("useThreadSessionState", () => {
               hasPreviousPage: false,
             },
           },
-        })
+        }),
       );
 
     const desktopApi: DesktopApi = {
@@ -1302,7 +1310,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -1403,7 +1411,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -1418,7 +1426,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-empty", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -1448,8 +1456,8 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(
         result.current.entries.map((entry) =>
-          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-        )
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+        ),
       ).toEqual([
         "user:Start a new ordered thread.",
         "assistant:The new thread is ordered.",
@@ -1486,7 +1494,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -1501,7 +1509,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -1524,7 +1532,9 @@ describe("useThreadSessionState", () => {
       });
     });
 
-    expect(result.current.pendingAssistantMessage?.text).toBe("First commentary.");
+    expect(result.current.pendingAssistantMessage?.text).toBe(
+      "First commentary.",
+    );
     expect(result.current.pendingAssistantMessage?.phase).toBe("commentary");
 
     act(() => {
@@ -1545,10 +1555,12 @@ describe("useThreadSessionState", () => {
 
     expect(
       result.current.entries.map((entry) =>
-        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-      )
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+      ),
     ).toEqual(["assistant:First commentary."]);
-    expect(result.current.pendingAssistantMessage?.text).toBe("Second commentary.");
+    expect(result.current.pendingAssistantMessage?.text).toBe(
+      "Second commentary.",
+    );
     expect(result.current.pendingAssistantMessage?.phase).toBe("commentary");
 
     act(() => {
@@ -1572,8 +1584,8 @@ describe("useThreadSessionState", () => {
 
     expect(
       result.current.entries.map((entry) =>
-        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-      )
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+      ),
     ).toEqual([
       "assistant:First commentary.",
       "assistant:Second commentary.",
@@ -1582,12 +1594,12 @@ describe("useThreadSessionState", () => {
     expect(
       result.current.entries
         .filter((entry) => entry.type === "message")
-        .map((entry) => entry.phase)
+        .map((entry) => entry.phase),
     ).toEqual(["commentary", "commentary", "final"]);
     expect(
       result.current.entries
         .filter((entry) => entry.type === "message")
-        .map((entry) => entry.turn)
+        .map((entry) => entry.turn),
     ).toEqual([
       { id: "turn-1", status: "completed", durationMs: 524_447 },
       { id: "turn-1", status: "completed", durationMs: 524_447 },
@@ -1625,7 +1637,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -1640,7 +1652,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -1762,7 +1774,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -1777,7 +1789,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -1818,16 +1830,16 @@ describe("useThreadSessionState", () => {
 
     expect(
       result.current.entries.map((entry) =>
-        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-      )
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+      ),
     ).toEqual([
       "user:Automation run metadata...",
       "assistant:The automation result is ready.",
     ]);
     expect(
       result.current.entries.find(
-        (entry) => entry.type === "message" && entry.role === "assistant"
-      )
+        (entry) => entry.type === "message" && entry.role === "assistant",
+      ),
     ).toMatchObject({
       id: "assistant-message-1",
       phase: "final",
@@ -1865,7 +1877,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -1880,7 +1892,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -1985,7 +1997,7 @@ describe("useThreadSessionState", () => {
             },
           },
         };
-      }
+      },
     );
 
     const desktopApi: DesktopApi = {
@@ -2008,7 +2020,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           currentThread: initialThread,
         },
-      }
+      },
     );
 
     await waitFor(() => {
@@ -2065,7 +2077,9 @@ describe("useThreadSessionState", () => {
   });
 
   it("persists completion monitor usage as durable transcript metadata", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     const readThread = vi.fn(async ({ backend, threadId }) => ({
       backend: backend ?? "codex",
       fetchedAt: Date.now(),
@@ -2079,12 +2093,14 @@ describe("useThreadSessionState", () => {
         },
       },
     }));
-    const persistThreadUsageActivity = vi.fn(async ({ backend, threadId, activity }) => ({
-      backend,
-      threadId,
-      activityId: activity.id,
-      persisted: true,
-    }));
+    const persistThreadUsageActivity = vi.fn(
+      async ({ backend, threadId, activity }) => ({
+        backend,
+        threadId,
+        activityId: activity.id,
+        persisted: true,
+      }),
+    );
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -2098,7 +2114,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -2180,7 +2196,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -2195,7 +2211,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -2295,8 +2311,8 @@ describe("useThreadSessionState", () => {
           ? `message:${entry.text}`
           : entry.type === "activity"
             ? `activity:${entry.summary}`
-            : entry.type
-      )
+            : entry.type,
+      ),
     ).toEqual([
       "message:First commentary.",
       "activity:Explored 1 item",
@@ -2307,7 +2323,7 @@ describe("useThreadSessionState", () => {
     expect(
       result.current.entries
         .filter((entry) => entry.type === "message")
-        .map((entry) => entry.phase)
+        .map((entry) => entry.phase),
     ).toEqual(["commentary", "commentary", "final"]);
   });
 
@@ -2341,7 +2357,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -2356,7 +2372,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -2463,8 +2479,8 @@ describe("useThreadSessionState", () => {
           ? `message:${entry.text}`
           : entry.type === "activity"
             ? `activity:${entry.summary}`
-            : entry.type
-      )
+            : entry.type,
+      ),
     ).toEqual([
       "message:First commentary.",
       "activity:Explored 1 item",
@@ -2505,7 +2521,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -2520,7 +2536,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -2594,8 +2610,8 @@ describe("useThreadSessionState", () => {
           ? `message:${entry.text}`
           : entry.type === "activity"
             ? `activity:${entry.summary}:${entry.details.length}`
-            : entry.type
-      )
+            : entry.type,
+      ),
     ).toEqual([
       "activity:Explored 1 item:1",
       "message:Starting to look through the project.",
@@ -2641,7 +2657,7 @@ describe("useThreadSessionState", () => {
               hasPreviousPage: false,
             },
           },
-        })
+        }),
       )
       .mockImplementationOnce(
         async ({
@@ -2709,7 +2725,7 @@ describe("useThreadSessionState", () => {
               hasPreviousPage: false,
             },
           },
-        })
+        }),
       );
 
     const desktopApi: DesktopApi = {
@@ -2730,7 +2746,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
         },
-      }
+      },
     );
 
     await waitFor(() => {
@@ -2964,7 +2980,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
         },
-      }
+      },
     );
 
     await waitFor(() => {
@@ -3008,7 +3024,7 @@ describe("useThreadSessionState", () => {
 
     const editedActivity = result.current.entries.find(
       (entry): entry is AppServerThreadActivityEntry =>
-        entry.type === "activity" && entry.summary === "Edited 1 file, +1, -2"
+        entry.type === "activity" && entry.summary === "Edited 1 file, +1, -2",
     );
     expect(editedActivity?.details[0]?.fileDiff?.diff).toBe(liveDiff);
   });
@@ -3031,8 +3047,10 @@ describe("useThreadSessionState", () => {
       status: "completed" as const,
       durationMs: 90_000,
     };
-    const previousDiff = "diff --git a/old.ts b/old.ts\n--- a/old.ts\n+++ b/old.ts";
-    const currentDiff = "diff --git a/current.ts b/current.ts\n--- a/current.ts\n+++ b/current.ts";
+    const previousDiff =
+      "diff --git a/old.ts b/old.ts\n--- a/old.ts\n+++ b/old.ts";
+    const currentDiff =
+      "diff --git a/current.ts b/current.ts\n--- a/current.ts\n+++ b/current.ts";
     const previousDiffActivity = diffActivity({
       id: "previous-diff",
       summary: "Edited 5 files, +204, -2",
@@ -3136,7 +3154,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
         },
-      }
+      },
     );
 
     await waitFor(() => {
@@ -3300,7 +3318,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
         },
-      }
+      },
     );
 
     await waitFor(() => {
@@ -3384,7 +3402,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -3408,7 +3426,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           thread: thread1,
         },
-      }
+      },
     );
 
     await waitFor(() => {
@@ -3516,7 +3534,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -3531,7 +3549,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -3539,7 +3557,9 @@ describe("useThreadSessionState", () => {
     });
 
     act(() => {
-      result.current.addOptimisticUserMessage("Please keep the reply under this prompt.");
+      result.current.addOptimisticUserMessage(
+        "Please keep the reply under this prompt.",
+      );
     });
 
     act(() => {
@@ -3576,14 +3596,16 @@ describe("useThreadSessionState", () => {
 
     expect(
       result.current.entries.map((entry) =>
-        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
-      )
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type,
+      ),
     ).toEqual([
       "assistant:Earlier thread context.",
       "user:Please keep the reply under this prompt.",
       "assistant:First commentary.",
     ]);
-    expect(result.current.pendingAssistantMessage?.text).toBe("Second commentary.");
+    expect(result.current.pendingAssistantMessage?.text).toBe(
+      "Second commentary.",
+    );
   });
 
   it("hydrates unphased streamed assistant text after completion", async () => {
@@ -3643,7 +3665,7 @@ describe("useThreadSessionState", () => {
             },
           },
         };
-      }
+      },
     );
 
     const desktopApi: DesktopApi = {
@@ -3658,7 +3680,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -3742,7 +3764,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -3757,7 +3779,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-2", updatedAt: 1_500 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -3801,7 +3823,9 @@ describe("useThreadSessionState", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+      expect(
+        result.current.thinkingThreadKeys["codex:thread-1"],
+      ).toBeUndefined();
     });
   });
 
@@ -3838,7 +3862,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -3860,7 +3884,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           thread: thread1,
         },
-      }
+      },
     );
 
     await waitFor(() => {
@@ -3923,7 +3947,7 @@ describe("useThreadSessionState", () => {
               hasPreviousPage: false,
             },
           },
-        })
+        }),
       )
       .mockImplementationOnce(
         async ({
@@ -3968,7 +3992,7 @@ describe("useThreadSessionState", () => {
               hasPreviousPage: false,
             },
           },
-        })
+        }),
       );
 
     const desktopApi: DesktopApi = {
@@ -3989,7 +4013,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           currentThread: thread,
         },
-      }
+      },
     );
 
     await waitFor(() => {
@@ -4037,7 +4061,7 @@ describe("useThreadSessionState", () => {
               hasPreviousPage: false,
             },
           },
-        })
+        }),
       )
       .mockImplementationOnce(
         async ({
@@ -4082,7 +4106,7 @@ describe("useThreadSessionState", () => {
               hasPreviousPage: false,
             },
           },
-        })
+        }),
       );
 
     const desktopApi: DesktopApi = {
@@ -4101,7 +4125,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread,
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -4140,7 +4164,7 @@ describe("useThreadSessionState", () => {
   it("surfaces a failed transcript read once per thread version", async () => {
     const readThread = vi.fn(async () => {
       throw new Error(
-        "json-rpc error (-32603): failed to locate rollout for thread thread-1"
+        "json-rpc error (-32603): failed to locate rollout for thread thread-1",
       );
     });
 
@@ -4162,12 +4186,12 @@ describe("useThreadSessionState", () => {
         initialProps: {
           currentThread: thread,
         },
-      }
+      },
     );
 
     await waitFor(() => {
       expect(result.current.error).toBe(
-        "json-rpc error (-32603): failed to locate rollout for thread thread-1"
+        "json-rpc error (-32603): failed to locate rollout for thread thread-1",
       );
     });
     expect(readThread).toHaveBeenCalledTimes(1);
@@ -4216,7 +4240,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -4273,7 +4297,9 @@ describe("useThreadSessionState", () => {
   });
 
   it("stores token usage updates as session-owned transcript entries", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -4298,7 +4324,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -4363,7 +4389,9 @@ describe("useThreadSessionState", () => {
   });
 
   it("prices token usage with Fast priority rates from thread settings", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -4392,7 +4420,7 @@ describe("useThreadSessionState", () => {
           fastMode: true,
           model: "gpt-5.5",
         },
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -4419,16 +4447,22 @@ describe("useThreadSessionState", () => {
 
     const usageEntry = result.current.entries[0];
     expect(usageEntry?.type).toBe("activity");
-    expect(usageEntry?.type === "activity" ? usageEntry.summary : undefined).toBe(
+    expect(
+      usageEntry?.type === "activity" ? usageEntry.summary : undefined,
+    ).toBe(
       "Usage: 17,585 uncached in · 10,112 cached · 95 out · $0.24 list price",
     );
-    expect(usageEntry?.type === "activity" ? usageEntry.details.at(-1)?.label : undefined).toBe(
-      "Cost: $0.24 list price for GPT-5.5 Fast (Priority)",
-    );
+    expect(
+      usageEntry?.type === "activity"
+        ? usageEntry.details.at(-1)?.label
+        : undefined,
+    ).toBe("Cost: $0.24 list price for GPT-5.5 Fast (Priority)");
   });
 
   it("updates pricing from live pricing notifications without rereading the thread", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     const readThread = vi.fn<NonNullable<DesktopApi["readThread"]>>(
       async ({ backend, threadId }) => ({
         backend: backend ?? "codex",
@@ -4460,7 +4494,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -4534,7 +4568,9 @@ describe("useThreadSessionState", () => {
   });
 
   it("finalizes active-turn usage from cumulative token deltas", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -4559,7 +4595,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -4599,7 +4635,7 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.entries).toEqual([]);
     expect(result.current.runningTurnUsageText).toBe(
-      "Usage so far: 900 uncached in · 100 cached · 20 out (5 reasoning)"
+      "Usage so far: 900 uncached in · 100 cached · 20 out (5 reasoning)",
     );
 
     act(() => {
@@ -4633,7 +4669,7 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.entries).toEqual([]);
     expect(result.current.runningTurnUsageText).toBe(
-      "Usage so far: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)"
+      "Usage so far: 1,100 uncached in · 1,900 cached · 50 out (15 reasoning)",
     );
 
     act(() => {
@@ -4700,7 +4736,9 @@ describe("useThreadSessionState", () => {
   });
 
   it("prices finalized active-turn usage from the token usage notification model", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -4725,7 +4763,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -4787,7 +4825,9 @@ describe("useThreadSessionState", () => {
   });
 
   it("keeps aggregate turn usage when hydration includes per-request usage", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     let readCount = 0;
     const readThread = vi.fn(async ({ backend, threadId }) => {
       readCount += 1;
@@ -4833,7 +4873,8 @@ describe("useThreadSessionState", () => {
                 {
                   type: "activity" as const,
                   id: "live-token-usage-turn-1",
-                  summary: "Latest request usage: 200 uncached in · 1,800 cached · 30 out (10 reasoning)",
+                  summary:
+                    "Latest request usage: 200 uncached in · 1,800 cached · 30 out (10 reasoning)",
                   status: "completed" as const,
                   createdAt: 10_002,
                   turn: {
@@ -4883,7 +4924,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
         },
-      }
+      },
     );
 
     await waitForThreadHydration(result);
@@ -4980,7 +5021,9 @@ describe("useThreadSessionState", () => {
   });
 
   it("does not rewrite completed turn usage from later same-id updates", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     let readCount = 0;
     const readThread = vi.fn(async ({ backend, threadId }) => {
       readCount += 1;
@@ -5007,7 +5050,8 @@ describe("useThreadSessionState", () => {
                       {
                         id: "live-token-usage-turn-1-input",
                         kind: "read" as const,
-                        label: "Input: 20,000 tokens (1,715 uncached, 18,285 cached)",
+                        label:
+                          "Input: 20,000 tokens (1,715 uncached, 18,285 cached)",
                         status: "completed" as const,
                       },
                     ],
@@ -5022,12 +5066,14 @@ describe("useThreadSessionState", () => {
         },
       };
     });
-    const persistThreadUsageActivity = vi.fn(async ({ backend, threadId, activity }) => ({
-      backend,
-      threadId,
-      activityId: activity.id,
-      persisted: true,
-    }));
+    const persistThreadUsageActivity = vi.fn(
+      async ({ backend, threadId, activity }) => ({
+        backend,
+        threadId,
+        activityId: activity.id,
+        persisted: true,
+      }),
+    );
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -5045,9 +5091,12 @@ describe("useThreadSessionState", () => {
         }),
       {
         initialProps: {
-          thread: { ...buildThread({ id: "thread-1", updatedAt: 1_000 }), model: "gpt-5.5" },
+          thread: {
+            ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+            model: "gpt-5.5",
+          },
         },
-      }
+      },
     );
 
     await waitForThreadHydration(result);
@@ -5074,9 +5123,10 @@ describe("useThreadSessionState", () => {
       });
     });
 
-    const originalSummary = result.current.entries[0]?.type === "activity"
-      ? result.current.entries[0].summary
-      : undefined;
+    const originalSummary =
+      result.current.entries[0]?.type === "activity"
+        ? result.current.entries[0].summary
+        : undefined;
     expect(originalSummary).toContain("23,000 uncached in");
     expect(originalSummary).toContain("20,000 cached");
 
@@ -5107,7 +5157,10 @@ describe("useThreadSessionState", () => {
     ]);
 
     rerender({
-      thread: { ...buildThread({ id: "thread-1", updatedAt: 2_000 }), model: "gpt-5.5" },
+      thread: {
+        ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+        model: "gpt-5.5",
+      },
     });
 
     await waitFor(() => {
@@ -5122,13 +5175,17 @@ describe("useThreadSessionState", () => {
   });
 
   it("does not persist pending usage for an unrelated delayed completion", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
-    const persistThreadUsageActivity = vi.fn(async ({ backend, threadId, activity }) => ({
-      backend,
-      threadId,
-      activityId: activity.id,
-      persisted: true,
-    }));
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const persistThreadUsageActivity = vi.fn(
+      async ({ backend, threadId, activity }) => ({
+        backend,
+        threadId,
+        activityId: activity.id,
+        persisted: true,
+      }),
+    );
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -5154,7 +5211,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -5213,13 +5270,17 @@ describe("useThreadSessionState", () => {
   });
 
   it("uses known turn timing for older turn usage while a newer turn is active", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
-    const persistThreadUsageActivity = vi.fn(async ({ backend, threadId, activity }) => ({
-      backend,
-      threadId,
-      activityId: activity.id,
-      persisted: true,
-    }));
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const persistThreadUsageActivity = vi.fn(
+      async ({ backend, threadId, activity }) => ({
+        backend,
+        threadId,
+        activityId: activity.id,
+        persisted: true,
+      }),
+    );
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -5276,7 +5337,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -5351,7 +5412,9 @@ describe("useThreadSessionState", () => {
   it("keeps completed token usage before the next turn user prompt during hydration", async () => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     let readCount = 0;
     const readThread = vi.fn(async ({ backend, threadId }) => {
       readCount += 1;
@@ -5406,7 +5469,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
         },
-      }
+      },
     );
 
     await waitForThreadHydration(result);
@@ -5486,7 +5549,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -5532,7 +5595,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -5616,7 +5679,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -5693,7 +5756,7 @@ describe("useThreadSessionState", () => {
         desktopApi,
         liveTranscriptEventFiltering: true,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -5753,7 +5816,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -5936,7 +5999,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
     const desktopApi: DesktopApi = {
       onAgentEvent: (listener) => {
@@ -5961,7 +6024,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           thread: thread2,
         },
-      }
+      },
     );
 
     await waitForThreadHydration(result, "thread-2");
@@ -6055,7 +6118,9 @@ describe("useThreadSessionState", () => {
       }
     });
 
-    expect(transcriptLabels(result.current.entries)).toEqual(["activity:pnpm test"]);
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:pnpm test",
+    ]);
     await flushReactUpdates();
     const rendersAfterFirstUpdate = renderCount;
 
@@ -6065,7 +6130,9 @@ describe("useThreadSessionState", () => {
       }
     });
 
-    expect(transcriptLabels(result.current.entries)).toEqual(["activity:pnpm test"]);
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:pnpm test",
+    ]);
     expect(renderCount).toBe(rendersAfterFirstUpdate);
   });
 
@@ -6129,7 +6196,9 @@ describe("useThreadSessionState", () => {
       }
     });
 
-    expect(transcriptLabels(result.current.entries)).toEqual(["activity:pnpm test"]);
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:pnpm test",
+    ]);
     await flushReactUpdates();
     const rendersAfterFirstUpdate = renderCount;
 
@@ -6139,7 +6208,9 @@ describe("useThreadSessionState", () => {
       }
     });
 
-    expect(transcriptLabels(result.current.entries)).toEqual(["activity:pnpm test"]);
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:pnpm test",
+    ]);
     expect(renderCount).toBeGreaterThan(rendersAfterFirstUpdate);
   });
 
@@ -6173,7 +6244,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -6276,7 +6347,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -6316,7 +6387,8 @@ describe("useThreadSessionState", () => {
                 id: "turn-1",
                 status: "failed",
                 error: {
-                  message: "Provider completed the turn without assistant text.",
+                  message:
+                    "Provider completed the turn without assistant text.",
                 },
               },
             },
@@ -6365,7 +6437,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -6432,7 +6504,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -6492,7 +6564,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -6611,7 +6683,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -6717,7 +6789,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -6735,9 +6807,11 @@ describe("useThreadSessionState", () => {
               serverName: "playwright",
               mode: "form",
               _meta: {
-                tool_description: "List, create, close, or select a browser tab.",
+                tool_description:
+                  "List, create, close, or select a browser tab.",
               },
-              message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+              message:
+                'Allow the playwright MCP server to run tool "browser_tabs"?',
               requestedSchema: {
                 type: "object",
                 properties: {},
@@ -6811,7 +6885,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -6829,7 +6903,8 @@ describe("useThreadSessionState", () => {
               serverName: "playwright",
               mode: "form",
               _meta: null,
-              message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+              message:
+                'Allow the playwright MCP server to run tool "browser_tabs"?',
               requestedSchema: {
                 type: "object",
                 properties: {},
@@ -6841,7 +6916,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.pendingMcpInteraction?.requestId).toBe(
-      "mcp-request-cancelled"
+      "mcp-request-cancelled",
     );
 
     act(() => {
@@ -6899,7 +6974,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -6943,17 +7018,19 @@ describe("useThreadSessionState", () => {
               fields: state.form.fields.map((field) =>
                 field.key === "repo" && field.kind === "string"
                   ? { ...field, value: "pwrdrvr/PwrAgent" }
-                  : field
+                  : field,
               ),
             }
           : state.form,
       }));
     });
 
-    expect(result.current.pendingMcpInteraction?.form?.fields[0]).toMatchObject({
-      key: "repo",
-      value: "pwrdrvr/PwrAgent",
-    });
+    expect(result.current.pendingMcpInteraction?.form?.fields[0]).toMatchObject(
+      {
+        key: "repo",
+        value: "pwrdrvr/PwrAgent",
+      },
+    );
 
     act(() => {
       result.current.clearPendingRequest("mcp-request-2", "Thinking");
@@ -7001,7 +7078,7 @@ describe("useThreadSessionState", () => {
               hasPreviousPage: false,
             },
           },
-        })
+        }),
       )
       .mockImplementationOnce(
         async ({
@@ -7041,13 +7118,14 @@ describe("useThreadSessionState", () => {
                 text: "The new thread is live and the reply has been hydrated.",
               },
             ],
-            lastAssistantMessage: "The new thread is live and the reply has been hydrated.",
+            lastAssistantMessage:
+              "The new thread is live and the reply has been hydrated.",
             pagination: {
               supportsPagination: false,
               hasPreviousPage: false,
             },
           },
-        })
+        }),
       );
 
     const desktopApi: DesktopApi = {
@@ -7066,7 +7144,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread,
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -7144,7 +7222,7 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     const desktopApi: DesktopApi = {
@@ -7161,7 +7239,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -7234,7 +7312,9 @@ describe("useThreadSessionState", () => {
               turn: {
                 id: "turn-review-1",
                 status: "completed",
-                output: [{ type: "text", text: "No findings. Ready to merge." }],
+                output: [
+                  { type: "text", text: "No findings. Ready to merge." },
+                ],
               },
             },
           },
@@ -7245,8 +7325,10 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(
         result.current.entries.map((entry) =>
-          entry.type === "message" ? `${entry.role}:${entry.text}` : `${entry.type}:${entry.id}`
-        )
+          entry.type === "message"
+            ? `${entry.role}:${entry.text}`
+            : `${entry.type}:${entry.id}`,
+        ),
       ).toEqual([
         "assistant:Loaded thread-1",
         "review:turn-review-1-item-entered",
@@ -7295,7 +7377,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -7332,8 +7414,8 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(
         result.current.entries.map((entry) =>
-          entry.type === "review" ? entry.review : entry.type
-        )
+          entry.type === "review" ? entry.review : entry.type,
+        ),
       ).toEqual([
         "Review changes against main",
         "No findings. Ready to merge.",
@@ -7374,7 +7456,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -7447,10 +7529,12 @@ describe("useThreadSessionState", () => {
       expect(result.current.pendingStatusText).toBeUndefined();
       expect(result.current.threadBusy).toBe(false);
       expect(
-        result.current.entries.filter((entry) => entry.type === "review")
+        result.current.entries.filter((entry) => entry.type === "review"),
       ).toHaveLength(2);
       expect(
-        result.current.entries.some((entry) => entry.id.startsWith("optimistic-review-"))
+        result.current.entries.some((entry) =>
+          entry.id.startsWith("optimistic-review-"),
+        ),
       ).toBe(false);
     });
   });
@@ -7491,7 +7575,7 @@ describe("useThreadSessionState", () => {
             reviewDisplayText: "Review changes against main",
           },
         },
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -7616,7 +7700,7 @@ describe("useThreadSessionState", () => {
               : {}),
           },
         }),
-      { initialProps: { includeOptimisticReview: false } }
+      { initialProps: { includeOptimisticReview: false } },
     );
 
     await waitForThreadHydration(result);
@@ -7724,7 +7808,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           currentThread: optimisticThread,
         },
-      }
+      },
     );
 
     await waitFor(() => {
@@ -7794,7 +7878,7 @@ describe("useThreadSessionState", () => {
             reviewDisplayText: "Review changes against main",
           },
         },
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -7921,7 +8005,7 @@ describe("useThreadSessionState", () => {
             reviewDisplayText: "Review changes against main",
           },
         },
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -7967,7 +8051,7 @@ describe("useThreadSessionState", () => {
             startedAt: 1_500,
           },
         },
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -7984,7 +8068,9 @@ describe("useThreadSessionState", () => {
   });
 
   it("stores context window usage from token usage notifications", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -8009,7 +8095,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -8054,7 +8140,9 @@ describe("useThreadSessionState", () => {
   });
 
   it("derives context window usage from captured input and output token breakdowns", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -8079,7 +8167,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -8125,7 +8213,9 @@ describe("useThreadSessionState", () => {
   });
 
   it("prefers last token usage over cumulative session usage for context fill", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -8150,7 +8240,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -8231,7 +8321,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -8324,7 +8414,9 @@ describe("useThreadSessionState", () => {
   });
 
   it("does not keep list thinking from completed usage with stale turn metadata", async () => {
-    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -8349,7 +8441,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -8442,7 +8534,7 @@ describe("useThreadSessionState", () => {
         initialProps: {
           currentThread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
         },
-      }
+      },
     );
 
     await waitFor(() => {
@@ -8463,7 +8555,9 @@ describe("useThreadSessionState", () => {
       expect(readThread).toHaveBeenCalledTimes(2);
     });
     await waitFor(() => {
-      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+      expect(
+        result.current.thinkingThreadKeys["codex:thread-1"],
+      ).toBeUndefined();
     });
 
     expect(logRendererDiagnostic).toHaveBeenCalledTimes(1);
@@ -8514,7 +8608,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -8547,7 +8641,8 @@ describe("useThreadSessionState", () => {
 
     const fileChange = result.current.entries.find(
       (entry): entry is AppServerThreadActivityEntry =>
-        entry.type === "activity" && entry.id === "live-file-change-call-file-change"
+        entry.type === "activity"
+        && entry.id === "live-file-change-call-file-change",
     );
     expect(fileChange).toBeDefined();
     expect(fileChange?.summary).toBe("Changed 1 file");
@@ -8598,7 +8693,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -8631,7 +8726,8 @@ describe("useThreadSessionState", () => {
 
     const fileChange = result.current.entries.find(
       (entry): entry is AppServerThreadActivityEntry =>
-        entry.type === "activity" && entry.id === "live-file-change-call-file-change"
+        entry.type === "activity"
+        && entry.id === "live-file-change-call-file-change",
     );
     expect(fileChange?.summary).toBe("Changed 1 file");
     expect(fileChange?.details).toEqual([
@@ -8679,7 +8775,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);
@@ -8808,7 +8904,7 @@ describe("useThreadSessionState", () => {
       useThreadSessionState({
         desktopApi,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      })
+      }),
     );
 
     await waitForThreadHydration(result);

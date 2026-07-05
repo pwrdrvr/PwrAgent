@@ -8,10 +8,7 @@ import type {
   MessagingInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
-import type {
-  NavigationSnapshot,
-  StartTurnRequest,
-} from "@pwragent/shared";
+import type { NavigationSnapshot, StartTurnRequest } from "@pwragent/shared";
 import { DiscordAdapter } from "@pwragent/messaging-provider-discord";
 import type {
   DiscordApi,
@@ -35,7 +32,9 @@ const DISCORD_USER_ID = "1480556454498009355";
 const DISCORD_OTHER_USER_ID = "1480556454498009356";
 const DISCORD_INTERACTION_ID = "1480556454498009357";
 const DISCORD_ATTACHMENT_ID = "1480556454498009358";
-const DISCORD_AUTHORIZED_GUILD_IDS = [{ id: DISCORD_GUILD_ID, displayName: "" }];
+const DISCORD_AUTHORIZED_GUILD_IDS = [
+  { id: DISCORD_GUILD_ID, displayName: "" },
+];
 
 afterEach(async () => {
   await Promise.all(
@@ -50,18 +49,21 @@ describe("DiscordAdapter", () => {
     const api = createApi({
       applicationCommands: [
         createApplicationCommand("cmd-resume", {
-          description: "Choose a PwrAgent thread to control from this conversation.",
+          description:
+            "Choose a PwrAgent thread to control from this conversation.",
           name: "resume",
           options: [
             {
-              description: "Optional resume flags, such as --projects or --new.",
+              description:
+                "Optional resume flags, such as --projects or --new.",
               name: "args",
               type: 3,
             },
           ],
         }),
         createApplicationCommand("cmd-agent", {
-          description: "Choose a PwrAgent Agent thread to control from this conversation.",
+          description:
+            "Choose a PwrAgent Agent thread to control from this conversation.",
           name: "agent",
           options: [
             {
@@ -80,14 +82,16 @@ describe("DiscordAdapter", () => {
           name: "new",
           options: [
             {
-              description: "Optional new-thread flags, such as --fast or --model.",
+              description:
+                "Optional new-thread flags, such as --fast or --model.",
               name: "args",
               type: 3,
             },
           ],
         }),
         createApplicationCommand("cmd-detach", {
-          description: "Detach this conversation from its current PwrAgent thread.",
+          description:
+            "Detach this conversation from its current PwrAgent thread.",
           name: "detach",
         }),
         createApplicationCommand("cmd-monitor", {
@@ -147,7 +151,10 @@ describe("DiscordAdapter", () => {
 
     await adapter.start(async () => {});
 
-    expect(api.deleteApplicationCommand).toHaveBeenCalledWith(DISCORD_APP_ID, "cmd-legacy");
+    expect(api.deleteApplicationCommand).toHaveBeenCalledWith(
+      DISCORD_APP_ID,
+      "cmd-legacy",
+    );
     expect(api.updateApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       "cmd-resume",
@@ -283,7 +290,9 @@ describe("DiscordAdapter", () => {
       applicationId: DISCORD_APP_ID,
     });
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.gateway.emit({
       d: {
         channel_id: DISCORD_CHANNEL_ID,
@@ -327,7 +336,9 @@ describe("DiscordAdapter", () => {
   it("normalizes /resume and renders a picker with components", async () => {
     const harness = await createControllerHarness();
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.gateway.emit({
       d: {
         author: {
@@ -541,7 +552,9 @@ describe("DiscordAdapter", () => {
       navigationSnapshot: buildNavigationSnapshot(10),
     });
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.gateway.emit({
       d: {
         author: {
@@ -625,7 +638,9 @@ describe("DiscordAdapter", () => {
       navigationSnapshot: buildNavigationSnapshot(10),
     });
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.gateway.emit({
       d: {
         author: {
@@ -788,7 +803,10 @@ describe("DiscordAdapter", () => {
     });
 
     expect(pinResult.outcome).toBe("pinned");
-    expect(api.pinMessage).toHaveBeenCalledWith(DISCORD_CHANNEL_ID, DISCORD_MESSAGE_ID);
+    expect(api.pinMessage).toHaveBeenCalledWith(
+      DISCORD_CHANNEL_ID,
+      DISCORD_MESSAGE_ID,
+    );
 
     const unpinResult = await adapter.deliver({
       id: "dismiss-1",
@@ -810,7 +828,10 @@ describe("DiscordAdapter", () => {
     });
 
     expect(unpinResult.outcome).toBe("unpinned");
-    expect(api.unpinMessage).toHaveBeenCalledWith(DISCORD_CHANNEL_ID, DISCORD_MESSAGE_ID);
+    expect(api.unpinMessage).toHaveBeenCalledWith(
+      DISCORD_CHANNEL_ID,
+      DISCORD_MESSAGE_ID,
+    );
   });
 
   it("expires Discord typing activity when no idle signal arrives", async () => {
@@ -945,7 +966,9 @@ describe("DiscordAdapter", () => {
   it("resolves component custom IDs and acknowledges interactions", async () => {
     const harness = await createControllerHarness();
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.gateway.emit({
       d: {
         author: {
@@ -962,8 +985,8 @@ describe("DiscordAdapter", () => {
       t: "MESSAGE_CREATE",
     });
     const customId =
-      harness.api.createMessage.mock.calls.at(-1)?.[1].components?.[0]?.components[0]
-        ?.custom_id ?? "";
+      harness.api.createMessage.mock.calls.at(-1)?.[1].components?.[0]
+        ?.components[0]?.custom_id ?? "";
 
     await harness.gateway.emit({
       d: {
@@ -1028,7 +1051,9 @@ describe("DiscordAdapter", () => {
       threadId: "thread-1",
       updatedAt: 1000,
     });
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.gateway.emit({
       d: {
         author: {
@@ -1061,7 +1086,9 @@ describe("DiscordAdapter", () => {
   it("drops matching display names with different Discord ids before controller dispatch", async () => {
     const harness = await createControllerHarness();
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.gateway.emit({
       d: {
         author: {
@@ -1240,10 +1267,12 @@ describe("DiscordAdapter", () => {
   });
 });
 
-async function createControllerHarness(options: {
-  applicationId?: string;
-  navigationSnapshot?: NavigationSnapshot;
-} = {}): Promise<{
+async function createControllerHarness(
+  options: {
+    applicationId?: string;
+    navigationSnapshot?: NavigationSnapshot;
+  } = {},
+): Promise<{
   adapter: DiscordAdapter;
   api: ReturnType<typeof createApi>;
   controller: MessagingController;
@@ -1301,9 +1330,11 @@ async function createControllerHarness(options: {
   };
 }
 
-function createApi(options: {
-  applicationCommands?: DiscordApplicationCommand[];
-} = {}): {
+function createApi(
+  options: {
+    applicationCommands?: DiscordApplicationCommand[];
+  } = {},
+): {
   createApplicationCommand: ReturnType<typeof vi.fn>;
   createInteractionResponse: ReturnType<typeof vi.fn>;
   createMessage: ReturnType<typeof vi.fn>;
@@ -1321,7 +1352,10 @@ function createApi(options: {
   let applicationCommands = [...(options.applicationCommands ?? [])];
   return {
     createApplicationCommand: vi.fn(
-      async (applicationId: string, command: Omit<DiscordApplicationCommand, "id">) => {
+      async (
+        applicationId: string,
+        command: Omit<DiscordApplicationCommand, "id">,
+      ) => {
         const created = {
           ...command,
           application_id: applicationId,
@@ -1355,9 +1389,13 @@ function createApi(options: {
     listApplicationCommands: vi.fn(
       async (_applicationId: string) => applicationCommands,
     ),
-    pinMessage: vi.fn(async (_channelId: string, _messageId: string) => undefined),
+    pinMessage: vi.fn(
+      async (_channelId: string, _messageId: string) => undefined,
+    ),
     sendTyping: vi.fn(async (_channelId: string) => undefined),
-    unpinMessage: vi.fn(async (_channelId: string, _messageId: string) => undefined),
+    unpinMessage: vi.fn(
+      async (_channelId: string, _messageId: string) => undefined,
+    ),
     updateChannelName: vi.fn(
       async (_channelId: string, _request: { name: string }) => undefined,
     ),
@@ -1425,7 +1463,9 @@ function createGateway(): DiscordGatewayConnection & {
   return {
     close: vi.fn(async () => {}),
     emit: async (event: DiscordGatewayEvent) => {
-      await Promise.all([...listeners].map(async (listener) => listener(event)));
+      await Promise.all(
+        [...listeners].map(async (listener) => listener(event)),
+      );
     },
     onEvent: vi.fn((listener: DiscordGatewayListener) => {
       listeners.add(listener);

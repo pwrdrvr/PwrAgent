@@ -30,7 +30,10 @@ export { validateTelegramChatId, validateTelegramPositiveId };
 export function validateTelegramCallbackQueryId(
   value: unknown,
 ): IdentifierValidationResult {
-  return validateBoundedVisibleAscii(value, TELEGRAM_MAX_CALLBACK_QUERY_ID_LENGTH);
+  return validateBoundedVisibleAscii(
+    value,
+    TELEGRAM_MAX_CALLBACK_QUERY_ID_LENGTH,
+  );
 }
 
 export function validateTelegramCallbackData(
@@ -56,7 +59,9 @@ export function validateTelegramCallbackData(
   return { ok: true };
 }
 
-export function validateTelegramFileId(value: unknown): IdentifierValidationResult {
+export function validateTelegramFileId(
+  value: unknown,
+): IdentifierValidationResult {
   if (typeof value !== "string") {
     return { ok: false, reason: "type" };
   }
@@ -117,11 +122,11 @@ function isAsciiDigit(code: number): boolean {
 
 function isBase64UrlChar(code: number): boolean {
   return (
-    (code >= 0x30 && code <= 0x39) ||
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    code === 0x2d ||
-    code === 0x5f
+    (code >= 0x30 && code <= 0x39)
+    || (code >= 0x41 && code <= 0x5a)
+    || (code >= 0x61 && code <= 0x7a)
+    || code === 0x2d
+    || code === 0x5f
   );
 }
 

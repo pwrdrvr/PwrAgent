@@ -11,7 +11,12 @@ export function formatExecutionModeLabel(mode?: ThreadExecutionMode): string {
 
 export function acpRuntimeModeRequiresFullAccess(value: string): boolean {
   // Auto/Auto-Edit are provider-managed ACP modes, not PwrAgent full access.
-  return value.trim().replace(/[-\s]+/g, "_").toLowerCase() === "yolo";
+  return (
+    value
+      .trim()
+      .replace(/[-\s]+/g, "_")
+      .toLowerCase() === "yolo"
+  );
 }
 
 export type AcpRuntimeModeControl = {
@@ -38,18 +43,18 @@ export function getAcpRuntimeModeControl(
       return undefined;
     }
     const currentModeValue =
-      settings?.acpRuntime?.currentModeId &&
-      modeConfigOption.values.some(
+      settings?.acpRuntime?.currentModeId
+      && modeConfigOption.values.some(
         (option) => option.value === settings.acpRuntime?.currentModeId,
       )
         ? settings.acpRuntime.currentModeId
         : undefined;
     const value =
-      currentModeValue ??
-      settings?.acpRuntime?.configValues?.[modeConfigOption.id] ??
-      modeConfigOption.currentValue ??
-      modeConfigOption.values[0]?.value ??
-      "";
+      currentModeValue
+      ?? settings?.acpRuntime?.configValues?.[modeConfigOption.id]
+      ?? modeConfigOption.currentValue
+      ?? modeConfigOption.values[0]?.value
+      ?? "";
     return {
       optionId: modeConfigOption.id,
       source: "configOption",
@@ -70,10 +75,10 @@ export function getAcpRuntimeModeControl(
     optionId: "mode",
     source: "mode",
     value:
-      settings?.acpRuntime?.currentModeId ??
-      runtime.modes?.currentModeId ??
-      modeOptions[0]?.id ??
-      "",
+      settings?.acpRuntime?.currentModeId
+      ?? runtime.modes?.currentModeId
+      ?? modeOptions[0]?.id
+      ?? "",
     options: modeOptions.map((mode) => ({
       label: formatAcpRuntimeModeLabel(mode.label ?? mode.id),
       value: mode.id,

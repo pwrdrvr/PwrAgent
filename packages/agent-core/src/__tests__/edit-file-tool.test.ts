@@ -59,7 +59,9 @@ describe("edit_file tool", () => {
       },
     );
 
-    expect(await fs.readFile(path.join(workspace.path, "src", "demo.ts"), "utf8")).toBe("\n");
+    expect(
+      await fs.readFile(path.join(workspace.path, "src", "demo.ts"), "utf8"),
+    ).toBe("\n");
     expect(requestApproval).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "fileChange",

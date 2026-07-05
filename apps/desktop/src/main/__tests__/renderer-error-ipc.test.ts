@@ -8,9 +8,11 @@ const errorLog = {
 
 vi.mock("electron", () => ({
   ipcMain: {
-    handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
-      handlers.set(channel, handler);
-    }),
+    handle: vi.fn(
+      (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
+        handlers.set(channel, handler);
+      },
+    ),
     removeHandler: vi.fn((channel: string) => {
       handlers.delete(channel);
     }),
@@ -46,7 +48,9 @@ describe("renderer error ipc", () => {
 
     registerRendererErrorIpcHandlers();
 
-    await expect(handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.({}, report)).resolves.toEqual({
+    await expect(
+      handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.({}, report),
+    ).resolves.toEqual({
       ok: true,
     });
     expect(errorLog.error).toHaveBeenCalledWith("report", report);
@@ -55,4 +59,3 @@ describe("renderer error ipc", () => {
     expect(handlers.has(RENDERER_ERROR_REPORT_CHANNEL)).toBe(false);
   });
 });
-

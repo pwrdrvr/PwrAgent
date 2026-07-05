@@ -64,7 +64,11 @@ export function applyCodexEnvironmentActionRunUpdate(
   current: CodexEnvironmentActionRun[],
   update:
     | { kind: "append"; run: CodexEnvironmentActionRun }
-    | { kind: "patch"; runId: string; patch: Partial<CodexEnvironmentActionRun> },
+    | {
+        kind: "patch";
+        runId: string;
+        patch: Partial<CodexEnvironmentActionRun>;
+      },
 ): CodexEnvironmentActionRun[] {
   if (update.kind === "append") {
     const next = [...current, update.run];

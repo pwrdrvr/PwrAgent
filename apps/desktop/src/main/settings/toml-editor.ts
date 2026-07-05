@@ -344,7 +344,10 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
 
   for (const edit of edits) {
     if (edit.op === "deleteTableArray" || edit.op === "setTableArray") {
-      for (const section of findTableArraySections(model, edit.path.join("."))) {
+      for (const section of findTableArraySections(
+        model,
+        edit.path.join("."),
+      )) {
         const { startLine, endLine } = sectionLineRange(model, section);
         lineOps.push({
           kind: "replace",
@@ -557,9 +560,7 @@ function isInlineTableArray(
     Array.isArray(value)
     && value.every(
       (entry) =>
-        typeof entry === "object"
-        && entry !== null
-        && !Array.isArray(entry),
+        typeof entry === "object" && entry !== null && !Array.isArray(entry),
     )
   );
 }

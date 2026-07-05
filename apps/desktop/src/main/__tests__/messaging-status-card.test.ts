@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  BackendSummary,
-  NavigationSnapshot,
-} from "@pwragent/shared";
-import type {
-  MessagingBindingRecord,
-} from "@pwragent/messaging-interface";
+import type { BackendSummary, NavigationSnapshot } from "@pwragent/shared";
+import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import {
   buildBindingStatusIntent,
   buildHandoffBranchPickerIntent,
@@ -119,7 +114,9 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain(
       "Context usage: Latest request usage: 12,000 uncached in · 4,000 cached · 2,000 out",
     );
-    expect(intent.text).toContain("Account: operator@example.com (ChatGPT pro)");
+    expect(intent.text).toContain(
+      "Account: operator@example.com (ChatGPT pro)",
+    );
     expect(intent.text).toContain(
       "Rate limits: gpt-5.3-codex primary: 76% left",
     );
@@ -383,7 +380,9 @@ describe("buildBindingStatusIntent", () => {
         },
         executionModes: [],
         launchpadOptions: {
-          models: [{ id: "kimi-code/kimi-for-coding", label: "Kimi for Coding" }],
+          models: [
+            { id: "kimi-code/kimi-for-coding", label: "Kimi for Coding" },
+          ],
           reasoningEfforts: [],
           supportsFastMode: false,
         },
@@ -556,7 +555,9 @@ describe("buildBindingStatusIntent", () => {
       threadState: resolveMessagingThreadState({ binding, navigation }),
     });
 
-    expect(intent.text).toContain("Binding: How much wood would a woodchuck... (codex)");
+    expect(intent.text).toContain(
+      "Binding: How much wood would a woodchuck... (codex)",
+    );
     expect(intent.text).not.toContain(
       "Binding: How much wood would a woodchuck chuck if a woodchuck could chuck wood",
     );
@@ -575,7 +576,9 @@ describe("buildBindingStatusIntent", () => {
       threadState: resolveMessagingThreadState({ binding, navigation }),
     });
 
-    expect(intent.text).toContain("Binding: We're here for another wood... (codex)");
+    expect(intent.text).toContain(
+      "Binding: We're here for another wood... (codex)",
+    );
     expect(intent.text).not.toContain(
       "Binding: We're here for another wood chuck joke (codex)",
     );
@@ -963,14 +966,19 @@ describe("buildBindingStatusIntent", () => {
         style: "primary",
       }),
     );
-    expect(overview.fallbackText).toContain("Reply with 1, Back, Refresh, or Cancel.");
+    expect(overview.fallbackText).toContain(
+      "Reply with 1, Back, Refresh, or Cancel.",
+    );
   });
 
   it("paginates handoff branch picker choices", () => {
     const binding = buildBinding();
     const context = {
       ...buildHandoffContext(),
-      leaveLocalBranches: Array.from({ length: 18 }, (_, index) => `branch-${index + 1}`),
+      leaveLocalBranches: Array.from(
+        { length: 18 },
+        (_, index) => `branch-${index + 1}`,
+      ),
     };
 
     const firstPage = buildHandoffBranchPickerIntent({
@@ -980,7 +988,9 @@ describe("buildBindingStatusIntent", () => {
       createdAt: 1000,
     });
     expect(
-      firstPage.choices.filter((choice) => choice.id === "handoff:select-leave-branch"),
+      firstPage.choices.filter(
+        (choice) => choice.id === "handoff:select-leave-branch",
+      ),
     ).toHaveLength(8);
     expect(firstPage.prompt).toContain("Page 1/3.");
     expect(firstPage.choices).toContainEqual(
@@ -1002,7 +1012,9 @@ describe("buildBindingStatusIntent", () => {
       pageIndex: 2,
     });
     expect(
-      lastPage.choices.filter((choice) => choice.id === "handoff:select-leave-branch"),
+      lastPage.choices.filter(
+        (choice) => choice.id === "handoff:select-leave-branch",
+      ),
     ).toHaveLength(2);
     expect(lastPage.prompt).toContain("Page 3/3.");
     expect(lastPage.choices[0]).toMatchObject({
@@ -1041,7 +1053,9 @@ describe("buildBindingStatusIntent", () => {
       strategy: "detached-changes",
       threadId: "thread-1",
     });
-    expect(handoffRequestFromValue({ direction: "local-to-worktree" })).toBeUndefined();
+    expect(
+      handoffRequestFromValue({ direction: "local-to-worktree" }),
+    ).toBeUndefined();
   });
 });
 

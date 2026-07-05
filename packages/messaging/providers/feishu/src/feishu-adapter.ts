@@ -5,7 +5,12 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { Readable } from "node:stream";
 import type {
   MessagingActorIdentity,
@@ -105,8 +110,13 @@ export type FeishuApi = {
     resourceType: FeishuMessageResourceType;
   }): Promise<Uint8Array>;
   getBotInfo(): Promise<FeishuBotInfo>;
-  sendMessage(params: FeishuSendMessageParams): Promise<FeishuSendMessageResult>;
-  updateMessage(params: { card: FeishuInteractiveCard; messageId: string }): Promise<FeishuSendMessageResult>;
+  sendMessage(
+    params: FeishuSendMessageParams,
+  ): Promise<FeishuSendMessageResult>;
+  updateMessage(params: {
+    card: FeishuInteractiveCard;
+    messageId: string;
+  }): Promise<FeishuSendMessageResult>;
 };
 
 export type FeishuProviderAdapter = {
@@ -122,11 +132,19 @@ export type FeishuProviderAdapter = {
   onDiagnostic?(listener: MessagingAdapterDiagnosticListener): () => void;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   readCredentialMetadata?(): { account?: string; detail?: string } | undefined;
-  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
-  start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
+  resolveDeliveryScope?(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined;
+  start(
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void>;
   stop(): Promise<void>;
-  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
-  updateRenderingPreferences?(update: MessagingAdapterRenderingPreferencesUpdate): Promise<void>;
+  updateAuthorization?(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void>;
+  updateRenderingPreferences?(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void>;
 };
 
 export type FeishuAdapterOptions = {
@@ -324,9 +342,13 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private started = false;
   private webhookListening = false;
   private wsClient: FeishuWsClient | undefined;
-  private readonly diagnosticListeners = new Set<MessagingAdapterDiagnosticListener>();
-  private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
-  private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
+  private readonly diagnosticListeners =
+    new Set<MessagingAdapterDiagnosticListener>();
+  private readonly inboundRejectedListeners =
+    new Set<MessagingInboundRejectedListener>();
+  private readonly rateLimitListeners = new Set<
+    (info: MessagingRateLimitInfo) => void
+  >();
   private readonly recentlyHandledInboundKeys = new Map<string, number>();
   // Per-stream card message created for a streaming response, keyed by
   // `intent.stream.key`. Feishu has no create-or-edit primitive, so the first
@@ -350,22 +372,27 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     this.callbackHandleStore = options.callbackHandleStore;
     this.logger = options.logger ?? {};
     this.now = options.now ?? Date.now;
-    this.authorizedActorIdsValue = options.config.authorizedActorIds.map((actor) => actor.id);
+    this.authorizedActorIdsValue = options.config.authorizedActorIds.map(
+      (actor) => actor.id,
+    );
     this.signingSecret =
       options.config.verificationToken?.trim()
       || options.config.appSecret.trim()
       || randomBytes(32).toString("hex");
-    this.wsClientFactory = options.wsClientFactory ?? (async (params) => {
-      const lark = await import("@larksuiteoapi/node-sdk");
-      return new lark.WSClient({
-        appId: params.appId,
-        appSecret: params.appSecret,
-        domain: params.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu,
-        logger: larkLoggerFromProviderLogger(this.logger),
-        loggerLevel: lark.LoggerLevel.info,
-        source: "pwragent",
+    this.wsClientFactory =
+      options.wsClientFactory
+      ?? (async (params) => {
+        const lark = await import("@larksuiteoapi/node-sdk");
+        return new lark.WSClient({
+          appId: params.appId,
+          appSecret: params.appSecret,
+          domain:
+            params.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu,
+          logger: larkLoggerFromProviderLogger(this.logger),
+          loggerLevel: lark.LoggerLevel.info,
+          source: "pwragent",
+        });
       });
-    });
     this.server = createServer((request, response) => {
       void this.handleWebhookRequest(request, response);
     });
@@ -383,7 +410,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     };
   }
 
-  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+  async updateAuthorization(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void> {
     this.authorizedActorIdsValue = [...update.authorizedActorIds];
     this.config.authorizedActorIds = feishuContactsFromIds(
       update.authorizedActorIds,
@@ -428,7 +457,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     };
   }
 
-  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+  resolveDeliveryScope(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined {
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
   }
@@ -438,7 +469,8 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     this.listener = listener;
     const botInfo = await this.api.getBotInfo();
     this.botAccount = botInfo.appName ?? botInfo.openId;
-    this.botAccountDetail = botInfo.tenantKey ?? hostFromUrl(this.config.tenantUrl);
+    this.botAccountDetail =
+      botInfo.tenantKey ?? hostFromUrl(this.config.tenantUrl);
     this.botOpenId = botInfo.openId;
     if (this.config.inboundMode === "webhook") {
       await this.listenForCallbacks();
@@ -467,7 +499,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     this.started = false;
   }
 
-  async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
+  async deliver(
+    intent: MessagingSurfaceIntent,
+  ): Promise<MessagingDeliveryResult> {
     const deliveredAt = this.now();
     if (intent.kind === "activity") {
       return { outcome: "discarded", channel: this.channel, deliveredAt };
@@ -492,7 +526,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     const rawText = textForFeishuIntent(intent);
     const actions = actionsForFeishuIntent(intent);
     const callbackBuilder = this.buildCallbackValueBuilder({
-      allowedActorIds: callbackAllowedActorIds(intent, this.authorizedActorIds[0] ?? ""),
+      allowedActorIds: callbackAllowedActorIds(
+        intent,
+        this.authorizedActorIds[0] ?? "",
+      ),
       bindingId: callbackBindingId(intent),
       channelRef: target.channelRef,
       intent,
@@ -508,9 +545,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     // boundaries so the per-message limit doesn't truncate the tail. Restricted
     // to the simple assistant-response case — no buttons, not an in-place edit.
     if (
-      intent.kind === "message" &&
-      actionElements.length === 0 &&
-      intent.delivery?.mode !== "update"
+      intent.kind === "message"
+      && actionElements.length === 0
+      && intent.delivery?.mode !== "update"
     ) {
       const chunks = splitTextForDelivery(rawText, {
         limit: FEISHU_MESSAGE_TEXT_LIMIT,
@@ -522,7 +559,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
           for (const chunk of chunks) {
             const useCard = shouldSendFeishuCard(intent, chunk, 0);
             const result = await this.api.sendMessage({
-              card: useCard ? buildFeishuCardForIntent({ intent, text: chunk }) : undefined,
+              card: useCard
+                ? buildFeishuCardForIntent({ intent, text: chunk })
+                : undefined,
               receiveId: target.receiveId,
               receiveIdType: target.receiveIdType,
               text: useCard ? undefined : clampFeishuMessage(chunk),
@@ -530,12 +569,15 @@ export class FeishuAdapter implements FeishuProviderAdapter {
             firstMessageId ??= result.messageId;
           }
         } catch (error) {
-          const rateLimit = this.emitRateLimitFromError(error, target, { retryable: !firstMessageId });
+          const rateLimit = this.emitRateLimitFromError(error, target, {
+            retryable: !firstMessageId,
+          });
           return {
             outcome: "failed",
             channel: this.channel,
             deliveredAt: this.now(),
-            errorMessage: error instanceof Error ? error.message : String(error),
+            errorMessage:
+              error instanceof Error ? error.message : String(error),
             ...(rateLimit ? { rateLimit } : {}),
           };
         }
@@ -553,7 +595,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
                       messageId: firstMessageId,
                       receiveId: target.receiveId,
                       receiveIdType: target.receiveIdType,
-                      ...(target.tenantKey ? { tenantKey: target.tenantKey } : {}),
+                      ...(target.tenantKey
+                        ? { tenantKey: target.tenantKey }
+                        : {}),
                     },
                   },
                 },
@@ -574,15 +618,21 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         intent.delivery?.mode === "update" && target.messageId
           ? await this.api.updateMessage({ card, messageId: target.messageId })
           : undefined;
-      const shouldSendCard = shouldSendFeishuCard(intent, rawText, actionElements.length);
-      const result = updated ?? (await this.api.sendMessage({
-        card: shouldSendCard ? card : undefined,
-        receiveId: target.receiveId,
-        receiveIdType: target.receiveIdType,
-        text: shouldSendCard
-          ? undefined
-          : clampFeishuMessage(rawText || intent.fallbackText || "PwrAgent"),
-      }));
+      const shouldSendCard = shouldSendFeishuCard(
+        intent,
+        rawText,
+        actionElements.length,
+      );
+      const result =
+        updated
+        ?? (await this.api.sendMessage({
+          card: shouldSendCard ? card : undefined,
+          receiveId: target.receiveId,
+          receiveIdType: target.receiveIdType,
+          text: shouldSendCard
+            ? undefined
+            : clampFeishuMessage(rawText || intent.fallbackText || "PwrAgent"),
+        }));
       const messageId = result.messageId ?? target.messageId;
       if (!messageId) {
         return {
@@ -611,7 +661,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         },
       };
     } catch (error) {
-      const rateLimit = this.emitRateLimitFromError(error, target, { retryable: true });
+      const rateLimit = this.emitRateLimitFromError(error, target, {
+        retryable: true,
+      });
       return {
         outcome: "failed",
         channel: this.channel,
@@ -649,14 +701,19 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     return {
       data,
       fileName: request.attachment.name,
-      ...(request.attachment.mimeType ? { mimeType: request.attachment.mimeType } : {}),
+      ...(request.attachment.mimeType
+        ? { mimeType: request.attachment.mimeType }
+        : {}),
       sizeBytes: data.byteLength,
     };
   }
 
   async handleWebhookPayload(payload: FeishuEventEnvelope): Promise<unknown> {
     this.logReceivedEvent("webhook", payload);
-    if (payload.type === "url_verification" && typeof payload.challenge === "string") {
+    if (
+      payload.type === "url_verification"
+      && typeof payload.challenge === "string"
+    ) {
       if (!this.isValidWebhookToken(payload.token)) {
         return { status: 401 };
       }
@@ -670,7 +727,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     const eventType = payload.header?.event_type;
     if (eventType === "im.message.receive_v1") {
       await this.handleMessageEvent(payload);
-    } else if (eventType === "card.action.trigger" || isFeishuCardActionEnvelope(payload)) {
+    } else if (
+      eventType === "card.action.trigger"
+      || isFeishuCardActionEnvelope(payload)
+    ) {
       return {
         body: await this.handleCardActionEvent(payload),
         status: 200,
@@ -703,7 +763,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     return { status: 200 };
   }
 
-  private async deliverDismiss(intent: Extract<MessagingSurfaceIntent, { kind: "dismiss" }>): Promise<MessagingDeliveryResult> {
+  private async deliverDismiss(
+    intent: Extract<MessagingSurfaceIntent, { kind: "dismiss" }>,
+  ): Promise<MessagingDeliveryResult> {
     const deliveredAt = this.now();
     const opaque = intent.targetSurface.state?.opaque;
     const messageId =
@@ -720,7 +782,11 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     }
     try {
       await this.api.deleteMessage({ messageId });
-      return { outcome: "dismissed", channel: this.channel, deliveredAt: this.now() };
+      return {
+        outcome: "dismissed",
+        channel: this.channel,
+        deliveredAt: this.now(),
+      };
     } catch (error) {
       return {
         outcome: "failed",
@@ -734,7 +800,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private async deliverStreamUpdate(
     intent: Extract<MessagingSurfaceIntent, { kind: "stream_update" }>,
   ): Promise<MessagingDeliveryResult> {
-    if (this.config.streamingResponses !== true && intent.policy !== "enabled") {
+    if (
+      this.config.streamingResponses !== true
+      && intent.policy !== "enabled"
+    ) {
       return {
         outcome: "discarded",
         channel: this.channel,
@@ -768,12 +837,16 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       measure: "chars",
     });
     if (chunks.length === 0) {
-      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
     }
     // Seed anchor 0 from a caller-supplied surface (restart-safety).
     const anchors =
-      this.streamSurfaces.get(streamKey) ??
-      (target?.messageId
+      this.streamSurfaces.get(streamKey)
+      ?? (target?.messageId
         ? [
             {
               messageId: target.messageId,
@@ -787,7 +860,11 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     if (anchors.length === 0 && !target) {
       // No conversation to post into yet — let the controller fall back to a
       // regular message.
-      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
     }
     let firstOutcome: "presented" | "updated" | undefined;
     try {
@@ -812,7 +889,11 @@ export class FeishuAdapter implements FeishuProviderAdapter {
           const messageId = result.messageId;
           if (!messageId) {
             if (anchors.length === 0) {
-              return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+              return {
+                channel: this.channel,
+                deliveredAt: this.now(),
+                outcome: "discarded",
+              };
             }
             break;
           }
@@ -827,7 +908,11 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         }
       }
       if (anchors.length === 0) {
-        return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+        return {
+          channel: this.channel,
+          deliveredAt: this.now(),
+          outcome: "discarded",
+        };
       }
       if (intent.stream.isFinal) {
         this.streamSurfaces.delete(streamKey);
@@ -851,14 +936,21 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     }
   }
 
-  private async handleMessageEvent(payload: FeishuEventEnvelope): Promise<void> {
+  private async handleMessageEvent(
+    payload: FeishuEventEnvelope,
+  ): Promise<void> {
     const event = payload.event as FeishuReceiveMessageEvent | undefined;
     const message = event?.message;
     const senderId = event?.sender?.sender_id?.open_id;
     const chatId = message?.chat_id;
     const messageId = message?.message_id;
     const tenantKey = payload.header?.tenant_key ?? event?.sender?.tenant_key;
-    const ids = this.validateInboundIds({ chatId, messageId, openId: senderId, tenantKey });
+    const ids = this.validateInboundIds({
+      chatId,
+      messageId,
+      openId: senderId,
+      tenantKey,
+    });
     if (!ids || !message) return;
     const dedupKey = buildFeishuInboundDedupKey(payload, ids.messageId);
     // Feishu/Lark retries webhook deliveries after slow or failed ACKs. Once
@@ -919,7 +1011,11 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     const command = parseFeishuCommandText(messageText);
     const pairingToken = extractMessagingPairingToken(messageText);
     const inboundKind: MessagingInboundEvent["kind"] =
-      command || pairingToken ? "command" : attachments.length > 0 ? "media" : "text";
+      command || pairingToken
+        ? "command"
+        : attachments.length > 0
+          ? "media"
+          : "text";
     this.logger.info?.("feishu inbound message received", {
       attachmentCount: attachments.length,
       chatType: message.chat_type,
@@ -928,13 +1024,15 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       messageType: message.message_type,
     });
 
-    if (!(await this.authorizeInbound({
-      actor,
-      channel: channelRef,
-      kind: inboundKind,
-      pairing: Boolean(pairingToken),
-      routingState,
-    }))) {
+    if (
+      !(await this.authorizeInbound({
+        actor,
+        channel: channelRef,
+        kind: inboundKind,
+        pairing: Boolean(pairingToken),
+        routingState,
+      }))
+    ) {
       return;
     }
 
@@ -959,16 +1057,18 @@ export class FeishuAdapter implements FeishuProviderAdapter {
               ...eventBase,
               kind: "media",
               attachments,
-              disposition: attachments.some((attachment) => attachment.disposition === "available")
+              disposition: attachments.some(
+                (attachment) => attachment.disposition === "available",
+              )
                 ? "available"
                 : "unsupported",
               ...(messageText ? { text: messageText } : {}),
             }
-        : {
-            ...eventBase,
-            kind: "text",
-            text: messageText,
-          };
+          : {
+              ...eventBase,
+              kind: "text",
+              text: messageText,
+            };
     await this.listener?.(inbound);
   }
 
@@ -1002,7 +1102,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     return false;
   }
 
-  private async handleBotP2pChatEnteredEvent(payload: FeishuEventEnvelope): Promise<void> {
+  private async handleBotP2pChatEnteredEvent(
+    payload: FeishuEventEnvelope,
+  ): Promise<void> {
     const event = objectRecord(payload.event);
     const operatorId = objectRecord(
       event.operator_id ?? event.user_id ?? event.sender_id,
@@ -1012,8 +1114,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       ?? stringField(event.open_id)
       ?? stringField(event.operator_open_id);
     const chatId =
-      stringField(event.chat_id)
-      ?? stringField(event.open_chat_id);
+      stringField(event.chat_id) ?? stringField(event.open_chat_id);
     const tenantKey =
       payload.header?.tenant_key
       ?? stringField(event.tenant_key)
@@ -1044,7 +1145,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       ...(actor ? { actor } : {}),
       ...(channel ? { channel } : {}),
       payload: {
-        eventType: payload.header?.event_type ?? "im.chat.access_event.bot_p2p_chat_entered_v1",
+        eventType:
+          payload.header?.event_type
+          ?? "im.chat.access_event.bot_p2p_chat_entered_v1",
         hasChatId: Boolean(chatId),
         hasOpenId: Boolean(openId),
         hasTenantKey: Boolean(tenantKey),
@@ -1082,7 +1185,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         reason: openIdValidation.reason,
         value: openId,
       });
-      return this.cardActionUnavailable("invalid-open-id", cardActionLogContext);
+      return this.cardActionUnavailable(
+        "invalid-open-id",
+        cardActionLogContext,
+      );
     }
     if (messageId !== undefined) {
       const messageValidation = validateFeishuMessageId(messageId);
@@ -1093,12 +1199,18 @@ export class FeishuAdapter implements FeishuProviderAdapter {
           reason: messageValidation.reason,
           value: messageId,
         });
-        return this.cardActionUnavailable("invalid-message-id", cardActionLogContext);
+        return this.cardActionUnavailable(
+          "invalid-message-id",
+          cardActionLogContext,
+        );
       }
     }
     const signed = this.parseSignedCallbackValue(handle);
     if (!signed) {
-      return this.cardActionUnavailable("invalid-signed-handle", cardActionLogContext);
+      return this.cardActionUnavailable(
+        "invalid-signed-handle",
+        cardActionLogContext,
+      );
     }
     const handleValidation = validateFeishuCallbackHandle(signed.handle);
     if (!handleValidation.ok) {
@@ -1108,7 +1220,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         reason: handleValidation.reason,
         value: signed.handle,
       });
-      return this.cardActionUnavailable("invalid-callback-handle", cardActionLogContext);
+      return this.cardActionUnavailable(
+        "invalid-callback-handle",
+        cardActionLogContext,
+      );
     }
 
     const actorId = openId as string;
@@ -1121,7 +1236,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         tenantKey,
       });
     if (!channelRef) {
-      return this.cardActionUnavailable("missing-channel", cardActionLogContext);
+      return this.cardActionUnavailable(
+        "missing-channel",
+        cardActionLogContext,
+      );
     }
     const record = await this.callbackHandleStore.resolveCallbackHandle({
       actorId,
@@ -1131,10 +1249,16 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     });
     if (!record) {
       this.logger.warn?.("feishu callback handle rejected", {
-        handleHash: createHash("sha256").update(signed.handle).digest("hex").slice(0, 8),
+        handleHash: createHash("sha256")
+          .update(signed.handle)
+          .digest("hex")
+          .slice(0, 8),
         ...cardActionLogContext,
       });
-      return this.cardActionUnavailable("handle-not-found", cardActionLogContext);
+      return this.cardActionUnavailable(
+        "handle-not-found",
+        cardActionLogContext,
+      );
     }
 
     this.logger.info?.("feishu card callback accepted", {
@@ -1229,13 +1353,17 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     return true;
   }
 
-  private async emitInboundRejected(event: MessagingRejectedInboundEvent): Promise<void> {
+  private async emitInboundRejected(
+    event: MessagingRejectedInboundEvent,
+  ): Promise<void> {
     for (const listener of this.inboundRejectedListeners) {
       await listener(event);
     }
   }
 
-  private async emitDiagnostic(event: MessagingAdapterDiagnosticEvent): Promise<void> {
+  private async emitDiagnostic(
+    event: MessagingAdapterDiagnosticEvent,
+  ): Promise<void> {
     this.logger.info?.("feishu adapter diagnostic", {
       eventId: event.id,
       summary: event.summary,
@@ -1256,7 +1384,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     return FEISHU_CARD_ACTION_UNAVAILABLE;
   }
 
-  private logReceivedEvent(transport: "persistent" | "webhook", data: unknown): void {
+  private logReceivedEvent(
+    transport: "persistent" | "webhook",
+    data: unknown,
+  ): void {
     this.logger.info?.("feishu event received", {
       ...feishuEventMetadata(data),
       transport,
@@ -1271,12 +1402,19 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   }): (action: MessagingSurfaceAction) => string {
     return (action) => {
       const handle = `${this.channel}:${createHash("sha256")
-        .update(JSON.stringify([params.intent.id, action.id, action.value ?? null]))
+        .update(
+          JSON.stringify([params.intent.id, action.id, action.value ?? null]),
+        )
         .digest("base64url")
         .slice(0, 18)}`;
       const issuedAt = this.now();
       const signedChannel = signedCallbackChannelFor(params.channelRef);
-      const sig = this.signCallbackValue(handle, params.intent.id, issuedAt, signedChannel);
+      const sig = this.signCallbackValue(
+        handle,
+        params.intent.id,
+        issuedAt,
+        signedChannel,
+      );
       const surface = {
         channel: this.channel,
         id: params.intent.id,
@@ -1319,14 +1457,14 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     };
   }
 
-  private parseSignedCallbackValue(
-    value: string,
-  ): {
-    channel?: MessagingChannelRef;
-    handle: string;
-    intentId: string;
-    issuedAt: number;
-  } | undefined {
+  private parseSignedCallbackValue(value: string):
+    | {
+        channel?: MessagingChannelRef;
+        handle: string;
+        intentId: string;
+        issuedAt: number;
+      }
+    | undefined {
     let parsed: unknown;
     try {
       parsed = JSON.parse(value);
@@ -1352,10 +1490,18 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     }
     const signedChannel = parseSignedCallbackChannel(record.c);
     if (record.c !== undefined && !signedChannel) return undefined;
-    const expected = this.signCallbackValue(record.h, record.i, record.t, signedChannel);
+    const expected = this.signCallbackValue(
+      record.h,
+      record.i,
+      record.t,
+      signedChannel,
+    );
     if (!safeEqual(expected, record.s)) {
       this.logger.warn?.("feishu callback signature rejected", {
-        handleHash: createHash("sha256").update(record.h).digest("hex").slice(0, 8),
+        handleHash: createHash("sha256")
+          .update(record.h)
+          .digest("hex")
+          .slice(0, 8),
       });
       return undefined;
     }
@@ -1363,7 +1509,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       handle: record.h,
       intentId: record.i,
       issuedAt: record.t,
-      ...(signedChannel ? { channel: channelRefFromSignedCallbackChannel(signedChannel) } : {}),
+      ...(signedChannel
+        ? { channel: channelRefFromSignedCallbackChannel(signedChannel) }
+        : {}),
     };
   }
 
@@ -1374,9 +1522,13 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     channel?: FeishuSignedCallbackChannel,
   ): string {
     return createHmac("sha256", this.signingSecret)
-      .update(JSON.stringify(channel
-        ? [handle, intentId, issuedAt, channel]
-        : [handle, intentId, issuedAt]))
+      .update(
+        JSON.stringify(
+          channel
+            ? [handle, intentId, issuedAt, channel]
+            : [handle, intentId, issuedAt],
+        ),
+      )
       .digest("base64url")
       .slice(0, 32);
   }
@@ -1433,7 +1585,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     messageId: unknown;
     openId: unknown;
     tenantKey?: unknown;
-  }): { chatId: string; messageId: string; openId: string; tenantKey?: string } | undefined {
+  }):
+    | { chatId: string; messageId: string; openId: string; tenantKey?: string }
+    | undefined {
     const openValidation = validateFeishuOpenId(params.openId);
     if (!openValidation.ok) {
       logFeishuInvalidIdentifier({
@@ -1489,16 +1643,19 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     };
   }
 
-  private resolveTarget(intent: MessagingSurfaceIntent): {
-    channelRef: MessagingChannelRef;
-    messageId?: string;
-    receiveId: string;
-    receiveIdType: "chat_id" | "open_id";
-    tenantKey?: string;
-  } | undefined {
-    const state = intent.targetSurface?.state ?? intent.audit?.channel
-      ? intent.targetSurface?.state
-      : undefined;
+  private resolveTarget(intent: MessagingSurfaceIntent):
+    | {
+        channelRef: MessagingChannelRef;
+        messageId?: string;
+        receiveId: string;
+        receiveIdType: "chat_id" | "open_id";
+        tenantKey?: string;
+      }
+    | undefined {
+    const state =
+      (intent.targetSurface?.state ?? intent.audit?.channel)
+        ? intent.targetSurface?.state
+        : undefined;
     const opaque = state?.opaque;
     const surface =
       opaque && typeof opaque === "object" && !Array.isArray(opaque)
@@ -1513,7 +1670,8 @@ export class FeishuAdapter implements FeishuProviderAdapter {
           : auditConversation?.id;
     if (!receiveId) return undefined;
     const receiveIdType =
-      typeof surface.receiveIdType === "string" && surface.receiveIdType === "open_id"
+      typeof surface.receiveIdType === "string"
+      && surface.receiveIdType === "open_id"
         ? "open_id"
         : auditConversation?.kind === "dm"
           ? "open_id"
@@ -1534,7 +1692,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         : typeof intent.targetSurface?.id === "string"
           ? { messageId: intent.targetSurface.id }
           : {}),
-      ...(typeof surface.tenantKey === "string" ? { tenantKey: surface.tenantKey } : {}),
+      ...(typeof surface.tenantKey === "string"
+        ? { tenantKey: surface.tenantKey }
+        : {}),
     };
   }
 
@@ -1614,7 +1774,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         );
       },
       "im.message.receive_v1": async (data: unknown) => {
-        await this.handleMessageEvent(feishuMessageEnvelopeFromPersistentEvent(data));
+        await this.handleMessageEvent(
+          feishuMessageEnvelopeFromPersistentEvent(data),
+        );
       },
     });
     const eventDispatcher: FeishuEventDispatcher = {
@@ -1641,7 +1803,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       return;
     }
     try {
-      const body = await readRequestBody(request, FEISHU_WEBHOOK_BODY_LIMIT_BYTES);
+      const body = await readRequestBody(
+        request,
+        FEISHU_WEBHOOK_BODY_LIMIT_BYTES,
+      );
       const payload = parseFeishuWebhookPayload(body, this.config.encryptKey);
       const result = await this.handleWebhookPayload(payload);
       if (
@@ -1652,7 +1817,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       ) {
         const body = "body" in result ? result.body : undefined;
         if (body !== undefined) {
-          response.writeHead(result.status, { "content-type": "application/json" });
+          response.writeHead(result.status, {
+            "content-type": "application/json",
+          });
           response.end(JSON.stringify(body));
         } else {
           response.writeHead(result.status).end();
@@ -1671,7 +1838,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
 
   private isValidWebhookToken(token: unknown): boolean {
     if (!this.config.verificationToken) return true;
-    return typeof token === "string" && safeEqual(token, this.config.verificationToken);
+    return (
+      typeof token === "string"
+      && safeEqual(token, this.config.verificationToken)
+    );
   }
 }
 
@@ -1700,10 +1870,10 @@ class DirectFeishuApi implements FeishuApi {
   }
 
   async getBotInfo(): Promise<FeishuBotInfo> {
-    const data = await this.request<{ bot?: { app_name?: string; avatar_url?: string; open_id?: string }; tenant_key?: string }>(
-      "/open-apis/bot/v3/info",
-      { method: "GET" },
-    );
+    const data = await this.request<{
+      bot?: { app_name?: string; avatar_url?: string; open_id?: string };
+      tenant_key?: string;
+    }>("/open-apis/bot/v3/info", { method: "GET" });
     return {
       appName: data.bot?.app_name,
       avatarUrl: data.bot?.avatar_url,
@@ -1712,7 +1882,9 @@ class DirectFeishuApi implements FeishuApi {
     };
   }
 
-  async sendMessage(params: FeishuSendMessageParams): Promise<FeishuSendMessageResult> {
+  async sendMessage(
+    params: FeishuSendMessageParams,
+  ): Promise<FeishuSendMessageResult> {
     const body = {
       receive_id: params.receiveId,
       msg_type: params.card ? "interactive" : "text",
@@ -1731,7 +1903,10 @@ class DirectFeishuApi implements FeishuApi {
     };
   }
 
-  async updateMessage(params: { card: FeishuInteractiveCard; messageId: string }): Promise<FeishuSendMessageResult> {
+  async updateMessage(params: {
+    card: FeishuInteractiveCard;
+    messageId: string;
+  }): Promise<FeishuSendMessageResult> {
     const data = await this.request<{ message_id?: string }>(
       `/open-apis/im/v1/messages/${encodeURIComponent(params.messageId)}`,
       {
@@ -1774,7 +1949,10 @@ class DirectFeishuApi implements FeishuApi {
     const chunks: Uint8Array[] = [];
     let total = 0;
     for await (const chunk of Readable.fromWeb(response.body as never)) {
-      const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk as ArrayBuffer);
+      const bytes =
+        chunk instanceof Uint8Array
+          ? chunk
+          : new Uint8Array(chunk as ArrayBuffer);
       total += bytes.byteLength;
       if (total > params.maxBytes) {
         throw new Error("Feishu attachment exceeds download limit");
@@ -1808,37 +1986,47 @@ class DirectFeishuApi implements FeishuApi {
       // Keep raw text below for error reporting.
     }
     if (!response.ok || (parsed.code !== undefined && parsed.code !== 0)) {
-      const error = new Error(parsed.msg || text || `Feishu request failed: ${response.status}`);
+      const error = new Error(
+        parsed.msg || text || `Feishu request failed: ${response.status}`,
+      );
       const retryAfter = response.headers.get("retry-after");
       if (retryAfter) {
         Object.assign(error, { retryAfter: Number(retryAfter) });
       }
       throw error;
     }
-    return (parsed.data ?? (parsed.bot ? { bot: parsed.bot } : {}) as T) as T;
+    return (parsed.data ?? ((parsed.bot ? { bot: parsed.bot } : {}) as T)) as T;
   }
 
   private async getTenantAccessToken(): Promise<string> {
     const now = Date.now();
-    if (this.tenantAccessToken && this.tenantAccessToken.expiresAt > now + 60_000) {
+    if (
+      this.tenantAccessToken
+      && this.tenantAccessToken.expiresAt > now + 60_000
+    ) {
       return this.tenantAccessToken.value;
     }
-    const response = await fetch(`${this.baseUrl}/open-apis/auth/v3/tenant_access_token/internal`, {
-      method: "POST",
-      headers: { "content-type": "application/json; charset=utf-8" },
-      body: JSON.stringify({
-        app_id: this.appId,
-        app_secret: this.appSecret,
-      }),
-    });
-    const payload = await response.json() as {
+    const response = await fetch(
+      `${this.baseUrl}/open-apis/auth/v3/tenant_access_token/internal`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify({
+          app_id: this.appId,
+          app_secret: this.appSecret,
+        }),
+      },
+    );
+    const payload = (await response.json()) as {
       code?: number;
       expire?: number;
       msg?: string;
       tenant_access_token?: string;
     };
     if (!response.ok || payload.code !== 0 || !payload.tenant_access_token) {
-      throw new Error(payload.msg || `Feishu tenant token request failed: ${response.status}`);
+      throw new Error(
+        payload.msg || `Feishu tenant token request failed: ${response.status}`,
+      );
     }
     this.tenantAccessToken = {
       value: payload.tenant_access_token,
@@ -1871,7 +2059,9 @@ function buildFeishuInboundDedupKey(
     : `message:${messageId}`;
 }
 
-function parseFeishuMessageContent(content: string | undefined): Record<string, unknown> {
+function parseFeishuMessageContent(
+  content: string | undefined,
+): Record<string, unknown> {
   if (!content) return {};
   try {
     const parsed = JSON.parse(content) as unknown;
@@ -1911,7 +2101,9 @@ function extractFeishuPostText(
   if (typeof record.text === "string") return record.text;
   if (typeof record.content === "string") return record.content;
   if (record.tag === "at") return feishuPostMentionText(record, context);
-  return record.content === undefined ? "" : extractFeishuPostText(record.content, context);
+  return record.content === undefined
+    ? ""
+    : extractFeishuPostText(record.content, context);
 }
 
 function feishuAttachmentsFromMessage(params: {
@@ -1966,7 +2158,11 @@ function feishuAttachmentsFromMessage(params: {
       },
     ];
   }
-  if (messageType === "audio" || messageType === "media" || messageType === "video") {
+  if (
+    messageType === "audio"
+    || messageType === "media"
+    || messageType === "video"
+  ) {
     const fileKey = stringField(params.content.file_key);
     return [
       {
@@ -2013,7 +2209,8 @@ function collectFeishuPostAttachments(
   const record = value as Record<string, unknown>;
   const tag = stringField(record.tag);
   if (tag === "img") {
-    const imageKey = stringField(record.image_key) ?? stringField(record.file_key);
+    const imageKey =
+      stringField(record.image_key) ?? stringField(record.file_key);
     if (imageKey) {
       attachments.push({
         id: `feishu:image:${imageKey}`,
@@ -2030,7 +2227,12 @@ function collectFeishuPostAttachments(
         },
       });
     }
-  } else if (tag === "media" || tag === "video" || tag === "audio" || tag === "file") {
+  } else if (
+    tag === "media"
+    || tag === "video"
+    || tag === "audio"
+    || tag === "file"
+  ) {
     const fileKey = stringField(record.file_key);
     attachments.push({
       id: `feishu:${tag}:${fileKey ?? messageId}`,
@@ -2071,10 +2273,11 @@ function shouldSendFeishuCard(
   actionCount: number,
 ): boolean {
   if (actionCount > 0 || intent.kind !== "message") return true;
-  return intent.parts.some((part) =>
-    part.type === "text"
-    && part.markdown === "markdown"
-    && containsMarkdownTable(part.text || text)
+  return intent.parts.some(
+    (part) =>
+      part.type === "text"
+      && part.markdown === "markdown"
+      && containsMarkdownTable(part.text || text),
   );
 }
 
@@ -2093,11 +2296,19 @@ function containsMarkdownTable(text: string): boolean {
 
 function isMarkdownTableRow(line: string): boolean {
   const trimmed = line.trim();
-  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.split("|").length >= 4;
+  return (
+    trimmed.startsWith("|")
+    && trimmed.endsWith("|")
+    && trimmed.split("|").length >= 4
+  );
 }
 
 function isMarkdownTableSeparator(line: string): boolean {
-  const cells = line.trim().split("|").map((cell) => cell.trim()).filter(Boolean);
+  const cells = line
+    .trim()
+    .split("|")
+    .map((cell) => cell.trim())
+    .filter(Boolean);
   return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
@@ -2106,7 +2317,9 @@ function feishuPostMentionText(
   context: { botOpenId?: string; mentions?: FeishuMessageMention[] },
 ): string {
   const userId = stringField(record.user_id);
-  const matchingMention = context.mentions?.find((mention) => mention.id?.open_id === userId);
+  const matchingMention = context.mentions?.find(
+    (mention) => mention.id?.open_id === userId,
+  );
   if (userId && context.botOpenId && userId === context.botOpenId) {
     return matchingMention?.key ?? "";
   }
@@ -2145,16 +2358,23 @@ function stripBotMentions(params: {
   return stripped.trim();
 }
 
-function signedCallbackChannelFor(channelRef: MessagingChannelRef): FeishuSignedCallbackChannel {
+function signedCallbackChannelFor(
+  channelRef: MessagingChannelRef,
+): FeishuSignedCallbackChannel {
   return {
     i: channelRef.conversation.id,
     k: channelRef.conversation.kind === "dm" ? "dm" : "channel",
-    ...(channelRef.conversation.parentId ? { p: channelRef.conversation.parentId } : {}),
+    ...(channelRef.conversation.parentId
+      ? { p: channelRef.conversation.parentId }
+      : {}),
   };
 }
 
-function parseSignedCallbackChannel(value: unknown): FeishuSignedCallbackChannel | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+function parseSignedCallbackChannel(
+  value: unknown,
+): FeishuSignedCallbackChannel | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
   const record = value as { i?: unknown; k?: unknown; p?: unknown };
   if (
     typeof record.i !== "string"
@@ -2164,9 +2384,12 @@ function parseSignedCallbackChannel(value: unknown): FeishuSignedCallbackChannel
     return undefined;
   }
   const idValidation =
-    record.k === "dm" ? validateFeishuOpenId(record.i) : validateFeishuChatId(record.i);
+    record.k === "dm"
+      ? validateFeishuOpenId(record.i)
+      : validateFeishuChatId(record.i);
   if (!idValidation.ok) return undefined;
-  if (record.p !== undefined && !validateFeishuTenantKey(record.p).ok) return undefined;
+  if (record.p !== undefined && !validateFeishuTenantKey(record.p).ok)
+    return undefined;
   return {
     i: record.i,
     k: record.k,
@@ -2187,37 +2410,50 @@ function channelRefFromSignedCallbackChannel(
   };
 }
 
-function feishuMessageEnvelopeFromPersistentEvent(data: unknown): FeishuEventEnvelope {
-  const { event, header, record } = feishuEnvelopePartsFromPersistentEvent(data);
+function feishuMessageEnvelopeFromPersistentEvent(
+  data: unknown,
+): FeishuEventEnvelope {
+  const { event, header, record } =
+    feishuEnvelopePartsFromPersistentEvent(data);
   return {
     header: {
       event_id: stringField(header.event_id) ?? stringField(record.event_id),
       event_type: "im.message.receive_v1",
-      tenant_key: stringField(header.tenant_key) ?? stringField(record.tenant_key),
+      tenant_key:
+        stringField(header.tenant_key) ?? stringField(record.tenant_key),
       token: stringField(header.token) ?? stringField(record.token),
     },
     event: {
-      message: objectRecord(event.message) as FeishuReceiveMessageEvent["message"],
+      message: objectRecord(
+        event.message,
+      ) as FeishuReceiveMessageEvent["message"],
       sender: objectRecord(event.sender) as FeishuReceiveMessageEvent["sender"],
     },
     schema: "2.0",
   };
 }
 
-function feishuCardActionEnvelopeFromPersistentEvent(data: unknown): FeishuEventEnvelope {
-  const { event, header, record } = feishuEnvelopePartsFromPersistentEvent(data);
+function feishuCardActionEnvelopeFromPersistentEvent(
+  data: unknown,
+): FeishuEventEnvelope {
+  const { event, header, record } =
+    feishuEnvelopePartsFromPersistentEvent(data);
   return {
     header: {
       event_id: stringField(header.event_id) ?? stringField(record.event_id),
       event_type: "card.action.trigger",
-      tenant_key: stringField(header.tenant_key) ?? stringField(record.tenant_key),
+      tenant_key:
+        stringField(header.tenant_key) ?? stringField(record.tenant_key),
       token: stringField(header.token) ?? stringField(record.token),
     },
     event: {
       action: objectRecord(event.action) as FeishuCardActionEvent["action"],
       context: objectRecord(event.context) as FeishuCardActionEvent["context"],
-      operator: objectRecord(event.operator) as FeishuCardActionEvent["operator"],
-      tenant_key: stringField(event.tenant_key) ?? stringField(record.tenant_key),
+      operator: objectRecord(
+        event.operator,
+      ) as FeishuCardActionEvent["operator"],
+      tenant_key:
+        stringField(event.tenant_key) ?? stringField(record.tenant_key),
       token: stringField(event.token) ?? stringField(record.token),
     },
     schema: "2.0",
@@ -2228,12 +2464,14 @@ function feishuEnvelopeFromPersistentEvent(
   data: unknown,
   eventType: string,
 ): FeishuEventEnvelope {
-  const { event, header, record } = feishuEnvelopePartsFromPersistentEvent(data);
+  const { event, header, record } =
+    feishuEnvelopePartsFromPersistentEvent(data);
   return {
     header: {
       event_id: stringField(header.event_id) ?? stringField(record.event_id),
       event_type: eventType,
-      tenant_key: stringField(header.tenant_key) ?? stringField(record.tenant_key),
+      tenant_key:
+        stringField(header.tenant_key) ?? stringField(record.tenant_key),
       token: stringField(header.token) ?? stringField(record.token),
     },
     event: event as FeishuEventEnvelope["event"],
@@ -2287,25 +2525,31 @@ function feishuEventMetadata(data: unknown): Record<string, unknown> {
   setMetadataField(
     metadata,
     "eventType",
-    stringField(header.event_type) ?? stringField(record.event_type)
-      ?? stringField(record.type) ?? stringField(objectRecord(record.event).type),
+    stringField(header.event_type)
+      ?? stringField(record.event_type)
+      ?? stringField(record.type)
+      ?? stringField(objectRecord(record.event).type),
   );
   setMetadataField(
     metadata,
     "tenantKey",
-    stringField(header.tenant_key) ?? stringField(body.tenant_key)
-      ?? stringField(sender.tenant_key) ?? stringField(operator.tenant_key),
+    stringField(header.tenant_key)
+      ?? stringField(body.tenant_key)
+      ?? stringField(sender.tenant_key)
+      ?? stringField(operator.tenant_key),
   );
   setMetadataField(
     metadata,
     "actorId",
-    stringField(senderId.open_id) ?? stringField(operator.open_id)
+    stringField(senderId.open_id)
+      ?? stringField(operator.open_id)
       ?? stringField(operatorId.open_id),
   );
   setMetadataField(
     metadata,
     "chatId",
-    stringField(message.chat_id) ?? stringField(context.open_chat_id)
+    stringField(message.chat_id)
+      ?? stringField(context.open_chat_id)
       ?? stringField(body.chat_id),
   );
   setMetadataField(metadata, "chatType", stringField(message.chat_type));
@@ -2339,7 +2583,9 @@ function parseFeishuWebhookPayload(
     return parsed as FeishuEventEnvelope;
   }
   if (!encryptKey) {
-    throw new Error("Feishu encrypted webhook payload requires an encryption key.");
+    throw new Error(
+      "Feishu encrypted webhook payload requires an encryption key.",
+    );
   }
 
   const decrypted = JSON.parse(
@@ -2362,7 +2608,11 @@ function decryptFeishuEncryptedPayload(
   keyHash.update(encryptKey);
   const key = keyHash.digest();
   const encryptedBuffer = Buffer.from(encryptedPayload, "base64");
-  const decipher = createDecipheriv("aes-256-cbc", key, encryptedBuffer.subarray(0, 16));
+  const decipher = createDecipheriv(
+    "aes-256-cbc",
+    key,
+    encryptedBuffer.subarray(0, 16),
+  );
   let decrypted = decipher.update(
     encryptedBuffer.subarray(16).toString("hex"),
     "hex",
@@ -2374,7 +2624,7 @@ function decryptFeishuEncryptedPayload(
 
 function objectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : {};
 }
 
@@ -2382,7 +2632,9 @@ function stringField(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function larkLoggerFromProviderLogger(logger: FeishuProviderLogger): LarkSdkLogger {
+function larkLoggerFromProviderLogger(
+  logger: FeishuProviderLogger,
+): LarkSdkLogger {
   return {
     debug: (...msg: unknown[]) => {
       logger.debug?.("feishu sdk", { message: msg.map(String).join(" ") });
@@ -2394,7 +2646,9 @@ function larkLoggerFromProviderLogger(logger: FeishuProviderLogger): LarkSdkLogg
       logger.info?.("feishu sdk", { message: msg.map(String).join(" ") });
     },
     trace: (...msg: unknown[]) => {
-      logger.debug?.("feishu sdk trace", { message: msg.map(String).join(" ") });
+      logger.debug?.("feishu sdk trace", {
+        message: msg.map(String).join(" "),
+      });
     },
     warn: (...msg: unknown[]) => {
       logger.warn?.("feishu sdk", { message: msg.map(String).join(" ") });
@@ -2419,11 +2673,13 @@ function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
   return intent.audit?.bindingId ?? intent.bindingId;
 }
 
-function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | undefined {
-  return intent.kind === "thread_picker" ||
-    intent.kind === "project_picker" ||
-    intent.kind === "single_select" ||
-    intent.kind === "confirmation"
+function browseSessionIdForIntent(
+  intent: MessagingSurfaceIntent,
+): string | undefined {
+  return intent.kind === "thread_picker"
+    || intent.kind === "project_picker"
+    || intent.kind === "single_select"
+    || intent.kind === "confirmation"
     ? intent.browseSessionId
     : undefined;
 }
@@ -2447,7 +2703,8 @@ function feishuContactsFromIds(
 ): Array<{ id: string; displayName: string }> {
   return ids.map((id) => ({
     id,
-    displayName: previous?.find((contact) => contact.id === id)?.displayName ?? "",
+    displayName:
+      previous?.find((contact) => contact.id === id)?.displayName ?? "",
   }));
 }
 
@@ -2497,5 +2754,8 @@ function readRequestBody(
 function safeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+  return (
+    leftBuffer.length === rightBuffer.length
+    && timingSafeEqual(leftBuffer, rightBuffer)
+  );
 }

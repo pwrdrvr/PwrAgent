@@ -41,7 +41,9 @@ describe("permission-transition-entries", () => {
     expect(entries).toHaveLength(3);
     for (const entry of entries) {
       expect(entry.type).toBe("activity");
-      expect(entry.id.startsWith(PERMISSION_TRANSITION_ENTRY_PREFIX)).toBe(true);
+      expect(entry.id.startsWith(PERMISSION_TRANSITION_ENTRY_PREFIX)).toBe(
+        true,
+      );
       expect(isPermissionTransitionEntry(entry)).toBe(true);
     }
   });

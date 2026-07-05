@@ -21,7 +21,7 @@ const localAcpDiscoveryMock = vi.hoisted(() => ({
   discoverLocalAcpAgentRecords: vi.fn(async () => [] as unknown[]),
 }));
 const acpRuntimeDiscoveryMock = vi.hoisted(() => ({
-  discoverAcpRuntimeCapabilities: vi.fn(async () => ({} as unknown)),
+  discoverAcpRuntimeCapabilities: vi.fn(async () => ({}) as unknown),
 }));
 const electronMocks = vi.hoisted(() => ({
   openExternal: vi.fn(async () => undefined),
@@ -65,10 +65,12 @@ const leaseCoordinatorMock = vi.hoisted(() => ({
 }));
 
 function createMockSpawnChild(
-  schedule: (child: EventEmitter & {
-    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-  }) => void,
+  schedule: (
+    child: EventEmitter & {
+      stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+      stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    },
+  ) => void,
 ): EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
   pid: number;
@@ -97,9 +99,11 @@ function createMockSpawnChild(
 
 vi.mock("electron", () => ({
   ipcMain: {
-    handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
-      handlers.set(channel, handler);
-    }),
+    handle: vi.fn(
+      (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
+        handlers.set(channel, handler);
+      },
+    ),
     removeHandler: vi.fn((channel: string) => {
       handlers.delete(channel);
     }),
@@ -139,9 +143,8 @@ vi.mock("../messaging/messaging-runtime", () => ({
 }));
 
 vi.mock("../messaging/messaging-config", async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import("../messaging/messaging-config")
-  >();
+  const actual =
+    await importOriginal<typeof import("../messaging/messaging-config")>();
   return {
     ...actual,
     loadDesktopMessagingConfigFromSettings:
@@ -202,7 +205,9 @@ describe("settings ipc", () => {
     localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockReset();
     localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([]);
     acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockReset();
-    acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockResolvedValue({});
+    acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockResolvedValue(
+      {},
+    );
     electronMocks.openExternal.mockClear();
     childProcessMocks.execFile.mockImplementation(
       (
@@ -228,7 +233,9 @@ describe("settings ipc", () => {
   });
 
   it("registers redacted read and write handlers", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
     tempRoots.push(tempRoot);
     const secretStore = new MemoryDesktopSecretStore();
     await secretStore.setSecret("telegramBotToken", "123456789:secret-token");
@@ -238,10 +245,8 @@ describe("settings ipc", () => {
       secretStore,
       now: () => 20,
     });
-    const {
-      registerSettingsIpcHandlers,
-      disposeSettingsIpcHandlers,
-    } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } =
+      await import("../ipc/settings");
     const {
       SETTINGS_READ_CHANNEL,
       SETTINGS_REPLACE_SECRET_CHANNEL,
@@ -298,7 +303,9 @@ describe("settings ipc", () => {
   });
 
   it("uses startup messaging identity as the last credential result when no manual test ran", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
     tempRoots.push(tempRoot);
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -312,7 +319,8 @@ describe("settings ipc", () => {
       observedAt: 1234,
     });
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
-    const { SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL } = await import("../../shared/ipc");
+    const { SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerSettingsIpcHandlers(service);
 
@@ -331,7 +339,9 @@ describe("settings ipc", () => {
   });
 
   it("disposes backend clients after model settings change", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
     tempRoots.push(tempRoot);
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -340,10 +350,8 @@ describe("settings ipc", () => {
       now: () => 20,
     });
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
-    const {
-      SETTINGS_CLEAR_SECRET_CHANNEL,
-      SETTINGS_WRITE_CONFIG_CHANNEL,
-    } = await import("../../shared/ipc");
+    const { SETTINGS_CLEAR_SECRET_CHANNEL, SETTINGS_WRITE_CONFIG_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerSettingsIpcHandlers(service);
 
@@ -415,19 +423,16 @@ describe("settings ipc", () => {
       resolveLineChannelAccessTokenSync: vi.fn(),
       resolveGrokApiKey: vi.fn(),
     } as unknown as DesktopSettingsService;
-    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
-    );
-    const { SETTINGS_TEST_CREDENTIALS_CHANNEL } = await import("../../shared/ipc");
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } =
+      await import("../ipc/settings");
+    const { SETTINGS_TEST_CREDENTIALS_CHANNEL } =
+      await import("../../shared/ipc");
 
     disposeSettingsIpcHandlers();
     registerSettingsIpcHandlers(service);
 
     await expect(
-      handlers.get(SETTINGS_TEST_CREDENTIALS_CHANNEL)?.(
-        {},
-        { kind: "codex" },
-      ),
+      handlers.get(SETTINGS_TEST_CREDENTIALS_CHANNEL)?.({}, { kind: "codex" }),
     ).resolves.toMatchObject({
       kind: "codex",
       status: "unset",
@@ -438,7 +443,9 @@ describe("settings ipc", () => {
   });
 
   it("starts named Codex auth profile login with the browser OAuth flow", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
     tempRoots.push(tempRoot);
     const codexHome = path.join(tempRoot, "codex");
     vi.stubEnv("CODEX_HOME", codexHome);
@@ -447,7 +454,8 @@ describe("settings ipc", () => {
         models: {
           codex: {
             discovery: {
-              selectedCommand: "/Applications/Codex.app/Contents/Resources/codex",
+              selectedCommand:
+                "/Applications/Codex.app/Contents/Resources/codex",
             },
           },
         },
@@ -458,16 +466,17 @@ describe("settings ipc", () => {
     childProcessMocks.spawn.mockImplementation(() => {
       return createMockSpawnChild((child) => {
         queueMicrotask(() => {
-          child.stdout.emit("data", `If your browser did not open, navigate to:\n${loginUrl}\n`);
+          child.stdout.emit(
+            "data",
+            `If your browser did not open, navigate to:\n${loginUrl}\n`,
+          );
         });
       });
     });
-    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
-    );
-    const {
-      SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
-    } = await import("../../shared/ipc");
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } =
+      await import("../ipc/settings");
+    const { SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL } =
+      await import("../../shared/ipc");
 
     disposeSettingsIpcHandlers();
     registerSettingsIpcHandlers(service);
@@ -493,13 +502,17 @@ describe("settings ipc", () => {
         stdio: ["ignore", "pipe", "pipe"],
       }),
     );
-    expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(loginUrl);
+    expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(
+      loginUrl,
+    );
 
     disposeSettingsIpcHandlers();
   });
 
   it("keeps the newest Codex login process tracked when restarting login", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
     tempRoots.push(tempRoot);
     const codexHome = path.join(tempRoot, "codex");
     vi.stubEnv("CODEX_HOME", codexHome);
@@ -508,7 +521,8 @@ describe("settings ipc", () => {
         models: {
           codex: {
             discovery: {
-              selectedCommand: "/Applications/Codex.app/Contents/Resources/codex",
+              selectedCommand:
+                "/Applications/Codex.app/Contents/Resources/codex",
             },
           },
         },
@@ -520,19 +534,20 @@ describe("settings ipc", () => {
     childProcessMocks.spawn.mockImplementation(() => {
       const child = createMockSpawnChild((spawnedChild) => {
         queueMicrotask(() => {
-          spawnedChild.stdout.emit("data", `If your browser did not open:\n${loginUrl}\n`);
+          spawnedChild.stdout.emit(
+            "data",
+            `If your browser did not open:\n${loginUrl}\n`,
+          );
         });
       });
       child.pid = 321 + children.length;
       children.push(child);
       return child;
     });
-    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
-    );
-    const {
-      SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
-    } = await import("../../shared/ipc");
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } =
+      await import("../ipc/settings");
+    const { SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL } =
+      await import("../../shared/ipc");
 
     disposeSettingsIpcHandlers();
     registerSettingsIpcHandlers(service);
@@ -554,7 +569,9 @@ describe("settings ipc", () => {
   });
 
   it("treats Codex login exit without a link as authenticated when status passes", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
     tempRoots.push(tempRoot);
     const codexHome = path.join(tempRoot, "codex");
     vi.stubEnv("CODEX_HOME", codexHome);
@@ -563,33 +580,34 @@ describe("settings ipc", () => {
         models: {
           codex: {
             discovery: {
-              selectedCommand: "/Applications/Codex.app/Contents/Resources/codex",
+              selectedCommand:
+                "/Applications/Codex.app/Contents/Resources/codex",
             },
           },
         },
       })),
     } as unknown as DesktopSettingsService;
-    childProcessMocks.spawn.mockImplementation((_command: string, args: string[]) => {
-      if (args.join(" ") === "login status") {
+    childProcessMocks.spawn.mockImplementation(
+      (_command: string, args: string[]) => {
+        if (args.join(" ") === "login status") {
+          return createMockSpawnChild((child) => {
+            queueMicrotask(() => {
+              child.stdout.emit("data", "Logged in as user@example.com");
+              child.emit("close", 0);
+            });
+          });
+        }
         return createMockSpawnChild((child) => {
           queueMicrotask(() => {
-            child.stdout.emit("data", "Logged in as user@example.com");
             child.emit("close", 0);
           });
         });
-      }
-      return createMockSpawnChild((child) => {
-        queueMicrotask(() => {
-          child.emit("close", 0);
-        });
-      });
-    });
-    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      },
     );
-    const {
-      SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
-    } = await import("../../shared/ipc");
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } =
+      await import("../ipc/settings");
+    const { SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL } =
+      await import("../../shared/ipc");
 
     disposeSettingsIpcHandlers();
     registerSettingsIpcHandlers(service);
@@ -632,7 +650,9 @@ describe("settings ipc", () => {
   it("hot-applies messaging config writes without defeating a launch disable override", async () => {
     vi.stubEnv("PWRAGENT_DISABLE_MESSAGING", "1");
     runtimeMock.isEnabled.mockReturnValue(false);
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
     tempRoots.push(tempRoot);
     const secretStore = new MemoryDesktopSecretStore();
     await secretStore.setSecret("telegramBotToken", "settings-telegram-token");
@@ -678,7 +698,9 @@ describe("settings ipc", () => {
   });
 
   it("resolves messaging contacts through provider packages", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
     tempRoots.push(tempRoot);
     const secretStore = new MemoryDesktopSecretStore();
     await secretStore.setSecret("telegramBotToken", "telegram-token");
@@ -690,9 +712,8 @@ describe("settings ipc", () => {
       now: () => 20,
     });
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
-    const {
-      SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
-    } = await import("../../shared/ipc");
+    const { SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL } =
+      await import("../../shared/ipc");
     providerMocks.resolveTelegramContact.mockResolvedValue({
       status: "ok",
       id: "8460800771",
@@ -716,7 +737,9 @@ describe("settings ipc", () => {
       displayName: "Harold",
       handle: "@hunt",
     });
-    expect(providerMocks.resolveTelegramContact).toHaveBeenCalledExactlyOnceWith(
+    expect(
+      providerMocks.resolveTelegramContact,
+    ).toHaveBeenCalledExactlyOnceWith(
       { botToken: "telegram-token" },
       { id: "8460800771", kind: "user" },
     );
@@ -748,7 +771,9 @@ describe("settings ipc", () => {
   });
 
   it("lists locally discovered ACP agents without a registry install", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
     tempRoots.push(tempRoot);
     vi.stubEnv("PWRAGENT_HOME", tempRoot);
     localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([
@@ -794,7 +819,8 @@ describe("settings ipc", () => {
         ],
       },
     });
-    const { initializeAppState, disposeAppState } = await import("../state/app-state");
+    const { initializeAppState, disposeAppState } =
+      await import("../state/app-state");
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
@@ -831,7 +857,8 @@ describe("settings ipc", () => {
       expect(
         cached?.entries?.every(
           (entry) =>
-            entry.installed === false && entry.installStatus === "not-installed",
+            entry.installed === false
+            && entry.installStatus === "not-installed",
         ),
       ).toBe(true);
       const refreshed = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
@@ -878,9 +905,8 @@ describe("settings ipc", () => {
     vi.stubEnv("PWRAGENT_HOME", tempRoot);
     vi.stubEnv("PWRAGENT_ACP_AGENTS_GROK_CLI_PATH", "/opt/pwragent/bin/grok");
     vi.stubEnv("PWRAGENT_ACP_AGENTS_QWEN_CLI_PATH", "/opt/pwragent/bin/qwen");
-    const { initializeAppState, disposeAppState } = await import(
-      "../state/app-state"
-    );
+    const { initializeAppState, disposeAppState } =
+      await import("../state/app-state");
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
@@ -954,9 +980,8 @@ describe("settings ipc", () => {
         configOptions: [],
       },
     });
-    const { initializeAppState, disposeAppState } = await import(
-      "../state/app-state"
-    );
+    const { initializeAppState, disposeAppState } =
+      await import("../state/app-state");
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
@@ -969,8 +994,7 @@ describe("settings ipc", () => {
     initializeAppState();
     try {
       registerSettingsIpcHandlers(service);
-      const probe =
-        acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities;
+      const probe = acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities;
 
       // First refresh: the agent is undiscovered → it must be probed once.
       await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
@@ -982,9 +1006,10 @@ describe("settings ipc", () => {
       expect(probe).toHaveBeenCalledTimes(1);
 
       // Forced refresh ("Discover new"): re-probe regardless of freshness.
-      await handlers
-        .get(ACP_AGENTS_LIST_CHANNEL)
-        ?.({}, { refresh: true, force: true });
+      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+        {},
+        { refresh: true, force: true },
+      );
       expect(probe).toHaveBeenCalledTimes(2);
     } finally {
       disposeAppState();
@@ -1034,9 +1059,8 @@ describe("settings ipc", () => {
         configOptions: [],
       },
     });
-    const { initializeAppState, disposeAppState } = await import(
-      "../state/app-state"
-    );
+    const { initializeAppState, disposeAppState } =
+      await import("../state/app-state");
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
@@ -1096,13 +1120,11 @@ describe("settings ipc", () => {
     }
 
     it("persists the wizard signal and fires the thread-list prefetch", async () => {
-      const { configPath, onConfigPatchWritten } =
-        await setupOnboardingHandler(
-          ["[onboarding]", "completed = false", ""].join("\n"),
-        );
-      const { ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL } = await import(
-        "../../shared/ipc"
+      const { configPath, onConfigPatchWritten } = await setupOnboardingHandler(
+        ["[onboarding]", "completed = false", ""].join("\n"),
       );
+      const { ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL } =
+        await import("../../shared/ipc");
 
       const response = (await handlers.get(
         ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
@@ -1125,9 +1147,8 @@ describe("settings ipc", () => {
       const { configPath } = await setupOnboardingHandler(
         ["[onboarding]", "completed = false", ""].join("\n"),
       );
-      const { ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL } = await import(
-        "../../shared/ipc"
-      );
+      const { ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL } =
+        await import("../../shared/ipc");
 
       const response = (await handlers.get(
         ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
@@ -1152,9 +1173,8 @@ describe("settings ipc", () => {
           "",
         ].join("\n"),
       );
-      const { ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL } = await import(
-        "../../shared/ipc"
-      );
+      const { ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL } =
+        await import("../../shared/ipc");
       const originalBytes = fs.readFileSync(configPath, "utf8");
 
       await handlers.get(ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL)?.({});

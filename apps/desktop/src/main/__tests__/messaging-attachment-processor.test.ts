@@ -1,15 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
-import type {
-  MessagingAdapter,
-} from "../messaging/core/messaging-adapter";
-import {
-  processMessagingAttachments,
-} from "../messaging/core/messaging-attachment-processor";
+import type { MessagingAdapter } from "../messaging/core/messaging-adapter";
+import { processMessagingAttachments } from "../messaging/core/messaging-attachment-processor";
 
 const bytes = (value: string): Uint8Array => new TextEncoder().encode(value);
 
-function createAdapter(dataByName: Record<string, Uint8Array>): MessagingAdapter {
+function createAdapter(
+  dataByName: Record<string, Uint8Array>,
+): MessagingAdapter {
   return {
     capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
     deliver: vi.fn(),
@@ -50,7 +48,9 @@ describe("processMessagingAttachments", () => {
     expect(result.input).toEqual([
       {
         type: "text",
-        text: expect.stringContaining("Please inspect this log\n\nAttached file: `streaming-logs.txt`"),
+        text: expect.stringContaining(
+          "Please inspect this log\n\nAttached file: `streaming-logs.txt`",
+        ),
       },
     ]);
     expect(result.input[0]).toMatchObject({

@@ -101,13 +101,25 @@ export function textForTelegramIntent(intent: MessagingSurfaceIntent): string {
     case "multi_select":
       return renderTelegramHtml(intent.prompt, "plain");
     case "questionnaire":
-      return renderTelegramHtml(formatMessagingQuestionnaireText(intent), "plain");
+      return renderTelegramHtml(
+        formatMessagingQuestionnaireText(intent),
+        "plain",
+      );
     case "approval":
-      return renderTelegramHtml([intent.title, intent.body].join("\n\n"), "markdown");
+      return renderTelegramHtml(
+        [intent.title, intent.body].join("\n\n"),
+        "markdown",
+      );
     case "confirmation":
-      return renderTelegramHtml([intent.title, intent.body].join("\n\n"), "plain");
+      return renderTelegramHtml(
+        [intent.title, intent.body].join("\n\n"),
+        "plain",
+      );
     case "error":
-      return renderTelegramHtml([intent.title, intent.body].join("\n\n"), "plain");
+      return renderTelegramHtml(
+        [intent.title, intent.body].join("\n\n"),
+        "plain",
+      );
     case "dismiss":
       return "";
   }
@@ -158,9 +170,10 @@ export function buildTelegramKeyboard(
       return {
         action,
         component: {
-          text: action.label.length > maxLabelLength
-            ? action.label.slice(0, maxLabelLength)
-            : action.label,
+          text:
+            action.label.length > maxLabelLength
+              ? action.label.slice(0, maxLabelLength)
+              : action.label,
           callback_data: callbackData,
         },
       };
@@ -180,7 +193,9 @@ export function buildTelegramKeyboard(
 
 function assertOpaqueTelegramCallbackHandle(callbackData: string): void {
   if (!/^tg:[A-Za-z0-9_-]{18}$/.test(callbackData)) {
-    throw new Error("Telegram callback_data must be an opaque persisted handle.");
+    throw new Error(
+      "Telegram callback_data must be an opaque persisted handle.",
+    );
   }
 }
 
@@ -207,7 +222,9 @@ function renderMarkdownishTelegramHtml(text: string): string {
   for (const line of lines) {
     if (line.trimStart().startsWith("```")) {
       if (codeLines.length > 0) {
-        segments.push(`<pre><code>${escapeTelegramHtml(codeLines.join("\n"))}</code></pre>`);
+        segments.push(
+          `<pre><code>${escapeTelegramHtml(codeLines.join("\n"))}</code></pre>`,
+        );
         codeLines = [];
       } else {
         codeLines.push("");
@@ -224,16 +241,21 @@ function renderMarkdownishTelegramHtml(text: string): string {
   }
 
   if (codeLines.length > 0) {
-    segments.push(`<pre><code>${escapeTelegramHtml(codeLines.join("\n"))}</code></pre>`);
+    segments.push(
+      `<pre><code>${escapeTelegramHtml(codeLines.join("\n"))}</code></pre>`,
+    );
   }
 
   return segments.join("\n").replace(/<pre><code>\n/g, "<pre><code>");
 }
 
 function renderInlineCode(line: string): string {
-  return escapeTelegramHtml(line).replace(/`([^`]+)`/g, (_match, code: string) => {
-    return `<code>${code}</code>`;
-  });
+  return escapeTelegramHtml(line).replace(
+    /`([^`]+)`/g,
+    (_match, code: string) => {
+      return `<code>${code}</code>`;
+    },
+  );
 }
 
 function splitPreservingParagraphBreaks(text: string): string[] {

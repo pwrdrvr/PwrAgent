@@ -21,7 +21,9 @@ function formatPlanSummary(completedCount: number, totalCount: number): string {
   return `${completedCount} out of ${totalCount} ${taskLabel} completed`;
 }
 
-function formatStepStatus(status: AppServerThreadPlanEntry["steps"][number]["status"]): string {
+function formatStepStatus(
+  status: AppServerThreadPlanEntry["steps"][number]["status"],
+): string {
   if (status === "in_progress") {
     return "In progress";
   }
@@ -30,7 +32,7 @@ function formatStepStatus(status: AppServerThreadPlanEntry["steps"][number]["sta
 
 export function TranscriptPlan(props: TranscriptPlanProps) {
   const completedCount = props.entry.steps.filter(
-    (step) => step.status === "completed"
+    (step) => step.status === "completed",
   ).length;
 
   return (
@@ -43,7 +45,9 @@ export function TranscriptPlan(props: TranscriptPlanProps) {
               : "Plan update"}
           </p>
           {props.entry.explanation ? (
-            <p className="transcript-plan__explanation">{props.entry.explanation}</p>
+            <p className="transcript-plan__explanation">
+              {props.entry.explanation}
+            </p>
           ) : null}
         </div>
         {props.entry.createdAt ? (
@@ -52,7 +56,7 @@ export function TranscriptPlan(props: TranscriptPlanProps) {
               month: "short",
               day: "numeric",
               hour: "numeric",
-              minute: "2-digit"
+              minute: "2-digit",
             }).format(props.entry.createdAt)}
           </time>
         ) : null}
@@ -61,7 +65,10 @@ export function TranscriptPlan(props: TranscriptPlanProps) {
       {props.entry.steps.length > 0 ? (
         <ol className="transcript-plan__steps">
           {props.entry.steps.map((step, index) => (
-            <li key={`${step.status}:${step.step}:${index}`} className="transcript-plan__step">
+            <li
+              key={`${step.status}:${step.step}:${index}`}
+              className="transcript-plan__step"
+            >
               <span
                 className={`transcript-plan__step-status transcript-plan__step-status--${step.status}`}
                 aria-hidden="true"

@@ -1,5 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { PullRequestsPanel } from "../PullRequestsPanel";
@@ -51,10 +57,16 @@ describe("PullRequestsPanel", () => {
     const checksPill = within(card).getByText("Checks passing");
     expect(checksPill).toHaveClass("rail-chip");
     expect(checksPill.querySelector(".rail-chip__dot--ok")).not.toBeNull();
-    expect(within(card).getByText("fix(desktop): polish the PR panel")).toBeInTheDocument();
-    expect(within(card).getByText("github.com/pwrdrvr/PwrSnap")).toBeInTheDocument();
+    expect(
+      within(card).getByText("fix(desktop): polish the PR panel"),
+    ).toBeInTheDocument();
+    expect(
+      within(card).getByText("github.com/pwrdrvr/PwrSnap"),
+    ).toBeInTheDocument();
 
-    fireEvent.click(within(card).getByRole("button", { name: /Open pwrdrvr\/PwrSnap#233/ }));
+    fireEvent.click(
+      within(card).getByRole("button", { name: /Open pwrdrvr\/PwrSnap#233/ }),
+    );
     expect(openSpy).toHaveBeenCalledWith(
       "https://github.com/pwrdrvr/PwrSnap/pull/233",
       "_blank",

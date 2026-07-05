@@ -182,7 +182,9 @@ export type DesktopMessagingFullAccessControls = {
   allowEscalation: boolean;
   allowThreadResume: boolean;
   warningPolicy: DesktopMessagingFullAccessWarningGlobalPolicy;
-  authorizedUsers: Partial<Record<MessagingChannelKind, DesktopAuthorizedContact[]>>;
+  authorizedUsers: Partial<
+    Record<MessagingChannelKind, DesktopAuthorizedContact[]>
+  >;
   dismissWarning?: (params: {
     actorId: string;
     channel: MessagingChannelKind;
@@ -303,14 +305,23 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     webhookUrl: "connection",
   },
 } as const satisfies {
-  telegram: Record<keyof TelegramMessagingConfig, DesktopMessagingConfigFieldImpact>;
-  discord: Record<keyof DiscordMessagingConfig, DesktopMessagingConfigFieldImpact>;
+  telegram: Record<
+    keyof TelegramMessagingConfig,
+    DesktopMessagingConfigFieldImpact
+  >;
+  discord: Record<
+    keyof DiscordMessagingConfig,
+    DesktopMessagingConfigFieldImpact
+  >;
   mattermost: Record<
     keyof MattermostMessagingConfig,
     DesktopMessagingConfigFieldImpact
   >;
   slack: Record<keyof SlackMessagingConfig, DesktopMessagingConfigFieldImpact>;
-  feishu: Record<keyof FeishuMessagingConfig, DesktopMessagingConfigFieldImpact>;
+  feishu: Record<
+    keyof FeishuMessagingConfig,
+    DesktopMessagingConfigFieldImpact
+  >;
   line: Record<keyof LineMessagingConfig, DesktopMessagingConfigFieldImpact>;
 };
 
@@ -363,11 +374,11 @@ export function desktopMessagingConfigHasRunnableAdapters(
 ): boolean {
   return Boolean(
     config.telegram
-      || config.discord
-      || config.mattermost
-      || config.slack
-      || config.feishu
-      || config.line,
+    || config.discord
+    || config.mattermost
+    || config.slack
+    || config.feishu
+    || config.line,
   );
 }
 
@@ -414,10 +425,10 @@ export function classifyDesktopMessagingChannelConfigUpdate(
 
   for (const fieldName of [...fieldNames].sort()) {
     const impact = impacts[fieldName as keyof typeof impacts];
-    const previousValue = previousChannelConfig[
-      fieldName as keyof typeof previousChannelConfig
-    ];
-    const nextValue = nextChannelConfig[fieldName as keyof typeof nextChannelConfig];
+    const previousValue =
+      previousChannelConfig[fieldName as keyof typeof previousChannelConfig];
+    const nextValue =
+      nextChannelConfig[fieldName as keyof typeof nextChannelConfig];
     if (
       stableMessagingConfigStringify(previousValue)
       === stableMessagingConfigStringify(nextValue)
@@ -447,7 +458,12 @@ export function classifyDesktopMessagingChannelConfigUpdate(
         ? { authorization: authorizationUpdateForChannelConfig(next, channel) }
         : {}),
       ...(renderingChanged
-        ? { renderingPreferences: renderingPreferencesForChannelConfig(next, channel) }
+        ? {
+            renderingPreferences: renderingPreferencesForChannelConfig(
+              next,
+              channel,
+            ),
+          }
         : {}),
     };
   }
@@ -457,17 +473,34 @@ export function classifyDesktopMessagingChannelConfigUpdate(
 export function loadDesktopMessagingConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): DesktopMessagingConfig {
-  const telegramBotToken = readEnv(env, TELEGRAM_BOT_TOKEN_ENV, "TELEGRAM_BOT_TOKEN");
-  const telegramAuthorizedActorIds = parseContactList(env[TELEGRAM_AUTHORIZED_USER_IDS_ENV]);
+  const telegramBotToken = readEnv(
+    env,
+    TELEGRAM_BOT_TOKEN_ENV,
+    "TELEGRAM_BOT_TOKEN",
+  );
+  const telegramAuthorizedActorIds = parseContactList(
+    env[TELEGRAM_AUTHORIZED_USER_IDS_ENV],
+  );
   const telegramAuthorizedSupergroupIds = parseContactList(
     env[TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV],
   );
-  const discordBotToken = readEnv(env, DISCORD_BOT_TOKEN_ENV, "DISCORD_BOT_TOKEN");
-  const discordAuthorizedActorIds = parseContactList(env[DISCORD_AUTHORIZED_USER_IDS_ENV]);
-  const discordAuthorizedGuildIds = parseContactList(env[DISCORD_AUTHORIZED_GUILDS_ENV]);
+  const discordBotToken = readEnv(
+    env,
+    DISCORD_BOT_TOKEN_ENV,
+    "DISCORD_BOT_TOKEN",
+  );
+  const discordAuthorizedActorIds = parseContactList(
+    env[DISCORD_AUTHORIZED_USER_IDS_ENV],
+  );
+  const discordAuthorizedGuildIds = parseContactList(
+    env[DISCORD_AUTHORIZED_GUILDS_ENV],
+  );
   const mattermostBotToken = readEnv(env, MATTERMOST_BOT_TOKEN_ENV);
   const mattermostServerUrl = readEnv(env, MATTERMOST_SERVER_URL_ENV);
-  const mattermostCallbackBaseUrl = readEnv(env, MATTERMOST_CALLBACK_BASE_URL_ENV);
+  const mattermostCallbackBaseUrl = readEnv(
+    env,
+    MATTERMOST_CALLBACK_BASE_URL_ENV,
+  );
   const mattermostAuthorizedActorIds = parseContactList(
     env[MATTERMOST_AUTHORIZED_USER_IDS_ENV],
   );
@@ -496,7 +529,9 @@ export function loadDesktopMessagingConfig(
   const slackInboundMode = normalizeSlackRuntimeInboundMode(
     readSlackInboundMode(env[SLACK_INBOUND_MODE_ENV]),
   );
-  const slackAuthorizedActorIds = parseContactList(env[SLACK_AUTHORIZED_USER_IDS_ENV]);
+  const slackAuthorizedActorIds = parseContactList(
+    env[SLACK_AUTHORIZED_USER_IDS_ENV],
+  );
   const slackAuthorizedWorkspaces = parseContactList(
     env[SLACK_AUTHORIZED_WORKSPACES_ENV],
   );
@@ -508,22 +543,30 @@ export function loadDesktopMessagingConfig(
   const feishuAppId = readEnv(env, FEISHU_APP_ID_ENV);
   const feishuAppSecret = readEnv(env, FEISHU_APP_SECRET_ENV);
   const feishuInboundMode = readFeishuInboundMode(env[FEISHU_INBOUND_MODE_ENV]);
-  const feishuTenantRegion = readFeishuTenantRegion(env[FEISHU_TENANT_REGION_ENV]);
+  const feishuTenantRegion = readFeishuTenantRegion(
+    env[FEISHU_TENANT_REGION_ENV],
+  );
   const feishuTenantUrl =
     readEnv(env, FEISHU_TENANT_URL_ENV)
     ?? tenantUrlForFeishuRegion(feishuTenantRegion);
   const feishuCallbackBaseUrl =
-    readEnv(env, FEISHU_CALLBACK_BASE_URL_ENV) ?? FEISHU_DEFAULT_CALLBACK_BASE_URL;
+    readEnv(env, FEISHU_CALLBACK_BASE_URL_ENV)
+    ?? FEISHU_DEFAULT_CALLBACK_BASE_URL;
   const feishuEncryptKey = readEnv(env, FEISHU_ENCRYPT_KEY_ENV);
   const feishuVerificationToken = readEnv(env, FEISHU_VERIFICATION_TOKEN_ENV);
   const feishuAuthorizedActorIds = parseContactList(
     env[FEISHU_AUTHORIZED_USER_IDS_ENV],
   );
-  const feishuAuthorizedChatIds = parseContactList(env[FEISHU_AUTHORIZED_CHATS_ENV]);
+  const feishuAuthorizedChatIds = parseContactList(
+    env[FEISHU_AUTHORIZED_CHATS_ENV],
+  );
   const feishuAuthorizedTenantKeys = parseContactList(
     env[FEISHU_AUTHORIZED_TENANTS_ENV],
   );
-  const feishuSlashCommandPrefix = readEnv(env, FEISHU_SLASH_COMMAND_PREFIX_ENV);
+  const feishuSlashCommandPrefix = readEnv(
+    env,
+    FEISHU_SLASH_COMMAND_PREFIX_ENV,
+  );
   const feishuRegisterSlashCommandsEnv = readEnvBoolean(
     env,
     FEISHU_REGISTER_SLASH_COMMANDS_ENV,
@@ -534,9 +577,15 @@ export function loadDesktopMessagingConfig(
   const lineCallbackBaseUrl =
     readEnv(env, LINE_CALLBACK_BASE_URL_ENV) ?? LINE_DEFAULT_CALLBACK_BASE_URL;
   const lineBotUserId = readEnv(env, LINE_BOT_USER_ID_ENV);
-  const lineAuthorizedActorIds = parseContactList(env[LINE_AUTHORIZED_USER_IDS_ENV]);
-  const lineAuthorizedGroupIds = parseContactList(env[LINE_AUTHORIZED_GROUPS_ENV]);
-  const lineAuthorizedRoomIds = parseContactList(env[LINE_AUTHORIZED_ROOMS_ENV]);
+  const lineAuthorizedActorIds = parseContactList(
+    env[LINE_AUTHORIZED_USER_IDS_ENV],
+  );
+  const lineAuthorizedGroupIds = parseContactList(
+    env[LINE_AUTHORIZED_GROUPS_ENV],
+  );
+  const lineAuthorizedRoomIds = parseContactList(
+    env[LINE_AUTHORIZED_ROOMS_ENV],
+  );
   const attachmentPolicy = readAttachmentPolicyFromEnv(env);
 
   return {
@@ -557,10 +606,9 @@ export function loadDesktopMessagingConfig(
             enabled: true,
             botToken: telegramBotToken,
             responseMode: "every_message",
-            streamingResponses: readEnvBoolean(
-              env,
-              TELEGRAM_STREAMING_RESPONSES_ENV,
-            ).value ?? false,
+            streamingResponses:
+              readEnvBoolean(env, TELEGRAM_STREAMING_RESPONSES_ENV).value
+              ?? false,
             authorizedActorIds: telegramAuthorizedActorIds,
             authorizedSupergroupIds: telegramAuthorizedSupergroupIds,
           },
@@ -573,18 +621,15 @@ export function loadDesktopMessagingConfig(
             enabled: true,
             botToken: discordBotToken,
             applicationId: readEnv(env, DISCORD_APPLICATION_ID_ENV),
-            streamingResponses: readEnvBoolean(
-              env,
-              DISCORD_STREAMING_RESPONSES_ENV,
-            ).value ?? false,
+            streamingResponses:
+              readEnvBoolean(env, DISCORD_STREAMING_RESPONSES_ENV).value
+              ?? false,
             authorizedActorIds: discordAuthorizedActorIds,
             authorizedGuildIds: discordAuthorizedGuildIds,
           },
         }
       : {}),
-    ...(mattermostBotToken
-      && mattermostServerUrl
-      && mattermostCallbackBaseUrl
+    ...(mattermostBotToken && mattermostServerUrl && mattermostCallbackBaseUrl
       ? {
           mattermost: {
             channel: "mattermost" as const,
@@ -601,25 +646,25 @@ export function loadDesktopMessagingConfig(
             ...(mattermostRegisterSlashCommandsEnv !== undefined
               ? { registerSlashCommands: mattermostRegisterSlashCommandsEnv }
               : {}),
-            streamingResponses: readEnvBoolean(
-              env,
-              MATTERMOST_STREAMING_RESPONSES_ENV,
-            ).value ?? false,
+            streamingResponses:
+              readEnvBoolean(env, MATTERMOST_STREAMING_RESPONSES_ENV).value
+              ?? false,
             authorizedActorIds: mattermostAuthorizedActorIds,
             authorizedTeamIds: mattermostAuthorizedTeamIds,
             authorizedConversationIds: mattermostAuthorizedConversationIds,
           },
         }
       : {}),
-    ...(slackBotToken
-      && slackAppToken
+    ...(slackBotToken && slackAppToken
       ? {
           slack: {
             channel: "slack" as const,
             enabled: true,
             botToken: slackBotToken,
             appToken: slackAppToken,
-            ...(slackSigningSecret ? { signingSecret: slackSigningSecret } : {}),
+            ...(slackSigningSecret
+              ? { signingSecret: slackSigningSecret }
+              : {}),
             ...(slackWorkspaceUrl ? { workspaceUrl: slackWorkspaceUrl } : {}),
             inboundMode: slackInboundMode,
             ...(slackSlashCommandPrefix !== undefined
@@ -628,10 +673,8 @@ export function loadDesktopMessagingConfig(
             ...(slackRegisterSlashCommandsEnv !== undefined
               ? { registerSlashCommands: slackRegisterSlashCommandsEnv }
               : {}),
-            streamingResponses: readEnvBoolean(
-              env,
-              SLACK_STREAMING_RESPONSES_ENV,
-            ).value ?? false,
+            streamingResponses:
+              readEnvBoolean(env, SLACK_STREAMING_RESPONSES_ENV).value ?? false,
             channelAuthorizationMode: SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
             channelUserAccessMode: SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
             dmAccessMode: SLACK_DM_ACCESS_MODE_DEFAULT,
@@ -643,8 +686,7 @@ export function loadDesktopMessagingConfig(
           },
         }
       : {}),
-    ...(feishuAppId
-      && feishuAppSecret
+    ...(feishuAppId && feishuAppSecret
       ? {
           feishu: {
             channel: "feishu" as const,
@@ -665,18 +707,16 @@ export function loadDesktopMessagingConfig(
             ...(feishuRegisterSlashCommandsEnv !== undefined
               ? { registerSlashCommands: feishuRegisterSlashCommandsEnv }
               : {}),
-            streamingResponses: readEnvBoolean(
-              env,
-              FEISHU_STREAMING_RESPONSES_ENV,
-            ).value ?? false,
+            streamingResponses:
+              readEnvBoolean(env, FEISHU_STREAMING_RESPONSES_ENV).value
+              ?? false,
             authorizedActorIds: feishuAuthorizedActorIds,
             authorizedChatIds: feishuAuthorizedChatIds,
             authorizedTenantKeys: feishuAuthorizedTenantKeys,
           },
         }
       : {}),
-    ...(lineChannelSecret
-      && lineCallbackBaseUrl
+    ...(lineChannelSecret && lineCallbackBaseUrl
       ? {
           line: {
             channel: "line" as const,
@@ -688,10 +728,8 @@ export function loadDesktopMessagingConfig(
               : {}),
             ...(lineWebhookUrl ? { webhookUrl: lineWebhookUrl } : {}),
             ...(lineBotUserId ? { botUserId: lineBotUserId } : {}),
-            streamingResponses: readEnvBoolean(
-              env,
-              LINE_STREAMING_RESPONSES_ENV,
-            ).value ?? false,
+            streamingResponses:
+              readEnvBoolean(env, LINE_STREAMING_RESPONSES_ENV).value ?? false,
             authorizedActorIds: lineAuthorizedActorIds,
             authorizedGroupIds: lineAuthorizedGroupIds,
             authorizedRoomIds: lineAuthorizedRoomIds,
@@ -773,7 +811,8 @@ export async function loadDesktopMessagingConfigFromSettings(
   const slackChannelAuthorizationMode =
     snapshot.messaging.slack.channelAuthorizationMode.value;
   const slackDmAccessMode = snapshot.messaging.slack.dmAccessMode.value;
-  const slackGroupDmAccessMode = snapshot.messaging.slack.groupDmAccessMode.value;
+  const slackGroupDmAccessMode =
+    snapshot.messaging.slack.groupDmAccessMode.value;
   const slackChannelUserAccessMode =
     snapshot.messaging.slack.channelUserAccessMode.value;
   const feishuAuthorizedActorIds =
@@ -833,9 +872,11 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.slack?.registerSlashCommands
     ?? snapshot.messaging.slack.registerSlashCommands.value;
   const feishuTenantRegion =
-    envConfig.feishu?.tenantRegion ?? snapshot.messaging.feishu.tenantRegion.value;
+    envConfig.feishu?.tenantRegion
+    ?? snapshot.messaging.feishu.tenantRegion.value;
   const feishuInboundMode =
-    envConfig.feishu?.inboundMode ?? snapshot.messaging.feishu.inboundMode.value;
+    envConfig.feishu?.inboundMode
+    ?? snapshot.messaging.feishu.inboundMode.value;
   const feishuTenantUrlRaw =
     envConfig.feishu?.tenantUrl
     || snapshot.messaging.feishu.tenantUrl.value
@@ -923,50 +964,56 @@ export async function loadDesktopMessagingConfigFromSettings(
     LINE_ENABLED_ENV,
   );
 
-  const telegramConfig = messagingEnabled && buildChannelConfig({
-    log,
-    channel: "telegram",
-    enabled: telegramEnabled,
-    hasToken: Boolean(telegramBotToken),
-    logStartupEligibility: options.logStartupEligibility === true,
-    authorizedActorCount: telegramAuthorizedActorIds.length,
-  })
-    ? {
-        telegram: {
-          channel: "telegram" as const,
-          enabled: true,
-          botToken: telegramBotToken!,
-          responseMode: snapshot.messaging.telegram.responseMode.value,
-          streamingResponses: snapshot.messaging.telegram.streamingResponses.value,
-          authorizedActorIds: telegramAuthorizedActorIds,
-          authorizedSupergroupIds: telegramAuthorizedSupergroupIds,
-        },
-      }
-    : {};
+  const telegramConfig =
+    messagingEnabled
+    && buildChannelConfig({
+      log,
+      channel: "telegram",
+      enabled: telegramEnabled,
+      hasToken: Boolean(telegramBotToken),
+      logStartupEligibility: options.logStartupEligibility === true,
+      authorizedActorCount: telegramAuthorizedActorIds.length,
+    })
+      ? {
+          telegram: {
+            channel: "telegram" as const,
+            enabled: true,
+            botToken: telegramBotToken!,
+            responseMode: snapshot.messaging.telegram.responseMode.value,
+            streamingResponses:
+              snapshot.messaging.telegram.streamingResponses.value,
+            authorizedActorIds: telegramAuthorizedActorIds,
+            authorizedSupergroupIds: telegramAuthorizedSupergroupIds,
+          },
+        }
+      : {};
 
-  const discordConfig = messagingEnabled && buildChannelConfig({
-    log,
-    channel: "discord",
-    enabled: discordEnabled,
-    hasToken: Boolean(discordBotToken),
-    logStartupEligibility: options.logStartupEligibility === true,
-    authorizedActorCount: discordAuthorizedActorIds.length,
-  })
-    ? {
-        discord: {
-          channel: "discord" as const,
-          enabled: true,
-          botToken: discordBotToken!,
-          applicationId:
-            (envConfig.discord?.applicationId
-              ?? snapshot.messaging.discord.applicationId.value)
-            || undefined,
-          streamingResponses: snapshot.messaging.discord.streamingResponses.value,
-          authorizedActorIds: discordAuthorizedActorIds,
-          authorizedGuildIds: discordAuthorizedGuildIds,
-        },
-      }
-    : {};
+  const discordConfig =
+    messagingEnabled
+    && buildChannelConfig({
+      log,
+      channel: "discord",
+      enabled: discordEnabled,
+      hasToken: Boolean(discordBotToken),
+      logStartupEligibility: options.logStartupEligibility === true,
+      authorizedActorCount: discordAuthorizedActorIds.length,
+    })
+      ? {
+          discord: {
+            channel: "discord" as const,
+            enabled: true,
+            botToken: discordBotToken!,
+            applicationId:
+              (envConfig.discord?.applicationId
+                ?? snapshot.messaging.discord.applicationId.value)
+              || undefined,
+            streamingResponses:
+              snapshot.messaging.discord.streamingResponses.value,
+            authorizedActorIds: discordAuthorizedActorIds,
+            authorizedGuildIds: discordAuthorizedGuildIds,
+          },
+        }
+      : {};
 
   const mattermostConfig =
     messagingEnabled
@@ -1019,14 +1066,17 @@ export async function loadDesktopMessagingConfigFromSettings(
             enabled: true,
             botToken: slackBotToken!,
             appToken: slackAppToken!,
-            ...(slackSigningSecret ? { signingSecret: slackSigningSecret } : {}),
+            ...(slackSigningSecret
+              ? { signingSecret: slackSigningSecret }
+              : {}),
             ...(slackWorkspaceUrl ? { workspaceUrl: slackWorkspaceUrl } : {}),
             inboundMode: slackInboundMode,
             ...(slackSlashCommandPrefix !== undefined
               ? { slashCommandPrefix: slackSlashCommandPrefix }
               : {}),
             registerSlashCommands: slackRegisterSlashCommands,
-            streamingResponses: snapshot.messaging.slack.streamingResponses.value,
+            streamingResponses:
+              snapshot.messaging.slack.streamingResponses.value,
             channelAuthorizationMode: slackChannelAuthorizationMode,
             channelUserAccessMode: slackChannelUserAccessMode,
             dmAccessMode: slackDmAccessMode,
@@ -1070,7 +1120,8 @@ export async function loadDesktopMessagingConfigFromSettings(
               ? { slashCommandPrefix: feishuSlashCommandPrefix }
               : {}),
             registerSlashCommands: feishuRegisterSlashCommands,
-            streamingResponses: snapshot.messaging.feishu.streamingResponses.value,
+            streamingResponses:
+              snapshot.messaging.feishu.streamingResponses.value,
             authorizedActorIds: feishuAuthorizedActorIds,
             authorizedChatIds: feishuAuthorizedChatIds,
             authorizedTenantKeys: feishuAuthorizedTenantKeys,
@@ -1100,7 +1151,8 @@ export async function loadDesktopMessagingConfigFromSettings(
               : {}),
             ...(lineWebhookUrl ? { webhookUrl: lineWebhookUrl } : {}),
             ...(lineBotUserId ? { botUserId: lineBotUserId } : {}),
-            streamingResponses: snapshot.messaging.line.streamingResponses.value,
+            streamingResponses:
+              snapshot.messaging.line.streamingResponses.value,
             authorizedActorIds: lineAuthorizedActorIds,
             authorizedGroupIds: lineAuthorizedGroupIds,
             authorizedRoomIds: lineAuthorizedRoomIds,
@@ -1126,7 +1178,11 @@ export async function loadDesktopMessagingConfigFromSettings(
         await dismissMessagingFullAccessWarning(settings, channel, actorId);
       },
       canDismissWarning: async ({ actorId, channel }) =>
-        await canPersistMessagingFullAccessWarningDismissal(settings, channel, actorId),
+        await canPersistMessagingFullAccessWarningDismissal(
+          settings,
+          channel,
+          actorId,
+        ),
     },
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
@@ -1154,8 +1210,14 @@ function buildChannelConfig(params: {
   logStartupEligibility: boolean;
   authorizedActorCount: number;
 }): boolean {
-  const { log, channel, enabled, hasToken, logStartupEligibility, authorizedActorCount } =
-    params;
+  const {
+    log,
+    channel,
+    enabled,
+    hasToken,
+    logStartupEligibility,
+    authorizedActorCount,
+  } = params;
 
   if (!enabled) {
     if (logStartupEligibility) {
@@ -1239,12 +1301,14 @@ export function redactDesktopMessagingConfig(
           callbackHmacSecret: config.mattermost.callbackHmacSecret
             ? "[REDACTED]"
             : "[GENERATED]",
-          slashCommandPrefix: config.mattermost.slashCommandPrefix ?? "[default]",
+          slashCommandPrefix:
+            config.mattermost.slashCommandPrefix ?? "[default]",
           registerSlashCommands:
             config.mattermost.registerSlashCommands ?? false,
           streamingResponses: config.mattermost.streamingResponses ?? false,
           authorizedActorCount: config.mattermost.authorizedActorIds.length,
-          authorizedWorkspaceCount: config.mattermost.authorizedTeamIds?.length ?? 0,
+          authorizedWorkspaceCount:
+            config.mattermost.authorizedTeamIds?.length ?? 0,
           authorizedConversationCount:
             config.mattermost.authorizedConversationIds?.length ?? 0,
         }
@@ -1284,7 +1348,8 @@ export function redactDesktopMessagingConfig(
           streamingResponses: config.feishu.streamingResponses ?? false,
           authorizedActorCount: config.feishu.authorizedActorIds.length,
           authorizedChatCount: config.feishu.authorizedChatIds?.length ?? 0,
-          authorizedTenantCount: config.feishu.authorizedTenantKeys?.length ?? 0,
+          authorizedTenantCount:
+            config.feishu.authorizedTenantKeys?.length ?? 0,
         }
       : undefined,
     line: config.line
@@ -1318,11 +1383,14 @@ async function dismissMessagingFullAccessWarning(
   const contacts = field.value;
   const log = getMainLogger("pwragent:messaging");
   if (field.source !== "config") {
-    log.error("refusing to dismiss Full Access warning for non-config authorized user", {
-      actorId,
-      channel,
-      source: field.source,
-    });
+    log.error(
+      "refusing to dismiss Full Access warning for non-config authorized user",
+      {
+        actorId,
+        channel,
+        source: field.source,
+      },
+    );
     return;
   }
   const nextContacts = contacts.map((contact) =>
@@ -1331,11 +1399,14 @@ async function dismissMessagingFullAccessWarning(
       : contact,
   );
   if (!nextContacts.some((contact) => contact.id === actorId)) {
-    log.error("refusing to insert authorized user while dismissing Full Access warning", {
-      actorId,
-      channel,
-      insertNewUser: false,
-    });
+    log.error(
+      "refusing to insert authorized user while dismissing Full Access warning",
+      {
+        actorId,
+        channel,
+        insertNewUser: false,
+      },
+    );
     return;
   }
 
@@ -1382,8 +1453,10 @@ async function canPersistMessagingFullAccessWarningDismissal(
 ): Promise<boolean> {
   const snapshot = await settings.readSettings();
   const field = contactsForFullAccessWarningChannel(snapshot, channel);
-  return field.source === "config"
-    && field.value.some((contact) => contact.id === actorId);
+  return (
+    field.source === "config"
+    && field.value.some((contact) => contact.id === actorId)
+  );
 }
 
 function contactsForFullAccessWarningChannel(
@@ -1408,7 +1481,9 @@ function contactsForFullAccessWarningChannel(
   }
 }
 
-function readInputDebounceMsFromEnv(env: NodeJS.ProcessEnv): number | undefined {
+function readInputDebounceMsFromEnv(
+  env: NodeJS.ProcessEnv,
+): number | undefined {
   const value = readEnvInteger(env, MESSAGING_INPUT_DEBOUNCE_MS_ENV).value;
   return value === undefined ? undefined : Math.min(value, 5_000);
 }
@@ -1421,7 +1496,9 @@ function authorizationUpdateForChannelConfig(
     case "telegram":
       return {
         authorizedActorIds: contactIds(config.telegram?.authorizedActorIds),
-        authorizedConversationIds: contactIds(config.telegram?.authorizedSupergroupIds),
+        authorizedConversationIds: contactIds(
+          config.telegram?.authorizedSupergroupIds,
+        ),
         conversationResponseModes: conversationResponseModes(
           config.telegram?.authorizedSupergroupIds,
         ),
@@ -1430,7 +1507,9 @@ function authorizationUpdateForChannelConfig(
     case "discord":
       return {
         authorizedActorIds: contactIds(config.discord?.authorizedActorIds),
-        authorizedConversationIds: contactIds(config.discord?.authorizedGuildIds),
+        authorizedConversationIds: contactIds(
+          config.discord?.authorizedGuildIds,
+        ),
       };
     case "mattermost":
       return {
@@ -1438,12 +1517,16 @@ function authorizationUpdateForChannelConfig(
         authorizedConversationIds: contactIds(
           config.mattermost?.authorizedConversationIds,
         ),
-        authorizedWorkspaceIds: contactIds(config.mattermost?.authorizedTeamIds),
+        authorizedWorkspaceIds: contactIds(
+          config.mattermost?.authorizedTeamIds,
+        ),
       };
     case "slack":
       return {
         authorizedActorIds: contactIds(config.slack?.authorizedActorIds),
-        authorizedConversationIds: contactIds(config.slack?.authorizedConversationIds),
+        authorizedConversationIds: contactIds(
+          config.slack?.authorizedConversationIds,
+        ),
         conversationAuthorizationMode: config.slack?.channelAuthorizationMode,
         conversationResponseModes: conversationResponseModes(
           config.slack?.authorizedConversationIds,
@@ -1514,11 +1597,13 @@ function conversationResponseModes(
       }[]
     | undefined,
 ): MessagingConversationResponseMode[] {
-  return contacts?.flatMap((contact) =>
-    contact.responseMode
-      ? [{ conversationId: contact.id, responseMode: contact.responseMode }]
-      : [],
-  ) ?? [];
+  return (
+    contacts?.flatMap((contact) =>
+      contact.responseMode
+        ? [{ conversationId: contact.id, responseMode: contact.responseMode }]
+        : [],
+    ) ?? []
+  );
 }
 
 function stableMessagingConfigStringify(value: unknown): string {
@@ -1530,7 +1615,10 @@ function stableMessagingConfigStringify(value: unknown): string {
     return `{${Object.keys(record)
       .sort()
       .filter((key) => record[key] !== undefined)
-      .map((key) => `${JSON.stringify(key)}:${stableMessagingConfigStringify(record[key])}`)
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${stableMessagingConfigStringify(record[key])}`,
+      )
       .join(",")}}`;
   }
   return JSON.stringify(value);
@@ -1544,9 +1632,13 @@ function readEnv(
   return env[primary]?.trim() || (fallback ? env[fallback]?.trim() : undefined);
 }
 
-function readSlackInboundMode(value: string | undefined): "socket" | "events" | undefined {
+function readSlackInboundMode(
+  value: string | undefined,
+): "socket" | "events" | undefined {
   const normalized = value?.trim().toLowerCase();
-  return normalized === "socket" || normalized === "events" ? normalized : undefined;
+  return normalized === "socket" || normalized === "events"
+    ? normalized
+    : undefined;
 }
 
 function readFeishuTenantRegion(value: string | undefined): "feishu" | "lark" {
@@ -1554,13 +1646,17 @@ function readFeishuTenantRegion(value: string | undefined): "feishu" | "lark" {
   return normalized === "lark" ? "lark" : "feishu";
 }
 
-function readFeishuInboundMode(value: string | undefined): "persistent" | "webhook" {
+function readFeishuInboundMode(
+  value: string | undefined,
+): "persistent" | "webhook" {
   const normalized = value?.trim().toLowerCase();
   return normalized === "webhook" ? "webhook" : "persistent";
 }
 
 function tenantUrlForFeishuRegion(region: "feishu" | "lark"): string {
-  return region === "lark" ? LARK_DEFAULT_TENANT_URL : FEISHU_DEFAULT_TENANT_URL;
+  return region === "lark"
+    ? LARK_DEFAULT_TENANT_URL
+    : FEISHU_DEFAULT_TENANT_URL;
 }
 
 function normalizeSlackRuntimeInboundMode(
@@ -1568,11 +1664,14 @@ function normalizeSlackRuntimeInboundMode(
   log?: Pick<ReturnType<typeof getMainLogger>, "warn">,
 ): "socket" {
   if (value === "events") {
-    log?.warn("slack Events API inbound mode is not implemented; using Socket Mode", {
-      channel: "slack",
-      configuredInboundMode: "events",
-      runtimeInboundMode: "socket",
-    });
+    log?.warn(
+      "slack Events API inbound mode is not implemented; using Socket Mode",
+      {
+        channel: "slack",
+        configuredInboundMode: "events",
+        runtimeInboundMode: "socket",
+      },
+    );
   }
   return "socket";
 }

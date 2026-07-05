@@ -177,7 +177,11 @@ export class AppRuntimeInstanceStore {
           disabledReason: "lease_held",
           now: params.now,
         });
-        return { acquired: false as const, reason: "held" as const, holder: existing };
+        return {
+          acquired: false as const,
+          reason: "held" as const,
+          holder: existing,
+        };
       }
 
       const acquiredAt =
@@ -346,7 +350,10 @@ function sanitizeCwdHint(cwd: string | undefined): string | null {
 export function hashCwd(cwd: string | undefined): string | null {
   const value = cwd?.trim();
   if (!value) return null;
-  return createHash("sha256").update(path.resolve(value)).digest("hex").slice(0, 16);
+  return createHash("sha256")
+    .update(path.resolve(value))
+    .digest("hex")
+    .slice(0, 16);
 }
 
 function normalizeDisabledReason(

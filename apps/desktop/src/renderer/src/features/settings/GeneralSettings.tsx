@@ -148,7 +148,9 @@ function updateResultText(result: AppUpdateCheckResult): string {
   return `Update available: v${result.version}. Downloading in the background.`;
 }
 
-function formatHotCpuStartDelay(delayMs: DesktopHotCpuProfileStartDelayMs): string {
+function formatHotCpuStartDelay(
+  delayMs: DesktopHotCpuProfileStartDelayMs,
+): string {
   return delayMs === 0 ? "Immediate" : `Delay ${Math.round(delayMs / 1_000)}s`;
 }
 
@@ -197,8 +199,7 @@ export function GeneralSettings(props: {
   const confirmQuitWithInProgressThreads =
     props.snapshot.general.confirmQuitWithInProgressThreads;
   const developerMode = props.snapshot.general.developerMode;
-  const hotCpuProfilingEnabled =
-    props.snapshot.general.hotCpuProfilingEnabled;
+  const hotCpuProfilingEnabled = props.snapshot.general.hotCpuProfilingEnabled;
   const hotCpuProfilingStartDelayMs =
     props.snapshot.general.hotCpuProfilingStartDelayMs;
   const hotCpuProfilingTriggerMode =
@@ -582,8 +583,8 @@ export function GeneralSettings(props: {
             sub="Resize pasted desktop images before upload to control image-token usage."
             help={
               <>
-                {activeOption?.description ??
-                  "Custom patch budget for pasted images."}{" "}
+                {activeOption?.description
+                  ?? "Custom patch budget for pasted images."}{" "}
                 Patch-based models count 32 x 32 pixel blocks before
                 model-specific multipliers. Images within 20% of the selected
                 patch budget are left unchanged to avoid marginal re-encodes.
@@ -721,7 +722,10 @@ export function GeneralSettings(props: {
                     Start Capture ({hotCpuStartDelayText})
                   </button>
                 )}
-                <span className="settings-hot-cpu-capture__status" aria-live="polite">
+                <span
+                  className="settings-hot-cpu-capture__status"
+                  aria-live="polite"
+                >
                   {hotCpuCountdownActive
                     ? `Starting in ${hotCpuCountdownSeconds}s`
                     : hotCpuProfilingEnabled.value

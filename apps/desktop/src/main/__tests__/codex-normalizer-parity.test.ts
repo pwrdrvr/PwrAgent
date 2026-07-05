@@ -50,7 +50,9 @@ function runKit(fixture: CodexFixture): AppServerThreadReplay {
     const event = normalizeNotification(n.method, n.params);
     if (event) events.push(event);
   }
-  return normalizedThreadToReplay(reduceNormalizedThread(events, "codex-thread"));
+  return normalizedThreadToReplay(
+    reduceNormalizedThread(events, "codex-thread"),
+  );
 }
 
 /** OLD path: codex thread/read result → in-tree extractor. */

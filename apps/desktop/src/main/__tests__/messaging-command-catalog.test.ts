@@ -171,7 +171,7 @@ function syntheticCatalog(count: number): MessagingCommandSpec[] {
     // The catalog type expects the canonical verb union. Cast
     // through `unknown` because synthetic verbs only exist in
     // tests; the catalog never exposes these names at runtime.
-    verb: (`v${i}` as unknown) as MessagingCommandSpec["verb"],
+    verb: `v${i}` as unknown as MessagingCommandSpec["verb"],
     description: `synthetic verb ${i}`,
   }));
 }

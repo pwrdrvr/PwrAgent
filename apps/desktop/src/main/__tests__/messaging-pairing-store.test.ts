@@ -42,7 +42,9 @@ describe("MessagingPairingStore", () => {
     ).toMatchObject({ id: entry.id, status: "pending" });
 
     const row = stateDb.raw
-      .prepare("SELECT token_hmac, payload FROM messaging_pairing_tokens WHERE entry_id = ?")
+      .prepare(
+        "SELECT token_hmac, payload FROM messaging_pairing_tokens WHERE entry_id = ?",
+      )
       .get(entry.id) as { token_hmac: string; payload: string };
     expect(row.token_hmac).not.toContain(token);
     expect(row.payload).not.toContain(token);
@@ -116,7 +118,9 @@ describe("MessagingPairingStore", () => {
       chat: { id: "C1", kind: "channel", title: "team-alerts", bucketId: "T1" },
     });
 
-    expect(store.recordApproval({ entryId: entry.id, target: "actor" })).toMatchObject({
+    expect(
+      store.recordApproval({ entryId: entry.id, target: "actor" }),
+    ).toMatchObject({
       status: "observed",
       approvedTargets: ["actor"],
     });
@@ -130,7 +134,9 @@ describe("MessagingPairingStore", () => {
     });
 
     // Consuming preserves the recorded targets in the payload.
-    expect(store.markStatus({ entryId: entry.id, status: "consumed" })).toMatchObject({
+    expect(
+      store.markStatus({ entryId: entry.id, status: "consumed" }),
+    ).toMatchObject({
       status: "consumed",
       approvedTargets: ["actor", "conversation"],
     });
@@ -155,6 +161,9 @@ describe("MessagingPairingStore", () => {
         now: 1_500,
       }),
     ).toBeUndefined();
-    expect(store.get(entry.id)).toMatchObject({ id: entry.id, status: "pending" });
+    expect(store.get(entry.id)).toMatchObject({
+      id: entry.id,
+      status: "pending",
+    });
   });
 });

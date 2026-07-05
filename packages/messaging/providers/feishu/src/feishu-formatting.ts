@@ -210,7 +210,10 @@ export function clampFeishuCardText(text: string): string {
 }
 
 export function markdownToFeishuMarkdown(markdown: string): string {
-  return markdown.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, "[$1]($2)");
+  return markdown.replace(
+    /\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g,
+    "[$1]($2)",
+  );
 }
 
 export function sanitizeFeishuActionId(rawId: string): string {
@@ -227,7 +230,10 @@ export function styleForFeishuAction(
   return "default";
 }
 
-export function truncateFeishuPlainText(text: string, maxLength: number): string {
+export function truncateFeishuPlainText(
+  text: string,
+  maxLength: number,
+): string {
   if (text.length <= maxLength) return text;
   if (maxLength <= 3) return text.slice(0, maxLength);
   return `${text.slice(0, maxLength - 3)}...`;

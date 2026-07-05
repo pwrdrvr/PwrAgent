@@ -154,10 +154,10 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
          WHERE usage_turn_id = ?`,
       )
       .get(pricing.lines[0]?.usageTurnId) as {
-        completed_at: number | null;
-        observed_at: number | null;
-        started_at: number | null;
-      };
+      completed_at: number | null;
+      observed_at: number | null;
+      started_at: number | null;
+    };
 
     expect(pricing.lines[0]).toMatchObject({
       completedAt: 20_000,
@@ -207,12 +207,12 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
          WHERE usage_turn_id = ?`,
       )
       .get(pricing.lines[0]?.usageTurnId) as {
-        fast_mode: number | null;
-        model: string | null;
-        service_tier: string | null;
-        settings_confidence: string | null;
-        settings_source: string | null;
-      };
+      fast_mode: number | null;
+      model: string | null;
+      service_tier: string | null;
+      settings_confidence: string | null;
+      settings_source: string | null;
+    };
 
     expect(pricing.lines[0]).toMatchObject({
       fastMode: true,
@@ -438,13 +438,13 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
          ORDER BY usage_turn_id`,
       )
       .all() as Array<{
-        usage_turn_id: string;
-        provider: string;
-        backend: string;
-        thread_id: string;
-        turn_id: string | null;
-        model: string | null;
-      }>;
+      usage_turn_id: string;
+      provider: string;
+      backend: string;
+      thread_id: string;
+      turn_id: string | null;
+      model: string | null;
+    }>;
 
     expect(turns).toEqual([
       {

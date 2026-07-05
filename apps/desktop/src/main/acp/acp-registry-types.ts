@@ -37,10 +37,7 @@ export type AcpRegistryDistribution =
   | AcpPackageDistribution
   | AcpBinaryPlatformDistribution;
 
-export type AcpRegistryAuthMethod =
-  | "agent-managed"
-  | "terminal"
-  | "unknown";
+export type AcpRegistryAuthMethod = "agent-managed" | "terminal" | "unknown";
 
 export type AcpRegistryAuthDescriptor = {
   required: boolean;

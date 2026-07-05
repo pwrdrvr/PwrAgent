@@ -98,7 +98,9 @@ export function createQuitManager(
 
     pendingPerformQuit = options.performQuit ?? dependencies.performQuit;
     promptPromise = (async () => {
-      const resolution = await (dependencies.confirm ?? showQuitConfirmationDialog)({
+      const resolution = await (
+        dependencies.confirm ?? showQuitConfirmationDialog
+      )({
         countdownSeconds: QUIT_CONFIRMATION_COUNTDOWN_SECONDS,
         inProgressThreadCount: snapshot.count,
         parent: dependencies.getFocusedWindow?.(),

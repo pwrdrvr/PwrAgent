@@ -37,9 +37,9 @@ export class MessagingStore {
     return await this.withData((data) => {
       for (const existing of Object.values(data.bindings)) {
         if (
-          existing.id !== sanitized.id &&
-          !existing.revokedAt &&
-          buildMessagingConversationKey(existing.channel) === channelKey
+          existing.id !== sanitized.id
+          && !existing.revokedAt
+          && buildMessagingConversationKey(existing.channel) === channelKey
         ) {
           revokeBindingInData(data, existing.id, sanitized.updatedAt);
         }
@@ -63,10 +63,12 @@ export class MessagingStore {
         Object.values(data.bindings)
           .filter(
             (binding) =>
-              !binding.revokedAt &&
-              buildMessagingConversationKey(binding.channel) === channelKey,
+              !binding.revokedAt
+              && buildMessagingConversationKey(binding.channel) === channelKey,
           )
-          .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0],
+          .sort(
+            (a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt,
+          )[0],
       ),
     );
   }
@@ -79,9 +81,9 @@ export class MessagingStore {
       Object.values(data.bindings)
         .filter(
           (binding) =>
-            !binding.revokedAt &&
-            binding.backend === params.backend &&
-            binding.threadId === params.threadId,
+            !binding.revokedAt
+            && binding.backend === params.backend
+            && binding.threadId === params.threadId,
         )
         .map((binding) => structuredClone(binding)),
     );
@@ -94,8 +96,8 @@ export class MessagingStore {
       Object.values(data.bindings)
         .filter(
           (binding) =>
-            !binding.revokedAt &&
-            (!binding.backend || binding.backend === params.backend),
+            !binding.revokedAt
+            && (!binding.backend || binding.backend === params.backend),
         )
         .map((binding) => structuredClone(binding)),
     );
@@ -123,11 +125,15 @@ export class MessagingStore {
     return await this.withData((data) => {
       for (const existing of Object.values(data.monitorSubscriptions)) {
         if (
-          existing.id !== sanitized.id &&
-          !existing.revokedAt &&
-          buildMessagingConversationKey(existing.channel) === channelKey
+          existing.id !== sanitized.id
+          && !existing.revokedAt
+          && buildMessagingConversationKey(existing.channel) === channelKey
         ) {
-          revokeMonitorSubscriptionInData(data, existing.id, sanitized.updatedAt);
+          revokeMonitorSubscriptionInData(
+            data,
+            existing.id,
+            sanitized.updatedAt,
+          );
         }
       }
       data.monitorSubscriptions[sanitized.id] = sanitized;
@@ -152,10 +158,13 @@ export class MessagingStore {
         Object.values(data.monitorSubscriptions)
           .filter(
             (subscription) =>
-              !subscription.revokedAt &&
-              buildMessagingConversationKey(subscription.channel) === channelKey,
+              !subscription.revokedAt
+              && buildMessagingConversationKey(subscription.channel)
+                === channelKey,
           )
-          .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0],
+          .sort(
+            (a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt,
+          )[0],
       ),
     );
   }
@@ -167,8 +176,8 @@ export class MessagingStore {
       Object.values(data.monitorSubscriptions)
         .filter(
           (subscription) =>
-            !subscription.revokedAt &&
-            subscription.channel.channel === params.channel,
+            !subscription.revokedAt
+            && subscription.channel.channel === params.channel,
         )
         .map((subscription) => structuredClone(subscription)),
     );
@@ -212,8 +221,8 @@ export class MessagingStore {
       Object.values(data.topics)
         .filter(
           (topic) =>
-            topic.channel === params.channel &&
-            topic.supergroupId === params.supergroupId,
+            topic.channel === params.channel
+            && topic.supergroupId === params.supergroupId,
         )
         .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
         .map((topic) => structuredClone(topic)),
@@ -229,9 +238,9 @@ export class MessagingStore {
       cloneOptional(
         Object.values(data.topics).find(
           (topic) =>
-            topic.channel === params.channel &&
-            topic.supergroupId === params.supergroupId &&
-            topic.topicId === params.topicId,
+            topic.channel === params.channel
+            && topic.supergroupId === params.supergroupId
+            && topic.topicId === params.topicId,
         ),
       ),
     );
@@ -244,11 +253,11 @@ export class MessagingStore {
     return await this.withData((data) => {
       for (const [id, existing] of Object.entries(data.topicLinks)) {
         if (
-          id !== sanitized.id &&
-          existing.channel === sanitized.channel &&
-          existing.supergroupId === sanitized.supergroupId &&
-          existing.backend === sanitized.backend &&
-          existing.threadId === sanitized.threadId
+          id !== sanitized.id
+          && existing.channel === sanitized.channel
+          && existing.supergroupId === sanitized.supergroupId
+          && existing.backend === sanitized.backend
+          && existing.threadId === sanitized.threadId
         ) {
           delete data.topicLinks[id];
         }
@@ -268,10 +277,10 @@ export class MessagingStore {
       cloneOptional(
         Object.values(data.topicLinks).find(
           (link) =>
-            link.backend === params.backend &&
-            link.channel === params.channel &&
-            link.supergroupId === params.supergroupId &&
-            link.threadId === params.threadId,
+            link.backend === params.backend
+            && link.channel === params.channel
+            && link.supergroupId === params.supergroupId
+            && link.threadId === params.threadId,
         ),
       ),
     );
@@ -331,10 +340,10 @@ export class MessagingStore {
         Object.values(data.pendingIntents)
           .filter(
             (intent) =>
-              intent.expiresAt > now &&
-              intent.allowedActorIds.includes(params.actorId) &&
-              intent.channel &&
-              buildMessagingConversationKey(intent.channel) === channelKey,
+              intent.expiresAt > now
+              && intent.allowedActorIds.includes(params.actorId)
+              && intent.channel
+              && buildMessagingConversationKey(intent.channel) === channelKey,
           )
           .sort((a, b) => b.createdAt - a.createdAt)[0],
       ),
@@ -353,10 +362,10 @@ export class MessagingStore {
         .filter((intent) => {
           const requestContext = intent.intent.requestContext;
           return (
-            intent.expiresAt > now &&
-            requestContext?.backend === params.backend &&
-            requestContext.threadId === params.threadId &&
-            requestContext.requestId === params.requestId
+            intent.expiresAt > now
+            && requestContext?.backend === params.backend
+            && requestContext.threadId === params.threadId
+            && requestContext.requestId === params.requestId
           );
         })
         .sort((a, b) => b.createdAt - a.createdAt)
@@ -402,9 +411,9 @@ export class MessagingStore {
       for (const [intentId, intent] of Object.entries(data.pendingIntents)) {
         const requestContext = intent.intent.requestContext;
         if (
-          (requestContext?.backend === params.backend &&
-            requestContext.threadId === params.threadId) ||
-          (intent.bindingId && bindingIds.has(intent.bindingId))
+          (requestContext?.backend === params.backend
+            && requestContext.threadId === params.threadId)
+          || (intent.bindingId && bindingIds.has(intent.bindingId))
         ) {
           delete data.pendingIntents[intentId];
           removed.push(intentId);
@@ -414,7 +423,9 @@ export class MessagingStore {
     });
   }
 
-  async cleanupExpiredPendingIntents(options?: { now?: number }): Promise<string[]> {
+  async cleanupExpiredPendingIntents(options?: {
+    now?: number;
+  }): Promise<string[]> {
     const now = options?.now ?? Date.now();
     return await this.withData((data) => {
       const removed: string[] = [];
@@ -464,9 +475,9 @@ export class MessagingStore {
         Object.values(data.browseSessions)
           .filter(
             (session) =>
-              session.expiresAt > now &&
-              session.allowedActorIds.includes(params.actorId) &&
-              buildMessagingConversationKey(session.channel) === channelKey,
+              session.expiresAt > now
+              && session.allowedActorIds.includes(params.actorId)
+              && buildMessagingConversationKey(session.channel) === channelKey,
           )
           .sort((a, b) => b.updatedAt - a.updatedAt)[0],
       ),
@@ -484,7 +495,9 @@ export class MessagingStore {
     });
   }
 
-  async cleanupExpiredBrowseSessions(options?: { now?: number }): Promise<string[]> {
+  async cleanupExpiredBrowseSessions(options?: {
+    now?: number;
+  }): Promise<string[]> {
     const now = options?.now ?? Date.now();
     return await this.withData((data) => {
       const removed: string[] = [];
@@ -495,7 +508,10 @@ export class MessagingStore {
         }
       }
       for (const [handleId, handle] of Object.entries(data.callbackHandles)) {
-        if (handle.browseSessionId && !data.browseSessions[handle.browseSessionId]) {
+        if (
+          handle.browseSessionId
+          && !data.browseSessions[handle.browseSessionId]
+        ) {
           delete data.callbackHandles[handleId];
         }
       }
@@ -540,10 +556,10 @@ export class MessagingStore {
         Object.values(data.callbackHandles)
           .filter(
             (handle) =>
-              handle.handle === params.handle &&
-              handle.expiresAt > now &&
-              handle.allowedActorIds.includes(params.actorId) &&
-              buildMessagingConversationKey(handle.channel) === channelKey,
+              handle.handle === params.handle
+              && handle.expiresAt > now
+              && handle.allowedActorIds.includes(params.actorId)
+              && buildMessagingConversationKey(handle.channel) === channelKey,
           )
           .sort((a, b) => b.updatedAt - a.updatedAt)[0],
       ),
@@ -564,7 +580,9 @@ export class MessagingStore {
     );
   }
 
-  async cleanupExpiredCallbackHandles(options?: { now?: number }): Promise<string[]> {
+  async cleanupExpiredCallbackHandles(options?: {
+    now?: number;
+  }): Promise<string[]> {
     const now = options?.now ?? Date.now();
     return await this.withData((data) => {
       const removed: string[] = [];
@@ -589,7 +607,9 @@ export class MessagingStore {
   }
 
   async getDelivery(id: string): Promise<MessagingDeliveryRecord | undefined> {
-    return await this.withReadData((data) => cloneOptional(data.deliveries[id]));
+    return await this.withReadData((data) =>
+      cloneOptional(data.deliveries[id]),
+    );
   }
 
   async readSnapshot(): Promise<MessagingStoreData> {
@@ -599,7 +619,8 @@ export class MessagingStore {
   private async withData<T>(
     operation: (data: MessagingStoreData) => Promise<T> | T,
   ): Promise<T> {
-    const currentQueue = MessagingStore.queues.get(this.filePath) ?? Promise.resolve();
+    const currentQueue =
+      MessagingStore.queues.get(this.filePath) ?? Promise.resolve();
     const next = currentQueue.then(async () => {
       const data = await this.readData();
       const result = await operation(data);
@@ -653,7 +674,9 @@ export class MessagingStore {
   }
 }
 
-export function buildMessagingConversationKey(channel: MessagingChannelRef): string {
+export function buildMessagingConversationKey(
+  channel: MessagingChannelRef,
+): string {
   return [
     channel.channel,
     channel.conversation.kind,
@@ -662,8 +685,14 @@ export function buildMessagingConversationKey(channel: MessagingChannelRef): str
   ].join(":");
 }
 
-function sanitizeBinding(binding: MessagingBindingRecord): MessagingBindingRecord {
-  const { activeTurn: _activeTurn, threadDisplay: _threadDisplay, ...rest } = binding;
+function sanitizeBinding(
+  binding: MessagingBindingRecord,
+): MessagingBindingRecord {
+  const {
+    activeTurn: _activeTurn,
+    threadDisplay: _threadDisplay,
+    ...rest
+  } = binding;
   return {
     ...rest,
     authorizedActorIds: [...new Set(binding.authorizedActorIds)],
@@ -681,8 +710,9 @@ function sanitizePendingIntent(
   return {
     ...intent,
     allowedActorIds: [...new Set(intent.allowedActorIds)],
-    intent: sanitizeJsonValue(intent.intent as unknown as MessagingJsonValue) as unknown as
-      MessagingPendingIntentRecord["intent"],
+    intent: sanitizeJsonValue(
+      intent.intent as unknown as MessagingJsonValue,
+    ) as unknown as MessagingPendingIntentRecord["intent"],
     surface: sanitizeSurfaceRef(intent.surface),
   };
 }
@@ -725,13 +755,13 @@ function sanitizeCallbackHandle(
     allowedActorIds: [...new Set(handle.allowedActorIds)],
     surface: sanitizeSurfaceRef(handle.surface),
     value:
-      handle.value === undefined
-        ? undefined
-        : sanitizeJsonValue(handle.value),
+      handle.value === undefined ? undefined : sanitizeJsonValue(handle.value),
   };
 }
 
-function sanitizeDelivery(delivery: MessagingDeliveryRecord): MessagingDeliveryRecord {
+function sanitizeDelivery(
+  delivery: MessagingDeliveryRecord,
+): MessagingDeliveryRecord {
   return {
     ...delivery,
     surface: sanitizeSurfaceRef(delivery.surface),
@@ -805,8 +835,8 @@ function deletePendingIntentsForChannelInData(
   for (const [intentId, intent] of Object.entries(data.pendingIntents)) {
     if (intent.bindingId) continue;
     if (
-      intent.channel &&
-      buildMessagingConversationKey(intent.channel) === channelKey
+      intent.channel
+      && buildMessagingConversationKey(intent.channel) === channelKey
     ) {
       delete data.pendingIntents[intentId];
       removed.push(intentId);
@@ -863,7 +893,9 @@ function sanitizeJsonValue(value: MessagingJsonValue): MessagingJsonValue {
     return Object.fromEntries(
       Object.entries(value).map(([key, entryValue]) => [
         key,
-        SECRET_KEY_PATTERN.test(key) ? "[REDACTED]" : sanitizeJsonValue(entryValue),
+        SECRET_KEY_PATTERN.test(key)
+          ? "[REDACTED]"
+          : sanitizeJsonValue(entryValue),
       ]),
     );
   }

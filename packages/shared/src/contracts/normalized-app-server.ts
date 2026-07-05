@@ -1,6 +1,9 @@
 import type { AutomationRunOutputDecision } from "./automations";
 import type { PrSummary } from "./navigation";
-import type { ThreadPricingSummary, ThreadUsageLineRecord } from "../token-usage-pricing";
+import type {
+  ThreadPricingSummary,
+  ThreadUsageLineRecord,
+} from "../token-usage-pricing";
 
 export type AppServerBuiltinBackendKind = "codex" | "grok";
 export type AcpBackendId = `acp:${string}`;

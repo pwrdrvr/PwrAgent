@@ -2,7 +2,10 @@ import { app, BrowserWindow, dialog, Menu, nativeImage, shell } from "electron";
 import { join } from "node:path";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
-import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
+import {
+  disposeAgentIpcHandlers,
+  registerAgentIpcHandlers,
+} from "./ipc/agent-ipc";
 import {
   disposeAppMetadataIpcHandlers,
   registerAppMetadataIpcHandlers,
@@ -32,7 +35,10 @@ import {
   disposeAutomationIpcHandlers,
   registerAutomationIpcHandlers,
 } from "./ipc/automation-ipc";
-import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers } from "./ipc/app-server";
+import {
+  disposeAppServerIpcHandlers,
+  registerAppServerIpcHandlers,
+} from "./ipc/app-server";
 import {
   disposeImageNormalizationIpcHandlers,
   registerImageNormalizationIpcHandlers,
@@ -273,7 +279,8 @@ function installBootErrorHandlers(): void {
   process.on("unhandledRejection", (reason) => {
     mainLog.error("unhandled promise rejection", {
       bootCompleted: mainWindowEverShown,
-      error: reason instanceof Error ? (reason.stack ?? reason.message) : reason,
+      error:
+        reason instanceof Error ? (reason.stack ?? reason.message) : reason,
     });
     if (!mainWindowEverShown) {
       lastBootError = reason;
@@ -319,7 +326,9 @@ function logBootDecision(decision: ProfileBootDecision): void {
 
 function prewarmInitialThreadList(): void {
   if (getDesktopSettingsService().isCodexBootstrapDeferred()) {
-    mainLog.info("startup thread list prewarm deferred until onboarding completes");
+    mainLog.info(
+      "startup thread list prewarm deferred until onboarding completes",
+    );
     recordStartupProfileEvent({
       type: "startup-thread-list-prewarm:deferred",
     });
@@ -390,8 +399,8 @@ function disposeMainProcessResourcesSync(): void {
   }
   void disposeMessagingStatusIpcHandlers();
   const runtimeMessagingLeaseCoordinator =
-    getExistingRuntimeMessagingLeaseCoordinator() ??
-    (isAppStateInitialized() ? getRuntimeMessagingLeaseCoordinator() : null);
+    getExistingRuntimeMessagingLeaseCoordinator()
+    ?? (isAppStateInitialized() ? getRuntimeMessagingLeaseCoordinator() : null);
   runtimeMessagingLeaseCoordinator?.shutdownSync();
   void disposeDesktopMessagingRuntime();
   void disposeAppServerIpcHandlers();
@@ -448,7 +457,9 @@ function isWindowCreationBlocked(): boolean {
   // profile-focus request in the teardown window can't boot a fresh window
   // while Squirrel is swapping the bundle.
   return (
-    quitInProgress || mainProcessResourcesDisposed || isUpdateInstallInProgress()
+    quitInProgress
+    || mainProcessResourcesDisposed
+    || isUpdateInstallInProgress()
   );
 }
 
@@ -513,7 +524,7 @@ function focusPwrAgentWindows(): void {
     .map((webContents) => BrowserWindow.fromWebContents(webContents))
     .filter((window): window is BrowserWindow =>
       Boolean(window && !window.isDestroyed()),
-  );
+    );
   if (windows.length === 0) {
     quitAppOnMainWindowClose(
       createMainWindow(
@@ -654,7 +665,6 @@ function rejectDevOnlyEnvVarsInProduction(): void {
   ];
   for (const name of devOnlyVars) {
     if (process.env[name] !== undefined) {
-      // eslint-disable-next-line no-console
       console.error(
         `[pwragent] Refusing to honor dev-only env var ${name} in a packaged build. Unsetting.`,
       );
@@ -678,209 +688,225 @@ export function bootstrapApp(): void {
   installProcessShutdownHandlers();
   installBootErrorHandlers();
 
-  app.whenReady().then(async () => {
-    startBootWatchdog();
-    const startupCpuProfiler = new StartupCpuProfiler();
-    startupCpuProfilerForNewWindows = startupCpuProfiler;
-    await startupCpuProfiler.start();
-    recordStartupProfileEvent({ type: "app-when-ready" });
-    installDevelopmentDockIcon();
-    // Boot decision — resolves which profile (if any) this Electron
-    // instance should open into. When the decision is `open` we run
-    // the today-style flow into an existing profile dir. Anything
-    // else (no profile configured, env/CLI named a missing profile,
-    // registry pointer is dangling) means the onboarding wizard
-    // needs to run BEFORE we commit to a profile, so app state goes
-    // into "bootstrap" mode against the throwaway .bootstrap/ dir.
-    // Wizard Finish graduates the bootstrap state into a real
-    // profile and opens a new window for it (see Task E).
-    // Reduce the 4-variant decision to a 2-variant app-state mode.
-    // The explicit switch (vs. a bare `kind === "open" ? … : …`)
-    // forces a compile error if a future variant is added — the
-    // missing case will fall through to `assertUnreachable…` and
-    // fail typecheck rather than silently fall into bootstrap mode.
-    const bootMode: "active-profile" | "bootstrap" = (() => {
-      switch (bootDecision.kind) {
-        case "open":
-          return "active-profile";
-        case "missing-named-profile":
-        case "missing-default-profile":
-        case "no-profile-configured":
-          return "bootstrap";
-        default:
-          assertUnreachableProfileBootDecision(bootDecision);
-      }
-    })();
-    logBootDecision(bootDecision);
-    // Stash the boot decision so the renderer can read it via
-    // `getBootInfo` IPC once the wizard mounts. Specifically the
-    // missing-named-profile case needs the requested name to
-    // pre-populate the confirmation step's "set up `foo`?" prompt.
-    recordBootDecision(bootDecision);
-    // Clean up any stale .bootstrap/ from a prior abandoned wizard
-    // session BEFORE deciding to init in bootstrap mode for the
-    // current run. Doing this here (vs. lazily) means a crashed
-    // wizard doesn't accumulate stale state.db handles across
-    // multiple boot attempts.
-    if (bootMode === "active-profile") {
-      cleanupBootstrapProfile();
-    }
-    recordStartupProfileEvent({
-      type: "boot-mode-resolved",
-      detail: {
-        bootMode,
-      },
-    });
-    initializeAppState(bootMode);
-    // Skip the focus-request watcher in bootstrap mode. The watcher
-    // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
-    // catch "focus existing window" requests from sibling PwrAgent
-    // instances — but in bootstrap mode there's no sibling and the
-    // active profile resolver falls back to literal "default",
-    // materializing a `default/` directory that #524 specifically
-    // promised would never appear silently.
-    if (bootMode === "active-profile") {
-      installProfileFocusRequestWatcher();
-    }
-    installApplicationMenu();
-    getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
-      createPwrAgentAppManagementHandler({
-        startedAt: mainProcessStartedAt,
-        version: () => app.getVersion(),
-      }),
-    );
-    // Windows: serve the painted title-bar menu bar from the live application
-    // menu (idempotent; the renderer mounts the bar only on win32).
-    wireAppMenuBridge();
-    installWindowMenuRefreshHandlers();
-    registerAppServerIpcHandlers();
-    registerAgentIpcHandlers();
-    registerApplicationIpcHandlers();
-    registerAutomationIpcHandlers();
-    registerAppMetadataIpcHandlers();
-    registerAppUpdateIpcHandlers({
-      requestQuit: async (performQuit) =>
-        await requestQuit({ performQuit, source: "update-install" }),
-    });
-    registerComposerDraftIpcHandlers();
-    registerImageNormalizationIpcHandlers();
-    registerIntegratedTerminalIpcHandlers();
-    installTranscriptImageProtocol();
-    registerPreloadLogIpcHandlers();
-    registerProfilesIpcHandlers({ onProfilesChanged: installApplicationMenu });
-    registerRendererErrorIpcHandlers();
-    registerBootInfoIpcHandlers({
-      requestQuit: async () => {
-        await requestQuit({ source: "ipc" });
-      },
-    });
-    registerSettingsIpcHandlers(undefined, {
-      onConfigPatchWritten: async (patch) => {
-        if (
-          patch.general?.developerMode !== undefined ||
-          patch.general?.hotCpuProfilingEnabled !== undefined ||
-          patch.general?.hotCpuProfilingStartDelayMs !== undefined ||
-          patch.general?.hotCpuProfilingTriggerMode !== undefined ||
-          patch.general?.hotCpuProfilingSlowburnThresholdPercent !== undefined ||
-          patch.general?.hotCpuProfilingCaptureHeapSnapshot !== undefined ||
-          patch.general?.hotCpuProfilingHeapSnapshotLimit !== undefined
-        ) {
-          installApplicationMenu();
-          syncHotCpuProfilersFromSettings("settings-changed");
+  app
+    .whenReady()
+    .then(async () => {
+      startBootWatchdog();
+      const startupCpuProfiler = new StartupCpuProfiler();
+      startupCpuProfilerForNewWindows = startupCpuProfiler;
+      await startupCpuProfiler.start();
+      recordStartupProfileEvent({ type: "app-when-ready" });
+      installDevelopmentDockIcon();
+      // Boot decision — resolves which profile (if any) this Electron
+      // instance should open into. When the decision is `open` we run
+      // the today-style flow into an existing profile dir. Anything
+      // else (no profile configured, env/CLI named a missing profile,
+      // registry pointer is dangling) means the onboarding wizard
+      // needs to run BEFORE we commit to a profile, so app state goes
+      // into "bootstrap" mode against the throwaway .bootstrap/ dir.
+      // Wizard Finish graduates the bootstrap state into a real
+      // profile and opens a new window for it (see Task E).
+      // Reduce the 4-variant decision to a 2-variant app-state mode.
+      // The explicit switch (vs. a bare `kind === "open" ? … : …`)
+      // forces a compile error if a future variant is added — the
+      // missing case will fall through to `assertUnreachable…` and
+      // fail typecheck rather than silently fall into bootstrap mode.
+      const bootMode: "active-profile" | "bootstrap" = (() => {
+        switch (bootDecision.kind) {
+          case "open":
+            return "active-profile";
+          case "missing-named-profile":
+          case "missing-default-profile":
+          case "no-profile-configured":
+            return "bootstrap";
+          default:
+            assertUnreachableProfileBootDecision(bootDecision);
         }
-      },
-    });
-    registerWindowPointerIpcHandlers();
-    if (isDevelopment) {
-      registerRuntimeIdentityIpcHandlers();
-    }
-    const messagingRuntime = getDesktopMessagingRuntime((options) =>
-      loadDesktopMessagingConfigFromSettings(
-        getDesktopSettingsService(),
-        process.env,
-        options,
-      ),
-    );
-    getDesktopBackendRegistry().setMessagingArchiveCleaner({
-      requestBindingRevokeAllForThread: (request) =>
-        messagingRuntime.requestBindingRevokeAllForThread(request),
-    });
-    getDesktopBackendRegistry().setMessagingAgentToolService(messagingRuntime);
-    const messagingOverride = resolveRuntimeMessagingOverride();
-    if (messagingOverride.disabled) {
-      mainLog.info("messaging runtime disabled for this app instance", {
-        reason: messagingOverride.reason,
+      })();
+      logBootDecision(bootDecision);
+      // Stash the boot decision so the renderer can read it via
+      // `getBootInfo` IPC once the wizard mounts. Specifically the
+      // missing-named-profile case needs the requested name to
+      // pre-populate the confirmation step's "set up `foo`?" prompt.
+      recordBootDecision(bootDecision);
+      // Clean up any stale .bootstrap/ from a prior abandoned wizard
+      // session BEFORE deciding to init in bootstrap mode for the
+      // current run. Doing this here (vs. lazily) means a crashed
+      // wizard doesn't accumulate stale state.db handles across
+      // multiple boot attempts.
+      if (bootMode === "active-profile") {
+        cleanupBootstrapProfile();
+      }
+      recordStartupProfileEvent({
+        type: "boot-mode-resolved",
+        detail: {
+          bootMode,
+        },
       });
-      void getRuntimeMessagingLeaseCoordinator()
-        .start(messagingRuntime, (options) =>
-          loadDesktopMessagingConfigFromSettings(
-            getDesktopSettingsService(),
-            process.env,
-            options,
-          ),
-        )
-        .catch((error) => {
-          mainLog.error("messaging runtime lease recording failed during startup", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-    } else {
-      void getRuntimeMessagingLeaseCoordinator()
-        .start(messagingRuntime, (options) =>
-          loadDesktopMessagingConfigFromSettings(
-            getDesktopSettingsService(),
-            process.env,
-            options,
-          ),
-        )
-        .catch((error) => {
-          mainLog.error("messaging runtime failed during background startup", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-    }
-    // Register status IPC after the runtime is constructed so the
-    // initial subscriber attaches before the renderer asks for the
-    // current snapshot. When messaging is disabled the runtime singleton
-    // still exists (default config); status returns []  / never emits.
-    registerMessagingStatusIpcHandlers();
-    recordStartupProfileEvent({ type: "main-window-create:start" });
-    const mainWindow = createMainWindow({
-      startupCpuProfiler,
-    });
-    // Boot is "done" once the main window actually shows; this cancels the
-    // boot watchdog and downgrades later unhandled rejections from "fatal
-    // startup failure dialog" to "log only".
-    markMainWindowBooted(mainWindow);
-    quitAppOnMainWindowClose(mainWindow);
-    recordStartupProfileEvent({ type: "main-window-create:end" });
-    recordStartupProfileEvent({ type: "startup-thread-list-prewarm:start" });
-    prewarmInitialThreadList();
-    recordStartupProfileEvent({ type: "startup-thread-list-prewarm:scheduled" });
-
-    // Wire up auto-update *after* the window is created so a slow update
-    // check does not delay first paint. Skips automatically in dev.
-    initAutoUpdater();
-
-    app.on("activate", () => {
-      if (isWindowCreationBlocked()) {
-        mainLog.info("ignoring activate during shutdown");
-        return;
+      initializeAppState(bootMode);
+      // Skip the focus-request watcher in bootstrap mode. The watcher
+      // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
+      // catch "focus existing window" requests from sibling PwrAgent
+      // instances — but in bootstrap mode there's no sibling and the
+      // active profile resolver falls back to literal "default",
+      // materializing a `default/` directory that #524 specifically
+      // promised would never appear silently.
+      if (bootMode === "active-profile") {
+        installProfileFocusRequestWatcher();
       }
-      if (BrowserWindow.getAllWindows().length === 0) {
-        quitAppOnMainWindowClose(
-          createMainWindow({
-            startupCpuProfiler,
-          }),
-        );
+      installApplicationMenu();
+      getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
+        createPwrAgentAppManagementHandler({
+          startedAt: mainProcessStartedAt,
+          version: () => app.getVersion(),
+        }),
+      );
+      // Windows: serve the painted title-bar menu bar from the live application
+      // menu (idempotent; the renderer mounts the bar only on win32).
+      wireAppMenuBridge();
+      installWindowMenuRefreshHandlers();
+      registerAppServerIpcHandlers();
+      registerAgentIpcHandlers();
+      registerApplicationIpcHandlers();
+      registerAutomationIpcHandlers();
+      registerAppMetadataIpcHandlers();
+      registerAppUpdateIpcHandlers({
+        requestQuit: async (performQuit) =>
+          await requestQuit({ performQuit, source: "update-install" }),
+      });
+      registerComposerDraftIpcHandlers();
+      registerImageNormalizationIpcHandlers();
+      registerIntegratedTerminalIpcHandlers();
+      installTranscriptImageProtocol();
+      registerPreloadLogIpcHandlers();
+      registerProfilesIpcHandlers({
+        onProfilesChanged: installApplicationMenu,
+      });
+      registerRendererErrorIpcHandlers();
+      registerBootInfoIpcHandlers({
+        requestQuit: async () => {
+          await requestQuit({ source: "ipc" });
+        },
+      });
+      registerSettingsIpcHandlers(undefined, {
+        onConfigPatchWritten: async (patch) => {
+          if (
+            patch.general?.developerMode !== undefined
+            || patch.general?.hotCpuProfilingEnabled !== undefined
+            || patch.general?.hotCpuProfilingStartDelayMs !== undefined
+            || patch.general?.hotCpuProfilingTriggerMode !== undefined
+            || patch.general?.hotCpuProfilingSlowburnThresholdPercent
+              !== undefined
+            || patch.general?.hotCpuProfilingCaptureHeapSnapshot !== undefined
+            || patch.general?.hotCpuProfilingHeapSnapshotLimit !== undefined
+          ) {
+            installApplicationMenu();
+            syncHotCpuProfilersFromSettings("settings-changed");
+          }
+        },
+      });
+      registerWindowPointerIpcHandlers();
+      if (isDevelopment) {
+        registerRuntimeIdentityIpcHandlers();
       }
+      const messagingRuntime = getDesktopMessagingRuntime((options) =>
+        loadDesktopMessagingConfigFromSettings(
+          getDesktopSettingsService(),
+          process.env,
+          options,
+        ),
+      );
+      getDesktopBackendRegistry().setMessagingArchiveCleaner({
+        requestBindingRevokeAllForThread: (request) =>
+          messagingRuntime.requestBindingRevokeAllForThread(request),
+      });
+      getDesktopBackendRegistry().setMessagingAgentToolService(
+        messagingRuntime,
+      );
+      const messagingOverride = resolveRuntimeMessagingOverride();
+      if (messagingOverride.disabled) {
+        mainLog.info("messaging runtime disabled for this app instance", {
+          reason: messagingOverride.reason,
+        });
+        void getRuntimeMessagingLeaseCoordinator()
+          .start(messagingRuntime, (options) =>
+            loadDesktopMessagingConfigFromSettings(
+              getDesktopSettingsService(),
+              process.env,
+              options,
+            ),
+          )
+          .catch((error) => {
+            mainLog.error(
+              "messaging runtime lease recording failed during startup",
+              {
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+          });
+      } else {
+        void getRuntimeMessagingLeaseCoordinator()
+          .start(messagingRuntime, (options) =>
+            loadDesktopMessagingConfigFromSettings(
+              getDesktopSettingsService(),
+              process.env,
+              options,
+            ),
+          )
+          .catch((error) => {
+            mainLog.error(
+              "messaging runtime failed during background startup",
+              {
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+          });
+      }
+      // Register status IPC after the runtime is constructed so the
+      // initial subscriber attaches before the renderer asks for the
+      // current snapshot. When messaging is disabled the runtime singleton
+      // still exists (default config); status returns []  / never emits.
+      registerMessagingStatusIpcHandlers();
+      recordStartupProfileEvent({ type: "main-window-create:start" });
+      const mainWindow = createMainWindow({
+        startupCpuProfiler,
+      });
+      // Boot is "done" once the main window actually shows; this cancels the
+      // boot watchdog and downgrades later unhandled rejections from "fatal
+      // startup failure dialog" to "log only".
+      markMainWindowBooted(mainWindow);
+      quitAppOnMainWindowClose(mainWindow);
+      recordStartupProfileEvent({ type: "main-window-create:end" });
+      recordStartupProfileEvent({ type: "startup-thread-list-prewarm:start" });
+      prewarmInitialThreadList();
+      recordStartupProfileEvent({
+        type: "startup-thread-list-prewarm:scheduled",
+      });
+
+      // Wire up auto-update *after* the window is created so a slow update
+      // check does not delay first paint. Skips automatically in dev.
+      initAutoUpdater();
+
+      app.on("activate", () => {
+        if (isWindowCreationBlocked()) {
+          mainLog.info("ignoring activate during shutdown");
+          return;
+        }
+        if (BrowserWindow.getAllWindows().length === 0) {
+          quitAppOnMainWindowClose(
+            createMainWindow({
+              startupCpuProfiler,
+            }),
+          );
+        }
+      });
+    })
+    .catch((error: unknown) => {
+      // A throw anywhere in the startup chain above rejects this promise. Without
+      // this handler the rejection was silent and the rest of boot just stopped,
+      // leaving a windowless, unusable process. Surface it instead.
+      surfaceBootFailure("whenReady", error);
     });
-  }).catch((error: unknown) => {
-    // A throw anywhere in the startup chain above rejects this promise. Without
-    // this handler the rejection was silent and the rest of boot just stopped,
-    // leaving a windowless, unusable process. Surface it instead.
-    surfaceBootFailure("whenReady", error);
-  });
 
   app.on("window-all-closed", () => {
     if (isUpdateInstallInProgress()) {

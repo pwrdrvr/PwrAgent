@@ -94,18 +94,22 @@ export type AcpRuntimeClient = Pick<
   | "refreshSession"
   | "startPrompt"
   | "startSession"
-> &
-  Partial<Pick<AcpAgentClient, "sendControlPrompt" | "setRuntimeOption">>;
+>
+  & Partial<Pick<AcpAgentClient, "sendControlPrompt" | "setRuntimeOption">>;
 
-export type AcpClientFactory = (agent: AcpInstalledAgentRecord) => AcpRuntimeClient;
+export type AcpClientFactory = (
+  agent: AcpInstalledAgentRecord,
+) => AcpRuntimeClient;
 export type AcpTransportFactory = (
   agent: AcpInstalledAgentRecord,
 ) => AcpJsonRpcTransport;
 export type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
 
-export type AcpSessionStoreLike =
-  Pick<AcpSessionStoreContract, "getSession" | "listSessions"> &
-  Partial<Pick<AcpSessionStoreContract, "upsertSession">>;
+export type AcpSessionStoreLike = Pick<
+  AcpSessionStoreContract,
+  "getSession" | "listSessions"
+>
+  & Partial<Pick<AcpSessionStoreContract, "upsertSession">>;
 
 export type AcpPromptPayload = {
   prompt: string;
@@ -118,7 +122,10 @@ export type AcpBackendAdapterOptions = {
     AcpAgentStoreLike,
     "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
   > | null;
-  acpRolloutStore?: Pick<AcpRolloutStore, "appendUpdate" | "readReplay" | "readUpdates"> | null;
+  acpRolloutStore?: Pick<
+    AcpRolloutStore,
+    "appendUpdate" | "readReplay" | "readUpdates"
+  > | null;
   acpSessionStore?: AcpSessionStoreLike | null;
   captureStores: ProtocolCaptureStore[];
   automationInspectionMcpCommand?: string;
@@ -256,15 +263,15 @@ export function describeInstalledAcpBackend(
 ): BackendSummary {
   const runtimeCapabilities = acpRuntimeCapabilitiesForAgent(agent);
   const available =
-    agent.installStatus === "installed" &&
-    (agent.authStatus === "not-required" || agent.authStatus === "authenticated");
-  const unavailableReason =
-    available
-      ? undefined
-      : agent.lastError ??
-        (agent.authStatus === "required"
-          ? "ACP agent authentication required"
-          : "ACP agent unavailable");
+    agent.installStatus === "installed"
+    && (agent.authStatus === "not-required"
+      || agent.authStatus === "authenticated");
+  const unavailableReason = available
+    ? undefined
+    : (agent.lastError
+      ?? (agent.authStatus === "required"
+        ? "ACP agent authentication required"
+        : "ACP agent unavailable"));
 
   return {
     kind: agent.backendId,
@@ -417,8 +424,8 @@ export function buildAcpLaunchpadOptions(
           label: value.label,
           current: runtimeCapabilities.configOptions?.some(
             (option) =>
-              option.category === "model" &&
-              option.currentValue === value.value,
+              option.category === "model"
+              && option.currentValue === value.value,
           ),
         }),
       ) ?? [];
@@ -445,8 +452,12 @@ export function withAcpModelRuntimeSelection(params: {
     return params.runtime;
   }
 
-  const modelConfigOption = findAcpModelConfigOption(params.runtimeCapabilities);
-  const hasModelList = Array.isArray(params.runtimeCapabilities?.models?.availableModels);
+  const modelConfigOption = findAcpModelConfigOption(
+    params.runtimeCapabilities,
+  );
+  const hasModelList = Array.isArray(
+    params.runtimeCapabilities?.models?.availableModels,
+  );
   const hasAdvertisedModel =
     params.runtimeCapabilities?.models?.availableModels.some(
       (option) => option.id === model,
@@ -485,7 +496,9 @@ export function mergeAcpRuntimeState(
   };
 }
 
-export function acpRuntimeValueLooksPrivileged(value: string | undefined): boolean {
+export function acpRuntimeValueLooksPrivileged(
+  value: string | undefined,
+): boolean {
   // ACP agents such as Qwen implement Auto/Auto-Edit internally; only Yolo
   // means the client should bypass every permission request.
   return value === "yolo";
@@ -510,14 +523,14 @@ export function acpSessionToThreadSummary(
   capabilities?: AcpAgentCapabilities,
 ): AppServerThreadSummary {
   const workspaceHandoffAvailable =
-    !acpSessionHasConversationHistory(session) ||
-    capabilities?.liveWorkspaceHandoff === true;
+    !acpSessionHasConversationHistory(session)
+    || capabilities?.liveWorkspaceHandoff === true;
   return {
     id: session.sessionId,
     title: session.title,
     titleSource:
-      session.titleSource ??
-      (session.title === "ACP session" ? "fallback" : "derived"),
+      session.titleSource
+      ?? (session.title === "ACP session" ? "fallback" : "derived"),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     archivedAt: session.archivedAt,
@@ -585,8 +598,8 @@ export function acpSessionThreadStatus(
 export function isAcpSessionMissingForProjectError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
-    message.includes("No previous sessions found for this project") ||
-    message.includes("Unknown sessionId")
+    message.includes("No previous sessions found for this project")
+    || message.includes("Unknown sessionId")
   );
 }
 
@@ -615,9 +628,16 @@ export function inputToAcpPrompt(
     if (item.type === "image") {
       const name = item.name?.trim();
       if (name) {
-        promptContent.push({ type: "text", text: `Attached image filename: ${name}` });
+        promptContent.push({
+          type: "text",
+          text: `Attached image filename: ${name}`,
+        });
       }
-      parts.push({ type: "image", ...(name ? { alt: name } : {}), url: item.url });
+      parts.push({
+        type: "image",
+        ...(name ? { alt: name } : {}),
+        url: item.url,
+      });
       const image = parseImageDataUrl(item.url);
       if (image) {
         promptContent.push({
@@ -643,8 +663,9 @@ export function inputToAcpPrompt(
 
   return {
     prompt: parts
-      .filter((part): part is Extract<AppServerThreadMessagePart, { type: "text" }> =>
-        part.type === "text",
+      .filter(
+        (part): part is Extract<AppServerThreadMessagePart, { type: "text" }> =>
+          part.type === "text",
       )
       .map((part) => part.text)
       .join("\n"),
@@ -688,39 +709,43 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
-  private readonly acpClients = new Map<AcpBackendId, Promise<AcpRuntimeClient>>();
+  private readonly acpClients = new Map<
+    AcpBackendId,
+    Promise<AcpRuntimeClient>
+  >();
   private readonly liveNotificationFingerprints = new Map<string, string>();
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
 
   constructor(options: AcpBackendAdapterOptions) {
     this.captureStores = options.captureStores;
-    this.automationInspectionMcpCommand = options.automationInspectionMcpCommand;
+    this.automationInspectionMcpCommand =
+      options.automationInspectionMcpCommand;
     this.emit = options.emit;
     this.handleServerRequest = options.handleServerRequest;
     this.acpAgentStore =
       options.acpAgentStore === null
         ? undefined
-        : options.acpAgentStore ??
-          (isAppStateInitialized()
+        : (options.acpAgentStore
+          ?? (isAppStateInitialized()
             ? new AcpAgentStore(getAppStateDb())
-            : undefined);
+            : undefined));
     this.acpSessionStore =
       options.acpSessionStore === null
         ? undefined
-        : options.acpSessionStore ??
-          (isAppStateInitialized()
+        : (options.acpSessionStore
+          ?? (isAppStateInitialized()
             ? new AcpSessionStore(getAppStateDb())
-            : undefined);
+            : undefined));
     this.acpRolloutStore =
       options.acpRolloutStore === null
         ? undefined
-        : options.acpRolloutStore ??
-          (isAppStateInitialized()
+        : (options.acpRolloutStore
+          ?? (isAppStateInitialized()
             ? new AcpRolloutStore(resolveDefaultAcpRolloutRoot())
-            : undefined);
+            : undefined));
     this.discoverLocalAcpAgents =
-      options.discoverLocalAcpAgents ??
-      (async () => {
+      options.discoverLocalAcpAgents
+      ?? (async () => {
         // Chat-launch discovery runs through the kit's multi-install discovery
         // (same as the settings path), so the binary that launches is the
         // resolved active install (override → picked → first) and every agent's
@@ -773,7 +798,9 @@ export class AcpBackendAdapter {
     this.acpSessionStore?.upsertSession?.(session);
   }
 
-  getInstalledAgent(backendId: AcpBackendId): AcpInstalledAgentRecord | undefined {
+  getInstalledAgent(
+    backendId: AcpBackendId,
+  ): AcpInstalledAgentRecord | undefined {
     const agent = this.acpAgentStore?.getInstalledAgent(backendId);
     return agent ? normalizeInstalledAcpAgent(agent) : undefined;
   }
@@ -781,8 +808,10 @@ export class AcpBackendAdapter {
   sessionToThreadSummary(session: AcpSessionMetadata): AppServerThreadSummary {
     const agent = this.getInstalledAgent(session.backendId);
     const capabilities =
-      agent?.capabilities ??
-      (agent ? acpAgentCapabilitiesForRegistryId(agent.registryId) : undefined);
+      agent?.capabilities
+      ?? (agent
+        ? acpAgentCapabilitiesForRegistryId(agent.registryId)
+        : undefined);
     return acpSessionToThreadSummary(session, capabilities);
   }
 
@@ -802,14 +831,16 @@ export class AcpBackendAdapter {
     sessionId: string,
   ): Promise<AppServerThreadReplay> {
     const session = this.getSession(backend, sessionId);
-    const cachedClient = await this.acpClients.get(backend)?.catch(() => undefined);
+    const cachedClient = await this.acpClients
+      .get(backend)
+      ?.catch(() => undefined);
     if (cachedClient) {
       const replay = cachedClient.readReplay(sessionId);
       if (
-        session &&
-        acpSessionHasConversationHistory(session) &&
-        replay.entries.length === 0 &&
-        acpRuntimeSupportsSessionLoad(
+        session
+        && acpSessionHasConversationHistory(session)
+        && replay.entries.length === 0
+        && acpRuntimeSupportsSessionLoad(
           this.getInstalledAgent(backend)?.runtimeCapabilities,
         )
       ) {
@@ -834,13 +865,16 @@ export class AcpBackendAdapter {
         }
       }
       if (
-        session &&
-        replay.entries.length === 0 &&
-        !acpRuntimeSupportsSessionLoad(
+        session
+        && replay.entries.length === 0
+        && !acpRuntimeSupportsSessionLoad(
           this.getInstalledAgent(backend)?.runtimeCapabilities,
         )
       ) {
-        return this.readRolloutReplay(session, "rollout-session-load-unsupported");
+        return this.readRolloutReplay(
+          session,
+          "rollout-session-load-unsupported",
+        );
       }
       this.logSessionReplaySource({
         backend,
@@ -869,7 +903,10 @@ export class AcpBackendAdapter {
         this.getInstalledAgent(backend)?.runtimeCapabilities,
       )
     ) {
-      return this.readRolloutReplay(session, "rollout-session-load-unsupported");
+      return this.readRolloutReplay(
+        session,
+        "rollout-session-load-unsupported",
+      );
     }
     const client = await this.getClient(backend);
     try {
@@ -995,7 +1032,10 @@ export class AcpBackendAdapter {
       return replay;
     }
 
-    if (replay.entries.length > 0 || !acpSessionHasConversationHistory(session)) {
+    if (
+      replay.entries.length > 0
+      || !acpSessionHasConversationHistory(session)
+    ) {
       this.logSessionReplaySource({
         backend,
         entries: replay.entries.length,
@@ -1099,7 +1139,10 @@ export class AcpBackendAdapter {
     if (agent.installStatus !== "installed") {
       throw new Error(`ACP backend is not installed: ${backend}`);
     }
-    if (agent.authStatus !== "not-required" && agent.authStatus !== "authenticated") {
+    if (
+      agent.authStatus !== "not-required"
+      && agent.authStatus !== "authenticated"
+    ) {
       throw new Error(`ACP backend authentication required: ${backend}`);
     }
     return agent;
@@ -1108,8 +1151,7 @@ export class AcpBackendAdapter {
   async supportsLiveWorkspaceHandoff(backend: AcpBackendId): Promise<boolean> {
     const agent = await this.resolveInstalledAgent(backend);
     return (
-      agent.capabilities ??
-      acpAgentCapabilitiesForRegistryId(agent.registryId)
+      agent.capabilities ?? acpAgentCapabilitiesForRegistryId(agent.registryId)
     ).liveWorkspaceHandoff;
   }
 
@@ -1179,18 +1221,24 @@ export class AcpBackendAdapter {
   }
 
   private async readLocalAgentsOnce(): Promise<AcpInstalledAgentRecord[]> {
-    this.localAcpAgentsPromise ??= this.discoverLocalAcpAgents().catch((error) => {
-      acpBackendAdapterLog.debug("local_acp_discovery_failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return [];
-    });
+    this.localAcpAgentsPromise ??= this.discoverLocalAcpAgents().catch(
+      (error) => {
+        acpBackendAdapterLog.debug("local_acp_discovery_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return [];
+      },
+    );
     return await this.localAcpAgentsPromise;
   }
 
-  private createDefaultClient(agent: AcpInstalledAgentRecord): AcpRuntimeClient {
+  private createDefaultClient(
+    agent: AcpInstalledAgentRecord,
+  ): AcpRuntimeClient {
     if (!agent.launchDescriptor) {
-      throw new Error(`ACP backend ${agent.backendId} has no launch descriptor`);
+      throw new Error(
+        `ACP backend ${agent.backendId} has no launch descriptor`,
+      );
     }
     if (!this.acpSessionStore?.upsertSession) {
       throw new Error("ACP session store is unavailable");
@@ -1209,8 +1257,8 @@ export class AcpBackendAdapter {
       rolloutStore: this.acpRolloutStore,
       store: this.acpSessionStore as AcpSessionStoreContract,
       transport:
-        this.createAcpTransport?.(agent) ??
-        new AcpStdioJsonRpcTransport({
+        this.createAcpTransport?.(agent)
+        ?? new AcpStdioJsonRpcTransport({
           launchDescriptor: agent.launchDescriptor,
           observer: createCompositeJsonRpcObserver([
             acpCapture?.observer,
@@ -1248,8 +1296,8 @@ export class AcpBackendAdapter {
               params: {
                 threadId: sessionId,
                 commands:
-                  this.getSession(agent.backendId, sessionId)?.availableCommands ??
-                  [],
+                  this.getSession(agent.backendId, sessionId)?.availableCommands
+                  ?? [],
               },
             },
           });
@@ -1261,8 +1309,8 @@ export class AcpBackendAdapter {
         if (kimiYoloExecutionMode) {
           const metadata = this.getSession(agent.backendId, sessionId);
           if (
-            metadata &&
-            (metadata.executionMode ?? "default") !== kimiYoloExecutionMode
+            metadata
+            && (metadata.executionMode ?? "default") !== kimiYoloExecutionMode
           ) {
             this.acpSessionStore?.upsertSession?.({
               ...metadata,
@@ -1282,10 +1330,10 @@ export class AcpBackendAdapter {
           }
         }
         if (
-          turnId &&
-          (updateKind === "agent_message_chunk" ||
-            (updateKind === "agent_thought_chunk" &&
-              shouldSurfaceAcpThoughtsAsMessages(agent.backendId)))
+          turnId
+          && (updateKind === "agent_message_chunk"
+            || (updateKind === "agent_thought_chunk"
+              && shouldSurfaceAcpThoughtsAsMessages(agent.backendId)))
         ) {
           const delta = readAcpUpdateText(update);
           if (delta) {
@@ -1299,7 +1347,8 @@ export class AcpBackendAdapter {
                   threadId: sessionId,
                   turnId,
                   itemId:
-                    assistantMessageItemId ?? `assistant:${turnId ?? sessionId}`,
+                    assistantMessageItemId
+                    ?? `assistant:${turnId ?? sessionId}`,
                   delta,
                   phase,
                 },
@@ -1338,7 +1387,9 @@ export class AcpBackendAdapter {
                   id: turnId,
                   status: "completed",
                   completedAt: Date.now(),
-                  output: outputText ? [{ type: "text", text: outputText }] : [],
+                  output: outputText
+                    ? [{ type: "text", text: outputText }]
+                    : [],
                 },
               },
             },
@@ -1370,7 +1421,8 @@ export class AcpBackendAdapter {
                 status: "failed",
                 completedAt: Date.now(),
                 error: {
-                  message: error instanceof Error ? error.message : String(error),
+                  message:
+                    error instanceof Error ? error.message : String(error),
                 },
               },
             },

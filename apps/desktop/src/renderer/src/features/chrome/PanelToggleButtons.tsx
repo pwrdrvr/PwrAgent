@@ -136,14 +136,30 @@ function LayoutGlyph({
         <>
           <path d="M8 4v16" />
           {open ? (
-            <rect x="3" y="4" width="5" height="16" rx="1.5" fill="currentColor" stroke="none" />
+            <rect
+              x="3"
+              y="4"
+              width="5"
+              height="16"
+              rx="1.5"
+              fill="currentColor"
+              stroke="none"
+            />
           ) : null}
         </>
       ) : (
         <>
           <path d="M16 4v16" />
           {open ? (
-            <rect x="16" y="4" width="5" height="16" rx="1.5" fill="currentColor" stroke="none" />
+            <rect
+              x="16"
+              y="4"
+              width="5"
+              height="16"
+              rx="1.5"
+              fill="currentColor"
+              stroke="none"
+            />
           ) : null}
         </>
       )}

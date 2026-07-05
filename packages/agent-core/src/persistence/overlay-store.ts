@@ -42,7 +42,10 @@ export class OverlayStore {
   async reconcileNavigationSnapshot(params: {
     backend: AppServerBackendScope;
     fetchedAt: number;
-    gitStatusByDirectoryKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
+    gitStatusByDirectoryKey?: Record<
+      string,
+      NavigationDirectoryGitStatus | undefined
+    >;
     threads: AppServerThreadSummary[];
   }): Promise<NavigationSnapshot> {
     return await this.withData(async (data) => {
@@ -60,8 +63,7 @@ export class OverlayStore {
             executionMode:
               current?.executionMode ?? thread.executionMode ?? "default",
             model: current?.model ?? thread.model,
-            reasoningEffort:
-              current?.reasoningEffort ?? thread.reasoningEffort,
+            reasoningEffort: current?.reasoningEffort ?? thread.reasoningEffort,
             serviceTier: current?.serviceTier ?? thread.serviceTier,
             fastMode: current?.fastMode ?? thread.fastMode,
             gitBranch: current?.gitBranch,
@@ -181,7 +183,8 @@ export class OverlayStore {
 
       const nextDirectories = [
         ...current.extraLinkedDirectories.filter(
-          (directory) => !linkedDirectoriesEquivalent(directory, params.directory),
+          (directory) =>
+            !linkedDirectoriesEquivalent(directory, params.directory),
         ),
         params.directory,
       ];
@@ -211,7 +214,8 @@ export class OverlayStore {
       const nextState: ThreadOverlayState = {
         ...current,
         extraLinkedDirectories: current.extraLinkedDirectories.filter(
-          (directory) => !linkedDirectoriesEquivalent(directory, params.directory),
+          (directory) =>
+            !linkedDirectoriesEquivalent(directory, params.directory),
         ),
       };
       data.threads[threadKey] = nextState;
@@ -240,8 +244,8 @@ export class OverlayStore {
           }
 
           if (
-            directory.id.startsWith("pwragent-handoff:") ||
-            directory.id.startsWith("pwragnt-handoff:")  // legacy prefix
+            directory.id.startsWith("pwragent-handoff:")
+            || directory.id.startsWith("pwragnt-handoff:") // legacy prefix
           ) {
             return false;
           }
@@ -251,9 +255,13 @@ export class OverlayStore {
         params.directory,
       ];
       const nextGitBranch =
-        params.gitBranch === null ? undefined : params.gitBranch ?? current.gitBranch;
+        params.gitBranch === null
+          ? undefined
+          : (params.gitBranch ?? current.gitBranch);
       const nextObservedGitBranch =
-        params.gitBranch === null ? undefined : params.gitBranch ?? current.observedGitBranch;
+        params.gitBranch === null
+          ? undefined
+          : (params.gitBranch ?? current.observedGitBranch);
       const nextState: ThreadOverlayState = {
         ...current,
         gitBranch: nextGitBranch,
@@ -317,7 +325,9 @@ export class OverlayStore {
           (snapshot) => snapshot.id !== params.snapshot.id,
         ),
         params.snapshot,
-      ].sort((left, right) => left.worktreePath.localeCompare(right.worktreePath));
+      ].sort((left, right) =>
+        left.worktreePath.localeCompare(right.worktreePath),
+      );
       const nextState: ThreadOverlayState = {
         ...current,
         worktreeSnapshots: nextSnapshots,
@@ -368,7 +378,9 @@ export class OverlayStore {
       // Cap at MAX_PERMISSION_TRANSITION_LOG_ENTRIES, evicting oldest first.
       const trimmed =
         nextLog.length > MAX_PERMISSION_TRANSITION_LOG_ENTRIES
-          ? nextLog.slice(nextLog.length - MAX_PERMISSION_TRANSITION_LOG_ENTRIES)
+          ? nextLog.slice(
+              nextLog.length - MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
+            )
           : nextLog;
       const nextState: ThreadOverlayState = {
         ...current,
@@ -456,8 +468,12 @@ export class OverlayStore {
         ...current,
         gitBranch: params.branch,
         observedGitBranch: params.branch,
-        retainedBranchDriftPairs: (current.retainedBranchDriftPairs ?? []).filter(
-          (pair) => pair.expectedBranch !== params.branch && pair.observedBranch !== params.branch,
+        retainedBranchDriftPairs: (
+          current.retainedBranchDriftPairs ?? []
+        ).filter(
+          (pair) =>
+            pair.expectedBranch !== params.branch
+            && pair.observedBranch !== params.branch,
         ),
       };
       data.threads[threadKey] = nextState;
@@ -575,7 +591,10 @@ export class OverlayStore {
       };
       data.threads[threadKey] = nextState;
       if (parentThreadId) {
-        const parentKey = buildThreadIdentityKey(params.backend, parentThreadId);
+        const parentKey = buildThreadIdentityKey(
+          params.backend,
+          parentThreadId,
+        );
         const parent = data.threads[parentKey] ?? {
           backend: params.backend,
           threadId: parentThreadId,
@@ -585,7 +604,9 @@ export class OverlayStore {
         data.threads[parentKey] = {
           ...parent,
           subthreadOrder: [
-            ...(parent.subthreadOrder ?? []).filter((id) => id !== params.threadId),
+            ...(parent.subthreadOrder ?? []).filter(
+              (id) => id !== params.threadId,
+            ),
             params.threadId,
           ],
         };
@@ -600,7 +621,10 @@ export class OverlayStore {
     threadIds: string[];
   }): Promise<string[]> {
     return await this.withData(async (data) => {
-      const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
+      const parentKey = buildThreadIdentityKey(
+        params.backend,
+        params.parentThreadId,
+      );
       const parent = data.threads[parentKey] ?? {
         backend: params.backend,
         threadId: params.parentThreadId,
@@ -627,7 +651,10 @@ export class OverlayStore {
     collapsed: boolean;
   }): Promise<ThreadOverlayState> {
     return await this.withData(async (data) => {
-      const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
+      const parentKey = buildThreadIdentityKey(
+        params.backend,
+        params.parentThreadId,
+      );
       const parent = data.threads[parentKey] ?? {
         backend: params.backend,
         threadId: params.parentThreadId,
@@ -689,7 +716,9 @@ export class OverlayStore {
     });
   }
 
-  async readAllDirectoryOverlays(): Promise<Record<string, DirectoryOverlayState>> {
+  async readAllDirectoryOverlays(): Promise<
+    Record<string, DirectoryOverlayState>
+  > {
     return await this.withData(async (data) => {
       return { ...data.directoryOverlays };
     });
@@ -738,22 +767,22 @@ export class OverlayStore {
       const previousObservedBranch = current.observedGitBranch?.trim();
       const nextObservedBranch = params.branch?.trim();
       const fallbackExpectedBranch =
-        !current.gitBranch?.trim() &&
-        previousObservedBranch &&
-        nextObservedBranch &&
-        previousObservedBranch !== nextObservedBranch
+        !current.gitBranch?.trim()
+        && previousObservedBranch
+        && nextObservedBranch
+        && previousObservedBranch !== nextObservedBranch
           ? previousObservedBranch
           : undefined;
       const requestedExpectedBranch =
-        params.expectedBranch?.trim() &&
-        params.expectedBranch.trim() !== nextObservedBranch
+        params.expectedBranch?.trim()
+        && params.expectedBranch.trim() !== nextObservedBranch
           ? params.expectedBranch.trim()
           : undefined;
       const nextState: ThreadOverlayState = {
         ...current,
         gitBranch: current.gitBranch?.trim()
           ? current.gitBranch
-          : requestedExpectedBranch ?? fallbackExpectedBranch,
+          : (requestedExpectedBranch ?? fallbackExpectedBranch),
         observedGitBranch: params.branch,
       };
       data.threads[threadKey] = nextState;
@@ -779,8 +808,8 @@ export class OverlayStore {
       const retainedBranchDriftPairs = [
         ...(current.retainedBranchDriftPairs ?? []).filter(
           (pair) =>
-            pair.expectedBranch !== params.expectedBranch ||
-            pair.observedBranch !== params.observedBranch,
+            pair.expectedBranch !== params.expectedBranch
+            || pair.observedBranch !== params.observedBranch,
         ),
         {
           expectedBranch: params.expectedBranch,
@@ -816,11 +845,15 @@ export class OverlayStore {
   async getDirectoryLaunchpad(params: {
     directoryKey: string;
   }): Promise<DirectoryLaunchpadOverlayState | undefined> {
-    return await this.withReadData(async (data) => data.directoryLaunchpads[params.directoryKey]);
+    return await this.withReadData(
+      async (data) => data.directoryLaunchpads[params.directoryKey],
+    );
   }
 
   async listDirectoryLaunchpads(): Promise<DirectoryLaunchpadOverlayState[]> {
-    return await this.withReadData(async (data) => Object.values(data.directoryLaunchpads));
+    return await this.withReadData(async (data) =>
+      Object.values(data.directoryLaunchpads),
+    );
   }
 
   async upsertDirectoryLaunchpad(
@@ -849,7 +882,8 @@ export class OverlayStore {
   private async withData<T>(
     operation: (data: OverlayStoreData) => Promise<T> | T,
   ): Promise<T> {
-    const currentQueue = OverlayStore.queues.get(this.filePath) ?? Promise.resolve();
+    const currentQueue =
+      OverlayStore.queues.get(this.filePath) ?? Promise.resolve();
     const next = currentQueue.then(async () => {
       const data = await this.readData();
       const result = await operation(data);
@@ -915,16 +949,21 @@ function linkedDirectoriesEquivalent(
   if (left.kind !== right.kind) {
     return false;
   }
-  if (normalizeLinkedDirectoryPath(left.path) !== normalizeLinkedDirectoryPath(right.path)) {
+  if (
+    normalizeLinkedDirectoryPath(left.path)
+    !== normalizeLinkedDirectoryPath(right.path)
+  ) {
     return false;
   }
   return (
-    normalizeLinkedDirectoryPath(left.worktreePath) ===
-    normalizeLinkedDirectoryPath(right.worktreePath)
+    normalizeLinkedDirectoryPath(left.worktreePath)
+    === normalizeLinkedDirectoryPath(right.worktreePath)
   );
 }
 
-function normalizeLinkedDirectoryPath(value: string | undefined): string | undefined {
+function normalizeLinkedDirectoryPath(
+  value: string | undefined,
+): string | undefined {
   const normalized = value?.trim();
   return normalized ? path.resolve(normalized) : undefined;
 }

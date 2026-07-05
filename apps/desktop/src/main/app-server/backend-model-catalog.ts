@@ -31,7 +31,10 @@ export class BackendModelCatalog {
   };
 
   constructor(
-    private readonly clients: Record<BackendModelCatalogBackend, BackendModelCatalogClient>,
+    private readonly clients: Record<
+      BackendModelCatalogBackend,
+      BackendModelCatalogClient
+    >,
   ) {}
 
   readModels(

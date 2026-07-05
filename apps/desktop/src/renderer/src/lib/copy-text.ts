@@ -15,9 +15,9 @@ export async function copyText(
   }
 
   const clipboardApi =
-    typeof navigator !== "undefined" &&
-    "clipboard" in navigator &&
-    typeof navigator.clipboard?.writeText === "function"
+    typeof navigator !== "undefined"
+    && "clipboard" in navigator
+    && typeof navigator.clipboard?.writeText === "function"
       ? navigator.clipboard
       : undefined;
 

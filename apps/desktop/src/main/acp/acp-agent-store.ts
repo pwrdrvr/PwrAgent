@@ -21,9 +21,7 @@ export class AcpAgentStore {
 
   readRegistrySnapshot(): AcpRegistrySnapshot | undefined {
     const row = this.stateDb.raw
-      .prepare(
-        `SELECT payload FROM acp_registry_cache WHERE cache_key = ?`,
-      )
+      .prepare(`SELECT payload FROM acp_registry_cache WHERE cache_key = ?`)
       .get(REGISTRY_CACHE_KEY) as { payload: string } | undefined;
     if (!row) {
       return undefined;
@@ -73,11 +71,11 @@ export class AcpAgentStore {
     });
   }
 
-  getInstalledAgent(backendId: AcpBackendId): AcpInstalledAgentRecord | undefined {
+  getInstalledAgent(
+    backendId: AcpBackendId,
+  ): AcpInstalledAgentRecord | undefined {
     const row = this.stateDb.raw
-      .prepare(
-        `SELECT payload FROM acp_installed_agents WHERE backend_id = ?`,
-      )
+      .prepare(`SELECT payload FROM acp_installed_agents WHERE backend_id = ?`)
       .get(backendId) as { payload: string } | undefined;
 
     const parsed = row ? parseJson(row.payload) : undefined;
@@ -99,12 +97,12 @@ function isInstalledRecord(value: unknown): value is AcpInstalledAgentRecord {
   }
   const record = value as Record<string, unknown>;
   return (
-    typeof record.backendId === "string" &&
-    record.backendId.startsWith("acp:") &&
-    typeof record.registryId === "string" &&
-    typeof record.name === "string" &&
-    typeof record.installStatus === "string" &&
-    typeof record.authStatus === "string" &&
-    typeof record.verificationStatus === "string"
+    typeof record.backendId === "string"
+    && record.backendId.startsWith("acp:")
+    && typeof record.registryId === "string"
+    && typeof record.name === "string"
+    && typeof record.installStatus === "string"
+    && typeof record.authStatus === "string"
+    && typeof record.verificationStatus === "string"
   );
 }

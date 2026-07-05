@@ -76,7 +76,9 @@ beforeEach(() => {
     onEvent: vi.fn((listener) => {
       registryListeners.push(listener);
       return () => {
-        registryListeners = registryListeners.filter((entry) => entry !== listener);
+        registryListeners = registryListeners.filter(
+          (entry) => entry !== listener,
+        );
       };
     }),
     publishLocalEvent: vi.fn(async (event: AgentEvent) => {
@@ -114,8 +116,9 @@ describe("DesktopAutomationService", () => {
       backlogPolicy: "coalesce",
       status: "enabled",
     });
-    expect(service.list({ backend: "codex", threadId: "thread-1" }).automations)
-      .toEqual([expect.objectContaining({ id: created.automation.id })]);
+    expect(
+      service.list({ backend: "codex", threadId: "thread-1" }).automations,
+    ).toEqual([expect.objectContaining({ id: created.automation.id })]);
     expect(publishedEvents).toContainEqual({
       backend: "codex",
       notification: {
@@ -269,26 +272,27 @@ describe("DesktopAutomationService", () => {
         },
       ],
     });
-    const event = (text: string, conversationId = "C123") =>
-      ({
-        id: "slack-text",
-        kind: "text" as const,
-        actor: { platformUserId: "U1", isBot: false },
-        channel: {
-          channel: "slack" as const,
-          conversation: { id: conversationId, kind: "channel" as const },
-        },
-        receivedAt: 1,
-        text,
-      });
+    const event = (text: string, conversationId = "C123") => ({
+      id: "slack-text",
+      kind: "text" as const,
+      actor: { platformUserId: "U1", isBot: false },
+      channel: {
+        channel: "slack" as const,
+        conversation: { id: conversationId, kind: "channel" as const },
+      },
+      receivedAt: 1,
+      text,
+    });
 
     expect(service.matchesInboundEvent(event("ERROR api latency"))).toBe(true);
     // Text filter misses, wrong channel, and non-text events do not match.
     expect(service.matchesInboundEvent(event("all good"))).toBe(false);
     expect(service.matchesInboundEvent(event("ERROR", "C999"))).toBe(false);
     // Predicate must not have created any runs.
-    const [automation] = service.list({ backend: "codex", threadId: "thread-1" })
-      .automations;
+    const [automation] = service.list({
+      backend: "codex",
+      threadId: "thread-1",
+    }).automations;
     expect(store.listRunsForAutomation(automation!.id)).toHaveLength(0);
   });
 
@@ -358,7 +362,8 @@ describe("DesktopAutomationService", () => {
     ).resolves.toBe(true);
 
     const [run] = store.listRunsForAutomation(
-      service.list({ backend: "codex", threadId: "thread-1" }).automations[0]!.id,
+      service.list({ backend: "codex", threadId: "thread-1" }).automations[0]!
+        .id,
     );
     expect(run).toMatchObject({
       trigger: "inbound_message",
@@ -416,7 +421,9 @@ describe("DesktopAutomationService", () => {
           conversation: { id: "C999", kind: "channel", title: "alerts" },
         },
         receivedAt: 2_000,
-        routingState: { opaque: { channelId: "C999", ts: "1712023099.000001" } },
+        routingState: {
+          opaque: { channelId: "C999", ts: "1712023099.000001" },
+        },
         text: "ERROR something happened",
       }),
     ).resolves.toBe(true);
@@ -440,7 +447,9 @@ describe("DesktopAutomationService", () => {
         unit: "minutes",
       },
     });
-    const runNow = await service.runNow({ automationId: created.automation.id });
+    const runNow = await service.runNow({
+      automationId: created.automation.id,
+    });
 
     await Promise.all(
       registryListeners.map((listener) =>
@@ -493,17 +502,20 @@ describe("DesktopAutomationService", () => {
       },
     });
 
-    const runNow = await service.runNow({ automationId: created.automation.id });
+    const runNow = await service.runNow({
+      automationId: created.automation.id,
+    });
 
     expect(runNow.run.status).toBe("running");
-    expect(service.list({ backend: "codex", threadId: "thread-1" }).automations)
-      .toEqual([
-        expect.objectContaining({
-          id: created.automation.id,
-          lastRunAt: runNow.run.startedAt,
-          lastRunStatus: "running",
-        }),
-      ]);
+    expect(
+      service.list({ backend: "codex", threadId: "thread-1" }).automations,
+    ).toEqual([
+      expect.objectContaining({
+        id: created.automation.id,
+        lastRunAt: runNow.run.startedAt,
+        lastRunStatus: "running",
+      }),
+    ]);
   });
 
   it("schedules from now when update enables a paused automation", async () => {
@@ -559,10 +571,12 @@ describe("DesktopAutomationService", () => {
       backend: "codex",
       threadId: "thread-2",
     });
-    expect(service.list({ backend: "codex", threadId: "thread-1" }).automations)
-      .toEqual([]);
-    expect(service.list({ backend: "codex", threadId: "thread-2" }).automations)
-      .toEqual([expect.objectContaining({ id: created.automation.id })]);
+    expect(
+      service.list({ backend: "codex", threadId: "thread-1" }).automations,
+    ).toEqual([]);
+    expect(
+      service.list({ backend: "codex", threadId: "thread-2" }).automations,
+    ).toEqual([expect.objectContaining({ id: created.automation.id })]);
     expect(publishedEvents).toEqual(
       expect.arrayContaining([
         {
@@ -596,7 +610,9 @@ describe("DesktopAutomationService", () => {
         timeOfDay: { hour: 9, minute: 0 },
       },
     });
-    const runNow = await service.runNow({ automationId: created.automation.id });
+    const runNow = await service.runNow({
+      automationId: created.automation.id,
+    });
     publishedEvents = [];
 
     await Promise.all(
@@ -708,7 +724,9 @@ describe("DesktopAutomationService", () => {
         summary: "Check email: Inbox summary is ready.",
       }),
     ]);
-    await expect(service.getRunArtifact({ runId: runNow.run.id })).resolves.toMatchObject({
+    await expect(
+      service.getRunArtifact({ runId: runNow.run.id }),
+    ).resolves.toMatchObject({
       artifact: {
         runId: runNow.run.id,
         finalText: "Inbox summary is ready.",
@@ -777,7 +795,9 @@ describe("DesktopAutomationService", () => {
       ),
     );
 
-    await expect(service.getRunArtifact({ runId: "run-quiet" })).resolves.toMatchObject({
+    await expect(
+      service.getRunArtifact({ runId: "run-quiet" }),
+    ).resolves.toMatchObject({
       artifact: {
         outputDecision: {
           kind: "quiet",
@@ -1026,8 +1046,9 @@ describe("DesktopAutomationService", () => {
       },
     });
 
-    const handler = vi.mocked(registry.setAutomationInspectionHandler).mock
-      .calls.at(-1)?.[0];
+    const handler = vi
+      .mocked(registry.setAutomationInspectionHandler)
+      .mock.calls.at(-1)?.[0];
     expect(handler).toBeDefined();
     const response = await handler!({
       operation: "summarize_automation_status",
@@ -1052,8 +1073,9 @@ describe("DesktopAutomationService", () => {
   it("denies automation inspection for ordinary work threads", async () => {
     const service = new DesktopAutomationService({ registry, store });
     service.start();
-    const handler = vi.mocked(registry.setAutomationInspectionHandler).mock
-      .calls.at(-1)?.[0];
+    const handler = vi
+      .mocked(registry.setAutomationInspectionHandler)
+      .mock.calls.at(-1)?.[0];
     expect(handler).toBeDefined();
 
     registry.getThreadAgentMetadata = vi.fn(async () => undefined);
@@ -1101,8 +1123,9 @@ describe("DesktopAutomationService", () => {
       },
     });
 
-    expect(service.list({ backend: "codex", threadId: "thread-1" }).automations)
-      .toEqual([expect.objectContaining({ id: created.automation.id })]);
+    expect(
+      service.list({ backend: "codex", threadId: "thread-1" }).automations,
+    ).toEqual([expect.objectContaining({ id: created.automation.id })]);
     await expect(
       service.runNow({ automationId: created.automation.id }),
     ).rejects.toThrow(

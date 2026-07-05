@@ -98,7 +98,9 @@ export class AcpSessionStore {
       )
       .get(backendId, sessionId) as { payload: string } | undefined;
     const parsed = row ? parseJson(row.payload) : undefined;
-    return isSessionMetadata(parsed) ? stripAcpSessionHistory(parsed) : undefined;
+    return isSessionMetadata(parsed)
+      ? stripAcpSessionHistory(parsed)
+      : undefined;
   }
 }
 
@@ -110,17 +112,18 @@ function parseJson(value: string): unknown {
   }
 }
 
-function stripAcpSessionHistory(metadata: AcpSessionMetadata): AcpSessionMetadata {
+function stripAcpSessionHistory(
+  metadata: AcpSessionMetadata,
+): AcpSessionMetadata {
   const legacyTranscriptUpdates = readLegacyTranscriptUpdates(metadata);
-  const {
-    transcriptUpdates: _transcriptUpdates,
-    ...metadataWithoutHistory
-  } = metadata as AcpSessionMetadata & {
-    transcriptUpdates?: AcpPersistedTranscriptUpdate[];
-  };
+  const { transcriptUpdates: _transcriptUpdates, ...metadataWithoutHistory } =
+    metadata as AcpSessionMetadata & {
+      transcriptUpdates?: AcpPersistedTranscriptUpdate[];
+    };
   const hasConversationHistory =
-    metadata.hasConversationHistory ??
-    (legacyTranscriptUpdates.some(isConversationTranscriptUpdate) || undefined);
+    metadata.hasConversationHistory
+    ?? (legacyTranscriptUpdates.some(isConversationTranscriptUpdate)
+      || undefined);
   return {
     ...metadataWithoutHistory,
     ...(hasConversationHistory === undefined ? {} : { hasConversationHistory }),
@@ -136,10 +139,10 @@ function readLegacyTranscriptUpdates(
   }
   return value.flatMap((item) => {
     const record = item as Partial<AcpPersistedTranscriptUpdate>;
-    return typeof record.receivedAt === "number" &&
-      record.update &&
-      typeof record.update === "object" &&
-      !Array.isArray(record.update)
+    return typeof record.receivedAt === "number"
+      && record.update
+      && typeof record.update === "object"
+      && !Array.isArray(record.update)
       ? [{ receivedAt: record.receivedAt, update: record.update }]
       : [];
   });
@@ -152,9 +155,9 @@ function isConversationTranscriptUpdate(
   const kind =
     update.kind ?? update.type ?? update.sessionUpdate ?? update.session_update;
   return (
-    kind === "pwragent_user_prompt" ||
-    kind === "user_message_chunk" ||
-    kind === "agent_message_chunk"
+    kind === "pwragent_user_prompt"
+    || kind === "user_message_chunk"
+    || kind === "agent_message_chunk"
   );
 }
 
@@ -164,11 +167,11 @@ function isSessionMetadata(value: unknown): value is AcpSessionMetadata {
   }
   const record = value as Record<string, unknown>;
   return (
-    typeof record.backendId === "string" &&
-    record.backendId.startsWith("acp:") &&
-    typeof record.sessionId === "string" &&
-    typeof record.title === "string" &&
-    typeof record.createdAt === "number" &&
-    typeof record.updatedAt === "number"
+    typeof record.backendId === "string"
+    && record.backendId.startsWith("acp:")
+    && typeof record.sessionId === "string"
+    && typeof record.title === "string"
+    && typeof record.createdAt === "number"
+    && typeof record.updatedAt === "number"
   );
 }

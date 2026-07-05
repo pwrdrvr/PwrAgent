@@ -2,9 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ProtocolCaptureStore, readProtocolCaptureFile } from "../testing/capture-store";
+import {
+  ProtocolCaptureStore,
+  readProtocolCaptureFile,
+} from "../testing/capture-store";
 import { analyzeProtocolCaptureTraffic } from "../testing/protocol-capture-analysis";
-import { createProtocolCaptureObserver, createProtocolCaptureFromEnv } from "../testing/protocol-capture";
+import {
+  createProtocolCaptureObserver,
+  createProtocolCaptureFromEnv,
+} from "../testing/protocol-capture";
 
 async function createTempDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-protocol-capture-"));
@@ -21,7 +27,7 @@ describe("ProtocolCaptureStore", () => {
     await Promise.all(
       cleanupPaths.splice(0).map(async (target) => {
         await fs.rm(target, { recursive: true, force: true });
-      })
+      }),
     );
   });
 
@@ -31,11 +37,11 @@ describe("ProtocolCaptureStore", () => {
     const store = new ProtocolCaptureStore({
       backend: "codex",
       captureId: "capture-1",
-      rootDir
+      rootDir,
     });
     const observer = createProtocolCaptureObserver({
       backend: "codex",
-      store
+      store,
     });
 
     await observer.onMessage({
@@ -46,9 +52,9 @@ describe("ProtocolCaptureStore", () => {
         id: "rpc-1",
         method: "thread/read",
         params: {
-          threadId: "thread-1"
-        }
-      }
+          threadId: "thread-1",
+        },
+      },
     });
 
     await observer.onMessage({
@@ -60,14 +66,16 @@ describe("ProtocolCaptureStore", () => {
         method: "turn/requestApproval",
         params: {
           threadId: "thread-1",
-          requestId: "approval-1"
-        }
-      }
+          requestId: "approval-1",
+        },
+      },
     });
 
     await store.close();
 
-    const lines = (await fs.readFile(path.join(rootDir, "capture-1.jsonl"), "utf8"))
+    const lines = (
+      await fs.readFile(path.join(rootDir, "capture-1.jsonl"), "utf8")
+    )
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -81,7 +89,7 @@ describe("ProtocolCaptureStore", () => {
       method: "thread/read",
       id: "rpc-1",
       sequence: 1,
-      threadIds: ["thread-1"]
+      threadIds: ["thread-1"],
     });
     expect(lines[1]).toMatchObject({
       direction: "inbound",
@@ -89,11 +97,11 @@ describe("ProtocolCaptureStore", () => {
       method: "turn/requestApproval",
       id: "request-1",
       sequence: 2,
-      threadIds: ["thread-1"]
+      threadIds: ["thread-1"],
     });
 
     const index = JSON.parse(
-      await fs.readFile(path.join(rootDir, "index.json"), "utf8")
+      await fs.readFile(path.join(rootDir, "index.json"), "utf8"),
     ) as Record<string, { threadIds: string[] }>;
     expect(index["capture-1"]?.threadIds).toEqual(["thread-1"]);
   });
@@ -104,11 +112,11 @@ describe("ProtocolCaptureStore", () => {
     const store = new ProtocolCaptureStore({
       backend: "grok",
       captureId: "diagnostic-capture",
-      rootDir
+      rootDir,
     });
     const observer = createProtocolCaptureObserver({
       backend: "grok",
-      store
+      store,
     });
 
     await observer.onMessage({
@@ -123,14 +131,16 @@ describe("ProtocolCaptureStore", () => {
         id: "rpc-1",
         method: "model/list",
         params: {},
-      }
+      },
     });
     await store.close();
 
-    const [line] = (await fs.readFile(
-      path.join(rootDir, "diagnostic-capture.jsonl"),
-      "utf8",
-    )).trim().split("\n").map((entry) => JSON.parse(entry) as Record<string, unknown>);
+    const [line] = (
+      await fs.readFile(path.join(rootDir, "diagnostic-capture.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((entry) => JSON.parse(entry) as Record<string, unknown>);
 
     expect(line).toMatchObject({
       diagnostics: {
@@ -149,7 +159,7 @@ describe("ProtocolCaptureStore", () => {
       createProtocolCaptureFromEnv({
         backend: "codex",
         backendInstance: "default",
-      })
+      }),
     ).toBeUndefined();
 
     process.env.PWRAGENT_PROTOCOL_CAPTURE = "true";
@@ -167,13 +177,13 @@ describe("ProtocolCaptureStore", () => {
       envelope: {
         jsonrpc: "2.0",
         method: "initialized",
-        params: {}
-      }
+        params: {},
+      },
     });
     await capture?.store.close();
 
     const index = JSON.parse(
-      await fs.readFile(path.join(rootDir, "index.json"), "utf8")
+      await fs.readFile(path.join(rootDir, "index.json"), "utf8"),
     ) as Record<string, { backend: string; backendInstance?: string }>;
     expect(Object.values(index)).toHaveLength(1);
     expect(Object.values(index)[0]?.backend).toBe("codex");
@@ -255,7 +265,10 @@ describe("ProtocolCaptureStore", () => {
 
     const index = JSON.parse(
       await fs.readFile(path.join(rootDir, "index.json"), "utf8"),
-    ) as Record<string, { backend: string; backendInstance?: string; threadIds: string[] }>;
+    ) as Record<
+      string,
+      { backend: string; backendInstance?: string; threadIds: string[] }
+    >;
     const [entry] = Object.values(index);
     expect(entry).toMatchObject({
       backend: "acp:gemini",
@@ -335,9 +348,10 @@ describe("ProtocolCaptureStore", () => {
       },
     });
 
-    const index = JSON.parse(
-      await fs.readFile(indexPath, "utf8"),
-    ) as Record<string, { backend: string; captureId: string }>;
+    const index = JSON.parse(await fs.readFile(indexPath, "utf8")) as Record<
+      string,
+      { backend: string; captureId: string }
+    >;
     expect(index["capture-with-bad-index"]).toMatchObject({
       backend: "codex",
       captureId: "capture-with-bad-index",

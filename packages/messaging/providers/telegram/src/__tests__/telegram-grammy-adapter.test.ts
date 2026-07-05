@@ -128,13 +128,9 @@ describe("adaptGrammyBot", () => {
         parse_mode: "HTML",
       },
     );
-    expect(grammyBot.api.editForumTopic).toHaveBeenCalledWith(
-      42,
-      9,
-      {
-        name: "Thread one",
-      },
-    );
+    expect(grammyBot.api.editForumTopic).toHaveBeenCalledWith(42, 9, {
+      name: "Thread one",
+    });
     expect(grammyBot.api.sendPhoto).toHaveBeenCalledWith(
       42,
       "https://example.com/image.png",
@@ -151,9 +147,12 @@ describe("adaptGrammyBot", () => {
         caption: "file",
       },
     );
-    expect(grammyBot.api.answerCallbackQuery).toHaveBeenCalledWith("callback-1", {
-      text: "Done",
-    });
+    expect(grammyBot.api.answerCallbackQuery).toHaveBeenCalledWith(
+      "callback-1",
+      {
+        text: "Done",
+      },
+    );
     expect(grammyBot.api.pinChatMessage).toHaveBeenCalledWith(42, 7, {
       disable_notification: true,
     });
@@ -275,7 +274,9 @@ describe("TelegramAdapter callback persistence", () => {
         },
         occurredAt: 1,
       },
-      decisions: [{ id: "approval:accept", label: "Approve", decision: "accept" }],
+      decisions: [
+        { id: "approval:accept", label: "Approve", decision: "accept" },
+      ],
     } satisfies MessagingApprovalIntent;
 
     await adapter.deliver(intent);
@@ -531,7 +532,9 @@ describe("TelegramAdapter source-relative delivery", () => {
     return { adapter, sent };
   }
 
-  function topicReplyIntent(sourceRelative: "source_thread" | "source_channel") {
+  function topicReplyIntent(
+    sourceRelative: "source_thread" | "source_channel",
+  ) {
     return {
       id: `automation-reply-${sourceRelative}`,
       kind: "message" as const,
@@ -637,13 +640,20 @@ function createGrammyBot(): TelegramGrammyBotLike & {
         can_manage_topics: true,
         status: "administrator" as const,
       })),
-      getMe: vi.fn(async () => ({ id: 123, is_bot: true, username: "TestBot" })),
+      getMe: vi.fn(async () => ({
+        id: 123,
+        is_bot: true,
+        username: "TestBot",
+      })),
       getWebhookInfo: vi.fn(async () => ({ url: "" })),
       pinChatMessage: vi.fn(
         async (
           _chatId: number | string,
           _messageId: number,
-          _other?: Omit<TelegramPinChatMessageRequest, "chat_id" | "message_id">,
+          _other?: Omit<
+            TelegramPinChatMessageRequest,
+            "chat_id" | "message_id"
+          >,
         ) => true,
       ),
       sendChatAction: vi.fn(
@@ -686,7 +696,10 @@ function createGrammyBot(): TelegramGrammyBotLike & {
         async (
           chatId: number | string,
           _photo: string,
-          _other?: Omit<TelegramSendPhotoRequest, "chat_id" | "photo" | "filename">,
+          _other?: Omit<
+            TelegramSendPhotoRequest,
+            "chat_id" | "photo" | "filename"
+          >,
         ) => ({
           chat: {
             id: Number(chatId),
@@ -701,7 +714,10 @@ function createGrammyBot(): TelegramGrammyBotLike & {
         async (
           _chatId: number | string,
           _messageId?: number,
-          _other?: Omit<TelegramUnpinChatMessageRequest, "chat_id" | "message_id">,
+          _other?: Omit<
+            TelegramUnpinChatMessageRequest,
+            "chat_id" | "message_id"
+          >,
         ) => true,
       ),
     },

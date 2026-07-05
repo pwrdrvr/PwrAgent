@@ -15,7 +15,9 @@ import {
 type LinkedProjectsPanelProps = {
   desktopApi?: Pick<
     DesktopApi,
-    "attachDirectoryToThread" | "detachDirectoryFromThread" | "pickDirectoryFromDisk"
+    | "attachDirectoryToThread"
+    | "detachDirectoryFromThread"
+    | "pickDirectoryFromDisk"
   >;
   onRefreshNavigation?: () => Promise<void>;
   thread: NavigationThreadSummary;
@@ -34,14 +36,20 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
   const [attaching, setAttaching] = useState(false);
   const [detachError, setDetachError] = useState<string>();
   const [detachingDirectoryId, setDetachingDirectoryId] = useState<string>();
-  const directories = dedupeLinkedProjectDirectories(props.thread.linkedDirectories);
+  const directories = dedupeLinkedProjectDirectories(
+    props.thread.linkedDirectories,
+  );
   const prs = props.thread.prs ?? [];
   const branch = props.thread.gitBranch;
   const canAttachDirectory = Boolean(
-    props.desktopApi?.pickDirectoryFromDisk && props.desktopApi.attachDirectoryToThread,
+    props.desktopApi?.pickDirectoryFromDisk
+    && props.desktopApi.attachDirectoryToThread,
   );
   const attachDirectory = async (): Promise<void> => {
-    if (!props.desktopApi?.pickDirectoryFromDisk || !props.desktopApi.attachDirectoryToThread) {
+    if (
+      !props.desktopApi?.pickDirectoryFromDisk
+      || !props.desktopApi.attachDirectoryToThread
+    ) {
       return;
     }
     setAttachError(undefined);
@@ -122,8 +130,8 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
             const worktreePath = directory.worktreePath ?? directory.path;
             const canDetachDirectory = Boolean(
               props.desktopApi?.detachDirectoryFromThread
-                && directories.length > 1
-                && (index > 0 || !props.thread.projectKey?.trim()),
+              && directories.length > 1
+              && (index > 0 || !props.thread.projectKey?.trim()),
             );
             const detaching = detachingDirectoryId === directory.id;
             return (
@@ -169,7 +177,9 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
                 <dl className="linked-project__facts">
                   <div>
                     <dt>Kind</dt>
-                    <dd>{directory.kind === "worktree" ? "Worktree" : "Directory"}</dd>
+                    <dd>
+                      {directory.kind === "worktree" ? "Worktree" : "Directory"}
+                    </dd>
                   </div>
                   {branch ? (
                     <div>
@@ -195,12 +205,21 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
           <h4 className="context-subheading">Linked pull requests</h4>
           <ul className="context-list pr-panel-list">
             {prs.map((pr) => (
-              <li key={`${pr.provider}/${pr.org}/${pr.repo}#${pr.number}`} className="pr-panel-row">
+              <li
+                key={`${pr.provider}/${pr.org}/${pr.repo}#${pr.number}`}
+                className="pr-panel-row"
+              >
                 <div className="pr-panel-row__main">
-                  <PrChip pr={pr} showRepoPrefix={false} onOpen={openExternalUrl} />
+                  <PrChip
+                    pr={pr}
+                    showRepoPrefix={false}
+                    onOpen={openExternalUrl}
+                  />
                   <span className="pr-panel-row__details">
                     {pr.title?.trim() ? (
-                      <span className="pr-panel-row__title">{pr.title.trim()}</span>
+                      <span className="pr-panel-row__title">
+                        {pr.title.trim()}
+                      </span>
                     ) : null}
                     <span className="pr-panel-row__repo">
                       {pr.provider}/{pr.org}/{pr.repo}

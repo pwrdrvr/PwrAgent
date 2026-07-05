@@ -97,5 +97,7 @@ export type ProviderActiveTurn = {
 };
 
 export interface AppServerProvider {
-  startTurn(params: ProviderTurnParams): Promise<ProviderActiveTurn> | ProviderActiveTurn;
+  startTurn(
+    params: ProviderTurnParams,
+  ): Promise<ProviderActiveTurn> | ProviderActiveTurn;
 }

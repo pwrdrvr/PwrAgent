@@ -22,11 +22,15 @@ const LINE_ID_LENGTH = 33;
 const FEISHU_MAX_ID_LENGTH = 128;
 const FEISHU_MAX_TENANT_KEY_LENGTH = 64;
 
-export function validateTelegramChatId(value: unknown): IdentifierValidationResult {
+export function validateTelegramChatId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateTelegramIntegerId(value, { allowNegative: true });
 }
 
-export function validateTelegramPositiveId(value: unknown): IdentifierValidationResult {
+export function validateTelegramPositiveId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateTelegramIntegerId(value, { allowNegative: false });
 }
 
@@ -54,7 +58,9 @@ export function validateTelegramSupergroupId(
   return { ok: true };
 }
 
-export function validateDiscordSnowflake(value: unknown): IdentifierValidationResult {
+export function validateDiscordSnowflake(
+  value: unknown,
+): IdentifierValidationResult {
   if (typeof value !== "string") {
     return { ok: false, reason: "type" };
   }
@@ -62,8 +68,8 @@ export function validateDiscordSnowflake(value: unknown): IdentifierValidationRe
     return { ok: false, reason: "empty" };
   }
   if (
-    value.length < DISCORD_MIN_SNOWFLAKE_LENGTH ||
-    value.length > DISCORD_MAX_SNOWFLAKE_LENGTH
+    value.length < DISCORD_MIN_SNOWFLAKE_LENGTH
+    || value.length > DISCORD_MAX_SNOWFLAKE_LENGTH
   ) {
     return { ok: false, reason: "length" };
   }
@@ -83,7 +89,9 @@ export function validateDiscordSnowflake(value: unknown): IdentifierValidationRe
   return { ok: true };
 }
 
-export function validateMattermostId(value: unknown): IdentifierValidationResult {
+export function validateMattermostId(
+  value: unknown,
+): IdentifierValidationResult {
   if (typeof value !== "string") {
     return { ok: false, reason: "type" };
   }
@@ -102,15 +110,21 @@ export function validateMattermostId(value: unknown): IdentifierValidationResult
   return { ok: true };
 }
 
-export function validateSlackUserId(value: unknown): IdentifierValidationResult {
+export function validateSlackUserId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateSlackId(value, ["U", "W"]);
 }
 
-export function validateSlackTeamId(value: unknown): IdentifierValidationResult {
+export function validateSlackTeamId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateSlackId(value, ["T"]);
 }
 
-export function validateSlackChannelId(value: unknown): IdentifierValidationResult {
+export function validateSlackChannelId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateSlackId(value, ["C", "G", "D"]);
 }
 
@@ -118,7 +132,9 @@ export function validateLineUserId(value: unknown): IdentifierValidationResult {
   return validateLinePrefixedHexId(value, "U");
 }
 
-export function validateLineGroupId(value: unknown): IdentifierValidationResult {
+export function validateLineGroupId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateLinePrefixedHexId(value, "C");
 }
 
@@ -126,22 +142,29 @@ export function validateLineRoomId(value: unknown): IdentifierValidationResult {
   return validateLinePrefixedHexId(value, "R");
 }
 
-export function validateFeishuOpenId(value: unknown): IdentifierValidationResult {
+export function validateFeishuOpenId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateFeishuPrefixedId(value, "ou_", FEISHU_MAX_ID_LENGTH);
 }
 
-export function validateFeishuChatId(value: unknown): IdentifierValidationResult {
+export function validateFeishuChatId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateFeishuPrefixedId(value, "oc_", FEISHU_MAX_ID_LENGTH);
 }
 
-export function validateFeishuTenantKey(value: unknown): IdentifierValidationResult {
+export function validateFeishuTenantKey(
+  value: unknown,
+): IdentifierValidationResult {
   if (typeof value !== "string") return { ok: false, reason: "type" };
   if (value.length === 0) return { ok: false, reason: "empty" };
   if (value.length > FEISHU_MAX_TENANT_KEY_LENGTH) {
     return { ok: false, reason: "length" };
   }
   for (let index = 0; index < value.length; index += 1) {
-    if (!isTokenChar(value.charCodeAt(index))) return { ok: false, reason: "format" };
+    if (!isTokenChar(value.charCodeAt(index)))
+      return { ok: false, reason: "format" };
   }
   return { ok: true };
 }
@@ -183,7 +206,8 @@ function validateFeishuPrefixedId(
     return { ok: false, reason: "format" };
   }
   for (let index = prefix.length; index < value.length; index += 1) {
-    if (!isTokenChar(value.charCodeAt(index))) return { ok: false, reason: "format" };
+    if (!isTokenChar(value.charCodeAt(index)))
+      return { ok: false, reason: "format" };
   }
   return { ok: true };
 }
@@ -266,10 +290,7 @@ function isAsciiDigit(code: number): boolean {
 }
 
 function isLowercaseHex(code: number): boolean {
-  return (
-    (code >= 0x30 && code <= 0x39)
-    || (code >= 0x61 && code <= 0x66)
-  );
+  return (code >= 0x30 && code <= 0x39) || (code >= 0x61 && code <= 0x66);
 }
 
 function isUppercaseAsciiLetter(code: number): boolean {
@@ -277,10 +298,7 @@ function isUppercaseAsciiLetter(code: number): boolean {
 }
 
 function isLowercaseAlphaNumeric(code: number): boolean {
-  return (
-    (code >= 0x30 && code <= 0x39) ||
-    (code >= 0x61 && code <= 0x7a)
-  );
+  return (code >= 0x30 && code <= 0x39) || (code >= 0x61 && code <= 0x7a);
 }
 
 function isTokenChar(code: number): boolean {

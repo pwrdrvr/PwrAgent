@@ -57,11 +57,11 @@ function summarizeDiff(diff: string): { additions: number; removals: number } {
 
   for (const line of diff.split("\n")) {
     if (
-      !line ||
-      line.startsWith("+++") ||
-      line.startsWith("---") ||
-      line.startsWith("@@") ||
-      line.startsWith("\\")
+      !line
+      || line.startsWith("+++")
+      || line.startsWith("---")
+      || line.startsWith("@@")
+      || line.startsWith("\\")
     ) {
       continue;
     }
@@ -107,7 +107,10 @@ function getBasename(path: string): string {
   return segments[segments.length - 1] || path;
 }
 
-function buildDiffLabel(kind: AppServerThreadFileChangeKind, path?: string): string {
+function buildDiffLabel(
+  kind: AppServerThreadFileChangeKind,
+  path?: string,
+): string {
   const verb = kind[0]?.toUpperCase() + kind.slice(1);
   return `${verb} ${path ? getBasename(path) : "file"}`;
 }
@@ -167,8 +170,14 @@ export function extractLiveDiffActivityDetails(params: {
   const details: AppServerThreadActivityDetail[] = [];
 
   for (const [index, section] of normalizedSections.entries()) {
-    const rawBefore = section.lines.find((line) => line.startsWith("--- "))?.slice(4).trim();
-    const rawAfter = section.lines.find((line) => line.startsWith("+++ "))?.slice(4).trim();
+    const rawBefore = section.lines
+      .find((line) => line.startsWith("--- "))
+      ?.slice(4)
+      .trim();
+    const rawAfter = section.lines
+      .find((line) => line.startsWith("+++ "))
+      ?.slice(4)
+      .trim();
     const path = normalizeDiffPath(rawAfter) ?? normalizeDiffPath(rawBefore);
     const diffText = section.lines.join("\n").trim();
 
@@ -209,7 +218,7 @@ export function buildLiveDiffActivityEntry(
 ): AppServerThreadActivityEntry | undefined {
   const entryId = notification.params.turnId
     ? `live-diff-${notification.params.turnId}`
-    : `live-diff-${notification.params.threadId}-${fallbackLiveDiffEntrySequence += 1}`;
+    : `live-diff-${notification.params.threadId}-${(fallbackLiveDiffEntrySequence += 1)}`;
   const details = extractLiveDiffActivityDetails({
     diff: notification.params.diff,
     entryId,

@@ -92,9 +92,11 @@ function readBridgedBrowseMode(): BrowseMode {
   if (typeof window === "undefined") {
     return DEFAULT_BROWSE_MODE;
   }
-  const bridged = (window as unknown as {
-    __pwragentNavigationPreferences?: { browseMode?: unknown };
-  }).__pwragentNavigationPreferences;
+  const bridged = (
+    window as unknown as {
+      __pwragentNavigationPreferences?: { browseMode?: unknown };
+    }
+  ).__pwragentNavigationPreferences;
   return normalizeBrowseMode(bridged?.browseMode);
 }
 
@@ -136,7 +138,9 @@ function buildLaunchpadSelectionKey(directoryKey: string): string {
   return `launchpad:${directoryKey}`;
 }
 
-function getDirectoryKeyFromLaunchpadSelection(selectionKey?: string): string | undefined {
+function getDirectoryKeyFromLaunchpadSelection(
+  selectionKey?: string,
+): string | undefined {
   if (!selectionKey?.startsWith("launchpad:")) {
     return undefined;
   }
@@ -154,8 +158,12 @@ function selectThreadWorkspace(
   workMode: NavigationLaunchpadDraft["workMode"];
   branchName?: string;
 } {
-  const worktree = thread.linkedDirectories.find((directory) => directory.kind === "worktree");
-  const local = thread.linkedDirectories.find((directory) => directory.kind === "local");
+  const worktree = thread.linkedDirectories.find(
+    (directory) => directory.kind === "worktree",
+  );
+  const local = thread.linkedDirectories.find(
+    (directory) => directory.kind === "local",
+  );
   const preferred = worktree ?? local;
   const namedBranch =
     thread.observedGitBranch && thread.observedGitBranch !== "HEAD"
@@ -166,7 +174,10 @@ function selectThreadWorkspace(
 
   if (mode === "new-worktree") {
     const repository =
-      worktree?.worktreePath ?? worktree?.path ?? local?.path ?? thread.projectKey;
+      worktree?.worktreePath
+      ?? worktree?.path
+      ?? local?.path
+      ?? thread.projectKey;
     return {
       branchName: namedBranch,
       directoryKind: repository ? "directory" : "workspace",
@@ -178,30 +189,35 @@ function selectThreadWorkspace(
 
   const sameWorkspacePath =
     mode === "same-worktree"
-      ? worktree?.worktreePath ?? worktree?.path ?? local?.path ?? thread.projectKey
-      : local?.path ?? thread.projectKey;
+      ? (worktree?.worktreePath
+        ?? worktree?.path
+        ?? local?.path
+        ?? thread.projectKey)
+      : (local?.path ?? thread.projectKey);
   return {
     directoryKind: sameWorkspacePath ? "directory" : "workspace",
     directoryLabel:
       mode === "local"
-        ? local?.label ?? thread.title
-        : preferred?.label ?? thread.title,
+        ? (local?.label ?? thread.title)
+        : (preferred?.label ?? thread.title),
     directoryPath: sameWorkspacePath,
     workMode: "local",
-    ...(mode === "same-worktree" && namedBranch ? { branchName: namedBranch } : {}),
+    ...(mode === "same-worktree" && namedBranch
+      ? { branchName: namedBranch }
+      : {}),
   };
 }
 
 function compareNavigationDirectoriesByLabel(
   left: NavigationDirectorySummary,
-  right: NavigationDirectorySummary
+  right: NavigationDirectorySummary,
 ): number {
   const labelDelta = left.label.localeCompare(right.label);
   return labelDelta !== 0 ? labelDelta : left.key.localeCompare(right.key);
 }
 
 function sortNavigationDirectories(
-  directories: NavigationSnapshot["directories"]
+  directories: NavigationSnapshot["directories"],
 ): NavigationSnapshot["directories"] {
   return [...directories].sort(compareNavigationDirectoriesByLabel);
 }
@@ -253,7 +269,9 @@ function directoryKeysForThread(
   }
 
   return directories
-    .filter((directory) => directory.path && directory.threadKeys.includes(threadKey))
+    .filter(
+      (directory) => directory.path && directory.threadKeys.includes(threadKey),
+    )
     .map((directory) => directory.key);
 }
 
@@ -273,7 +291,8 @@ function resolveCreateThreadTargetDirectory(args: {
   directoryLabel: string;
   directoryPath?: string;
 } {
-  const { directories, selectedDirectory, selectedThreadKey, forceWorkspace } = args;
+  const { directories, selectedDirectory, selectedThreadKey, forceWorkspace } =
+    args;
 
   if (!forceWorkspace && selectedDirectory?.kind === "directory") {
     return {
@@ -287,7 +306,8 @@ function resolveCreateThreadTargetDirectory(args: {
   if (!forceWorkspace && selectedThreadKey) {
     const threadDirectories = directories.filter(
       (directory) =>
-        directory.kind === "directory" && directory.threadKeys.includes(selectedThreadKey)
+        directory.kind === "directory"
+        && directory.threadKeys.includes(selectedThreadKey),
     );
     if (threadDirectories.length === 1) {
       const [threadDirectory] = threadDirectories;
@@ -302,27 +322,32 @@ function resolveCreateThreadTargetDirectory(args: {
     }
   }
 
-  const workspaceDirectory = directories.find((directory) => directory.kind === "workspace");
+  const workspaceDirectory = directories.find(
+    (directory) => directory.kind === "workspace",
+  );
   return {
-    directoryKey: workspaceDirectory?.key ?? ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
+    directoryKey:
+      workspaceDirectory?.key ?? ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
     directoryKind: "workspace",
-    directoryLabel: workspaceDirectory?.label ?? ROOT_NEW_THREAD_WORKSPACE_LABEL,
+    directoryLabel:
+      workspaceDirectory?.label ?? ROOT_NEW_THREAD_WORKSPACE_LABEL,
     directoryPath: workspaceDirectory?.path,
   };
 }
 
 function formatArchiveCleanupNotice(
-  cleanup: ArchiveThreadCleanupResult[]
+  cleanup: ArchiveThreadCleanupResult[],
 ): ArchiveThreadNotice | undefined {
   const failures = cleanup.filter(
-    (item) => !item.removedWorktree || item.error || item.skippedReason
+    (item) => !item.removedWorktree || item.error || item.skippedReason,
   );
   const firstFailure = failures[0];
   if (!firstFailure) {
     return undefined;
   }
 
-  const reason = firstFailure.error ?? firstFailure.skippedReason ?? "cleanup was skipped";
+  const reason =
+    firstFailure.error ?? firstFailure.skippedReason ?? "cleanup was skipped";
   const sharedWorktree = reason.startsWith("Worktree is still used by");
   const title = sharedWorktree ? "Worktree kept" : "Worktree cleanup skipped";
   const message = sharedWorktree
@@ -333,7 +358,11 @@ function formatArchiveCleanupNotice(
     : reason;
 
   return {
-    id: [firstFailure.worktreePath ?? "no-worktree", reason, Date.now().toString()].join("\n"),
+    id: [
+      firstFailure.worktreePath ?? "no-worktree",
+      reason,
+      Date.now().toString(),
+    ].join("\n"),
     title,
     message,
     detail,
@@ -342,7 +371,7 @@ function formatArchiveCleanupNotice(
 
 function linkedDirectoriesEqual(
   left: NavigationThreadSummary["linkedDirectories"],
-  right: NavigationThreadSummary["linkedDirectories"]
+  right: NavigationThreadSummary["linkedDirectories"],
 ): boolean {
   if (left.length !== right.length) {
     return false;
@@ -351,18 +380,18 @@ function linkedDirectoriesEqual(
   return left.every((directory, index) => {
     const candidate = right[index];
     return (
-      directory?.id === candidate?.id &&
-      directory?.label === candidate?.label &&
-      directory?.path === candidate?.path &&
-      directory?.worktreePath === candidate?.worktreePath &&
-      directory?.kind === candidate?.kind
+      directory?.id === candidate?.id
+      && directory?.label === candidate?.label
+      && directory?.path === candidate?.path
+      && directory?.worktreePath === candidate?.worktreePath
+      && directory?.kind === candidate?.kind
     );
   });
 }
 
 function worktreeSnapshotsEqual(
   left: NavigationThreadSummary["worktreeSnapshots"],
-  right: NavigationThreadSummary["worktreeSnapshots"]
+  right: NavigationThreadSummary["worktreeSnapshots"],
 ): boolean {
   const leftSnapshots = left ?? [];
   const rightSnapshots = right ?? [];
@@ -377,33 +406,33 @@ function worktreeSnapshotsEqual(
     }
 
     return (
-      snapshot.id === candidate.id &&
-      snapshot.worktreePath === candidate.worktreePath &&
-      snapshot.repositoryPath === candidate.repositoryPath &&
-      snapshot.snapshotRef === candidate.snapshotRef &&
-      snapshot.snapshotCommit === candidate.snapshotCommit &&
-      snapshot.state === candidate.state &&
-      snapshot.archivedAt === candidate.archivedAt &&
-      snapshot.restoredAt === candidate.restoredAt
+      snapshot.id === candidate.id
+      && snapshot.worktreePath === candidate.worktreePath
+      && snapshot.repositoryPath === candidate.repositoryPath
+      && snapshot.snapshotRef === candidate.snapshotRef
+      && snapshot.snapshotCommit === candidate.snapshotCommit
+      && snapshot.state === candidate.state
+      && snapshot.archivedAt === candidate.archivedAt
+      && snapshot.restoredAt === candidate.restoredAt
     );
   });
 }
 
 function threadInboxEqual(
   left: NavigationThreadSummary["inbox"],
-  right: NavigationThreadSummary["inbox"]
+  right: NavigationThreadSummary["inbox"],
 ): boolean {
   return (
-    left.inInbox === right.inInbox &&
-    left.reason === right.reason &&
-    left.lastSeenAt === right.lastSeenAt &&
-    left.lastSeenUpdatedAt === right.lastSeenUpdatedAt
+    left.inInbox === right.inInbox
+    && left.reason === right.reason
+    && left.lastSeenAt === right.lastSeenAt
+    && left.lastSeenUpdatedAt === right.lastSeenUpdatedAt
   );
 }
 
 function retainedBranchDriftPairsEqual(
   left: NavigationThreadSummary["retainedBranchDriftPairs"],
-  right: NavigationThreadSummary["retainedBranchDriftPairs"]
+  right: NavigationThreadSummary["retainedBranchDriftPairs"],
 ): boolean {
   const leftPairs = left ?? [];
   const rightPairs = right ?? [];
@@ -414,16 +443,16 @@ function retainedBranchDriftPairsEqual(
   return leftPairs.every((pair, index) => {
     const candidate = rightPairs[index];
     return (
-      candidate?.expectedBranch === pair.expectedBranch &&
-      candidate.observedBranch === pair.observedBranch &&
-      candidate.retainedAt === pair.retainedAt
+      candidate?.expectedBranch === pair.expectedBranch
+      && candidate.observedBranch === pair.observedBranch
+      && candidate.retainedAt === pair.retainedAt
     );
   });
 }
 
 function messagingBindingsEqual(
   left: NavigationThreadSummary["messagingBindings"],
-  right: NavigationThreadSummary["messagingBindings"]
+  right: NavigationThreadSummary["messagingBindings"],
 ): boolean {
   const leftBindings = left ?? [];
   const rightBindings = right ?? [];
@@ -434,20 +463,20 @@ function messagingBindingsEqual(
   return leftBindings.every((binding, index) => {
     const candidate = rightBindings[index];
     return (
-      candidate?.bindingId === binding.bindingId &&
-      candidate.platform === binding.platform &&
-      candidate.conversationKind === binding.conversationKind &&
-      candidate.conversationTitle === binding.conversationTitle &&
-      candidate.parentTitle === binding.parentTitle &&
-      candidate.ancestorTitle === binding.ancestorTitle &&
-      candidate.activeAt === binding.activeAt
+      candidate?.bindingId === binding.bindingId
+      && candidate.platform === binding.platform
+      && candidate.conversationKind === binding.conversationKind
+      && candidate.conversationTitle === binding.conversationTitle
+      && candidate.parentTitle === binding.parentTitle
+      && candidate.ancestorTitle === binding.ancestorTitle
+      && candidate.activeAt === binding.activeAt
     );
   });
 }
 
 function automationSummariesEqual(
   left: NavigationThreadSummary["automationSummary"],
-  right: NavigationThreadSummary["automationSummary"]
+  right: NavigationThreadSummary["automationSummary"],
 ): boolean {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
@@ -460,17 +489,17 @@ function threadAgentsEqual(
     return left === right;
   }
   return (
-    left.name === right.name &&
-    left.instructions === right.instructions &&
-    left.instructionLineCount === right.instructionLineCount &&
-    left.instructionsTooLong === right.instructionsTooLong &&
-    left.updatedAt === right.updatedAt
+    left.name === right.name
+    && left.instructions === right.instructions
+    && left.instructionLineCount === right.instructionLineCount
+    && left.instructionsTooLong === right.instructionsTooLong
+    && left.updatedAt === right.updatedAt
   );
 }
 
 function prSummariesEqual(
   left: NavigationThreadSummary["prs"],
-  right: NavigationThreadSummary["prs"]
+  right: NavigationThreadSummary["prs"],
 ): boolean {
   const leftPrs = left ?? [];
   const rightPrs = right ?? [];
@@ -481,25 +510,26 @@ function prSummariesEqual(
   return leftPrs.every((pr, index) => {
     const candidate = rightPrs[index];
     return (
-      candidate?.number === pr.number &&
-      candidate.provider === pr.provider &&
-      candidate.org === pr.org &&
-      candidate.repo === pr.repo &&
-      candidate.title === pr.title &&
-      candidate.state === pr.state &&
-      candidate.checkState === pr.checkState &&
-      candidate.lifecycleState === pr.lifecycleState &&
-      candidate.reviewState === pr.reviewState &&
-      candidate.mergeState === pr.mergeState &&
-      JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
-      candidate.url === pr.url
+      candidate?.number === pr.number
+      && candidate.provider === pr.provider
+      && candidate.org === pr.org
+      && candidate.repo === pr.repo
+      && candidate.title === pr.title
+      && candidate.state === pr.state
+      && candidate.checkState === pr.checkState
+      && candidate.lifecycleState === pr.lifecycleState
+      && candidate.reviewState === pr.reviewState
+      && candidate.mergeState === pr.mergeState
+      && JSON.stringify(candidate.commitShas ?? [])
+        === JSON.stringify(pr.commitShas ?? [])
+      && candidate.url === pr.url
     );
   });
 }
 
 function reactionsEqual(
   left: NavigationThreadSummary["reactions"],
-  right: NavigationThreadSummary["reactions"]
+  right: NavigationThreadSummary["reactions"],
 ): boolean {
   const leftReactions = left ?? [];
   const rightReactions = right ?? [];
@@ -508,20 +538,20 @@ function reactionsEqual(
   }
 
   return leftReactions.every(
-    (reaction, index) => rightReactions[index] === reaction
+    (reaction, index) => rightReactions[index] === reaction,
   );
 }
 
 function subAgentsEqual(
   left: NavigationThreadSummary["subAgents"],
-  right: NavigationThreadSummary["subAgents"]
+  right: NavigationThreadSummary["subAgents"],
 ): boolean {
   return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
 }
 
 function permissionTransitionLogsEqual(
   left: NavigationThreadSummary["permissionTransitionLog"],
-  right: NavigationThreadSummary["permissionTransitionLog"]
+  right: NavigationThreadSummary["permissionTransitionLog"],
 ): boolean {
   const leftLog = left ?? [];
   const rightLog = right ?? [];
@@ -532,22 +562,22 @@ function permissionTransitionLogsEqual(
   return leftLog.every((entry, index) => {
     const candidate = rightLog[index];
     return (
-      candidate?.id === entry.id &&
-      candidate.fromExecutionMode === entry.fromExecutionMode &&
-      candidate.toExecutionMode === entry.toExecutionMode &&
-      candidate.fromLabel === entry.fromLabel &&
-      candidate.toLabel === entry.toLabel &&
-      candidate.status === entry.status &&
-      candidate.occurredAt === entry.occurredAt &&
-      candidate.queueId === entry.queueId &&
-      candidate.note === entry.note
+      candidate?.id === entry.id
+      && candidate.fromExecutionMode === entry.fromExecutionMode
+      && candidate.toExecutionMode === entry.toExecutionMode
+      && candidate.fromLabel === entry.fromLabel
+      && candidate.toLabel === entry.toLabel
+      && candidate.status === entry.status
+      && candidate.occurredAt === entry.occurredAt
+      && candidate.queueId === entry.queueId
+      && candidate.note === entry.note
     );
   });
 }
 
 function messagingBindingTransitionLogsEqual(
   left: NavigationThreadSummary["messagingBindingTransitionLog"],
-  right: NavigationThreadSummary["messagingBindingTransitionLog"]
+  right: NavigationThreadSummary["messagingBindingTransitionLog"],
 ): boolean {
   const leftLog = left ?? [];
   const rightLog = right ?? [];
@@ -558,63 +588,64 @@ function messagingBindingTransitionLogsEqual(
   return leftLog.every((entry, index) => {
     const candidate = rightLog[index];
     return (
-      candidate?.id === entry.id &&
-      candidate.action === entry.action &&
-      candidate.bindingId === entry.bindingId &&
-      candidate.platform === entry.platform &&
-      candidate.conversationKind === entry.conversationKind &&
-      candidate.conversationTitle === entry.conversationTitle &&
-      candidate.parentTitle === entry.parentTitle &&
-      candidate.ancestorTitle === entry.ancestorTitle &&
-      candidate.occurredAt === entry.occurredAt
+      candidate?.id === entry.id
+      && candidate.action === entry.action
+      && candidate.bindingId === entry.bindingId
+      && candidate.platform === entry.platform
+      && candidate.conversationKind === entry.conversationKind
+      && candidate.conversationTitle === entry.conversationTitle
+      && candidate.parentTitle === entry.parentTitle
+      && candidate.ancestorTitle === entry.ancestorTitle
+      && candidate.occurredAt === entry.occurredAt
     );
   });
 }
 
 function threadSummariesEqual(
   left: NavigationThreadSummary,
-  right: NavigationThreadSummary
+  right: NavigationThreadSummary,
 ): boolean {
   return (
-    left.id === right.id &&
-    left.source === right.source &&
-    left.title === right.title &&
-    left.titleSource === right.titleSource &&
-    left.summary === right.summary &&
-    left.projectKey === right.projectKey &&
-    left.createdAt === right.createdAt &&
-    left.updatedAt === right.updatedAt &&
-    left.gitBranch === right.gitBranch &&
-    left.observedGitBranch === right.observedGitBranch &&
+    left.id === right.id
+    && left.source === right.source
+    && left.title === right.title
+    && left.titleSource === right.titleSource
+    && left.summary === right.summary
+    && left.projectKey === right.projectKey
+    && left.createdAt === right.createdAt
+    && left.updatedAt === right.updatedAt
+    && left.gitBranch === right.gitBranch
+    && left.observedGitBranch === right.observedGitBranch
     // Working state is probed on its own cadence (background refresh +
     // post-turn invalidation), independent of `updatedAt` — like PRs and
     // messaging bindings below. Without this check the reconciler would
     // reuse the previous thread reference and the dirty/unpushed chips
     // would stay stale until some other field changed.
-    JSON.stringify(left.gitWorkingState ?? null) ===
-      JSON.stringify(right.gitWorkingState ?? null) &&
-    left.executionMode === right.executionMode &&
-    left.queuedExecutionMode === right.queuedExecutionMode &&
-    left.queuedExecutionModeAt === right.queuedExecutionModeAt &&
-    left.model === right.model &&
-    left.reasoningEffort === right.reasoningEffort &&
-    left.serviceTier === right.serviceTier &&
-    left.fastMode === right.fastMode &&
-    JSON.stringify(left.acpRuntime ?? {}) === JSON.stringify(right.acpRuntime ?? {}) &&
-    JSON.stringify(left.workspaceHandoff ?? {}) ===
-      JSON.stringify(right.workspaceHandoff ?? {}) &&
-    left.pinnedRank === right.pinnedRank &&
-    left.parentThreadId === right.parentThreadId &&
-    JSON.stringify(left.subthreadOrder ?? []) ===
-      JSON.stringify(right.subthreadOrder ?? []) &&
-    left.subthreadsCollapsed === right.subthreadsCollapsed &&
-    retainedBranchDriftPairsEqual(
+    && JSON.stringify(left.gitWorkingState ?? null)
+      === JSON.stringify(right.gitWorkingState ?? null)
+    && left.executionMode === right.executionMode
+    && left.queuedExecutionMode === right.queuedExecutionMode
+    && left.queuedExecutionModeAt === right.queuedExecutionModeAt
+    && left.model === right.model
+    && left.reasoningEffort === right.reasoningEffort
+    && left.serviceTier === right.serviceTier
+    && left.fastMode === right.fastMode
+    && JSON.stringify(left.acpRuntime ?? {})
+      === JSON.stringify(right.acpRuntime ?? {})
+    && JSON.stringify(left.workspaceHandoff ?? {})
+      === JSON.stringify(right.workspaceHandoff ?? {})
+    && left.pinnedRank === right.pinnedRank
+    && left.parentThreadId === right.parentThreadId
+    && JSON.stringify(left.subthreadOrder ?? [])
+      === JSON.stringify(right.subthreadOrder ?? [])
+    && left.subthreadsCollapsed === right.subthreadsCollapsed
+    && retainedBranchDriftPairsEqual(
       left.retainedBranchDriftPairs,
-      right.retainedBranchDriftPairs
-    ) &&
-    linkedDirectoriesEqual(left.linkedDirectories, right.linkedDirectories) &&
-    worktreeSnapshotsEqual(left.worktreeSnapshots, right.worktreeSnapshots) &&
-    threadInboxEqual(left.inbox, right.inbox) &&
+      right.retainedBranchDriftPairs,
+    )
+    && linkedDirectoriesEqual(left.linkedDirectories, right.linkedDirectories)
+    && worktreeSnapshotsEqual(left.worktreeSnapshots, right.worktreeSnapshots)
+    && threadInboxEqual(left.inbox, right.inbox)
     // Bindings and PRs mutate independently of `updatedAt`: the messaging
     // store revokes a binding row without touching the thread row, and
     // GitHub PR detection runs on its own cadence. Reactions can also be
@@ -622,33 +653,33 @@ function threadSummariesEqual(
     // otherwise unchanged. Without these checks the reconciler reuses the
     // previous thread reference whenever nothing else changed and chips on
     // the row stay stale until something else triggers a re-render.
-    messagingBindingsEqual(left.messagingBindings, right.messagingBindings) &&
-    automationSummariesEqual(left.automationSummary, right.automationSummary) &&
-    threadAgentsEqual(left.agent, right.agent) &&
-    prSummariesEqual(left.prs, right.prs) &&
-    reactionsEqual(left.reactions, right.reactions) &&
-    subAgentsEqual(left.subAgents, right.subAgents) &&
-    permissionTransitionLogsEqual(
+    && messagingBindingsEqual(left.messagingBindings, right.messagingBindings)
+    && automationSummariesEqual(left.automationSummary, right.automationSummary)
+    && threadAgentsEqual(left.agent, right.agent)
+    && prSummariesEqual(left.prs, right.prs)
+    && reactionsEqual(left.reactions, right.reactions)
+    && subAgentsEqual(left.subAgents, right.subAgents)
+    && permissionTransitionLogsEqual(
       left.permissionTransitionLog,
-      right.permissionTransitionLog
-    ) &&
-    messagingBindingTransitionLogsEqual(
+      right.permissionTransitionLog,
+    )
+    && messagingBindingTransitionLogsEqual(
       left.messagingBindingTransitionLog,
-      right.messagingBindingTransitionLog
+      right.messagingBindingTransitionLog,
     )
   );
 }
 
 function hasPlaceholderThreadTitle(thread: NavigationThreadSummary): boolean {
   return (
-    thread.titleSource === "fallback" &&
-    (thread.title === thread.id || thread.title === "Untitled thread")
+    thread.titleSource === "fallback"
+    && (thread.title === thread.id || thread.title === "Untitled thread")
   );
 }
 
 function reconcileNavigationSnapshot(
   previous: NavigationSnapshot | undefined,
-  next: NavigationSnapshot
+  next: NavigationSnapshot,
 ): NavigationSnapshot {
   if (!previous) {
     return next;
@@ -658,17 +689,17 @@ function reconcileNavigationSnapshot(
     previous.threads.map((thread) => [
       buildThreadIdentityKey(thread.source, thread.id),
       thread,
-    ])
+    ]),
   );
   const previousByDirectoryKey = new Map(
-    previous.directories.map((directory) => [directory.key, directory])
+    previous.directories.map((directory) => [directory.key, directory]),
   );
   const reconciledDirectories = next.directories.map((directory) => {
     const previousDirectory = previousByDirectoryKey.get(directory.key);
     return {
       ...directory,
-      ...(previousDirectory?.gitStatus &&
-      !Object.prototype.hasOwnProperty.call(directory, "gitStatus")
+      ...(previousDirectory?.gitStatus
+      && !Object.prototype.hasOwnProperty.call(directory, "gitStatus")
         ? { gitStatus: previousDirectory.gitStatus }
         : {}),
     };
@@ -679,7 +710,7 @@ function reconcileNavigationSnapshot(
     directories: sortNavigationDirectories(reconciledDirectories),
     threads: next.threads.map((thread) => {
       const previousThread = previousByThreadKey.get(
-        buildThreadIdentityKey(thread.source, thread.id)
+        buildThreadIdentityKey(thread.source, thread.id),
       );
       return previousThread && threadSummariesEqual(previousThread, thread)
         ? previousThread
@@ -701,7 +732,10 @@ function applyDirectoryGitStatusUpdate(
     if (directory.key !== params.directoryKey) {
       return directory;
     }
-    if (JSON.stringify(directory.gitStatus ?? null) === JSON.stringify(params.gitStatus)) {
+    if (
+      JSON.stringify(directory.gitStatus ?? null)
+      === JSON.stringify(params.gitStatus)
+    ) {
       return directory;
     }
 
@@ -732,8 +766,8 @@ function applyThreadGitWorkingStateUpdate(
       return thread;
     }
     if (
-      JSON.stringify(thread.gitWorkingState ?? null) ===
-      JSON.stringify(params.gitWorkingState)
+      JSON.stringify(thread.gitWorkingState ?? null)
+      === JSON.stringify(params.gitWorkingState)
     ) {
       return thread;
     }
@@ -769,8 +803,8 @@ function updateThreadReactionsInSnapshot(
     }
     const current = thread.reactions ?? [];
     if (
-      current.length === params.reactions.length &&
-      current.every((emoji, index) => emoji === params.reactions[index])
+      current.length === params.reactions.length
+      && current.every((emoji, index) => emoji === params.reactions[index])
     ) {
       return thread;
     }
@@ -911,8 +945,8 @@ function ungroupChildThreadsInSnapshot(
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
     if (
-      thread.source !== params.backend ||
-      thread.parentThreadId !== params.parentThreadId
+      thread.source !== params.backend
+      || thread.parentThreadId !== params.parentThreadId
     ) {
       return thread;
     }
@@ -930,8 +964,7 @@ function collectDescendantThreads(
   const descendants: NavigationThreadSummary[] = [];
   const queue = threads.filter(
     (thread) =>
-      thread.source === parent.source &&
-      thread.parentThreadId === parent.id,
+      thread.source === parent.source && thread.parentThreadId === parent.id,
   );
   const seen = new Set<string>();
 
@@ -946,8 +979,8 @@ function collectDescendantThreads(
     queue.push(
       ...threads.filter(
         (candidate) =>
-          candidate.source === thread.source &&
-          candidate.parentThreadId === thread.id,
+          candidate.source === thread.source
+          && candidate.parentThreadId === thread.id,
       ),
     );
   }
@@ -969,10 +1002,16 @@ function updateSubthreadOrderInSnapshot(
 
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.parentThreadId) {
+    if (
+      thread.source !== params.backend
+      || thread.id !== params.parentThreadId
+    ) {
       return thread;
     }
-    if (JSON.stringify(thread.subthreadOrder ?? []) === JSON.stringify(params.threadIds)) {
+    if (
+      JSON.stringify(thread.subthreadOrder ?? [])
+      === JSON.stringify(params.threadIds)
+    ) {
       return thread;
     }
     changed = true;
@@ -996,7 +1035,10 @@ function updateSubthreadsCollapsedInSnapshot(
 
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.parentThreadId) {
+    if (
+      thread.source !== params.backend
+      || thread.id !== params.parentThreadId
+    ) {
       return thread;
     }
     if (thread.subthreadsCollapsed === params.collapsed) {
@@ -1072,7 +1114,7 @@ function markThreadSeenInSnapshot(
     backend: AppServerBackendKind;
     threadId: string;
     seenUpdatedAt?: number;
-  }
+  },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1086,14 +1128,17 @@ function markThreadSeenInSnapshot(
     }
 
     if (
-      params.seenUpdatedAt !== undefined &&
-      thread.updatedAt !== undefined &&
-      thread.updatedAt > params.seenUpdatedAt
+      params.seenUpdatedAt !== undefined
+      && thread.updatedAt !== undefined
+      && thread.updatedAt > params.seenUpdatedAt
     ) {
       return thread;
     }
 
-    if (!thread.inbox.inInbox && thread.inbox.lastSeenUpdatedAt === params.seenUpdatedAt) {
+    if (
+      !thread.inbox.inInbox
+      && thread.inbox.lastSeenUpdatedAt === params.seenUpdatedAt
+    ) {
       return thread;
     }
 
@@ -1119,7 +1164,7 @@ function markThreadSeenInSnapshot(
     threads.map((thread) => [
       buildThreadIdentityKey(thread.source, thread.id),
       thread.inbox.inInbox,
-    ])
+    ]),
   );
 
   return {
@@ -1128,10 +1173,12 @@ function markThreadSeenInSnapshot(
       ...directory,
       needsAttentionCount: directory.threadKeys.reduce(
         (count, threadKey) => count + (threadInboxByKey.get(threadKey) ? 1 : 0),
-        0
+        0,
       ),
     })),
-    inboxThreadKeys: snapshot.inboxThreadKeys.filter((candidate) => candidate !== threadKey),
+    inboxThreadKeys: snapshot.inboxThreadKeys.filter(
+      (candidate) => candidate !== threadKey,
+    ),
     threads,
   };
 }
@@ -1141,7 +1188,7 @@ function removeThreadFromSnapshot(
   params: {
     backend: AppServerBackendKind;
     threadId: string;
-  }
+  },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1149,7 +1196,7 @@ function removeThreadFromSnapshot(
 
   const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
   const threads = snapshot.threads.filter(
-    (thread) => buildThreadIdentityKey(thread.source, thread.id) !== threadKey
+    (thread) => buildThreadIdentityKey(thread.source, thread.id) !== threadKey,
   );
   if (threads.length === snapshot.threads.length) {
     return snapshot;
@@ -1159,66 +1206,73 @@ function removeThreadFromSnapshot(
     threads.map((thread) => [
       buildThreadIdentityKey(thread.source, thread.id),
       thread.inbox.inInbox,
-    ])
-  );
-
-  return {
-    ...snapshot,
-    directories: snapshot.directories.map((directory) => {
-      const threadKeys = directory.threadKeys.filter((candidate) => candidate !== threadKey);
-      return {
-        ...directory,
-        threadKeys,
-        needsAttentionCount: threadKeys.reduce(
-          (count, candidate) => count + (threadInboxByKey.get(candidate) ? 1 : 0),
-          0
-        ),
-      };
-    }),
-    inboxThreadKeys: snapshot.inboxThreadKeys.filter((candidate) => candidate !== threadKey),
-    threads,
-  };
-}
-
-function removeThreadKeysFromSnapshot(
-  snapshot: NavigationSnapshot,
-  threadKeysToRemove: ReadonlySet<string>
-): NavigationSnapshot {
-  if (threadKeysToRemove.size === 0) {
-    return snapshot;
-  }
-
-  const threads = snapshot.threads.filter(
-    (thread) => !threadKeysToRemove.has(buildThreadIdentityKey(thread.source, thread.id))
-  );
-  if (threads.length === snapshot.threads.length) {
-    return snapshot;
-  }
-
-  const threadInboxByKey = new Map(
-    threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
-      thread.inbox.inInbox,
-    ])
+    ]),
   );
 
   return {
     ...snapshot,
     directories: snapshot.directories.map((directory) => {
       const threadKeys = directory.threadKeys.filter(
-        (candidate) => !threadKeysToRemove.has(candidate)
+        (candidate) => candidate !== threadKey,
       );
       return {
         ...directory,
         threadKeys,
         needsAttentionCount: threadKeys.reduce(
-          (count, candidate) => count + (threadInboxByKey.get(candidate) ? 1 : 0),
-          0
+          (count, candidate) =>
+            count + (threadInboxByKey.get(candidate) ? 1 : 0),
+          0,
         ),
       };
     }),
     inboxThreadKeys: snapshot.inboxThreadKeys.filter(
-      (candidate) => !threadKeysToRemove.has(candidate)
+      (candidate) => candidate !== threadKey,
+    ),
+    threads,
+  };
+}
+
+function removeThreadKeysFromSnapshot(
+  snapshot: NavigationSnapshot,
+  threadKeysToRemove: ReadonlySet<string>,
+): NavigationSnapshot {
+  if (threadKeysToRemove.size === 0) {
+    return snapshot;
+  }
+
+  const threads = snapshot.threads.filter(
+    (thread) =>
+      !threadKeysToRemove.has(buildThreadIdentityKey(thread.source, thread.id)),
+  );
+  if (threads.length === snapshot.threads.length) {
+    return snapshot;
+  }
+
+  const threadInboxByKey = new Map(
+    threads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread.inbox.inInbox,
+    ]),
+  );
+
+  return {
+    ...snapshot,
+    directories: snapshot.directories.map((directory) => {
+      const threadKeys = directory.threadKeys.filter(
+        (candidate) => !threadKeysToRemove.has(candidate),
+      );
+      return {
+        ...directory,
+        threadKeys,
+        needsAttentionCount: threadKeys.reduce(
+          (count, candidate) =>
+            count + (threadInboxByKey.get(candidate) ? 1 : 0),
+          0,
+        ),
+      };
+    }),
+    inboxThreadKeys: snapshot.inboxThreadKeys.filter(
+      (candidate) => !threadKeysToRemove.has(candidate),
     ),
     threads,
   };
@@ -1230,7 +1284,7 @@ function getFallbackSelectionAfterRemoval(
     backend: AppServerBackendKind;
     threadId: string;
     optimisticThreadKey?: string;
-  }
+  },
 ): string | undefined {
   const nextSnapshot = removeThreadFromSnapshot(snapshot, params);
   return nextSnapshot
@@ -1240,7 +1294,11 @@ function getFallbackSelectionAfterRemoval(
 
 function applyThreadNameUpdate(
   snapshot: NavigationSnapshot | undefined,
-  params: { backend: AppServerBackendKind; threadId: string; threadName?: string }
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    threadName?: string;
+  },
 ): NavigationSnapshot | undefined {
   const threadName = params.threadName?.trim();
   if (!snapshot || !threadName) {
@@ -1275,7 +1333,7 @@ function applyThreadNameUpdate(
 
 function applyThreadPullRequestsUpdate(
   snapshot: NavigationSnapshot | undefined,
-  params: { backend: AppServerBackendKind; threadId: string; prs: PrSummary[] }
+  params: { backend: AppServerBackendKind; threadId: string; prs: PrSummary[] },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1308,8 +1366,11 @@ function applyThreadPullRequestsUpdate(
 
 function applyPullRequestStatusUpdate(
   snapshot: NavigationSnapshot | undefined,
-  params: { prKey: string; pr: PrSummary; index?: PrChipLocationIndex }
-): { snapshot: NavigationSnapshot | undefined; index: PrChipLocationIndex | undefined } {
+  params: { prKey: string; pr: PrSummary; index?: PrChipLocationIndex },
+): {
+  snapshot: NavigationSnapshot | undefined;
+  index: PrChipLocationIndex | undefined;
+} {
   if (!snapshot) {
     return { snapshot, index: undefined };
   }
@@ -1397,7 +1458,7 @@ function applyThreadModelSettingsUpdate(
     reasoningEffort?: string;
     serviceTier?: string;
     fastMode?: boolean;
-  }
+  },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1433,7 +1494,7 @@ function applyThreadAcpRuntimeUpdate(
     backend: AppServerBackendKind;
     threadId: string;
     acpRuntime?: NavigationThreadSummary["acpRuntime"];
-  }
+  },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1473,7 +1534,7 @@ function applyThreadCodexEnvironmentUpdate(
     backend: AppServerBackendKind;
     threadId: string;
     codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
-  }
+  },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1506,7 +1567,7 @@ function applyThreadExecutionModeUpdate(
     backend: AppServerBackendKind;
     threadId: string;
     executionMode: "default" | "full-access";
-  }
+  },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1544,7 +1605,7 @@ function applyThreadExecutionModeQueued(
     threadId: string;
     queuedExecutionMode: "default" | "full-access";
     queuedAt: number;
-  }
+  },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1556,8 +1617,8 @@ function applyThreadExecutionModeQueued(
       return thread;
     }
     if (
-      thread.queuedExecutionMode === params.queuedExecutionMode &&
-      thread.queuedExecutionModeAt === params.queuedAt
+      thread.queuedExecutionMode === params.queuedExecutionMode
+      && thread.queuedExecutionModeAt === params.queuedAt
     ) {
       return thread;
     }
@@ -1582,7 +1643,7 @@ function applyThreadExecutionModeQueueCleared(
   params: {
     backend: AppServerBackendKind;
     threadId: string;
-  }
+  },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1594,8 +1655,8 @@ function applyThreadExecutionModeQueueCleared(
       return thread;
     }
     if (
-      thread.queuedExecutionMode === undefined &&
-      thread.queuedExecutionModeAt === undefined
+      thread.queuedExecutionMode === undefined
+      && thread.queuedExecutionModeAt === undefined
     ) {
       return thread;
     }
@@ -1618,7 +1679,7 @@ function applyThreadExecutionModeQueueCleared(
 function applyLaunchpadUpdate(
   snapshot: NavigationSnapshot | undefined,
   launchpad: NavigationLaunchpadDraft,
-  defaults: NavigationSnapshot["launchpadDefaults"]
+  defaults: NavigationSnapshot["launchpadDefaults"],
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return {
@@ -1648,10 +1709,13 @@ function applyLaunchpadUpdateIfMissing(
     return applyLaunchpadUpdate(snapshot, launchpad, defaults);
   }
 
-  if (snapshot.directories.some(
-    (directory) =>
-      directory.key === launchpad.directoryKey && Boolean(directory.launchpad)
-  )) {
+  if (
+    snapshot.directories.some(
+      (directory) =>
+        directory.key === launchpad.directoryKey
+        && Boolean(directory.launchpad),
+    )
+  ) {
     return snapshot;
   }
 
@@ -1661,7 +1725,9 @@ function applyLaunchpadUpdateIfMissing(
 function mergeLaunchpadUpdateResponse(
   current: NavigationLaunchpadDraft | undefined,
   next: NavigationLaunchpadDraft,
-  patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
+  patch: Parameters<
+    NonNullable<DesktopApi["updateDirectoryLaunchpad"]>
+  >[0]["patch"],
 ): NavigationLaunchpadDraft {
   if (!current || current.directoryKey !== next.directoryKey) {
     return next;
@@ -1705,7 +1771,7 @@ function mergeLaunchpadUpdateResponse(
 function applyLaunchpadReset(
   snapshot: NavigationSnapshot | undefined,
   directoryKey: string,
-  defaults: NavigationSnapshot["launchpadDefaults"]
+  defaults: NavigationSnapshot["launchpadDefaults"],
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1714,7 +1780,9 @@ function applyLaunchpadReset(
   return {
     ...snapshot,
     directories: snapshot.directories.map((directory) =>
-      directory.key === directoryKey ? { ...directory, launchpad: undefined } : directory
+      directory.key === directoryKey
+        ? { ...directory, launchpad: undefined }
+        : directory,
     ),
     launchpadDefaults: defaults,
   };
@@ -1722,13 +1790,16 @@ function applyLaunchpadReset(
 
 function projectOptimisticThreadIntoDirectories(
   directories: NavigationSnapshot["directories"],
-  optimisticThread?: NavigationThreadSummary
+  optimisticThread?: NavigationThreadSummary,
 ): NavigationSnapshot["directories"] {
   if (!optimisticThread) {
     return directories;
   }
 
-  const threadKey = buildThreadIdentityKey(optimisticThread.source, optimisticThread.id);
+  const threadKey = buildThreadIdentityKey(
+    optimisticThread.source,
+    optimisticThread.id,
+  );
   let changed = false;
   const nextDirectories = [...directories];
 
@@ -1743,7 +1814,7 @@ function projectOptimisticThreadIntoDirectories(
     }
 
     const existingIndex = nextDirectories.findIndex(
-      (directory) => directory.key === directoryKey
+      (directory) => directory.key === directoryKey,
     );
     if (existingIndex >= 0) {
       const existing = nextDirectories[existingIndex]!;
@@ -1755,10 +1826,11 @@ function projectOptimisticThreadIntoDirectories(
         ...existing,
         threadKeys: [threadKey, ...existing.threadKeys],
         needsAttentionCount:
-          existing.needsAttentionCount + (optimisticThread.inbox.inInbox ? 1 : 0),
+          existing.needsAttentionCount
+          + (optimisticThread.inbox.inInbox ? 1 : 0),
         latestUpdatedAt: Math.max(
           existing.latestUpdatedAt ?? 0,
-          optimisticThread.updatedAt ?? 0
+          optimisticThread.updatedAt ?? 0,
         ),
       };
       changed = true;
@@ -1783,36 +1855,43 @@ function projectOptimisticThreadIntoDirectories(
 function hasSelectionKey(
   response: NavigationSnapshot,
   selectionKey: string,
-  optimisticThreadKey?: string
+  optimisticThreadKey?: string,
 ): boolean {
-  const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectionKey);
+  const launchpadDirectoryKey =
+    getDirectoryKeyFromLaunchpadSelection(selectionKey);
   if (launchpadDirectoryKey) {
     return response.directories.some(
       (directory) =>
-        directory.key === launchpadDirectoryKey && Boolean(directory.launchpad)
+        directory.key === launchpadDirectoryKey && Boolean(directory.launchpad),
     );
   }
 
   return (
     response.threads.some(
-      (thread) => buildThreadIdentityKey(thread.source, thread.id) === selectionKey
+      (thread) =>
+        buildThreadIdentityKey(thread.source, thread.id) === selectionKey,
     ) || selectionKey === optimisticThreadKey
   );
 }
 
 function getFallbackSelectionKey(
   response: NavigationSnapshot,
-  optimisticThreadKey?: string
+  optimisticThreadKey?: string,
 ): string | undefined {
   if (optimisticThreadKey) {
     return optimisticThreadKey;
   }
 
   if (response.threads[0]) {
-    return buildThreadIdentityKey(response.threads[0].source, response.threads[0].id);
+    return buildThreadIdentityKey(
+      response.threads[0].source,
+      response.threads[0].id,
+    );
   }
 
-  const firstLaunchpadDirectory = response.directories.find((directory) => directory.launchpad);
+  const firstLaunchpadDirectory = response.directories.find(
+    (directory) => directory.launchpad,
+  );
   return firstLaunchpadDirectory
     ? buildLaunchpadSelectionKey(firstLaunchpadDirectory.key)
     : undefined;
@@ -1823,14 +1902,14 @@ function resolveRefreshSelectionKey(
   currentSelectionKey: string | undefined,
   preferredSelectionKey: string | undefined,
   optimisticThreadKey?: string,
-  forcePreferredSelection = false
+  forcePreferredSelection = false,
 ): string | undefined {
   if (
-    preferredSelectionKey &&
-    (forcePreferredSelection ||
-      currentSelectionKey === preferredSelectionKey ||
-      !currentSelectionKey) &&
-    hasSelectionKey(response, preferredSelectionKey, optimisticThreadKey)
+    preferredSelectionKey
+    && (forcePreferredSelection
+      || currentSelectionKey === preferredSelectionKey
+      || !currentSelectionKey)
+    && hasSelectionKey(response, preferredSelectionKey, optimisticThreadKey)
   ) {
     return preferredSelectionKey;
   }
@@ -1855,7 +1934,8 @@ function buildOptimisticThreadFromLaunchpad(params: {
   parentThreadId?: string;
 }): NavigationThreadSummary {
   const titlePrompt =
-    params.optimisticUserMessage?.text?.trim() || params.launchpad.prompt.trim();
+    params.optimisticUserMessage?.text?.trim()
+    || params.launchpad.prompt.trim();
   const derivedTitle = shortenDerivedThreadTitle(titlePrompt);
 
   return {
@@ -1876,7 +1956,8 @@ function buildOptimisticThreadFromLaunchpad(params: {
     optimisticUserMessage: params.optimisticUserMessage,
     optimisticActiveTurn: params.optimisticActiveTurn,
     linkedDirectories:
-      params.launchpad.directoryPath && params.launchpad.directoryKind !== "workspace"
+      params.launchpad.directoryPath
+      && params.launchpad.directoryKind !== "workspace"
         ? [
             {
               id: `launchpad:${params.launchpad.directoryKey}`,
@@ -1889,7 +1970,8 @@ function buildOptimisticThreadFromLaunchpad(params: {
     gitBranch:
       params.workMode === "worktree"
         ? "HEAD"
-        : params.directory?.gitStatus?.currentBranch ?? params.launchpad.branchName,
+        : (params.directory?.gitStatus?.currentBranch
+          ?? params.launchpad.branchName),
     observedGitBranch: params.workMode === "worktree" ? "HEAD" : undefined,
     updatedAt: Date.now(),
     inbox: {
@@ -1920,22 +2002,24 @@ function mergeHydratedThreadWithOptimisticTitle(
 }
 
 function buildOptimisticUserMessage(
-  input: AppServerTurnInputItem[] | undefined
+  input: AppServerTurnInputItem[] | undefined,
 ): NavigationThreadSummary["optimisticUserMessage"] {
   if (!input?.length) {
     return undefined;
   }
 
   const text = input
-    .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> =>
-      item.type === "text" && typeof item.text === "string"
+    .filter(
+      (item): item is Extract<AppServerTurnInputItem, { type: "text" }> =>
+        item.type === "text" && typeof item.text === "string",
     )
     .map((item) => item.text.trim())
     .filter(Boolean)
     .join("\n\n");
   const imageParts: AppServerThreadImagePart[] = input
-    .filter((item): item is Extract<AppServerTurnInputItem, { type: "image" }> =>
-      item.type === "image" && typeof item.url === "string"
+    .filter(
+      (item): item is Extract<AppServerTurnInputItem, { type: "image" }> =>
+        item.type === "image" && typeof item.url === "string",
     )
     .map((item) => ({
       type: "image",
@@ -1962,9 +2046,9 @@ function buildPendingForkEnvironmentSetup(params: {
 }): PendingForkEnvironmentSetup | undefined {
   const { mode, runtime } = params;
   if (
-    mode !== "new-worktree" ||
-    runtime?.executionTarget !== "local" ||
-    !runtime.setupCommand
+    mode !== "new-worktree"
+    || runtime?.executionTarget !== "local"
+    || !runtime.setupCommand
   ) {
     return undefined;
   }
@@ -1981,7 +2065,7 @@ function buildPendingForkEnvironmentSetup(params: {
 }
 
 function reviewDisplayTextFromTarget(
-  target: AppServerReviewTarget | undefined
+  target: AppServerReviewTarget | undefined,
 ): string | undefined {
   if (!target) {
     return undefined;
@@ -2007,7 +2091,7 @@ type UseThreadNavigationOptions = {
 
 export function useThreadNavigation(
   desktopApi?: DesktopApi,
-  options: UseThreadNavigationOptions = {}
+  options: UseThreadNavigationOptions = {},
 ): {
   browseMode: BrowseMode;
   /** Identity key of the card to highlight as the open composer's source. */
@@ -2015,7 +2099,7 @@ export function useThreadNavigation(
   createThread: (
     backend?: AppServerBackendKind,
     executionMode?: ThreadExecutionMode,
-    options?: { forceWorkspace?: boolean }
+    options?: { forceWorkspace?: boolean },
   ) => Promise<void>;
   createSubthread: (
     parent: NavigationThreadSummary,
@@ -2053,11 +2137,11 @@ export function useThreadNavigation(
   newThreadDirectoryLabel?: string;
   openDirectoryLaunchpad: (
     directory: NavigationDirectorySummary,
-    preferredBackend?: AppServerBackendKind
+    preferredBackend?: AppServerBackendKind,
   ) => Promise<void>;
   /** Switch the composer to the directory-less ("workspace") launchpad. */
   openWorkspaceLaunchpad: (
-    preferredBackend?: AppServerBackendKind
+    preferredBackend?: AppServerBackendKind,
   ) => Promise<void>;
   /** Project-directory picker (issue #223): OS dialog → validate → seed launchpad → focus it. */
   pickAndRegisterDirectory: (
@@ -2076,11 +2160,11 @@ export function useThreadNavigation(
   selectedThreadKey?: string;
   setThreadExecutionMode: (
     thread: NavigationThreadSummary,
-    executionMode: ThreadExecutionMode
+    executionMode: ThreadExecutionMode,
   ) => Promise<void>;
   setThreadExecutionModeError?: string;
   cancelThreadExecutionModeQueue: (
-    thread: NavigationThreadSummary
+    thread: NavigationThreadSummary,
   ) => Promise<void>;
   setAcpSessionRuntimeOption: (
     thread: NavigationThreadSummary,
@@ -2088,23 +2172,25 @@ export function useThreadNavigation(
       source: "configOption" | "mode";
       optionId: string;
       value: string;
-    }
+    },
   ) => Promise<void>;
   setThreadModelSettings: (
     thread: NavigationThreadSummary,
     patch: Partial<
       Pick<
-      NavigationThreadSummary,
-      "model" | "reasoningEffort" | "serviceTier" | "fastMode"
+        NavigationThreadSummary,
+        "model" | "reasoningEffort" | "serviceTier" | "fastMode"
       >
-    >
+    >,
   ) => Promise<void>;
   setThreadModelSettingsError?: string;
   updatingThreadExecutionMode?: ThreadExecutionMode;
   updateDirectoryLaunchpad: (
     directoryKey: string,
-    patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
-    options?: { stickySettingsChanged?: boolean }
+    patch: Parameters<
+      NonNullable<DesktopApi["updateDirectoryLaunchpad"]>
+    >[0]["patch"],
+    options?: { stickySettingsChanged?: boolean },
   ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
@@ -2118,18 +2204,21 @@ export function useThreadNavigation(
   ) => Promise<void>;
   archiveWorktree: (
     thread: NavigationThreadSummary,
-    directory: LinkedDirectorySummary
+    directory: LinkedDirectorySummary,
   ) => Promise<void>;
   restoreWorktree: (
     thread: NavigationThreadSummary,
     snapshotRef: string,
-    worktreePath: string
+    worktreePath: string,
   ) => Promise<void>;
   handoffThreadWorkspace: (
     thread: NavigationThreadSummary,
-    request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
+    request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">,
   ) => Promise<void>;
-  renameThread: (thread: NavigationThreadSummary, name: string) => Promise<void>;
+  renameThread: (
+    thread: NavigationThreadSummary,
+    name: string,
+  ) => Promise<void>;
   setThreadReaction: (
     thread: NavigationThreadSummary,
     emoji: string,
@@ -2183,14 +2272,18 @@ export function useThreadNavigation(
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
   const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
   const enabled = options.enabled ?? true;
-  const lightweightNavigationRefresh = options.lightweightNavigationRefresh ?? false;
+  const lightweightNavigationRefresh =
+    options.lightweightNavigationRefresh ?? false;
   const threadViewVisible = options.threadViewVisible ?? true;
-  const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
+  const [browseMode, setBrowseMode] = useState<BrowseMode>(
+    readBridgedBrowseMode,
+  );
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
   const [retainedUnreadThread, setRetainedUnreadThread] =
     useState<NavigationThreadSummary>();
-  const [optimisticThread, setOptimisticThread] = useState<NavigationThreadSummary>();
+  const [optimisticThread, setOptimisticThread] =
+    useState<NavigationThreadSummary>();
   const [creatingThread, setCreatingThread] = useState<CreatingThreadState>();
   const [localLaunchpads, setLocalLaunchpads] = useState<
     Record<string, NavigationLaunchpadDraft>
@@ -2198,7 +2291,8 @@ export function useThreadNavigation(
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
-  const [archiveThreadNotice, setArchiveThreadNotice] = useState<ArchiveThreadNotice>();
+  const [archiveThreadNotice, setArchiveThreadNotice] =
+    useState<ArchiveThreadNotice>();
   const [worktreeArchiveError, setWorktreeArchiveError] = useState<string>();
   const [renameThreadError, setRenameThreadError] = useState<string>();
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
@@ -2218,13 +2312,23 @@ export function useThreadNavigation(
     loading: enabled,
     refreshing: false,
   });
-  const [viewForeground, setViewForeground] = useState(isRendererViewForeground);
-  const prChipLocationIndexRef = useRef<PrChipLocationIndex | undefined>(undefined);
+  const [viewForeground, setViewForeground] = useState(
+    isRendererViewForeground,
+  );
+  const prChipLocationIndexRef = useRef<PrChipLocationIndex | undefined>(
+    undefined,
+  );
 
-  const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
-  const retainedUnreadThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
+  const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(
+    undefined,
+  );
+  const retainedUnreadThreadRef = useRef<NavigationThreadSummary | undefined>(
+    undefined,
+  );
   const manuallySelectedThreadKeysRef = useRef(new Set<string>());
-  const submittedSeenUpdatedAtByThreadKeyRef = useRef(new Map<string, number | undefined>());
+  const submittedSeenUpdatedAtByThreadKeyRef = useRef(
+    new Map<string, number | undefined>(),
+  );
   const refreshInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const queuedRefreshRef = useRef<
@@ -2238,9 +2342,9 @@ export function useThreadNavigation(
     | undefined
   >(undefined);
   const suppressedArchivedThreadKeysRef = useRef<Set<string>>(new Set());
-  const scheduledRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined
-  );
+  const scheduledRefreshTimerRef = useRef<
+    ReturnType<typeof setTimeout> | undefined
+  >(undefined);
   const scheduledFocusRefreshTimerRef = useRef<
     ReturnType<typeof setTimeout> | undefined
   >(undefined);
@@ -2250,8 +2354,12 @@ export function useThreadNavigation(
   const lastNavigationActivityAtRef = useRef(Date.now());
   const backgroundRefreshIdleRef = useRef(false);
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
-  const pendingPickedLaunchpadRef = useRef(new Map<string, NavigationLaunchpadDraft>());
-  const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
+  const pendingPickedLaunchpadRef = useRef(
+    new Map<string, NavigationLaunchpadDraft>(),
+  );
+  const setNavigationBrowseModeRequestRef = useRef(
+    setNavigationBrowseModeRequest,
+  );
   const stateRef = useRef(state);
 
   optimisticThreadRef.current = optimisticThread;
@@ -2272,42 +2380,47 @@ export function useThreadNavigation(
   const updateBrowseMode = useCallback((nextBrowseMode: BrowseMode): void => {
     const normalized = normalizeBrowseMode(nextBrowseMode);
     setBrowseMode(normalized);
-    void setNavigationBrowseModeRequestRef.current?.({
-      browseMode: normalized,
-    }).catch(() => undefined);
+    void setNavigationBrowseModeRequestRef
+      .current?.({
+        browseMode: normalized,
+      })
+      .catch(() => undefined);
   }, []);
 
-  const releaseRetainedUnreadThread = useCallback((nextSelectionKey?: string): void => {
-    const retainedThread = retainedUnreadThreadRef.current;
-    if (!retainedThread) {
-      return;
-    }
+  const releaseRetainedUnreadThread = useCallback(
+    (nextSelectionKey?: string): void => {
+      const retainedThread = retainedUnreadThreadRef.current;
+      if (!retainedThread) {
+        return;
+      }
 
-    const retainedThreadKey = buildThreadIdentityKey(
-      retainedThread.source,
-      retainedThread.id
-    );
-    if (nextSelectionKey === retainedThreadKey) {
-      return;
-    }
+      const retainedThreadKey = buildThreadIdentityKey(
+        retainedThread.source,
+        retainedThread.id,
+      );
+      if (nextSelectionKey === retainedThreadKey) {
+        return;
+      }
 
-    setState((current) => ({
-      ...current,
-      response: markThreadSeenInSnapshot(current.response, {
-        backend: retainedThread.source,
-        threadId: retainedThread.id,
-        seenUpdatedAt: retainedThread.updatedAt,
-      }),
-    }));
-    setRetainedUnreadThread(undefined);
-  }, []);
+      setState((current) => ({
+        ...current,
+        response: markThreadSeenInSnapshot(current.response, {
+          backend: retainedThread.source,
+          threadId: retainedThread.id,
+          seenUpdatedAt: retainedThread.updatedAt,
+        }),
+      }));
+      setRetainedUnreadThread(undefined);
+    },
+    [],
+  );
 
   const performRefresh = useCallback(
     async (
       preferredSelectionKey?: string,
       preferredOptimisticThread?: NavigationThreadSummary,
       forcePreferredSelection = false,
-      options?: NavigationRefreshOptions
+      options?: NavigationRefreshOptions,
     ): Promise<void> => {
       if (!enabled) {
         prChipLocationIndexRef.current = undefined;
@@ -2348,7 +2461,9 @@ export function useThreadNavigation(
           options?.forceRefresh || options?.refreshMode
             ? {
                 ...(options?.forceRefresh ? { forceRefresh: true } : {}),
-                ...(options?.refreshMode ? { refreshMode: options.refreshMode } : {}),
+                ...(options?.refreshMode
+                  ? { refreshMode: options.refreshMode }
+                  : {}),
               }
             : undefined;
         const snapshot = snapshotRequest
@@ -2362,15 +2477,23 @@ export function useThreadNavigation(
         });
         const response = removeThreadKeysFromSnapshot(
           snapshot,
-          suppressedArchivedThreadKeysRef.current
+          suppressedArchivedThreadKeysRef.current,
         );
-        const optimisticSelection = preferredOptimisticThread ?? optimisticThreadRef.current;
+        const optimisticSelection =
+          preferredOptimisticThread ?? optimisticThreadRef.current;
         const optimisticThreadKey = optimisticSelection
-          ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
+          ? buildThreadIdentityKey(
+              optimisticSelection.source,
+              optimisticSelection.id,
+            )
           : undefined;
 
         setState((current) => {
-          if (current.response && response.unchanged && !preferredSelectionKey) {
+          if (
+            current.response
+            && response.unchanged
+            && !preferredSelectionKey
+          ) {
             return {
               ...current,
               loading: false,
@@ -2379,8 +2502,12 @@ export function useThreadNavigation(
             };
           }
 
-          const nextResponse = reconcileNavigationSnapshot(current.response, response);
-          prChipLocationIndexRef.current = buildPrChipLocationIndex(nextResponse);
+          const nextResponse = reconcileNavigationSnapshot(
+            current.response,
+            response,
+          );
+          prChipLocationIndexRef.current =
+            buildPrChipLocationIndex(nextResponse);
           return {
             loading: false,
             refreshing: false,
@@ -2390,13 +2517,17 @@ export function useThreadNavigation(
         });
 
         if (
-          optimisticThreadKey &&
-          response.threads.some(
-            (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+          optimisticThreadKey
+          && response.threads.some(
+            (thread) =>
+              buildThreadIdentityKey(thread.source, thread.id)
+              === optimisticThreadKey,
           )
         ) {
           const hydratedOptimisticThread = response.threads.find(
-            (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+            (thread) =>
+              buildThreadIdentityKey(thread.source, thread.id)
+              === optimisticThreadKey,
           );
 
           setOptimisticThread((current) => {
@@ -2405,9 +2536,9 @@ export function useThreadNavigation(
             }
 
             if (
-              current?.titleSource === "derived" &&
-              hydratedOptimisticThread &&
-              hasPlaceholderThreadTitle(hydratedOptimisticThread)
+              current?.titleSource === "derived"
+              && hydratedOptimisticThread
+              && hasPlaceholderThreadTitle(hydratedOptimisticThread)
             ) {
               return current;
             }
@@ -2422,7 +2553,7 @@ export function useThreadNavigation(
             current,
             preferredSelectionKey,
             optimisticThreadKey,
-            forcePreferredSelection
+            forcePreferredSelection,
           );
         });
       } catch (error) {
@@ -2437,7 +2568,7 @@ export function useThreadNavigation(
         }));
       }
     },
-    [desktopApi, enabled]
+    [desktopApi, enabled],
   );
 
   const refresh = useCallback(
@@ -2445,7 +2576,7 @@ export function useThreadNavigation(
       preferredSelectionKey?: string,
       preferredOptimisticThread?: NavigationThreadSummary,
       forcePreferredSelection = false,
-      options?: NavigationRefreshOptions
+      options?: NavigationRefreshOptions,
     ): Promise<void> => {
       const initialRequest = {
         forceRefresh: options?.forceRefresh === true,
@@ -2473,7 +2604,7 @@ export function useThreadNavigation(
             {
               forceRefresh: nextRequest.forceRefresh,
               refreshMode: nextRequest.refreshMode,
-            }
+            },
           );
           nextRequest = queuedRefreshRef.current;
         }
@@ -2481,7 +2612,7 @@ export function useThreadNavigation(
         refreshInFlightRef.current = false;
       }
     },
-    [performRefresh]
+    [performRefresh],
   );
   const refreshNavigation = useCallback(async (): Promise<void> => {
     await refresh();
@@ -2492,19 +2623,20 @@ export function useThreadNavigation(
       preferredSelectionKey?: string,
       preferredOptimisticThread?: NavigationThreadSummary,
       forcePreferredSelection = false,
-      options?: NavigationRefreshOptions
+      options?: NavigationRefreshOptions,
     ): void => {
       queuedRefreshRef.current = {
         forceRefresh:
-          options?.forceRefresh === true || queuedRefreshRef.current?.forceRefresh === true,
+          options?.forceRefresh === true
+          || queuedRefreshRef.current?.forceRefresh === true,
         forcePreferredSelection,
         preferredOptimisticThread,
         preferredSelectionKey,
         refreshMode:
-          options?.refreshMode === "full" ||
-          queuedRefreshRef.current?.refreshMode === "full"
+          options?.refreshMode === "full"
+          || queuedRefreshRef.current?.refreshMode === "full"
             ? "full"
-            : options?.refreshMode ?? queuedRefreshRef.current?.refreshMode,
+            : (options?.refreshMode ?? queuedRefreshRef.current?.refreshMode),
       };
 
       if (scheduledRefreshTimerRef.current !== undefined) {
@@ -2526,11 +2658,11 @@ export function useThreadNavigation(
           {
             forceRefresh: nextRequest.forceRefresh,
             refreshMode: nextRequest.refreshMode,
-          }
+          },
         );
       }, 0);
     },
-    [refresh]
+    [refresh],
   );
 
   const scheduleFocusRefresh = useCallback((): void => {
@@ -2587,9 +2719,9 @@ export function useThreadNavigation(
       }
 
       if (
-        !enabled ||
-        !desktopApi?.getNavigationSnapshot ||
-        (lightweightNavigationRefresh && !isRendererViewForeground())
+        !enabled
+        || !desktopApi?.getNavigationSnapshot
+        || (lightweightNavigationRefresh && !isRendererViewForeground())
       ) {
         return;
       }
@@ -2604,7 +2736,7 @@ export function useThreadNavigation(
       enabled,
       lightweightNavigationRefresh,
       scheduleRefresh,
-    ]
+    ],
   );
 
   useEffect(() => {
@@ -2649,7 +2781,9 @@ export function useThreadNavigation(
     };
 
     for (const eventName of NAVIGATION_ACTIVITY_EVENTS) {
-      window.addEventListener(eventName, handleNavigationActivity, { capture: true });
+      window.addEventListener(eventName, handleNavigationActivity, {
+        capture: true,
+      });
     }
 
     return () => {
@@ -2678,9 +2812,9 @@ export function useThreadNavigation(
 
   useEffect(() => {
     if (
-      !enabled ||
-      !desktopApi?.getNavigationSnapshot ||
-      (lightweightNavigationRefresh && !viewForeground)
+      !enabled
+      || !desktopApi?.getNavigationSnapshot
+      || (lightweightNavigationRefresh && !viewForeground)
     ) {
       return;
     }
@@ -2868,17 +3002,21 @@ export function useThreadNavigation(
                 optimisticThreadKey: optimisticThreadRef.current
                   ? buildThreadIdentityKey(
                       optimisticThreadRef.current.source,
-                      optimisticThreadRef.current.id
+                      optimisticThreadRef.current.id,
                     )
                   : undefined,
               })
-            : current
+            : current,
         );
         setRetainedUnreadThread((current) =>
-          current?.source === event.backend && current.id === threadId ? undefined : current
+          current?.source === event.backend && current.id === threadId
+            ? undefined
+            : current,
         );
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === threadId ? undefined : current
+          current?.source === event.backend && current.id === threadId
+            ? undefined
+            : current,
         );
         return;
       }
@@ -2899,7 +3037,7 @@ export function useThreadNavigation(
         setOptimisticThread((current) =>
           current?.source === event.backend && current.id === threadId
             ? { ...current, executionMode }
-            : current
+            : current,
         );
         // Refresh so the persisted permissionTransitionLog (which the
         // registry just appended an `applied` entry to) flows back into
@@ -2931,7 +3069,7 @@ export function useThreadNavigation(
                 queuedExecutionMode,
                 queuedExecutionModeAt: queuedAt,
               }
-            : current
+            : current,
         );
         // The registry already persisted a `queued` audit entry; pull
         // the snapshot so the transcript renders it.
@@ -2958,7 +3096,7 @@ export function useThreadNavigation(
                 queuedExecutionMode: undefined,
                 queuedExecutionModeAt: undefined,
               }
-            : current
+            : current,
         );
         // Pull the snapshot so the matching `applied` / `cancelled`
         // transition entry shows up in the transcript.
@@ -2983,7 +3121,7 @@ export function useThreadNavigation(
         setOptimisticThread((current) =>
           current?.source === event.backend && current.id === threadId
             ? { ...current, codexEnvironmentRuntime }
-            : current
+            : current,
         );
         return;
       }
@@ -3011,7 +3149,7 @@ export function useThreadNavigation(
         setOptimisticThread((current) =>
           current?.source === event.backend && current.id === threadId
             ? { ...current, model, reasoningEffort, serviceTier, fastMode }
-            : current
+            : current,
         );
         return;
       }
@@ -3042,7 +3180,7 @@ export function useThreadNavigation(
                   },
                 },
               }
-            : current
+            : current,
         );
         scheduleRefresh();
         return;
@@ -3058,11 +3196,11 @@ export function useThreadNavigation(
       }
 
       if (
-        method === "thread/automations/updated" ||
-        method === "automation/run/updated" ||
-        method === "thread/turnQueue/updated" ||
-        method === "thread/agent/updated" ||
-        method === "thread/subAgents/updated"
+        method === "thread/automations/updated"
+        || method === "automation/run/updated"
+        || method === "thread/turnQueue/updated"
+        || method === "thread/agent/updated"
+        || method === "thread/subAgents/updated"
       ) {
         scheduleRefresh();
         return;
@@ -3228,7 +3366,7 @@ export function useThreadNavigation(
           threadId: string;
         };
         suppressedArchivedThreadKeysRef.current.delete(
-          buildThreadIdentityKey(event.backend, threadId)
+          buildThreadIdentityKey(event.backend, threadId),
         );
         scheduleRefresh();
         return;
@@ -3240,14 +3378,20 @@ export function useThreadNavigation(
       }
 
       if (
-        method === "turn/completed" ||
-        method === "turn/failed" ||
-        method === "turn/cancelled"
+        method === "turn/completed"
+        || method === "turn/failed"
+        || method === "turn/cancelled"
       ) {
         scheduleRefresh();
       }
     });
-  }, [desktopApi, enabled, markNavigationActivity, scheduleRefresh, state.response]);
+  }, [
+    desktopApi,
+    enabled,
+    markNavigationActivity,
+    scheduleRefresh,
+    state.response,
+  ]);
 
   // Bindings live in the navigation snapshot but are mutated outside
   // the agent-event bus (a Telegram callback creates a binding, a
@@ -3272,62 +3416,68 @@ export function useThreadNavigation(
 
     const optimisticThreadKey = buildThreadIdentityKey(
       optimisticThread.source,
-      optimisticThread.id
+      optimisticThread.id,
     );
 
     const hasHydratedThread = currentThreads.some(
-      (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+      (thread) =>
+        buildThreadIdentityKey(thread.source, thread.id)
+        === optimisticThreadKey,
     );
     if (hasHydratedThread) {
       return currentThreads.map((thread) =>
         buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
           ? {
-              ...mergeHydratedThreadWithOptimisticTitle(thread, optimisticThread),
+              ...mergeHydratedThreadWithOptimisticTitle(
+                thread,
+                optimisticThread,
+              ),
               optimisticActiveTurn:
-                thread.optimisticActiveTurn ?? optimisticThread.optimisticActiveTurn,
+                thread.optimisticActiveTurn
+                ?? optimisticThread.optimisticActiveTurn,
               optimisticUserMessage:
-                thread.optimisticUserMessage ?? optimisticThread.optimisticUserMessage,
+                thread.optimisticUserMessage
+                ?? optimisticThread.optimisticUserMessage,
             }
-          : thread
+          : thread,
       );
     }
 
     return [optimisticThread, ...currentThreads];
   }, [optimisticThread, state.response?.threads]);
 
-  const directories = useMemo(
-    () => {
-      const launchpads = Object.values(localLaunchpads);
-      const currentDirectories = launchpads.reduce(
-        (nextDirectories, launchpad) =>
-          upsertLaunchpadDirectory(nextDirectories, launchpad),
-        state.response?.directories ?? [],
-      );
+  const directories = useMemo(() => {
+    const launchpads = Object.values(localLaunchpads);
+    const currentDirectories = launchpads.reduce(
+      (nextDirectories, launchpad) =>
+        upsertLaunchpadDirectory(nextDirectories, launchpad),
+      state.response?.directories ?? [],
+    );
 
-      if (!optimisticThread) {
-        return currentDirectories;
-      }
+    if (!optimisticThread) {
+      return currentDirectories;
+    }
 
-      const optimisticThreadKey = buildThreadIdentityKey(
-        optimisticThread.source,
-        optimisticThread.id
-      );
-      const hasHydratedThread = state.response?.threads.some(
-        (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
-      );
+    const optimisticThreadKey = buildThreadIdentityKey(
+      optimisticThread.source,
+      optimisticThread.id,
+    );
+    const hasHydratedThread = state.response?.threads.some(
+      (thread) =>
+        buildThreadIdentityKey(thread.source, thread.id)
+        === optimisticThreadKey,
+    );
 
-      return projectOptimisticThreadIntoDirectories(
-        currentDirectories,
-        hasHydratedThread ? undefined : optimisticThread
-      );
-    },
-    [
-      localLaunchpads,
-      optimisticThread,
-      state.response?.directories,
-      state.response?.threads,
-    ]
-  );
+    return projectOptimisticThreadIntoDirectories(
+      currentDirectories,
+      hasHydratedThread ? undefined : optimisticThread,
+    );
+  }, [
+    localLaunchpads,
+    optimisticThread,
+    state.response?.directories,
+    state.response?.threads,
+  ]);
 
   const inboxThreads = threads;
   const recentThreads = useMemo(
@@ -3336,7 +3486,10 @@ export function useThreadNavigation(
   );
 
   const selectedThreadKey = useMemo(() => {
-    if (selectedItemKey && !getDirectoryKeyFromLaunchpadSelection(selectedItemKey)) {
+    if (
+      selectedItemKey
+      && !getDirectoryKeyFromLaunchpadSelection(selectedItemKey)
+    ) {
       return selectedItemKey;
     }
 
@@ -3348,16 +3501,20 @@ export function useThreadNavigation(
       selectedThreadKey
         ? threads.find(
             (thread) =>
-              buildThreadIdentityKey(thread.source, thread.id) === selectedThreadKey
+              buildThreadIdentityKey(thread.source, thread.id)
+              === selectedThreadKey,
           )
         : undefined,
-    [selectedThreadKey, threads]
+    [selectedThreadKey, threads],
   );
 
   const selectedDirectory = useMemo(() => {
-    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
+    const launchpadDirectoryKey =
+      getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
     if (launchpadDirectoryKey) {
-      return directories.find((directory) => directory.key === launchpadDirectoryKey);
+      return directories.find(
+        (directory) => directory.key === launchpadDirectoryKey,
+      );
     }
 
     if (!selectedThreadKey) {
@@ -3365,17 +3522,19 @@ export function useThreadNavigation(
     }
 
     return directories.find((directory) =>
-      directory.threadKeys.includes(selectedThreadKey)
+      directory.threadKeys.includes(selectedThreadKey),
     );
   }, [directories, selectedItemKey, selectedThreadKey]);
   const selectedLaunchpad = useMemo(() => {
-    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
+    const launchpadDirectoryKey =
+      getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
     if (!launchpadDirectoryKey) {
       return undefined;
     }
 
-    return directories.find((directory) => directory.key === launchpadDirectoryKey)
-      ?.launchpad;
+    return directories.find(
+      (directory) => directory.key === launchpadDirectoryKey,
+    )?.launchpad;
   }, [directories, selectedItemKey]);
 
   // The directory label the New Thread button would resolve to with its
@@ -3389,7 +3548,9 @@ export function useThreadNavigation(
       selectedDirectory,
       selectedThreadKey,
     });
-    return target.directoryKind === "directory" ? target.directoryLabel : undefined;
+    return target.directoryKind === "directory"
+      ? target.directoryLabel
+      : undefined;
   }, [directories, selectedDirectory, selectedThreadKey]);
   // The thread card to render as the orange "composing" source while a
   // sub-thread launchpad is open. Plain new-thread launchpads have no source.
@@ -3411,11 +3572,11 @@ export function useThreadNavigation(
     const submitMarkThreadSeen = markThreadSeen;
 
     if (
-      !pendingSeenThreadKey ||
-      !selectedThread ||
-      pendingSeenThreadKey !==
-        buildThreadIdentityKey(selectedThread.source, selectedThread.id) ||
-      !submitMarkThreadSeen
+      !pendingSeenThreadKey
+      || !selectedThread
+      || pendingSeenThreadKey
+        !== buildThreadIdentityKey(selectedThread.source, selectedThread.id)
+      || !submitMarkThreadSeen
     ) {
       return;
     }
@@ -3426,11 +3587,11 @@ export function useThreadNavigation(
     async function markSeen(): Promise<void> {
       const threadKey = buildThreadIdentityKey(
         threadToMarkSeen.source,
-        threadToMarkSeen.id
+        threadToMarkSeen.id,
       );
       submittedSeenUpdatedAtByThreadKeyRef.current.set(
         threadKey,
-        threadToMarkSeen.updatedAt
+        threadToMarkSeen.updatedAt,
       );
 
       try {
@@ -3442,9 +3603,9 @@ export function useThreadNavigation(
         if (mountedRef.current) {
           const retainedThread = retainedUnreadThreadRef.current;
           if (
-            !retainedThread ||
-            buildThreadIdentityKey(retainedThread.source, retainedThread.id) !==
-              threadKey
+            !retainedThread
+            || buildThreadIdentityKey(retainedThread.source, retainedThread.id)
+              !== threadKey
           ) {
             setState((current) => ({
               ...current,
@@ -3459,7 +3620,7 @@ export function useThreadNavigation(
       } finally {
         if (mountedRef.current) {
           setPendingSeenThreadKey((current) =>
-            current === threadKey ? undefined : current
+            current === threadKey ? undefined : current,
           );
         }
       }
@@ -3484,42 +3645,45 @@ export function useThreadNavigation(
         force: true,
       });
     },
-    [desktopApi?.refreshDirectoryGitStatuses, directories]
+    [desktopApi?.refreshDirectoryGitStatuses, directories],
   );
 
   useEffect(() => {
     if (
-      !selectedThread ||
-      selectedThread.inbox.reason !== "updated-since-seen" ||
-      !viewForeground ||
-      !threadViewVisible
+      !selectedThread
+      || selectedThread.inbox.reason !== "updated-since-seen"
+      || !viewForeground
+      || !threadViewVisible
     ) {
       return;
     }
 
     const threadKey = buildThreadIdentityKey(
       selectedThread.source,
-      selectedThread.id
+      selectedThread.id,
     );
     if (!manuallySelectedThreadKeysRef.current.has(threadKey)) {
       return;
     }
     const retainedThreadKey = retainedUnreadThread
-      ? buildThreadIdentityKey(retainedUnreadThread.source, retainedUnreadThread.id)
+      ? buildThreadIdentityKey(
+          retainedUnreadThread.source,
+          retainedUnreadThread.id,
+        )
       : undefined;
 
     if (
-      retainedThreadKey === threadKey &&
-      retainedUnreadThread?.updatedAt !== selectedThread.updatedAt
+      retainedThreadKey === threadKey
+      && retainedUnreadThread?.updatedAt !== selectedThread.updatedAt
     ) {
       setRetainedUnreadThread(selectedThread);
     }
 
     if (
-      pendingSeenThreadKey === threadKey ||
-      selectedThread.inbox.lastSeenUpdatedAt === selectedThread.updatedAt ||
-      submittedSeenUpdatedAtByThreadKeyRef.current.get(threadKey) ===
-        selectedThread.updatedAt
+      pendingSeenThreadKey === threadKey
+      || selectedThread.inbox.lastSeenUpdatedAt === selectedThread.updatedAt
+      || submittedSeenUpdatedAtByThreadKeyRef.current.get(threadKey)
+        === selectedThread.updatedAt
     ) {
       return;
     }
@@ -3533,22 +3697,28 @@ export function useThreadNavigation(
     viewForeground,
   ]);
 
-  const selectThread = useCallback((thread: NavigationThreadSummary): void => {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    manuallySelectedThreadKeysRef.current.add(threadKey);
-    releaseRetainedUnreadThread(threadKey);
-    refreshThreadDirectoryGitStatuses(threadKey);
-    setCreateThreadError(undefined);
-    setLaunchpadError(undefined);
-    setArchiveThreadError(undefined);
-    setSetThreadExecutionModeError(undefined);
-    setSetThreadModelSettingsError(undefined);
-    setSelectedItemKey(threadKey);
-    setPendingSeenThreadKey(threadKey);
-    if (thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen") {
-      setRetainedUnreadThread(thread);
-    }
-  }, [refreshThreadDirectoryGitStatuses, releaseRetainedUnreadThread]);
+  const selectThread = useCallback(
+    (thread: NavigationThreadSummary): void => {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      manuallySelectedThreadKeysRef.current.add(threadKey);
+      releaseRetainedUnreadThread(threadKey);
+      refreshThreadDirectoryGitStatuses(threadKey);
+      setCreateThreadError(undefined);
+      setLaunchpadError(undefined);
+      setArchiveThreadError(undefined);
+      setSetThreadExecutionModeError(undefined);
+      setSetThreadModelSettingsError(undefined);
+      setSelectedItemKey(threadKey);
+      setPendingSeenThreadKey(threadKey);
+      if (
+        thread.inbox.inInbox
+        && thread.inbox.reason === "updated-since-seen"
+      ) {
+        setRetainedUnreadThread(thread);
+      }
+    },
+    [refreshThreadDirectoryGitStatuses, releaseRetainedUnreadThread],
+  );
 
   const showThread = useCallback(
     async (params: {
@@ -3558,7 +3728,8 @@ export function useThreadNavigation(
       const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
       const thread = state.response?.threads.find(
         (candidate) =>
-          candidate.source === params.backend && candidate.id === params.threadId,
+          candidate.source === params.backend
+          && candidate.id === params.threadId,
       );
       if (thread) {
         selectThread(thread);
@@ -3574,10 +3745,12 @@ export function useThreadNavigation(
     async (
       backend?: AppServerBackendKind,
       executionMode: ThreadExecutionMode = "default",
-      options?: { forceWorkspace?: boolean }
+      options?: { forceWorkspace?: boolean },
     ): Promise<void> => {
       if (!desktopApi?.ensureDirectoryLaunchpad) {
-        setCreateThreadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
+        setCreateThreadError(
+          "Desktop bridge is missing ensureDirectoryLaunchpad().",
+        );
         return;
       }
 
@@ -3605,8 +3778,8 @@ export function useThreadNavigation(
         let launchpad = response.launchpad;
         let defaults: NavigationLaunchpadDefaults = response.defaults;
         if (
-          executionMode !== response.launchpad.executionMode &&
-          desktopApi.updateDirectoryLaunchpad
+          executionMode !== response.launchpad.executionMode
+          && desktopApi.updateDirectoryLaunchpad
         ) {
           const updated = await desktopApi.updateDirectoryLaunchpad({
             directoryKey,
@@ -3639,7 +3812,9 @@ export function useThreadNavigation(
         }));
         setSelectedItemKey(selectionKey);
       } catch (error) {
-        setCreateThreadError(error instanceof Error ? error.message : String(error));
+        setCreateThreadError(
+          error instanceof Error ? error.message : String(error),
+        );
       } finally {
         const targetDirectory = resolveCreateThreadTargetDirectory({
           directories,
@@ -3651,7 +3826,7 @@ export function useThreadNavigation(
         setCreatingThread(undefined);
       }
     },
-    [desktopApi, directories, refresh, selectedDirectory, selectedThreadKey]
+    [desktopApi, directories, refresh, selectedDirectory, selectedThreadKey],
   );
 
   /**
@@ -3668,8 +3843,8 @@ export function useThreadNavigation(
       }
       const root = stateRef.current.response?.threads.find(
         (thread) =>
-          thread.source === source.source &&
-          thread.id === source.parentThreadId,
+          thread.source === source.source
+          && thread.id === source.parentThreadId,
       );
       return root ?? source;
     },
@@ -3701,8 +3876,7 @@ export function useThreadNavigation(
         root ?? { subthreadOrder: undefined },
         snapshot.threads.filter(
           (thread) =>
-            thread.source === backend &&
-            thread.parentThreadId === rootThreadId,
+            thread.source === backend && thread.parentThreadId === rootThreadId,
         ),
       ).map((child) => child.id);
       const nextOrder = insertSubthreadIdAfter(
@@ -3752,11 +3926,13 @@ export function useThreadNavigation(
             collapsed: false,
           }),
         }));
-        void desktopApi?.setSubthreadsCollapsed?.({
-          backend,
-          parentThreadId: rootThreadId,
-          collapsed: false,
-        }).catch(() => {});
+        void desktopApi
+          ?.setSubthreadsCollapsed?.({
+            backend,
+            parentThreadId: rootThreadId,
+            collapsed: false,
+          })
+          .catch(() => {});
       }
     },
     [desktopApi, refresh],
@@ -3768,7 +3944,9 @@ export function useThreadNavigation(
       mode: ThreadWorkspaceMode = "same-worktree",
     ): Promise<void> => {
       if (!desktopApi?.ensureDirectoryLaunchpad) {
-        setCreateThreadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
+        setCreateThreadError(
+          "Desktop bridge is missing ensureDirectoryLaunchpad().",
+        );
         return;
       }
 
@@ -3804,9 +3982,12 @@ export function useThreadNavigation(
           sourceThreadId: parent.id,
         };
         let defaults: NavigationLaunchpadDefaults = response.defaults;
-        const patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"] = {
+        const patch: Parameters<
+          NonNullable<DesktopApi["updateDirectoryLaunchpad"]>
+        >[0]["patch"] = {
           backend: parent.source,
-          executionMode: parent.executionMode ?? response.launchpad.executionMode,
+          executionMode:
+            parent.executionMode ?? response.launchpad.executionMode,
           workMode: directory.workMode,
           directoryLabel: directory.directoryLabel,
           directoryPath: directory.directoryPath,
@@ -3837,7 +4018,9 @@ export function useThreadNavigation(
         }));
         setSelectedItemKey(buildLaunchpadSelectionKey(directoryKey));
       } catch (error) {
-        setCreateThreadError(error instanceof Error ? error.message : String(error));
+        setCreateThreadError(
+          error instanceof Error ? error.message : String(error),
+        );
       } finally {
         setCreatingThread(undefined);
       }
@@ -3908,9 +4091,9 @@ export function useThreadNavigation(
           summary: parent.summary,
           source: response.backend,
           projectKey:
-            response.linkedDirectory?.worktreePath ??
-            response.linkedDirectory?.path ??
-            parent.projectKey,
+            response.linkedDirectory?.worktreePath
+            ?? response.linkedDirectory?.path
+            ?? parent.projectKey,
           createdAt: now,
           updatedAt: now,
           inbox: {
@@ -3923,16 +4106,21 @@ export function useThreadNavigation(
           serviceTier: parent.serviceTier,
           fastMode: parent.fastMode,
           gitBranch:
-            response.gitBranch ??
-            (response.workMode === "worktree" ? "HEAD" : parent.gitBranch),
+            response.gitBranch
+            ?? (response.workMode === "worktree" ? "HEAD" : parent.gitBranch),
           observedGitBranch:
-            response.observedGitBranch ??
-            (response.workMode === "worktree" ? "HEAD" : parent.observedGitBranch),
+            response.observedGitBranch
+            ?? (response.workMode === "worktree"
+              ? "HEAD"
+              : parent.observedGitBranch),
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
           linkedDirectories,
           parentThreadId: groupRoot.id,
         };
-        const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
+        const nextThreadKey = buildThreadIdentityKey(
+          response.backend,
+          response.threadId,
+        );
         // Drop the fork directly below the card it was spawned from, and let
         // the order write land before the refresh below reads it back.
         await insertSubthreadBelowSource(
@@ -3946,7 +4134,9 @@ export function useThreadNavigation(
         setPendingSeenThreadKey(nextThreadKey);
         await refresh(nextThreadKey, optimisticFork, true);
       } catch (error) {
-        setCreateThreadError(error instanceof Error ? error.message : String(error));
+        setCreateThreadError(
+          error instanceof Error ? error.message : String(error),
+        );
       } finally {
         setCreatingThread(undefined);
       }
@@ -3957,10 +4147,12 @@ export function useThreadNavigation(
   const openDirectoryLaunchpad = useCallback(
     async (
       directory: NavigationDirectorySummary,
-      preferredBackend?: AppServerBackendKind
+      preferredBackend?: AppServerBackendKind,
     ): Promise<void> => {
       if (!desktopApi?.ensureDirectoryLaunchpad) {
-        setLaunchpadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
+        setLaunchpadError(
+          "Desktop bridge is missing ensureDirectoryLaunchpad().",
+        );
         return;
       }
 
@@ -3988,15 +4180,17 @@ export function useThreadNavigation(
           response: applyLaunchpadUpdate(
             current.response,
             response.launchpad,
-            response.defaults
+            response.defaults,
           ),
         }));
         setSelectedItemKey(buildLaunchpadSelectionKey(directory.key));
       } catch (error) {
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        setLaunchpadError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     },
-    [desktopApi]
+    [desktopApi],
   );
 
   // Switch the composer to the directory-less "workspace" launchpad. Backs the
@@ -4007,7 +4201,7 @@ export function useThreadNavigation(
   const openWorkspaceLaunchpad = useCallback(
     async (preferredBackend?: AppServerBackendKind): Promise<void> => {
       const workspaceDirectory = directories.find(
-        (directory) => directory.kind === "workspace"
+        (directory) => directory.kind === "workspace",
       );
       await openDirectoryLaunchpad(
         workspaceDirectory ?? {
@@ -4017,10 +4211,10 @@ export function useThreadNavigation(
           threadKeys: [],
           needsAttentionCount: 0,
         },
-        preferredBackend
+        preferredBackend,
       );
     },
-    [directories, openDirectoryLaunchpad]
+    [directories, openDirectoryLaunchpad],
   );
 
   const pickAndRegisterDirectory = useCallback(
@@ -4033,8 +4227,8 @@ export function useThreadNavigation(
       // so the composer focuses the just-added directory without an
       // extra click.
       if (
-        !desktopApi?.pickDirectoryFromDisk ||
-        !desktopApi?.registerDirectoryFromDisk
+        !desktopApi?.pickDirectoryFromDisk
+        || !desktopApi?.registerDirectoryFromDisk
       ) {
         setPickDirectoryError(
           "Desktop bridge is missing the directory picker.",
@@ -4060,7 +4254,10 @@ export function useThreadNavigation(
           return;
         }
         pendingPickedDirectoryKey = result.directoryKey;
-        pendingPickedLaunchpadRef.current.set(result.directoryKey, result.launchpad);
+        pendingPickedLaunchpadRef.current.set(
+          result.directoryKey,
+          result.launchpad,
+        );
         setLocalLaunchpads((current) => ({
           ...current,
           [result.directoryKey]: result.launchpad,
@@ -4077,8 +4274,8 @@ export function useThreadNavigation(
         setSelectedItemKey(selectionKey);
         await refresh(selectionKey, undefined, true);
         const pickedLaunchpad =
-          pendingPickedLaunchpadRef.current.get(result.directoryKey) ??
-          result.launchpad;
+          pendingPickedLaunchpadRef.current.get(result.directoryKey)
+          ?? result.launchpad;
         setState((current) => ({
           ...current,
           response: applyLaunchpadUpdateIfMissing(
@@ -4106,45 +4303,50 @@ export function useThreadNavigation(
     [desktopApi, refresh],
   );
 
-  const pickAndAttachDirectoryToSelectedThread = useCallback(async (): Promise<void> => {
-    if (
-      !desktopApi?.pickDirectoryFromDisk ||
-      !desktopApi.attachDirectoryToThread
-    ) {
-      setPickDirectoryError("Desktop bridge is missing the directory picker.");
-      return;
-    }
-    if (!selectedThread) {
-      setPickDirectoryError("Select a thread before adding a directory.");
-      return;
-    }
+  const pickAndAttachDirectoryToSelectedThread =
+    useCallback(async (): Promise<void> => {
+      if (
+        !desktopApi?.pickDirectoryFromDisk
+        || !desktopApi.attachDirectoryToThread
+      ) {
+        setPickDirectoryError(
+          "Desktop bridge is missing the directory picker.",
+        );
+        return;
+      }
+      if (!selectedThread) {
+        setPickDirectoryError("Select a thread before adding a directory.");
+        return;
+      }
 
-    setPickDirectoryError(undefined);
-    setPickingDirectory(true);
-    try {
-      const pick = await desktopApi.pickDirectoryFromDisk();
-      if (pick.canceled) {
-        return;
+      setPickDirectoryError(undefined);
+      setPickingDirectory(true);
+      try {
+        const pick = await desktopApi.pickDirectoryFromDisk();
+        if (pick.canceled) {
+          return;
+        }
+        const result = await desktopApi.attachDirectoryToThread({
+          backend: selectedThread.source,
+          threadId: selectedThread.id,
+          path: pick.path,
+          preferredBackend: selectedThread.source,
+        });
+        if (!result.ok) {
+          setPickDirectoryError(result.message);
+          return;
+        }
+        await refresh(
+          buildThreadIdentityKey(selectedThread.source, selectedThread.id),
+        );
+      } catch (error) {
+        setPickDirectoryError(
+          error instanceof Error ? error.message : String(error),
+        );
+      } finally {
+        setPickingDirectory(false);
       }
-      const result = await desktopApi.attachDirectoryToThread({
-        backend: selectedThread.source,
-        threadId: selectedThread.id,
-        path: pick.path,
-        preferredBackend: selectedThread.source,
-      });
-      if (!result.ok) {
-        setPickDirectoryError(result.message);
-        return;
-      }
-      await refresh(buildThreadIdentityKey(selectedThread.source, selectedThread.id));
-    } catch (error) {
-      setPickDirectoryError(
-        error instanceof Error ? error.message : String(error),
-      );
-    } finally {
-      setPickingDirectory(false);
-    }
-  }, [desktopApi, refresh, selectedThread]);
+    }, [desktopApi, refresh, selectedThread]);
 
   const clearPickDirectoryError = useCallback((): void => {
     setPickDirectoryError(undefined);
@@ -4153,11 +4355,15 @@ export function useThreadNavigation(
   const updateDirectoryLaunchpad = useCallback(
     async (
       directoryKey: string,
-      patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
-      options?: { stickySettingsChanged?: boolean }
+      patch: Parameters<
+        NonNullable<DesktopApi["updateDirectoryLaunchpad"]>
+      >[0]["patch"],
+      options?: { stickySettingsChanged?: boolean },
     ): Promise<void> => {
       if (!desktopApi?.updateDirectoryLaunchpad) {
-        setLaunchpadError("Desktop bridge is missing updateDirectoryLaunchpad().");
+        setLaunchpadError(
+          "Desktop bridge is missing updateDirectoryLaunchpad().",
+        );
         return;
       }
 
@@ -4169,7 +4375,7 @@ export function useThreadNavigation(
       setState((current) => {
         const currentResponse = current.response;
         const currentLaunchpad = currentResponse?.directories.find(
-          (directory) => directory.key === directoryKey
+          (directory) => directory.key === directoryKey,
         )?.launchpad;
         if (!currentResponse || !currentLaunchpad) {
           return current;
@@ -4185,7 +4391,7 @@ export function useThreadNavigation(
               directoryKey,
               updatedAt: Date.now(),
             },
-            currentResponse.launchpadDefaults
+            currentResponse.launchpadDefaults,
           ),
         };
       });
@@ -4204,7 +4410,8 @@ export function useThreadNavigation(
           },
         };
       });
-      const pendingPickedLaunchpad = pendingPickedLaunchpadRef.current.get(directoryKey);
+      const pendingPickedLaunchpad =
+        pendingPickedLaunchpadRef.current.get(directoryKey);
       if (pendingPickedLaunchpad) {
         pendingPickedLaunchpadRef.current.set(directoryKey, {
           ...pendingPickedLaunchpad,
@@ -4233,7 +4440,7 @@ export function useThreadNavigation(
                   patch,
                 ),
               }
-            : current
+            : current,
         );
         setState((current) => ({
           ...current,
@@ -4241,12 +4448,12 @@ export function useThreadNavigation(
             current.response,
             mergeLaunchpadUpdateResponse(
               current.response?.directories.find(
-                (directory) => directory.key === directoryKey
+                (directory) => directory.key === directoryKey,
               )?.launchpad,
               response.launchpad,
               patch,
             ),
-            response.defaults
+            response.defaults,
           ),
         }));
         const nextPendingPickedLaunchpad =
@@ -4265,23 +4472,29 @@ export function useThreadNavigation(
         if (launchpadUpdateRevisionRef.current.get(directoryKey) !== revision) {
           return;
         }
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        setLaunchpadError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     },
-    [desktopApi]
+    [desktopApi],
   );
 
   const resetDirectoryLaunchpad = useCallback(
     async (directoryKey: string): Promise<void> => {
       if (!desktopApi?.resetDirectoryLaunchpad) {
-        setLaunchpadError("Desktop bridge is missing resetDirectoryLaunchpad().");
+        setLaunchpadError(
+          "Desktop bridge is missing resetDirectoryLaunchpad().",
+        );
         return;
       }
 
       setLaunchpadError(undefined);
 
       try {
-        const response = await desktopApi.resetDirectoryLaunchpad({ directoryKey });
+        const response = await desktopApi.resetDirectoryLaunchpad({
+          directoryKey,
+        });
         setLocalLaunchpads((current) => {
           if (!current[directoryKey]) {
             return current;
@@ -4295,14 +4508,18 @@ export function useThreadNavigation(
           response: applyLaunchpadReset(
             current.response,
             response.directoryKey,
-            response.defaults
+            response.defaults,
           ),
         }));
         setSelectedItemKey((current) =>
           current === buildLaunchpadSelectionKey(directoryKey)
             ? getFallbackSelectionKey(
                 state.response
-                  ? applyLaunchpadReset(state.response, response.directoryKey, response.defaults)!
+                  ? applyLaunchpadReset(
+                      state.response,
+                      response.directoryKey,
+                      response.defaults,
+                    )!
                   : {
                       backend: "all",
                       fetchedAt: Date.now(),
@@ -4313,16 +4530,21 @@ export function useThreadNavigation(
                       launchpadDefaults: response.defaults,
                     },
                 optimisticThread
-                  ? buildThreadIdentityKey(optimisticThread.source, optimisticThread.id)
-                  : undefined
+                  ? buildThreadIdentityKey(
+                      optimisticThread.source,
+                      optimisticThread.id,
+                    )
+                  : undefined,
               )
-            : current
+            : current,
         );
       } catch (error) {
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        setLaunchpadError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     },
-    [desktopApi, directories, optimisticThread, state.response, threads]
+    [desktopApi, directories, optimisticThread, state.response, threads],
   );
 
   const materializeDirectoryLaunchpad = useCallback(
@@ -4334,11 +4556,15 @@ export function useThreadNavigation(
       parentThreadId?: string,
     ): Promise<void> => {
       if (!desktopApi?.materializeDirectoryLaunchpad) {
-        setLaunchpadError("Desktop bridge is missing materializeDirectoryLaunchpad().");
+        setLaunchpadError(
+          "Desktop bridge is missing materializeDirectoryLaunchpad().",
+        );
         return;
       }
 
-      const directory = directories.find((candidate) => candidate.key === directoryKey);
+      const directory = directories.find(
+        (candidate) => candidate.key === directoryKey,
+      );
       const launchpad = directory?.launchpad;
       if (!launchpad) {
         setLaunchpadError(`No launchpad found for ${directoryKey}.`);
@@ -4351,10 +4577,12 @@ export function useThreadNavigation(
       // the root); prefer it over the key-parsed source so the new thread links
       // to the root and renders one level deep.
       const materializeParentThreadId =
-        parentThreadId ??
-        launchpad.parentThreadId ??
-        getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
-      let response: Awaited<ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>>;
+        parentThreadId
+        ?? launchpad.parentThreadId
+        ?? getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
+      let response: Awaited<
+        ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>
+      >;
       try {
         response = await desktopApi.materializeDirectoryLaunchpad({
           directoryKey,
@@ -4367,7 +4595,9 @@ export function useThreadNavigation(
             : {}),
         });
       } catch (error) {
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        setLaunchpadError(
+          error instanceof Error ? error.message : String(error),
+        );
         throw error;
       }
       const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
@@ -4381,23 +4611,30 @@ export function useThreadNavigation(
         optimisticUserMessage: response.turnStartFailure
           ? undefined
           : buildOptimisticUserMessage(input),
-        optimisticActiveTurn: response.turnId && !response.turnStartFailure
-          ? {
-              id: response.turnId,
-              statusText: reviewTarget
-                ? "Reviewing"
-                : collaborationMode
-                  ? "Planning"
-                  : "Thinking",
-              startedAt: Date.now(),
-              ...(reviewTarget
-                ? { reviewDisplayText: reviewDisplayTextFromTarget(reviewTarget) }
-                : {}),
-            }
-          : undefined,
+        optimisticActiveTurn:
+          response.turnId && !response.turnStartFailure
+            ? {
+                id: response.turnId,
+                statusText: reviewTarget
+                  ? "Reviewing"
+                  : collaborationMode
+                    ? "Planning"
+                    : "Thinking",
+                startedAt: Date.now(),
+                ...(reviewTarget
+                  ? {
+                      reviewDisplayText:
+                        reviewDisplayTextFromTarget(reviewTarget),
+                    }
+                  : {}),
+              }
+            : undefined,
         parentThreadId: materializeParentThreadId,
       });
-      const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
+      const nextThreadKey = buildThreadIdentityKey(
+        response.backend,
+        response.threadId,
+      );
       // Sub-thread launchpads drop the new child directly below their source
       // card. Plain new-thread launchpads have no parent and skip this. Await
       // so the order write commits before the refresh below reads it back.
@@ -4429,17 +4666,19 @@ export function useThreadNavigation(
           ? applyLaunchpadReset(
               current.response,
               directoryKey,
-              current.response.launchpadDefaults
+              current.response.launchpadDefaults,
             )
           : current.response,
       }));
       try {
         await refresh(nextThreadKey, optimisticMaterializedThread);
       } catch (error) {
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        setLaunchpadError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     },
-    [desktopApi, directories, insertSubthreadBelowSource, refresh]
+    [desktopApi, directories, insertSubthreadBelowSource, refresh],
   );
 
   /**
@@ -4499,8 +4738,8 @@ export function useThreadNavigation(
         : [thread];
       const targetThreadKeys = new Set(
         targetThreads.map((target) =>
-          buildThreadIdentityKey(target.source, target.id)
-        )
+          buildThreadIdentityKey(target.source, target.id),
+        ),
       );
 
       for (const targetKey of targetThreadKeys) {
@@ -4525,7 +4764,7 @@ export function useThreadNavigation(
             : ungroupChildThreadsInSnapshot(current.response, {
                 backend: thread.source,
                 parentThreadId: thread.id,
-              })
+              }),
         ),
       }));
       setSelectedItemKey((current) =>
@@ -4535,17 +4774,23 @@ export function useThreadNavigation(
               threadId: thread.id,
               optimisticThreadKey,
             })
-          : current
+          : current,
       );
       setRetainedUnreadThread((current) =>
-        current && targetThreadKeys.has(buildThreadIdentityKey(current.source, current.id))
+        current
+        && targetThreadKeys.has(
+          buildThreadIdentityKey(current.source, current.id),
+        )
           ? undefined
-          : current
+          : current,
       );
       setOptimisticThread((current) =>
-        current && targetThreadKeys.has(buildThreadIdentityKey(current.source, current.id))
+        current
+        && targetThreadKeys.has(
+          buildThreadIdentityKey(current.source, current.id),
+        )
           ? undefined
-          : current
+          : current,
       );
 
       try {
@@ -4564,17 +4809,19 @@ export function useThreadNavigation(
         for (const targetKey of targetThreadKeys) {
           suppressedArchivedThreadKeysRef.current.delete(targetKey);
         }
-        setArchiveThreadError(error instanceof Error ? error.message : String(error));
+        setArchiveThreadError(
+          error instanceof Error ? error.message : String(error),
+        );
         await refresh(threadKey, undefined, true);
       }
     },
-    [archiveThreadRequest, optimisticThread, refresh, state.response, threads]
+    [archiveThreadRequest, optimisticThread, refresh, state.response, threads],
   );
 
   const archiveWorktree = useCallback(
     async (
       thread: NavigationThreadSummary,
-      directory: LinkedDirectorySummary
+      directory: LinkedDirectorySummary,
     ): Promise<void> => {
       if (!archiveWorktreeRequest) {
         setWorktreeArchiveError("Desktop bridge is missing archiveWorktree().");
@@ -4594,17 +4841,19 @@ export function useThreadNavigation(
         });
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       } catch (error) {
-        setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
+        setWorktreeArchiveError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     },
-    [archiveWorktreeRequest, refresh]
+    [archiveWorktreeRequest, refresh],
   );
 
   const restoreWorktree = useCallback(
     async (
       thread: NavigationThreadSummary,
       snapshotRef: string,
-      worktreePath: string
+      worktreePath: string,
     ): Promise<void> => {
       if (!restoreWorktreeRequest) {
         setWorktreeArchiveError("Desktop bridge is missing restoreWorktree().");
@@ -4623,19 +4872,23 @@ export function useThreadNavigation(
         });
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       } catch (error) {
-        setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
+        setWorktreeArchiveError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
     },
-    [refresh, restoreWorktreeRequest]
+    [refresh, restoreWorktreeRequest],
   );
 
   const handoffThreadWorkspace = useCallback(
     async (
       thread: NavigationThreadSummary,
-      request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
+      request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">,
     ): Promise<void> => {
       if (!handoffThreadWorkspaceRequest) {
-        const error = new Error("Desktop bridge is missing handoffThreadWorkspace().");
+        const error = new Error(
+          "Desktop bridge is missing handoffThreadWorkspace().",
+        );
         setWorktreeArchiveError(error.message);
         throw error;
       }
@@ -4656,7 +4909,7 @@ export function useThreadNavigation(
         throw error;
       }
     },
-    [handoffThreadWorkspaceRequest, refresh]
+    [handoffThreadWorkspaceRequest, refresh],
   );
 
   const renameThread = useCallback(
@@ -4695,7 +4948,7 @@ export function useThreadNavigation(
               title: nextName,
               titleSource: "explicit",
             }
-          : current
+          : current,
       );
       setOptimisticThread((current) =>
         current?.source === thread.source && current.id === thread.id
@@ -4704,7 +4957,7 @@ export function useThreadNavigation(
               title: nextName,
               titleSource: "explicit",
             }
-          : current
+          : current,
       );
 
       try {
@@ -4715,11 +4968,13 @@ export function useThreadNavigation(
         });
         await refresh(threadKey);
       } catch (error) {
-        setRenameThreadError(error instanceof Error ? error.message : String(error));
+        setRenameThreadError(
+          error instanceof Error ? error.message : String(error),
+        );
         await refresh(threadKey);
       }
     },
-    [refresh, renameThreadRequest]
+    [refresh, renameThreadRequest],
   );
 
   const setThreadReactionRequest = desktopApi?.setThreadReaction;
@@ -4779,10 +5034,7 @@ export function useThreadNavigation(
   );
 
   const setThreadPin = useCallback(
-    async (
-      thread: NavigationThreadSummary,
-      pinned: boolean,
-    ): Promise<void> => {
+    async (thread: NavigationThreadSummary, pinned: boolean): Promise<void> => {
       if (!setThreadPinRequest) {
         return;
       }
@@ -4790,11 +5042,12 @@ export function useThreadNavigation(
       // Append above ALL existing pins (across backends), not just this
       // thread's backend — pin order is global.
       const pinnedRank = pinned
-        ? thread.pinnedRank ?? buildAppendPinRank(
+        ? (thread.pinnedRank
+          ?? buildAppendPinRank(
             (state.response?.threads ?? []).map(
               (candidate) => candidate.pinnedRank,
             ),
-          )
+          ))
         : undefined;
 
       setState((current) => ({
@@ -5023,12 +5276,12 @@ export function useThreadNavigation(
       }
 
       const pinnedRank = pinned
-        ? directory.pinnedRank ??
-          buildAppendPinRank(
+        ? (directory.pinnedRank
+          ?? buildAppendPinRank(
             (state.response?.directories ?? [])
               .filter((candidate) => candidate.kind === "directory")
               .map((candidate) => candidate.pinnedRank),
-          )
+          ))
         : undefined;
 
       setState((current) => ({
@@ -5090,11 +5343,11 @@ export function useThreadNavigation(
   const updateThreadExecutionMode = useCallback(
     async (
       thread: NavigationThreadSummary,
-      executionMode: ThreadExecutionMode
+      executionMode: ThreadExecutionMode,
     ): Promise<void> => {
       if (!setThreadExecutionMode) {
         setSetThreadExecutionModeError(
-          "Desktop bridge is missing setThreadExecutionMode()."
+          "Desktop bridge is missing setThreadExecutionMode().",
         );
         return;
       }
@@ -5132,20 +5385,22 @@ export function useThreadNavigation(
         });
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       } catch (error) {
-        setSetThreadExecutionModeError(error instanceof Error ? error.message : String(error));
+        setSetThreadExecutionModeError(
+          error instanceof Error ? error.message : String(error),
+        );
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       } finally {
         setUpdatingThreadExecutionMode(undefined);
       }
     },
-    [refresh, setThreadExecutionMode]
+    [refresh, setThreadExecutionMode],
   );
 
   const cancelThreadExecutionModeQueue = useCallback(
     async (thread: NavigationThreadSummary): Promise<void> => {
       if (!cancelThreadExecutionModeQueueRequest) {
         setSetThreadExecutionModeError(
-          "Desktop bridge is missing cancelThreadExecutionModeQueue()."
+          "Desktop bridge is missing cancelThreadExecutionModeQueue().",
         );
         return;
       }
@@ -5158,12 +5413,12 @@ export function useThreadNavigation(
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       } catch (error) {
         setSetThreadExecutionModeError(
-          error instanceof Error ? error.message : String(error)
+          error instanceof Error ? error.message : String(error),
         );
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       }
     },
-    [cancelThreadExecutionModeQueueRequest, refresh]
+    [cancelThreadExecutionModeQueueRequest, refresh],
   );
 
   const updateThreadModelSettings = useCallback(
@@ -5174,11 +5429,11 @@ export function useThreadNavigation(
           NavigationThreadSummary,
           "model" | "reasoningEffort" | "serviceTier" | "fastMode"
         >
-      >
+      >,
     ): Promise<void> => {
       if (!setThreadModelSettings) {
         setSetThreadModelSettingsError(
-          "Desktop bridge is missing setThreadModelSettings()."
+          "Desktop bridge is missing setThreadModelSettings().",
         );
         return;
       }
@@ -5189,7 +5444,8 @@ export function useThreadNavigation(
           "reasoningEffort" in patch
             ? patch.reasoningEffort
             : thread.reasoningEffort,
-        serviceTier: "serviceTier" in patch ? patch.serviceTier : thread.serviceTier,
+        serviceTier:
+          "serviceTier" in patch ? patch.serviceTier : thread.serviceTier,
         fastMode:
           thread.source === "codex"
             ? "fastMode" in patch
@@ -5202,7 +5458,7 @@ export function useThreadNavigation(
       setOptimisticThread((current) =>
         current && current.id === thread.id && current.source === thread.source
           ? { ...current, ...nextSettings }
-          : current
+          : current,
       );
       setState((current) => ({
         ...current,
@@ -5221,12 +5477,12 @@ export function useThreadNavigation(
         });
       } catch (error) {
         setSetThreadModelSettingsError(
-          error instanceof Error ? error.message : String(error)
+          error instanceof Error ? error.message : String(error),
         );
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       }
     },
-    [refresh, setThreadModelSettings]
+    [refresh, setThreadModelSettings],
   );
 
   const updateAcpSessionRuntimeOption = useCallback(
@@ -5236,11 +5492,11 @@ export function useThreadNavigation(
         source: "configOption" | "mode";
         optionId: string;
         value: string;
-      }
+      },
     ): Promise<void> => {
       if (!setAcpSessionRuntimeOption) {
         setSetThreadExecutionModeError(
-          "Desktop bridge is missing setAcpSessionRuntimeOption()."
+          "Desktop bridge is missing setAcpSessionRuntimeOption().",
         );
         return;
       }
@@ -5264,7 +5520,7 @@ export function useThreadNavigation(
       setOptimisticThread((current) =>
         current && current.id === thread.id && current.source === thread.source
           ? { ...current, acpRuntime: nextAcpRuntime }
-          : current
+          : current,
       );
       setState((current) => ({
         ...current,
@@ -5283,12 +5539,12 @@ export function useThreadNavigation(
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       } catch (error) {
         setSetThreadExecutionModeError(
-          error instanceof Error ? error.message : String(error)
+          error instanceof Error ? error.message : String(error),
         );
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       }
     },
-    [refresh, setAcpSessionRuntimeOption]
+    [refresh, setAcpSessionRuntimeOption],
   );
 
   const dismissArchiveThreadNotice = useCallback((): void => {

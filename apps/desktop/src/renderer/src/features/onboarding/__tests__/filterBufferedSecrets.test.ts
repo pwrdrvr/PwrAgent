@@ -7,15 +7,15 @@ describe("filterBufferedSecrets", () => {
     // \n was previously stored verbatim, then Grok auth failed with
     // a cryptic error. The filter now `.trim()`s before passing the
     // value to the keychain-write IPC.
-    expect(
-      filterBufferedSecrets({ grokApiKey: "xai-abc123\n" }),
-    ).toEqual({ grokApiKey: "xai-abc123" });
+    expect(filterBufferedSecrets({ grokApiKey: "xai-abc123\n" })).toEqual({
+      grokApiKey: "xai-abc123",
+    });
   });
 
   it("strips leading + trailing whitespace alike", () => {
-    expect(
-      filterBufferedSecrets({ telegramBotToken: "  111:bot  " }),
-    ).toEqual({ telegramBotToken: "111:bot" });
+    expect(filterBufferedSecrets({ telegramBotToken: "  111:bot  " })).toEqual({
+      telegramBotToken: "111:bot",
+    });
   });
 
   it("drops whitespace-only values entirely (treated as 'no value')", () => {

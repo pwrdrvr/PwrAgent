@@ -17,13 +17,17 @@ describe("ThinkingScanner", () => {
       <>
         <ThinkingScanner />
         <ThinkingScanner compact />
-      </>
+      </>,
     );
 
-    const scanners = Array.from(document.querySelectorAll<HTMLElement>(".thinking-scanner"));
+    const scanners = Array.from(
+      document.querySelectorAll<HTMLElement>(".thinking-scanner"),
+    );
     expect(scanners).toHaveLength(2);
     expect(
-      scanners.map((scanner) => scanner.style.getPropertyValue("--thinking-scanner-delay"))
+      scanners.map((scanner) =>
+        scanner.style.getPropertyValue("--thinking-scanner-delay"),
+      ),
     ).toEqual(["-450ms", "-450ms"]);
     expect(requestAnimationFrameSpy).not.toHaveBeenCalled();
     expect(setTimeoutSpy).not.toHaveBeenCalled();

@@ -32,7 +32,9 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
   // number (monotonic with creation within a repo); for the rare multi-repo
   // thread, group by repo first so the numbers stay comparable.
   const prs = [...(props.thread.prs ?? [])].sort((left, right) => {
-    const repoOrder = repositoryLabel(left).localeCompare(repositoryLabel(right));
+    const repoOrder = repositoryLabel(left).localeCompare(
+      repositoryLabel(right),
+    );
     return repoOrder !== 0 ? repoOrder : right.number - left.number;
   });
   const detachPr = async (pr: PrSummary): Promise<void> => {
@@ -162,7 +164,9 @@ function checkLabel(state: CheckState): string {
   }
 }
 
-function resolveLifecycleState(pr: PrSummary): NonNullable<PrSummary["lifecycleState"]> {
+function resolveLifecycleState(
+  pr: PrSummary,
+): NonNullable<PrSummary["lifecycleState"]> {
   if (pr.lifecycleState) {
     return pr.lifecycleState;
   }

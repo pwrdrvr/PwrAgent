@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { CodexAppServer } from "../app-server/codex-app-server.js";
 import { AppServerSessionState } from "../app-server/session-state.js";
 import { GrokRolloutStore } from "../persistence/grok-rollout-store.js";
-import { FakeProvider, createTemporaryTestDirectory } from "../testing/test-harness.js";
+import {
+  FakeProvider,
+  createTemporaryTestDirectory,
+} from "../testing/test-harness.js";
 
 describe("CodexAppServer persistence", () => {
   it("reloads threads and previous response ids across server recreation", async () => {

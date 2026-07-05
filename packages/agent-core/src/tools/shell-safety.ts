@@ -19,7 +19,9 @@ const SAFE_GIT_SUBCOMMANDS = new Set([
   "ls-files",
 ]);
 
-export function classifyShellCommand(command: string): ShellSafetyClassification {
+export function classifyShellCommand(
+  command: string,
+): ShellSafetyClassification {
   const trimmed = command.trim();
   if (!trimmed) {
     return {
@@ -47,8 +49,8 @@ export function classifyShellCommand(command: string): ShellSafetyClassification
   if (program === "rg") {
     for (const arg of args) {
       if (
-        UNSAFE_RIPGREP_FLAGS.has(arg) ||
-        UNSAFE_RIPGREP_WITH_VALUE.some((pattern) => pattern.test(arg))
+        UNSAFE_RIPGREP_FLAGS.has(arg)
+        || UNSAFE_RIPGREP_WITH_VALUE.some((pattern) => pattern.test(arg))
       ) {
         return {
           safe: false,
@@ -67,7 +69,12 @@ export function classifyShellCommand(command: string): ShellSafetyClassification
     if (subcommand && SAFE_GIT_SUBCOMMANDS.has(subcommand)) {
       return {
         safe: true,
-        commandAction: subcommand === "grep" ? "search" : subcommand === "ls-files" ? "listFiles" : "unknown",
+        commandAction:
+          subcommand === "grep"
+            ? "search"
+            : subcommand === "ls-files"
+              ? "listFiles"
+              : "unknown",
       };
     }
     return {

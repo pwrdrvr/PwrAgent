@@ -23,13 +23,15 @@ import {
 export function isPwrAgentAppDynamicToolCall(
   call: Pick<DynamicToolCallParams, "namespace" | "tool">,
 ): call is DynamicToolCallParams & {
-  namespace: typeof PWRAGENT_APP_TOOL_NAMESPACE | typeof PWRAGENT_TOOL_NAMESPACE;
+  namespace:
+    | typeof PWRAGENT_APP_TOOL_NAMESPACE
+    | typeof PWRAGENT_TOOL_NAMESPACE;
   tool: PwrAgentAppOperationName;
 } {
   return (
-    call.namespace === PWRAGENT_APP_TOOL_NAMESPACE ||
-    (call.namespace === PWRAGENT_TOOL_NAMESPACE &&
-      PWRAGENT_APP_OPERATION_NAMES.includes(
+    call.namespace === PWRAGENT_APP_TOOL_NAMESPACE
+    || (call.namespace === PWRAGENT_TOOL_NAMESPACE
+      && PWRAGENT_APP_OPERATION_NAMES.includes(
         call.tool as PwrAgentAppOperationName,
       ))
   );
@@ -43,10 +45,12 @@ export async function handlePwrAgentAppDynamicToolCall(params: {
   const call = isPwrAgentAppDynamicToolCall(params.call)
     ? { ...params.call, namespace: PWRAGENT_TOOL_NAMESPACE }
     : params.call;
-  return await buildPwrAgentAppToolRouter(params.handler).handleDynamicToolCall({
-    backend: params.backend,
-    call,
-  });
+  return await buildPwrAgentAppToolRouter(params.handler).handleDynamicToolCall(
+    {
+      backend: params.backend,
+      call,
+    },
+  );
 }
 
 export function buildPwrAgentAppDynamicToolErrorResponse(params: {

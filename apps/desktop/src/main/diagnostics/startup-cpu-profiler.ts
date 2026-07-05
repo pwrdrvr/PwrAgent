@@ -3,12 +3,8 @@ import path from "node:path";
 import { writeHeapSnapshot } from "node:v8";
 import { getMainLogger } from "../log";
 import { analyzeStartupCpuProfileSession } from "./startup-cpu-analysis";
-import {
-  MainProcessCpuProfiler,
-} from "./main-process-cpu-profiler";
-import {
-  RendererStartupCpuProfiler,
-} from "./renderer-startup-cpu-profiler";
+import { MainProcessCpuProfiler } from "./main-process-cpu-profiler";
+import { RendererStartupCpuProfiler } from "./renderer-startup-cpu-profiler";
 import {
   createStartupCpuProfileSession,
   type StartupCpuProfileSession,
@@ -42,7 +38,10 @@ type StartupHeapSnapshotTarget = {
   takeHeapSnapshot?: (filePath: string) => Promise<void>;
 };
 
-type EnabledStartupCpuProfileConfig = Extract<StartupCpuProfileConfig, { enabled: true }>;
+type EnabledStartupCpuProfileConfig = Extract<
+  StartupCpuProfileConfig,
+  { enabled: true }
+>;
 
 type CreateStartupCpuProfileSession = (options: {
   config: EnabledStartupCpuProfileConfig;
@@ -119,7 +118,8 @@ export class StartupCpuProfiler {
       });
     this.logger = options?.logger ?? getMainLogger("pwragent:startup-cpu");
     this.now = options?.now ?? (() => new Date());
-    this.createSession = options?.createSession ?? createStartupCpuProfileSession;
+    this.createSession =
+      options?.createSession ?? createStartupCpuProfileSession;
     this.createMainProfiler =
       options?.createMainProfiler
       ?? ((session) =>
@@ -134,9 +134,9 @@ export class StartupCpuProfiler {
           target,
         }));
     this.analyzeSession =
-      options?.analyzeSession
-      ?? analyzeStartupCpuProfileSession;
-    this.writeMainHeapSnapshot = options?.writeMainHeapSnapshot ?? writeHeapSnapshot;
+      options?.analyzeSession ?? analyzeStartupCpuProfileSession;
+    this.writeMainHeapSnapshot =
+      options?.writeMainHeapSnapshot ?? writeHeapSnapshot;
   }
 
   async start(): Promise<void> {
@@ -185,16 +185,25 @@ export class StartupCpuProfiler {
 
   attachWindow(window: WindowTarget): void {
     const config = this.config;
-    if (!config.enabled || !this.session || this.attachedWindow || this.stopped) {
+    if (
+      !config.enabled
+      || !this.session
+      || this.attachedWindow
+      || this.stopped
+    ) {
       return;
     }
 
     this.attachedWindow = true;
-    this.rendererHeapSnapshotTarget = window.webContents as StartupHeapSnapshotTarget;
+    this.rendererHeapSnapshotTarget =
+      window.webContents as StartupHeapSnapshotTarget;
     recordStartupProfileEvent({
       type: "window-attached",
     });
-    this.rendererProfiler = this.createRendererProfiler(this.session, window.webContents);
+    this.rendererProfiler = this.createRendererProfiler(
+      this.session,
+      window.webContents,
+    );
     void this.rendererProfiler.start();
 
     window.webContents.on("did-finish-load", () => {
@@ -215,7 +224,10 @@ export class StartupCpuProfiler {
       }
 
       this.clearPostLoadTimer();
-      this.postLoadStopTimer = setTimeout(scheduleStop, config.postLoadDurationMs);
+      this.postLoadStopTimer = setTimeout(
+        scheduleStop,
+        config.postLoadDurationMs,
+      );
     });
 
     window.webContents.on("did-fail-load", () => {
@@ -257,11 +269,12 @@ export class StartupCpuProfiler {
       stopResults[0]?.status === "fulfilled" ? stopResults[0].value : false;
     const rendererCaptured =
       stopResults[1]?.status === "fulfilled" ? stopResults[1].value : false;
-    const status = mainCaptured && rendererCaptured
-      ? "completed"
-      : mainCaptured || rendererCaptured
-        ? "partial"
-        : "failed";
+    const status =
+      mainCaptured && rendererCaptured
+        ? "completed"
+        : mainCaptured || rendererCaptured
+          ? "partial"
+          : "failed";
     await this.captureHeapSnapshots();
     await flushStartupProfileEvents();
 
@@ -326,7 +339,11 @@ export class StartupCpuProfiler {
   }
 
   private async captureHeapSnapshots(): Promise<void> {
-    if (!this.config.enabled || !this.config.captureHeapSnapshots || !this.session) {
+    if (
+      !this.config.enabled
+      || !this.config.captureHeapSnapshots
+      || !this.session
+    ) {
       return;
     }
 

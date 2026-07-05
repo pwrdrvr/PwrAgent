@@ -65,7 +65,8 @@ export function formatSubAgentUsageSummary(params: {
   model?: string;
   usage: TaskMonitorUsageSnapshot;
 }): string {
-  const displayOptions = params.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
+  const displayOptions =
+    params.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   const tokenUsage = params.usage.tokenUsage;
   const inputTokens = Math.max(0, tokenUsage.inputTokens ?? 0);
   const cachedInputTokens = Math.min(
@@ -106,10 +107,13 @@ export function formatSubAgentUsageEstimates(params: {
   model?: string;
   usage: TaskMonitorUsageSnapshot;
 }): string | undefined {
-  const displayOptions = params.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
+  const displayOptions =
+    params.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   const estimates: string[] = [];
   if (displayOptions.usd && params.usage.cost) {
-    estimates.push(`${formatTokenUsageUsd(params.usage.cost.totalUsd)} list price`);
+    estimates.push(
+      `${formatTokenUsageUsd(params.usage.cost.totalUsd)} list price`,
+    );
   }
   if (displayOptions.codexCredits) {
     const credits = estimateOpenAiCodexCreditUsage({
@@ -127,9 +131,9 @@ export function formatSubAgentUsageEstimates(params: {
       serviceTier: params.usage.serviceTier,
       uncachedInputTokens: Math.max(
         0,
-        params.usage.tokenUsage.uncachedInputTokens ??
-          Math.max(0, params.usage.tokenUsage.inputTokens ?? 0) -
-            Math.max(0, params.usage.tokenUsage.cachedInputTokens ?? 0),
+        params.usage.tokenUsage.uncachedInputTokens
+          ?? Math.max(0, params.usage.tokenUsage.inputTokens ?? 0)
+            - Math.max(0, params.usage.tokenUsage.cachedInputTokens ?? 0),
       ),
     });
     if (credits && credits.totalCreditMicros > 0) {

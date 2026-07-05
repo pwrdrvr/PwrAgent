@@ -187,9 +187,9 @@ export class AcpRolloutStore {
 function shouldPersistUpdate(update: Record<string, unknown>): boolean {
   const kind = readKind(update);
   if (
-    kind === "available_commands_update" ||
-    kind === "config_option_update" ||
-    kind === "current_mode_update"
+    kind === "available_commands_update"
+    || kind === "config_option_update"
+    || kind === "current_mode_update"
   ) {
     return false;
   }
@@ -200,8 +200,8 @@ function shouldPersistUpdate(update: Record<string, unknown>): boolean {
   // replay, so without this guard every reload appends another copy to the
   // rollout and permanently pollutes durable history with setup/control text.
   if (
-    kind === "user_message_chunk" &&
-    isAcpUserBoilerplateMessage(readUpdateText(update))
+    kind === "user_message_chunk"
+    && isAcpUserBoilerplateMessage(readUpdateText(update))
   ) {
     return false;
   }
@@ -216,10 +216,10 @@ function streamingChunkKey(
     return undefined;
   }
   const id =
-    readString(params.update, "messageId") ??
-    readString(params.update, "message_id") ??
-    readString(params.update, "id") ??
-    "default";
+    readString(params.update, "messageId")
+    ?? readString(params.update, "message_id")
+    ?? readString(params.update, "id")
+    ?? "default";
   return `${params.backendId}:${params.sessionId}:${kind}:${id}`;
 }
 
@@ -231,18 +231,20 @@ function updateDuplicateKey(
     return undefined;
   }
   const id =
-    readString(params.update, "toolCallId") ??
-    readString(params.update, "tool_call_id") ??
-    readString(params.update, "id") ??
-    readString(params.update, "itemId") ??
-    readString(params.update, "item_id") ??
-    readString(params.update, "title");
+    readString(params.update, "toolCallId")
+    ?? readString(params.update, "tool_call_id")
+    ?? readString(params.update, "id")
+    ?? readString(params.update, "itemId")
+    ?? readString(params.update, "item_id")
+    ?? readString(params.update, "title");
   return id
     ? `${params.backendId}:${params.sessionId}:${kind}:${id}`
     : undefined;
 }
 
-function updateFingerprint(update: Record<string, unknown>): string | undefined {
+function updateFingerprint(
+  update: Record<string, unknown>,
+): string | undefined {
   const kind = readKind(update);
   if (kind !== "tool_call" && kind !== "tool_call_update") {
     return undefined;
@@ -284,11 +286,11 @@ function updateWithText(
 
 function readKind(update: Record<string, unknown>): string {
   return (
-    readString(update, "sessionUpdate") ??
-    readString(update, "session_update") ??
-    readString(update, "kind") ??
-    readString(update, "type") ??
-    "unknown"
+    readString(update, "sessionUpdate")
+    ?? readString(update, "session_update")
+    ?? readString(update, "kind")
+    ?? readString(update, "type")
+    ?? "unknown"
   );
 }
 
@@ -326,10 +328,10 @@ function isRolloutRecord(value: unknown): value is AcpRolloutRecord {
   }
   const record = value as Record<string, unknown>;
   return (
-    record.type === "update" &&
-    typeof record.receivedAt === "number" &&
-    record.update !== null &&
-    typeof record.update === "object" &&
-    !Array.isArray(record.update)
+    record.type === "update"
+    && typeof record.receivedAt === "number"
+    && record.update !== null
+    && typeof record.update === "object"
+    && !Array.isArray(record.update)
   );
 }

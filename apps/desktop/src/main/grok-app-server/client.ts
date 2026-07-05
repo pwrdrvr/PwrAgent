@@ -6,9 +6,7 @@ import {
   loadLocalEnv,
   resolveGrokAppServerRuntimeConfig,
 } from "@pwragent/agent-core";
-import {
-  shortenDerivedThreadTitle,
-} from "@pwragent/shared";
+import { shortenDerivedThreadTitle } from "@pwragent/shared";
 import type {
   AppServerAvailableCommandSummary,
   AppServerNotification,
@@ -54,13 +52,13 @@ type GrokServerLike = {
   request(method: string, params?: unknown): Promise<unknown>;
   notify?(method: string, params?: unknown): Promise<void>;
   onNotification(
-    handler: (notification: AppServerNotification) => void | Promise<void>
+    handler: (notification: AppServerNotification) => void | Promise<void>,
   ): () => void;
   onRequest?(
     handler: (
       method: string,
-      params?: Record<string, unknown>
-    ) => Promise<unknown> | unknown
+      params?: Record<string, unknown>,
+    ) => Promise<unknown> | unknown,
   ): () => void;
 };
 
@@ -72,10 +70,10 @@ type GrokClientOptions = {
   model?: string;
   stateRoot?: string;
   directoryResolver?: (
-    projectKey?: string
+    projectKey?: string,
   ) => Promise<LinkedDirectorySummary[]>;
   threadDirectoryEnricher?: (
-    projectKey?: string
+    projectKey?: string,
   ) => Promise<ThreadDirectoryEnrichment>;
   server?: GrokServerLike;
   threadIdGenerator?: () => string;
@@ -115,7 +113,7 @@ function normalizeThreadSummary(thread: RawThreadSummary): RawThreadSummary {
   const normalizedRawTitle = thread.title?.trim();
   const normalizedTitle =
     normalizedTitleSource === "derived"
-      ? shortenDerivedThreadTitle(normalizedRawTitle) ?? "Untitled thread"
+      ? (shortenDerivedThreadTitle(normalizedRawTitle) ?? "Untitled thread")
       : normalizedRawTitle || "Untitled thread";
   const normalizedSummary = thread.summary?.trim() || undefined;
 
@@ -123,18 +121,19 @@ function normalizeThreadSummary(thread: RawThreadSummary): RawThreadSummary {
     ...thread,
     title: normalizedTitle,
     titleSource:
-      normalizedTitleSource ??
-      (normalizedTitle === "Untitled thread" ? "fallback" : "explicit"),
+      normalizedTitleSource
+      ?? (normalizedTitle === "Untitled thread" ? "fallback" : "explicit"),
     summary:
-      normalizedSummary === normalizedTitle ||
-      (normalizedTitleSource === "derived" && normalizedSummary === normalizedRawTitle)
+      normalizedSummary === normalizedTitle
+      || (normalizedTitleSource === "derived"
+        && normalizedSummary === normalizedRawTitle)
         ? undefined
         : normalizedSummary,
   };
 }
 
 function normalizeTitleSource(
-  value: unknown
+  value: unknown,
 ): AppServerThreadTitleSource | undefined {
   return value === "explicit" || value === "derived" || value === "fallback"
     ? value
@@ -143,13 +142,13 @@ function normalizeTitleSource(
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined;
 }
 
 function readString(
   record: Record<string, unknown> | undefined,
-  key: string
+  key: string,
 ): string | undefined {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -157,7 +156,7 @@ function readString(
 
 function readBoolean(
   record: Record<string, unknown> | undefined,
-  key: string
+  key: string,
 ): boolean | undefined {
   const value = record?.[key];
   return typeof value === "boolean" ? value : undefined;
@@ -182,8 +181,13 @@ function readTimestamp(
   return undefined;
 }
 
-function normalizeThreadStatus(value: string | undefined): AppServerThreadStatus | undefined {
-  const normalized = value?.trim().replace(/[-_\s]/g, "").toLowerCase();
+function normalizeThreadStatus(
+  value: string | undefined,
+): AppServerThreadStatus | undefined {
+  const normalized = value
+    ?.trim()
+    .replace(/[-_\s]/g, "")
+    .toLowerCase();
   if (normalized === "active") {
     return "active";
   }
@@ -214,22 +218,22 @@ function readThreadStatus(value: unknown): AppServerThreadStatus | undefined {
   const threadStatus = asRecord(thread?.status);
 
   return normalizeThreadStatus(
-    readString(status, "type") ??
-      readString(status, "status") ??
-      readString(status, "state") ??
-      readString(threadStatus, "type") ??
-      readString(threadStatus, "status") ??
-      readString(threadStatus, "state") ??
-      readString(record, "status") ??
-      readString(record, "state") ??
-      readString(thread, "status") ??
-      readString(thread, "state")
+    readString(status, "type")
+      ?? readString(status, "status")
+      ?? readString(status, "state")
+      ?? readString(threadStatus, "type")
+      ?? readString(threadStatus, "status")
+      ?? readString(threadStatus, "state")
+      ?? readString(record, "status")
+      ?? readString(record, "state")
+      ?? readString(thread, "status")
+      ?? readString(thread, "state"),
   );
 }
 
 function withThreadStatus(
   replay: AppServerThreadReplay,
-  source: unknown
+  source: unknown,
 ): AppServerThreadReplay {
   const threadStatus = readThreadStatus(source);
   return threadStatus ? { ...replay, threadStatus } : replay;
@@ -268,7 +272,8 @@ function extractThreadSummaryList(value: unknown): RawThreadSummary[] {
           threadId,
           title: typeof record.title === "string" ? record.title : undefined,
           titleSource: normalizeTitleSource(record.titleSource),
-          summary: typeof record.summary === "string" ? record.summary : undefined,
+          summary:
+            typeof record.summary === "string" ? record.summary : undefined,
           projectKey:
             typeof record.projectKey === "string"
               ? record.projectKey
@@ -277,12 +282,15 @@ function extractThreadSummaryList(value: unknown): RawThreadSummary[] {
                 : undefined,
           model: typeof record.model === "string" ? record.model : undefined,
           serviceTier:
-            typeof record.serviceTier === "string" ? record.serviceTier : undefined,
+            typeof record.serviceTier === "string"
+              ? record.serviceTier
+              : undefined,
           reasoningEffort:
             typeof record.reasoningEffort === "string"
               ? record.reasoningEffort
               : undefined,
-          fastMode: typeof record.fastMode === "boolean" ? record.fastMode : undefined,
+          fastMode:
+            typeof record.fastMode === "boolean" ? record.fastMode : undefined,
           createdAt:
             typeof record.createdAt === "number" ? record.createdAt : undefined,
           updatedAt:
@@ -325,32 +333,46 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
       return withThreadStatus(replayFromItems, value);
     }
     return withThreadStatus(
-      buildReplayFromMessages(messages, pagination, activityEntries(replayFromItems)),
-      value
+      buildReplayFromMessages(
+        messages,
+        pagination,
+        activityEntries(replayFromItems),
+      ),
+      value,
     );
   }
 
   if (messages.length > 0) {
-    return withThreadStatus(buildReplayFromMessages(messages, pagination), value);
+    return withThreadStatus(
+      buildReplayFromMessages(messages, pagination),
+      value,
+    );
   }
 
   if (rawMessages.length === 0) {
     const fallbackMessages = fallbackLastMessages(record);
     if (fallbackMessages.length > 0) {
-      return withThreadStatus(buildReplayFromMessages(fallbackMessages, pagination), value);
+      return withThreadStatus(
+        buildReplayFromMessages(fallbackMessages, pagination),
+        value,
+      );
     }
   }
 
   return withThreadStatus(buildReplayFromMessages([], pagination), value);
 }
 
-function extractReplayPagination(value: unknown): AppServerThreadReplay["pagination"] {
+function extractReplayPagination(
+  value: unknown,
+): AppServerThreadReplay["pagination"] {
   const record = asRecord(value);
   const pagination = asRecord(record?.pagination);
   const previousCursor = readString(pagination, "previousCursor");
   return {
-    supportsPagination: readBoolean(pagination, "supportsPagination") ?? Boolean(previousCursor),
-    hasPreviousPage: readBoolean(pagination, "hasPreviousPage") ?? Boolean(previousCursor),
+    supportsPagination:
+      readBoolean(pagination, "supportsPagination") ?? Boolean(previousCursor),
+    hasPreviousPage:
+      readBoolean(pagination, "hasPreviousPage") ?? Boolean(previousCursor),
     ...(previousCursor ? { previousCursor } : {}),
   };
 }
@@ -377,22 +399,22 @@ function fallbackLastMessages(record: {
           text: record.lastAssistantMessage,
         }
       : undefined,
-  ].filter((message): message is ReplayMessage =>
-    Boolean(message)
-  );
+  ].filter((message): message is ReplayMessage => Boolean(message));
 }
 
-function normalizeRenderableImageUrl(value: string | undefined): string | undefined {
+function normalizeRenderableImageUrl(
+  value: string | undefined,
+): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
     return undefined;
   }
 
   if (
-    trimmed.startsWith("http://") ||
-    trimmed.startsWith("https://") ||
-    trimmed.startsWith("file://") ||
-    trimmed.startsWith("data:image/")
+    trimmed.startsWith("http://")
+    || trimmed.startsWith("https://")
+    || trimmed.startsWith("file://")
+    || trimmed.startsWith("data:image/")
   ) {
     return trimmed;
   }
@@ -404,7 +426,9 @@ function normalizeRenderableImageUrl(value: string | undefined): string | undefi
   return undefined;
 }
 
-function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePart[] {
+function extractStructuredMessageParts(
+  value: unknown,
+): AppServerThreadMessagePart[] {
   if (Array.isArray(value)) {
     return value.flatMap((entry) => extractStructuredMessageParts(entry));
   }
@@ -415,7 +439,9 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
   }
 
   const normalizedType =
-    typeof record.type === "string" ? record.type.trim().toLowerCase() : undefined;
+    typeof record.type === "string"
+      ? record.type.trim().toLowerCase()
+      : undefined;
 
   if (normalizedType === "text" || normalizedType === "input_text") {
     const text = typeof record.text === "string" ? record.text.trim() : "";
@@ -429,7 +455,10 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
         ? record.path
         : undefined,
   );
-  if (imageUrl && (normalizedType === "image" || normalizedType === "localimage")) {
+  if (
+    imageUrl
+    && (normalizedType === "image" || normalizedType === "localimage")
+  ) {
     const part: AppServerThreadImagePart = {
       type: "image",
       url: imageUrl,
@@ -475,7 +504,9 @@ function buildReplayFromMessages(
   activityEntries: AppServerThreadEntry[] = [],
 ): AppServerThreadReplay {
   const entries: AppServerThreadEntry[] = [];
-  const lastUserIndex = messages.findLastIndex((message) => message.role === "user");
+  const lastUserIndex = messages.findLastIndex(
+    (message) => message.role === "user",
+  );
   let insertedActivity = false;
 
   for (const [index, message] of messages.entries()) {
@@ -518,7 +549,9 @@ function buildReplayFromMessages(
   };
 }
 
-function activityEntries(replay: AppServerThreadReplay): AppServerThreadEntry[] {
+function activityEntries(
+  replay: AppServerThreadReplay,
+): AppServerThreadEntry[] {
   return replay.entries.filter((entry) => entry.type === "activity");
 }
 
@@ -526,7 +559,11 @@ function extractReplayFromItems(
   items: Record<string, unknown>[],
   pagination: AppServerThreadReplay["pagination"],
 ): AppServerThreadReplay | undefined {
-  if (!items.some((item) => isActivityReplayItem(item) || isReviewReplayItem(item))) {
+  if (
+    !items.some(
+      (item) => isActivityReplayItem(item) || isReviewReplayItem(item),
+    )
+  ) {
     return undefined;
   }
 
@@ -591,33 +628,43 @@ function extractReplayFromItems(
   };
 }
 
-function itemToReviewEntry(item: Record<string, unknown>): AppServerThreadReviewEntry | undefined {
+function itemToReviewEntry(
+  item: Record<string, unknown>,
+): AppServerThreadReviewEntry | undefined {
   const type = typeof item.type === "string" ? item.type : undefined;
   if (type !== "enteredReviewMode" && type !== "exitedReviewMode") {
     return undefined;
   }
-  const review = typeof item.review === "string"
-    ? item.review
-    : typeof item.text === "string"
-      ? item.text
-      : "";
+  const review =
+    typeof item.review === "string"
+      ? item.review
+      : typeof item.text === "string"
+        ? item.text
+        : "";
   const data = asRecord(item.data);
   const output = asRecord(data?.reviewOutput);
-  const findings = Array.isArray(output?.findings) ? output.findings : undefined;
+  const findings = Array.isArray(output?.findings)
+    ? output.findings
+    : undefined;
   return {
     type: "review",
     id: typeof item.id === "string" ? item.id : `review-${type}`,
     review,
-    displayText: type === "enteredReviewMode" ? review || "Code review started" : undefined,
-    ...(output &&
-    findings &&
-    (output.overall_correctness === "patch is correct" ||
-      output.overall_correctness === "patch is incorrect") &&
-    typeof output.overall_explanation === "string" &&
-    typeof output.overall_confidence_score === "number"
+    displayText:
+      type === "enteredReviewMode"
+        ? review || "Code review started"
+        : undefined,
+    ...(output
+    && findings
+    && (output.overall_correctness === "patch is correct"
+      || output.overall_correctness === "patch is incorrect")
+    && typeof output.overall_explanation === "string"
+    && typeof output.overall_confidence_score === "number"
       ? {
           output: {
-            findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
+            findings: findings as NonNullable<
+              AppServerThreadReviewEntry["output"]
+            >["findings"],
             overall_correctness: output.overall_correctness,
             overall_explanation: output.overall_explanation,
             overall_confidence_score: output.overall_confidence_score,
@@ -627,7 +674,10 @@ function itemToReviewEntry(item: Record<string, unknown>): AppServerThreadReview
   };
 }
 
-function itemToMessage(item: Record<string, unknown>, index: number): ReplayMessage | undefined {
+function itemToMessage(
+  item: Record<string, unknown>,
+  index: number,
+): ReplayMessage | undefined {
   const type = typeof item.type === "string" ? item.type : undefined;
   const role =
     item.role === "user" || type === "userMessage"
@@ -650,11 +700,12 @@ function itemToMessage(item: Record<string, unknown>, index: number): ReplayMess
 
 function isActivityReplayItem(item: Record<string, unknown>): boolean {
   const type = typeof item.type === "string" ? item.type : undefined;
-  const toolName = typeof item.toolName === "string" ? item.toolName : undefined;
+  const toolName =
+    typeof item.toolName === "string" ? item.toolName : undefined;
   return (
-    type === "dynamicToolCall" ||
-    type === "commandExecution" ||
-    Boolean(toolName)
+    type === "dynamicToolCall"
+    || type === "commandExecution"
+    || Boolean(toolName)
   );
 }
 
@@ -694,7 +745,7 @@ function extractSkillsList(value: unknown): SkillCatalogEntry[] {
   }
 
   const data = Array.isArray((value as { data?: unknown }).data)
-    ? ((value as { data: unknown[] }).data)
+    ? (value as { data: unknown[] }).data
     : [];
 
   return data.flatMap((entry): SkillCatalogEntry[] => {
@@ -737,33 +788,37 @@ function extractSkillsList(value: unknown): SkillCatalogEntry[] {
       : Array.isArray(record.availableCommands)
         ? record.availableCommands
         : [];
-    const commands = rawCommands.flatMap((command): AppServerAvailableCommandSummary[] => {
-      if (!command || typeof command !== "object" || Array.isArray(command)) {
-        return [];
-      }
+    const commands = rawCommands.flatMap(
+      (command): AppServerAvailableCommandSummary[] => {
+        if (!command || typeof command !== "object" || Array.isArray(command)) {
+          return [];
+        }
 
-      const item = command as Record<string, unknown>;
-      const name =
-        typeof item.name === "string" && item.name.trim()
-          ? item.name.trim()
-          : typeof item.command === "string" && item.command.trim()
-            ? item.command.trim()
-            : "";
-      if (!name) {
-        return [];
-      }
+        const item = command as Record<string, unknown>;
+        const name =
+          typeof item.name === "string" && item.name.trim()
+            ? item.name.trim()
+            : typeof item.command === "string" && item.command.trim()
+              ? item.command.trim()
+              : "";
+        if (!name) {
+          return [];
+        }
 
-      return [
-        {
-          name,
-          description:
-            typeof item.description === "string" ? item.description : undefined,
-          aliases: readStringArray(item.aliases),
-          scope: "backend",
-          source: "provider",
-        },
-      ];
-    });
+        return [
+          {
+            name,
+            description:
+              typeof item.description === "string"
+                ? item.description
+                : undefined,
+            aliases: readStringArray(item.aliases),
+            scope: "backend",
+            source: "provider",
+          },
+        ];
+      },
+    );
 
     return [
       {
@@ -796,7 +851,7 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
   }
 
   const data = Array.isArray((value as { data?: unknown }).data)
-    ? ((value as { data: unknown[] }).data)
+    ? (value as { data: unknown[] }).data
     : [];
 
   return data.flatMap((entry): BackendModelOption[] => {
@@ -814,15 +869,20 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
       {
         id,
         label: typeof record.label === "string" ? record.label : undefined,
-        current: typeof record.current === "boolean" ? record.current : undefined,
+        current:
+          typeof record.current === "boolean" ? record.current : undefined,
         supportsReasoning:
           typeof record.supportsReasoning === "boolean"
             ? record.supportsReasoning
             : undefined,
         supportsFast:
-          typeof record.supportsFast === "boolean" ? record.supportsFast : undefined,
+          typeof record.supportsFast === "boolean"
+            ? record.supportsFast
+            : undefined,
         supportsSteering:
-          typeof record.supportsSteering === "boolean" ? record.supportsSteering : false,
+          typeof record.supportsSteering === "boolean"
+            ? record.supportsSteering
+            : false,
       },
     ];
   });
@@ -830,7 +890,7 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
 
 export class GrokAppServerClient {
   private readonly threadDirectoryEnricher: (
-    projectKey?: string
+    projectKey?: string,
   ) => Promise<ThreadDirectoryEnrichment>;
   private requestCounter = 0;
   private server: GrokServerLike | null;
@@ -841,17 +901,15 @@ export class GrokAppServerClient {
     (notification: AppServerNotification) => void | Promise<void>
   >();
   private readonly requestListeners = new Set<
-    (
-      request: AppServerPendingRequestNotification
-    ) => Promise<unknown> | unknown
+    (request: AppServerPendingRequestNotification) => Promise<unknown> | unknown
   >();
   private unsubscribeNotification?: () => void;
   private unsubscribeRequest?: () => void;
 
   constructor(private readonly options: GrokClientOptions = {}) {
     this.threadDirectoryEnricher =
-      options.threadDirectoryEnricher ??
-      (options.directoryResolver
+      options.threadDirectoryEnricher
+      ?? (options.directoryResolver
         ? async (projectKey?: string) => ({
             linkedDirectories: await options.directoryResolver!(projectKey),
           })
@@ -873,7 +931,7 @@ export class GrokAppServerClient {
   }
 
   onNotification(
-    listener: (notification: AppServerNotification) => void | Promise<void>
+    listener: (notification: AppServerNotification) => void | Promise<void>,
   ): () => void {
     this.notificationListeners.add(listener);
     return () => {
@@ -883,8 +941,8 @@ export class GrokAppServerClient {
 
   onRequest(
     listener: (
-      request: AppServerPendingRequestNotification
-    ) => Promise<unknown> | unknown
+      request: AppServerPendingRequestNotification,
+    ) => Promise<unknown> | unknown,
   ): () => void {
     this.requestListeners.add(listener);
     return () => {
@@ -897,20 +955,29 @@ export class GrokAppServerClient {
     return this.initializeResult ?? {};
   }
 
-  async listThreads(params?: {
-    archived?: boolean;
-    filter?: string;
-  }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
+  async listThreads(
+    params?: {
+      archived?: boolean;
+      filter?: string;
+    },
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
-    const result = await this.request("thread/list", {
-      archived: params?.archived === true,
-      filter: params?.filter,
-    }, diagnostics);
+    const result = await this.request(
+      "thread/list",
+      {
+        archived: params?.archived === true,
+        filter: params?.filter,
+      },
+      diagnostics,
+    );
     return await Promise.all(
       extractThreadSummaryList(result).map(async (thread) => {
         const normalized = normalizeThreadSummary(thread);
-        const enrichment = await this.threadDirectoryEnricher(thread.projectKey);
+        const enrichment = await this.threadDirectoryEnricher(
+          thread.projectKey,
+        );
         return {
           id: thread.threadId,
           title: normalized.title ?? "Untitled thread",
@@ -930,7 +997,7 @@ export class GrokAppServerClient {
             : {}),
           source: "grok" as const,
         };
-      })
+      }),
     );
   }
 
@@ -940,7 +1007,9 @@ export class GrokAppServerClient {
   }): Promise<SkillCatalogEntry[]> {
     await this.ensureInitialized();
 
-    const cwds = [...new Set([...(params?.cwds ?? []), params?.cwd].filter(Boolean))];
+    const cwds = [
+      ...new Set([...(params?.cwds ?? []), params?.cwd].filter(Boolean)),
+    ];
     const result = await this.request("skills/list", { cwds });
     return extractSkillsList(result);
   }
@@ -1022,7 +1091,9 @@ export class GrokAppServerClient {
     const threadId = extractThreadId(result);
     const turnId = extractTurnId(result);
     if (!threadId || !turnId) {
-      throw new Error("grok app server turn/start did not return threadId and turnId");
+      throw new Error(
+        "grok app server turn/start did not return threadId and turnId",
+      );
     }
 
     return { threadId, turnId };
@@ -1081,7 +1152,9 @@ export class GrokAppServerClient {
     const threadId = extractThreadId(result);
     const turnId = extractTurnId(result);
     if (!threadId || !turnId) {
-      throw new Error("grok app server turn/interrupt did not return threadId and turnId");
+      throw new Error(
+        "grok app server turn/interrupt did not return threadId and turnId",
+      );
     }
 
     return { threadId, turnId };
@@ -1105,7 +1178,9 @@ export class GrokAppServerClient {
     };
   }
 
-  async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
+  async archiveThread(params: {
+    threadId: string;
+  }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
     const result = await this.request("thread/archive", {
@@ -1116,7 +1191,9 @@ export class GrokAppServerClient {
     };
   }
 
-  async restoreThread(params: { threadId: string }): Promise<{ threadId: string }> {
+  async restoreThread(params: {
+    threadId: string;
+  }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
     const result = await this.request("thread/unarchive", {
@@ -1204,19 +1281,21 @@ export class GrokAppServerClient {
 
   private subscribeToServerNotifications(server: GrokServerLike): void {
     this.unsubscribeNotification?.();
-    this.unsubscribeNotification = server.onNotification(async (notification) => {
-      await this.observe({
-        direction: "inbound",
-        envelope: {
-          jsonrpc: "2.0",
-          method: notification.method,
-          params: notification.params ?? {},
-        },
-      });
-      for (const listener of this.notificationListeners) {
-        await listener(notification);
-      }
-    });
+    this.unsubscribeNotification = server.onNotification(
+      async (notification) => {
+        await this.observe({
+          direction: "inbound",
+          envelope: {
+            jsonrpc: "2.0",
+            method: notification.method,
+            params: notification.params ?? {},
+          },
+        });
+        for (const listener of this.notificationListeners) {
+          await listener(notification);
+        }
+      },
+    );
     this.unsubscribeRequest?.();
     this.unsubscribeRequest = server.onRequest?.(async (method, params) => {
       const requestId =

@@ -8,7 +8,10 @@ import type {
   ThreadWorkspaceHandoffStrategy,
 } from "./normalized-app-server";
 import type { CodexEnvironmentStartupFailure } from "./agent";
-import type { MessagingChannelKind, MessagingConversationKind } from "./messaging";
+import type {
+  MessagingChannelKind,
+  MessagingConversationKind,
+} from "./messaging";
 
 export const PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES = [
   "attach_thread_directory",
@@ -255,7 +258,11 @@ export type ThreadHandoffOriginWorkspace = {
   branch?: string;
   linkedDirectory?: LinkedDirectorySummary;
   git:
-    | { kind: "none"; worktreeCreationAvailable: false; unavailableReason: string }
+    | {
+        kind: "none";
+        worktreeCreationAvailable: false;
+        unavailableReason: string;
+      }
     | {
         kind: "non_git";
         worktreeCreationAvailable: false;

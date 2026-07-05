@@ -108,25 +108,27 @@ export function initializeMainLogger(options?: { profileName?: string }): void {
   electronLog.transports.file.level = debugCollectionEnabled ? "debug" : "info";
   electronLog.initialize();
   electronLog.scope.labelPadding = false;
-  electronLog.hooks.push((
-    message: ElectronLogMessage,
-    _transport: Parameters<ElectronLogHook>[1],
-    transportName: Parameters<ElectronLogHook>[2],
-  ) => {
-    const compacted: ElectronLogMessage = {
-      ...message,
-      data: compactStructuredLogData(message.data),
-    };
-    if (transportName === "file") {
-      appendAppLogEntry({
-        timestamp: message.date.getTime(),
-        level: String(message.level),
-        scope: message.scope,
-        line: formatAppLogLine(compacted),
-      });
-    }
-    return compacted;
-  });
+  electronLog.hooks.push(
+    (
+      message: ElectronLogMessage,
+      _transport: Parameters<ElectronLogHook>[1],
+      transportName: Parameters<ElectronLogHook>[2],
+    ) => {
+      const compacted: ElectronLogMessage = {
+        ...message,
+        data: compactStructuredLogData(message.data),
+      };
+      if (transportName === "file") {
+        appendAppLogEntry({
+          timestamp: message.date.getTime(),
+          level: String(message.level),
+          scope: message.scope,
+          line: formatAppLogLine(compacted),
+        });
+      }
+      return compacted;
+    },
+  );
 }
 
 export function getMainLogger(scope: string) {
@@ -195,7 +197,11 @@ function formatLogTextPart(value: unknown): string {
   if (value instanceof Error) {
     return value.stack ?? value.message;
   }
-  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+  if (
+    typeof value === "number"
+    || typeof value === "boolean"
+    || value === null
+  ) {
     return String(value);
   }
   if (value === undefined) {
@@ -228,14 +234,17 @@ export function compactStructuredLogData(data: unknown[]): unknown[] {
     ? [`${data[0]} ${compacted.filter(Boolean).join(" ")}`, ...passthrough]
     : hadStructuredPayload
       ? [data[0], ...passthrough]
-    : data;
+      : data;
 }
 
 function compactObjectFields(value: Record<string, unknown>): string {
   const fields: CompactField[] = [];
   collectCompactFields(value, "", fields, 0);
   const suffix = fields.length >= MAX_COMPACT_FIELDS ? " ..." : "";
-  return `${fields.slice(0, MAX_COMPACT_FIELDS).map((field) => `${field.key}=${field.value}`).join(" ")}${suffix}`;
+  return `${fields
+    .slice(0, MAX_COMPACT_FIELDS)
+    .map((field) => `${field.key}=${field.value}`)
+    .join(" ")}${suffix}`;
 }
 
 function collectCompactFields(
@@ -257,9 +266,9 @@ function collectCompactFields(
     }
     const fieldKey = prefix ? `${prefix}.${key}` : key;
     if (
-      isPlainObject(child) &&
-      depth < MAX_COMPACT_DEPTH &&
-      Object.keys(child).length <= 8
+      isPlainObject(child)
+      && depth < MAX_COMPACT_DEPTH
+      && Object.keys(child).length <= 8
     ) {
       collectCompactFields(child, fieldKey, fields, depth + 1);
       continue;
@@ -275,7 +284,11 @@ function compactLogValue(value: unknown): string {
   if (typeof value === "string") {
     return quoteIfNeeded(value);
   }
-  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+  if (
+    typeof value === "number"
+    || typeof value === "boolean"
+    || value === null
+  ) {
     return String(value);
   }
   if (value === undefined) {

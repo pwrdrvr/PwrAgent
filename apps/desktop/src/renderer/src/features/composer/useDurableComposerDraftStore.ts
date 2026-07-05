@@ -55,7 +55,9 @@ export function useDurableComposerDraftStore(
       };
       localRecoverySequenceRef.current += 1;
       const [previousCandidate] = localRecoveryCandidatesRef.current;
-      if (shouldReplacePreviousUnsentCandidate(previousCandidate, nextCandidate)) {
+      if (
+        shouldReplacePreviousUnsentCandidate(previousCandidate, nextCandidate)
+      ) {
         localRecoveryCandidatesRef.current = [
           nextCandidate,
           ...localRecoveryCandidatesRef.current.slice(1),
@@ -104,7 +106,8 @@ export function useDurableComposerDraftStore(
     }
 
     let cancelled = false;
-    void desktopApi.listComposerDraftLatest()
+    void desktopApi
+      .listComposerDraftLatest()
       .then((response) => {
         if (cancelled) {
           return;
@@ -157,11 +160,12 @@ export function useDurableComposerDraftStore(
       listRecoveryCandidates: async (
         request: ListComposerDraftRecoveryCandidatesRequest,
       ): Promise<ComposerDraftRecoveryCandidate[]> => {
-        const response = await desktopApi?.listComposerDraftRecoveryCandidates?.(
-          request,
-        );
+        const response =
+          await desktopApi?.listComposerDraftRecoveryCandidates?.(request);
         const localCandidates = localRecoveryCandidatesRef.current
-          .filter((candidate) => matchesLocalRecoveryRequest(candidate, request))
+          .filter((candidate) =>
+            matchesLocalRecoveryRequest(candidate, request),
+          )
           .map(({ localSequence: _localSequence, ...candidate }) => candidate);
         return mergeRecoveryCandidates(
           localCandidates,
@@ -180,11 +184,18 @@ export function useDurableComposerDraftStore(
         if (!shouldRecordHistory(snapshot, status)) {
           return;
         }
-        const record = buildDraftRecord(scopeKey, snapshot, status, createdAtRef);
+        const record = buildDraftRecord(
+          scopeKey,
+          snapshot,
+          status,
+          createdAtRef,
+        );
         rememberLocalRecoveryCandidate(record);
-        void desktopApi.recordComposerDraftHistory({ draft: record }).catch((error) => {
-          console.warn("Failed to record composer draft history", error);
-        });
+        void desktopApi
+          .recordComposerDraftHistory({ draft: record })
+          .catch((error) => {
+            console.warn("Failed to record composer draft history", error);
+          });
       },
       set: (scopeKey, snapshot) => {
         baseStore.set(scopeKey, snapshot);
@@ -251,7 +262,9 @@ function buildDraftRecord(
     threadId: scope.threadId,
     directoryKey: scope.directoryKey,
     text: snapshot.draft,
-    editorDocument: snapshot.editorDocument as ComposerDraftJsonValue | undefined,
+    editorDocument: snapshot.editorDocument as
+      | ComposerDraftJsonValue
+      | undefined,
     skillTokens: snapshot.skillTokens,
     imageAttachments: snapshot.imageAttachments,
     status,
@@ -297,9 +310,9 @@ function shouldRecordHistory(
     return false;
   }
   const hasRecoverableContent =
-    snapshot.draft.trim().length > 0 ||
-    snapshot.imageAttachments.length > 0 ||
-    snapshot.skillTokens.length > 0;
+    snapshot.draft.trim().length > 0
+    || snapshot.imageAttachments.length > 0
+    || snapshot.skillTokens.length > 0;
   if (status === "sent") {
     return hasRecoverableContent;
   }
@@ -410,9 +423,9 @@ function shouldReplacePreviousUnsentCandidate(
   const previousText = previous.text.trimEnd();
   const nextText = next.text.trimEnd();
   return (
-    previousText.length > 0 &&
-    nextText.length > previousText.length &&
-    nextText.startsWith(previousText)
+    previousText.length > 0
+    && nextText.length > previousText.length
+    && nextText.startsWith(previousText)
   );
 }
 

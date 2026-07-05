@@ -41,8 +41,9 @@ describe("messaging-binding-transition-entries", () => {
     expect(entries).toHaveLength(2);
     for (const entry of entries) {
       expect(entry.type).toBe("activity");
-      expect(entry.id.startsWith(MESSAGING_BINDING_TRANSITION_ENTRY_PREFIX))
-        .toBe(true);
+      expect(
+        entry.id.startsWith(MESSAGING_BINDING_TRANSITION_ENTRY_PREFIX),
+      ).toBe(true);
       expect(isMessagingBindingTransitionEntry(entry)).toBe(true);
     }
   });
@@ -76,7 +77,9 @@ describe("messaging-binding-transition-entries", () => {
 
   it("returns the original entries array when transitions is empty", () => {
     const original: AppServerThreadEntry[] = [];
-    expect(injectMessagingBindingTransitions(original, undefined)).toBe(original);
+    expect(injectMessagingBindingTransitions(original, undefined)).toBe(
+      original,
+    );
     expect(injectMessagingBindingTransitions(original, [])).toBe(original);
   });
 
@@ -100,7 +103,10 @@ describe("messaging-binding-transition-entries", () => {
       },
     ];
 
-    const merged = injectMessagingBindingTransitions(existing, [unbound, bound]);
+    const merged = injectMessagingBindingTransitions(existing, [
+      unbound,
+      bound,
+    ]);
     expect(merged.map((entry) => entry.id)).toEqual([
       "msg-1",
       `${MESSAGING_BINDING_TRANSITION_ENTRY_PREFIX}${bound.id}`,

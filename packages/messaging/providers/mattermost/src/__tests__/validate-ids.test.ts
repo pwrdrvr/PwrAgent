@@ -22,11 +22,17 @@ describe("Mattermost identifier validators", () => {
     expect(validateMattermostId("abcdefghijklmnopqrstu12345")).toEqual({
       ok: true,
     });
-    expect(validateMattermostCallbackHandle("mattermost:abcdefghijklmnopqr")).toEqual({
+    expect(
+      validateMattermostCallbackHandle("mattermost:abcdefghijklmnopqr"),
+    ).toEqual({
       ok: true,
     });
-    expect(validateMattermostOpaqueToken("tk_ABC.123-xyz")).toEqual({ ok: true });
-    expect(validateMattermostResponseUrl("https://mattermost.example.com/hooks/x")).toEqual({
+    expect(validateMattermostOpaqueToken("tk_ABC.123-xyz")).toEqual({
+      ok: true,
+    });
+    expect(
+      validateMattermostResponseUrl("https://mattermost.example.com/hooks/x"),
+    ).toEqual({
       ok: true,
     });
   });

@@ -25,47 +25,50 @@ const mockAppServerLog = vi.hoisted(() => ({
 }));
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-const listThreads = vi.fn(async (request?: {
-  archived?: boolean;
-  backend?: "codex" | "grok";
-  filter?: string;
-  forceRefresh?: boolean;
-  limit?: number;
-  maxPages?: number;
-  skipArchivedMetadataRefresh?: boolean;
-}) =>
-  request?.archived
-    ? [
-        {
-          id: "thread-archived",
-          title: "Archived thread",
-          titleSource: "explicit" as const,
-          source: "codex" as const,
-          linkedDirectories: [],
-          updatedAt: 500,
-        },
-      ]
-    : [
-        {
-          id: "thread-1",
-          title: "Thread one",
-          titleSource: "explicit" as const,
-          source: "codex" as const,
-          linkedDirectories: [],
-          updatedAt: 2000,
-        },
-        {
-          id: "thread-1",
-          title: "Thread one (Grok)",
-          titleSource: "explicit" as const,
-          source: "grok" as const,
-          linkedDirectories: [],
-          updatedAt: 1000,
-        },
-      ]
+const listThreads = vi.fn(
+  async (request?: {
+    archived?: boolean;
+    backend?: "codex" | "grok";
+    filter?: string;
+    forceRefresh?: boolean;
+    limit?: number;
+    maxPages?: number;
+    skipArchivedMetadataRefresh?: boolean;
+  }) =>
+    request?.archived
+      ? [
+          {
+            id: "thread-archived",
+            title: "Archived thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            updatedAt: 500,
+          },
+        ]
+      : [
+          {
+            id: "thread-1",
+            title: "Thread one",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            updatedAt: 2000,
+          },
+          {
+            id: "thread-1",
+            title: "Thread one (Grok)",
+            titleSource: "explicit" as const,
+            source: "grok" as const,
+            linkedDirectories: [],
+            updatedAt: 1000,
+          },
+        ],
 );
 const readThread = vi.fn(async ({ threadId }: { threadId: string }) => ({
-  messages: [{ id: `${threadId}-message`, role: "assistant" as const, text: "Loaded" }],
+  messages: [
+    { id: `${threadId}-message`, role: "assistant" as const, text: "Loaded" },
+  ],
   pagination: {
     supportsPagination: false,
     hasPreviousPage: false,
@@ -119,24 +122,29 @@ const restoreWorktree = vi.fn(async (request: RestoreWorktreeRequest) => ({
     ignoredFilesExcluded: true,
   },
 }));
-const handoffThreadWorkspace = vi.fn(async (request: HandoffThreadWorkspaceRequest) => ({
-  backend: request.backend,
-  threadId: request.threadId,
-  direction: request.direction,
-  workMode: request.direction === "local-to-worktree" ? "worktree" as const : "local" as const,
-  branch: request.sourceBranch ?? "feature/handoff",
-  repositoryPath: request.repositoryPath ?? "/repo",
-  targetPath: "/repo/.worktrees/app-feature-handoff",
-  linkedDirectory: {
-    id: "pwragent-handoff:codex:thread-1",
-    label: "app",
-    path: request.repositoryPath ?? "/repo",
-    worktreePath: "/repo/.worktrees/app-feature-handoff",
-    kind: "worktree" as const,
-  },
-  warnings: [],
-  completedAt: 5000,
-}));
+const handoffThreadWorkspace = vi.fn(
+  async (request: HandoffThreadWorkspaceRequest) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    direction: request.direction,
+    workMode:
+      request.direction === "local-to-worktree"
+        ? ("worktree" as const)
+        : ("local" as const),
+    branch: request.sourceBranch ?? "feature/handoff",
+    repositoryPath: request.repositoryPath ?? "/repo",
+    targetPath: "/repo/.worktrees/app-feature-handoff",
+    linkedDirectory: {
+      id: "pwragent-handoff:codex:thread-1",
+      label: "app",
+      path: request.repositoryPath ?? "/repo",
+      worktreePath: "/repo/.worktrees/app-feature-handoff",
+      kind: "worktree" as const,
+    },
+    warnings: [],
+    completedAt: 5000,
+  }),
+);
 const renameThread = vi.fn(async (request: RenameThreadRequest) => ({
   backend: request.backend ?? "codex",
   threadId: request.threadId,
@@ -182,15 +190,16 @@ const directoryGitStatus = {
   syncState: "in-sync" as const,
   branches: ["main"],
 };
-const readDirectoryStatusEntries = vi.fn((directories: Array<{ key: string }>) =>
-  (async function* () {
-    for (const directory of directories) {
-      yield {
-        directoryKey: directory.key,
-        gitStatus: directoryGitStatus,
-      };
-    }
-  })(),
+const readDirectoryStatusEntries = vi.fn(
+  (directories: Array<{ key: string }>) =>
+    (async function* () {
+      for (const directory of directories) {
+        yield {
+          directoryKey: directory.key,
+          gitStatus: directoryGitStatus,
+        };
+      }
+    })(),
 );
 const readDirectoryGitStatusCache = vi.fn(async () => ({}));
 const writeDirectoryGitStatusCacheEntry = vi.fn(async () => undefined);
@@ -210,7 +219,10 @@ const readWorktreeWorkingStateEntries = vi.fn(
   (
     worktreePaths: string[],
     _options?: {
-      acceptedPushedCommitShasByWorktreePath?: Record<string, string[] | undefined>;
+      acceptedPushedCommitShasByWorktreePath?: Record<
+        string,
+        string[] | undefined
+      >;
     },
   ): AsyncGenerator<WorkingStateEntry> =>
     (async function* () {
@@ -219,7 +231,9 @@ const readWorktreeWorkingStateEntries = vi.fn(
       }
     })(),
 );
-const invalidateWorktreeWorkingState = vi.fn((_worktreePath?: string) => undefined);
+const invalidateWorktreeWorkingState = vi.fn(
+  (_worktreePath?: string) => undefined,
+);
 // Hold the result until the test releases it, so two concurrent IPC requests
 // overlap and exercise the in-flight dedup.
 let releaseEditCommitResolve: (() => void) | undefined;
@@ -248,110 +262,122 @@ function emitRegistryEvent(event: unknown): void {
 }
 const publishLocalEvent = vi.fn(async () => undefined);
 const setThreadPullRequestStatusToolHandler = vi.fn();
-const ensureDirectoryLaunchpad = vi.fn(async (request: {
-  directoryKey: string;
-  directoryKind: string;
-  directoryLabel: string;
-  directoryPath?: string;
-  currentBranch?: string;
-}) => ({
-  launchpad: {
-    directoryKey: request.directoryKey,
-    directoryKind: request.directoryKind,
-    directoryLabel: request.directoryLabel,
-    directoryPath: request.directoryPath,
-    backend: "codex",
-    executionMode: "default",
-    prompt: "",
-    branchName: request.currentBranch,
-    createdAt: 1000,
-    updatedAt: 1000,
-  },
-  defaults: {
-    backend: "codex",
-    executionMode: "default",
-  },
-}));
+const ensureDirectoryLaunchpad = vi.fn(
+  async (request: {
+    directoryKey: string;
+    directoryKind: string;
+    directoryLabel: string;
+    directoryPath?: string;
+    currentBranch?: string;
+  }) => ({
+    launchpad: {
+      directoryKey: request.directoryKey,
+      directoryKind: request.directoryKind,
+      directoryLabel: request.directoryLabel,
+      directoryPath: request.directoryPath,
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      branchName: request.currentBranch,
+      createdAt: 1000,
+      updatedAt: 1000,
+    },
+    defaults: {
+      backend: "codex",
+      executionMode: "default",
+    },
+  }),
+);
 const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   backend: request.backend ?? "codex",
   threadId: request.threadId,
   seenAt: request.seenAt ?? 2000,
   seenUpdatedAt: request.seenUpdatedAt,
 }));
-const registerDirectoryFromDiskService = vi.fn(async (request: { path: string }) => {
-  const directoryPath = path.resolve(request.path);
-  return {
-    ok: true as const,
-    directoryKey: `directory:${directoryPath}`,
-    directoryPath,
-    directoryLabel: path.basename(directoryPath) || directoryPath,
-    currentBranch: "main",
-    launchpad: {
+const registerDirectoryFromDiskService = vi.fn(
+  async (request: { path: string }) => {
+    const directoryPath = path.resolve(request.path);
+    return {
+      ok: true as const,
       directoryKey: `directory:${directoryPath}`,
-      directoryKind: "directory" as const,
-      directoryLabel: path.basename(directoryPath) || directoryPath,
       directoryPath,
-      backend: "codex" as const,
-      executionMode: "default" as const,
-      prompt: "",
-      branchName: "main",
-      workMode: "local" as const,
-      createdAt: 1000,
-      updatedAt: 1000,
-    },
-    defaults: {
-      backend: "codex" as const,
-      executionMode: "default" as const,
-    },
-  };
-});
+      directoryLabel: path.basename(directoryPath) || directoryPath,
+      currentBranch: "main",
+      launchpad: {
+        directoryKey: `directory:${directoryPath}`,
+        directoryKind: "directory" as const,
+        directoryLabel: path.basename(directoryPath) || directoryPath,
+        directoryPath,
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        branchName: "main",
+        workMode: "local" as const,
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    };
+  },
+);
 const getThreadOverlayState = vi.fn();
 const getThreadOverlayStates = vi.fn(async () => ({}));
-const addLinkedDirectory = vi.fn(async (request: {
-  backend: "codex" | "grok";
-  threadId: string;
-  directory: unknown;
-}) => ({
-  backend: request.backend,
-  threadId: request.threadId,
-  executionMode: "default" as const,
-  extraLinkedDirectories: [request.directory],
-}));
-const removeLinkedDirectory = vi.fn(async (request: {
-  backend: "codex" | "grok";
-  threadId: string;
-  directory: unknown;
-}) => ({
-  backend: request.backend,
-  threadId: request.threadId,
-  executionMode: "default" as const,
-  extraLinkedDirectories: [],
-}));
-const setThreadPullRequests = vi.fn(async (request: {
-  backend: "codex" | "grok";
-  threadId: string;
-  prs: PrSummary[];
-  refreshKey?: string;
-}) => ({
-  backend: request.backend,
-  threadId: request.threadId,
-  executionMode: "default" as const,
-  extraLinkedDirectories: [],
-  prs: request.prs,
-  prsFetchedAt: Date.now(),
-  prsRefreshKey: request.refreshKey,
-}));
-const addThreadPullRequestReference = vi.fn(async (request: {
-  backend: "codex" | "grok";
-  threadId: string;
-  pr: PrSummary;
-}) => ({
-  backend: request.backend,
-  threadId: request.threadId,
-  executionMode: "default" as const,
-  extraLinkedDirectories: [],
-  prs: [request.pr],
-}));
+const addLinkedDirectory = vi.fn(
+  async (request: {
+    backend: "codex" | "grok";
+    threadId: string;
+    directory: unknown;
+  }) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    executionMode: "default" as const,
+    extraLinkedDirectories: [request.directory],
+  }),
+);
+const removeLinkedDirectory = vi.fn(
+  async (request: {
+    backend: "codex" | "grok";
+    threadId: string;
+    directory: unknown;
+  }) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    executionMode: "default" as const,
+    extraLinkedDirectories: [],
+  }),
+);
+const setThreadPullRequests = vi.fn(
+  async (request: {
+    backend: "codex" | "grok";
+    threadId: string;
+    prs: PrSummary[];
+    refreshKey?: string;
+  }) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    executionMode: "default" as const,
+    extraLinkedDirectories: [],
+    prs: request.prs,
+    prsFetchedAt: Date.now(),
+    prsRefreshKey: request.refreshKey,
+  }),
+);
+const addThreadPullRequestReference = vi.fn(
+  async (request: {
+    backend: "codex" | "grok";
+    threadId: string;
+    pr: PrSummary;
+  }) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    executionMode: "default" as const,
+    extraLinkedDirectories: [],
+    prs: [request.pr],
+  }),
+);
 const readPrStatusCache = vi.fn(async () => ({}));
 const writePrStatusCacheEntries = vi.fn(async () => undefined);
 const readPrLookupCache = vi.fn(async () => ({}));
@@ -364,14 +390,24 @@ const getAuthStatus = vi.fn(async () => ({
   hasRepoScope: true,
 }));
 const fetchPullRequestByUrl = vi.fn(
-  async (_request: { cwd: string; url: string }): Promise<PrSummary | undefined> =>
-    undefined,
+  async (_request: {
+    cwd: string;
+    url: string;
+  }): Promise<PrSummary | undefined> => undefined,
 );
 const detectPullRequestsForThread = vi.fn(async (): Promise<PrSummary[]> => []);
 
 function githubPr(
-  pr: Omit<PrSummary, "provider" | "checkState" | "lifecycleState" | "reviewState" | "mergeState">
-    & Partial<Pick<PrSummary, "checkState" | "lifecycleState" | "reviewState" | "mergeState">>,
+  pr: Omit<
+    PrSummary,
+    "provider" | "checkState" | "lifecycleState" | "reviewState" | "mergeState"
+  >
+    & Partial<
+      Pick<
+        PrSummary,
+        "checkState" | "lifecycleState" | "reviewState" | "mergeState"
+      >
+    >,
 ): PrSummary {
   const checkState = pr.checkState ?? normalizeTestCheckState(pr.state);
   return {
@@ -385,7 +421,9 @@ function githubPr(
   };
 }
 
-function normalizeTestCheckState(state: PrSummary["state"]): NonNullable<PrSummary["checkState"]> {
+function normalizeTestCheckState(
+  state: PrSummary["state"],
+): NonNullable<PrSummary["checkState"]> {
   if (
     state === "passing"
     || state === "failing"
@@ -397,14 +435,18 @@ function normalizeTestCheckState(state: PrSummary["state"]): NonNullable<PrSumma
   return "unknown";
 }
 
-function legacyTestLifecycleState(state: PrSummary["state"]): NonNullable<PrSummary["lifecycleState"]> {
+function legacyTestLifecycleState(
+  state: PrSummary["state"],
+): NonNullable<PrSummary["lifecycleState"]> {
   if (state === "merged" || state === "closed") {
     return state;
   }
   return "open";
 }
 
-function legacyTestReviewState(state: PrSummary["state"]): NonNullable<PrSummary["reviewState"]> {
+function legacyTestReviewState(
+  state: PrSummary["state"],
+): NonNullable<PrSummary["reviewState"]> {
   return state === "draft" ? "draft" : "ready_for_review";
 }
 
@@ -443,9 +485,11 @@ vi.mock("electron", () => ({
     getPath: vi.fn(() => "/tmp/pwragent-userdata"),
   },
   ipcMain: {
-    handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
-      handlers.set(channel, handler);
-    }),
+    handle: vi.fn(
+      (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
+        handlers.set(channel, handler);
+      },
+    ),
     removeHandler: vi.fn((channel: string) => {
       handlers.delete(channel);
     }),
@@ -650,13 +694,10 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
-      {},
-      {
-        forceRefresh: true,
-        refreshMode: "active-recent",
-      } satisfies GetNavigationSnapshotRequest,
-    );
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {
+      forceRefresh: true,
+      refreshMode: "active-recent",
+    } satisfies GetNavigationSnapshotRequest);
 
     expect(listThreads).toHaveBeenCalledWith({
       backend: undefined,
@@ -704,13 +745,10 @@ describe("app server ipc", () => {
       {},
       {} satisfies GetNavigationSnapshotRequest,
     );
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
-      {},
-      {
-        forceRefresh: true,
-        refreshMode: "active-recent",
-      } satisfies GetNavigationSnapshotRequest,
-    );
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {
+      forceRefresh: true,
+      refreshMode: "active-recent",
+    } satisfies GetNavigationSnapshotRequest);
 
     expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -727,7 +765,8 @@ describe("app server ipc", () => {
 
   it("returns backend scope all when listing threads without a backend filter", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { APP_SERVER_LIST_THREADS_CHANNEL } = await import("../../shared/ipc");
+    const { APP_SERVER_LIST_THREADS_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
 
@@ -755,9 +794,9 @@ describe("app server ipc", () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_READ_THREAD_CHANNEL } = await import("../../shared/ipc");
     const oversizedOutput =
-      `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}` +
-      "x".repeat(80_000) +
-      "protocol-tail";
+      `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}`
+      + "x".repeat(80_000)
+      + "protocol-tail";
 
     const oversizedReadThreadResponse: AppServerReadThreadResponse = {
       backend: "codex",
@@ -795,14 +834,14 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(APP_SERVER_READ_THREAD_CHANNEL)?.(
+    const response = (await handlers.get(APP_SERVER_READ_THREAD_CHANNEL)?.(
       {},
       { backend: "codex", threadId: "thread-large" },
-    ) as AppServerReadThreadResponse | undefined;
+    )) as AppServerReadThreadResponse | undefined;
     const entry = response?.replay.entries[0];
     const output =
       entry?.type === "activity"
-        ? entry.details[0]?.command?.output ?? ""
+        ? (entry.details[0]?.command?.output ?? "")
         : "";
 
     expect(readThread).toHaveBeenCalledWith({
@@ -868,10 +907,10 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(APP_SERVER_READ_THREAD_CHANNEL)?.(
+    const response = (await handlers.get(APP_SERVER_READ_THREAD_CHANNEL)?.(
       {},
       { backend: "codex", threadId: "thread-diff-ref" },
-    ) as AppServerReadThreadResponse | undefined;
+    )) as AppServerReadThreadResponse | undefined;
     const entry = response?.replay.entries[0];
     const detail = entry?.type === "activity" ? entry.details[0] : undefined;
 
@@ -889,17 +928,17 @@ describe("app server ipc", () => {
     });
     expect(JSON.stringify(response)).not.toContain("+added one");
 
-    const fetched = await handlers.get(APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL)?.(
-      {},
-      { ref: detail!.fileDiff!.diffRef! },
-    );
+    const fetched = await handlers.get(
+      APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
+    )?.({}, { ref: detail!.fileDiff!.diffRef! });
 
     expect(fetched).toEqual({ diff });
   });
 
   it("hydrates retained worktree snapshots when listing archived threads", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { APP_SERVER_LIST_THREADS_CHANNEL } = await import("../../shared/ipc");
+    const { APP_SERVER_LIST_THREADS_CHANNEL } =
+      await import("../../shared/ipc");
     getThreadOverlayStates.mockResolvedValue({
       "thread-archived": {
         backend: "codex",
@@ -926,10 +965,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(APP_SERVER_LIST_THREADS_CHANNEL)?.(
-      {},
-      { archived: true } satisfies AppServerListThreadsRequest,
-    );
+    const response = await handlers.get(APP_SERVER_LIST_THREADS_CHANNEL)?.({}, {
+      archived: true,
+    } satisfies AppServerListThreadsRequest);
 
     expect(getThreadOverlayStates).toHaveBeenCalledWith({
       backend: "codex",
@@ -959,14 +997,18 @@ describe("app server ipc", () => {
 
   it("archives threads through the app-server IPC handler", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { APP_SERVER_ARCHIVE_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const { APP_SERVER_ARCHIVE_THREAD_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(APP_SERVER_ARCHIVE_THREAD_CHANNEL)?.({}, {
-      backend: "codex",
-      threadId: "thread-1",
-    } satisfies ArchiveThreadRequest);
+    const response = await handlers.get(APP_SERVER_ARCHIVE_THREAD_CHANNEL)?.(
+      {},
+      {
+        backend: "codex",
+        threadId: "thread-1",
+      } satisfies ArchiveThreadRequest,
+    );
 
     expect(archiveThread).toHaveBeenCalledWith({
       backend: "codex",
@@ -982,14 +1024,18 @@ describe("app server ipc", () => {
 
   it("restores threads through the app-server IPC handler", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { APP_SERVER_RESTORE_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const { APP_SERVER_RESTORE_THREAD_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(APP_SERVER_RESTORE_THREAD_CHANNEL)?.({}, {
-      backend: "grok",
-      threadId: "thread-1",
-    } satisfies RestoreThreadRequest);
+    const response = await handlers.get(APP_SERVER_RESTORE_THREAD_CHANNEL)?.(
+      {},
+      {
+        backend: "grok",
+        threadId: "thread-1",
+      } satisfies RestoreThreadRequest,
+    );
 
     expect(restoreThread).toHaveBeenCalledWith({
       backend: "grok",
@@ -1004,16 +1050,20 @@ describe("app server ipc", () => {
 
   it("archives worktrees through the app-server IPC handler", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { APP_SERVER_ARCHIVE_WORKTREE_CHANNEL } = await import("../../shared/ipc");
+    const { APP_SERVER_ARCHIVE_WORKTREE_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL)?.({}, {
-      backend: "codex",
-      threadId: "thread-1",
-      repositoryPath: "/repo",
-      worktreePath: "/worktrees/thread-1",
-    } satisfies ArchiveWorktreeRequest);
+    const response = await handlers.get(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL)?.(
+      {},
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        repositoryPath: "/repo",
+        worktreePath: "/worktrees/thread-1",
+      } satisfies ArchiveWorktreeRequest,
+    );
 
     expect(archiveWorktree).toHaveBeenCalledWith({
       backend: "codex",
@@ -1034,16 +1084,20 @@ describe("app server ipc", () => {
 
   it("restores worktrees through the app-server IPC handler", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { APP_SERVER_RESTORE_WORKTREE_CHANNEL } = await import("../../shared/ipc");
+    const { APP_SERVER_RESTORE_WORKTREE_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(APP_SERVER_RESTORE_WORKTREE_CHANNEL)?.({}, {
-      backend: "codex",
-      threadId: "thread-1",
-      snapshotRef: "refs/codex/snapshots/snapshot-1",
-      worktreePath: "/worktrees/thread-1",
-    } satisfies RestoreWorktreeRequest);
+    const response = await handlers.get(APP_SERVER_RESTORE_WORKTREE_CHANNEL)?.(
+      {},
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        snapshotRef: "refs/codex/snapshots/snapshot-1",
+        worktreePath: "/worktrees/thread-1",
+      } satisfies RestoreWorktreeRequest,
+    );
 
     expect(restoreWorktree).toHaveBeenCalledWith({
       backend: "codex",
@@ -1064,11 +1118,14 @@ describe("app server ipc", () => {
 
   it("hands off thread workspaces through the app-server IPC handler", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL } = await import("../../shared/ipc");
+    const { APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL)?.({}, {
+    const response = await handlers.get(
+      APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
+    )?.({}, {
       backend: "codex",
       threadId: "thread-1",
       direction: "local-to-worktree",
@@ -1105,15 +1162,19 @@ describe("app server ipc", () => {
 
   it("renames threads through the app-server IPC handler", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { APP_SERVER_RENAME_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const { APP_SERVER_RENAME_THREAD_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(APP_SERVER_RENAME_THREAD_CHANNEL)?.({}, {
-      backend: "grok",
-      threadId: "thread-1",
-      name: "Renamed thread",
-    } satisfies RenameThreadRequest);
+    const response = await handlers.get(APP_SERVER_RENAME_THREAD_CHANNEL)?.(
+      {},
+      {
+        backend: "grok",
+        threadId: "thread-1",
+        name: "Renamed thread",
+      } satisfies RenameThreadRequest,
+    );
 
     expect(renameThread).toHaveBeenCalledWith({
       backend: "grok",
@@ -1129,15 +1190,19 @@ describe("app server ipc", () => {
 
   it("marks Grok threads seen without rejecting the backend", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_MARK_THREAD_SEEN_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_MARK_THREAD_SEEN_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_MARK_THREAD_SEEN_CHANNEL)?.({}, {
-      backend: "grok",
-      threadId: "thread-1",
-      seenUpdatedAt: 3000,
-    } satisfies MarkThreadSeenRequest);
+    const response = await handlers.get(NAVIGATION_MARK_THREAD_SEEN_CHANNEL)?.(
+      {},
+      {
+        backend: "grok",
+        threadId: "thread-1",
+        seenUpdatedAt: 3000,
+      } satisfies MarkThreadSeenRequest,
+    );
 
     expect(markThreadSeen).toHaveBeenCalledWith({
       backend: "grok",
@@ -1155,7 +1220,8 @@ describe("app server ipc", () => {
 
   it("returns known PR chips immediately and refreshes mixed terminal/non-terminal state in the background", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -1206,10 +1272,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(response).toEqual({
       backend: "codex",
@@ -1263,7 +1328,8 @@ describe("app server ipc", () => {
 
   it("logs user-triggered PR refresh decisions and background completion with PR ids", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "019ed359-0b92-7ca2-ae05-a5837cc80df8",
@@ -1340,7 +1406,8 @@ describe("app server ipc", () => {
 
   it("serves the same canonical PR state across different thread overlays", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const stalePr = githubPr({
       number: 727,
       org: "OpenAI",
@@ -1417,10 +1484,9 @@ describe("app server ipc", () => {
       );
     });
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      threadTwoRequest,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, threadTwoRequest);
 
     expect(response).toEqual({
       backend: "codex",
@@ -1434,7 +1500,8 @@ describe("app server ipc", () => {
 
   it("hydrates canonical PR state from persisted cache without scheduled GitHub refresh", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const stalePr = githubPr({
       number: 727,
       org: "OpenAI",
@@ -1496,10 +1563,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(response).toEqual({
       backend: "codex",
@@ -1513,7 +1579,8 @@ describe("app server ipc", () => {
 
   it("skips user-triggered PR refresh when the persisted cache was fetched recently", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const cachedPr = githubPr({
       number: 727,
       org: "OpenAI",
@@ -1568,10 +1635,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(response).toEqual({
       backend: "codex",
@@ -1585,7 +1651,8 @@ describe("app server ipc", () => {
 
   it("persists fresh lookup-cache hits to the requesting thread overlay", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const cachedPr = githubPr({
       number: 727,
       org: "OpenAI",
@@ -1640,10 +1707,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(response).toEqual({
       backend: "codex",
@@ -1664,7 +1730,8 @@ describe("app server ipc", () => {
 
   it("coalesces concurrent first-time PR lookups for the same branch and directories", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const firstRequest = {
       backend: "codex",
       threadId: "thread-1",
@@ -1736,7 +1803,8 @@ describe("app server ipc", () => {
 
   it("refreshes retained PRs from all subscribers on a coalesced lookup", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const baseRequest = {
       backend: "codex",
       branch: "codex/reused-branch",
@@ -1811,11 +1879,13 @@ describe("app server ipc", () => {
         resolveFetch = resolve;
       }),
     );
-    fetchPullRequestByUrl.mockImplementation(async ({ url }: { url: string }) => {
-      if (url.endsWith("/255")) return firstMergedPr;
-      if (url.endsWith("/256")) return secondMergedPr;
-      return undefined;
-    });
+    fetchPullRequestByUrl.mockImplementation(
+      async ({ url }: { url: string }) => {
+        if (url.endsWith("/255")) return firstMergedPr;
+        if (url.endsWith("/256")) return secondMergedPr;
+        return undefined;
+      },
+    );
 
     registerAppServerIpcHandlers();
 
@@ -1873,7 +1943,8 @@ describe("app server ipc", () => {
 
   it("returns recent cached empty PR lookups without hitting GitHub", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -1898,10 +1969,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(detectPullRequestsForThread).not.toHaveBeenCalled();
     expect(setThreadPullRequests).not.toHaveBeenCalled();
@@ -1916,7 +1986,8 @@ describe("app server ipc", () => {
 
   it("returns stale cached empty PR lookups immediately and refreshes them in the background", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -1951,10 +2022,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(response).toEqual({
       backend: "codex",
@@ -1985,7 +2055,8 @@ describe("app server ipc", () => {
 
   it("appends newly discovered PRs to the thread PR history", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -2027,10 +2098,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(response).toEqual({
       backend: "codex",
@@ -2062,7 +2132,8 @@ describe("app server ipc", () => {
 
   it("publishes the store-filtered PR list after background refreshes", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -2107,7 +2178,10 @@ describe("app server ipc", () => {
       prsFetchedAt: Date.now() - 120_000,
       prsRefreshKey: requestKey,
     });
-    detectPullRequestsForThread.mockResolvedValueOnce([detachedPr, discoveredPr]);
+    detectPullRequestsForThread.mockResolvedValueOnce([
+      detachedPr,
+      discoveredPr,
+    ]);
     setThreadPullRequests.mockResolvedValueOnce({
       backend: "codex",
       threadId: "thread-1",
@@ -2145,7 +2219,8 @@ describe("app server ipc", () => {
 
   it("returns and publishes the store-filtered PR list for lookup-cache hits", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -2216,10 +2291,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(response).toEqual({
       backend: "codex",
@@ -2242,7 +2316,8 @@ describe("app server ipc", () => {
 
   it("keeps detached PRs hidden when gh is unavailable and lookup cache still has them", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -2299,10 +2374,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(response).toEqual({
       backend: "codex",
@@ -2323,7 +2397,8 @@ describe("app server ipc", () => {
 
   it("persists and publishes title-only PR updates", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -2386,7 +2461,8 @@ describe("app server ipc", () => {
 
   it("rechecks PRs when cached PRs belong to a different lookup key", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -2435,10 +2511,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(response).toEqual({
       backend: "codex",
@@ -2467,7 +2542,8 @@ describe("app server ipc", () => {
 
   it("refreshes retained non-terminal PRs by URL when the current branch lookup is empty", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -2513,10 +2589,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(response).toEqual({
       backend: "codex",
@@ -2587,7 +2662,8 @@ describe("app server ipc", () => {
 
   it("refreshes retained detached PRs by URL when the current branch lookup is empty", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -2630,10 +2706,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(response).toEqual({
       backend: "codex",
@@ -2661,7 +2736,8 @@ describe("app server ipc", () => {
 
   it("does not publish PR update events when retained PR status is unchanged", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -2736,7 +2812,8 @@ describe("app server ipc", () => {
 
   it("short-circuits PR refresh when all cached PRs are terminal for the same lookup", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+      await import("../../shared/ipc");
     const request = {
       backend: "codex",
       threadId: "thread-1",
@@ -2777,10 +2854,9 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-      {},
-      request,
-    );
+    const response = await handlers.get(
+      NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    )?.({}, request);
 
     expect(detectPullRequestsForThread).not.toHaveBeenCalled();
     expect(setThreadPullRequests).not.toHaveBeenCalled();
@@ -2798,8 +2874,10 @@ describe("app server ipc", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000_000);
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-      const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+      const { registerAppServerIpcHandlers } =
+        await import("../ipc/app-server");
+      const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+        await import("../../shared/ipc");
       const request = {
         backend: "codex",
         threadId: "thread-1",
@@ -2860,8 +2938,10 @@ describe("app server ipc", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(2_000_000);
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-      const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+      const { registerAppServerIpcHandlers } =
+        await import("../ipc/app-server");
+      const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } =
+        await import("../../shared/ipc");
       const request = {
         backend: "codex",
         threadId: "thread-1",
@@ -2899,10 +2979,9 @@ describe("app server ipc", () => {
 
       registerAppServerIpcHandlers();
 
-      const firstResponse = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-        {},
-        request,
-      );
+      const firstResponse = await handlers.get(
+        NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+      )?.({}, request);
       expect(firstResponse).toMatchObject({
         backend: "codex",
         threadId: "thread-1",
@@ -2926,10 +3005,9 @@ describe("app server ipc", () => {
       mockAppServerLog.info.mockClear();
 
       vi.setSystemTime(2_000_000 + 9_000);
-      const cooldownResponse = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
-        {},
-        request,
-      );
+      const cooldownResponse = await handlers.get(
+        NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+      )?.({}, request);
       expect(cooldownResponse).toMatchObject({
         backend: "codex",
         threadId: "thread-1",
@@ -3080,9 +3158,7 @@ describe("app server ipc", () => {
       backend: "all",
       fetchedAt: 9012,
       unchanged: true,
-      threads: [
-        expect.objectContaining({ source: "codex", id: "thread-1" }),
-      ],
+      threads: [expect.objectContaining({ source: "codex", id: "thread-1" })],
       inboxThreadKeys: ["codex:thread-1"],
       directories: [
         {
@@ -3273,7 +3349,10 @@ describe("app server ipc", () => {
         'name = "New environment"\n',
         "utf8",
       );
-      const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+        {},
+        {},
+      );
 
       expect(response).toMatchObject({
         unchanged: false,
@@ -3432,7 +3511,9 @@ describe("app server ipc", () => {
     expect(first).toEqual({ scheduledCount: 0 });
     expect(second).toEqual({ scheduledCount: 0 });
     // No probe beyond the snapshot's ran.
-    expect(readDirectoryStatusEntries.mock.calls.length).toBe(callsAfterSnapshot);
+    expect(readDirectoryStatusEntries.mock.calls.length).toBe(
+      callsAfterSnapshot,
+    );
   });
 
   it("publishes a working-state chip update when a snapshot probe lands", async () => {
@@ -3621,7 +3702,8 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    const handler = setThreadPullRequestStatusToolHandler.mock.calls.at(-1)?.[0];
+    const handler =
+      setThreadPullRequestStatusToolHandler.mock.calls.at(-1)?.[0];
     expect(handler).toBeTypeOf("function");
 
     const response = await handler?.({
@@ -3646,12 +3728,12 @@ describe("app server ipc", () => {
       },
     });
     if (response?.ok && "pullRequestStatus" in response.data) {
-      expect(response.data.pullRequestStatus.lastStatusCheckAgeMs).toBeGreaterThanOrEqual(
-        45_000,
-      );
-      expect(response.data.pullRequestStatus.requestedAt).toBeGreaterThanOrEqual(
-        fetchedAt,
-      );
+      expect(
+        response.data.pullRequestStatus.lastStatusCheckAgeMs,
+      ).toBeGreaterThanOrEqual(45_000);
+      expect(
+        response.data.pullRequestStatus.requestedAt,
+      ).toBeGreaterThanOrEqual(fetchedAt);
     }
   });
 
@@ -3695,7 +3777,8 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    const handler = setThreadPullRequestStatusToolHandler.mock.calls.at(-1)?.[0];
+    const handler =
+      setThreadPullRequestStatusToolHandler.mock.calls.at(-1)?.[0];
     expect(handler).toBeTypeOf("function");
 
     const response = await handler?.({
@@ -3738,7 +3821,8 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
-    const callsAfterSnapshot = readWorktreeWorkingStateEntries.mock.calls.length;
+    const callsAfterSnapshot =
+      readWorktreeWorkingStateEntries.mock.calls.length;
 
     emitRegistryEvent({
       backend: "codex",
@@ -3784,7 +3868,8 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
-    const callsAfterSnapshot = readWorktreeWorkingStateEntries.mock.calls.length;
+    const callsAfterSnapshot =
+      readWorktreeWorkingStateEntries.mock.calls.length;
 
     emitRegistryEvent({
       backend: "codex",
@@ -3984,7 +4069,8 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
-    const callsAfterSnapshot = readWorktreeWorkingStateEntries.mock.calls.length;
+    const callsAfterSnapshot =
+      readWorktreeWorkingStateEntries.mock.calls.length;
     invalidateWorktreeWorkingState.mockClear();
 
     emitRegistryEvent({
@@ -4006,9 +4092,8 @@ describe("app server ipc", () => {
 
   it("coalesces concurrent identical resolveEditCommitStates requests", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL } = await import(
-      "../../shared/ipc"
-    );
+    const { NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
 
@@ -4076,8 +4161,9 @@ describe("app server ipc", () => {
 
     expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toHaveLength(4);
     expect(
-      (readDirectoryStatusEntries.mock.calls[0]?.[0] as Array<{ key: string }>)
-        .map((directory) => directory.key),
+      (
+        readDirectoryStatusEntries.mock.calls[0]?.[0] as Array<{ key: string }>
+      ).map((directory) => directory.key),
     ).toEqual([
       "directory:/repo/app-5",
       "directory:/repo/app-4",
@@ -4088,29 +4174,34 @@ describe("app server ipc", () => {
 
   it("refreshes launchpad directory git status before selecting the default branch", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } =
+      await import("../../shared/ipc");
 
-    readDirectoryStatusEntries.mockImplementationOnce((directories: Array<{ key: string }>) =>
-      (async function* () {
-        yield {
-          directoryKey: directories[0]!.key,
-          gitStatus: {
-            ...directoryGitStatus,
-            currentBranch: "fresh-branch",
-          },
-        };
-      })(),
+    readDirectoryStatusEntries.mockImplementationOnce(
+      (directories: Array<{ key: string }>) =>
+        (async function* () {
+          yield {
+            directoryKey: directories[0]!.key,
+            gitStatus: {
+              ...directoryGitStatus,
+              currentBranch: "fresh-branch",
+            },
+          };
+        })(),
     );
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)?.({}, {
-      directoryKey: "directory:/repo/app",
-      directoryKind: "directory",
-      directoryLabel: "app",
-      directoryPath: "/repo/app",
-      currentBranch: "stale-branch",
-    });
+    await handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)?.(
+      {},
+      {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        currentBranch: "stale-branch",
+      },
+    );
 
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -4128,13 +4219,16 @@ describe("app server ipc", () => {
 
   it("attaches directories with path-shaped linked directory ids", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const { NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL } =
+      await import("../../shared/ipc");
     const directoryPath = path.resolve("/repo/app");
     const directoryPathId = directoryPath.replace(/\\/g, "/");
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL)?.(
+    const response = await handlers.get(
+      NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
+    )?.(
       {},
       {
         backend: "codex",

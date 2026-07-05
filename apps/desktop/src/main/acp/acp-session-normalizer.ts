@@ -39,7 +39,9 @@ export class AcpSessionReplayNormalizer {
   private assistantMessageSequence = 0;
   private generatedMessageSequence = 0;
 
-  constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {}
+  constructor(
+    private readonly options: AcpSessionReplayNormalizerOptions = {},
+  ) {}
 
   recordUserPrompt(params: {
     sessionId: string;
@@ -60,7 +62,9 @@ export class AcpSessionReplayNormalizer {
       id,
       role: "user",
       text: normalizedPrompt.text,
-      ...(normalizedPrompt.parts?.length ? { parts: normalizedPrompt.parts } : {}),
+      ...(normalizedPrompt.parts?.length
+        ? { parts: normalizedPrompt.parts }
+        : {}),
       createdAt,
     });
     if (params.waitingForAgent) {
@@ -127,8 +131,8 @@ export class AcpSessionReplayNormalizer {
     const kind = readKind(update.update);
     const createdAt = update.receivedAt ?? Date.now();
     if (
-      kind === "agent_thought_chunk" &&
-      this.options.surfaceThoughtsAsMessages === false
+      kind === "agent_thought_chunk"
+      && this.options.surfaceThoughtsAsMessages === false
     ) {
       return this.replay();
     }
@@ -139,9 +143,9 @@ export class AcpSessionReplayNormalizer {
       // Consecutive ACP text chunks form one live bubble, but text after a tool
       // call should become a new bubble instead of overwriting earlier text.
       const text =
-        readContentText(update.update, "content") ??
-        readString(update.update, "text") ??
-        "";
+        readContentText(update.update, "content")
+        ?? readString(update.update, "text")
+        ?? "";
       if (text && !isModeUpdateMarker(text) && this.currentTurnId) {
         this.removeAgentWaitingActivity(this.currentTurnId);
       }
@@ -158,7 +162,10 @@ export class AcpSessionReplayNormalizer {
       this.applyUserMessageChunk(update, createdAt);
     } else if (kind === "available_commands_update") {
       // Command metadata belongs in provider capabilities, not the transcript.
-    } else if (kind === "config_option_update" || kind === "current_mode_update") {
+    } else if (
+      kind === "config_option_update"
+      || kind === "current_mode_update"
+    ) {
       // Runtime configuration changes belong in ACP session metadata.
     } else if (readAcpTopicTitle(update.update)) {
       // Topic updates are thread metadata, not transcript entries.
@@ -181,7 +188,9 @@ export class AcpSessionReplayNormalizer {
       } else if (kind === "pwragent_turn_failed") {
         this.recordTurnFailed({
           sessionId: update.sessionId,
-          turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
+          turnId:
+            readString(update.update, "turnId")
+            ?? `pending:${update.sessionId}`,
           error: readString(update.update, "error") ?? "Turn failed.",
           receivedAt: createdAt,
         });
@@ -190,7 +199,9 @@ export class AcpSessionReplayNormalizer {
           sessionId: update.sessionId,
           prompt: readString(update.update, "prompt") ?? "",
           parts: readMessageParts(update.update),
-          turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
+          turnId:
+            readString(update.update, "turnId")
+            ?? `pending:${update.sessionId}`,
           receivedAt: createdAt,
           waitingForAgent: readBoolean(update.update, "waitingForAgent"),
         });
@@ -221,11 +232,14 @@ export class AcpSessionReplayNormalizer {
     };
   }
 
-  private applyAgentMessageChunk(update: AcpSessionUpdate, createdAt: number): void {
+  private applyAgentMessageChunk(
+    update: AcpSessionUpdate,
+    createdAt: number,
+  ): void {
     const text =
-      readContentText(update.update, "content") ??
-      readString(update.update, "text") ??
-      "";
+      readContentText(update.update, "content")
+      ?? readString(update.update, "text")
+      ?? "";
     if (!text || isModeUpdateMarker(text)) {
       return;
     }
@@ -239,11 +253,14 @@ export class AcpSessionReplayNormalizer {
     });
   }
 
-  private applyUserMessageChunk(update: AcpSessionUpdate, createdAt: number): void {
+  private applyUserMessageChunk(
+    update: AcpSessionUpdate,
+    createdAt: number,
+  ): void {
     const text =
-      readContentText(update.update, "content") ??
-      readString(update.update, "text") ??
-      "";
+      readContentText(update.update, "content")
+      ?? readString(update.update, "text")
+      ?? "";
     if (isAcpUserBoilerplateMessage(text)) {
       // Gemini re-emits its <session_context> environment block (date, OS,
       // workspace dir, directory tree) as a user_message_chunk on session/load.
@@ -264,20 +281,23 @@ export class AcpSessionReplayNormalizer {
       return;
     }
     const id =
-      readString(update.update, "messageId") ??
-      readString(update.update, "id") ??
-      `user:${update.sessionId}:${createdAt}:${this.generatedMessageSequence++}`;
+      readString(update.update, "messageId")
+      ?? readString(update.update, "id")
+      ?? `user:${update.sessionId}:${createdAt}:${this.generatedMessageSequence++}`;
     this.appendMessageChunk({ id, role: "user", text, createdAt });
   }
 
-  private applyAgentThoughtChunk(update: AcpSessionUpdate, createdAt: number): void {
+  private applyAgentThoughtChunk(
+    update: AcpSessionUpdate,
+    createdAt: number,
+  ): void {
     if (this.options.surfaceThoughtsAsMessages === false) {
       return;
     }
     const text =
-      readContentText(update.update, "content") ??
-      readString(update.update, "text") ??
-      "";
+      readContentText(update.update, "content")
+      ?? readString(update.update, "text")
+      ?? "";
     if (!text) {
       return;
     }
@@ -293,21 +313,20 @@ export class AcpSessionReplayNormalizer {
 
   private assistantMessageIdForChunk(update: AcpSessionUpdate): string {
     const explicitId =
-      readString(update.update, "messageId") ??
-      readString(update.update, "message_id");
+      readString(update.update, "messageId")
+      ?? readString(update.update, "message_id");
     if (explicitId) {
       this.activeAssistantMessageId = explicitId;
       return explicitId;
     }
     if (!this.activeAssistantMessageId) {
-      this.activeAssistantMessageId =
-        `assistant:${this.currentTurnId ?? update.sessionId}:${this.assistantMessageSequence++}`;
+      this.activeAssistantMessageId = `assistant:${this.currentTurnId ?? update.sessionId}:${this.assistantMessageSequence++}`;
     }
     return this.activeAssistantMessageId;
   }
 
   private resetAssistantMessageIfPhaseChanged(
-    phase: AppServerTranscriptPhase
+    phase: AppServerTranscriptPhase,
   ): void {
     if (this.activeAssistantMessagePhase === phase) {
       return;
@@ -317,7 +336,8 @@ export class AcpSessionReplayNormalizer {
   }
 
   private upsertPlan(update: AcpSessionUpdate, createdAt: number): void {
-    const id = readString(update.update, "planId") ?? `plan:${update.sessionId}`;
+    const id =
+      readString(update.update, "planId") ?? `plan:${update.sessionId}`;
     const steps = readPlanSteps(update.update);
     const plan: AppServerThreadPlanEntry = {
       type: "plan",
@@ -361,7 +381,8 @@ export class AcpSessionReplayNormalizer {
         {
           id: `${agentWaitingActivityId(turnId)}:detail`,
           kind: "read",
-          label: "The prompt was sent. Waiting for the agent provider to respond.",
+          label:
+            "The prompt was sent. Waiting for the agent provider to respond.",
           status: "in_progress",
         },
       ],
@@ -381,7 +402,9 @@ export class AcpSessionReplayNormalizer {
   }
 
   private upsertEntry(entry: AppServerThreadEntry): void {
-    const index = this.entries.findIndex((existing) => existing.id === entry.id);
+    const index = this.entries.findIndex(
+      (existing) => existing.id === entry.id,
+    );
     if (index === -1) {
       this.entries.push(entry);
       return;
@@ -420,7 +443,10 @@ export class AcpSessionReplayNormalizer {
       (message) => message.id === params.id,
     );
     if (existingMessage) {
-      existingMessage.text = appendTranscriptChunk(existingMessage.text, params.text);
+      existingMessage.text = appendTranscriptChunk(
+        existingMessage.text,
+        params.text,
+      );
     } else {
       this.messages.push({
         id: params.id,
@@ -435,7 +461,10 @@ export class AcpSessionReplayNormalizer {
         entry.type === "message" && entry.id === params.id,
     );
     if (existingEntry) {
-      existingEntry.text = appendTranscriptChunk(existingEntry.text, params.text);
+      existingEntry.text = appendTranscriptChunk(
+        existingEntry.text,
+        params.text,
+      );
     } else {
       this.entries.push({
         type: "message",
@@ -459,7 +488,10 @@ function appendTranscriptChunk(existing: string, next: string): string {
   return `${existing}${next}`;
 }
 
-function shouldSeparateTranscriptChunks(existing: string, next: string): boolean {
+function shouldSeparateTranscriptChunks(
+  existing: string,
+  next: string,
+): boolean {
   if (/\s$/.test(existing)) {
     return false;
   }
@@ -468,11 +500,11 @@ function shouldSeparateTranscriptChunks(existing: string, next: string): boolean
 
 function readKind(update: Record<string, unknown>): string {
   return (
-    readString(update, "sessionUpdate") ??
-    readString(update, "session_update") ??
-    readString(update, "kind") ??
-    readString(update, "type") ??
-    "unknown"
+    readString(update, "sessionUpdate")
+    ?? readString(update, "session_update")
+    ?? readString(update, "kind")
+    ?? readString(update, "type")
+    ?? "unknown"
   );
 }
 
@@ -492,19 +524,19 @@ export function readAcpTopicTitle(
   // the summary verbatim — no parsing required, unlike the tool-call path below.
   if (sessionUpdate === "session_summary_generated") {
     const summary = (
-      readString(update, "session_summary") ??
-      readString(update, "sessionSummary")
+      readString(update, "session_summary")
+      ?? readString(update, "sessionSummary")
     )?.trim();
     return summary || undefined;
   }
 
   const kind = readString(update, "kind");
   const isToolUpdate =
-    sessionUpdate === "tool_call" ||
-    sessionUpdate === "tool_call_update" ||
-    kind === "tool_call" ||
-    kind === "tool_call_update" ||
-    kind === "think";
+    sessionUpdate === "tool_call"
+    || sessionUpdate === "tool_call_update"
+    || kind === "tool_call"
+    || kind === "tool_call_update"
+    || kind === "think";
   if (!isToolUpdate) {
     return undefined;
   }
@@ -550,7 +582,9 @@ function readNumber(
   key: string,
 ): number | undefined {
   const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function readMessageParts(
@@ -612,21 +646,18 @@ function normalizeUserPrompt(
 
   return {
     text,
-    parts: [
-      ...(text ? [{ type: "text" as const, text }] : []),
-      ...images,
-    ],
+    parts: [...(text ? [{ type: "text" as const, text }] : []), ...images],
   };
 }
 
 function readToolOutput(record: Record<string, unknown>): string | undefined {
   const contentText = readContentText(record, "content");
   return (
-    readString(record, "output") ??
-    readString(record, "stdout") ??
-    readString(record, "stderr") ??
-    readString(record, "result") ??
-    (readAcpToolContentCommand(record) ? undefined : contentText)
+    readString(record, "output")
+    ?? readString(record, "stdout")
+    ?? readString(record, "stderr")
+    ?? readString(record, "result")
+    ?? (readAcpToolContentCommand(record) ? undefined : contentText)
   );
 }
 
@@ -648,18 +679,21 @@ function readContentText(
  * not a user turn, so it must never appear in the transcript. Used both to keep
  * it out of the rendered replay and to stop persisting it into the rollout.
  */
-export function isAcpSessionContextBoilerplate(text: string | undefined): boolean {
+export function isAcpSessionContextBoilerplate(
+  text: string | undefined,
+): boolean {
   return text !== undefined && text.trimStart().startsWith("<session_context>");
 }
 
-export function isAcpSystemReminderBoilerplate(text: string | undefined): boolean {
+export function isAcpSystemReminderBoilerplate(
+  text: string | undefined,
+): boolean {
   return text !== undefined && text.trimStart().startsWith("<system-reminder>");
 }
 
 export function isAcpUserBoilerplateMessage(text: string | undefined): boolean {
   return (
-    isAcpSessionContextBoilerplate(text) ||
-    isAcpSystemReminderBoilerplate(text)
+    isAcpSessionContextBoilerplate(text) || isAcpSystemReminderBoilerplate(text)
   );
 }
 
@@ -684,14 +718,16 @@ export function readAcpContentText(value: unknown): string | undefined {
     return content.text;
   }
   return (
-    readAcpContentText(content.content) ??
-    readAcpContentText(content.text) ??
-    readAcpContentText(content.output) ??
-    readAcpContentText(content.result)
+    readAcpContentText(content.content)
+    ?? readAcpContentText(content.text)
+    ?? readAcpContentText(content.output)
+    ?? readAcpContentText(content.result)
   );
 }
 
-function readPlanSteps(record: Record<string, unknown>): AppServerThreadPlanEntry["steps"] {
+function readPlanSteps(
+  record: Record<string, unknown>,
+): AppServerThreadPlanEntry["steps"] {
   const steps = Array.isArray(record.steps) ? record.steps : [];
   return steps.flatMap((step) => {
     if (typeof step === "string") {
@@ -701,7 +737,8 @@ function readPlanSteps(record: Record<string, unknown>): AppServerThreadPlanEntr
       return [];
     }
     const stepRecord = step as Record<string, unknown>;
-    const text = readString(stepRecord, "step") ?? readString(stepRecord, "content");
+    const text =
+      readString(stepRecord, "step") ?? readString(stepRecord, "content");
     if (!text) {
       return [];
     }
@@ -724,22 +761,25 @@ function toolActivity(
   createdAt: number,
 ): AppServerThreadActivityEntry {
   const id =
-    readString(update.update, "toolCallId") ??
-    readString(update.update, "tool_call_id") ??
-    readString(update.update, "id") ??
-    readString(update.update, "itemId") ??
-    readString(update.update, "item_id") ??
-    `${kind}:${update.sessionId}`;
+    readString(update.update, "toolCallId")
+    ?? readString(update.update, "tool_call_id")
+    ?? readString(update.update, "id")
+    ?? readString(update.update, "itemId")
+    ?? readString(update.update, "item_id")
+    ?? `${kind}:${update.sessionId}`;
   const command = readAcpToolCommand(update.update);
   const labelCandidate =
-    readString(update.update, "title") ??
-    readString(update.update, "name") ??
-    readString(update.update, "kind") ??
-    kind.replaceAll("_", " ");
+    readString(update.update, "title")
+    ?? readString(update.update, "name")
+    ?? readString(update.update, "kind")
+    ?? kind.replaceAll("_", " ");
   const label =
-    command && isGenericShellToolTitle(labelCandidate) ? command : labelCandidate;
+    command && isGenericShellToolTitle(labelCandidate)
+      ? command
+      : labelCandidate;
   const status = readString(update.update, "status");
-  const path = readString(update.update, "path") ?? readFirstLocationPath(update.update);
+  const path =
+    readString(update.update, "path") ?? readFirstLocationPath(update.update);
   const output = readToolOutput(update.update);
   const exitCode = readNumber(update.update, "exitCode");
   const detailKind = command
@@ -752,11 +792,11 @@ function toolActivity(
     createdAt,
     summary: label,
     status:
-      status === "completed" ||
-      status === "failed" ||
-      status === "cancelled" ||
-      status === "in_progress" ||
-      status === "pending"
+      status === "completed"
+      || status === "failed"
+      || status === "cancelled"
+      || status === "in_progress"
+      || status === "pending"
         ? status === "pending"
           ? "in_progress"
           : status
@@ -798,7 +838,10 @@ function mergeActivity(
             {
               ...existingDetail,
               ...incomingDetail,
-              label: preferSpecificLabel(existingDetail.label, incomingDetail.label),
+              label: preferSpecificLabel(
+                existingDetail.label,
+                incomingDetail.label,
+              ),
               path: incomingDetail.path ?? existingDetail.path,
               command:
                 existingDetail.command || incomingDetail.command
@@ -807,25 +850,27 @@ function mergeActivity(
                         preferSpecificCommand(
                           existingDetail.command?.displayCommand,
                           incomingDetail.command?.displayCommand,
-                        ) ??
-                        preferSpecificLabel(existingDetail.label, incomingDetail.label),
-                      rawCommand:
-                        preferSpecificCommand(
-                          existingDetail.command?.rawCommand,
-                          incomingDetail.command?.rawCommand,
+                        )
+                        ?? preferSpecificLabel(
+                          existingDetail.label,
+                          incomingDetail.label,
                         ),
+                      rawCommand: preferSpecificCommand(
+                        existingDetail.command?.rawCommand,
+                        incomingDetail.command?.rawCommand,
+                      ),
                       output:
-                        incomingDetail.command?.output ??
-                        existingDetail.command?.output,
+                        incomingDetail.command?.output
+                        ?? existingDetail.command?.output,
                       exitCode:
-                        incomingDetail.command?.exitCode ??
-                        existingDetail.command?.exitCode,
+                        incomingDetail.command?.exitCode
+                        ?? existingDetail.command?.exitCode,
                       durationMs:
-                        incomingDetail.command?.durationMs ??
-                        existingDetail.command?.durationMs,
+                        incomingDetail.command?.durationMs
+                        ?? existingDetail.command?.durationMs,
                       cwd:
-                        incomingDetail.command?.cwd ??
-                        existingDetail.command?.cwd,
+                        incomingDetail.command?.cwd
+                        ?? existingDetail.command?.cwd,
                     }
                   : undefined,
               fileDiff: incomingDetail.fileDiff ?? existingDetail.fileDiff,
@@ -884,7 +929,9 @@ function toolDetailKind(
   return path ? "read" : "command";
 }
 
-function readFirstLocationPath(record: Record<string, unknown>): string | undefined {
+function readFirstLocationPath(
+  record: Record<string, unknown>,
+): string | undefined {
   const locations = record.locations;
   if (!Array.isArray(locations)) {
     return undefined;

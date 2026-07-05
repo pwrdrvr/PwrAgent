@@ -18,8 +18,8 @@ function readGitValue(cwd: string, args: string[]): string | undefined {
 
 export function resolveRuntimeIdentity(cwd = process.cwd()): RuntimeIdentity {
   const branch =
-    readGitValue(cwd, ["branch", "--show-current"]) ??
-    readGitValue(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    readGitValue(cwd, ["branch", "--show-current"])
+    ?? readGitValue(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
 
   if (branch) {
     return {

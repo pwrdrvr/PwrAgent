@@ -67,7 +67,9 @@ describe("discoverAcpAgentInstances", () => {
         instance("/usr/bin/qwen", "path", "0.17.0"),
         instance("/opt/homebrew/bin/qwen", "path", "0.16.0"),
       ]),
-      group("kimi", [instance("/Users/me/.kimi-code/bin/kimi", "fallback", "0.11.0")]),
+      group("kimi", [
+        instance("/Users/me/.kimi-code/bin/kimi", "fallback", "0.11.0"),
+      ]),
     ]);
 
     const result = await discoverAcpAgentInstances({ discover });
@@ -75,7 +77,11 @@ describe("discoverAcpAgentInstances", () => {
     expect(result.get("qwen")).toEqual({
       instances: [
         { command: "/usr/bin/qwen", version: "0.17.0", source: "path" },
-        { command: "/opt/homebrew/bin/qwen", version: "0.16.0", source: "path" },
+        {
+          command: "/opt/homebrew/bin/qwen",
+          version: "0.16.0",
+          source: "path",
+        },
       ],
       activeCommand: "/usr/bin/qwen",
     });
@@ -118,7 +124,9 @@ describe("discoverAcpAgentInstances", () => {
 
     expect(result.get("qwen")?.activeCommand).toBe("/opt/homebrew/bin/qwen");
     // No override → kit called without an `overrides` key.
-    expect(discover).toHaveBeenCalledWith(expect.not.objectContaining({ overrides: expect.anything() }));
+    expect(discover).toHaveBeenCalledWith(
+      expect.not.objectContaining({ overrides: expect.anything() }),
+    );
   });
 
   it("omits agents with no installed instances", async () => {

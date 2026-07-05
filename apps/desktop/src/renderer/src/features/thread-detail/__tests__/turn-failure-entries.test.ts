@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  AppServerThreadEntry,
-  ThreadTurnFailure,
-} from "@pwragent/shared";
+import type { AppServerThreadEntry, ThreadTurnFailure } from "@pwragent/shared";
 import {
   TURN_FAILURE_ENTRY_PREFIX,
   buildTurnFailureActivityEntries,

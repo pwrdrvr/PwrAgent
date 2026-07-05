@@ -71,26 +71,27 @@ function matchesInboundTrigger(
   const conversation = event.channel.conversation;
   const expectedConversationId = trigger.conversation.conversationId;
   const matchesConversation =
-    conversation.id === expectedConversationId ||
-    conversation.parentId === expectedConversationId;
+    conversation.id === expectedConversationId
+    || conversation.parentId === expectedConversationId;
   if (!matchesConversation) return false;
   if (
-    conversation.kind === "thread" &&
-    !trigger.includeThreadReplies &&
-    conversation.id !== expectedConversationId
+    conversation.kind === "thread"
+    && !trigger.includeThreadReplies
+    && conversation.id !== expectedConversationId
   ) {
     return false;
   }
 
   if (trigger.sender?.platformUserId) {
-    if (event.actor.platformUserId !== trigger.sender.platformUserId) return false;
+    if (event.actor.platformUserId !== trigger.sender.platformUserId)
+      return false;
   }
   if (trigger.sender?.isBot !== undefined) {
     if (Boolean(event.actor.isBot) !== trigger.sender.isBot) return false;
   }
 
   if (trigger.textFilter) {
-    const text = event.kind === "text" ? event.text : event.text ?? "";
+    const text = event.kind === "text" ? event.text : (event.text ?? "");
     if (!matchesTextFilter(text, trigger.textFilter)) return false;
   }
 
@@ -112,7 +113,8 @@ function buildRunSourceMetadata(params: {
   event: Extract<MessagingInboundEvent, { kind: "text" | "media" }>;
   trigger: AutomationInboundMessageTriggerDefinition;
 }): AutomationRunSourceMetadata {
-  const text = params.event.kind === "text" ? params.event.text : params.event.text;
+  const text =
+    params.event.kind === "text" ? params.event.text : params.event.text;
   const bounded = boundSourceText(text);
   return {
     kind: "messaging",
@@ -145,7 +147,12 @@ function buildRunSourceMetadata(params: {
         }
       : {}),
     ...(params.event.routingState
-      ? { routingState: params.event.routingState as unknown as Record<string, unknown> }
+      ? {
+          routingState: params.event.routingState as unknown as Record<
+            string,
+            unknown
+          >,
+        }
       : {}),
   };
 }
@@ -167,12 +174,13 @@ export function buildSourceEventKey(event: MessagingInboundEvent): string {
     opaque && typeof opaque === "object" && !Array.isArray(opaque)
       ? (opaque as Record<string, unknown>)
       : {};
-  const channelId = stringValue(routing.channelId) ?? event.channel.conversation.id;
+  const channelId =
+    stringValue(routing.channelId) ?? event.channel.conversation.id;
   const messageId =
-    stringValue(routing.ts) ??
-    stringValue(routing.messageId) ??
-    stringValue(routing.eventTs) ??
-    event.id;
+    stringValue(routing.ts)
+    ?? stringValue(routing.messageId)
+    ?? stringValue(routing.eventTs)
+    ?? event.id;
   const threadRoot =
     stringValue(routing.threadTs) ?? event.channel.conversation.parentId ?? "";
   return [

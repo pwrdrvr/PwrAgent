@@ -176,7 +176,7 @@ describe("useQueuedTurnRelease", () => {
           }),
           thread("thread-b"),
         ],
-      })
+      }),
     );
 
     await act(async () => {
@@ -205,11 +205,11 @@ describe("useQueuedTurnRelease", () => {
           backend: "codex",
           threadId: "thread-a",
           input: [{ type: "text", text: "First background reply" }],
-        })
+        }),
       );
     });
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text,
     ).toBe("Second background reply");
   });
 
@@ -329,7 +329,7 @@ describe("useQueuedTurnRelease", () => {
           }),
           thread("thread-b"),
         ],
-      })
+      }),
     );
 
     await act(async () => {
@@ -353,10 +353,12 @@ describe("useQueuedTurnRelease", () => {
           backend: "codex",
           threadId: "thread-a",
           input: [{ type: "text", text: "Idle status reply" }],
-        })
+        }),
       );
     });
-    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toBeUndefined();
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a"),
+    ).toBeUndefined();
   });
 
   it("releases a queued review with review/start for a non-focused thread", async () => {
@@ -410,7 +412,7 @@ describe("useQueuedTurnRelease", () => {
           }),
           thread("thread-b"),
         ],
-      })
+      }),
     );
 
     await act(async () => {
@@ -449,7 +451,9 @@ describe("useQueuedTurnRelease", () => {
       });
     });
     expect(startTurn).not.toHaveBeenCalled();
-    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toBeUndefined();
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a"),
+    ).toBeUndefined();
   });
 
   it("keeps a queued review when review/start rejects", async () => {
@@ -488,7 +492,7 @@ describe("useQueuedTurnRelease", () => {
         desktopApi,
         selectedThread: thread("thread-b"),
         threads: [thread("thread-a"), thread("thread-b")],
-      })
+      }),
     );
 
     await act(async () => {
@@ -514,9 +518,9 @@ describe("useQueuedTurnRelease", () => {
     await waitFor(() => {
       expect(startReview).toHaveBeenCalled();
     });
-    expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.id
-    ).toBe("queued-review");
+    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.id).toBe(
+      "queued-review",
+    );
   });
 
   it("does not remove the next background queued message when the started item changed while in flight", async () => {
@@ -536,7 +540,7 @@ describe("useQueuedTurnRelease", () => {
               turnId: "turn-next",
             });
           };
-        })
+        }),
     );
     const desktopApi: DesktopApi = {
       onAgentEvent: (listener) => {
@@ -570,7 +574,7 @@ describe("useQueuedTurnRelease", () => {
         desktopApi,
         selectedThread: thread("thread-b"),
         threads: [thread("thread-a"), thread("thread-b")],
-      })
+      }),
     );
 
     await act(async () => {
@@ -597,12 +601,12 @@ describe("useQueuedTurnRelease", () => {
       expect(startTurn).toHaveBeenCalledWith(
         expect.objectContaining({
           input: [{ type: "text", text: "First background reply" }],
-        })
+        }),
       );
     });
 
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text,
     ).toBe("Second background reply");
 
     await act(async () => {
@@ -610,7 +614,7 @@ describe("useQueuedTurnRelease", () => {
     });
 
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text,
     ).toBe("Second background reply");
   });
 
@@ -653,7 +657,7 @@ describe("useQueuedTurnRelease", () => {
           thread("thread-a", { gitBranch: "feature/expected" }),
           thread("thread-b"),
         ],
-      })
+      }),
     );
 
     await act(async () => {
@@ -685,7 +689,7 @@ describe("useQueuedTurnRelease", () => {
       });
     });
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text,
     ).toBe("Guarded background reply");
   });
 
@@ -726,7 +730,7 @@ describe("useQueuedTurnRelease", () => {
         desktopApi,
         selectedThread: thread("thread-b"),
         threads: [thread("thread-a"), thread("thread-b")],
-      })
+      }),
     );
 
     await act(async () => {
@@ -759,7 +763,7 @@ describe("useQueuedTurnRelease", () => {
     });
     expect(startTurn).not.toHaveBeenCalled();
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a"),
     ).toBeUndefined();
   });
 
@@ -811,7 +815,7 @@ describe("useQueuedTurnRelease", () => {
           thread("thread-a", { gitBranch: "feature/review" }),
           thread("thread-b"),
         ],
-      })
+      }),
     );
 
     await act(async () => {
@@ -843,7 +847,7 @@ describe("useQueuedTurnRelease", () => {
       expect(startReview).toHaveBeenCalled();
     });
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a"),
     ).toBeUndefined();
   });
 
@@ -890,7 +894,7 @@ describe("useQueuedTurnRelease", () => {
           thread("thread-a", { gitBranch: "feature/review" }),
           thread("thread-b"),
         ],
-      })
+      }),
     );
 
     await act(async () => {
@@ -918,7 +922,7 @@ describe("useQueuedTurnRelease", () => {
     });
     expect(startReview).not.toHaveBeenCalled();
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text,
     ).toBe("/review main");
   });
 
@@ -979,7 +983,7 @@ describe("useQueuedTurnRelease", () => {
           }),
           thread("thread-b"),
         ],
-      })
+      }),
     );
 
     await act(async () => {
@@ -1011,7 +1015,7 @@ describe("useQueuedTurnRelease", () => {
       });
     });
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a"),
     ).toBeUndefined();
   });
 
@@ -1067,7 +1071,7 @@ describe("useQueuedTurnRelease", () => {
           }),
           thread("thread-b"),
         ],
-      })
+      }),
     );
 
     await act(async () => {
@@ -1099,7 +1103,7 @@ describe("useQueuedTurnRelease", () => {
     });
     expect(startReview).not.toHaveBeenCalled();
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text,
     ).toBe("/review main");
   });
 
@@ -1146,7 +1150,7 @@ describe("useQueuedTurnRelease", () => {
           thread("thread-a", { gitBranch: "feature/expected" }),
           thread("thread-b"),
         ],
-      })
+      }),
     );
 
     await act(async () => {
@@ -1175,10 +1179,12 @@ describe("useQueuedTurnRelease", () => {
           backend: "codex",
           threadId: "thread-a",
           input: [{ type: "text", text: "Release background reply" }],
-        })
+        }),
       );
     });
-    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toBeUndefined();
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a"),
+    ).toBeUndefined();
   });
 
   it("does not background-release when the guarded thread becomes focused", async () => {
@@ -1189,7 +1195,7 @@ describe("useQueuedTurnRelease", () => {
       () =>
         new Promise<BranchDriftResult>((resolve) => {
           resolveDrift = resolve;
-        })
+        }),
     );
     const desktopApi: DesktopApi = {
       checkThreadBranchDrift,
@@ -1263,9 +1269,9 @@ describe("useQueuedTurnRelease", () => {
     });
 
     expect(startTurn).not.toHaveBeenCalled();
-    expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.id
-    ).toBe("queued-branch");
+    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.id).toBe(
+      "queued-branch",
+    );
   });
 
   it("does not background-release when the queued item changes during the drift guard", async () => {
@@ -1276,7 +1282,7 @@ describe("useQueuedTurnRelease", () => {
       () =>
         new Promise<BranchDriftResult>((resolve) => {
           resolveDrift = resolve;
-        })
+        }),
     );
     const desktopApi: DesktopApi = {
       checkThreadBranchDrift,
@@ -1306,7 +1312,7 @@ describe("useQueuedTurnRelease", () => {
           thread("thread-a", { gitBranch: "feature/expected" }),
           thread("thread-b"),
         ],
-      })
+      }),
     );
 
     await act(async () => {
@@ -1351,9 +1357,9 @@ describe("useQueuedTurnRelease", () => {
     });
 
     expect(startTurn).not.toHaveBeenCalled();
-    expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.id
-    ).toBe("queued-new");
+    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.id).toBe(
+      "queued-new",
+    );
   });
 
   it("leaves the focused thread queue for the mounted composer to release", async () => {
@@ -1383,7 +1389,7 @@ describe("useQueuedTurnRelease", () => {
         desktopApi,
         selectedThread: thread("thread-a"),
         threads: [thread("thread-a")],
-      })
+      }),
     );
 
     await act(async () => {
@@ -1408,7 +1414,7 @@ describe("useQueuedTurnRelease", () => {
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text,
     ).toBe("Focused reply");
   });
 
@@ -1458,7 +1464,7 @@ describe("useQueuedTurnRelease", () => {
         desktopApi,
         selectedThread: thread("thread-a"),
         threads: [thread("thread-a")],
-      })
+      }),
     );
 
     await act(async () => {
@@ -1468,14 +1474,16 @@ describe("useQueuedTurnRelease", () => {
     expect(readThread).not.toHaveBeenCalled();
     expect(startReview).not.toHaveBeenCalled();
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text,
     ).toBe("/review main");
   });
 
   it("does not release from the idle probe when the thread becomes focused mid-check", async () => {
     vi.useFakeTimers();
     let resolveReadThread:
-      | ((response: Awaited<ReturnType<NonNullable<DesktopApi["readThread"]>>>) => void)
+      | ((
+          response: Awaited<ReturnType<NonNullable<DesktopApi["readThread"]>>>,
+        ) => void)
       | undefined;
     const startReview = vi.fn(async () => ({
       backend: "codex" as const,
@@ -1485,11 +1493,11 @@ describe("useQueuedTurnRelease", () => {
     }));
     const readThread = vi.fn(
       () =>
-        new Promise<
-          Awaited<ReturnType<NonNullable<DesktopApi["readThread"]>>>
-        >((resolve) => {
-          resolveReadThread = resolve;
-        })
+        new Promise<Awaited<ReturnType<NonNullable<DesktopApi["readThread"]>>>>(
+          (resolve) => {
+            resolveReadThread = resolve;
+          },
+        ),
     );
     const desktopApi: DesktopApi = {
       onAgentEvent: () => () => undefined,
@@ -1550,9 +1558,9 @@ describe("useQueuedTurnRelease", () => {
     });
 
     expect(startReview).not.toHaveBeenCalled();
-    expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.id
-    ).toBe("queued-review");
+    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.id).toBe(
+      "queued-review",
+    );
   });
 
   it("periodically releases a non-focused queued review after verifying the thread is idle", async () => {
@@ -1601,7 +1609,7 @@ describe("useQueuedTurnRelease", () => {
         desktopApi,
         selectedThread: thread("thread-b"),
         threads: [thread("thread-a"), thread("thread-b")],
-      })
+      }),
     );
 
     await act(async () => {
@@ -1620,7 +1628,7 @@ describe("useQueuedTurnRelease", () => {
       delivery: "inline",
     });
     expect(
-      composerDraftStore.getQueuedTurn("thread:codex:thread-a")
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a"),
     ).toBeUndefined();
   });
 });

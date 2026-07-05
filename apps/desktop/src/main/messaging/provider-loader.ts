@@ -71,13 +71,21 @@ export function configuredMessagingProviderIds(
     ...(config.telegram && config.telegram.enabled !== false
       ? (["telegram"] as const)
       : []),
-    ...(config.discord && config.discord.enabled !== false ? (["discord"] as const) : []),
+    ...(config.discord && config.discord.enabled !== false
+      ? (["discord"] as const)
+      : []),
     ...(config.mattermost && config.mattermost.enabled !== false
       ? (["mattermost"] as const)
       : []),
-    ...(config.slack && config.slack.enabled !== false ? (["slack"] as const) : []),
-    ...(config.feishu && config.feishu.enabled !== false ? (["feishu"] as const) : []),
-    ...(config.line && config.line.enabled !== false ? (["line"] as const) : []),
+    ...(config.slack && config.slack.enabled !== false
+      ? (["slack"] as const)
+      : []),
+    ...(config.feishu && config.feishu.enabled !== false
+      ? (["feishu"] as const)
+      : []),
+    ...(config.line && config.line.enabled !== false
+      ? (["line"] as const)
+      : []),
   ];
 }
 

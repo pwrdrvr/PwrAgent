@@ -5,7 +5,10 @@ import {
   readOptionalPositiveInteger,
   readRequiredString,
 } from "./tool-contract.js";
-import { ToolExecutionFailure, InvalidToolArgumentsError } from "./tool-errors.js";
+import {
+  ToolExecutionFailure,
+  InvalidToolArgumentsError,
+} from "./tool-errors.js";
 import { resolveWorkspaceFilePath } from "./workspace-paths.js";
 
 const TOOL_NAME = "read_file";
@@ -33,11 +36,13 @@ export function createReadFileTool(): ToolDefinition<ReadFileArguments> {
         },
         startLine: {
           type: "integer",
-          description: "Optional first line to include, using 1-based numbering.",
+          description:
+            "Optional first line to include, using 1-based numbering.",
         },
         endLine: {
           type: "integer",
-          description: "Optional last line to include, using 1-based numbering.",
+          description:
+            "Optional last line to include, using 1-based numbering.",
         },
       },
       required: ["path"],
@@ -46,7 +51,11 @@ export function createReadFileTool(): ToolDefinition<ReadFileArguments> {
     parseArguments(arguments_) {
       const record = asObjectArguments(TOOL_NAME, arguments_);
       const filePath = readRequiredString(record, TOOL_NAME, "path");
-      const startLine = readOptionalPositiveInteger(record, TOOL_NAME, "startLine");
+      const startLine = readOptionalPositiveInteger(
+        record,
+        TOOL_NAME,
+        "startLine",
+      );
       const endLine = readOptionalPositiveInteger(record, TOOL_NAME, "endLine");
       if (startLine && endLine && endLine < startLine) {
         throw new InvalidToolArgumentsError(
@@ -61,13 +70,16 @@ export function createReadFileTool(): ToolDefinition<ReadFileArguments> {
       };
     },
     async execute(arguments_, context) {
-      const resolved = resolveWorkspaceFilePath(context, TOOL_NAME, arguments_.path);
+      const resolved = resolveWorkspaceFilePath(
+        context,
+        TOOL_NAME,
+        arguments_.path,
+      );
       let content: string;
       try {
         content = await fs.readFile(resolved.absolutePath, "utf8");
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : String(error);
+        const message = error instanceof Error ? error.message : String(error);
         throw new ToolExecutionFailure(
           TOOL_NAME,
           `unable to read ${resolved.relativePath}: ${message}`,
@@ -91,9 +103,9 @@ export function createReadFileTool(): ToolDefinition<ReadFileArguments> {
         startLine + MAX_LINES - 1,
       );
       const limitedByDefault =
-        arguments_.startLine == null &&
-        arguments_.endLine == null &&
-        lines.length > DEFAULT_MAX_LINES;
+        arguments_.startLine == null
+        && arguments_.endLine == null
+        && lines.length > DEFAULT_MAX_LINES;
       const endLine = limitedByDefault
         ? Math.min(DEFAULT_MAX_LINES, lines.length)
         : Math.min(cappedEndLine, lines.length);

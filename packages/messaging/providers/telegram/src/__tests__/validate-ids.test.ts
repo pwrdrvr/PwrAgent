@@ -22,7 +22,9 @@ describe("Telegram identifier validators", () => {
   it("accepts known-good identifiers", () => {
     expect(validateTelegramPositiveId(42)).toEqual({ ok: true });
     expect(validateTelegramChatId(-1001234567890)).toEqual({ ok: true });
-    expect(validateTelegramCallbackQueryId("AAHdqT4AAAAAAAG")).toEqual({ ok: true });
+    expect(validateTelegramCallbackQueryId("AAHdqT4AAAAAAAG")).toEqual({
+      ok: true,
+    });
     expect(validateTelegramCallbackData("tg:abcdefghijklmnopqr")).toEqual({
       ok: true,
     });

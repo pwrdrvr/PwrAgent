@@ -74,11 +74,15 @@ describe("DeterministicInteractionMapper", () => {
       ],
     } satisfies MessagingApprovalIntent;
 
-    expect(mapper.mapText({ intent, text: "yes for this session" })).toMatchObject({
+    expect(
+      mapper.mapText({ intent, text: "yes for this session" }),
+    ).toMatchObject({
       kind: "matched",
       action: { id: "approval:accept_for_session" },
     });
-    expect(mapper.mapText({ intent, text: "approve this session" })).toMatchObject({
+    expect(
+      mapper.mapText({ intent, text: "approve this session" }),
+    ).toMatchObject({
       kind: "matched",
       action: { id: "approval:accept_for_session" },
     });

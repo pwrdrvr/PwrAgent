@@ -14,7 +14,9 @@ export type UseSubAgentsResult = {
  * Lists sub-agents (task monitors) delegated from a thread. The source is
  * the persisted thread overlay projected onto the navigation snapshot.
  */
-export function useSubAgents(thread: NavigationThreadSummary): UseSubAgentsResult {
+export function useSubAgents(
+  thread: NavigationThreadSummary,
+): UseSubAgentsResult {
   return {
     subAgents: [...(thread.subAgents ?? [])].sort(
       (left, right) => right.createdAt - left.createdAt,

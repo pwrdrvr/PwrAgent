@@ -33,7 +33,10 @@ describe("buildTranscriptRenderItems", () => {
       commentary("c3", "Still working."),
     ];
 
-    const items = buildTranscriptRenderItems({ entries, activeMessageId: "c3" });
+    const items = buildTranscriptRenderItems({
+      entries,
+      activeMessageId: "c3",
+    });
 
     expect(items).toEqual([
       { type: "entry", entry: entries[0] },
@@ -51,7 +54,10 @@ describe("buildTranscriptRenderItems", () => {
       commentary("c5", "Almost done."),
     ];
 
-    const items = buildTranscriptRenderItems({ entries, activeMessageId: "c5" });
+    const items = buildTranscriptRenderItems({
+      entries,
+      activeMessageId: "c5",
+    });
 
     expect(items).toEqual([
       { type: "entry", entry: entries[0] },
@@ -368,7 +374,7 @@ describe("buildTranscriptRenderItems", () => {
     const startedReview = review(
       "review-start",
       "Review changes against main",
-      turn
+      turn,
     );
     const firstActivity: AppServerThreadActivityEntry = {
       type: "activity",
@@ -377,11 +383,7 @@ describe("buildTranscriptRenderItems", () => {
       details: [],
       turn,
     };
-    const completedReview = review(
-      "review-complete",
-      "Code review",
-      turn
-    );
+    const completedReview = review("review-complete", "Code review", turn);
     const secondActivity: AppServerThreadActivityEntry = {
       type: "activity",
       id: "tool-2",
@@ -579,7 +581,8 @@ describe("buildTranscriptRenderItems", () => {
             additions: 0,
             removals: 3,
             diff: "",
-            omittedReason: "Large file diff omitted from transcript view (518 KB).",
+            omittedReason:
+              "Large file diff omitted from transcript view (518 KB).",
             originalLength: 530_180,
           },
         },
@@ -680,7 +683,9 @@ describe("buildTranscriptRenderItems", () => {
     const answer = final("f1", "Interim answer.");
     const second = commentary("c2", "Second scan.");
 
-    const items = buildTranscriptRenderItems({ entries: [first, answer, second] });
+    const items = buildTranscriptRenderItems({
+      entries: [first, answer, second],
+    });
 
     expect(items).toEqual([
       {
@@ -705,7 +710,7 @@ describe("buildTranscriptRenderItems", () => {
 function commentary(
   id: string,
   text: string,
-  turn?: AppServerThreadMessageEntry["turn"]
+  turn?: AppServerThreadMessageEntry["turn"],
 ): AppServerThreadMessageEntry {
   return {
     type: "message",
@@ -720,7 +725,7 @@ function commentary(
 function final(
   id: string,
   text: string,
-  turn?: AppServerThreadMessageEntry["turn"]
+  turn?: AppServerThreadMessageEntry["turn"],
 ): AppServerThreadEntry {
   return {
     type: "message",
@@ -735,7 +740,7 @@ function final(
 function review(
   id: string,
   displayText: string,
-  turn?: AppServerThreadMessageEntry["turn"]
+  turn?: AppServerThreadMessageEntry["turn"],
 ): AppServerThreadEntry {
   return {
     type: "review",
@@ -746,7 +751,10 @@ function review(
   };
 }
 
-function completedTurn(id: string, durationMs: number): AppServerThreadMessageEntry["turn"] {
+function completedTurn(
+  id: string,
+  durationMs: number,
+): AppServerThreadMessageEntry["turn"] {
   return {
     id,
     status: "completed",

@@ -7,10 +7,7 @@ export function attachWindowFocusSync(window: BrowserWindow): void {
   }
 
   window.on("focus", () => {
-    if (
-      typeof window.isDestroyed === "function" &&
-      window.isDestroyed()
-    ) {
+    if (typeof window.isDestroyed === "function" && window.isDestroyed()) {
       return;
     }
 

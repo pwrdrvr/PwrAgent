@@ -55,7 +55,8 @@ export async function analyzeProtocolCaptureTraffic(params: {
     }
 
     const summary = getMutableSummary(summaries, record.backend);
-    const method = record.method?.trim() || inferResponseMethod(record) || "unknown";
+    const method =
+      record.method?.trim() || inferResponseMethod(record) || "unknown";
     if (record.kind === "request" && record.direction === "outbound") {
       increment(summary.requestCounts, method);
       const methodSummary = getMutableMethodSummary(summary.requests, method);
@@ -126,14 +127,14 @@ function parseCaptureRecord(line: string): ProtocolCaptureEventRecord | null {
 
     const record = parsed as ProtocolCaptureEventRecord;
     if (
-      typeof record.backend !== "string" ||
-      !record.backend.trim() ||
-      !record.captureId?.trim() ||
-      (record.direction !== "inbound" && record.direction !== "outbound") ||
-      (record.kind !== "request" &&
-        record.kind !== "response" &&
-        record.kind !== "notification") ||
-      typeof record.timestamp !== "number"
+      typeof record.backend !== "string"
+      || !record.backend.trim()
+      || !record.captureId?.trim()
+      || (record.direction !== "inbound" && record.direction !== "outbound")
+      || (record.kind !== "request"
+        && record.kind !== "response"
+        && record.kind !== "notification")
+      || typeof record.timestamp !== "number"
     ) {
       return null;
     }
@@ -144,7 +145,9 @@ function parseCaptureRecord(line: string): ProtocolCaptureEventRecord | null {
   }
 }
 
-function inferResponseMethod(record: ProtocolCaptureEventRecord): string | undefined {
+function inferResponseMethod(
+  record: ProtocolCaptureEventRecord,
+): string | undefined {
   if (record.kind !== "response") {
     return undefined;
   }
@@ -192,7 +195,9 @@ function increment(record: Record<string, number>, key: string): void {
   record[key] = (record[key] ?? 0) + 1;
 }
 
-function finalizeSummary(summary: MutableBackendSummary): ProtocolCaptureBackendSummary {
+function finalizeSummary(
+  summary: MutableBackendSummary,
+): ProtocolCaptureBackendSummary {
   return {
     requestCounts: sortCounts(summary.requestCounts),
     notificationCounts: sortCounts(summary.notificationCounts),

@@ -94,7 +94,9 @@ export type DesktopMessagingAdapter = {
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   readCredentialMetadata?(): MessagingCredentialMetadata | undefined;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
-  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  resolveDeliveryScope?(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
   /**
    * Optional history fetch for the Automations editor live preview. Providers
@@ -117,8 +119,12 @@ export type DesktopMessagingAdapter = {
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
-  onDiagnostic?(listener: (event: MessagingAdapterDiagnosticEvent) => void): () => void;
-  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  onDiagnostic?(
+    listener: (event: MessagingAdapterDiagnosticEvent) => void,
+  ): () => void;
+  updateAuthorization?(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void>;
   updateRenderingPreferences?(
     update: MessagingAdapterRenderingPreferencesUpdate,
   ): Promise<void>;
@@ -140,7 +146,9 @@ export type DesktopMessagingAdapter = {
   deleteManagedConversation?(
     request: MessagingManagedConversationActionRequest,
   ): Promise<MessagingManagedConversationActionResult>;
-  start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
+  start?(
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void>;
   stop?(): Promise<void>;
 };
 
@@ -156,9 +164,7 @@ export type DesktopMessagingAdapterFactory = (params: {
 
 export type DesktopMessagingConfigLoader = (
   options?: DesktopMessagingConfigLoadOptions,
-) =>
-  | DesktopMessagingConfig
-  | Promise<DesktopMessagingConfig>;
+) => DesktopMessagingConfig | Promise<DesktopMessagingConfig>;
 
 export type MessagingAutomationInboundHandler = (
   event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
@@ -307,7 +313,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     string,
     ReturnType<typeof setTimeout>
   >();
-  private readonly deliveryBudgetDiagnosticLastLoggedAt = new Map<string, number>();
+  private readonly deliveryBudgetDiagnosticLastLoggedAt = new Map<
+    string,
+    number
+  >();
   private readonly platformStatusListeners = new Set<
     (event: MessagingPlatformStatusEvent) => void
   >();
@@ -327,7 +336,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     private readonly options: {
       adapterFactory: DesktopMessagingAdapterFactory;
       backendBridge: MessagingBackendBridge & {
-        onEvent?: (listener: (event: AgentEvent) => void | Promise<void>) => () => void;
+        onEvent?: (
+          listener: (event: AgentEvent) => void | Promise<void>,
+        ) => () => void;
       };
       config: DesktopMessagingConfig | DesktopMessagingConfigLoader;
       automationInboundHandler?: MessagingAutomationInboundHandler;
@@ -363,13 +374,15 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       }
       return response;
     }
-    return firstNotFound ?? {
-      ok: false,
-      error: {
-        code: "not_found",
-        message: "No running messaging adapter has this Agent turn location.",
-      },
-    };
+    return (
+      firstNotFound ?? {
+        ok: false,
+        error: {
+          code: "not_found",
+          message: "No running messaging adapter has this Agent turn location.",
+        },
+      }
+    );
   }
 
   private async stopNow(): Promise<void> {
@@ -383,7 +396,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     const stoppedChannels = [...this.runningAdapters.keys()];
     await Promise.all(
       [...this.runningAdapters.values()].map(async (running) =>
-        this.stopRunningAdapter(running)
+        this.stopRunningAdapter(running),
       ),
     );
     this.runningAdapters.clear();
@@ -428,7 +441,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       config,
       store,
     });
-    const nextAdapters = new Map<MessagingChannelKind, DesktopMessagingAdapter>();
+    const nextAdapters = new Map<
+      MessagingChannelKind,
+      DesktopMessagingAdapter
+    >();
     for (const adapter of configuredAdapters) {
       nextAdapters.set(adapter.channel, adapter);
     }
@@ -445,7 +461,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       }
 
       if (!isDesktopMessagingConfigChannel(channel)) {
-        const nextFingerprint = messagingAdapterConfigFingerprint(config, channel);
+        const nextFingerprint = messagingAdapterConfigFingerprint(
+          config,
+          channel,
+        );
         if (running.fingerprint !== nextFingerprint) {
           await this.stopRunningAdapter(running);
           this.runningAdapters.delete(channel);
@@ -463,23 +482,29 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         continue;
       }
 
-      const nextFingerprint = messagingAdapterConfigFingerprint(config, channel);
+      const nextFingerprint = messagingAdapterConfigFingerprint(
+        config,
+        channel,
+      );
       if (
         configUpdate.action === "hot"
-        && await this.hotApplyRunningAdapter(running, configUpdate, {
+        && (await this.hotApplyRunningAdapter(running, configUpdate, {
           config,
           fingerprint: nextFingerprint,
-        })
+        }))
       ) {
         hotUpdatedChannels.push(channel);
         continue;
       }
 
       if (configUpdate.action === "hot") {
-        messagingLog.info(`${channel}: hot config update unsupported — restarting adapter`, {
-          channel,
-          changedFields: configUpdate.changedFields,
-        });
+        messagingLog.info(
+          `${channel}: hot config update unsupported — restarting adapter`,
+          {
+            channel,
+            changedFields: configUpdate.changedFields,
+          },
+        );
       }
 
       if (running.fingerprint !== nextFingerprint) {
@@ -515,7 +540,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
     const failedChannelSet = new Set<MessagingChannelKind>(failedChannels);
     for (const channel of stoppedChannels) {
-      if (!this.runningAdapters.has(channel) && !failedChannelSet.has(channel)) {
+      if (
+        !this.runningAdapters.has(channel)
+        && !failedChannelSet.has(channel)
+      ) {
         this.setPlatformHealth(channel, "suspended");
       }
     }
@@ -527,7 +555,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       || hotUpdatedChannels.length > 0
     ) {
       messagingLog.info("messaging runtime config applied", {
-        hotUpdated: hotUpdatedChannels.length > 0 ? hotUpdatedChannels : undefined,
+        hotUpdated:
+          hotUpdatedChannels.length > 0 ? hotUpdatedChannels : undefined,
         started: startedChannels.length > 0 ? startedChannels : undefined,
         stopped: stoppedChannels.length > 0 ? stoppedChannels : undefined,
         failed: failedChannels.length > 0 ? failedChannels : undefined,
@@ -623,8 +652,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       const message = inboundEventToPreviewMessage(event);
       if (!message) continue;
       if (
-        message.conversationId === params.conversationId ||
-        message.parentId === params.conversationId
+        message.conversationId === params.conversationId
+        || message.parentId === params.conversationId
       ) {
         messages.push(message);
       }
@@ -711,7 +740,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ): Promise<void> {
     const running = this.runningAdapters.get(entry.platform);
     if (!running || !entry.observedActor || !entry.observedChat) return;
-    const text = options?.text
+    const text =
+      options?.text
       ?? (outcome === "approved"
         ? "PwrAgent pairing approved."
         : outcome === "expired"
@@ -877,31 +907,28 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ): Promise<MessagingCredentialValidationResult> {
     switch (request.channel) {
       case "telegram": {
-        const telegramProvider = await import(
-          "@pwragent/messaging-provider-telegram"
-        );
+        const telegramProvider =
+          await import("@pwragent/messaging-provider-telegram");
         return await telegramProvider.validateCredentials(request.credential);
       }
       case "discord": {
-        const discordProvider = await import(
-          "@pwragent/messaging-provider-discord"
-        );
+        const discordProvider =
+          await import("@pwragent/messaging-provider-discord");
         return await discordProvider.validateCredentials(request.credential);
       }
       case "mattermost": {
-        const mattermostProvider = await import(
-          "@pwragent/messaging-provider-mattermost"
-        );
+        const mattermostProvider =
+          await import("@pwragent/messaging-provider-mattermost");
         return await mattermostProvider.validateCredentials(request.credential);
       }
       case "slack": {
-        const slackProvider = await import("@pwragent/messaging-provider-slack");
+        const slackProvider =
+          await import("@pwragent/messaging-provider-slack");
         return await slackProvider.validateCredentials(request.credential);
       }
       case "feishu": {
-        const feishuProvider = await import(
-          "@pwragent/messaging-provider-feishu"
-        );
+        const feishuProvider =
+          await import("@pwragent/messaging-provider-feishu");
         return await feishuProvider.validateCredentials(request.credential);
       }
       case "line": {
@@ -940,7 +967,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     if (event.botMention || event.channel.conversation.kind === "dm") {
       return false;
     }
-    const binding = await params.store.findActiveBindingForChannel(event.channel);
+    const binding = await params.store.findActiveBindingForChannel(
+      event.channel,
+    );
     if (binding?.targetKind === "thread") {
       return false;
     }
@@ -982,10 +1011,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     };
     const deliveryBudget = new MessagingDeliveryBudget();
     if (adapter.clientRateLimitStrategy === "sdk-managed") {
-      messagingLog.warn(`${adapter.channel}: SDK-managed rate-limit retries are enabled`, {
-        channel: adapter.channel,
-        clientRateLimitStrategy: adapter.clientRateLimitStrategy,
-      });
+      messagingLog.warn(
+        `${adapter.channel}: SDK-managed rate-limit retries are enabled`,
+        {
+          channel: adapter.channel,
+          clientRateLimitStrategy: adapter.clientRateLimitStrategy,
+        },
+      );
     }
     const controller = new MessagingController({
       adapter,
@@ -1070,14 +1102,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         if (await this.handlePairingInbound(adapter, event)) {
           return;
         }
-        const authorized = authorization.actorIdSet.has(event.actor.platformUserId);
+        const authorized = authorization.actorIdSet.has(
+          event.actor.platformUserId,
+        );
         if (
-          authorized &&
-          await this.shouldDropAmbientSharedMessage({
+          authorized
+          && (await this.shouldDropAmbientSharedMessage({
             channel: adapter.channel,
             event,
             store,
-          })
+          }))
         ) {
           return;
         }
@@ -1099,16 +1133,19 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           }
           await controller.handleInboundEvent(event);
         } catch (error) {
-          messagingLog.error("messaging controller failed to handle inbound event", {
-            actorDisplayName: event.actor.displayName,
-            actorId: event.actor.platformUserId,
-            channel: adapter.channel,
-            conversationId: event.channel.conversation.id,
-            conversationKind: event.channel.conversation.kind,
-            error,
-            eventId: event.id,
-            eventKind: event.kind,
-          });
+          messagingLog.error(
+            "messaging controller failed to handle inbound event",
+            {
+              actorDisplayName: event.actor.displayName,
+              actorId: event.actor.platformUserId,
+              channel: adapter.channel,
+              conversationId: event.channel.conversation.id,
+              conversationKind: event.channel.conversation.kind,
+              error,
+              eventId: event.id,
+              eventKind: event.kind,
+            },
+          );
         }
       });
     } catch (error) {
@@ -1126,10 +1163,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       try {
         await adapter.stop?.();
       } catch (stopError) {
-        messagingLog.warn(`${adapter.channel}: adapter stop after failed start threw`, {
-          channel: adapter.channel,
-          error: stopError instanceof Error ? stopError.message : String(stopError),
-        });
+        messagingLog.warn(
+          `${adapter.channel}: adapter stop after failed start threw`,
+          {
+            channel: adapter.channel,
+            error:
+              stopError instanceof Error
+                ? stopError.message
+                : String(stopError),
+          },
+        );
       }
       messagingLog.error(`${adapter.channel}: failed to start adapter`, {
         channel: adapter.channel,
@@ -1206,17 +1249,23 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     try {
       if (update.authorization) {
         await adapter.updateAuthorization?.(update.authorization);
-        this.replaceRunningAuthorization(running, update.authorization.authorizedActorIds);
+        this.replaceRunningAuthorization(
+          running,
+          update.authorization.authorizedActorIds,
+        );
       }
       if (update.renderingPreferences) {
         await adapter.updateRenderingPreferences?.(update.renderingPreferences);
       }
     } catch (error) {
-      messagingLog.warn(`${adapter.channel}: hot config update failed — restarting adapter`, {
-        channel: adapter.channel,
-        changedFields: update.changedFields,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      messagingLog.warn(
+        `${adapter.channel}: hot config update failed — restarting adapter`,
+        {
+          channel: adapter.channel,
+          changedFields: update.changedFields,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
       return false;
     }
 
@@ -1254,7 +1303,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     running.controller.updateAuthorizedActorIds(actorIds);
   }
 
-  private async stopRunningAdapter(running: RunningMessagingAdapter): Promise<void> {
+  private async stopRunningAdapter(
+    running: RunningMessagingAdapter,
+  ): Promise<void> {
     try {
       running.unsubscribeDiagnostic?.();
     } catch (error) {
@@ -1286,9 +1337,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     try {
       running.unsubscribeInboundRejected?.();
     } catch (error) {
-      messagingLog.warn("messaging adapter inbound-rejected unsubscribe threw", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      messagingLog.warn(
+        "messaging adapter inbound-rejected unsubscribe threw",
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
     }
     running.controller.dispose();
     await running.adapter.stop?.();
@@ -1299,28 +1353,33 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       return;
     }
 
-    this.unsubscribeBackendEvents = this.options.backendBridge.onEvent?.(async (event) => {
-      await Promise.all(
-        this.controllers.map(async (controller) => {
-          try {
-            if (isMessagingPendingRequest(event.notification)) {
-              await controller.handleBackendPendingRequest(
-                event.backend,
-                event.notification,
+    this.unsubscribeBackendEvents = this.options.backendBridge.onEvent?.(
+      async (event) => {
+        await Promise.all(
+          this.controllers.map(async (controller) => {
+            try {
+              if (isMessagingPendingRequest(event.notification)) {
+                await controller.handleBackendPendingRequest(
+                  event.backend,
+                  event.notification,
+                );
+              } else {
+                await controller.handleBackendEvent(event);
+              }
+            } catch (error) {
+              messagingLog.error(
+                "messaging controller failed to handle backend event",
+                {
+                  backend: event.backend,
+                  error,
+                  method: event.notification.method,
+                },
               );
-            } else {
-              await controller.handleBackendEvent(event);
             }
-          } catch (error) {
-            messagingLog.error("messaging controller failed to handle backend event", {
-              backend: event.backend,
-              error,
-              method: event.notification.method,
-            });
-          }
-        }),
-      );
-    });
+          }),
+        );
+      },
+    );
   }
 
   private syncRunningAdapterLists(): void {
@@ -1352,7 +1411,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     return false;
   }
 
-  private async recordBindingUnbound(binding: MessagingBindingRecord): Promise<void> {
+  private async recordBindingUnbound(
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
     const conversation = binding.channel.conversation;
     const occurredAt = Date.now();
     if (this.options.backendBridge.recordMessagingBindingTransition) {
@@ -1420,7 +1481,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     const previous = this.platformStatuses.get(platform);
     if (
       options.credentialMetadata
-      && (options.credentialMetadata.account || options.credentialMetadata.detail)
+      && (options.credentialMetadata.account
+        || options.credentialMetadata.detail)
     ) {
       this.platformCredentialMetadata.set(platform, {
         ...definedCredentialMetadata(options.credentialMetadata),
@@ -1435,7 +1497,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       detail: _previousDetail,
       ...previousWithoutCredentialMetadata
     } = previous ?? {};
-    if (health === "enabled" || health === "suspended" || health === "errored") {
+    if (
+      health === "enabled"
+      || health === "suspended"
+      || health === "errored"
+    ) {
       if (health !== "enabled") {
         this.clearPlatformDegradationReasons(platform, { broadcast: false });
       } else {
@@ -1444,7 +1510,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
     const degradationReasons = this.currentDegradationReasons(platform);
     const effectiveHealth =
-      health === "enabled" && degradationReasons.length > 0 ? "degraded" : health;
+      health === "enabled" && degradationReasons.length > 0
+        ? "degraded"
+        : health;
     const next: MessagingPlatformStatus = {
       ...previousWithoutCredentialMetadata,
       platform,
@@ -1482,7 +1550,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       kind: "rate-limited",
       key,
       message: clipStatusText(
-        info.message ?? `Cool Off active for ${formatDurationForStatus(retryAfterMs)}.`,
+        info.message
+          ?? `Cool Off active for ${formatDurationForStatus(retryAfterMs)}.`,
       ),
       scope: sanitizeDeliveryScope(info.scope),
       retryAfterMs,
@@ -1507,10 +1576,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     event: MessagingControllerDeliveryBudgetEvent,
   ): Promise<void> {
     const scopeId = event.scope?.id ?? "unknown";
-    const reason = event.reason ?? (event.outcome === "deferred" ? "deferred" : "dropped");
-    const retryDelayMs = event.retryAt !== undefined
-      ? Math.max(0, event.retryAt - event.at)
-      : undefined;
+    const reason =
+      event.reason ?? (event.outcome === "deferred" ? "deferred" : "dropped");
+    const retryDelayMs =
+      event.retryAt !== undefined
+        ? Math.max(0, event.retryAt - event.at)
+        : undefined;
     const isCoolOff = reason === "cool-off";
     const modeLabel = isCoolOff ? "Cool Off" : "Slow Mode";
     const targetKey = deliveryBudgetTargetKey(event);
@@ -1524,10 +1595,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       event.priority,
       event.intentKind,
     ].join("\0");
-    const lastLoggedAt = this.deliveryBudgetDiagnosticLastLoggedAt.get(diagnosticKey);
+    const lastLoggedAt =
+      this.deliveryBudgetDiagnosticLastLoggedAt.get(diagnosticKey);
     if (
-      lastLoggedAt !== undefined &&
-      event.at - lastLoggedAt < DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS
+      lastLoggedAt !== undefined
+      && event.at - lastLoggedAt < DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS
     ) {
       return;
     }
@@ -1550,9 +1622,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       threadId: event.threadId,
     });
 
-    const expiresAt = event.outcome === "deferred"
-      ? event.retryAt
-      : event.at + DELIVERY_BUDGET_WARNING_TTL_MS;
+    const expiresAt =
+      event.outcome === "deferred"
+        ? event.retryAt
+        : event.at + DELIVERY_BUDGET_WARNING_TTL_MS;
     const key = degradationKey(
       event.channel,
       "warning",
@@ -1562,9 +1635,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     this.addPlatformDegradationReason(event.channel, {
       kind: "warning",
       key,
-      message: event.outcome === "deferred"
-        ? `${modeLabel} active; holding ${priorityPhrase} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}.`
-        : `${modeLabel} active; dropped ${priorityPhrase} (${reason})${targetPhrase}.`,
+      message:
+        event.outcome === "deferred"
+          ? `${modeLabel} active; holding ${priorityPhrase} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}.`
+          : `${modeLabel} active; dropped ${priorityPhrase} (${reason})${targetPhrase}.`,
       scope: event.scope ? sanitizeDeliveryScope(event.scope) : undefined,
       startedAt: event.at,
       expiresAt,
@@ -1575,9 +1649,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       threadId: event.threadId,
       bindingId: event.bindingId,
       conversation: event.conversation,
-      summary: event.outcome === "deferred"
-        ? `${modeLabel} held ${priorityPhrase} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}`
-        : `${modeLabel} dropped ${priorityPhrase}: ${reason}${targetPhrase}`,
+      summary:
+        event.outcome === "deferred"
+          ? `${modeLabel} held ${priorityPhrase} for ${formatDurationForStatus(retryDelayMs ?? 0)}${targetPhrase}`
+          : `${modeLabel} dropped ${priorityPhrase}: ${reason}${targetPhrase}`,
       createdAt: event.at,
       payload: {
         type: isCoolOff ? "cool-off" : "slow-mode",
@@ -1638,11 +1713,14 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       );
       return clipStatusText(thread?.title);
     } catch (error) {
-      messagingLog.debug("messaging budget diagnostic thread-title lookup failed", {
-        backend: event.backend,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: event.threadId,
-      });
+      messagingLog.debug(
+        "messaging budget diagnostic thread-title lookup failed",
+        {
+          backend: event.backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: event.threadId,
+        },
+      );
       return undefined;
     }
   }
@@ -1709,7 +1787,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
   private refreshDegradedPlatformHealth(platform: MessagingChannelKind): void {
     const previous = this.platformStatuses.get(platform);
-    if (!previous || previous.health === "errored" || previous.health === "suspended") {
+    if (
+      !previous
+      || previous.health === "errored"
+      || previous.health === "suspended"
+    ) {
       return;
     }
     const degradationReasons = this.currentDegradationReasons(platform);
@@ -1813,29 +1895,42 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         event,
         "That PwrAgent pairing token is invalid or expired.",
       );
-      this.recordPairingAttemptActivity(adapter.channel, event, "Invalid pairing token");
+      this.recordPairingAttemptActivity(
+        adapter.channel,
+        event,
+        "Invalid pairing token",
+      );
       return true;
     }
 
     const scopeFailure = pairingScopeFailure(entry, event);
     if (scopeFailure) {
-      const rejected = store.markStatus({
-        entryId: entry.id,
-        status: "rejected",
-        failureReason: scopeFailure,
-      }) ?? entry;
-      this.recordPairingActivity(rejected, `Rejected pairing token: ${scopeFailure}`);
+      const rejected =
+        store.markStatus({
+          entryId: entry.id,
+          status: "rejected",
+          failureReason: scopeFailure,
+        }) ?? entry;
+      this.recordPairingActivity(
+        rejected,
+        `Rejected pairing token: ${scopeFailure}`,
+      );
       this.broadcastPairingChanged(rejected);
-      await this.deliverPairingReply(adapter, event, `Pairing rejected: ${scopeFailure}`);
+      await this.deliverPairingReply(
+        adapter,
+        event,
+        `Pairing rejected: ${scopeFailure}`,
+      );
       return true;
     }
 
-    const observed = store.markObserved({
-      entryId: entry.id,
-      observedAt: now,
-      actor: observedActorFromEvent(event),
-      chat: observedChatFromEvent(event),
-    }) ?? entry;
+    const observed =
+      store.markObserved({
+        entryId: entry.id,
+        observedAt: now,
+        actor: observedActorFromEvent(event),
+        chat: observedChatFromEvent(event),
+      }) ?? entry;
     this.recordPairingActivity(observed, "Observed pairing token");
     this.broadcastPairingChanged(observed);
     await this.deliverPairingReply(
@@ -1873,7 +1968,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
   }
 
-  private recordPairingActivity(entry: MessagingPairingEntry, summary: string): void {
+  private recordPairingActivity(
+    entry: MessagingPairingEntry,
+    summary: string,
+  ): void {
     try {
       getDesktopMessagingActivityLog().record({
         platform: entry.platform,
@@ -2194,7 +2292,7 @@ function messagingAdapterConfigFingerprint(
             ? config.slack
             : channel === "line"
               ? config.line
-            : undefined;
+              : undefined;
 
   return stableStringify({
     attachmentPolicy: config.attachmentPolicy,
@@ -2206,11 +2304,13 @@ function messagingAdapterConfigFingerprint(
 function isDesktopMessagingConfigChannel(
   channel: MessagingChannelKind,
 ): channel is DesktopMessagingConfigChannel {
-  return channel === "telegram"
+  return (
+    channel === "telegram"
     || channel === "discord"
     || channel === "mattermost"
     || channel === "slack"
-    || channel === "line";
+    || channel === "line"
+  );
 }
 
 function stableStringify(value: unknown): string {
@@ -2241,12 +2341,17 @@ function generatePairingToken(): string {
   const bytes = randomBytes(32);
   let token = "";
   for (let index = 0; token.length < 32; index += 1) {
-    token += PAIRING_TOKEN_ALPHABET[bytes[index % bytes.length] % PAIRING_TOKEN_ALPHABET.length];
+    token +=
+      PAIRING_TOKEN_ALPHABET[
+        bytes[index % bytes.length] % PAIRING_TOKEN_ALPHABET.length
+      ];
   }
   return token;
 }
 
-function tokenFromInboundEvent(event: MessagingInboundEvent): string | undefined {
+function tokenFromInboundEvent(
+  event: MessagingInboundEvent,
+): string | undefined {
   if (event.kind === "text") {
     return extractMessagingPairingToken(event.text);
   }
@@ -2281,7 +2386,9 @@ function pairingScopeFailure(
   return undefined;
 }
 
-function observedActorFromEvent(event: MessagingInboundEvent): MessagingPairingObservedActor {
+function observedActorFromEvent(
+  event: MessagingInboundEvent,
+): MessagingPairingObservedActor {
   return {
     id: event.actor.platformUserId,
     displayName: event.actor.displayName,
@@ -2290,7 +2397,9 @@ function observedActorFromEvent(event: MessagingInboundEvent): MessagingPairingO
   };
 }
 
-function observedChatFromEvent(event: MessagingInboundEvent): MessagingPairingObservedChat {
+function observedChatFromEvent(
+  event: MessagingInboundEvent,
+): MessagingPairingObservedChat {
   const conversation = event.channel.conversation;
   return {
     id: conversation.id,
@@ -2309,7 +2418,10 @@ function bucketIdFromEvent(event: MessagingInboundEvent): string | undefined {
     if (typeof record.guildId === "string" && record.guildId) {
       return record.guildId;
     }
-    if (typeof record.chatId === "number" || typeof record.chatId === "string") {
+    if (
+      typeof record.chatId === "number"
+      || typeof record.chatId === "string"
+    ) {
       return String(record.chatId);
     }
     if (typeof record.teamId === "string" && record.teamId) {
@@ -2360,15 +2472,15 @@ function responseModeForChannel(
   ].filter((id): id is string => Boolean(id));
   switch (channel) {
     case "slack": {
-      const specificMode = config.slack?.authorizedConversationIds
-        ?.find((contact) => conversationIds.includes(contact.id))
-        ?.responseMode;
+      const specificMode = config.slack?.authorizedConversationIds?.find(
+        (contact) => conversationIds.includes(contact.id),
+      )?.responseMode;
       return specificMode ?? config.slack?.responseMode ?? "mention_only";
     }
     case "telegram": {
-      const specificMode = config.telegram?.authorizedSupergroupIds
-        ?.find((contact) => conversationIds.includes(contact.id))
-        ?.responseMode;
+      const specificMode = config.telegram?.authorizedSupergroupIds?.find(
+        (contact) => conversationIds.includes(contact.id),
+      )?.responseMode;
       return specificMode ?? config.telegram?.responseMode ?? "every_message";
     }
     default:
@@ -2414,7 +2526,9 @@ function describeDeliveryBudgetTarget(
 ): string {
   const pieces: string[] = [];
   if (event.conversation) {
-    pieces.push(`conversation ${shortIdentifier(describeConversation(event.conversation), 80)}`);
+    pieces.push(
+      `conversation ${shortIdentifier(describeConversation(event.conversation), 80)}`,
+    );
   } else if (event.bindingId) {
     pieces.push(`binding ${shortIdentifier(event.bindingId)}`);
   }
@@ -2424,7 +2538,9 @@ function describeDeliveryBudgetTarget(
     pieces.push(`thread ${shortIdentifier(event.threadId)}`);
   }
   if (event.scope && !event.conversation) {
-    pieces.push(`${event.scope.kind} ${shortIdentifier(event.scope.label ?? event.scope.id, 48)}`);
+    pieces.push(
+      `${event.scope.kind} ${shortIdentifier(event.scope.label ?? event.scope.id, 48)}`,
+    );
   }
   return pieces.length > 0 ? ` for ${pieces.join(", ")}` : "";
 }
@@ -2457,7 +2573,9 @@ function clipStatusText(value: string | undefined): string | undefined {
     return undefined;
   }
   const normalized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
-  return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+  return normalized.length > 160
+    ? `${normalized.slice(0, 157)}...`
+    : normalized;
 }
 
 function describeConversation(

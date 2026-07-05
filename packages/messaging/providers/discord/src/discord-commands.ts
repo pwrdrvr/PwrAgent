@@ -37,8 +37,13 @@ export type DiscordApplicationCommandApi = {
     applicationId: string,
     command: DiscordApplicationCommandBody,
   ): Promise<DiscordApplicationCommand>;
-  deleteApplicationCommand(applicationId: string, commandId: string): Promise<void>;
-  listApplicationCommands(applicationId: string): Promise<DiscordApplicationCommand[]>;
+  deleteApplicationCommand(
+    applicationId: string,
+    commandId: string,
+  ): Promise<void>;
+  listApplicationCommands(
+    applicationId: string,
+  ): Promise<DiscordApplicationCommand[]>;
   updateApplicationCommand(
     applicationId: string,
     commandId: string,
@@ -74,7 +79,8 @@ export const DISCORD_APPLICATION_COMMANDS: DiscordApplicationCommandBody[] = [
   },
   {
     contexts: COMMAND_CONTEXTS,
-    description: "Choose a PwrAgent Agent thread to control from this conversation.",
+    description:
+      "Choose a PwrAgent Agent thread to control from this conversation.",
     integration_types: COMMAND_INTEGRATION_TYPES,
     name: "agent",
     options: [
@@ -139,7 +145,9 @@ export async function reconcileDiscordApplicationCommands(params: {
 }> {
   const log = params.log ?? (() => {});
   const desiredBodies = params.commands ?? DISCORD_APPLICATION_COMMANDS;
-  const liveCommands = await params.api.listApplicationCommands(params.applicationId);
+  const liveCommands = await params.api.listApplicationCommands(
+    params.applicationId,
+  );
   const liveByKey = new Map(
     liveCommands.map((command) => [commandKey(command), command]),
   );
@@ -213,7 +221,9 @@ export async function reconcileDiscordApplicationCommands(params: {
   };
 }
 
-function commandKey(command: Pick<DiscordApplicationCommandBody, "name" | "type">): string {
+function commandKey(
+  command: Pick<DiscordApplicationCommandBody, "name" | "type">,
+): string {
   return `${command.type}:${command.name}`;
 }
 
@@ -221,7 +231,10 @@ function commandsEqual(
   live: DiscordApplicationCommand,
   desired: DiscordApplicationCommandBody,
 ): boolean {
-  return JSON.stringify(normalizeLiveCommand(live)) === JSON.stringify(normalizeCommand(desired));
+  return (
+    JSON.stringify(normalizeLiveCommand(live))
+    === JSON.stringify(normalizeCommand(desired))
+  );
 }
 
 function normalizeLiveCommand(command: DiscordApplicationCommand): unknown {
@@ -270,23 +283,23 @@ function normalizeCommand(value: unknown, path: string[] = []): unknown {
       "integration_types",
       "name_localizations",
     ]);
-    const normalizedEntries = Object.entries(value as Record<string, unknown>).flatMap(
-      ([key, entry]) => {
-        if (path.includes("options") && subcommandOnlyFields.has(key)) {
-          return [];
-        }
-        if ((key === "required" || key === "autocomplete") && entry === false) {
-          return [];
-        }
+    const normalizedEntries = Object.entries(
+      value as Record<string, unknown>,
+    ).flatMap(([key, entry]) => {
+      if (path.includes("options") && subcommandOnlyFields.has(key)) {
+        return [];
+      }
+      if ((key === "required" || key === "autocomplete") && entry === false) {
+        return [];
+      }
 
-        const normalized = normalizeCommand(entry, [...path, key]);
-        if (normalized === undefined) {
-          return [];
-        }
+      const normalized = normalizeCommand(entry, [...path, key]);
+      if (normalized === undefined) {
+        return [];
+      }
 
-        return [[key, normalized] as const];
-      },
-    );
+      return [[key, normalized] as const];
+    });
 
     return Object.fromEntries(
       normalizedEntries.sort(([left], [right]) => left.localeCompare(right)),

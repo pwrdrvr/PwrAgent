@@ -10,9 +10,18 @@ type RendererDebugger = {
   attach: (version: string) => void;
   detach: () => void;
   isAttached: () => boolean;
-  sendCommand: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
-  on: (event: "detach", listener: (event: unknown, reason: string) => void) => void;
-  off?: (event: "detach", listener: (event: unknown, reason: string) => void) => void;
+  sendCommand: (
+    method: string,
+    params?: Record<string, unknown>,
+  ) => Promise<unknown>;
+  on: (
+    event: "detach",
+    listener: (event: unknown, reason: string) => void,
+  ) => void;
+  off?: (
+    event: "detach",
+    listener: (event: unknown, reason: string) => void,
+  ) => void;
 };
 
 type RendererStartupCpuTarget = {
@@ -81,7 +90,9 @@ export class RendererStartupCpuProfiler {
           reason: "debugger-already-attached",
         },
       });
-      this.logger.warn("renderer startup CPU profiler skipped because debugger is already attached");
+      this.logger.warn(
+        "renderer startup CPU profiler skipped because debugger is already attached",
+      );
       return false;
     }
 
@@ -129,7 +140,9 @@ export class RendererStartupCpuProfiler {
     }
 
     try {
-      const result = (await this.target.debugger.sendCommand("Profiler.stop")) as {
+      const result = (await this.target.debugger.sendCommand(
+        "Profiler.stop",
+      )) as {
         profile?: unknown;
       };
       await fs.writeFile(
@@ -172,7 +185,11 @@ export class RendererStartupCpuProfiler {
       this.target.debugger.off("detach", this.detachListener);
     }
 
-    if (!this.attachedByProfiler || !this.target.debugger.isAttached() || this.isTargetDestroyed()) {
+    if (
+      !this.attachedByProfiler
+      || !this.target.debugger.isAttached()
+      || this.isTargetDestroyed()
+    ) {
       return;
     }
 

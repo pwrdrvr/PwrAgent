@@ -64,7 +64,9 @@ function isNotFoundError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-async function pathExists(candidate: string): Promise<"exists" | "not_found" | "unknown"> {
+async function pathExists(
+  candidate: string,
+): Promise<"exists" | "not_found" | "unknown"> {
   try {
     await access(candidate, fsConstants.F_OK);
     return "exists";
@@ -86,7 +88,10 @@ function commandHasPathSeparator(command: string): boolean {
   return command.includes("/") || command.includes("\\");
 }
 
-function readPathEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
+function readPathEnv(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): string | undefined {
   if (platform !== "win32") {
     return env.PATH;
   }
@@ -115,12 +120,16 @@ function buildPathCommandNames(
     .split(";")
     .map((extension) => extension.trim())
     .filter(Boolean)
-    .map((extension) => (extension.startsWith(".") ? extension : `.${extension}`));
+    .map((extension) =>
+      extension.startsWith(".") ? extension : `.${extension}`,
+    );
   const commandExtension = path.win32.extname(command).toLowerCase();
 
   if (
-    commandExtension &&
-    extensions.some((extension) => extension.toLowerCase() === commandExtension)
+    commandExtension
+    && extensions.some(
+      (extension) => extension.toLowerCase() === commandExtension,
+    )
   ) {
     return [command];
   }
@@ -152,7 +161,7 @@ async function resolvePathCommand(
     .filter(Boolean)) {
     for (const commandName of commandNames) {
       const candidate = joinPath(directory, commandName);
-      if (await pathExists(candidate) !== "not_found") {
+      if ((await pathExists(candidate)) !== "not_found") {
         return candidate;
       }
     }
@@ -223,19 +232,22 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
     ? await resolvePathCommand(trimmedCommand, options.env, platform)
     : trimmedCommand;
   const probeCommand = resolvedCommand ?? trimmedCommand;
-  const existence = resolvedCommand ? await pathExists(resolvedCommand) : "unknown";
+  const existence = resolvedCommand
+    ? await pathExists(resolvedCommand)
+    : "unknown";
   const accessExecutable =
     resolvedCommand && existence !== "not_found"
       ? await pathIsExecutable(resolvedCommand)
       : false;
-  const preflightResult = existence !== "not_found"
-    ? await options.preflightCandidate?.({
-        command: probeCommand,
-        source: candidate.source,
-        env: options.env,
-        platform,
-      })
-    : undefined;
+  const preflightResult =
+    existence !== "not_found"
+      ? await options.preflightCandidate?.({
+          command: probeCommand,
+          source: candidate.source,
+          env: options.env,
+          platform,
+        })
+      : undefined;
 
   if (preflightResult?.failureReason) {
     return {
@@ -249,22 +261,24 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
     };
   }
 
-  const versionResult = existence !== "not_found"
-    ? preflightResult?.skipVersionProbe
-      ? {
-          ran: accessExecutable,
-          version: preflightResult.version,
-          failureReason: preflightResult.version
-            ? undefined
-            : (preflightResult.versionFailureReason ?? "version_not_reported"),
-        }
-      : await readCommandVersion({
-          command: probeCommand,
-          env: options.env,
-          parseVersion: options.parseVersion,
-          versionArgs: options.versionArgs ?? ["--version"],
-        })
-    : { ran: false, failureReason: "not_found" };
+  const versionResult =
+    existence !== "not_found"
+      ? preflightResult?.skipVersionProbe
+        ? {
+            ran: accessExecutable,
+            version: preflightResult.version,
+            failureReason: preflightResult.version
+              ? undefined
+              : (preflightResult.versionFailureReason
+                ?? "version_not_reported"),
+          }
+        : await readCommandVersion({
+            command: probeCommand,
+            env: options.env,
+            parseVersion: options.parseVersion,
+            versionArgs: options.versionArgs ?? ["--version"],
+          })
+      : { ran: false, failureReason: "not_found" };
   const version = versionResult.version ?? preflightResult?.version;
   const versionValidationFailure = version
     ? options.validateVersion?.(version)
@@ -316,17 +330,22 @@ export async function discoverCommands<Source extends string>(
       options.autoCandidates.map((candidate) =>
         buildCommandDiscoveryCandidate(candidate, options),
       ),
-    )
+    ),
   );
 
-  const executableAutoCandidates = autoCandidates.filter((candidate) => candidate.executable);
+  const executableAutoCandidates = autoCandidates.filter(
+    (candidate) => candidate.executable,
+  );
   const includeFailedAutoCandidates =
     options.includeFailedAutoCandidates === "if-none-executable"
       ? executableAutoCandidates.length === 0
       : options.includeFailedAutoCandidates === true;
   const visibleAutoCandidates = autoCandidates
-    .filter((candidate) =>
-      includeFailedAutoCandidates || candidate.executable || candidate.version,
+    .filter(
+      (candidate) =>
+        includeFailedAutoCandidates
+        || candidate.executable
+        || candidate.version,
     )
     .sort((left, right) =>
       options.compareVersions
@@ -336,8 +355,12 @@ export async function discoverCommands<Source extends string>(
 
   const candidates = [...fixedCandidates, ...visibleAutoCandidates];
   const selected =
-    fixedCandidates.find((candidate) => candidate.source === "env" && candidate.executable)
-    ?? fixedCandidates.find((candidate) => candidate.source === "config" && candidate.executable)
+    fixedCandidates.find(
+      (candidate) => candidate.source === "env" && candidate.executable,
+    )
+    ?? fixedCandidates.find(
+      (candidate) => candidate.source === "config" && candidate.executable,
+    )
     ?? visibleAutoCandidates.find((candidate) => candidate.executable);
 
   if (selected) {
@@ -369,7 +392,10 @@ function dedupeCommandDiscoveryCandidates<Source extends string>(
     }
 
     const existing = deduped[existingIndex];
-    deduped[existingIndex] = mergeCommandDiscoveryCandidates(existing, candidate);
+    deduped[existingIndex] = mergeCommandDiscoveryCandidates(
+      existing,
+      candidate,
+    );
   }
 
   return deduped;
@@ -379,7 +405,10 @@ function mergeCommandDiscoveryCandidates<Source extends string>(
   existing: CommandDiscoveryCandidate<Source>,
   candidate: CommandDiscoveryCandidate<Source>,
 ): CommandDiscoveryCandidate<Source> {
-  const preferred = choosePreferredCommandDiscoveryCandidate(existing, candidate);
+  const preferred = choosePreferredCommandDiscoveryCandidate(
+    existing,
+    candidate,
+  );
   const fallback = preferred === existing ? candidate : existing;
   const executable = existing.executable || candidate.executable;
 
@@ -419,10 +448,13 @@ function choosePreferredCommandDiscoveryCandidate<Source extends string>(
 export async function resolveDiscoveredCommand<Source extends string>(params: {
   command: string;
   fallbackSource: Source;
-  discover: (configuredCommand?: string) => Promise<CommandDiscoverySnapshot<Source>>;
+  discover: (
+    configuredCommand?: string,
+  ) => Promise<CommandDiscoverySnapshot<Source>>;
 }): Promise<ResolvedCommandCandidate<Source>> {
   const configuredCommand =
-    params.command.trim() && params.command.trim() !== path.basename(params.command.trim())
+    params.command.trim()
+    && params.command.trim() !== path.basename(params.command.trim())
       ? params.command.trim()
       : params.command.trim() || undefined;
   const discovery = await params.discover(configuredCommand);

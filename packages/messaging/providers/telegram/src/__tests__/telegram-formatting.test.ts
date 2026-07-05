@@ -52,9 +52,12 @@ describe("telegram formatting", () => {
     );
 
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= TELEGRAM_MESSAGE_TEXT_LIMIT)).toBe(
-      true,
-    );
+    expect(
+      chunks.every(
+        (chunk) =>
+          Buffer.byteLength(chunk, "utf8") <= TELEGRAM_MESSAGE_TEXT_LIMIT,
+      ),
+    ).toBe(true);
   });
 
   it("builds one-button rows with compact opaque callback handles", () => {
@@ -82,9 +85,12 @@ describe("telegram formatting", () => {
         ],
       ],
     });
-    expect(Buffer.byteLength(keyboard!.inline_keyboard[0]![0]!.callback_data, "utf8")).toBeLessThanOrEqual(
-      TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
-    );
+    expect(
+      Buffer.byteLength(
+        keyboard!.inline_keyboard[0]![0]!.callback_data,
+        "utf8",
+      ),
+    ).toBeLessThanOrEqual(TELEGRAM_CALLBACK_DATA_LIMIT_BYTES);
   });
 
   it("honors explicit channel-neutral button rows", () => {
@@ -109,10 +115,9 @@ describe("telegram formatting", () => {
       () => "tg:abcdefghijklmnopqr",
     );
 
-    expect(keyboard?.inline_keyboard.map((row) => row.map((button) => button.text))).toEqual([
-      ["One", "Two"],
-      ["Three"],
-    ]);
+    expect(
+      keyboard?.inline_keyboard.map((row) => row.map((button) => button.text)),
+    ).toEqual([["One", "Two"], ["Three"]]);
   });
 
   it("honors channel-neutral automatic column hints", () => {
@@ -126,10 +131,9 @@ describe("telegram formatting", () => {
       { columns: 2 },
     );
 
-    expect(keyboard?.inline_keyboard.map((row) => row.map((button) => button.text))).toEqual([
-      ["One", "Two"],
-      ["Three"],
-    ]);
+    expect(
+      keyboard?.inline_keyboard.map((row) => row.map((button) => button.text)),
+    ).toEqual([["One", "Two"], ["Three"]]);
   });
 
   it("renders workspace handoff choices with opaque callback handles", () => {
@@ -174,10 +178,9 @@ describe("telegram formatting", () => {
     );
 
     expect(textForTelegramIntent(intent)).toContain("Workspace Handoff");
-    expect(keyboard?.inline_keyboard.map((row) => row.map((button) => button.text))).toEqual([
-      ["Handoff to New Worktree"],
-      ["Cancel"],
-    ]);
+    expect(
+      keyboard?.inline_keyboard.map((row) => row.map((button) => button.text)),
+    ).toEqual([["Handoff to New Worktree"], ["Cancel"]]);
     expect(JSON.stringify(keyboard)).not.toContain("/repo/pwragent");
   });
 

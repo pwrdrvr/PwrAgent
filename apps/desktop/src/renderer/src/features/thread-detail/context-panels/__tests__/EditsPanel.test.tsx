@@ -1,6 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { EditsPanel } from "../EditsPanel";
 import type { EditedFileGroup } from "../../edited-file-groups";
 
@@ -67,7 +73,9 @@ describe("EditsPanel", () => {
   });
 
   it("keeps the single group header after the hidden view toggle was left on All files", () => {
-    const { rerender } = render(renderEditsPanel([editedGroup(2), editedGroup(1)]));
+    const { rerender } = render(
+      renderEditsPanel([editedGroup(2), editedGroup(1)]),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "All files" }));
     rerender(renderEditsPanel([editedGroup(1)]));

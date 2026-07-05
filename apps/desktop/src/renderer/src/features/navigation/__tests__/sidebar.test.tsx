@@ -210,15 +210,19 @@ describe("Sidebar", () => {
         onOpenSettings={onOpenSettings}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
     expect(onOpenSettings).toHaveBeenCalledOnce();
-    expect(screen.queryByRole("heading", { level: 2, name: "Browse" })).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Thread browser" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { level: 2, name: "Browse" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Thread browser" }),
+    ).toBeInTheDocument();
     const lensTabs = within(
-      screen.getByRole("tablist", { name: "Thread lenses" })
+      screen.getByRole("tablist", { name: "Thread lenses" }),
     ).getAllByRole("tab");
     // The Directories tab carries a responsive short form ("Dirs") alongside
     // the full word; which one shows is decided purely in CSS by a container
@@ -227,13 +231,15 @@ describe("Sidebar", () => {
     expect(
       lensTabs.map(
         (tab) =>
-          tab.querySelector(".lens-switch__label--full")?.textContent ??
-          tab.textContent
-      )
+          tab.querySelector(".lens-switch__label--full")?.textContent
+          ?? tab.textContent,
+      ),
     ).toEqual(["Updated", "Created", "Directories"]);
     expect(lensTabs[2]).toHaveAttribute("aria-selected", "true");
     expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(
+      0,
+    );
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
   });
 
@@ -260,19 +266,27 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onOpenSettings={onOpenSettings}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
-    const automationsButton = screen.getByRole("button", { name: "Open automations" });
+    const automationsButton = screen.getByRole("button", {
+      name: "Open automations",
+    });
     fireEvent.mouseEnter(automationsButton);
-    expect((await screen.findByRole("tooltip")).textContent).toBe("Open automations");
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Open automations",
+    );
     fireEvent.click(automationsButton);
     expect(onOpenAutomations).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
-    const settingsButton = screen.getByRole("button", { name: "Open settings" });
+    const settingsButton = screen.getByRole("button", {
+      name: "Open settings",
+    });
     fireEvent.focus(settingsButton);
-    expect((await screen.findByRole("tooltip")).textContent).toBe("Open settings");
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Open settings",
+    );
     fireEvent.blur(settingsButton);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     fireEvent.click(settingsButton);
@@ -310,13 +324,13 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     const updatedTab = screen.getByRole("tab", { name: "Updated" });
     fireEvent.mouseEnter(updatedTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "All threads, most recently updated first"
+      "All threads, most recently updated first",
     );
     fireEvent.mouseLeave(updatedTab);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
@@ -324,7 +338,7 @@ describe("Sidebar", () => {
     const createdTab = screen.getByRole("tab", { name: "Created" });
     fireEvent.focus(createdTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "All threads, newest created first"
+      "All threads, newest created first",
     );
 
     // Selecting a lens still works and the tooltip dismisses on click.
@@ -357,7 +371,7 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onOpenSettings={() => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     const newThreadButton = screen.getByRole("button", { name: "New thread" });
@@ -367,14 +381,14 @@ describe("Sidebar", () => {
     await screen.findByRole("menuitem", { name: "New chat in PwrAgnt" });
 
     fireEvent.click(
-      screen.getByRole("menuitem", { name: "New chat without a directory" })
+      screen.getByRole("menuitem", { name: "New chat without a directory" }),
     );
     expect(onCreateThreadWithoutDirectory).toHaveBeenCalledTimes(1);
     expect(onCreateThread).not.toHaveBeenCalled();
 
     fireEvent.mouseEnter(newThreadButton.parentElement as HTMLElement);
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "New chat in PwrAgnt" })
+      await screen.findByRole("menuitem", { name: "New chat in PwrAgnt" }),
     );
     expect(onCreateThread).toHaveBeenCalledTimes(1);
   });
@@ -407,8 +421,12 @@ describe("Sidebar", () => {
     );
 
     expect(container.querySelector(".subthread-list")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Cross-project cleanup" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Adversarial review" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Cross-project cleanup" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Adversarial review" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -437,11 +455,20 @@ describe("Sidebar", () => {
       />,
     );
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
-    expect(screen.queryByRole("menuitem", { name: "Sub-thread in Local" })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }));
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Cross-project cleanup" }),
+    );
+    expect(
+      screen.queryByRole("menuitem", { name: "Sub-thread in Local" }),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }),
+    );
 
-    expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
+    expect(onCreateSubthread).toHaveBeenCalledWith(
+      sharedThread,
+      "same-worktree",
+    );
   });
 
   it("opens a local sub-thread launchpad only for local parent threads", () => {
@@ -463,10 +490,18 @@ describe("Sidebar", () => {
       />,
     );
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
-    expect(screen.queryByRole("menuitem", { name: "Sub-thread in Same Worktree" })).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Sub-thread in New Worktree" })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in Local" }));
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Local checkout cleanup" }),
+    );
+    expect(
+      screen.queryByRole("menuitem", { name: "Sub-thread in Same Worktree" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Sub-thread in New Worktree" }),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Sub-thread in Local" }),
+    );
 
     expect(onCreateSubthread).toHaveBeenCalledWith(localThread, "local");
   });
@@ -499,8 +534,12 @@ describe("Sidebar", () => {
       />,
     );
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Fork into New Worktree" }));
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Cross-project cleanup" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Fork into New Worktree" }),
+    );
 
     expect(onForkThread).toHaveBeenCalledWith(sharedThread, "new-worktree");
   });
@@ -533,9 +572,15 @@ describe("Sidebar", () => {
       />,
     );
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
-    expect(screen.queryByRole("menuitem", { name: "Fork into Same Worktree" })).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Fork into New Worktree" })).toBeNull();
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Local checkout cleanup" }),
+    );
+    expect(
+      screen.queryByRole("menuitem", { name: "Fork into Same Worktree" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Fork into New Worktree" }),
+    ).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Fork in Local" }));
 
     expect(onForkThread).toHaveBeenCalledWith(localThread, "local");
@@ -560,11 +605,19 @@ describe("Sidebar", () => {
       />,
     );
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Cross-project cleanup" }),
+    );
 
-    expect(screen.queryByRole("menuitem", { name: "Fork into Same Worktree" })).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Fork into New Worktree" })).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Fork in Local" })).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Fork into Same Worktree" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Fork into New Worktree" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Fork in Local" }),
+    ).toBeNull();
   });
 
   it("exposes sub-thread and fork actions on a child card", () => {
@@ -603,13 +656,20 @@ describe("Sidebar", () => {
 
     // A child card now offers the same spawn actions; the parent hook
     // re-parents the result to the group root, so the menu can stay open.
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Child cleanup" }));
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Child cleanup" }),
+    );
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }),
     );
-    expect(onCreateSubthread).toHaveBeenCalledWith(childThread, "same-worktree");
+    expect(onCreateSubthread).toHaveBeenCalledWith(
+      childThread,
+      "same-worktree",
+    );
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Child cleanup" }));
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Child cleanup" }),
+    );
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Fork into Same Worktree" }),
     );
@@ -784,9 +844,11 @@ describe("Sidebar", () => {
       />,
     );
 
-    expect(screen.getByRole("button", {
-      name: "Open PwrAgent profile menu",
-    })).toHaveTextContent("profile:work, codex:work3");
+    expect(
+      screen.getByRole("button", {
+        name: "Open PwrAgent profile menu",
+      }),
+    ).toHaveTextContent("profile:work, codex:work3");
   });
 
   it("keeps recents to a single worktree indicator on the directory chip", () => {
@@ -806,18 +868,25 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
+    const browseSection = screen.getByRole("region", {
+      name: "Thread browser",
     });
-
-    expect(within(threadButton).getByLabelText("Copy path for worktree PwrAgent")).toHaveTextContent(
-      "PwrAgent"
+    const threadButton = within(browseSection as HTMLElement).getByRole(
+      "button",
+      {
+        name: /Cross-project cleanup/i,
+      },
     );
-    expect(within(threadButton).queryByText("worktree")).not.toBeInTheDocument();
+
+    expect(
+      within(threadButton).getByLabelText("Copy path for worktree PwrAgent"),
+    ).toHaveTextContent("PwrAgent");
+    expect(
+      within(threadButton).queryByText("worktree"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows local versus worktree location chips in directory rows", () => {
@@ -856,22 +925,36 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const browseSection = screen.getByRole("region", {
+      name: "Thread browser",
+    });
     fireEvent.click(
-      within(browseSection as HTMLElement).getByRole("button", { name: "PwrAgent1" })
+      within(browseSection as HTMLElement).getByRole("button", {
+        name: "PwrAgent1",
+      }),
     );
-    const worktreeThreadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
-    });
-    const localThreadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Local cleanup/i,
-    });
+    const worktreeThreadButton = within(browseSection as HTMLElement).getByRole(
+      "button",
+      {
+        name: /Cross-project cleanup/i,
+      },
+    );
+    const localThreadButton = within(browseSection as HTMLElement).getByRole(
+      "button",
+      {
+        name: /Local cleanup/i,
+      },
+    );
 
-    expect(within(worktreeThreadButton).getByText("worktree")).toBeInTheDocument();
-    expect(within(worktreeThreadButton).queryByText("PwrAgent")).not.toBeInTheDocument();
+    expect(
+      within(worktreeThreadButton).getByText("worktree"),
+    ).toBeInTheDocument();
+    expect(
+      within(worktreeThreadButton).queryByText("PwrAgent"),
+    ).not.toBeInTheDocument();
     expect(within(localThreadButton).getByText("local")).toBeInTheDocument();
   });
 
@@ -894,13 +977,13 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={onOpenLaunchpad}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     fireEvent.click(
       screen.getByRole("button", {
         name: "Open new thread launchpad for PwrAgent",
-      })
+      }),
     );
 
     expect(onOpenLaunchpad).toHaveBeenCalledWith(directories[0], undefined);
@@ -941,11 +1024,13 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     expect(
-      screen.getByRole("button", { name: "Open new thread launchpad for PwrAgent" }),
+      screen.getByRole("button", {
+        name: "Open new thread launchpad for PwrAgent",
+      }),
     ).not.toHaveClass("has-draft");
   });
 
@@ -984,11 +1069,13 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     expect(
-      screen.getByRole("button", { name: "Open new thread launchpad for PwrAgent" }),
+      screen.getByRole("button", {
+        name: "Open new thread launchpad for PwrAgent",
+      }),
     ).toHaveClass("has-draft");
   });
 
@@ -1010,19 +1097,28 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
+    const browseSection = screen.getByRole("region", {
+      name: "Thread browser",
     });
+    const threadButton = within(browseSection as HTMLElement).getByRole(
+      "button",
+      {
+        name: /Cross-project cleanup/i,
+      },
+    );
 
-    const thinkingIndicator = threadButton.querySelector('[data-thread-status="thinking"]');
+    const thinkingIndicator = threadButton.querySelector(
+      '[data-thread-status="thinking"]',
+    );
     expect(thinkingIndicator).not.toBeNull();
     expect(thinkingIndicator).toHaveAttribute("aria-label", "Thinking");
     expect(thinkingIndicator).toHaveAttribute("title", "Thinking");
-    expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
+    expect(
+      threadButton.querySelector('[data-thread-status="unread"]'),
+    ).toBeNull();
   });
 
   it("shows an approval chip for threads waiting on an approval request", () => {
@@ -1043,15 +1139,22 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
+    const browseSection = screen.getByRole("region", {
+      name: "Thread browser",
     });
+    const threadButton = within(browseSection as HTMLElement).getByRole(
+      "button",
+      {
+        name: /Cross-project cleanup/i,
+      },
+    );
 
-    const approvalChip = within(threadButton).getByTitle("Waiting for approval");
+    const approvalChip = within(threadButton).getByTitle(
+      "Waiting for approval",
+    );
     expect(approvalChip).toHaveTextContent("Waiting for approval");
     expect(approvalChip).not.toHaveTextContent("!");
     expect(approvalChip).toHaveAttribute("title", "Waiting for approval");
@@ -1075,13 +1178,18 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
+    const browseSection = screen.getByRole("region", {
+      name: "Thread browser",
     });
+    const threadButton = within(browseSection as HTMLElement).getByRole(
+      "button",
+      {
+        name: /Cross-project cleanup/i,
+      },
+    );
 
     const inputChip = within(threadButton).getByTitle("Input needed");
     expect(inputChip).toHaveTextContent("Input needed");
@@ -1106,16 +1214,25 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
+    const browseSection = screen.getByRole("region", {
+      name: "Thread browser",
     });
+    const threadButton = within(browseSection as HTMLElement).getByRole(
+      "button",
+      {
+        name: /Cross-project cleanup/i,
+      },
+    );
 
-    expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
-    expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
+    expect(
+      threadButton.querySelector('[data-thread-status="thinking"]'),
+    ).toBeNull();
+    expect(
+      threadButton.querySelector('[data-thread-status="unread"]'),
+    ).toBeNull();
   });
 
   it("shows an unread marker in recents for threads updated since they were seen", () => {
@@ -1135,21 +1252,32 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Updated thread/i,
+    const browseSection = screen.getByRole("region", {
+      name: "Thread browser",
     });
+    const threadButton = within(browseSection as HTMLElement).getByRole(
+      "button",
+      {
+        name: /Updated thread/i,
+      },
+    );
 
-    expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
-    const unreadIndicator = threadButton.querySelector('[data-thread-status="unread"]');
+    expect(
+      threadButton.querySelector('[data-thread-status="thinking"]'),
+    ).toBeNull();
+    const unreadIndicator = threadButton.querySelector(
+      '[data-thread-status="unread"]',
+    );
     expect(unreadIndicator).not.toBeNull();
     expect(unreadIndicator).toHaveAttribute("aria-label", "Unread update");
     expect(unreadIndicator).toHaveAttribute("title", "Unread update");
     expect(
-      threadButton.querySelector('[data-thread-status="unread"] .thread-row__status-cookie')
+      threadButton.querySelector(
+        '[data-thread-status="unread"] .thread-row__status-cookie',
+      ),
     ).not.toBeNull();
     expect(unreadIndicator).not.toHaveTextContent("!");
   });
@@ -1173,7 +1301,7 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     expect(screen.getByRole("tab", { name: "Updated" })).toHaveAttribute(
@@ -1184,7 +1312,9 @@ describe("Sidebar", () => {
       "aria-selected",
       "false",
     );
-    expect(screen.getByRole("button", { name: /Updated thread/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Updated thread/i }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Created" }));
 
@@ -1226,10 +1356,12 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const browseSection = screen.getByRole("region", {
+      name: "Thread browser",
+    });
     const rows = within(browseSection as HTMLElement).getAllByRole("button", {
       name: /Updated later|Created later/i,
     });
@@ -1259,11 +1391,11 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onArchiveThread={onArchiveThread}
-      />
+      />,
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Open thread actions" })
+      screen.getByRole("button", { name: "Open thread actions" }),
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
 
@@ -1297,11 +1429,11 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onArchiveThread={onArchiveThread}
-      />
+      />,
     );
 
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Open thread actions" })[0]!
+      screen.getAllByRole("button", { name: "Open thread actions" })[0]!,
     );
 
     expect(
@@ -1353,11 +1485,11 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onArchiveThread={onArchiveThread}
-      />
+      />,
     );
 
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Open thread actions" })[0]!
+      screen.getAllByRole("button", { name: "Open thread actions" })[0]!,
     );
     fireEvent.click(
       screen.getByRole("menuitem", {
@@ -1394,10 +1526,12 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onSetThreadPin={onSetThreadPin}
-      />
+      />,
     );
 
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const browseSection = screen.getByRole("region", {
+      name: "Thread browser",
+    });
     const rows = within(browseSection as HTMLElement).getAllByRole("button", {
       name: /Cross-project cleanup|Updated thread/i,
     });
@@ -1405,11 +1539,16 @@ describe("Sidebar", () => {
     expect(
       within(rows[0]).getByRole("img", { name: "Pinned" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("separator", { name: "Unpinned threads" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("separator", { name: "Unpinned threads" }),
+    ).toBeInTheDocument();
 
-    const unpinnedRow = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
-    });
+    const unpinnedRow = within(browseSection as HTMLElement).getByRole(
+      "button",
+      {
+        name: /Cross-project cleanup/i,
+      },
+    );
     const overflowButton = unpinnedRow
       .closest(".thread-row-shell")
       ?.querySelector(".thread-row__overflow-button") as HTMLButtonElement;
@@ -1557,7 +1696,7 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     const directoryThreads = screen
@@ -1630,8 +1769,8 @@ describe("Sidebar", () => {
       name: /Capped thread 12/,
     });
     expect(
-      showLess.compareDocumentPosition(overflowRow) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      showLess.compareDocumentPosition(overflowRow)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     await clickElement(screen.getByRole("button", { name: "Show less" }));
@@ -1700,7 +1839,7 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     expect(
@@ -1743,7 +1882,7 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onReorderThreadPins={onReorderThreadPins}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     fireEvent.drop(
@@ -1780,7 +1919,7 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onReorderThreadPins={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     const draggedRow = screen
@@ -1851,7 +1990,10 @@ describe("Sidebar", () => {
       kind: "directory",
       label: "ProjectB",
       path: "/Users/huntharo/pwrdrvr/ProjectB",
-      threadKeys: ["codex:thread-project-b-pinned", "codex:thread-project-b-unpinned"],
+      threadKeys: [
+        "codex:thread-project-b-pinned",
+        "codex:thread-project-b-unpinned",
+      ],
       needsAttentionCount: 0,
       latestUpdatedAt: projectBPinnedThread.updatedAt,
     };
@@ -1873,7 +2015,7 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onReorderThreadPins={onReorderThreadPins}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     const projectBSummary = screen
@@ -1908,14 +2050,20 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onArchiveThread={async () => undefined}
-      />
+      />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread actions" }),
+    );
 
     const menu = screen.getByRole("menu");
     expect(within(menu).getByRole("separator")).toBeInTheDocument();
-    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual([
       "Rename Thread",
       "Archive Thread",
       "Copy Thread ID",
@@ -1972,7 +2120,7 @@ describe("Sidebar", () => {
           y: 0,
           toJSON: () => ({}),
         };
-      }
+      },
     );
 
     render(
@@ -1992,10 +2140,12 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onArchiveThread={async () => undefined}
-      />
+      />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread actions" }),
+    );
 
     expect(screen.getByRole("menu")).toHaveStyle({
       left: "420px",
@@ -2030,9 +2180,11 @@ describe("Sidebar", () => {
           onOpenLaunchpad={async () => undefined}
           onSelectThread={() => undefined}
           onArchiveThread={async () => undefined}
-        />
+        />,
       );
-      fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open thread actions" }),
+      );
     };
 
     renderMenu();
@@ -2040,7 +2192,9 @@ describe("Sidebar", () => {
     cleanup();
 
     renderMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Worktree Path" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Copy Worktree Path" }),
+    );
     cleanup();
 
     renderMenu();
@@ -2049,7 +2203,7 @@ describe("Sidebar", () => {
     expect(copyText).toHaveBeenNthCalledWith(1, "thread-1");
     expect(copyText).toHaveBeenNthCalledWith(
       2,
-      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent"
+      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
     );
     expect(copyText).toHaveBeenNthCalledWith(3, "codex/thread-centric-ui");
   });
@@ -2098,15 +2252,25 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onArchiveThread={async () => undefined}
-      />
+      />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread actions" }),
+    );
 
-    expect(screen.queryByRole("menuitem", { name: "Copy Worktree Path" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: "Copy Branch Name" })).not.toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Copy Thread ID" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Copy Local Path" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: "Copy Worktree Path" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: "Copy Branch Name" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Copy Thread ID" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Copy Local Path" }),
+    ).toBeInTheDocument();
   });
 
   it("hides archive actions when the backend does not support archiving", () => {
@@ -2119,7 +2283,7 @@ describe("Sidebar", () => {
               archiveThread: false,
             },
           }
-        : backend
+        : backend,
     );
 
     render(
@@ -2139,13 +2303,19 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onArchiveThread={async () => undefined}
-      />
+      />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread actions" }),
+    );
 
-    expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: "Archive Thread" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Rename Thread" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: "Archive Thread" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renames a thread from the thread context menu", () => {
@@ -2168,20 +2338,30 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onRenameThread={onRenameThread}
-      />
+      />,
     );
 
-    const threadButton = screen.getByText("Cross-project cleanup").closest("button");
+    const threadButton = screen
+      .getByText("Cross-project cleanup")
+      .closest("button");
     expect(threadButton).not.toBeNull();
-    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    fireEvent.contextMenu(threadButton as HTMLElement, {
+      clientX: 12,
+      clientY: 34,
+    });
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
     const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
     const input = within(dialog).getByLabelText("Name");
     fireEvent.change(input, { target: { value: "  Renamed cleanup  " } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Rename Thread" }),
+    );
 
-    expect(onRenameThread).toHaveBeenCalledWith(sharedThread, "Renamed cleanup");
+    expect(onRenameThread).toHaveBeenCalledWith(
+      sharedThread,
+      "Renamed cleanup",
+    );
   });
 
   it("offers rename for ACP threads when the backend supports local renaming", () => {
@@ -2223,19 +2403,24 @@ describe("Sidebar", () => {
         onSelectThread={() => undefined}
         onArchiveThread={async () => undefined}
         onRenameThread={onRenameThread}
-      />
+      />,
     );
 
     const threadButton = screen.getByText("ACP session").closest("button");
     expect(threadButton).not.toBeNull();
-    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    fireEvent.contextMenu(threadButton as HTMLElement, {
+      clientX: 12,
+      clientY: 34,
+    });
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
     const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
     fireEvent.change(within(dialog).getByLabelText("Name"), {
       target: { value: "Gemini cleanup" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Rename Thread" }),
+    );
 
     expect(onRenameThread).toHaveBeenCalledWith(acpThread, "Gemini cleanup");
   });
@@ -2258,12 +2443,17 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onRenameThread={async () => undefined}
-      />
+      />,
     );
 
-    const threadButton = screen.getByText("Cross-project cleanup").closest("button");
+    const threadButton = screen
+      .getByText("Cross-project cleanup")
+      .closest("button");
     expect(threadButton).not.toBeNull();
-    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    fireEvent.contextMenu(threadButton as HTMLElement, {
+      clientX: 12,
+      clientY: 34,
+    });
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
     const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
@@ -2292,10 +2482,12 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onRenameThread={async () => undefined}
-      />
+      />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread actions" }),
+    );
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
     const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
@@ -2331,20 +2523,26 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onRenameThread={onRenameThread}
-      />
+      />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread actions" }),
+    );
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
     const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
     fireEvent.change(within(dialog).getByLabelText("Name"), {
       target: { value: "   " },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Rename Thread" }),
+    );
 
     expect(onRenameThread).not.toHaveBeenCalled();
-    expect(within(dialog).getByText("Thread name cannot be blank.")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Thread name cannot be blank."),
+    ).toBeInTheDocument();
   });
 
   it("archives directly from the thread context menu", () => {
@@ -2367,15 +2565,22 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
         onArchiveThread={onArchiveThread}
-      />
+      />,
     );
 
-    const threadButton = screen.getByText("Cross-project cleanup").closest("button");
+    const threadButton = screen
+      .getByText("Cross-project cleanup")
+      .closest("button");
     expect(threadButton).not.toBeNull();
-    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    fireEvent.contextMenu(threadButton as HTMLElement, {
+      clientX: 12,
+      clientY: 34,
+    });
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
 
-    expect(screen.queryByRole("dialog", { name: "Archive Thread" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Archive Thread" }),
+    ).not.toBeInTheDocument();
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
   });
 
@@ -2396,7 +2601,7 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     expect(screen.queryByText("▾")).not.toBeInTheDocument();
@@ -2427,7 +2632,7 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     const directoryChip = screen.getByRole("button", {
@@ -2435,7 +2640,7 @@ describe("Sidebar", () => {
     });
     fireEvent.mouseEnter(directoryChip);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent\nClick to copy to clipboard"
+      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent\nClick to copy to clipboard",
     );
     fireEvent.mouseLeave(directoryChip);
 
@@ -2450,9 +2655,9 @@ describe("Sidebar", () => {
           .getAllByRole("tooltip")
           .some(
             (tooltip) =>
-              tooltip.textContent ===
-              "codex/thread-centric-ui\nClick to copy to clipboard"
-          )
+              tooltip.textContent
+              === "codex/thread-centric-ui\nClick to copy to clipboard",
+          ),
       ).toBe(true);
     });
     fireEvent.mouseLeave(branchChip);
@@ -2460,11 +2665,11 @@ describe("Sidebar", () => {
 
     expect(copyText).toHaveBeenNthCalledWith(
       1,
-      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent"
+      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
     );
     expect(copyText).toHaveBeenNthCalledWith(2, "codex/thread-centric-ui");
     expect(
-      screen.queryByText("Line up the desktop shell with the app server")
+      screen.queryByText("Line up the desktop shell with the app server"),
     ).not.toBeInTheDocument();
   });
 
@@ -2502,7 +2707,7 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     const branchChip = screen.getByRole("button", {
@@ -2551,7 +2756,7 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={onSelectThread}
-      />
+      />,
     );
 
     const prChip = screen.getByRole("button", {
@@ -2597,27 +2802,32 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByText(".worktrees/pwragent-fix-t...ng-moioth2352")).toBeInTheDocument();
-    expect(screen.getByText("codex/fix-thread-naming-ephemeral")).toBeInTheDocument();
+    expect(
+      screen.getByText(".worktrees/pwragent-fix-t...ng-moioth2352"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("codex/fix-thread-naming-ephemeral"),
+    ).toBeInTheDocument();
 
-    const cwdButton = screen.getByRole("button", { name: "Copy working directory" });
+    const cwdButton = screen.getByRole("button", {
+      name: "Copy working directory",
+    });
     fireEvent.mouseEnter(cwdButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352\nClick to copy to clipboard"
+      "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352\nClick to copy to clipboard",
     );
     fireEvent.mouseLeave(cwdButton);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
-    const branchButton = within(screen.getByLabelText("Runtime identity")).getByRole(
-      "button",
-      { name: "Copy branch name" }
-    );
+    const branchButton = within(
+      screen.getByLabelText("Runtime identity"),
+    ).getByRole("button", { name: "Copy branch name" });
     fireEvent.mouseEnter(branchButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "codex/fix-thread-naming-ephemeral\nClick to copy to clipboard"
+      "codex/fix-thread-naming-ephemeral\nClick to copy to clipboard",
     );
     fireEvent.mouseLeave(branchButton);
 
@@ -2626,9 +2836,12 @@ describe("Sidebar", () => {
 
     expect(copyText).toHaveBeenNthCalledWith(
       1,
-      "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352"
+      "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352",
     );
-    expect(copyText).toHaveBeenNthCalledWith(2, "codex/fix-thread-naming-ephemeral");
+    expect(copyText).toHaveBeenNthCalledWith(
+      2,
+      "codex/fix-thread-naming-ephemeral",
+    );
     expect(await screen.findAllByText("PwrAgent")).not.toHaveLength(0);
   });
 
@@ -2662,12 +2875,14 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     expect(screen.getByText("HEAD")).toBeInTheDocument();
     await clickElement(screen.getByRole("button", { name: "Copy commit SHA" }));
-    expect(copyText).toHaveBeenCalledWith("ab12cd3344556677889900aabbccddeeff001122");
+    expect(copyText).toHaveBeenCalledWith(
+      "ab12cd3344556677889900aabbccddeeff001122",
+    );
   });
 
   it("shows when the local branch diverged from the codex thread branch", () => {
@@ -2697,7 +2912,7 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     expect(screen.getByText("now main")).toBeInTheDocument();
@@ -2722,7 +2937,7 @@ describe("Sidebar", () => {
         onCreateThread={onCreateThread}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
@@ -2863,12 +3078,12 @@ describe("Sidebar directory pinning", () => {
 
     // Pinned directory renders before the divider; unpinned after.
     expect(
-      pinnedSummary.compareDocumentPosition(divider) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      pinnedSummary.compareDocumentPosition(divider)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      divider.compareDocumentPosition(unpinnedSummary) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      divider.compareDocumentPosition(unpinnedSummary)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -3329,9 +3544,7 @@ describe("Sidebar directory pinning", () => {
     expect(
       await screen.findByRole("menuitem", { name: /Move Up/i }),
     ).not.toBeDisabled();
-    expect(
-      screen.getByRole("menuitem", { name: /Move Down/i }),
-    ).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: /Move Down/i })).toBeDisabled();
   });
 
   it("omits Move Up / Move Down entirely from an unpinned directory's context menu", async () => {
@@ -3473,7 +3686,9 @@ describe("Sidebar thread pinning Move items", () => {
       .getByRole("button", { name: /Codex top pin/i })
       .closest(".thread-row-shell") as HTMLElement;
     fireEvent.click(
-      codexRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
+      codexRow.querySelector(
+        ".thread-row__overflow-button",
+      ) as HTMLButtonElement,
     );
 
     const moveUp = await screen.findByRole("menuitem", { name: /Move Up/i });

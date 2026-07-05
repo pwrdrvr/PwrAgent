@@ -69,7 +69,11 @@ describe("EnvActionAnchorList", () => {
     const { container } = render(
       <EnvActionAnchorList
         runtime={buildRuntime([
-          buildRun({ runId: uniqueRunId("zombie"), status: "started", startedAt: 1 }),
+          buildRun({
+            runId: uniqueRunId("zombie"),
+            status: "started",
+            startedAt: 1,
+          }),
         ])}
       />,
     );

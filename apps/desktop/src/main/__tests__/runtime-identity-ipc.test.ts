@@ -5,9 +5,11 @@ const execFileSyncMock = vi.fn();
 
 vi.mock("electron", () => ({
   ipcMain: {
-    handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
-      handlers.set(channel, handler);
-    }),
+    handle: vi.fn(
+      (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
+        handlers.set(channel, handler);
+      },
+    ),
     removeHandler: vi.fn((channel: string) => {
       handlers.delete(channel);
     }),
@@ -38,7 +40,7 @@ describe("runtime identity ipc", () => {
       {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
-      }
+      },
     );
   });
 
@@ -60,12 +62,16 @@ describe("runtime identity ipc", () => {
 
   it("registers and disposes the IPC handler", async () => {
     execFileSyncMock.mockReturnValue("main\n");
-    const { registerRuntimeIdentityIpcHandlers, disposeRuntimeIdentityIpcHandlers } =
-      await import("../ipc/runtime-identity");
+    const {
+      registerRuntimeIdentityIpcHandlers,
+      disposeRuntimeIdentityIpcHandlers,
+    } = await import("../ipc/runtime-identity");
     const { RUNTIME_IDENTITY_CHANNEL } = await import("../../shared/ipc");
 
     registerRuntimeIdentityIpcHandlers();
-    await expect(handlers.get(RUNTIME_IDENTITY_CHANNEL)?.({})).resolves.toMatchObject({
+    await expect(
+      handlers.get(RUNTIME_IDENTITY_CHANNEL)?.({}),
+    ).resolves.toMatchObject({
       branch: "main",
     });
 

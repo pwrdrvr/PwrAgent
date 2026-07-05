@@ -12,15 +12,22 @@ import {
 } from "./command-discovery";
 
 export function parseGhVersionOutput(output: string): string | undefined {
-  return output.match(/\bgh version\s+([0-9]+(?:\.[0-9]+){1,2}(?:-[0-9A-Za-z.-]+)?)/i)?.[1]
-    ?? output.match(/\b([0-9]+(?:\.[0-9]+){1,2}(?:-[0-9A-Za-z.-]+)?)\b/)?.[1];
+  return (
+    output.match(
+      /\bgh version\s+([0-9]+(?:\.[0-9]+){1,2}(?:-[0-9A-Za-z.-]+)?)/i,
+    )?.[1]
+    ?? output.match(/\b([0-9]+(?:\.[0-9]+){1,2}(?:-[0-9A-Za-z.-]+)?)\b/)?.[1]
+  );
 }
 
 function ghCandidatePaths(env: NodeJS.ProcessEnv): Array<{
   command: string;
   source: DesktopGhCandidateSource;
 }> {
-  const candidates: Array<{ command: string; source: DesktopGhCandidateSource }> = [
+  const candidates: Array<{
+    command: string;
+    source: DesktopGhCandidateSource;
+  }> = [
     { command: "/opt/homebrew/bin/gh", source: "homebrew" },
     { command: "/usr/local/bin/gh", source: "homebrew" },
     { command: "/opt/local/bin/gh", source: "macports" },
@@ -70,7 +77,8 @@ export async function discoverGhCommands(params?: {
       ...ghCandidatePaths(env),
     ],
     parseVersion: parseGhVersionOutput,
-    includeFailedAutoCandidates: params?.includeFailedAutoCandidates ?? "if-none-executable",
+    includeFailedAutoCandidates:
+      params?.includeFailedAutoCandidates ?? "if-none-executable",
   }) as Promise<DesktopGhDiscoverySnapshot>;
 }
 
@@ -78,13 +86,14 @@ export async function validateGhCommand(params: {
   command: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<DesktopGhDiscoveryCandidate> {
-  const candidate = await buildCommandDiscoveryCandidate<DesktopGhCandidateSource>(
-    { command: params.command, source: "config" },
-    {
-      env: params.env ?? process.env,
-      parseVersion: parseGhVersionOutput,
-    },
-  );
+  const candidate =
+    await buildCommandDiscoveryCandidate<DesktopGhCandidateSource>(
+      { command: params.command, source: "config" },
+      {
+        env: params.env ?? process.env,
+        parseVersion: parseGhVersionOutput,
+      },
+    );
   if (!candidate) {
     throw new Error("No gh path was selected.");
   }

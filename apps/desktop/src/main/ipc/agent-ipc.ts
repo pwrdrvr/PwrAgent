@@ -105,10 +105,15 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
   appServerLog.info(event, payload);
 }
 
-function summarizeTurnInput(input: StartTurnRequest["input"]): Record<string, unknown> {
+function summarizeTurnInput(
+  input: StartTurnRequest["input"],
+): Record<string, unknown> {
   const textChars = input
-    .filter((item): item is Extract<StartTurnRequest["input"][number], { type: "text" }> =>
-      item.type === "text"
+    .filter(
+      (
+        item,
+      ): item is Extract<StartTurnRequest["input"][number], { type: "text" }> =>
+        item.type === "text",
     )
     .reduce((count, item) => count + item.text.length, 0);
   const imageCount = input.filter((item) => item.type !== "text").length;
@@ -120,7 +125,9 @@ function summarizeTurnInput(input: StartTurnRequest["input"]): Record<string, un
   };
 }
 
-function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> | undefined {
+function summarizeAgentEvent(
+  event: AgentEvent,
+): Record<string, unknown> | undefined {
   const params = event.notification.params;
   const turn =
     "turn" in params && typeof params.turn === "object" && params.turn !== null
@@ -136,11 +143,13 @@ function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> | undef
       : undefined;
 
   if (
-    event.notification.method === "item/started" ||
-    event.notification.method === "item/completed"
+    event.notification.method === "item/started"
+    || event.notification.method === "item/completed"
   ) {
     const item =
-      "item" in params && typeof params.item === "object" && params.item !== null
+      "item" in params
+      && typeof params.item === "object"
+      && params.item !== null
         ? (params.item as Record<string, unknown>)
         : undefined;
     return {
@@ -153,10 +162,10 @@ function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> | undef
       status: typeof item?.status === "string" ? item.status : null,
       textChars: typeof item?.text === "string" ? item.text.length : 0,
       elapsedMs:
-        item?.data &&
-        typeof item.data === "object" &&
-        !Array.isArray(item.data) &&
-        typeof (item.data as Record<string, unknown>).elapsedMs === "number"
+        item?.data
+        && typeof item.data === "object"
+        && !Array.isArray(item.data)
+        && typeof (item.data as Record<string, unknown>).elapsedMs === "number"
           ? (item.data as Record<string, unknown>).elapsedMs
           : null,
     };
@@ -187,7 +196,9 @@ function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> | undef
 
   if (event.notification.method === "turn/failed") {
     const error =
-      turn?.error && typeof turn.error === "object" && !Array.isArray(turn.error)
+      turn?.error
+      && typeof turn.error === "object"
+      && !Array.isArray(turn.error)
         ? (turn.error as Record<string, unknown>)
         : undefined;
     summary.error = typeof error?.message === "string" ? error.message : null;
@@ -258,12 +269,18 @@ function coalescedAgentEventLogKey(
 }
 
 function withRendererActivityEntry(event: AgentEvent): AgentEvent {
-  if (event.backend !== "codex" || event.notification.method !== "turn/diff/updated") {
+  if (
+    event.backend !== "codex"
+    || event.notification.method !== "turn/diff/updated"
+  ) {
     return event;
   }
 
   const rendererActivityEntry = buildLiveDiffActivityEntry(
-    event.notification as Extract<AgentEvent["notification"], { method: "turn/diff/updated" }>,
+    event.notification as Extract<
+      AgentEvent["notification"],
+      { method: "turn/diff/updated" }
+    >,
   );
   return rendererActivityEntry ? { ...event, rendererActivityEntry } : event;
 }
@@ -273,7 +290,9 @@ function broadcastAgentEvent(event: AgentEvent): void {
   if (eventSummary) {
     logAgentEventSummary(eventSummary);
   }
-  const rendererEvent = sanitizeRendererPayload(withRendererActivityEntry(event));
+  const rendererEvent = sanitizeRendererPayload(
+    withRendererActivityEntry(event),
+  );
 
   // Only deliver to windows that registered for this channel.
   // Secondary windows (e.g. the Messaging Activity window) opt out by
@@ -297,7 +316,7 @@ export function registerAgentIpcHandlers(): void {
     BACKEND_LIST_CHANNEL,
     async (
       _event,
-      request?: ListBackendsRequest
+      request?: ListBackendsRequest,
     ): Promise<ListBackendsResponse> => {
       return await timeStartupProfileOperation({
         type: "ipc-main:listBackends",
@@ -314,7 +333,7 @@ export function registerAgentIpcHandlers(): void {
     AGENT_START_THREAD_CHANNEL,
     async (
       _event,
-      request: StartThreadRequest
+      request: StartThreadRequest,
     ): Promise<StartThreadResponse> => {
       return await registry.startThread(request);
     },
@@ -330,7 +349,10 @@ export function registerAgentIpcHandlers(): void {
       return await registry.forkThread({
         ...request,
         onCodexEnvironmentSetupProgress: (progress) => {
-          event.sender?.send?.(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, progress);
+          event.sender?.send?.(
+            CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
+            progress,
+          );
         },
       });
     },
@@ -339,10 +361,7 @@ export function registerAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.handle(
     AGENT_START_TURN_CHANNEL,
-    async (
-      _event,
-      request: StartTurnRequest
-    ): Promise<StartTurnResponse> => {
+    async (_event, request: StartTurnRequest): Promise<StartTurnResponse> => {
       logDebug("startTurn", {
         backend: request.backend,
         threadId: request.threadId,
@@ -397,7 +416,7 @@ export function registerAgentIpcHandlers(): void {
     AGENT_START_REVIEW_CHANNEL,
     async (
       _event,
-      request: StartReviewRequest
+      request: StartReviewRequest,
     ): Promise<StartReviewResponse> => {
       logDebug("startReview", {
         backend: request.backend,
@@ -431,7 +450,7 @@ export function registerAgentIpcHandlers(): void {
     AGENT_COMPACT_THREAD_CHANNEL,
     async (
       _event,
-      request: CompactThreadRequest
+      request: CompactThreadRequest,
     ): Promise<CompactThreadResponse> => {
       logDebug("compactThread", {
         backend: request.backend,
@@ -463,7 +482,7 @@ export function registerAgentIpcHandlers(): void {
     AGENT_INTERRUPT_TURN_CHANNEL,
     async (
       _event,
-      request: InterruptTurnRequest
+      request: InterruptTurnRequest,
     ): Promise<InterruptTurnResponse> => {
       logDebug("interruptTurn", {
         backend: request.backend,
@@ -488,10 +507,7 @@ export function registerAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
   ipcMain.handle(
     AGENT_STEER_TURN_CHANNEL,
-    async (
-      _event,
-      request: SteerTurnRequest
-    ): Promise<SteerTurnResponse> => {
+    async (_event, request: SteerTurnRequest): Promise<SteerTurnResponse> => {
       logDebug("steerTurn", {
         backend: request.backend,
         threadId: request.threadId,
@@ -518,7 +534,7 @@ export function registerAgentIpcHandlers(): void {
     AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
     async (
       _event,
-      request: SetThreadExecutionModeRequest
+      request: SetThreadExecutionModeRequest,
     ): Promise<SetThreadExecutionModeResponse> => {
       return await registry.setThreadExecutionMode(request);
     },
@@ -562,7 +578,7 @@ export function registerAgentIpcHandlers(): void {
     AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
     async (
       _event,
-      request: SetThreadModelSettingsRequest
+      request: SetThreadModelSettingsRequest,
     ): Promise<SetThreadModelSettingsResponse> => {
       return await registry.setThreadModelSettings(request);
     },
@@ -606,11 +622,14 @@ export function registerAgentIpcHandlers(): void {
     AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
     async (
       event,
-      request: MaterializeDirectoryLaunchpadRequest
+      request: MaterializeDirectoryLaunchpadRequest,
     ): Promise<MaterializeDirectoryLaunchpadResponse> => {
       return await registry.materializeDirectoryLaunchpad(request, {
         onCodexEnvironmentSetupProgress: (progress) => {
-          event.sender?.send?.(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, progress);
+          event.sender?.send?.(
+            CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
+            progress,
+          );
         },
       });
     },
@@ -654,7 +673,7 @@ export function registerAgentIpcHandlers(): void {
     AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
     async (
       _event,
-      request: SubmitServerRequestRequest
+      request: SubmitServerRequestRequest,
     ): Promise<SubmitServerRequestResponse> => {
       return await registry.submitServerRequest(request);
     },

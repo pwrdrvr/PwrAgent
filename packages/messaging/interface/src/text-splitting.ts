@@ -17,7 +17,10 @@
 export type MessageTextMeasure = "chars" | "bytes";
 
 /** Size of `text` in the given unit. `chars` counts UTF-16 code units. */
-export function measureMessageText(text: string, measure: MessageTextMeasure): number {
+export function measureMessageText(
+  text: string,
+  measure: MessageTextMeasure,
+): number {
   return measure === "bytes" ? Buffer.byteLength(text, "utf8") : text.length;
 }
 

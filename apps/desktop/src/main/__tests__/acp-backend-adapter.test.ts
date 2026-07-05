@@ -672,8 +672,9 @@ describe("AcpBackendAdapter", () => {
     expect(
       events.filter(
         (event) =>
-          event.notification.method === "item/agentMessage/delta" &&
-          event.notification.params.delta === "I should run the build first.",
+          event.notification.method === "item/agentMessage/delta"
+          && event.notification.params.delta
+            === "I should run the build first.",
       ),
     ).toEqual([]);
 
@@ -936,7 +937,9 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
-    await expect(adapter.readReplay(backendId, "session-1")).resolves.toMatchObject({
+    await expect(
+      adapter.readReplay(backendId, "session-1"),
+    ).resolves.toMatchObject({
       lastAssistantMessage: "Restored from rollout",
     });
     expect(loadSession).not.toHaveBeenCalled();
@@ -1197,7 +1200,9 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
-    await expect(adapter.readReplay(backendId, "session-1")).resolves.toMatchObject({
+    await expect(
+      adapter.readReplay(backendId, "session-1"),
+    ).resolves.toMatchObject({
       lastAssistantMessage: "Restored from rollout",
     });
     expect(loadSession).toHaveBeenCalled();

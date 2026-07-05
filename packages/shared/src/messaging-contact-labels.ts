@@ -85,15 +85,19 @@ function stripHtmlLikeMarkup(value: string): string {
 }
 
 function isAllowedContactLabelChar(char: string): boolean {
-  return /^[\p{L}\p{N}\p{M}]$/u.test(char)
-    || SAFE_CONTACT_LABEL_PUNCTUATION.has(char);
+  return (
+    /^[\p{L}\p{N}\p{M}]$/u.test(char)
+    || SAFE_CONTACT_LABEL_PUNCTUATION.has(char)
+  );
 }
 
 function isBlockedContactLabelCodePoint(codePoint: number): boolean {
-  return codePoint <= 0x1f
+  return (
+    codePoint <= 0x1f
     || (codePoint >= 0x7f && codePoint <= 0x9f)
     || (codePoint >= 0xd800 && codePoint <= 0xdfff)
     || (codePoint >= 0xe000 && codePoint <= 0xf8ff)
     || (codePoint >= 0xf0000 && codePoint <= 0xffffd)
-    || (codePoint >= 0x100000 && codePoint <= 0x10fffd);
+    || (codePoint >= 0x100000 && codePoint <= 0x10fffd)
+  );
 }

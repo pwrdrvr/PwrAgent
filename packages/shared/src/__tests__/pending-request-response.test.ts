@@ -194,7 +194,9 @@ describe("buildPendingRequestResponse", () => {
 
     const actions = buildPendingRequestActions(request);
 
-    expect(new Set(actions.map((action) => action.id)).size).toBe(actions.length);
+    expect(new Set(actions.map((action) => action.id)).size).toBe(
+      actions.length,
+    );
     expect(buildPendingRequestResponse(request, actions[1]!)).toEqual({
       decision: secondPrefix,
     });
@@ -270,9 +272,9 @@ describe("buildPendingRequestApprovalContext", () => {
   });
 
   it("keeps absolute paths when they are outside known thread directories", () => {
-    expect(formatApprovalPath("/tmp/PR_DESCRIPTION.md", ["/repo/pwragent"])).toBe(
-      "/tmp/PR_DESCRIPTION.md",
-    );
+    expect(
+      formatApprovalPath("/tmp/PR_DESCRIPTION.md", ["/repo/pwragent"]),
+    ).toBe("/tmp/PR_DESCRIPTION.md");
   });
 
   it("infers file-change context from the matching transcript activity item", () => {

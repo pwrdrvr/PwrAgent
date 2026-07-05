@@ -9,7 +9,13 @@ export type SlackCredentialValidationConfig = {
 };
 
 export type SlackValidateCredentialsOptions = {
-  authTest?: () => Promise<{ team?: string; team_id?: string; url?: string; user?: string; user_id?: string }>;
+  authTest?: () => Promise<{
+    team?: string;
+    team_id?: string;
+    url?: string;
+    user?: string;
+    user_id?: string;
+  }>;
 };
 
 export async function validateCredentials(

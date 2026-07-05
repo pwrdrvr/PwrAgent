@@ -1,19 +1,13 @@
 import { describe, expect, it } from "vitest";
-import {
-  insertSubthreadIdAfter,
-  sortSubthreadSummaries,
-} from "../subthreads";
+import { insertSubthreadIdAfter, sortSubthreadSummaries } from "../subthreads";
 
 describe("sortSubthreadSummaries", () => {
   it("orders explicitly-ranked children by subthreadOrder", () => {
-    const sorted = sortSubthreadSummaries(
-      { subthreadOrder: ["c", "a", "b"] },
-      [
-        { id: "a", createdAt: 1 },
-        { id: "b", createdAt: 2 },
-        { id: "c", createdAt: 3 },
-      ],
-    );
+    const sorted = sortSubthreadSummaries({ subthreadOrder: ["c", "a", "b"] }, [
+      { id: "a", createdAt: 1 },
+      { id: "b", createdAt: 2 },
+      { id: "c", createdAt: 3 },
+    ]);
     expect(sorted.map((child) => child.id)).toEqual(["c", "a", "b"]);
   });
 

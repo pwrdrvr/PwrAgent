@@ -1,4 +1,7 @@
-export type { LineAuthorizedContact, LineMessagingConfig } from "./line-config.ts";
+export type {
+  LineAuthorizedContact,
+  LineMessagingConfig,
+} from "./line-config.ts";
 export { validateCredentials } from "./validate-credentials.ts";
 export type { LineCredentialValidationConfig } from "./validate-credentials.ts";
 export type {

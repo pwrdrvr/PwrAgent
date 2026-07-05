@@ -62,7 +62,9 @@ export function getDesktopAutomationStore(): AutomationStore {
   return storeOverride ?? getAppAutomationStore();
 }
 
-export function setDesktopAutomationStoreForTests(store: AutomationStore | null): void {
+export function setDesktopAutomationStoreForTests(
+  store: AutomationStore | null,
+): void {
   storeOverride = store;
 }
 
@@ -146,9 +148,12 @@ export class DesktopAutomationService {
       return response;
     });
     if (this.options.runtime?.disabled) {
-      automationServiceLog.info("automation scheduler disabled for this app instance", {
-        reason: this.options.runtime.disabledReason,
-      });
+      automationServiceLog.info(
+        "automation scheduler disabled for this app instance",
+        {
+          reason: this.options.runtime.disabledReason,
+        },
+      );
       return;
     }
     if (!this.unsubscribeRegistryEvents) {
@@ -184,8 +189,10 @@ export class DesktopAutomationService {
             threadId: request.threadId,
           })
         : this.options.store.listAutomations().filter((automation) => {
-            if (request.backend && automation.backend !== request.backend) return false;
-            if (request.threadId && automation.threadId !== request.threadId) return false;
+            if (request.backend && automation.backend !== request.backend)
+              return false;
+            if (request.threadId && automation.threadId !== request.threadId)
+              return false;
             return true;
           });
     return {
@@ -243,7 +250,9 @@ export class DesktopAutomationService {
   ): Promise<GetAutomationRunArtifactResponse> {
     const run = this.options.store.getRun(request.runId);
     const automation = run
-      ? this.options.store.getAutomation(run.automationId, { includeDeleted: true })
+      ? this.options.store.getAutomation(run.automationId, {
+          includeDeleted: true,
+        })
       : undefined;
     const artifact = this.options.store.getRunArtifact(request.runId);
     const rollout =
@@ -259,7 +268,9 @@ export class DesktopAutomationService {
     };
   }
 
-  async create(request: CreateAutomationRequest): Promise<AutomationMutationResponse> {
+  async create(
+    request: CreateAutomationRequest,
+  ): Promise<AutomationMutationResponse> {
     const schedule = request.schedule ?? scheduleFromTriggers(request.triggers);
     if (schedule) {
       this.assertValidSchedule(schedule);
@@ -284,8 +295,8 @@ export class DesktopAutomationService {
       maxRunsPerHour: request.maxRunsPerHour,
       status: request.enabled === false ? "paused" : "enabled",
       nextRunAt:
-        request.nextRunAt ??
-        (request.enabled === false || !schedule
+        request.nextRunAt
+        ?? (request.enabled === false || !schedule
           ? undefined
           : computeNextAutomationRunAt(schedule, now)),
       now,
@@ -295,17 +306,22 @@ export class DesktopAutomationService {
     return { automation: toAutomationDetail(automation) };
   }
 
-  async update(request: UpdateAutomationRequest): Promise<AutomationMutationResponse> {
+  async update(
+    request: UpdateAutomationRequest,
+  ): Promise<AutomationMutationResponse> {
     const current = this.options.store.getAutomation(request.automationId);
     if (!current) {
       throw new Error("Automation not found.");
     }
-    const requestedSchedule = request.schedule ?? scheduleFromTriggers(request.triggers);
+    const requestedSchedule =
+      request.schedule ?? scheduleFromTriggers(request.triggers);
     if (requestedSchedule) {
       this.assertValidSchedule(requestedSchedule);
     }
     if ((request.backend === undefined) !== (request.threadId === undefined)) {
-      throw new Error("Automation Agent reassignment requires backend and threadId.");
+      throw new Error(
+        "Automation Agent reassignment requires backend and threadId.",
+      );
     }
     const reassignment =
       request.backend !== undefined && request.threadId !== undefined
@@ -315,24 +331,25 @@ export class DesktopAutomationService {
           }
         : undefined;
     const assignmentChanged = Boolean(
-      reassignment &&
-        (reassignment.backend !== current.backend ||
-          reassignment.threadId !== current.threadId),
+      reassignment
+      && (reassignment.backend !== current.backend
+        || reassignment.threadId !== current.threadId),
     );
     if (assignmentChanged && reassignment) {
       await this.assertAgentThreadTarget(reassignment);
     }
     const now = Date.now();
     const schedule = requestedSchedule ?? current.schedule;
-    const enablingFromPaused = request.enabled === true && current.status !== "enabled";
+    const enablingFromPaused =
+      request.enabled === true && current.status !== "enabled";
     const disabling = request.enabled === false;
     const shouldRecomputeNextRun =
-      request.nextRunAt === undefined &&
-      !disabling &&
-      Boolean(schedule) &&
-      (enablingFromPaused ||
-        ((request.schedule !== undefined || request.triggers !== undefined) &&
-          current.status === "enabled"));
+      request.nextRunAt === undefined
+      && !disabling
+      && Boolean(schedule)
+      && (enablingFromPaused
+        || ((request.schedule !== undefined || request.triggers !== undefined)
+          && current.status === "enabled"));
     const updated = this.options.store.updateAutomation(request.automationId, {
       backend: reassignment?.backend,
       threadId: reassignment?.threadId,
@@ -358,8 +375,8 @@ export class DesktopAutomationService {
           : disabling
             ? null
             : shouldRecomputeNextRun
-            ? computeNextAutomationRunAt(schedule!, now)
-            : undefined,
+              ? computeNextAutomationRunAt(schedule!, now)
+              : undefined,
       now,
     });
     if (!updated) throw new Error("Automation not found.");
@@ -378,13 +395,18 @@ export class DesktopAutomationService {
     return { automation: toAutomationDetail(updated) };
   }
 
-  async pause(request: AutomationIdRequest): Promise<AutomationMutationResponse> {
+  async pause(
+    request: AutomationIdRequest,
+  ): Promise<AutomationMutationResponse> {
     const now = Date.now();
-    const automation = this.options.store.updateAutomation(request.automationId, {
-      status: "paused",
-      nextRunAt: null,
-      now,
-    });
+    const automation = this.options.store.updateAutomation(
+      request.automationId,
+      {
+        status: "paused",
+        nextRunAt: null,
+        now,
+      },
+    );
     if (!automation) throw new Error("Automation not found.");
     await this.cancelPendingRunsForAutomation(
       request.automationId,
@@ -396,36 +418,50 @@ export class DesktopAutomationService {
     return { automation: toAutomationDetail(automation) };
   }
 
-  async resume(request: AutomationIdRequest): Promise<AutomationMutationResponse> {
+  async resume(
+    request: AutomationIdRequest,
+  ): Promise<AutomationMutationResponse> {
     const current = this.options.store.getAutomation(request.automationId);
     if (!current) throw new Error("Automation not found.");
-    const automation = this.options.store.resumeAutomation(request.automationId, {
-      nextRunAt: current.schedule
-        ? computeNextAutomationRunAt(current.schedule, Date.now())
-        : undefined,
-    });
+    const automation = this.options.store.resumeAutomation(
+      request.automationId,
+      {
+        nextRunAt: current.schedule
+          ? computeNextAutomationRunAt(current.schedule, Date.now())
+          : undefined,
+      },
+    );
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
   }
 
-  async delete(request: AutomationIdRequest): Promise<AutomationMutationResponse> {
+  async delete(
+    request: AutomationIdRequest,
+  ): Promise<AutomationMutationResponse> {
     this.cancelQueuedTurnsForAutomation(
       request.automationId,
       "Automation deleted before the run started.",
     );
-    const automation = this.options.store.deleteAutomation(request.automationId);
+    const automation = this.options.store.deleteAutomation(
+      request.automationId,
+    );
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
   }
 
-  async runNow(request: AutomationIdRequest): Promise<RunAutomationNowResponse> {
+  async runNow(
+    request: AutomationIdRequest,
+  ): Promise<RunAutomationNowResponse> {
     this.assertAutomationsEnabled();
     const result = await this.scheduler.runNow(request.automationId);
-    const [run] = this.options.store.listRunsForAutomation(request.automationId, 1);
+    const [run] = this.options.store.listRunsForAutomation(
+      request.automationId,
+      1,
+    );
     if (!run) {
       throw new Error("Automation not found.");
     }
@@ -441,7 +477,9 @@ export class DesktopAutomationService {
     };
   }
 
-  async handleMessagingInboundEvent(event: MessagingInboundEvent): Promise<boolean> {
+  async handleMessagingInboundEvent(
+    event: MessagingInboundEvent,
+  ): Promise<boolean> {
     const matches = matchAutomationInboundEvent({
       automations: this.enabledInboundAutomations(),
       event,
@@ -534,9 +572,12 @@ export class DesktopAutomationService {
     }
   }
 
-  private async handleBackendTerminalTurnEvent(event: AgentEvent): Promise<void> {
+  private async handleBackendTerminalTurnEvent(
+    event: AgentEvent,
+  ): Promise<void> {
     if (!isTerminalTurnNotification(event.notification)) return;
-    const turnId = event.notification.params.turnId ?? event.notification.params.turn.id;
+    const turnId =
+      event.notification.params.turnId ?? event.notification.params.turn.id;
     if (!turnId) return;
     const activeRun = this.options.store.findRunningRunByBackendTurnId({
       backend: event.backend,
@@ -548,27 +589,35 @@ export class DesktopAutomationService {
         backendTurnId: turnId,
       });
       if (resolvedRun && isTerminalAutomationRunStatus(resolvedRun.status)) {
-        automationServiceLog.debug("terminal backend turn already resolved automation", {
-          backend: event.backend,
-          method: event.notification.method,
-          runId: resolvedRun.id,
-          runStatus: resolvedRun.status,
-          threadId: event.notification.params.threadId,
-          turnId,
-        });
+        automationServiceLog.debug(
+          "terminal backend turn already resolved automation",
+          {
+            backend: event.backend,
+            method: event.notification.method,
+            runId: resolvedRun.id,
+            runStatus: resolvedRun.status,
+            threadId: event.notification.params.threadId,
+            turnId,
+          },
+        );
         return;
       }
-      automationServiceLog.warn("terminal backend turn did not match a running automation", {
-        backend: event.backend,
-        method: event.notification.method,
-        threadId: event.notification.params.threadId,
-        turnId,
-      });
+      automationServiceLog.warn(
+        "terminal backend turn did not match a running automation",
+        {
+          backend: event.backend,
+          method: event.notification.method,
+          threadId: event.notification.params.threadId,
+          turnId,
+        },
+      );
       return;
     }
 
     const finalText = finalTextFromTerminalTurnNotification(event.notification);
-    const errorMessage = errorMessageFromTerminalTurnNotification(event.notification);
+    const errorMessage = errorMessageFromTerminalTurnNotification(
+      event.notification,
+    );
     await this.scheduler.handleTurnQueueUpdate({
       automationRunId: activeRun.id,
       status: "terminal",
@@ -576,9 +625,12 @@ export class DesktopAutomationService {
       turnId,
       errorMessage,
     });
-    const automation = this.options.store.getAutomation(activeRun.automationId, {
-      includeDeleted: true,
-    });
+    const automation = this.options.store.getAutomation(
+      activeRun.automationId,
+      {
+        includeDeleted: true,
+      },
+    );
     await this.publishAutomationRunUpdate({
       backend: event.backend,
       runId: activeRun.id,
@@ -599,12 +651,15 @@ export class DesktopAutomationService {
   }): Promise<void> {
     const run = this.options.store.getRun(params.runId);
     if (!run) {
-      automationServiceLog.warn("automation run update skipped because run was missing", {
-        backend: params.backend,
-        runId: params.runId,
-        status: params.status,
-        threadId: params.threadId,
-      });
+      automationServiceLog.warn(
+        "automation run update skipped because run was missing",
+        {
+          backend: params.backend,
+          runId: params.runId,
+          status: params.status,
+          threadId: params.threadId,
+        },
+      );
       return;
     }
     const automation = this.options.store.getAutomation(run.automationId, {
@@ -744,7 +799,9 @@ export class DesktopAutomationService {
     }
   }
 
-  private async captureAutomationRunTranscriptEvent(event: AgentEvent): Promise<void> {
+  private async captureAutomationRunTranscriptEvent(
+    event: AgentEvent,
+  ): Promise<void> {
     const turnId = turnIdFromAutomationNotification(event.notification);
     if (!turnId) return;
     const run = this.options.store.findRunningRunByBackendTurnId({
@@ -773,26 +830,32 @@ export class DesktopAutomationService {
       event: transcriptEvent,
       now: transcriptEvent.at,
     });
-    if (transcriptEvent.kind !== "assistant_final" || !transcriptEvent.text?.trim()) {
+    if (
+      transcriptEvent.kind !== "assistant_final"
+      || !transcriptEvent.text?.trim()
+    ) {
       return;
     }
 
     const finalText = transcriptEvent.text.trim();
     const outputDecision = parseAutomationOutputDecision(finalText);
     if (
-      outputDecision?.kind !== "post_card" &&
-      outputDecision?.kind !== "quiet"
+      outputDecision?.kind !== "post_card"
+      && outputDecision?.kind !== "quiet"
     ) {
       return;
     }
-    automationServiceLog.info("completing automation run from captured assistant final", {
-      backend: event.backend,
-      outputDecision: outputDecision.kind,
-      runId: run.id,
-      textLength: finalText.length,
-      threadId: notificationThreadId(event.notification),
-      turnId,
-    });
+    automationServiceLog.info(
+      "completing automation run from captured assistant final",
+      {
+        backend: event.backend,
+        outputDecision: outputDecision.kind,
+        runId: run.id,
+        textLength: finalText.length,
+        threadId: notificationThreadId(event.notification),
+        turnId,
+      },
+    );
     await this.scheduler.handleTurnQueueUpdate({
       automationRunId: run.id,
       status: "terminal",
@@ -806,7 +869,10 @@ export class DesktopAutomationService {
       backend: event.backend,
       runId: run.id,
       status: "terminal",
-      threadId: automation?.threadId ?? notificationThreadId(event.notification) ?? run.id,
+      threadId:
+        automation?.threadId
+        ?? notificationThreadId(event.notification)
+        ?? run.id,
       finalText,
     });
   }
@@ -820,7 +886,10 @@ export class DesktopAutomationService {
         // load; the explicit `schedule` guard is belt-and-suspenders so a
         // schedule-less record can never reach computeNextAutomationRunAt and
         // abort the whole startup reconcile.
-        .filter((automation) => automation.status === "enabled" && automation.schedule)
+        .filter(
+          (automation) =>
+            automation.status === "enabled" && automation.schedule,
+        )
         .map((automation) => [
           automation.id,
           computeNextAutomationRunAt(automation.schedule!, now),
@@ -843,9 +912,8 @@ export class DesktopAutomationService {
     const automation = this.options.store.getAutomation(automationId, {
       includeDeleted: true,
     });
-    const pendingRuns = this.options.store.listPendingOrQueuedRunsForAutomation(
-      automationId,
-    );
+    const pendingRuns =
+      this.options.store.listPendingOrQueuedRunsForAutomation(automationId);
     this.cancelQueuedTurns(pendingRuns, reason);
     this.options.store.cancelPendingRunsForAutomation({
       automationId,
@@ -866,14 +934,20 @@ export class DesktopAutomationService {
     }
   }
 
-  private cancelQueuedTurnsForAutomation(automationId: string, reason: string): void {
+  private cancelQueuedTurnsForAutomation(
+    automationId: string,
+    reason: string,
+  ): void {
     this.cancelQueuedTurns(
       this.options.store.listPendingOrQueuedRunsForAutomation(automationId),
       reason,
     );
   }
 
-  private cancelQueuedTurns(runs: AutomationRunSummary[], reason: string): void {
+  private cancelQueuedTurns(
+    runs: AutomationRunSummary[],
+    reason: string,
+  ): void {
     const pendingQueueEntryIds = runs
       .map((run) => run.queueEntryId)
       .filter((entryId): entryId is string => Boolean(entryId));
@@ -891,7 +965,9 @@ export class DesktopAutomationService {
     );
   }
 
-  private assertValidSchedule(schedule: NonNullable<CreateAutomationRequest["schedule"]>): void {
+  private assertValidSchedule(
+    schedule: NonNullable<CreateAutomationRequest["schedule"]>,
+  ): void {
     const validation = validateAutomationScheduleDefinition(schedule);
     if (!validation.ok) {
       throw new Error(validation.error);
@@ -942,11 +1018,13 @@ function toAutomationDetail(
   record: AutomationRecord,
   latestRun?: AutomationRunSummary,
 ): AutomationDetail {
-  const latestRunAt = latestRun ? automationRunActivityAt(latestRun) : undefined;
+  const latestRunAt = latestRun
+    ? automationRunActivityAt(latestRun)
+    : undefined;
   const useLatestRun =
-    latestRun !== undefined &&
-    latestRunAt !== undefined &&
-    (record.lastRunAt === undefined || latestRunAt >= record.lastRunAt);
+    latestRun !== undefined
+    && latestRunAt !== undefined
+    && (record.lastRunAt === undefined || latestRunAt >= record.lastRunAt);
   return {
     id: record.id,
     backend: record.backend,
@@ -972,7 +1050,9 @@ function toAutomationDetail(
   };
 }
 
-function automationRunActivityAt(run: AutomationRunSummary): number | undefined {
+function automationRunActivityAt(
+  run: AutomationRunSummary,
+): number | undefined {
   return run.completedAt ?? run.startedAt ?? run.queuedAt ?? run.scheduledFor;
 }
 
@@ -986,10 +1066,10 @@ function shouldRecordRunArtifact(
   status: "queued" | "started" | "failed" | "cancelled" | "terminal",
 ): boolean {
   return (
-    status === "started" ||
-    status === "terminal" ||
-    status === "failed" ||
-    status === "cancelled"
+    status === "started"
+    || status === "terminal"
+    || status === "failed"
+    || status === "cancelled"
   );
 }
 
@@ -1002,9 +1082,9 @@ function isTerminalTurnNotification(
   notification: AppServerNotification,
 ): notification is TerminalTurnNotification {
   return (
-    notification.method === "turn/completed" ||
-    notification.method === "turn/failed" ||
-    notification.method === "turn/cancelled"
+    notification.method === "turn/completed"
+    || notification.method === "turn/failed"
+    || notification.method === "turn/cancelled"
   );
 }
 
@@ -1086,7 +1166,9 @@ function buildRunArtifactTranscript(params: {
 }
 
 function isTerminalAutomationRunStatus(status: AutomationRunStatus): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
+  return (
+    status === "completed" || status === "failed" || status === "cancelled"
+  );
 }
 
 function automationTranscriptEventFromBackendEvent(params: {
@@ -1172,7 +1254,9 @@ function turnIdFromAutomationNotification(
   return params.turnId ?? params.turn?.id ?? undefined;
 }
 
-function notificationThreadId(notification: AppServerNotification): string | undefined {
+function notificationThreadId(
+  notification: AppServerNotification,
+): string | undefined {
   const threadId = (notification.params as { threadId?: unknown }).threadId;
   return typeof threadId === "string" ? threadId : undefined;
 }
@@ -1186,7 +1270,9 @@ type AutomationNotificationItem = {
   toolName?: string;
 };
 
-function asAutomationItem(value: unknown): AutomationNotificationItem | undefined {
+function asAutomationItem(
+  value: unknown,
+): AutomationNotificationItem | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -1219,10 +1305,10 @@ function automationToolSummary(
     return item.text.trim();
   }
   if (
-    type.includes("command") ||
-    type.includes("tool") ||
-    type.includes("search") ||
-    type.includes("file")
+    type.includes("command")
+    || type.includes("tool")
+    || type.includes("search")
+    || type.includes("file")
   ) {
     return `${item.success === false ? "Failed" : "Completed"} ${item.type}`;
   }
@@ -1235,12 +1321,13 @@ function buildAutomationTimelineCard(params: {
   run: AutomationRunSummary;
 }): AutomationTimelineCard | undefined {
   const notable =
-    params.run.trigger === "manual" ||
-    params.run.status === "failed" ||
-    params.run.status === "cancelled" ||
-    params.artifact?.outputDecision?.kind === "post_card" ||
-    params.artifact?.outputDecision?.kind === "parse_failed" ||
-    (!params.artifact?.outputDecision && Boolean(params.artifact?.finalText));
+    params.run.trigger === "manual"
+    || params.run.status === "failed"
+    || params.run.status === "cancelled"
+    || params.artifact?.outputDecision?.kind === "post_card"
+    || params.artifact?.outputDecision?.kind === "parse_failed"
+    || (!params.artifact?.outputDecision
+      && Boolean(params.artifact?.finalText));
   if (!notable) return undefined;
 
   return {
@@ -1254,11 +1341,11 @@ function buildAutomationTimelineCard(params: {
     summary: summarizeAutomationCard(params),
     details: params.artifact?.outputDecision?.details,
     occurredAt:
-      params.run.completedAt ??
-      params.run.startedAt ??
-      params.run.queuedAt ??
-      params.run.scheduledFor ??
-      Date.now(),
+      params.run.completedAt
+      ?? params.run.startedAt
+      ?? params.run.queuedAt
+      ?? params.run.scheduledFor
+      ?? Date.now(),
   };
 }
 
@@ -1268,10 +1355,10 @@ function summarizeAutomationCard(params: {
   run: AutomationRunSummary;
 }): string {
   const summary =
-    params.artifact?.outputDecision?.summary ??
-    firstLine(params.artifact?.finalText) ??
-    params.artifact?.errorMessage ??
-    params.run.errorMessage;
+    params.artifact?.outputDecision?.summary
+    ?? firstLine(params.artifact?.finalText)
+    ?? params.artifact?.errorMessage
+    ?? params.run.errorMessage;
   if (summary) {
     return `${params.automation.name}: ${summary}`;
   }

@@ -23,7 +23,9 @@ describe("automation tool contracts", () => {
       "get_automation_run",
       "get_automation_run_artifact",
     ]);
-    expect(isAutomationInspectionOperationName("get_automation_run")).toBe(true);
+    expect(isAutomationInspectionOperationName("get_automation_run")).toBe(
+      true,
+    );
     expect(isAutomationInspectionOperationName("pause_automation")).toBe(false);
   });
 

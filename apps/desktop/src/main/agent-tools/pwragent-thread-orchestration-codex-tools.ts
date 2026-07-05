@@ -26,8 +26,8 @@ export function isPwrAgentThreadOrchestrationDynamicToolCall(
   tool: PwrAgentThreadOrchestrationOperationName;
 } {
   return (
-    call.namespace === PWRAGENT_TOOL_NAMESPACE &&
-    PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES.includes(
+    call.namespace === PWRAGENT_TOOL_NAMESPACE
+    && PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES.includes(
       call.tool as PwrAgentThreadOrchestrationOperationName,
     )
   );

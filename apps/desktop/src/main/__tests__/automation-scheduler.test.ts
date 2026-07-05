@@ -18,8 +18,8 @@ class FakeQueue {
   }
 
   async submit(
-    entry: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
-      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    entry: Omit<ThreadTurnQueueEntry, "id" | "createdAt">
+      & Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
   ) {
     const queuedEntry: ThreadTurnQueueEntry = {
       ...entry,
@@ -41,7 +41,10 @@ class FakeQueue {
     };
   }
 
-  updateQueuedInput(entryId: string, input: ThreadTurnQueueEntry["input"]): void {
+  updateQueuedInput(
+    entryId: string,
+    input: ThreadTurnQueueEntry["input"],
+  ): void {
     const entry = this.submitted.find((candidate) => candidate.id === entryId);
     if (entry) {
       entry.input = input;
@@ -56,7 +59,9 @@ let queue: FakeQueue;
 let now = 0;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-automation-scheduler-"));
+  tempDir = mkdtempSync(
+    path.join(os.tmpdir(), "pwragent-automation-scheduler-"),
+  );
   stateDb = StateDb.open(path.join(tempDir, "state.db"));
   store = new AutomationStore(stateDb);
   queue = new FakeQueue();
@@ -100,7 +105,9 @@ function buildScheduler(): AutomationScheduler {
   });
 }
 
-function buildSchedulerWithGate(gateRunner: AutomationGateRunner): AutomationScheduler {
+function buildSchedulerWithGate(
+  gateRunner: AutomationGateRunner,
+): AutomationScheduler {
   return new AutomationScheduler({
     store,
     runner: new ThreadQueueAutomationRunner(queue),
@@ -223,7 +230,10 @@ describe("AutomationScheduler", () => {
           { scheduledFor: 15 * 60 * 1000 },
         ],
       }),
-      expect.objectContaining({ status: "running", scheduledFor: 5 * 60 * 1000 }),
+      expect.objectContaining({
+        status: "running",
+        scheduledFor: 5 * 60 * 1000,
+      }),
     ]);
 
     await scheduler.handleTurnQueueUpdate({
@@ -297,8 +307,14 @@ describe("AutomationScheduler", () => {
 
     expect(queue.submitted).toHaveLength(1);
     expect(store.listRunsForAutomation("automation-1")).toEqual([
-      expect.objectContaining({ status: "skipped", scheduledFor: 10 * 60 * 1000 }),
-      expect.objectContaining({ status: "running", scheduledFor: 5 * 60 * 1000 }),
+      expect.objectContaining({
+        status: "skipped",
+        scheduledFor: 10 * 60 * 1000,
+      }),
+      expect.objectContaining({
+        status: "running",
+        scheduledFor: 5 * 60 * 1000,
+      }),
     ]);
   });
 
@@ -333,7 +349,10 @@ describe("AutomationScheduler", () => {
         errorMessage:
           "Dropped 11 missed schedule windows because the automation execution lane was busy.",
       }),
-      expect.objectContaining({ status: "running", scheduledFor: 5 * 60 * 1000 }),
+      expect.objectContaining({
+        status: "running",
+        scheduledFor: 5 * 60 * 1000,
+      }),
     ]);
   });
 
@@ -530,7 +549,11 @@ describe("AutomationScheduler", () => {
     };
 
     now = 1_000;
-    const first = await scheduler.runFromInboundEvent({ automation, source, now });
+    const first = await scheduler.runFromInboundEvent({
+      automation,
+      source,
+      now,
+    });
     now = 1_500;
     const redelivered = await scheduler.runFromInboundEvent({
       automation,
@@ -584,16 +607,28 @@ describe("AutomationScheduler", () => {
     });
 
     now = 1_000;
-    await scheduler.runFromInboundEvent({ automation, source: src("k1", "ERROR one"), now });
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: src("k1", "ERROR one"),
+      now,
+    });
     // Leading edge fires immediately.
     expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
     expect(queue.submitted).toHaveLength(1);
 
     // Two more within the window are buffered, not run.
     now = 1_100;
-    await scheduler.runFromInboundEvent({ automation, source: src("k2", "ERROR two"), now });
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: src("k2", "ERROR two"),
+      now,
+    });
     now = 1_200;
-    await scheduler.runFromInboundEvent({ automation, source: src("k3", "ERROR three"), now });
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: src("k3", "ERROR three"),
+      now,
+    });
     expect(store.listRunsForAutomation("automation-1")).toHaveLength(1);
 
     // Leading run completes so the lane is free.
@@ -654,13 +689,21 @@ describe("AutomationScheduler", () => {
     // 10 distinct messages at the same instant; capacity == rate == 5.
     now = 1_000;
     for (let i = 0; i < 10; i += 1) {
-      await scheduler.runFromInboundEvent({ automation, source: src(`k${i}`), now });
+      await scheduler.runFromInboundEvent({
+        automation,
+        source: src(`k${i}`),
+        now,
+      });
     }
     expect(store.listRunsForAutomation("automation-rl")).toHaveLength(5);
 
     // Bucket refills 1 token after 1/5 hour (12 min); one more run starts.
     now = 1_000 + 12 * 60 * 1000;
-    await scheduler.runFromInboundEvent({ automation, source: src("k-refill"), now });
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: src("k-refill"),
+      now,
+    });
     expect(store.listRunsForAutomation("automation-rl")).toHaveLength(6);
   });
 
@@ -699,7 +742,11 @@ describe("AutomationScheduler", () => {
     await scheduler.runFromInboundEvent({ automation, source: src("k1"), now });
     // Three redeliveries of the same key are idempotent: no run, no token spent.
     for (let i = 0; i < 3; i += 1) {
-      await scheduler.runFromInboundEvent({ automation, source: src("k1"), now });
+      await scheduler.runFromInboundEvent({
+        automation,
+        source: src("k1"),
+        now,
+      });
     }
     // A genuinely new message still has its token and starts/queues a run.
     await scheduler.runFromInboundEvent({ automation, source: src("k2"), now });
@@ -742,9 +789,15 @@ describe("AutomationScheduler", () => {
 
     now = 1_000;
     for (let i = 0; i < 30; i += 1) {
-      await scheduler.runFromInboundEvent({ automation, source: src(`k${i}`), now });
+      await scheduler.runFromInboundEvent({
+        automation,
+        source: src(`k${i}`),
+        now,
+      });
     }
-    expect(store.listRunsForAutomation("automation-unlimited")).toHaveLength(30);
+    expect(store.listRunsForAutomation("automation-unlimited")).toHaveLength(
+      30,
+    );
   });
 
   it("includes successful gate output in the automation run prompt", async () => {

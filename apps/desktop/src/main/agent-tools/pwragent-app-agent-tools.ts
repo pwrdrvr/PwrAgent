@@ -13,10 +13,7 @@ import type {
   AgentToolDefinition,
   AgentToolDispatchResult,
 } from "./agent-tool-definition.js";
-import {
-  agentToolFailure,
-  agentToolSuccess,
-} from "./agent-tool-definition.js";
+import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 
 export const PWRAGENT_APP_MANAGEMENT_UNAVAILABLE_MESSAGE =
@@ -30,12 +27,15 @@ export function buildPwrAgentAppToolRouter(
   handler: PwrAgentAppManagementHandler | undefined,
   options: { namespace?: string; unsupportedMessage?: string } = {},
 ): AgentToolRouter {
-  return new AgentToolRouter(buildPwrAgentAppToolDefinitions(handler, {
-    namespace: options.namespace,
-  }), {
-    unsupportedMessage:
-      options.unsupportedMessage ?? "Unsupported PwrAgent app tool.",
-  });
+  return new AgentToolRouter(
+    buildPwrAgentAppToolDefinitions(handler, {
+      namespace: options.namespace,
+    }),
+    {
+      unsupportedMessage:
+        options.unsupportedMessage ?? "Unsupported PwrAgent app tool.",
+    },
+  );
 }
 
 export function buildPwrAgentAppToolDefinitions(
@@ -101,9 +101,11 @@ function inputSchemaForOperation(
   }
 }
 
-function normalizeAction(value: unknown): PwrAgentAppManagementAction | undefined {
-  return typeof value === "string" &&
-    PWRAGENT_APP_MANAGEMENT_ACTIONS.includes(
+function normalizeAction(
+  value: unknown,
+): PwrAgentAppManagementAction | undefined {
+  return typeof value === "string"
+    && PWRAGENT_APP_MANAGEMENT_ACTIONS.includes(
       value as PwrAgentAppManagementAction,
     )
     ? (value as PwrAgentAppManagementAction)

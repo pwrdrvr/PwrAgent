@@ -11,6 +11,8 @@ export function resetDesktopMessagingStoreForTests(): void {
   messagingStoreOverride = null;
 }
 
-export function setDesktopMessagingStoreForTests(store: SqliteMessagingStore): void {
+export function setDesktopMessagingStoreForTests(
+  store: SqliteMessagingStore,
+): void {
   messagingStoreOverride = store;
 }

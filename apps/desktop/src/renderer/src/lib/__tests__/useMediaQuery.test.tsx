@@ -13,7 +13,9 @@ type FakeMatchMedia = ((query: string) => MediaQueryList) & {
   __get(query: string): FakeMediaQueryList | undefined;
 };
 
-function createFakeMatchMedia(initial: Record<string, boolean>): FakeMatchMedia {
+function createFakeMatchMedia(
+  initial: Record<string, boolean>,
+): FakeMatchMedia {
   // The browser's `MediaQueryList` declares `matches` readonly, but
   // a real implementation flips it internally before notifying
   // listeners. Our fake is a writable mirror; the cast at the

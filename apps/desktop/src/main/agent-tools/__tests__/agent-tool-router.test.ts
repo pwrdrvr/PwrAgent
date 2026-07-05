@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { agentToolFailure, agentToolSuccess } from "../agent-tool-definition";
-import { AgentToolRouter, readAgentDynamicToolCall } from "../agent-tool-router";
+import {
+  AgentToolRouter,
+  readAgentDynamicToolCall,
+} from "../agent-tool-router";
 
 describe("AgentToolRouter", () => {
   it("projects agent tool definitions into Codex dynamic tool specs", () => {

@@ -18,7 +18,12 @@ export type AutomationSourceMessageDeliveryHandler = (params: {
   intentId: string;
   source: AutomationRunSourceMetadata;
   text: string;
-}) => Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }>;
+}) => Promise<{
+  message?: string;
+  ok: boolean;
+  unsupported?: boolean;
+  errorMessage?: string;
+}>;
 
 export type AutomationTargetMessageDeliveryHandler = (params: {
   intentId: string;
@@ -27,10 +32,17 @@ export type AutomationTargetMessageDeliveryHandler = (params: {
     { kind: "messaging_target" }
   >["target"];
   text: string;
-}) => Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }>;
+}) => Promise<{
+  message?: string;
+  ok: boolean;
+  unsupported?: boolean;
+  errorMessage?: string;
+}>;
 
-const sourceMessageDeliveryHandlers = new Set<AutomationSourceMessageDeliveryHandler>();
-const targetMessageDeliveryHandlers = new Set<AutomationTargetMessageDeliveryHandler>();
+const sourceMessageDeliveryHandlers =
+  new Set<AutomationSourceMessageDeliveryHandler>();
+const targetMessageDeliveryHandlers =
+  new Set<AutomationTargetMessageDeliveryHandler>();
 
 export function registerAutomationSourceMessageDeliveryHandler(
   handler: AutomationSourceMessageDeliveryHandler,
@@ -79,7 +91,9 @@ export async function executeAutomationOutputActions(params: {
   const results: AutomationOutputActionResult[] = [];
   for (const action of params.actions) {
     if (action.enabled === false) {
-      results.push(resultFor(action, "skipped", { message: "Action is disabled." }));
+      results.push(
+        resultFor(action, "skipped", { message: "Action is disabled." }),
+      );
       continue;
     }
     const previous = existing.get(action.id);
@@ -92,23 +106,30 @@ export async function executeAutomationOutputActions(params: {
       continue;
     }
     if (action.kind === "agent_context") {
-      results.push(resultFor(action, "completed", {
-        message: "Automation artifact is available to the Agent thread.",
-      }));
+      results.push(
+        resultFor(action, "completed", {
+          message: "Automation artifact is available to the Agent thread.",
+        }),
+      );
       continue;
     }
     if (action.kind === "messaging_target") {
       if (targetMessageDeliveryHandlers.size === 0) {
-        results.push(resultFor(action, "unsupported", {
-          errorMessage: "Alternate messaging target delivery is not available.",
-        }));
+        results.push(
+          resultFor(action, "unsupported", {
+            errorMessage:
+              "Alternate messaging target delivery is not available.",
+          }),
+        );
         continue;
       }
       const text = renderActionMessage(params.artifact);
       if (!text) {
-        results.push(resultFor(action, "skipped", {
-          message: "No user-visible automation output to deliver.",
-        }));
+        results.push(
+          resultFor(action, "skipped", {
+            message: "No user-visible automation output to deliver.",
+          }),
+        );
         continue;
       }
       const attemptedAt = Date.now();
@@ -133,22 +154,29 @@ export async function executeAutomationOutputActions(params: {
       continue;
     }
     if (!params.source) {
-      results.push(resultFor(action, "failed", {
-        errorMessage: "Source-message action requires inbound source metadata.",
-      }));
+      results.push(
+        resultFor(action, "failed", {
+          errorMessage:
+            "Source-message action requires inbound source metadata.",
+        }),
+      );
       continue;
     }
     if (sourceMessageDeliveryHandlers.size === 0) {
-      results.push(resultFor(action, "unsupported", {
-        errorMessage: "Source-message delivery is not available.",
-      }));
+      results.push(
+        resultFor(action, "unsupported", {
+          errorMessage: "Source-message delivery is not available.",
+        }),
+      );
       continue;
     }
     const text = renderActionMessage(params.artifact);
     if (!text) {
-      results.push(resultFor(action, "skipped", {
-        message: "No user-visible automation output to deliver.",
-      }));
+      results.push(
+        resultFor(action, "skipped", {
+          message: "No user-visible automation output to deliver.",
+        }),
+      );
       continue;
     }
     const attemptedAt = Date.now();
@@ -191,7 +219,10 @@ export function buildPendingDeliveryActionResults(
   const pending: AutomationOutputActionResult[] = [];
   for (const action of actions) {
     if (action.enabled === false) continue;
-    if (action.kind !== "source_message" && action.kind !== "messaging_target") {
+    if (
+      action.kind !== "source_message"
+      && action.kind !== "messaging_target"
+    ) {
       continue;
     }
     const previous = byId.get(action.id);
@@ -221,11 +252,13 @@ async function deliverSourceMessage(
     }
     unsupported = result;
   }
-  return unsupported ?? {
-    ok: false,
-    unsupported: true,
-    errorMessage: "Source-message delivery is not available.",
-  };
+  return (
+    unsupported ?? {
+      ok: false,
+      unsupported: true,
+      errorMessage: "Source-message delivery is not available.",
+    }
+  );
 }
 
 async function deliverTargetMessage(
@@ -241,14 +274,18 @@ async function deliverTargetMessage(
     }
     unsupported = result;
   }
-  return unsupported ?? {
-    ok: false,
-    unsupported: true,
-    errorMessage: "Alternate messaging target delivery is not available.",
-  };
+  return (
+    unsupported ?? {
+      ok: false,
+      unsupported: true,
+      errorMessage: "Alternate messaging target delivery is not available.",
+    }
+  );
 }
 
-function renderActionMessage(artifact: AutomationRunArtifact): string | undefined {
+function renderActionMessage(
+  artifact: AutomationRunArtifact,
+): string | undefined {
   return artifact.outputDecision?.kind === "post_card"
     ? renderAutomationDecisionForMessaging(artifact.outputDecision)
     : renderAutomationOutputForMessaging(artifact.finalText);
@@ -265,7 +302,8 @@ function resultFor(
     kind: action.kind,
     status,
     attemptedAt: now,
-    completedAt: status === "completed" || status === "skipped" ? now : undefined,
+    completedAt:
+      status === "completed" || status === "skipped" ? now : undefined,
     ...extra,
   };
 }

@@ -32,7 +32,10 @@ export type ReplayRequestStep = {
   request: AppServerPendingRequestNotification;
 };
 
-export type ReplayStep = ReplayResponseStep | ReplayNotificationStep | ReplayRequestStep;
+export type ReplayStep =
+  | ReplayResponseStep
+  | ReplayNotificationStep
+  | ReplayRequestStep;
 
 export type ReplayFixture = {
   metadata: {
@@ -44,7 +47,9 @@ export type ReplayFixture = {
   steps: ReplayStep[];
 };
 
-export type ReplayStepOverride = Partial<ReplayNotificationStep | ReplayRequestStep>;
+export type ReplayStepOverride = Partial<
+  ReplayNotificationStep | ReplayRequestStep
+>;
 
 export function validateReplayFixture(fixture: ReplayFixture): void {
   if (!fixture.metadata?.backend) {
@@ -73,12 +78,9 @@ export function validateReplayFixture(fixture: ReplayFixture): void {
       if (!step.method?.trim()) {
         throw new Error(`Replay response step ${step.id} requires method`);
       }
-      if (
-        !Object.hasOwn(step, "result")
-        && !Object.hasOwn(step, "error")
-      ) {
+      if (!Object.hasOwn(step, "result") && !Object.hasOwn(step, "error")) {
         throw new Error(
-          `Replay response step ${step.id} requires result or error`
+          `Replay response step ${step.id} requires result or error`,
         );
       }
       continue;
@@ -86,17 +88,26 @@ export function validateReplayFixture(fixture: ReplayFixture): void {
 
     if (step.kind === "notification") {
       if (!step.notification?.method?.trim()) {
-        throw new Error(`Replay notification step ${step.id} requires notification.method`);
+        throw new Error(
+          `Replay notification step ${step.id} requires notification.method`,
+        );
       }
       continue;
     }
 
     if (step.kind === "request") {
       if (!step.request?.method?.trim()) {
-        throw new Error(`Replay request step ${step.id} requires request.method`);
+        throw new Error(
+          `Replay request step ${step.id} requires request.method`,
+        );
       }
-      if (!step.request?.params?.requestId || typeof step.request.params.requestId !== "string") {
-        throw new Error(`Replay request step ${step.id} requires params.requestId`);
+      if (
+        !step.request?.params?.requestId
+        || typeof step.request.params.requestId !== "string"
+      ) {
+        throw new Error(
+          `Replay request step ${step.id} requires params.requestId`,
+        );
       }
       continue;
     }
@@ -105,9 +116,7 @@ export function validateReplayFixture(fixture: ReplayFixture): void {
   }
 }
 
-export function asInitializeResult(
-  value: unknown
-): {
+export function asInitializeResult(value: unknown): {
   serverInfo?: {
     name?: string;
     version?: string;
@@ -128,7 +137,7 @@ export function asThreadList(value: unknown): AppServerThreadSummary[] {
 }
 
 export function asSkillList(
-  value: unknown
+  value: unknown,
 ): AppServerListSkillsResponse["data"] {
   return Array.isArray(value)
     ? (value as AppServerListSkillsResponse["data"])
@@ -136,7 +145,7 @@ export function asSkillList(
 }
 
 export function asThreadReplay(
-  value: unknown
+  value: unknown,
 ): AppServerReadThreadResponse["replay"] {
   return value as AppServerReadThreadResponse["replay"];
 }

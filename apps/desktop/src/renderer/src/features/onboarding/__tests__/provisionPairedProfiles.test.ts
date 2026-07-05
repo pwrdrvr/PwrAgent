@@ -107,7 +107,9 @@ describe("provisionPairedProfiles", () => {
 
   it("normalizes profile names before provisioning", async () => {
     const mock = makeApi();
-    const created = await provisionPairedProfiles(mock.api, ["My Work Profile"]);
+    const created = await provisionPairedProfiles(mock.api, [
+      "My Work Profile",
+    ]);
 
     expect(created).toEqual(["my-work-profile"]);
     expect(mock.callLog).toEqual([

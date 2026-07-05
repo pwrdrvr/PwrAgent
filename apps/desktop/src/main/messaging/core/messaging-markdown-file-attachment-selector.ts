@@ -57,7 +57,10 @@ export class MessagingMarkdownFileAttachmentSelector {
     if (normalizeToken(readString(itemRecord, "type")) !== "filechange") {
       return undefined;
     }
-    if (readString(itemRecord, "status") === "failed" || itemRecord.success === false) {
+    if (
+      readString(itemRecord, "status") === "failed"
+      || itemRecord.success === false
+    ) {
       return undefined;
     }
 
@@ -168,18 +171,19 @@ function extractAddedMarkdown(
   changeKind: Record<string, unknown> | undefined,
 ): string | undefined {
   const content =
-    readStringAllowEmpty(changeKind, "content") ??
-    readStringAllowEmpty(change, "content");
+    readStringAllowEmpty(changeKind, "content")
+    ?? readStringAllowEmpty(change, "content");
   if (content !== undefined) {
     return content;
   }
 
-  const diff = readStringAllowEmpty(changeKind, "unified_diff") ??
-    readStringAllowEmpty(changeKind, "unifiedDiff") ??
-    readStringAllowEmpty(change, "diff") ??
-    readStringAllowEmpty(change, "patch") ??
-    readStringAllowEmpty(change, "unifiedDiff") ??
-    readStringAllowEmpty(change, "unified_diff");
+  const diff =
+    readStringAllowEmpty(changeKind, "unified_diff")
+    ?? readStringAllowEmpty(changeKind, "unifiedDiff")
+    ?? readStringAllowEmpty(change, "diff")
+    ?? readStringAllowEmpty(change, "patch")
+    ?? readStringAllowEmpty(change, "unifiedDiff")
+    ?? readStringAllowEmpty(change, "unified_diff");
   if (diff === undefined) {
     return undefined;
   }
@@ -190,12 +194,12 @@ function addedContentFromUnifiedDiff(diff: string): string {
   const lines: string[] = [];
   for (const line of diff.split("\n")) {
     if (
-      line.startsWith("+++") ||
-      line.startsWith("diff --git ") ||
-      line.startsWith("index ") ||
-      line.startsWith("new file mode ") ||
-      line.startsWith("@@ ") ||
-      line.startsWith("\\")
+      line.startsWith("+++")
+      || line.startsWith("diff --git ")
+      || line.startsWith("index ")
+      || line.startsWith("new file mode ")
+      || line.startsWith("@@ ")
+      || line.startsWith("\\")
     ) {
       continue;
     }
@@ -213,11 +217,11 @@ function looksLikeUnifiedDiff(text: string): boolean {
 function normalizeFileChangeKind(
   record: Record<string, unknown>,
 ): "add" | "delete" | "update" {
-  const raw =
-    readString(record, "type") ??
-    readString(record, "kind");
+  const raw = readString(record, "type") ?? readString(record, "kind");
   const normalized = raw?.trim().toLowerCase();
-  return normalized === "add" || normalized === "delete" || normalized === "update"
+  return normalized === "add"
+    || normalized === "delete"
+    || normalized === "update"
     ? normalized
     : "update";
 }
@@ -235,7 +239,7 @@ function markdownAttachmentName(filePath: string): string {
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined;
 }
 

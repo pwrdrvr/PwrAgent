@@ -76,7 +76,11 @@ export function AcpAgentsSettings(props: {
       setEntries(response.entries);
       setError(response.error);
     } catch (refreshError) {
-      setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
+      setError(
+        refreshError instanceof Error
+          ? refreshError.message
+          : String(refreshError),
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -186,7 +190,10 @@ function AcpAgentSection(props: {
           source={`${instances.length} found`}
           error={detail}
           control={
-            <div className="settings-paths" aria-label={`${entry.name} installs`}>
+            <div
+              className="settings-paths"
+              aria-label={`${entry.name} installs`}
+            >
               {instances.length === 0 ? (
                 <p className="settings-empty">Not installed.</p>
               ) : (
@@ -194,7 +201,8 @@ function AcpAgentSection(props: {
                   const active = instance.command === entry.activeCommand;
                   const chips: SettingsPathRowChip[] = [
                     {
-                      label: instance.source === "override" ? "override" : "path",
+                      label:
+                        instance.source === "override" ? "override" : "path",
                       tone: "muted",
                     },
                     {

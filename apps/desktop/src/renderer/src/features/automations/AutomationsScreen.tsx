@@ -48,7 +48,9 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
     [props.threads],
   );
 
-  const submitEditor = async (submission: AutomationEditorSubmit): Promise<void> => {
+  const submitEditor = async (
+    submission: AutomationEditorSubmit,
+  ): Promise<void> => {
     setSaving(true);
     try {
       if (submission.kind === "create") {
@@ -88,7 +90,11 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
             Pwr<span className="settings-nav__brand-accent">Agent</span>
           </p>
         </header>
-        <button className="settings-nav__exit" type="button" onClick={props.onClose}>
+        <button
+          className="settings-nav__exit"
+          type="button"
+          onClick={props.onClose}
+        >
           <span aria-hidden="true">&lt;</span> Exit Automations
         </button>
         <p className="settings-nav__group-label">Schedules</p>
@@ -161,7 +167,11 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
           ) : automations.automations.length === 0 ? (
             <p className="settings-empty">No automations configured.</p>
           ) : (
-            <div className="automations-table" role="table" aria-label="Automations">
+            <div
+              className="automations-table"
+              role="table"
+              aria-label="Automations"
+            >
               <div className="automations-table__header" role="row">
                 <span role="columnheader">Automation</span>
                 <span role="columnheader">Agent</span>
@@ -171,7 +181,10 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
               </div>
               {automations.automations.map((automation) => {
                 const thread = threadsByKey.get(
-                  buildThreadIdentityKey(automation.backend, automation.threadId),
+                  buildThreadIdentityKey(
+                    automation.backend,
+                    automation.threadId,
+                  ),
                 );
                 return (
                   <AutomationTableRow
@@ -278,7 +291,9 @@ function AutomationTableRow(props: {
           <p>Next {formatAutomationRelative(props.automation.nextRunAt)}</p>
         </div>
         <div role="cell">
-          <span className={`automation-status automation-status--${props.automation.status}`}>
+          <span
+            className={`automation-status automation-status--${props.automation.status}`}
+          >
             {formatAutomationStatus(props.automation.status)}
           </span>
           <p>{formatAutomationLatestRun(props.automation)}</p>
@@ -292,7 +307,11 @@ function AutomationTableRow(props: {
           >
             Run
           </button>
-          <button className="context-list__action" type="button" onClick={props.onEdit}>
+          <button
+            className="context-list__action"
+            type="button"
+            onClick={props.onEdit}
+          >
             Edit
           </button>
           <button
@@ -303,7 +322,11 @@ function AutomationTableRow(props: {
           >
             {props.automation.status === "paused" ? "Resume" : "Pause"}
           </button>
-          <button className="context-list__action" type="button" onClick={props.onExpand}>
+          <button
+            className="context-list__action"
+            type="button"
+            onClick={props.onExpand}
+          >
             {props.expanded ? "Hide" : "History"}
           </button>
           <button
@@ -331,9 +354,9 @@ function formatAutomationAgentLabel(props: {
   thread?: NavigationThreadSummary;
 }): string {
   return (
-    props.thread?.agent?.name ??
-    props.thread?.title ??
-    `Assigned thread ...${formatThreadIdSuffix(props.automation.threadId)}`
+    props.thread?.agent?.name
+    ?? props.thread?.title
+    ?? `Assigned thread ...${formatThreadIdSuffix(props.automation.threadId)}`
   );
 }
 

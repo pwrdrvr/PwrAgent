@@ -211,7 +211,9 @@ describe("usePullRequestRefresh", () => {
   });
 
   it("uses the observed branch for PR refresh when it differs from the expected branch", async () => {
-    const refreshThreadPullRequests = vi.fn(async () => buildResponse({ prs: [] }));
+    const refreshThreadPullRequests = vi.fn(async () =>
+      buildResponse({ prs: [] }),
+    );
     const desktopApi = {
       refreshThreadPullRequests,
     } satisfies DesktopApi;
@@ -239,7 +241,9 @@ describe("usePullRequestRefresh", () => {
   });
 
   it("marks hover prefetches as user-triggered refreshes", async () => {
-    const refreshThreadPullRequests = vi.fn(async () => buildResponse({ prs: [] }));
+    const refreshThreadPullRequests = vi.fn(async () =>
+      buildResponse({ prs: [] }),
+    );
     const desktopApi = {
       refreshThreadPullRequests,
     } satisfies DesktopApi;

@@ -25,7 +25,8 @@ function textEvent(params: {
       isBot: params.isBot ?? false,
     },
     channel: {
-      channel: (params.provider ?? "telegram") as MessagingInboundEvent["channel"]["channel"],
+      channel: (params.provider
+        ?? "telegram") as MessagingInboundEvent["channel"]["channel"],
       conversation: {
         id: params.conversationId,
         kind: params.parentId ? "topic" : "channel",
@@ -47,7 +48,9 @@ describe("inbound-preview-bus", () => {
     setInboundPreviewSink(sink);
     startInboundPreview("s1", { provider: "telegram", conversationId: "-100" });
 
-    publishInboundPreview(textEvent({ conversationId: "-100", text: "ERROR x" }));
+    publishInboundPreview(
+      textEvent({ conversationId: "-100", text: "ERROR x" }),
+    );
 
     expect(sink).toHaveBeenCalledTimes(1);
     expect(sink.mock.calls[0]?.[0]).toMatchObject({
@@ -78,7 +81,11 @@ describe("inbound-preview-bus", () => {
       textEvent({ conversationId: "42", parentId: "-100", text: "in topic" }),
     );
     publishInboundPreview(
-      textEvent({ conversationId: "99", parentId: "-100", text: "other topic" }),
+      textEvent({
+        conversationId: "99",
+        parentId: "-100",
+        text: "other topic",
+      }),
     );
 
     expect(sink).toHaveBeenCalledTimes(1);

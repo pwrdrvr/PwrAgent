@@ -19,33 +19,35 @@ export function createProtocolCaptureObserver(params: {
         direction: event.direction,
         diagnostics: event.diagnostics,
         raw: event.raw,
-        envelope: event.envelope
+        envelope: event.envelope,
       });
-    }
+    },
   };
 }
 
 export function createProtocolCaptureFromEnv(params: {
   backend: string;
   backendInstance: string;
-}): {
-  store: ProtocolCaptureStore;
-  observer: JsonRpcObserver;
-} | undefined {
+}):
+  | {
+      store: ProtocolCaptureStore;
+      observer: JsonRpcObserver;
+    }
+  | undefined {
   const enabledBy = captureEnabledBy();
   if (!enabledBy) {
     return undefined;
   }
 
   const rootDir =
-    process.env[CAPTURE_ROOT_ENV]?.trim() ||
-    resolveActiveProfilePath("state/protocol-captures");
+    process.env[CAPTURE_ROOT_ENV]?.trim()
+    || resolveActiveProfilePath("state/protocol-captures");
   const captureId = buildCaptureId(params.backend, params.backendInstance);
   const store = new ProtocolCaptureStore({
     backend: params.backend,
     backendInstance: params.backendInstance,
     captureId,
-    rootDir
+    rootDir,
   });
   protocolCaptureLog.info("capture enabled", {
     backend: params.backend,
@@ -60,8 +62,8 @@ export function createProtocolCaptureFromEnv(params: {
     store,
     observer: createProtocolCaptureObserver({
       backend: params.backend,
-      store
-    })
+      store,
+    }),
   };
 }
 
@@ -71,7 +73,10 @@ function buildCaptureId(backend: string, backendInstance: string): string {
 }
 
 function sanitizeCapturePart(value: string): string {
-  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-");
   return normalized || "default";
 }
 

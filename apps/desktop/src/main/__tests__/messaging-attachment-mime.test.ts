@@ -54,7 +54,11 @@ describe("messaging attachment MIME classification", () => {
   });
 
   it("decodes plain text attachments", () => {
-    expect(decodeMessagingTextAttachment(bytes("alpha\nbeta"))).toBe("alpha\nbeta");
-    expect(decodeMessagingTextAttachment(new Uint8Array([1, 0, 2]))).toBeUndefined();
+    expect(decodeMessagingTextAttachment(bytes("alpha\nbeta"))).toBe(
+      "alpha\nbeta",
+    );
+    expect(
+      decodeMessagingTextAttachment(new Uint8Array([1, 0, 2])),
+    ).toBeUndefined();
   });
 });

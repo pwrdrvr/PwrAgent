@@ -29,7 +29,8 @@ describe("search_code tool", () => {
 
     expect(result).toEqual({
       success: true,
-      output: "src/app.ts:1: const UNIQUE_MARKER_42 = true;\nsrc/app.ts:2: export { UNIQUE_MARKER_42 };",
+      output:
+        "src/app.ts:1: const UNIQUE_MARKER_42 = true;\nsrc/app.ts:2: export { UNIQUE_MARKER_42 };",
       data: {
         query: "UNIQUE_MARKER_42",
         path: ".",
@@ -105,7 +106,11 @@ describe("search_code tool", () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
     await fs.mkdir(path.join(workspace.path, "src"), { recursive: true });
-    await fs.writeFile(path.join(workspace.path, "src", "app.ts"), "export const hello = true;\n", "utf8");
+    await fs.writeFile(
+      path.join(workspace.path, "src", "app.ts"),
+      "export const hello = true;\n",
+      "utf8",
+    );
     const tool = createSearchCodeTool();
 
     const result = await tool.execute(
@@ -131,7 +136,10 @@ describe("search_code tool", () => {
     await fs.mkdir(path.join(workspace.path, "src"), { recursive: true });
     await fs.writeFile(
       path.join(workspace.path, "src", "many.txt"),
-      Array.from({ length: 30_000 }, (_, index) => `BROAD_MARKER_${index}`).join("\n"),
+      Array.from(
+        { length: 30_000 },
+        (_, index) => `BROAD_MARKER_${index}`,
+      ).join("\n"),
       "utf8",
     );
     const tool = createSearchCodeTool();

@@ -11,10 +11,13 @@ describe("automation inspection CLI adapter", () => {
   it("resolves the ACP MCP command from the runtime environment", () => {
     expect(
       resolveAutomationInspectionMcpCommand({
-        [AUTOMATION_INSPECTION_MCP_COMMAND_ENV]: "  /usr/local/bin/pwragent-mcp  ",
+        [AUTOMATION_INSPECTION_MCP_COMMAND_ENV]:
+          "  /usr/local/bin/pwragent-mcp  ",
       } as NodeJS.ProcessEnv),
     ).toBe("/usr/local/bin/pwragent-mcp");
-    expect(resolveAutomationInspectionMcpCommand({} as NodeJS.ProcessEnv)).toBeUndefined();
+    expect(
+      resolveAutomationInspectionMcpCommand({} as NodeJS.ProcessEnv),
+    ).toBeUndefined();
   });
 
   it("builds ACP MCP server config only when MCP and session context are available", () => {
@@ -73,7 +76,7 @@ describe("automation inspection CLI adapter", () => {
         "--thread-id",
         "agent-thread",
         "--args",
-        "{\"limit\":1}",
+        '{"limit":1}',
       ],
       handler: (request) => {
         expect(request).toEqual({

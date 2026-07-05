@@ -31,10 +31,7 @@ import type {
   AgentToolDefinition,
   AgentToolDispatchResult,
 } from "./agent-tool-definition.js";
-import {
-  agentToolFailure,
-  agentToolSuccess,
-} from "./agent-tool-definition.js";
+import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 
 export const PWRAGENT_THREAD_ORCHESTRATION_UNAVAILABLE_MESSAGE =
@@ -56,7 +53,8 @@ export function buildPwrAgentThreadOrchestrationToolRouter(
     }),
     {
       unsupportedMessage:
-        options.unsupportedMessage ?? "Unsupported PwrAgent thread handoff tool.",
+        options.unsupportedMessage
+        ?? "Unsupported PwrAgent thread handoff tool.",
     },
   );
 }
@@ -264,8 +262,7 @@ function inputSchemaForOperation(
           strategy: {
             type: "string",
             enum: THREAD_WORKSPACE_HANDOFF_STRATEGIES,
-            description:
-              `Optional workspace handoff branch strategy using the existing PwrAgent workspace handoff vocabulary. Defaults to ${DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY} unless leaveLocalBranch or newBranchName implies a branch strategy.`,
+            description: `Optional workspace handoff branch strategy using the existing PwrAgent workspace handoff vocabulary. Defaults to ${DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY} unless leaveLocalBranch or newBranchName implies a branch strategy.`,
           },
           repositoryPath: {
             type: "string",
@@ -302,7 +299,8 @@ function inputSchemaForOperation(
           },
           threadId: {
             type: "string",
-            description: "Existing target thread id that should receive the prompt.",
+            description:
+              "Existing target thread id that should receive the prompt.",
           },
           prompt: {
             type: "string",
@@ -486,7 +484,9 @@ function normalizeHandoffTaskArgs(
           ) as HandoffTaskWorkspaceMode,
         }
       : {}),
-    ...(readTrimmedString(args.cwd) ? { cwd: readTrimmedString(args.cwd) } : {}),
+    ...(readTrimmedString(args.cwd)
+      ? { cwd: readTrimmedString(args.cwd) }
+      : {}),
     ...(readChoice(
       args.messagingAttachment,
       HANDOFF_TASK_MESSAGING_ATTACHMENT_MODES,
@@ -499,7 +499,11 @@ function normalizeHandoffTaskArgs(
         }
       : {}),
     ...(readTrimmedString(args.backend)
-      ? { backend: readTrimmedString(args.backend) as HandoffTaskToolArgs["backend"] }
+      ? {
+          backend: readTrimmedString(
+            args.backend,
+          ) as HandoffTaskToolArgs["backend"],
+        }
       : {}),
     ...(readTrimmedString(args.model)
       ? { model: readTrimmedString(args.model) }
@@ -610,7 +614,9 @@ function normalizeMoveThreadWorkspaceArgs(
   return {
     direction,
     ...(strategy ? { strategy } : {}),
-    ...(backend ? { backend: backend as MoveThreadWorkspaceToolArgs["backend"] } : {}),
+    ...(backend
+      ? { backend: backend as MoveThreadWorkspaceToolArgs["backend"] }
+      : {}),
     ...(repositoryPath ? { repositoryPath } : {}),
     ...(sourcePath ? { sourcePath } : {}),
     ...(sourceBranch ? { sourceBranch } : {}),

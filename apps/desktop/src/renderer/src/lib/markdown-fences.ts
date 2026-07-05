@@ -15,7 +15,9 @@ export type BacktickFenceLine = {
 // spaces of indent, an optional info string). Returns undefined for non-fence
 // lines. Variable length matters: a closing fence must be at least as long as
 // its opener, which is what lets a 3-backtick fence live inside a 4-backtick one.
-export function parseBacktickFenceLine(line: string): BacktickFenceLine | undefined {
+export function parseBacktickFenceLine(
+  line: string,
+): BacktickFenceLine | undefined {
   const match = /^( {0,3})(`{3,})([^`\r\n]*?)[ \t]*(\r?)$/.exec(line);
   if (!match) {
     return undefined;
@@ -94,7 +96,10 @@ export function repairNestedLanguageFences(markdown: string): string {
     }
 
     const repairedFenceLength = maxFenceLength + 1;
-    lines[index] = replaceBacktickFenceLine(lines[index] ?? "", repairedFenceLength);
+    lines[index] = replaceBacktickFenceLine(
+      lines[index] ?? "",
+      repairedFenceLength,
+    );
     lines[closeIndex] = replaceBacktickFenceLine(
       lines[closeIndex] ?? "",
       repairedFenceLength,

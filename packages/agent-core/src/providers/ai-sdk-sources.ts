@@ -28,7 +28,9 @@ export function normalizeAiSdkSources(value: unknown): ProviderSource[] {
   });
 }
 
-export function normalizeProviderMetadata(value: unknown): Record<string, unknown> | undefined {
+export function normalizeProviderMetadata(
+  value: unknown,
+): Record<string, unknown> | undefined {
   return readRecord(value);
 }
 

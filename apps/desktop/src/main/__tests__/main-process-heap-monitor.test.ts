@@ -22,7 +22,9 @@ type MainProcessHeapReading = {
 type SessionStub = ReturnType<typeof createSessionStub>;
 
 function createMonitorConfig(
-  overrides?: Partial<Extract<ReturnType<typeof resolveHeapMonitorConfig>, { enabled: true }>>,
+  overrides?: Partial<
+    Extract<ReturnType<typeof resolveHeapMonitorConfig>, { enabled: true }>
+  >,
 ) {
   const config = resolveHeapMonitorConfig({
     env: {
@@ -75,7 +77,9 @@ function createSessionStub() {
   };
 }
 
-function createReading(overrides: Partial<MainProcessHeapReading>): MainProcessHeapReading {
+function createReading(
+  overrides: Partial<MainProcessHeapReading>,
+): MainProcessHeapReading {
   return {
     heapUsed: 100,
     heapTotal: 200,
@@ -112,7 +116,10 @@ async function advance(ms: number) {
 
 async function waitForEvent(
   eventsPath: string,
-  predicate: (event: { type?: string; detail?: Record<string, unknown> }) => boolean,
+  predicate: (event: {
+    type?: string;
+    detail?: Record<string, unknown>;
+  }) => boolean,
 ): Promise<void> {
   const deadline = Date.now() + 1_000;
   let lastError: unknown;
@@ -123,7 +130,13 @@ async function waitForEvent(
         .trim()
         .split("\n")
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as { type?: string; detail?: Record<string, unknown> });
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              type?: string;
+              detail?: Record<string, unknown>;
+            },
+        );
       if (events.some(predicate)) {
         return;
       }
@@ -186,9 +199,24 @@ describe("MainProcessHeapMonitor", () => {
     await advance(5);
 
     expect(session.samples).toEqual([
-      expect.objectContaining({ source: "main", usedSize: 100, isBaseline: true, deltaBytes: null }),
-      expect.objectContaining({ source: "main", usedSize: 120, isBaseline: false, deltaBytes: 20 }),
-      expect.objectContaining({ source: "main", usedSize: 125, isBaseline: false, deltaBytes: 5 }),
+      expect.objectContaining({
+        source: "main",
+        usedSize: 100,
+        isBaseline: true,
+        deltaBytes: null,
+      }),
+      expect.objectContaining({
+        source: "main",
+        usedSize: 120,
+        isBaseline: false,
+        deltaBytes: 20,
+      }),
+      expect.objectContaining({
+        source: "main",
+        usedSize: 125,
+        isBaseline: false,
+        deltaBytes: 5,
+      }),
     ]);
 
     await monitor.stop();
@@ -196,7 +224,9 @@ describe("MainProcessHeapMonitor", () => {
 
   it("captures the baseline immediately when settle delay is zero", async () => {
     const session = createSessionStub();
-    const readHeap = createHeapReader([createReading({ heapUsed: 100, heapTotal: 200 })]);
+    const readHeap = createHeapReader([
+      createReading({ heapUsed: 100, heapTotal: 200 }),
+    ]);
 
     const monitor = new MainProcessHeapMonitor({
       session: session.session,
@@ -253,10 +283,7 @@ describe("MainProcessHeapMonitor", () => {
       // The monitor builds the snapshot path with path.join(directoryPath,
       // filename), which uses native separators (backslashes on Windows), so
       // build the expectation the same way instead of a forward-slash literal.
-      path.join(
-        session.session.directoryPath,
-        "main-heap-0001.heapsnapshot",
-      ),
+      path.join(session.session.directoryPath, "main-heap-0001.heapsnapshot"),
     );
     expect(session.snapshotFiles).toEqual(["main-heap-0001.heapsnapshot"]);
     expect(session.events).toEqual(
@@ -401,12 +428,15 @@ describe("MainProcessHeapMonitor", () => {
     await waitForEvent(
       created.session.eventsPath,
       (event) =>
-        event.type === "snapshot-completed" &&
-        event.detail?.filename === "main-heap-0001.heapsnapshot",
+        event.type === "snapshot-completed"
+        && event.detail?.filename === "main-heap-0001.heapsnapshot",
     );
 
     const eventLines = (
-      await fs.readFile(path.join(created.session.directoryPath, "events.ndjson"), "utf8")
+      await fs.readFile(
+        path.join(created.session.directoryPath, "events.ndjson"),
+        "utf8",
+      )
     )
       .trim()
       .split("\n")

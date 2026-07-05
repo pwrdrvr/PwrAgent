@@ -19,7 +19,9 @@ export function SkillChip(props: SkillChipProps) {
       <span aria-hidden="true" className="thread-row__chip-icon">
         🧰
       </span>
-      <span className="skill-chip__label">{props.label ?? `$${props.skill.name}`}</span>
+      <span className="skill-chip__label">
+        {props.label ?? `$${props.skill.name}`}
+      </span>
       {props.onRemove ? (
         <button
           aria-label={`Remove $${props.skill.name}`}

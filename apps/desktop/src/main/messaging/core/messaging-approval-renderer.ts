@@ -20,7 +20,8 @@ export function buildApprovalIntent(params: {
   id: string;
   request: AppServerPendingRequestNotification;
 }): MessagingApprovalIntent {
-  const prompt = stringField(params.request.params.prompt) ?? "Approve this action?";
+  const prompt =
+    stringField(params.request.params.prompt) ?? "Approve this action?";
   const command = extractCommand(params.request.params);
   const context = buildPendingRequestApprovalContext(params.request, {
     directoryPaths: params.directoryPaths,
@@ -41,7 +42,12 @@ export function buildApprovalIntent(params: {
     body: [
       prompt,
       command
-        ? ["Command:", "```shell", stripDisplayShellWrapper(command), "```"].join("\n")
+        ? [
+            "Command:",
+            "```shell",
+            stripDisplayShellWrapper(command),
+            "```",
+          ].join("\n")
         : undefined,
       fileContext ? ["Context:", fileContext].join("\n") : undefined,
       replyInstruction.body,
@@ -94,7 +100,9 @@ function approvalReplyInstruction(
   if (decisions.some((decision) => decision.decision === "accept")) {
     examples.add("yes");
   }
-  if (decisions.some((decision) => decision.decision === "accept_for_session")) {
+  if (
+    decisions.some((decision) => decision.decision === "accept_for_session")
+  ) {
     examples.add("yes for this session");
   }
   if (
@@ -133,12 +141,12 @@ function extractCommand(
   params: AppServerPendingRequestNotification["params"],
 ): string | undefined {
   const promptCommand =
-    commandFromApprovalText(stringField(params.prompt)) ??
-    commandFromApprovalText(stringField(params.reason));
+    commandFromApprovalText(stringField(params.prompt))
+    ?? commandFromApprovalText(stringField(params.reason));
   const direct =
-    stringField(params.command) ??
-    stringField(params.shellCommand) ??
-    stringField(params.commandText);
+    stringField(params.command)
+    ?? stringField(params.shellCommand)
+    ?? stringField(params.commandText);
   if (direct && !isGenericShellToolTitle(direct)) {
     return direct;
   }
@@ -153,9 +161,9 @@ function extractCommand(
   if (command && typeof command === "object" && !Array.isArray(command)) {
     const record = command as Record<string, unknown>;
     return (
-      stringField(record.command) ??
-      stringField(record.cmd) ??
-      stringField(record.text)
+      stringField(record.command)
+      ?? stringField(record.cmd)
+      ?? stringField(record.text)
     );
   }
 
@@ -206,7 +214,9 @@ function approvalContextMarkdown(
   } else if (fileContexts.length > 1) {
     lines.push("Files:");
     for (const file of fileContexts) {
-      lines.push(`- ${file.displayPath}${file.action ? ` (${file.action})` : ""}`);
+      lines.push(
+        `- ${file.displayPath}${file.action ? ` (${file.action})` : ""}`,
+      );
     }
   } else if (context.displayPath) {
     lines.push(`File: ${context.displayPath}`);
@@ -235,12 +245,20 @@ function summarizeApprovalDiffs(
 ): string | undefined {
   if (files.length) {
     const filesWithDiff = files.filter((file) =>
-      Boolean(file.diff || file.diffRef || file.diffRefs?.length || file.omittedReason),
+      Boolean(
+        file.diff
+        || file.diffRef
+        || file.diffRefs?.length
+        || file.omittedReason,
+      ),
     );
     if (!filesWithDiff.length) {
       return undefined;
     }
-    const totals = filesWithDiff.reduce<{ additions: number; removals: number }>(
+    const totals = filesWithDiff.reduce<{
+      additions: number;
+      removals: number;
+    }>(
       (sum, file) => {
         const counted = countDiffLines(file.diff);
         return {
@@ -284,7 +302,9 @@ function countDiffLines(diff: string | undefined): {
 }
 
 function stripDisplayShellWrapper(command: string): string {
-  const match = /^\/bin\/(?:zsh|bash|sh)\s+-lc\s+(['"])([\s\S]*)\1$/.exec(command.trim());
+  const match = /^\/bin\/(?:zsh|bash|sh)\s+-lc\s+(['"])([\s\S]*)\1$/.exec(
+    command.trim(),
+  );
   return match?.[2] ?? command;
 }
 

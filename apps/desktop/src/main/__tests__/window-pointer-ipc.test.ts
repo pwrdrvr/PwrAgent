@@ -11,9 +11,11 @@ vi.mock("electron", () => ({
     fromWebContents: fromWebContentsMock,
   },
   ipcMain: {
-    handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
-      handlers.set(channel, handler);
-    }),
+    handle: vi.fn(
+      (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
+        handlers.set(channel, handler);
+      },
+    ),
     removeHandler: vi.fn((channel: string) => {
       handlers.delete(channel);
     }),
@@ -33,9 +35,12 @@ describe("window pointer ipc", () => {
   });
 
   it("returns cursor position and sender content bounds", async () => {
-    const { registerWindowPointerIpcHandlers, disposeWindowPointerIpcHandlers } =
-      await import("../ipc/window-pointer");
-    const { WINDOW_POINTER_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const {
+      registerWindowPointerIpcHandlers,
+      disposeWindowPointerIpcHandlers,
+    } = await import("../ipc/window-pointer");
+    const { WINDOW_POINTER_SNAPSHOT_CHANNEL } =
+      await import("../../shared/ipc");
 
     getContentBoundsMock.mockReturnValue({
       height: 800,

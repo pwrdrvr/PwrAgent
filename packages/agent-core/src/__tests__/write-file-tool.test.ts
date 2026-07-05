@@ -17,13 +17,19 @@ describe("write_file tool", () => {
     const tool = createWriteFileTool();
 
     const result = await tool.execute(
-      tool.parseArguments({ path: "src/new-file.ts", content: "export const value = 1;\n" }),
+      tool.parseArguments({
+        path: "src/new-file.ts",
+        content: "export const value = 1;\n",
+      }),
       { cwd: workspace.path, approvalPolicy: "never" },
     );
 
-    expect(await fs.readFile(path.join(workspace.path, "src", "new-file.ts"), "utf8")).toBe(
-      "export const value = 1;\n",
-    );
+    expect(
+      await fs.readFile(
+        path.join(workspace.path, "src", "new-file.ts"),
+        "utf8",
+      ),
+    ).toBe("export const value = 1;\n");
     expect(result).toEqual({
       success: true,
       output: "Created src/new-file.ts.",
@@ -50,7 +56,9 @@ describe("write_file tool", () => {
       },
     );
 
-    await expect(fs.stat(path.join(workspace.path, "src", "new-file.ts"))).rejects.toThrow();
+    await expect(
+      fs.stat(path.join(workspace.path, "src", "new-file.ts")),
+    ).rejects.toThrow();
     expect(requestApproval).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "fileChange",

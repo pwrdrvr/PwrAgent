@@ -55,19 +55,20 @@ export type TranscriptImageFileResolution =
   | { ok: true; path: string; mimeType: string }
   | { ok: false; status: number; message: string };
 
-const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies = {
-  resolveRoot: ({ backend, threadId }) =>
-    resolveActiveProfilePath(
-      path.join(
-        "state",
-        "thread-images",
-        encodePathSegment(backend),
-        encodePathSegment(threadId),
+const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
+  {
+    resolveRoot: ({ backend, threadId }) =>
+      resolveActiveProfilePath(
+        path.join(
+          "state",
+          "thread-images",
+          encodePathSegment(backend),
+          encodePathSegment(threadId),
+        ),
       ),
-    ),
-  mkdir,
-  writeFile,
-};
+    mkdir,
+    writeFile,
+  };
 
 export function toTranscriptImageProtocolUrl(src: string): string {
   return `pwragent-image://file/${encodeURIComponent(src)}`;
@@ -152,7 +153,9 @@ async function materializeTranscriptEntryImageUrls(
   )) as AppServerThreadMessageEntry;
 }
 
-async function materializeTranscriptMessageImageUrls<T extends AppServerThreadMessage>(
+async function materializeTranscriptMessageImageUrls<
+  T extends AppServerThreadMessage,
+>(
   message: T,
   response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
@@ -209,10 +212,15 @@ async function materializeTranscriptMessagePartImageUrl(
   });
   try {
     await deps.mkdir(root, { recursive: true });
-    const filePath = path.join(root, `${dataImage.sha256}.${dataImage.extension}`);
+    const filePath = path.join(
+      root,
+      `${dataImage.sha256}.${dataImage.extension}`,
+    );
     let writePromise = materializedFileWrites.get(filePath);
     if (!writePromise) {
-      writePromise = deps.writeFile(filePath, dataImage.buffer).then(() => undefined);
+      writePromise = deps
+        .writeFile(filePath, dataImage.buffer)
+        .then(() => undefined);
       materializedFileWrites.set(filePath, writePromise);
     }
     await writePromise;
@@ -226,18 +234,26 @@ async function materializeTranscriptMessagePartImageUrl(
   }
 }
 
-function rewriteTranscriptEntryImageUrls(entry: AppServerThreadEntry): AppServerThreadEntry {
+function rewriteTranscriptEntryImageUrls(
+  entry: AppServerThreadEntry,
+): AppServerThreadEntry {
   if (entry.type !== "message") {
     return entry;
   }
 
-  return rewriteTranscriptMessageImageUrls(entry) as AppServerThreadMessageEntry;
+  return rewriteTranscriptMessageImageUrls(
+    entry,
+  ) as AppServerThreadMessageEntry;
 }
 
 function rewriteTranscriptMessageImageUrls<T extends AppServerThreadMessage>(
   message: T,
 ): T {
-  if (!message.parts?.some((part) => part.type === "image" && isFileImageUrl(part.url))) {
+  if (
+    !message.parts?.some(
+      (part) => part.type === "image" && isFileImageUrl(part.url),
+    )
+  ) {
     return message;
   }
 
@@ -300,7 +316,9 @@ export async function resolveTranscriptImageProtocolRequest(
   return await resolveTranscriptImageFile(sourcePath, options);
 }
 
-function decodeTranscriptImageProtocolRequest(requestUrl: string): string | undefined {
+function decodeTranscriptImageProtocolRequest(
+  requestUrl: string,
+): string | undefined {
   let parsed: URL;
   try {
     parsed = new URL(requestUrl);
@@ -309,8 +327,8 @@ function decodeTranscriptImageProtocolRequest(requestUrl: string): string | unde
   }
 
   if (
-    parsed.protocol !== `${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}:` ||
-    parsed.hostname !== "file"
+    parsed.protocol !== `${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}:`
+    || parsed.hostname !== "file"
   ) {
     return undefined;
   }
@@ -344,7 +362,11 @@ async function resolveTranscriptImageFile(
 ): Promise<TranscriptImageFileResolution> {
   const mimeType = mimeTypeForImagePath(sourcePath);
   if (!mimeType) {
-    return { ok: false, status: 415, message: "unsupported transcript image type" };
+    return {
+      ok: false,
+      status: 415,
+      message: "unsupported transcript image type",
+    };
   }
 
   let resolvedPath: string;
@@ -366,7 +388,11 @@ async function resolveTranscriptImageFile(
   }
 
   if (!(await isAllowedTranscriptImagePath(resolvedPath, options))) {
-    return { ok: false, status: 403, message: "transcript image path is not allowed" };
+    return {
+      ok: false,
+      status: 403,
+      message: "transcript image path is not allowed",
+    };
   }
 
   return { ok: true, path: resolvedPath, mimeType };
@@ -393,7 +419,9 @@ async function isAllowedTranscriptImagePath(
   return false;
 }
 
-function collectTranscriptImageRoots(options?: TranscriptImageProtocolOptions): string[] {
+function collectTranscriptImageRoots(
+  options?: TranscriptImageProtocolOptions,
+): string[] {
   const env = options?.env ?? process.env;
   const homeDir = options?.homeDir ?? os.homedir();
   const roots = new Set<string>();
@@ -409,10 +437,10 @@ function collectTranscriptImageRoots(options?: TranscriptImageProtocolOptions): 
 function isPathInsideRoot(targetPath: string, rootPath: string): boolean {
   const relativePath = path.relative(rootPath, targetPath);
   return (
-    relativePath === "" ||
-    (relativePath !== "" &&
-      !relativePath.startsWith("..") &&
-      !path.isAbsolute(relativePath))
+    relativePath === ""
+    || (relativePath !== ""
+      && !relativePath.startsWith("..")
+      && !path.isAbsolute(relativePath))
   );
 }
 
@@ -423,9 +451,8 @@ function mimeTypeForImagePath(filePath: string): string | undefined {
 function parseSupportedImageDataUrl(
   url: string,
 ): { buffer: Buffer; extension: string; sha256: string } | undefined {
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(
-    url,
-  );
+  const match =
+    /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(url);
   if (!match) {
     return undefined;
   }

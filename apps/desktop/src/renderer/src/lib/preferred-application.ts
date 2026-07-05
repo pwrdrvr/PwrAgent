@@ -16,8 +16,9 @@ export function resolvePreferredEditor(
   return (
     applications?.editors.find(
       (application) =>
-        application.canOpenWorkspace &&
-        application.id === applications?.preferredEditorId.value,
-    ) ?? applications?.editors.find((application) => application.canOpenWorkspace)
+        application.canOpenWorkspace
+        && application.id === applications?.preferredEditorId.value,
+    )
+    ?? applications?.editors.find((application) => application.canOpenWorkspace)
   );
 }

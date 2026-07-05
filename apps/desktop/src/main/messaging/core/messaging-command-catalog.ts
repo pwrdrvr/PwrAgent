@@ -129,10 +129,10 @@ export function formatMessagingCommandHelpBody(options?: {
   const footer =
     options?.invocationFooter
     ?? "You can also mention the bot with a command, like @bot new.";
-  const lines = catalog.map(
-    (spec) => `/${spec.verb} - ${spec.description}`,
+  const lines = catalog.map((spec) => `/${spec.verb} - ${spec.description}`);
+  return ["Send a command or tap a button.", "", ...lines, "", footer].join(
+    "\n",
   );
-  return ["Send a command or tap a button.", "", ...lines, "", footer].join("\n");
 }
 
 /**
@@ -217,9 +217,7 @@ export type MessagingCommandHelpPage = {
  * Returns 0 when the profile has fewer than `HELP_NAV_ACTION_COUNT`
  * action slots — the caller falls back to text-only rendering.
  */
-export function helpPageSize(
-  profile?: MessagingCapabilityProfile,
-): number {
+export function helpPageSize(profile?: MessagingCapabilityProfile): number {
   if (!profile) {
     return HELP_PAGE_SIZE;
   }

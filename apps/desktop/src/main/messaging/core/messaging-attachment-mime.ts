@@ -78,7 +78,10 @@ export function classifyMessagingAttachment(params: {
   }
   if (TEXT_EXTENSIONS.has(extension)) {
     return isProbablyUtf8Text(params.data)
-      ? { kind: "text", mimeType: mimeType ?? mimeTypeForTextExtension(extension) }
+      ? {
+          kind: "text",
+          mimeType: mimeType ?? mimeTypeForTextExtension(extension),
+        }
       : { kind: "binary", mimeType };
   }
 
@@ -87,7 +90,9 @@ export function classifyMessagingAttachment(params: {
     : { kind: "binary", mimeType };
 }
 
-export function decodeMessagingTextAttachment(data: Uint8Array): string | undefined {
+export function decodeMessagingTextAttachment(
+  data: Uint8Array,
+): string | undefined {
   if (!isProbablyUtf8Text(data)) {
     return undefined;
   }
@@ -99,10 +104,10 @@ function classifyMagicBytes(
 ): MessagingAttachmentClassification | undefined {
   if (data.length >= 4) {
     if (
-      data[0] === 0x89 &&
-      data[1] === 0x50 &&
-      data[2] === 0x4e &&
-      data[3] === 0x47
+      data[0] === 0x89
+      && data[1] === 0x50
+      && data[2] === 0x4e
+      && data[3] === 0x47
     ) {
       return { kind: "image", mimeType: "image/png" };
     }
@@ -110,18 +115,18 @@ function classifyMagicBytes(
       return { kind: "image", mimeType: "image/jpeg" };
     }
     if (
-      data[0] === 0x47 &&
-      data[1] === 0x49 &&
-      data[2] === 0x46 &&
-      data[3] === 0x38
+      data[0] === 0x47
+      && data[1] === 0x49
+      && data[2] === 0x46
+      && data[3] === 0x38
     ) {
       return { kind: "gif", mimeType: "image/gif" };
     }
     if (
-      data[0] === 0x25 &&
-      data[1] === 0x50 &&
-      data[2] === 0x44 &&
-      data[3] === 0x46
+      data[0] === 0x25
+      && data[1] === 0x50
+      && data[2] === 0x44
+      && data[3] === 0x46
     ) {
       return { kind: "pdf", mimeType: "application/pdf" };
     }
@@ -131,8 +136,8 @@ function classifyMagicBytes(
 
 function isTextLikeMimeType(mimeType: string): boolean {
   return (
-    mimeType.startsWith("text/") ||
-    [
+    mimeType.startsWith("text/")
+    || [
       "application/json",
       "application/jsonl",
       "application/toml",

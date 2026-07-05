@@ -12,7 +12,9 @@ export type ModelInteractionMapperClient = {
 };
 
 export class ModelInteractionMapper implements MessagingInteractionMapper {
-  constructor(private readonly client: ModelInteractionMapperClient | undefined) {}
+  constructor(
+    private readonly client: ModelInteractionMapperClient | undefined,
+  ) {}
 
   async mapText(): Promise<MessagingInteractionMapperResult> {
     return {

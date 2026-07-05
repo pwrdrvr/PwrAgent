@@ -85,7 +85,12 @@ describe("ProviderStatusPanel", () => {
   });
 
   it("renders a backend error when status is unavailable", () => {
-    render(<ProviderStatusPanel backends={[]} backendError="App servers unreachable" />);
+    render(
+      <ProviderStatusPanel
+        backends={[]}
+        backendError="App servers unreachable"
+      />,
+    );
 
     expect(screen.getByText("App servers unreachable")).toBeInTheDocument();
   });

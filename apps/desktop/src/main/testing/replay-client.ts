@@ -109,9 +109,7 @@ export class ReplayClient {
     (notification: AppServerNotification) => void | Promise<void>
   >();
   private readonly requestListeners = new Set<
-    (
-      request: AppServerPendingRequestNotification
-    ) => Promise<unknown> | unknown
+    (request: AppServerPendingRequestNotification) => Promise<unknown> | unknown
   >();
   private initializeResult?: InitializeResult;
   private initializePromise?: Promise<InitializeResult>;
@@ -147,7 +145,10 @@ export class ReplayClient {
   ) {}
 
   static fromFixture(fixture: ReplayFixture): ReplayClient {
-    return new ReplayClient(new ReplayController(fixture), fixture.metadata.backend);
+    return new ReplayClient(
+      new ReplayController(fixture),
+      fixture.metadata.backend,
+    );
   }
 
   async close(): Promise<void> {
@@ -183,7 +184,7 @@ export class ReplayClient {
   }
 
   onNotification(
-    listener: (notification: AppServerNotification) => void | Promise<void>
+    listener: (notification: AppServerNotification) => void | Promise<void>,
   ): () => void {
     this.notificationListeners.add(listener);
     return () => {
@@ -193,8 +194,8 @@ export class ReplayClient {
 
   onRequest(
     listener: (
-      request: AppServerPendingRequestNotification
-    ) => Promise<unknown> | unknown
+      request: AppServerPendingRequestNotification,
+    ) => Promise<unknown> | unknown,
   ): () => void {
     this.requestListeners.add(listener);
     return () => {
@@ -208,7 +209,9 @@ export class ReplayClient {
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]> {
     await this.ensureInitialized();
-    return asThreadReplay(this.controller.consumeResponse("thread/read").result);
+    return asThreadReplay(
+      this.controller.consumeResponse("thread/read").result,
+    );
   }
 
   async archiveThread(params: {
@@ -300,10 +303,12 @@ export class ReplayClient {
     return { threadId: params.threadId };
   }
 
-  async advance(params: {
-    stepId?: string;
-    override?: ReplayStepOverride;
-  } = {}): Promise<void> {
+  async advance(
+    params: {
+      stepId?: string;
+      override?: ReplayStepOverride;
+    } = {},
+  ): Promise<void> {
     const step = this.controller.advance(params);
     if (step.kind === "notification") {
       for (const listener of this.notificationListeners) {
@@ -378,7 +383,9 @@ export class ReplayClient {
 
     if (!this.initializePromise) {
       this.initializePromise = Promise.resolve(
-        asInitializeResult(this.controller.consumeResponse("initialize").result)
+        asInitializeResult(
+          this.controller.consumeResponse("initialize").result,
+        ),
       ).then((result) => {
         this.initializeResult = result;
         return result;

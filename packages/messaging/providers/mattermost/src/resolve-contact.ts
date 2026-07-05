@@ -66,9 +66,10 @@ export async function resolveContact(
     if (!response.ok) {
       const body = await safeReadText(response);
       return {
-        status: response.status === 403 || response.status === 404
-          ? "not_found"
-          : "failed",
+        status:
+          response.status === 403 || response.status === 404
+            ? "not_found"
+            : "failed",
         id: request.id,
         errorMessage: clipMessagingValidationError(
           `HTTP ${response.status} ${response.statusText || ""} ${body}`.trim(),
@@ -100,8 +101,10 @@ export async function resolveContact(
 function buildUserUrl(serverUrl: string, userId: string): string | undefined {
   try {
     const base = new URL(serverUrl);
-    return new URL(`/api/v4/users/${encodeURIComponent(userId)}`, base)
-      .toString();
+    return new URL(
+      `/api/v4/users/${encodeURIComponent(userId)}`,
+      base,
+    ).toString();
   } catch {
     return undefined;
   }
@@ -113,17 +116,20 @@ function formatMattermostDisplayName(
   const fullName = [
     sanitizeOptionalContactLabel(user.first_name),
     sanitizeOptionalContactLabel(user.last_name),
-  ].filter(Boolean).join(" ");
-  const name = sanitizeOptionalContactLabel(user.nickname)
-    || fullName
-    || undefined;
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const name =
+    sanitizeOptionalContactLabel(user.nickname) || fullName || undefined;
   const username = sanitizeOptionalContactLabel(user.username);
   const handle = formatContactHandle(user.username);
   if (name && handle && name !== username) return `${name} (${handle})`;
   return name ?? handle ?? sanitizeOptionalContactLabel(user.id);
 }
 
-function sanitizeOptionalContactLabel(value: string | undefined): string | undefined {
+function sanitizeOptionalContactLabel(
+  value: string | undefined,
+): string | undefined {
   const sanitized = sanitizeMessagingContactLabel(value);
   return sanitized || undefined;
 }

@@ -22,8 +22,8 @@ export function sortSubthreadSummaries<T extends SubthreadChild>(
     const rightRank = order.get(right.id);
     if (leftRank !== undefined || rightRank !== undefined) {
       return (
-        (leftRank ?? Number.MAX_SAFE_INTEGER) -
-        (rightRank ?? Number.MAX_SAFE_INTEGER)
+        (leftRank ?? Number.MAX_SAFE_INTEGER)
+        - (rightRank ?? Number.MAX_SAFE_INTEGER)
       );
     }
     return (right.createdAt ?? 0) - (left.createdAt ?? 0);

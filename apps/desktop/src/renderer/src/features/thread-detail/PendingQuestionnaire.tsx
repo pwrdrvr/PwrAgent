@@ -40,11 +40,16 @@ function resizeFreeformTextarea(element: HTMLTextAreaElement | null): void {
   const borderTop = Number.parseFloat(computed.borderTopWidth) || 0;
   const borderBottom = Number.parseFloat(computed.borderBottomWidth) || 0;
   const maxHeight =
-    lineHeight * FREEFORM_MAX_ROWS + paddingTop + paddingBottom + borderTop + borderBottom;
+    lineHeight * FREEFORM_MAX_ROWS
+    + paddingTop
+    + paddingBottom
+    + borderTop
+    + borderBottom;
   const nextHeight = Math.min(element.scrollHeight, maxHeight);
 
   element.style.height = `${nextHeight}px`;
-  element.style.overflowY = element.scrollHeight > maxHeight ? "auto" : "hidden";
+  element.style.overflowY =
+    element.scrollHeight > maxHeight ? "auto" : "hidden";
 }
 
 export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
@@ -61,18 +66,22 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
     return null;
   }
 
-  const isLastQuestion = props.state.currentIndex === props.state.questions.length - 1;
+  const isLastQuestion =
+    props.state.currentIndex === props.state.questions.length - 1;
   const canMoveNext = canAdvanceQuestionnaire(props.state);
   const canSubmit = canSubmitQuestionnaire(props.state);
 
   return (
-    <div className="transcript-questionnaire" role="group" aria-label="Pending input">
+    <div
+      className="transcript-questionnaire"
+      role="group"
+      aria-label="Pending input"
+    >
       <div className="transcript-questionnaire__header">
-        <span className="chip chip--mode">
-          Input needed
-        </span>
+        <span className="chip chip--mode">Input needed</span>
         <span className="transcript-message__time">
-          Question {props.state.currentIndex + 1} of {props.state.questions.length}
+          Question {props.state.currentIndex + 1} of{" "}
+          {props.state.questions.length}
         </span>
       </div>
 
@@ -97,12 +106,20 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
                 disabled={props.busy}
                 onClick={() => {
                   if (isLastQuestion) {
-                    const answered = answerQuestionnaireOption(props.state, option.key);
+                    const answered = answerQuestionnaireOption(
+                      props.state,
+                      option.key,
+                    );
                     void props.onSubmit(answered);
                     return;
                   }
 
-                  props.onChange(answerQuestionnaireOptionAndAdvance(props.state, option.key));
+                  props.onChange(
+                    answerQuestionnaireOptionAndAdvance(
+                      props.state,
+                      option.key,
+                    ),
+                  );
                 }}
               >
                 <span className="transcript-questionnaire__option-label">
@@ -137,7 +154,9 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
             rows={1}
             onChange={(event) => {
               resizeFreeformTextarea(event.currentTarget);
-              props.onChange(answerQuestionnaireText(props.state, event.target.value));
+              props.onChange(
+                answerQuestionnaireText(props.state, event.target.value),
+              );
             }}
           />
         </label>

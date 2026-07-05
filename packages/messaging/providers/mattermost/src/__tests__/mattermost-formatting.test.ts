@@ -58,12 +58,12 @@ describe("sanitizeMattermostActionId", () => {
 
 describe("styleForMattermostAction", () => {
   it("maps generic styles onto Mattermost keyword set", () => {
-    expect(styleForMattermostAction({ id: "a", label: "A", style: "primary" })).toBe(
-      "primary",
-    );
-    expect(styleForMattermostAction({ id: "a", label: "A", style: "danger" })).toBe(
-      "danger",
-    );
+    expect(
+      styleForMattermostAction({ id: "a", label: "A", style: "primary" }),
+    ).toBe("primary");
+    expect(
+      styleForMattermostAction({ id: "a", label: "A", style: "danger" }),
+    ).toBe("danger");
     expect(
       styleForMattermostAction({ id: "a", label: "A", style: "secondary" }),
     ).toBe("default");
@@ -122,9 +122,21 @@ describe("buildMattermostActions", () => {
     // binding the wrong thread.
     const buttons = buildMattermostActions({
       actions: [
-        { id: "browse:select-thread", label: "1. Knock Knock Rock", value: { threadId: "thread-1" } },
-        { id: "browse:select-thread", label: "2. Wood chuck joke", value: { threadId: "thread-2" } },
-        { id: "browse:select-thread", label: "3. Codex App Server", value: { threadId: "thread-3" } },
+        {
+          id: "browse:select-thread",
+          label: "1. Knock Knock Rock",
+          value: { threadId: "thread-1" },
+        },
+        {
+          id: "browse:select-thread",
+          label: "2. Wood chuck joke",
+          value: { threadId: "thread-2" },
+        },
+        {
+          id: "browse:select-thread",
+          label: "3. Codex App Server",
+          value: { threadId: "thread-3" },
+        },
       ],
       buildCallbackContext: (action) => ({
         actionId: action.id,

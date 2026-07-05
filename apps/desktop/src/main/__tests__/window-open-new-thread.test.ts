@@ -37,11 +37,15 @@ describe("requestOpenNewThread", () => {
     };
 
     getFocusedWindowMock.mockReturnValue(focusedWindow);
-    vi.mocked(subscribersForChannel).mockReturnValue([focusedWindow.webContents]);
+    vi.mocked(subscribersForChannel).mockReturnValue([
+      focusedWindow.webContents,
+    ]);
 
     requestOpenNewThread();
 
-    expect(subscribersForChannel).toHaveBeenCalledWith(WINDOW_OPEN_NEW_THREAD_CHANNEL);
+    expect(subscribersForChannel).toHaveBeenCalledWith(
+      WINDOW_OPEN_NEW_THREAD_CHANNEL,
+    );
     expect(focusedWindow.show).toHaveBeenCalledOnce();
     expect(send).toHaveBeenCalledWith(WINDOW_OPEN_NEW_THREAD_CHANNEL);
   });

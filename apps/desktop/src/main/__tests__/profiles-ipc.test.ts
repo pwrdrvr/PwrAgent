@@ -15,7 +15,9 @@ const spawnMock = vi.fn(() => ({
   unref: vi.fn(),
 }));
 
-const safeStorageEncryptMock = vi.fn((value: string) => Buffer.from(`enc:${value}`));
+const safeStorageEncryptMock = vi.fn((value: string) =>
+  Buffer.from(`enc:${value}`),
+);
 const safeStorageDecryptMock = vi.fn((buf: Buffer) =>
   buf.toString("utf8").replace(/^enc:/, ""),
 );
@@ -120,7 +122,9 @@ describe("profile IPC helpers", () => {
       "personal",
       "work",
     ]);
-    expect(result.profiles.some((profile) => profile.name === "default")).toBe(false);
+    expect(result.profiles.some((profile) => profile.name === "default")).toBe(
+      false,
+    );
   });
 
   it("does not move the startup default row when listing profiles", async () => {
@@ -143,29 +147,22 @@ describe("profile IPC helpers", () => {
     setDefaultProfileName("scratch", { env });
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
-    const {
-      listDesktopPwrAgentProfiles,
-      setDefaultDesktopPwrAgentProfile,
-    } = await import("../ipc/profiles");
+    const { listDesktopPwrAgentProfiles, setDefaultDesktopPwrAgentProfile } =
+      await import("../ipc/profiles");
 
-    expect(listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name)).toEqual([
-      "dev",
-      "default",
-      "scratch",
-      "work",
-    ]);
+    expect(
+      listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name),
+    ).toEqual(["dev", "default", "scratch", "work"]);
 
     setDefaultDesktopPwrAgentProfile({ profile: "work" });
 
-    expect(listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name)).toEqual([
-      "dev",
-      "default",
-      "scratch",
-      "work",
-    ]);
     expect(
-      listDesktopPwrAgentProfiles().profiles.find((profile) => profile.name === "work")
-        ?.default,
+      listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name),
+    ).toEqual(["dev", "default", "scratch", "work"]);
+    expect(
+      listDesktopPwrAgentProfiles().profiles.find(
+        (profile) => profile.name === "work",
+      )?.default,
     ).toBe(true);
   });
 
@@ -250,7 +247,9 @@ describe("profile IPC helpers", () => {
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
     const { createDesktopPwrAgentProfile } = await import("../ipc/profiles");
 
-    const response = createDesktopPwrAgentProfile({ profile: "My Work Profile" });
+    const response = createDesktopPwrAgentProfile({
+      profile: "My Work Profile",
+    });
 
     expect(response.profile).toBe("my-work-profile");
     expect(response.profileDir).toBe(
@@ -321,9 +320,12 @@ describe("profile IPC helpers", () => {
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
       getAppStateModeMock.mockReturnValue("active-profile");
 
-      const { graduateDesktopBootstrapConfigToProfile } = await import("../ipc/profiles");
+      const { graduateDesktopBootstrapConfigToProfile } =
+        await import("../ipc/profiles");
 
-      const result = graduateDesktopBootstrapConfigToProfile({ targetProfile: "personal" });
+      const result = graduateDesktopBootstrapConfigToProfile({
+        targetProfile: "personal",
+      });
 
       expect(result).toEqual({
         graduated: false,
@@ -331,7 +333,9 @@ describe("profile IPC helpers", () => {
         targetProfile: "personal",
       });
       // No profile dir should have been created.
-      expect(fs.existsSync(path.join(root, "profiles", "personal"))).toBe(false);
+      expect(fs.existsSync(path.join(root, "profiles", "personal"))).toBe(
+        false,
+      );
     });
 
     it("returns no-bootstrap-config when bootstrap mode but the dir is missing", async () => {
@@ -339,9 +343,12 @@ describe("profile IPC helpers", () => {
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
       getAppStateModeMock.mockReturnValue("bootstrap");
 
-      const { graduateDesktopBootstrapConfigToProfile } = await import("../ipc/profiles");
+      const { graduateDesktopBootstrapConfigToProfile } =
+        await import("../ipc/profiles");
 
-      const result = graduateDesktopBootstrapConfigToProfile({ targetProfile: "personal" });
+      const result = graduateDesktopBootstrapConfigToProfile({
+        targetProfile: "personal",
+      });
 
       expect(result).toEqual({
         graduated: false,
@@ -362,7 +369,7 @@ describe("profile IPC helpers", () => {
         path.join(bootstrapDir, "config.toml"),
         [
           "[general]",
-          'developer_mode = false',
+          "developer_mode = false",
           "[general.appearance]",
           'theme = "dark"',
           'density = "compact"',
@@ -373,9 +380,12 @@ describe("profile IPC helpers", () => {
         "utf8",
       );
 
-      const { graduateDesktopBootstrapConfigToProfile } = await import("../ipc/profiles");
+      const { graduateDesktopBootstrapConfigToProfile } =
+        await import("../ipc/profiles");
 
-      const result = graduateDesktopBootstrapConfigToProfile({ targetProfile: "personal" });
+      const result = graduateDesktopBootstrapConfigToProfile({
+        targetProfile: "personal",
+      });
 
       expect(result).toEqual({ graduated: true, targetProfile: "personal" });
 
@@ -397,7 +407,10 @@ describe("profile IPC helpers", () => {
       // wizard will run again. The caller (wizard) creates the
       // profile beforehand with seedOnboardingCompleted, so this
       // path is exercised in production.
-      const profilesToml = fs.readFileSync(path.join(root, "profiles.toml"), "utf8");
+      const profilesToml = fs.readFileSync(
+        path.join(root, "profiles.toml"),
+        "utf8",
+      );
       expect(profilesToml).toContain('default_profile = "personal"');
     });
   });
@@ -436,12 +449,19 @@ describe("profile IPC helpers", () => {
       // profile's state.db — open it fresh and verify the secrets
       // table holds the ciphertext we encrypted.
       const { StateDb } = await import("../state/state-db");
-      const db = StateDb.open(path.join(root, "profiles", "personal", "state", "state.db"), {
-        profileName: "personal",
-      });
+      const db = StateDb.open(
+        path.join(root, "profiles", "personal", "state", "state.db"),
+        {
+          profileName: "personal",
+        },
+      );
       try {
-        expect(db.getSecret("grokApiKey")?.toString("utf8")).toBe("enc:xai-fake-key");
-        expect(db.getSecret("telegramBotToken")?.toString("utf8")).toBe("enc:111:bot");
+        expect(db.getSecret("grokApiKey")?.toString("utf8")).toBe(
+          "enc:xai-fake-key",
+        );
+        expect(db.getSecret("telegramBotToken")?.toString("utf8")).toBe(
+          "enc:111:bot",
+        );
       } finally {
         db.close();
       }
@@ -465,9 +485,12 @@ describe("profile IPC helpers", () => {
       });
 
       const { StateDb } = await import("../state/state-db");
-      const db = StateDb.open(path.join(root, "profiles", "personal", "state", "state.db"), {
-        profileName: "personal",
-      });
+      const db = StateDb.open(
+        path.join(root, "profiles", "personal", "state", "state.db"),
+        {
+          profileName: "personal",
+        },
+      );
       try {
         expect(db.getSecret("grokApiKey")).toBeUndefined();
       } finally {
@@ -480,12 +503,12 @@ describe("profile IPC helpers", () => {
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
 
       const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
-    expect(() =>
-      writeDesktopSecretsToProfile({
-        profile: "!!!",
-        secrets: { grokApiKey: "x" },
-      }),
-    ).toThrow(/must contain at least one letter or number/);
+      expect(() =>
+        writeDesktopSecretsToProfile({
+          profile: "!!!",
+          secrets: { grokApiKey: "x" },
+        }),
+      ).toThrow(/must contain at least one letter or number/);
       expect(safeStorageEncryptMock).not.toHaveBeenCalled();
     });
 
@@ -541,9 +564,12 @@ describe("profile IPC helpers", () => {
       expect(safeStorageEncryptMock).not.toHaveBeenCalled();
 
       const { StateDb } = await import("../state/state-db");
-      const db = StateDb.open(path.join(root, "profiles", "personal", "state", "state.db"), {
-        profileName: "personal",
-      });
+      const db = StateDb.open(
+        path.join(root, "profiles", "personal", "state", "state.db"),
+        {
+          profileName: "personal",
+        },
+      );
       try {
         // No ciphertext was written to the secrets table — the
         // typed value was silently dropped, as documented.
@@ -564,7 +590,7 @@ describe("profile IPC helpers", () => {
     ensureNamedProfileExists("scratch", { env });
     fs.writeFileSync(
       path.join(root, "profiles", "scratch", "config.toml"),
-      "[models.codex\nprofile = \"work\"\n",
+      '[models.codex\nprofile = "work"\n',
       "utf8",
     );
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
@@ -575,9 +601,8 @@ describe("profile IPC helpers", () => {
     // listing unconditionally synthesized it. Post-#524 fix: only
     // real on-disk profiles surface, so "default" is absent unless
     // a `default/` dir exists.
-    expect(listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name)).toEqual([
-      "dev",
-      "scratch",
-    ]);
+    expect(
+      listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name),
+    ).toEqual(["dev", "scratch"]);
   });
 });

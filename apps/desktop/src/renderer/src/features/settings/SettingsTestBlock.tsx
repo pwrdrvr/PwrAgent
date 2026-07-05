@@ -49,9 +49,9 @@ export function SettingsTestBlock(props: {
   desktopApi?: DesktopApi;
 }) {
   const desktopApi = props.desktopApi;
-  const [result, setResult] = useState<SettingsCredentialTestResult | undefined>(
-    undefined,
-  );
+  const [result, setResult] = useState<
+    SettingsCredentialTestResult | undefined
+  >(undefined);
   const [testing, setTesting] = useState(false);
 
   // Pull the last result on mount so reopening the panel shows
@@ -75,7 +75,9 @@ export function SettingsTestBlock(props: {
     if (!desktopApi?.testSettingsCredentials) return;
     setTesting(true);
     try {
-      const next = await desktopApi.testSettingsCredentials({ kind: props.kind });
+      const next = await desktopApi.testSettingsCredentials({
+        kind: props.kind,
+      });
       setResult(next);
     } catch (error) {
       setResult({
@@ -96,9 +98,7 @@ export function SettingsTestBlock(props: {
   );
   const blockedByPrereqs = missingRequired.length > 0;
 
-  const status = testing
-    ? "testing"
-    : (result?.status ?? "idle");
+  const status = testing ? "testing" : (result?.status ?? "idle");
   const name = result?.account ?? props.defaultName;
   const sub = blockedByPrereqs
     ? `Enter ${missingRequired.map((item) => item.label).join(" and ")} to run the test.`
@@ -126,7 +126,9 @@ export function SettingsTestBlock(props: {
         </span>
         <button
           className="button button--secondary"
-          disabled={testing || blockedByPrereqs || !desktopApi?.testSettingsCredentials}
+          disabled={
+            testing || blockedByPrereqs || !desktopApi?.testSettingsCredentials
+          }
           type="button"
           onClick={() => {
             void onTest();
@@ -144,7 +146,10 @@ export function SettingsTestBlock(props: {
               }`}
               key={item.label}
             >
-              <span className="settings-testblock__prereq-mark" aria-hidden="true">
+              <span
+                className="settings-testblock__prereq-mark"
+                aria-hidden="true"
+              >
                 {item.met ? "✓" : "○"}
               </span>
               <span className="settings-testblock__prereq-label">

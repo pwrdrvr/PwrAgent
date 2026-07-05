@@ -11,9 +11,14 @@ function makeStructuredResult(object: unknown, cachedTokens?: number) {
 describe("XaiEphemeralObjectCaller", () => {
   it("returns parsed object output from an injected client", async () => {
     const client = {
-      generateObject: vi.fn(async () => makeStructuredResult({ title: "PROJECT-123 crash" }, 42)),
+      generateObject: vi.fn(async () =>
+        makeStructuredResult({ title: "PROJECT-123 crash" }, 42),
+      ),
     };
-    const caller = new XaiEphemeralObjectCaller({ client, model: "grok-test-model" });
+    const caller = new XaiEphemeralObjectCaller({
+      client,
+      model: "grok-test-model",
+    });
 
     const result = await caller.generateObject({
       promptCacheKey: "thread-title-v1",
@@ -64,7 +69,7 @@ describe("XaiEphemeralObjectCaller", () => {
           schema: { type: "object" },
           system: "Return a title.",
           prompt: "Name this thread.",
-        })
+        }),
       ).resolves.toEqual({
         status: "unavailable",
         reason: "xai_unavailable",
@@ -98,7 +103,7 @@ describe("XaiEphemeralObjectCaller", () => {
           schema: { type: "object" },
           system: "Return a title.",
           prompt: "Name this thread.",
-        })
+        }),
       ).resolves.toEqual({
         status: "unavailable",
         reason: "xai_unavailable",
@@ -125,7 +130,7 @@ describe("XaiEphemeralObjectCaller", () => {
         schema: { type: "object" },
         system: "Return a title.",
         prompt: "Name this thread.",
-      })
+      }),
     ).resolves.toEqual({
       status: "failed",
       reason: "timeout",

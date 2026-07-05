@@ -69,9 +69,8 @@ afterEach(() => {
 describe("auxiliary window chrome", () => {
   it("trades native fullscreen for windowed zoom on macOS secondary windows", async () => {
     setPlatform("darwin");
-    const { auxiliaryWindowChromeOptions } = await import(
-      "../auxiliary-window-chrome"
-    );
+    const { auxiliaryWindowChromeOptions } =
+      await import("../auxiliary-window-chrome");
 
     const options = auxiliaryWindowChromeOptions();
 
@@ -84,9 +83,8 @@ describe("auxiliary window chrome", () => {
 
   it("does not constrain fullscreen/maximize on Linux secondary windows", async () => {
     setPlatform("linux");
-    const { auxiliaryWindowChromeOptions } = await import(
-      "../auxiliary-window-chrome"
-    );
+    const { auxiliaryWindowChromeOptions } =
+      await import("../auxiliary-window-chrome");
 
     const options = auxiliaryWindowChromeOptions();
 
@@ -97,9 +95,8 @@ describe("auxiliary window chrome", () => {
   it("retries Linux raises after the window has had time to map", async () => {
     vi.useFakeTimers();
     setPlatform("linux");
-    const { showAndFocusAuxiliaryWindow } = await import(
-      "../auxiliary-window-chrome"
-    );
+    const { showAndFocusAuxiliaryWindow } =
+      await import("../auxiliary-window-chrome");
     const window = createWindow();
 
     showAndFocusAuxiliaryWindow(window);
@@ -125,9 +122,8 @@ describe("auxiliary window chrome", () => {
   it("uses moveTop without delayed retries when the platform supports it", async () => {
     vi.useFakeTimers();
     setPlatform("darwin");
-    const { showAndFocusAuxiliaryWindow } = await import(
-      "../auxiliary-window-chrome"
-    );
+    const { showAndFocusAuxiliaryWindow } =
+      await import("../auxiliary-window-chrome");
     const window = createWindow();
 
     showAndFocusAuxiliaryWindow(window);
@@ -142,9 +138,8 @@ describe("auxiliary window chrome", () => {
   it("shows first-open windows on ready-to-show", async () => {
     vi.useFakeTimers();
     setPlatform("darwin");
-    const { showAuxiliaryWindowWhenReady } = await import(
-      "../auxiliary-window-chrome"
-    );
+    const { showAuxiliaryWindowWhenReady } =
+      await import("../auxiliary-window-chrome");
     const window = createWindow();
 
     showAuxiliaryWindowWhenReady(window);
@@ -164,9 +159,8 @@ describe("auxiliary window chrome", () => {
   it("does not refocus when load finishes after ready-to-show already showed the window", async () => {
     vi.useFakeTimers();
     setPlatform("darwin");
-    const { showAuxiliaryWindowWhenReady } = await import(
-      "../auxiliary-window-chrome"
-    );
+    const { showAuxiliaryWindowWhenReady } =
+      await import("../auxiliary-window-chrome");
     const window = createWindow();
 
     showAuxiliaryWindowWhenReady(window);
@@ -181,9 +175,8 @@ describe("auxiliary window chrome", () => {
   it("shows first-open windows after load if ready-to-show is late", async () => {
     vi.useFakeTimers();
     setPlatform("darwin");
-    const { showAuxiliaryWindowWhenReady } = await import(
-      "../auxiliary-window-chrome"
-    );
+    const { showAuxiliaryWindowWhenReady } =
+      await import("../auxiliary-window-chrome");
     const window = createWindow();
 
     showAuxiliaryWindowWhenReady(window);
@@ -197,9 +190,8 @@ describe("auxiliary window chrome", () => {
   it("does not refocus from the fallback after load already showed the window", async () => {
     vi.useFakeTimers();
     setPlatform("darwin");
-    const { showAuxiliaryWindowWhenReady } = await import(
-      "../auxiliary-window-chrome"
-    );
+    const { showAuxiliaryWindowWhenReady } =
+      await import("../auxiliary-window-chrome");
     const window = createWindow();
 
     showAuxiliaryWindowWhenReady(window);
@@ -214,9 +206,8 @@ describe("auxiliary window chrome", () => {
   it("shows first-open windows from a timed fallback", async () => {
     vi.useFakeTimers();
     setPlatform("darwin");
-    const { showAuxiliaryWindowWhenReady } = await import(
-      "../auxiliary-window-chrome"
-    );
+    const { showAuxiliaryWindowWhenReady } =
+      await import("../auxiliary-window-chrome");
     const window = createWindow();
 
     showAuxiliaryWindowWhenReady(window);

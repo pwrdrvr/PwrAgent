@@ -161,7 +161,9 @@ describe("messaging tool activity", () => {
       }),
     );
 
-    expect(directQuery?.title).toBe("Searched web: xai token=[redacted] failure");
+    expect(directQuery?.title).toBe(
+      "Searched web: xai token=[redacted] failure",
+    );
     expect(argumentQuery?.title).toBe(
       "Searched web: authorization [redacted] stack trace",
     );

@@ -15,7 +15,9 @@ export function normalizeReviewDisplayText(value: string): string {
     return "Review current changes";
   }
 
-  const branchMatch = /^(?:review\s+)?changes\s+against\s+(.+)$/i.exec(normalized);
+  const branchMatch = /^(?:review\s+)?changes\s+against\s+(.+)$/i.exec(
+    normalized,
+  );
   if (branchMatch) {
     return `Review changes against ${stripWrappingQuotes(branchMatch[1])}`;
   }
@@ -36,7 +38,9 @@ export function normalizeReviewDisplayText(value: string): string {
   return `Review ${normalized}`;
 }
 
-export function parseReviewCommand(input: string): ParsedReviewCommand | undefined {
+export function parseReviewCommand(
+  input: string,
+): ParsedReviewCommand | undefined {
   const trimmed = input.trim();
   if (!trimmed) {
     return undefined;

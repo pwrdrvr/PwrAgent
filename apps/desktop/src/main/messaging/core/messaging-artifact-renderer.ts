@@ -52,7 +52,8 @@ export function buildPlanArtifactIntent(params: {
   id: string;
   plan: AppServerThreadPlanEntry;
 }): MessagingArtifactMessageIntent {
-  const markdown = params.plan.markdown?.trim() || renderPlanMarkdown(params.plan);
+  const markdown =
+    params.plan.markdown?.trim() || renderPlanMarkdown(params.plan);
   return buildArtifactDeliveryIntent({
     artifact: {
       kind: "plan",
@@ -100,13 +101,17 @@ export function buildArtifactDeliveryIntent(params: {
   const markdown = params.artifact.preserveMarkdown
     ? params.artifact.markdown
     : normalizeMarkdown(params.artifact.markdown);
-  const inlineLimit = clampTextLimit(params.capabilityProfile, INLINE_ONLY_THRESHOLD);
+  const inlineLimit = clampTextLimit(
+    params.capabilityProfile,
+    INLINE_ONLY_THRESHOLD,
+  );
   const canSendInlineOnly = markdown.length <= inlineLimit;
   const fileData = new TextEncoder().encode(markdown);
-  const uploadLimit = params.capabilityProfile.outboundAttachments?.maxUploadBytes;
+  const uploadLimit =
+    params.capabilityProfile.outboundAttachments?.maxUploadBytes;
   const canAttach =
-    params.capabilityProfile.outboundAttachments?.supportsFileUpload === true &&
-    (uploadLimit === undefined || fileData.byteLength <= uploadLimit);
+    params.capabilityProfile.outboundAttachments?.supportsFileUpload === true
+    && (uploadLimit === undefined || fileData.byteLength <= uploadLimit);
   const mode: MessagingArtifactDeliveryMode = params.artifact.preferAttachment
     ? canAttach
       ? "attachment_summary"
@@ -116,25 +121,26 @@ export function buildArtifactDeliveryIntent(params: {
       : canAttach
         ? "attachment_summary"
         : "inline_fallback";
-  const text = mode === "inline_only"
-    ? markdown
-    : mode === "attachment_summary"
-      ? formatAttachmentSummary({
-          artifact: params.artifact,
-          markdown,
-          maxChars: clampTextLimit(
-            params.capabilityProfile,
-            ATTACHMENT_SUMMARY_PREVIEW_CHARS,
-          ),
-        })
-      : formatInlineFallback({
-          artifact: params.artifact,
-          markdown,
-          maxChars: clampTextLimit(
-            params.capabilityProfile,
-            INLINE_FALLBACK_PREVIEW_CHARS,
-          ),
-        });
+  const text =
+    mode === "inline_only"
+      ? markdown
+      : mode === "attachment_summary"
+        ? formatAttachmentSummary({
+            artifact: params.artifact,
+            markdown,
+            maxChars: clampTextLimit(
+              params.capabilityProfile,
+              ATTACHMENT_SUMMARY_PREVIEW_CHARS,
+            ),
+          })
+        : formatInlineFallback({
+            artifact: params.artifact,
+            markdown,
+            maxChars: clampTextLimit(
+              params.capabilityProfile,
+              INLINE_FALLBACK_PREVIEW_CHARS,
+            ),
+          });
 
   return {
     id: params.id,
@@ -161,8 +167,8 @@ export function buildArtifactDeliveryIntent(params: {
               mimeType: "text/markdown",
               sizeBytes: fileData.byteLength,
               description:
-                params.artifact.attachmentDescription ??
-                `Full ${params.artifact.kind} artifact`,
+                params.artifact.attachmentDescription
+                ?? `Full ${params.artifact.kind} artifact`,
             },
           ]
         : []),
@@ -226,7 +232,9 @@ export function planEntryFromUpdate(params: {
   };
 }
 
-export function artifactFromPlanEntry(plan: AppServerThreadPlanEntry): MessagingArtifact {
+export function artifactFromPlanEntry(
+  plan: AppServerThreadPlanEntry,
+): MessagingArtifact {
   return {
     kind: "plan",
     title: "Plan artifact",
@@ -236,7 +244,9 @@ export function artifactFromPlanEntry(plan: AppServerThreadPlanEntry): Messaging
   };
 }
 
-export function artifactFromReviewEntry(review: AppServerThreadReviewEntry): MessagingArtifact {
+export function artifactFromReviewEntry(
+  review: AppServerThreadReviewEntry,
+): MessagingArtifact {
   return {
     kind: "review",
     title: "Review artifact",
@@ -350,28 +360,43 @@ function formatArtifactPreview(params: {
   return `${preview.trimEnd()}\n\n${params.marker}`;
 }
 
-function truncateMarkdown(markdown: string, maxChars: number, marker: string): string {
+function truncateMarkdown(
+  markdown: string,
+  maxChars: number,
+  marker: string,
+): string {
   if (markdown.length <= maxChars) {
     return markdown;
   }
   const available = Math.max(0, maxChars - marker.length - 2);
   const headingBreak = markdown.lastIndexOf("\n## ", available);
   const lineBreak = markdown.lastIndexOf("\n", available);
-  const cutAt = headingBreak > 120 ? headingBreak : lineBreak > 120 ? lineBreak : available;
+  const cutAt =
+    headingBreak > 120 ? headingBreak : lineBreak > 120 ? lineBreak : available;
   return `${markdown.slice(0, cutAt).trimEnd()}\n\n${marker}`;
 }
 
-function boundedText(parts: Array<string | undefined>, maxChars: number, marker: string): string {
-  const text = parts.filter((part): part is string => Boolean(part?.trim())).join("\n");
+function boundedText(
+  parts: Array<string | undefined>,
+  maxChars: number,
+  marker: string,
+): string {
+  const text = parts
+    .filter((part): part is string => Boolean(part?.trim()))
+    .join("\n");
   return truncateMarkdown(text, maxChars, marker);
 }
 
-function stepSummary(steps: AppServerThreadPlanStep[] | undefined): string | undefined {
+function stepSummary(
+  steps: AppServerThreadPlanStep[] | undefined,
+): string | undefined {
   if (!steps || steps.length === 0) {
     return undefined;
   }
   const pending = steps.filter((step) => step.status === "pending").length;
-  const inProgress = steps.filter((step) => step.status === "in_progress").length;
+  const inProgress = steps.filter(
+    (step) => step.status === "in_progress",
+  ).length;
   const completed = steps.filter((step) => step.status === "completed").length;
   return `Steps: ${completed} completed, ${inProgress} in progress, ${pending} pending`;
 }
@@ -383,11 +408,17 @@ function clampTextLimit(
   return Math.max(200, Math.min(preferred, capabilityProfile.text.maxLength));
 }
 
-function artifactFileName(artifact: MessagingArtifact, markdown: string): string {
+function artifactFileName(
+  artifact: MessagingArtifact,
+  markdown: string,
+): string {
   if (artifact.attachmentName?.trim()) {
     return artifact.attachmentName.trim();
   }
-  const digest = createHash("sha256").update(markdown).digest("hex").slice(0, 10);
+  const digest = createHash("sha256")
+    .update(markdown)
+    .digest("hex")
+    .slice(0, 10);
   return `${artifact.kind}-${digest}.md`;
 }
 

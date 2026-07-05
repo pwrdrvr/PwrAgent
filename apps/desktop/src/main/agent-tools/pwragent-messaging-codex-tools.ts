@@ -29,9 +29,9 @@ export function isPwrAgentMessagingDynamicToolCall(
   tool: PwrAgentMessagingOperationName;
 } {
   return (
-    (call.namespace === PWRAGENT_MESSAGING_TOOL_NAMESPACE ||
-      call.namespace === PWRAGENT_TOOL_NAMESPACE) &&
-    PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES.includes(
+    (call.namespace === PWRAGENT_MESSAGING_TOOL_NAMESPACE
+      || call.namespace === PWRAGENT_TOOL_NAMESPACE)
+    && PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES.includes(
       call.tool as PwrAgentMessagingOperationName,
     )
   );
@@ -45,7 +45,9 @@ export async function handlePwrAgentMessagingDynamicToolCall(params: {
   const call = isPwrAgentMessagingDynamicToolCall(params.call)
     ? { ...params.call, namespace: PWRAGENT_TOOL_NAMESPACE }
     : params.call;
-  return await buildPwrAgentMessagingToolRouter(params.handler).handleDynamicToolCall({
+  return await buildPwrAgentMessagingToolRouter(
+    params.handler,
+  ).handleDynamicToolCall({
     backend: params.backend,
     call,
   });

@@ -8,12 +8,16 @@ import { OverlayStore } from "../persistence/overlay-store";
 const tempDirs: string[] = [];
 
 async function createStore(): Promise<OverlayStore> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-overlay-store-"));
+  const tempDir = await mkdtemp(
+    path.join(os.tmpdir(), "pwragent-overlay-store-"),
+  );
   tempDirs.push(tempDir);
   return new OverlayStore(path.join(tempDir, "overlay-state.json"));
 }
 
-function buildThread(overrides: Partial<AppServerThreadSummary> = {}): AppServerThreadSummary {
+function buildThread(
+  overrides: Partial<AppServerThreadSummary> = {},
+): AppServerThreadSummary {
   return {
     id: "thread-1",
     title: "Desktop App",
@@ -295,10 +299,15 @@ describe("OverlayStore", () => {
       },
     });
 
-    const reloaded = new OverlayStore(path.join(tempDirs[0]!, "overlay-state.json"));
+    const reloaded = new OverlayStore(
+      path.join(tempDirs[0]!, "overlay-state.json"),
+    );
 
     await expect(
-      reloaded.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+      reloaded.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "thread-1",
@@ -368,11 +377,16 @@ describe("OverlayStore", () => {
     const raw = JSON.parse(
       await readFile(path.join(tempDirs[0]!, "overlay-state.json"), "utf8"),
     ) as {
-      directoryLaunchpads: Record<string, { prompt?: string; executionMode?: string }>;
+      directoryLaunchpads: Record<
+        string,
+        { prompt?: string; executionMode?: string }
+      >;
       threads: Record<string, unknown>;
     };
 
-    expect(raw.directoryLaunchpads["directory:/Users/huntharo/pwrdrvr/PwrAgent"]).toMatchObject({
+    expect(
+      raw.directoryLaunchpads["directory:/Users/huntharo/pwrdrvr/PwrAgent"],
+    ).toMatchObject({
       prompt: "Investigate the directories launchpad flow",
       executionMode: "full-access",
     });
@@ -424,10 +438,15 @@ describe("OverlayStore", () => {
       fastMode: false,
     });
 
-    const reloaded = new OverlayStore(path.join(tempDirs[0]!, "overlay-state.json"));
+    const reloaded = new OverlayStore(
+      path.join(tempDirs[0]!, "overlay-state.json"),
+    );
 
     await expect(
-      reloaded.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+      reloaded.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "thread-1",
@@ -437,7 +456,10 @@ describe("OverlayStore", () => {
       fastMode: true,
     });
     await expect(
-      reloaded.getThreadOverlayState({ backend: "codex", threadId: "thread-2" }),
+      reloaded.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-2",
+      }),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "thread-2",
@@ -489,7 +511,9 @@ describe("OverlayStore", () => {
   });
 
   it("persists correctly when separate store instances write the same file concurrently", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-overlay-store-shared-"));
+    const tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-overlay-store-shared-"),
+    );
     tempDirs.push(tempDir);
     const sharedPath = path.join(tempDir, "overlay-state.json");
     const firstStore = new OverlayStore(sharedPath);

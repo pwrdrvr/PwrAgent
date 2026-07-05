@@ -16,7 +16,10 @@ type TranscriptMessageProps = {
   applications?: DesktopApplicationsSnapshot;
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    | "copyText"
+    | "openApplication"
+    | "openMarkdownFileViewer"
+    | "readMarkdownFile"
   >;
   fileViewerContext?: MarkdownFileViewerContext;
   message: AppServerThreadMessageEntry;
@@ -24,18 +27,27 @@ type TranscriptMessageProps = {
   onOpenImage?: (image: AppServerThreadImagePart) => void;
 };
 
-export const TranscriptMessage = memo(function TranscriptMessage(props: TranscriptMessageProps) {
+export const TranscriptMessage = memo(function TranscriptMessage(
+  props: TranscriptMessageProps,
+) {
   const contentParts =
     props.message.parts && props.message.parts.length > 0
       ? props.message.parts
       : props.message.text
-        ? [{ type: "text", text: props.message.text } satisfies AppServerThreadMessagePart]
+        ? [
+            {
+              type: "text",
+              text: props.message.text,
+            } satisfies AppServerThreadMessagePart,
+          ]
         : [];
   const messageCopyText = useMemo(
     () => buildMessageCopyText(props.message, contentParts),
-    [contentParts, props.message]
+    [contentParts, props.message],
   );
-  const messageSegments = groupMessageParts(contentParts).flatMap(splitMarkdownTableSegment);
+  const messageSegments = groupMessageParts(contentParts).flatMap(
+    splitMarkdownTableSegment,
+  );
 
   if (messageSegments.length === 0) {
     return (
@@ -95,11 +107,16 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
 TranscriptMessage.displayName = "TranscriptMessage";
 
 type MessagePartSegment =
-  | { type: "text"; part: Exclude<AppServerThreadMessagePart, AppServerThreadImagePart> }
+  | {
+      type: "text";
+      part: Exclude<AppServerThreadMessagePart, AppServerThreadImagePart>;
+    }
   | { type: "table"; text: string; wide: boolean }
   | { type: "images"; parts: AppServerThreadImagePart[]; startIndex: number };
 
-function groupMessageParts(parts: AppServerThreadMessagePart[]): MessagePartSegment[] {
+function groupMessageParts(
+  parts: AppServerThreadMessagePart[],
+): MessagePartSegment[] {
   const segments: MessagePartSegment[] = [];
 
   for (let index = 0; index < parts.length; index += 1) {
@@ -114,26 +131,30 @@ function groupMessageParts(parts: AppServerThreadMessagePart[]): MessagePartSegm
       segments.push({
         type: "images",
         parts: [part],
-        startIndex: index
+        startIndex: index,
       });
       continue;
     }
 
     segments.push({
       type: "text",
-      part
+      part,
     });
   }
 
   return segments;
 }
 
-function splitMarkdownTableSegment(segment: MessagePartSegment): MessagePartSegment[] {
+function splitMarkdownTableSegment(
+  segment: MessagePartSegment,
+): MessagePartSegment[] {
   if (segment.type !== "text") {
     return [segment];
   }
 
-  const referenceDefinitions = extractMarkdownReferenceDefinitions(segment.part.text);
+  const referenceDefinitions = extractMarkdownReferenceDefinitions(
+    segment.part.text,
+  );
   const blocks = splitMarkdownTableBlocks(segment.part.text);
   if (blocks.length === 1 && blocks[0]?.type === "text") {
     return [segment];
@@ -144,7 +165,10 @@ function splitMarkdownTableSegment(segment: MessagePartSegment): MessagePartSegm
     if (block.type === "table" && isWideMarkdownTable(block.text)) {
       segments.push({
         type: "table",
-        text: withMarkdownReferenceDefinitions(block.text, referenceDefinitions),
+        text: withMarkdownReferenceDefinitions(
+          block.text,
+          referenceDefinitions,
+        ),
         wide: true,
       });
       continue;
@@ -196,9 +220,9 @@ function splitMarkdownTableBlocks(markdown: string): MarkdownBlock[] {
     }
 
     if (
-      !inFence &&
-      isMarkdownTableHeader(line) &&
-      isMarkdownTableDelimiter(lines[index + 1] ?? "")
+      !inFence
+      && isMarkdownTableHeader(line)
+      && isMarkdownTableDelimiter(lines[index + 1] ?? "")
     ) {
       flushText();
       const tableLines = [line, lines[index + 1] ?? ""];
@@ -227,17 +251,16 @@ function isMarkdownTableHeader(line: string): boolean {
 function isMarkdownTableDelimiter(line: string): boolean {
   const cells = splitTableCells(line.trim());
   return (
-    cells.length >= 2 &&
-    cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()))
+    cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()))
   );
 }
 
 function isMarkdownTableRow(line: string): boolean {
   const trimmed = line.trim();
   return (
-    trimmed !== "" &&
-    trimmed.includes("|") &&
-    splitTableCells(trimmed).length >= 2
+    trimmed !== ""
+    && trimmed.includes("|")
+    && splitTableCells(trimmed).length >= 2
   );
 }
 
@@ -254,7 +277,7 @@ function isWideMarkdownTable(table: string): boolean {
   const columnCount = splitTableCells(header).length;
   const longestRowLength = rows.reduce(
     (longest, row) => Math.max(longest, row.length),
-    header.length
+    header.length,
   );
   return columnCount >= 4 || longestRowLength > 140;
 }
@@ -278,7 +301,10 @@ function extractMarkdownReferenceDefinitions(markdown: string): string[] {
     .filter((line) => /^\s{0,3}\[[^\]]+\]:\s+\S/.test(line));
 }
 
-function withMarkdownReferenceDefinitions(table: string, definitions: string[]): string {
+function withMarkdownReferenceDefinitions(
+  table: string,
+  definitions: string[],
+): string {
   if (definitions.length === 0) {
     return table;
   }
@@ -292,8 +318,8 @@ function isOnlyMarkdownReferenceDefinitions(markdown: string): boolean {
     .filter((line) => line.trim() !== "");
 
   return (
-    meaningfulLines.length > 0 &&
-    meaningfulLines.every((line) => /^\s{0,3}\[[^\]]+\]:\s+\S/.test(line))
+    meaningfulLines.length > 0
+    && meaningfulLines.every((line) => /^\s{0,3}\[[^\]]+\]:\s+\S/.test(line))
   );
 }
 
@@ -311,7 +337,10 @@ function renderMessageSegment(params: {
   applications?: DesktopApplicationsSnapshot;
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    | "copyText"
+    | "openApplication"
+    | "openMarkdownFileViewer"
+    | "readMarkdownFile"
   >;
   fileViewerContext?: MarkdownFileViewerContext;
   segment: MessagePartSegment;
@@ -323,7 +352,10 @@ function renderMessageSegment(params: {
     const imageSegment = params.segment;
 
     return (
-      <div key={`images:${params.index}`} className="transcript-message__image-grid">
+      <div
+        key={`images:${params.index}`}
+        className="transcript-message__image-grid"
+      >
         {imageSegment.parts.map((imagePart, imageIndex) => (
           <TranscriptImageTile
             key={`image:${imageSegment.startIndex + imageIndex}:${imagePart.url}`}
@@ -345,7 +377,11 @@ function renderMessageSegment(params: {
       desktopApi={params.desktopApi}
       fileViewerContext={params.fileViewerContext}
       skills={params.skills}
-      text={params.segment.type === "table" ? params.segment.text : params.segment.part.text}
+      text={
+        params.segment.type === "table"
+          ? params.segment.text
+          : params.segment.part.text
+      }
     />
   );
 }
@@ -359,14 +395,16 @@ function TranscriptImageTile(props: {
   const [failed, setFailed] = useState(false);
   const sourceLabel = useMemo(
     () => formatTranscriptImageSourceLabel(props.imagePart.url),
-    [props.imagePart.url]
+    [props.imagePart.url],
   );
 
   if (failed) {
     return (
       <div className="transcript-message__image-fallback">
         <div className="transcript-message__image-fallback-main">
-          <span className="transcript-message__image-fallback-title">Image failed to load</span>
+          <span className="transcript-message__image-fallback-title">
+            Image failed to load
+          </span>
           <code
             className="transcript-message__image-fallback-path"
             title={sourceLabel}
@@ -451,7 +489,9 @@ function renderMessageHeader(params: {
 
   return (
     <header className="transcript-message__header">
-      <span className="transcript-message__role">{labelForRole(params.message.role)}</span>
+      <span className="transcript-message__role">
+        {labelForRole(params.message.role)}
+      </span>
       <span className="transcript-message__header-actions">
         {params.text ? (
           <TranscriptCopyButton
@@ -468,7 +508,7 @@ function renderMessageHeader(params: {
               month: "short",
               day: "numeric",
               hour: "numeric",
-              minute: "2-digit"
+              minute: "2-digit",
             }).format(params.message.createdAt)}
           </time>
         ) : null}
@@ -486,15 +526,20 @@ function labelForRole(role: AppServerThreadMessageEntry["role"]): string {
 
 function buildMessageCopyText(
   message: AppServerThreadMessageEntry,
-  parts: AppServerThreadMessagePart[]
+  parts: AppServerThreadMessagePart[],
 ): string {
   if (typeof message.text === "string" && message.text.length > 0) {
     return message.text;
   }
 
   return parts
-    .filter((part): part is Exclude<AppServerThreadMessagePart, AppServerThreadImagePart> =>
-      part.type !== "image"
+    .filter(
+      (
+        part,
+      ): part is Exclude<
+        AppServerThreadMessagePart,
+        AppServerThreadImagePart
+      > => part.type !== "image",
     )
     .map((part) => part.text)
     .join("\n\n");

@@ -52,7 +52,9 @@ export class ThreadSearchStore {
       .map((directory) => directory.label)
       .join(" ");
     const directoryPaths = thread.linkedDirectories
-      .flatMap((directory) => [directory.path, directory.worktreePath].filter(Boolean))
+      .flatMap((directory) =>
+        [directory.path, directory.worktreePath].filter(Boolean),
+      )
       .join(" ");
     const displayJson = JSON.stringify({
       source: thread.source,
@@ -189,7 +191,9 @@ export class ThreadSearchStore {
   search(request: ThreadSearchProjectionSearchRequest): ThreadSearchResult[] {
     const ftsQuery = buildThreadSearchFtsQuery(request.query);
     const backendClause = request.backend ? " AND d.backend = @backend" : "";
-    const archivedClause = request.includeArchived ? "" : " AND d.archived_at IS NULL";
+    const archivedClause = request.includeArchived
+      ? ""
+      : " AND d.archived_at IS NULL";
     const filterWhere = buildFilterWhereClause(request.filters);
 
     if (!ftsQuery) {
@@ -206,7 +210,9 @@ export class ThreadSearchStore {
           ...filterWhere.params,
           limit: request.limit,
         })
-        .map((row) => this.rowToResult(row as ThreadSearchDocumentRow, 0, null));
+        .map((row) =>
+          this.rowToResult(row as ThreadSearchDocumentRow, 0, null),
+        );
     }
 
     return this.db
@@ -277,7 +283,10 @@ export class ThreadSearchStore {
   }
 }
 
-function queryMatchesIdentifier(query: string | undefined, identifier: string): boolean {
+function queryMatchesIdentifier(
+  query: string | undefined,
+  identifier: string,
+): boolean {
   const needle = query?.trim().toLowerCase();
   return needle !== undefined && needle.length > 0
     ? identifier.toLowerCase().includes(needle)
@@ -332,19 +341,23 @@ function buildFilterWhereClause(filters: ThreadSearchFilters | undefined): {
   }
 
   if (filters.directoryIds?.length) {
-    clauses.push(buildJsonArrayPredicate(filters.directoryIds, "directoryId", params));
+    clauses.push(
+      buildJsonArrayPredicate(filters.directoryIds, "directoryId", params),
+    );
   }
   if (filters.directoryPaths?.length) {
-    const pathPredicates = filters.directoryPaths.flatMap((directoryPath, index) => {
-      const pathParam = `directoryPath${index}`;
-      const worktreePathParam = `worktreePath${index}`;
-      params[pathParam] = directoryPath;
-      params[worktreePathParam] = directoryPath;
-      return [
-        `json_extract(value, '$.path') = @${pathParam}`,
-        `json_extract(value, '$.worktreePath') = @${worktreePathParam}`,
-      ];
-    });
+    const pathPredicates = filters.directoryPaths.flatMap(
+      (directoryPath, index) => {
+        const pathParam = `directoryPath${index}`;
+        const worktreePathParam = `worktreePath${index}`;
+        params[pathParam] = directoryPath;
+        params[worktreePathParam] = directoryPath;
+        return [
+          `json_extract(value, '$.path') = @${pathParam}`,
+          `json_extract(value, '$.worktreePath') = @${worktreePathParam}`,
+        ];
+      },
+    );
     clauses.push(
       `EXISTS (
         SELECT 1

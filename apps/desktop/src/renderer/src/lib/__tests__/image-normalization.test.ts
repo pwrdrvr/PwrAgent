@@ -22,18 +22,19 @@ function makeDependencies(params: {
       } as unknown as CanvasRenderingContext2D,
     }),
     decodeImage:
-      params.decode ??
-      vi.fn(async () => ({
+      params.decode
+      ?? vi.fn(async () => ({
         width: 1024,
         height: 1024,
         draw: vi.fn(),
       })),
     encodeCanvas:
-      params.encode ??
-      vi.fn(async (_canvas, mimeType) =>
-        new Blob([new Uint8Array(params.outputBytes ?? [1, 2, 3])], {
-          type: mimeType,
-        }),
+      params.encode
+      ?? vi.fn(
+        async (_canvas, mimeType) =>
+          new Blob([new Uint8Array(params.outputBytes ?? [1, 2, 3])], {
+            type: mimeType,
+          }),
       ),
     hasAlpha: vi.fn(() => Boolean(params.hasAlpha)),
     readBlobAsDataUrl: vi.fn(async (blob) => `data:${blob.type};base64,AQID`),
@@ -42,28 +43,36 @@ function makeDependencies(params: {
 
 describe("image normalization", () => {
   it("keeps square 1024 images unchanged", () => {
-    expect(calculateBoundedImageDimensions({ width: 1024, height: 1024 })).toEqual({
+    expect(
+      calculateBoundedImageDimensions({ width: 1024, height: 1024 }),
+    ).toEqual({
       width: 1024,
       height: 1024,
     });
   });
 
   it("allows 1536x1024 images unchanged", () => {
-    expect(calculateBoundedImageDimensions({ width: 1536, height: 1024 })).toEqual({
+    expect(
+      calculateBoundedImageDimensions({ width: 1536, height: 1024 }),
+    ).toEqual({
       width: 1536,
       height: 1024,
     });
   });
 
   it("caps landscape images by the short edge", () => {
-    expect(calculateBoundedImageDimensions({ width: 3000, height: 2000 })).toEqual({
+    expect(
+      calculateBoundedImageDimensions({ width: 3000, height: 2000 }),
+    ).toEqual({
       width: 1536,
       height: 1024,
     });
   });
 
   it("caps portrait images by the short edge", () => {
-    expect(calculateBoundedImageDimensions({ width: 2000, height: 3000 })).toEqual({
+    expect(
+      calculateBoundedImageDimensions({ width: 2000, height: 3000 }),
+    ).toEqual({
       width: 1024,
       height: 1536,
     });
@@ -119,7 +128,9 @@ describe("image normalization", () => {
   });
 
   it("does not upscale small images", () => {
-    expect(calculateBoundedImageDimensions({ width: 640, height: 480 })).toEqual({
+    expect(
+      calculateBoundedImageDimensions({ width: 640, height: 480 }),
+    ).toEqual({
       width: 640,
       height: 480,
     });
@@ -226,8 +237,9 @@ describe("image normalization", () => {
   });
 
   it("preserves the patch cap when every resized PNG encoding is larger", async () => {
-    const encodeCanvas = vi.fn(async (_canvas, mimeType) =>
-      new Blob([new Uint8Array(140)], { type: mimeType }),
+    const encodeCanvas = vi.fn(
+      async (_canvas, mimeType) =>
+        new Blob([new Uint8Array(140)], { type: mimeType }),
     );
     const dependencies = makeDependencies({
       decode: vi.fn(async () => ({

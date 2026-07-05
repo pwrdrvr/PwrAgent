@@ -263,7 +263,9 @@ describe("ThreadContextPanel", () => {
       },
     });
 
-    expect(screen.getByText("Watch CI until it completes.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Watch CI until it completes."),
+    ).toBeInTheDocument();
     expect(screen.getByText("Poincare")).toBeInTheDocument();
     expect(screen.getByText("Running")).toBeInTheDocument();
     const firstCard = within(screen.getAllByRole("listitem")[0]!);
@@ -292,7 +294,10 @@ describe("ThreadContextPanel", () => {
     const dialog = screen.getByRole("dialog");
     const modal = within(dialog);
     expect(
-      modal.getByRole("heading", { level: 2, name: "Watch CI until it completes." }),
+      modal.getByRole("heading", {
+        level: 2,
+        name: "Watch CI until it completes.",
+      }),
     ).toBeInTheDocument();
     expect(modal.getByText("Latest message")).toBeInTheDocument();
     expect(modal.getByText("Name")).toBeInTheDocument();
@@ -452,7 +457,9 @@ describe("ThreadContextPanel", () => {
       screen.getByText("PR #783 is open and all required checks are passing."),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Monitor usage: 800 uncached in · 200 cached · 50 out"),
+      screen.queryByText(
+        "Monitor usage: 800 uncached in · 200 cached · 50 out",
+      ),
     ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
@@ -500,8 +507,12 @@ describe("ThreadContextPanel", () => {
       screen.getByText("System usage: 80 uncached in · 20 cached · 10 out"),
     ).toBeInTheDocument();
     expect(screen.getByText("PwrAgent")).toBeInTheDocument();
-    expect(screen.getByText("Spawned by PwrAgent system helper.")).toBeInTheDocument();
-    expect(screen.getByText("Generated title: Readable thread title")).toBeInTheDocument();
+    expect(
+      screen.getByText("Spawned by PwrAgent system helper."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Generated title: Readable thread title"),
+    ).toBeInTheDocument();
     expect(
       screen.queryByText("Monitor usage: 80 uncached in · 20 cached · 10 out"),
     ).not.toBeInTheDocument();
@@ -532,9 +543,9 @@ describe("ThreadContextPanel", () => {
       },
     });
 
-    expect(screen.getAllByText("Spawned by Codex native spawnAgent.")).toHaveLength(
-      1,
-    );
+    expect(
+      screen.getAllByText("Spawned by Codex native spawnAgent."),
+    ).toHaveLength(1);
   });
 
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {
@@ -576,11 +587,15 @@ describe("ThreadContextPanel", () => {
       threadPricingSummaryEnabled: false,
     });
 
-    expect(screen.queryByRole("tab", { name: "Pricing" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("tab", { name: "Pricing" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { level: 3, name: "Pricing" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("tab", { name: "Thread info" }),
+    ).toBeInTheDocument();
   });
 
   it("renders cached pricing totals and per-turn model settings", () => {
@@ -647,17 +662,23 @@ describe("ThreadContextPanel", () => {
       threadPricingSummaryEnabled: true,
     });
 
-    expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Pricing" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("$0.010")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.5 · high · Fast")).toBeInTheDocument();
     expect(
       screen.queryByText("gpt-5.5 · high · Fast · priority"),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByText("1,500 uncached in · 500 cached · 300 out (120 reasoning)"),
+      screen.getByText(
+        "1,500 uncached in · 500 cached · 300 out (120 reasoning)",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText("$0.010 list price this turn")).toBeInTheDocument();
-    expect(screen.getByText("Running total: $0.010 list price")).toBeInTheDocument();
+    expect(
+      screen.getByText("Running total: $0.010 list price"),
+    ).toBeInTheDocument();
   });
 
   it("renders Codex Credits as an optional pricing display unit", () => {
@@ -723,12 +744,18 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.getByText("$0.010 · 1.3 Codex Credits")).toBeInTheDocument();
-    expect(screen.queryByText("$0.042 · 1.3 Codex Credits")).not.toBeInTheDocument();
     expect(
-      screen.getByText("$0.010 list price this turn · 1.3 Codex Credits this turn"),
+      screen.queryByText("$0.042 · 1.3 Codex Credits"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "$0.010 list price this turn · 1.3 Codex Credits this turn",
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Running total: $0.042 list price · 1.3 Codex Credits"),
+      screen.queryByText(
+        "Running total: $0.042 list price · 1.3 Codex Credits",
+      ),
     ).not.toBeInTheDocument();
     expect(
       screen.getByText("Running total: $0.010 list price · 1.3 Codex Credits"),
@@ -849,15 +876,21 @@ describe("ThreadContextPanel", () => {
       threadPricingSummaryEnabled: true,
     });
 
-    expect(screen.getByText("$56.98 · 1,424 Codex Credits estimated")).toBeInTheDocument();
-    expect(screen.queryByText("$21.44 · 1,423 Codex Credits")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("$56.98 · 1,424 Codex Credits estimated"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("$21.44 · 1,423 Codex Credits"),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByText("2,807,703 uncached, 70,606,976 cached"),
     ).toBeInTheDocument();
     expect(screen.getByText("222,825 (37,085 reasoning)")).toBeInTheDocument();
     expect(screen.getByText("Historical usage estimate")).toBeInTheDocument();
     expect(
-      screen.getByText("$56.23 estimated list price · 1,406 Codex Credits estimated"),
+      screen.getByText(
+        "$56.23 estimated list price · 1,406 Codex Credits estimated",
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -873,9 +906,13 @@ describe("ThreadContextPanel", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Running total: $20.77 list price · 1.2 Codex Credits"),
+      screen.queryByText(
+        "Running total: $20.77 list price · 1.2 Codex Credits",
+      ),
     ).not.toBeInTheDocument();
-    expect(screen.getByText("Running total: $0.049 list price · 1.2 Codex Credits")).toBeInTheDocument();
+    expect(
+      screen.getByText("Running total: $0.049 list price · 1.2 Codex Credits"),
+    ).toBeInTheDocument();
   });
 
   it("inserts estimated historical gap rows from unexplained cumulative token jumps", () => {
@@ -976,16 +1013,28 @@ describe("ThreadContextPanel", () => {
       threadPricingSummaryEnabled: true,
     });
 
-    expect(screen.getByText("$0.032 · 0.4 Codex Credits estimated")).toBeInTheDocument();
+    expect(
+      screen.getByText("$0.032 · 0.4 Codex Credits estimated"),
+    ).toBeInTheDocument();
     expect(document.body).toHaveTextContent("4 (4 priced, 0 unpriced)");
     expect(screen.getAllByText("Historical usage estimate")).toHaveLength(2);
-    expect(screen.getByText("1,000 uncached in · 2,000 cached · 100 out (20 reasoning)")).toBeInTheDocument();
-    expect(screen.getByText("500 uncached in · 1,000 cached · 50 out")).toBeInTheDocument();
     expect(
-      screen.getByText("$0.010 estimated list price · 0.2 Codex Credits estimated"),
+      screen.getByText(
+        "1,000 uncached in · 2,000 cached · 100 out (20 reasoning)",
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("$0.005 estimated list price · 0.1 Codex Credits estimated"),
+      screen.getByText("500 uncached in · 1,000 cached · 50 out"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "$0.010 estimated list price · 0.2 Codex Credits estimated",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "$0.005 estimated list price · 0.1 Codex Credits estimated",
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -1097,8 +1146,12 @@ describe("ThreadContextPanel", () => {
       threadPricingSummaryEnabled: true,
     });
 
-    expect(screen.queryByText(/Estimated cold context replays/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Estimated hot context replays/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Estimated cold context replays/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Estimated hot context replays/),
+    ).not.toBeInTheDocument();
   });
 
   it("does not add later uncached tail tokens to a cumulative live cold replay estimate", () => {
@@ -1443,7 +1496,9 @@ describe("ThreadContextPanel", () => {
       threadPricingSummaryEnabled: true,
     });
 
-    expect(screen.queryByText("No usage pricing recorded yet.")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("No usage pricing recorded yet."),
+    ).not.toBeInTheDocument();
     expect(screen.getAllByText("$0.002")[0]).toBeInTheDocument();
     expect(document.body).toHaveTextContent("1 (1 priced, 0 unpriced)");
     expect(screen.getByText("Sub-agent usage")).toBeInTheDocument();
@@ -1505,7 +1560,9 @@ describe("ThreadContextPanel", () => {
 
     expect(screen.getByText("Historical usage summary")).toBeInTheDocument();
     expect(screen.getByText("$55.83 list price")).toBeInTheDocument();
-    expect(screen.queryByText("$55.83 list price this turn")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("$55.83 list price this turn"),
+    ).not.toBeInTheDocument();
   });
 
   it("hides the hover rail when document mouse movement resumes outside the rail", async () => {
@@ -1677,7 +1734,9 @@ describe("ThreadContextPanel", () => {
 
     fireEvent.mouseLeave(screen.getByLabelText("Path for PwrAgent"));
     fireEvent.mouseEnter(screen.getByLabelText("Path for worktree PwrAgent"));
-    expect(screen.getByRole("tooltip")).toHaveTextContent("/Users/huntharo/github");
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "/Users/huntharo/github",
+    );
     expect(screen.getByRole("tooltip")).toHaveTextContent(
       "launchpad-pwragent-main-molpnvyk",
     );
@@ -1725,7 +1784,9 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.getAllByLabelText("Path for PwrAgent")).toHaveLength(1);
-    expect(screen.getByLabelText("Path for PwrAgent Other")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Path for PwrAgent Other"),
+    ).toBeInTheDocument();
   });
 
   it("detaches a secondary linked project from the Linked Projects tab", async () => {
@@ -1745,7 +1806,8 @@ describe("ThreadContextPanel", () => {
       pinned: true,
       thread: {
         ...baseThread,
-        projectKey: "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+        projectKey:
+          "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
         linkedDirectories: [
           {
             id: "primary-dir",
@@ -1812,7 +1874,9 @@ describe("ThreadContextPanel", () => {
       },
     });
 
-    expect(screen.queryByRole("button", { name: "Detach" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Detach" }),
+    ).not.toBeInTheDocument();
     expect(detachDirectoryFromThread).not.toHaveBeenCalled();
   });
 
@@ -1822,7 +1886,9 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText(/5h limit: 93% left/)).toBeInTheDocument();
     expect(screen.getByText(/Weekly limit: 88% left/)).toBeInTheDocument();
     expect(screen.getByText(/Spark 5h limit: 100% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Spark Weekly limit: 100% left/),
+    ).toBeInTheDocument();
   });
 
   it("marks an ordinary thread as an Agent from the context panel", async () => {
@@ -1895,7 +1961,8 @@ describe("ThreadContextPanel", () => {
         {
           ...baseBackend,
           rateLimits: baseBackend.rateLimits?.map((limit) =>
-            limit.limitId === "gpt-5.3-codex-spark" && limit.windowMinutes === 300
+            limit.limitId === "gpt-5.3-codex-spark"
+            && limit.windowMinutes === 300
               ? { ...limit, usedPercent: 2 }
               : limit,
           ),
@@ -1904,7 +1971,9 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.getByText(/Spark 5h limit: 98% left/)).toBeInTheDocument();
-    expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Spark Weekly limit: 100% left/),
+    ).toBeInTheDocument();
   });
 
   it("renders the Edits tab empty state when no edits accumulated", () => {
@@ -1949,14 +2018,18 @@ describe("ThreadContextPanel", () => {
       onEditedFilesDockChange,
     });
 
-    expect(screen.getByRole("heading", { level: 3, name: "Edits" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Edits" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /Update a\.ts/ }),
     ).toBeInTheDocument();
 
     // Docked to the sidebar → the toggle offers to restore the
     // above-composer copy.
-    fireEvent.click(screen.getByRole("button", { name: "Show above composer" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show above composer" }),
+    );
     expect(onEditedFilesDockChange).toHaveBeenCalledWith("above");
   });
 });

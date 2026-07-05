@@ -2,10 +2,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import {
-  isCanonicalProfileName,
-  normalizeProfileName,
-} from "@pwragent/shared";
+import { isCanonicalProfileName, normalizeProfileName } from "@pwragent/shared";
 
 export { normalizeProfileName };
 
@@ -137,9 +134,7 @@ export function resolvePwragentRoot(options?: {
  * exhaustiveness assertion stay co-located.
  */
 export function assertUnreachableProfileBootDecision(decision: never): never {
-  throw new Error(
-    `unhandled ProfileBootDecision: ${JSON.stringify(decision)}`,
-  );
+  throw new Error(`unhandled ProfileBootDecision: ${JSON.stringify(decision)}`);
 }
 
 export type ProfileBootDecision =
@@ -194,7 +189,12 @@ export function resolveProfileBootDecision(options?: {
         `Profile name "${cliProfile}" must contain at least one letter or number.`,
       );
     }
-    return decideForRequestedName(name, "cli", { env: options?.env, homeDir: options?.homeDir }, autoCreate);
+    return decideForRequestedName(
+      name,
+      "cli",
+      { env: options?.env, homeDir: options?.homeDir },
+      autoCreate,
+    );
   }
 
   // 2. PWRAGENT_PROFILE env var.
@@ -206,13 +206,24 @@ export function resolveProfileBootDecision(options?: {
         `PWRAGENT_PROFILE="${envProfile}" must contain at least one letter or number.`,
       );
     }
-    return decideForRequestedName(name, "env", { env: options?.env, homeDir: options?.homeDir }, autoCreate);
+    return decideForRequestedName(
+      name,
+      "env",
+      { env: options?.env, homeDir: options?.homeDir },
+      autoCreate,
+    );
   }
 
   // 3. profiles.toml::default_profile.
-  const registryDefault = readProfilesRegistry({ env: options?.env, homeDir: options?.homeDir }).default_profile?.trim();
+  const registryDefault = readProfilesRegistry({
+    env: options?.env,
+    homeDir: options?.homeDir,
+  }).default_profile?.trim();
   if (registryDefault && isValidProfileName(registryDefault)) {
-    const profileDir = resolveProfileDir(registryDefault, { env: options?.env, homeDir: options?.homeDir });
+    const profileDir = resolveProfileDir(registryDefault, {
+      env: options?.env,
+      homeDir: options?.homeDir,
+    });
     if (fs.existsSync(profileDir)) {
       return {
         kind: "open",
@@ -236,7 +247,10 @@ export function resolveProfileBootDecision(options?: {
   // Honor it as the implicit default so currently-fielded installs
   // don't suddenly hit the wizard on next launch. Only the on-disk
   // dir counts — we don't fabricate it.
-  const defaultDir = resolveProfileDir("default", { env: options?.env, homeDir: options?.homeDir });
+  const defaultDir = resolveProfileDir("default", {
+    env: options?.env,
+    homeDir: options?.homeDir,
+  });
   if (fs.existsSync(defaultDir)) {
     return {
       kind: "open",
@@ -349,7 +363,11 @@ export function resolveProfileDir(
       `Profile name "${profileName}" must contain at least one letter or number.`,
     );
   }
-  return path.join(resolvePwragentRoot(options), "profiles", normalizedProfileName);
+  return path.join(
+    resolvePwragentRoot(options),
+    "profiles",
+    normalizedProfileName,
+  );
 }
 
 export function resolveActiveProfileDir(options?: {
@@ -457,7 +475,9 @@ export function ensureNamedProfileExists(
   }
 
   const registry = readProfilesRegistry(options);
-  const existing = registry.profiles.find((p) => p.name === normalizedProfileName);
+  const existing = registry.profiles.find(
+    (p) => p.name === normalizedProfileName,
+  );
   if (!existing) {
     registry.profiles.push({ name: normalizedProfileName });
     writeProfilesRegistry(registry, options);
@@ -551,7 +571,10 @@ export function setDefaultProfileName(
   profileName: string,
   options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
 ): string {
-  const normalizedProfileName = ensureNamedProfileExists(profileName, options).profileName;
+  const normalizedProfileName = ensureNamedProfileExists(
+    profileName,
+    options,
+  ).profileName;
   const registry = readProfilesRegistry(options);
   registry.default_profile =
     normalizedProfileName === "default" ? undefined : normalizedProfileName;
@@ -575,7 +598,9 @@ export function assertProfileCanBeDeleted(
 ): string {
   const normalizedProfileName = normalizeProfileName(profileName);
   if (!normalizedProfileName) {
-    throw new Error(`Profile name "${profileName}" must contain at least one letter or number.`);
+    throw new Error(
+      `Profile name "${profileName}" must contain at least one letter or number.`,
+    );
   }
   if (normalizedProfileName === "default") {
     throw new Error("The default profile cannot be deleted.");
@@ -586,7 +611,10 @@ export function assertProfileCanBeDeleted(
     throw new Error("The active profile cannot be deleted.");
   }
 
-  const liveMarkers = findLiveProfileRuntimeMarkers(normalizedProfileName, options);
+  const liveMarkers = findLiveProfileRuntimeMarkers(
+    normalizedProfileName,
+    options,
+  );
   if (liveMarkers.length > 0) {
     throw new Error(
       `Profile "${normalizedProfileName}" is open in another PwrAgent instance. Close that instance before deleting this profile.`,
@@ -624,7 +652,9 @@ export function startProfileRuntimeHeartbeat(
 ): ProfileRuntimeHeartbeat {
   const normalizedProfileName = normalizeProfileName(profileName);
   if (!normalizedProfileName) {
-    throw new Error(`Profile name "${profileName}" must contain at least one letter or number.`);
+    throw new Error(
+      `Profile name "${profileName}" must contain at least one letter or number.`,
+    );
   }
   const now = options?.now ?? Date.now;
   const processId = options?.processId ?? process.pid;
@@ -635,9 +665,15 @@ export function startProfileRuntimeHeartbeat(
     startedAt: now(),
     heartbeatAt: now(),
   };
-  const markerDir = resolveProfileRuntimeMarkerDir(normalizedProfileName, options);
+  const markerDir = resolveProfileRuntimeMarkerDir(
+    normalizedProfileName,
+    options,
+  );
   fs.mkdirSync(markerDir, { recursive: true });
-  const markerPath = path.join(markerDir, `${processId}-${marker.instanceId}.json`);
+  const markerPath = path.join(
+    markerDir,
+    `${processId}-${marker.instanceId}.json`,
+  );
   let interval: ReturnType<typeof setInterval> | undefined;
   const writeMarker = (): void => {
     marker.heartbeatAt = now();
@@ -687,7 +723,10 @@ export function findLiveProfileRuntimeMarkers(
   if (!normalizedProfileName) {
     return [];
   }
-  const markerDir = resolveProfileRuntimeMarkerDir(normalizedProfileName, options);
+  const markerDir = resolveProfileRuntimeMarkerDir(
+    normalizedProfileName,
+    options,
+  );
   if (!fs.existsSync(markerDir)) {
     return [];
   }
@@ -723,13 +762,17 @@ export function requestProfileInstanceFocus(
 ): boolean {
   const normalizedProfileName = normalizeProfileName(profileName);
   if (
-    !normalizedProfileName ||
-    findLiveProfileRuntimeMarkers(normalizedProfileName, options).length === 0
+    !normalizedProfileName
+    || findLiveProfileRuntimeMarkers(normalizedProfileName, options).length
+      === 0
   ) {
     return false;
   }
 
-  const requestDir = resolveProfileFocusRequestDir(normalizedProfileName, options);
+  const requestDir = resolveProfileFocusRequestDir(
+    normalizedProfileName,
+    options,
+  );
   fs.mkdirSync(requestDir, { recursive: true });
   const now = options?.now ?? Date.now();
   const processId = options?.processId ?? process.pid;
@@ -757,9 +800,14 @@ export function startProfileFocusRequestWatcher(
 ): ProfileFocusRequestWatcher {
   const normalizedProfileName = normalizeProfileName(profileName);
   if (!normalizedProfileName) {
-    throw new Error(`Profile name "${profileName}" must contain at least one letter or number.`);
+    throw new Error(
+      `Profile name "${profileName}" must contain at least one letter or number.`,
+    );
   }
-  const requestDir = resolveProfileFocusRequestDir(normalizedProfileName, options);
+  const requestDir = resolveProfileFocusRequestDir(
+    normalizedProfileName,
+    options,
+  );
   fs.mkdirSync(requestDir, { recursive: true });
   const seen = new Set<string>();
   const now = options.now ?? Date.now;
@@ -861,19 +909,31 @@ function resolveProfileRuntimeMarkerDir(
   profileName: string,
   options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
 ): string {
-  return path.join(resolveProfileDir(profileName, options), "state", "runtime-instances");
+  return path.join(
+    resolveProfileDir(profileName, options),
+    "state",
+    "runtime-instances",
+  );
 }
 
 function resolveProfileFocusRequestDir(
   profileName: string,
   options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
 ): string {
-  return path.join(resolveProfileDir(profileName, options), "state", "focus-requests");
+  return path.join(
+    resolveProfileDir(profileName, options),
+    "state",
+    "focus-requests",
+  );
 }
 
-function readProfileRuntimeMarker(markerPath: string): ProfileRuntimeMarker | undefined {
+function readProfileRuntimeMarker(
+  markerPath: string,
+): ProfileRuntimeMarker | undefined {
   try {
-    const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8")) as Partial<ProfileRuntimeMarker>;
+    const parsed = JSON.parse(
+      fs.readFileSync(markerPath, "utf8"),
+    ) as Partial<ProfileRuntimeMarker>;
     if (
       typeof parsed.instanceId === "string"
       && typeof parsed.processId === "number"
@@ -937,7 +997,8 @@ function stringifyProfilesToml(registry: ProfilesRegistry): string {
       : [];
   const sections = registry.profiles.map((entry) => {
     const lines = ["[[profiles]]", `name = "${entry.name}"`];
-    if (entry.display_name) lines.push(`display_name = "${entry.display_name}"`);
+    if (entry.display_name)
+      lines.push(`display_name = "${entry.display_name}"`);
     if (entry.last_used) lines.push(`last_used = "${entry.last_used}"`);
     return lines.join("\n");
   });

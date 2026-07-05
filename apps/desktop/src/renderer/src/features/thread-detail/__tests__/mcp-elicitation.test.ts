@@ -9,7 +9,7 @@ import {
 } from "../mcp-elicitation";
 
 function buildRequest(
-  params: Partial<AppServerMcpElicitationRequestNotification["params"]>
+  params: Partial<AppServerMcpElicitationRequestNotification["params"]>,
 ): AppServerMcpElicitationRequestNotification {
   return {
     method: "mcpServer/elicitation/request",
@@ -20,7 +20,7 @@ function buildRequest(
       serverName: "playwright",
       mode: "form",
       _meta: null,
-      message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+      message: 'Allow the playwright MCP server to run tool "browser_tabs"?',
       requestedSchema: {
         type: "object",
         properties: {},
@@ -77,7 +77,7 @@ describe("MCP elicitation helpers", () => {
             },
           },
         },
-      })
+      }),
     )!;
 
     expect(canAcceptMcpElicitation(state)).toBe(false);
@@ -122,7 +122,7 @@ describe("MCP elicitation helpers", () => {
             },
           },
         },
-      })
+      }),
     )!;
 
     const withCount = updateMcpFieldValue(state, "count", 3);
@@ -160,7 +160,7 @@ describe("MCP elicitation helpers", () => {
             },
           },
         },
-      })
+      }),
     )!;
 
     expect(canAcceptMcpElicitation(state)).toBe(false);
@@ -187,7 +187,7 @@ describe("MCP elicitation helpers", () => {
         requestedSchema: undefined,
         url: "https://example.test/oauth/start?state=secret-state#fragment",
         elicitationId: "elicitation-1",
-      })
+      }),
     );
 
     expect(state).toBeDefined();
@@ -217,7 +217,7 @@ describe("MCP elicitation helpers", () => {
             },
           },
         },
-      })
+      }),
     );
 
     expect(state).toBeDefined();
@@ -234,15 +234,15 @@ describe("MCP elicitation helpers", () => {
       createMcpElicitationState(
         buildRequest({
           requestId: "",
-        })
-      )
+        }),
+      ),
     ).toBeUndefined();
     expect(
       createMcpElicitationState(
         buildRequest({
           requestedSchema: undefined,
-        })
-      )
+        }),
+      ),
     ).toBeUndefined();
     expect(
       createMcpElicitationState(
@@ -251,16 +251,18 @@ describe("MCP elicitation helpers", () => {
           requestedSchema: undefined,
           url: "",
           elicitationId: "elicitation-1",
-        })
-      )
+        }),
+      ),
     ).toBeUndefined();
   });
 
   it("redacts tokens and URL query strings for display", () => {
     expect(redactDisplayValue("Bearer abc123")).toBe("[redacted]");
-    expect(redactDisplayValue("abc123def456ghi789jkl012mno345pq")).toBe("[redacted]");
-    expect(redactDisplayValue("https://example.test/path?token=secret#frag")).toBe(
-      "https://example.test/path"
+    expect(redactDisplayValue("abc123def456ghi789jkl012mno345pq")).toBe(
+      "[redacted]",
     );
+    expect(
+      redactDisplayValue("https://example.test/path?token=secret#frag"),
+    ).toBe("https://example.test/path");
   });
 });

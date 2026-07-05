@@ -69,8 +69,8 @@ function matchesAnyScope(
   for (const scope of activeScopes.values()) {
     if (scope.provider !== event.channel.channel) continue;
     if (
-      conversation.id === scope.conversationId ||
-      conversation.parentId === scope.conversationId
+      conversation.id === scope.conversationId
+      || conversation.parentId === scope.conversationId
     ) {
       return true;
     }
@@ -93,7 +93,7 @@ export function inboundEventToPreviewMessage(
 function toPreviewMessage(
   event: Extract<MessagingInboundEvent, { kind: "text" | "media" }>,
 ): InboundPreviewMessage {
-  const rawText = event.kind === "text" ? event.text : event.text ?? "";
+  const rawText = event.kind === "text" ? event.text : (event.text ?? "");
   const text =
     rawText.length > MAX_PREVIEW_TEXT_CHARS
       ? `${rawText.slice(0, MAX_PREVIEW_TEXT_CHARS)}…`
@@ -108,7 +108,9 @@ function toPreviewMessage(
     receivedAt: event.receivedAt,
     actor: {
       platformUserId: event.actor.platformUserId,
-      ...(event.actor.displayName ? { displayName: event.actor.displayName } : {}),
+      ...(event.actor.displayName
+        ? { displayName: event.actor.displayName }
+        : {}),
       ...(event.actor.isBot !== undefined ? { isBot: event.actor.isBot } : {}),
     },
     text,

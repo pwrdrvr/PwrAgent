@@ -50,8 +50,6 @@ describe("read_file tool", () => {
       tool.execute(tool.parseArguments({ path: "src/missing.ts" }), {
         cwd: workspace.path,
       }),
-    ).rejects.toThrow(
-      /read_file failed: unable to read src\/missing\.ts:/,
-    );
+    ).rejects.toThrow(/read_file failed: unable to read src\/missing\.ts:/);
   });
 });

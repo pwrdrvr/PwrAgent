@@ -24,23 +24,33 @@ const FEISHU_CALLBACK_HANDLE_HASH_LENGTH = 18;
 
 export type { IdentifierValidationReason, IdentifierValidationResult };
 
-export function validateFeishuOpenId(value: unknown): IdentifierValidationResult {
+export function validateFeishuOpenId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateFeishuPrefixedId(value, "ou_", MAX_FEISHU_ID_LENGTH);
 }
 
-export function validateFeishuUnionId(value: unknown): IdentifierValidationResult {
+export function validateFeishuUnionId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateFeishuPrefixedId(value, "on_", MAX_FEISHU_ID_LENGTH);
 }
 
-export function validateFeishuChatId(value: unknown): IdentifierValidationResult {
+export function validateFeishuChatId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateFeishuPrefixedId(value, "oc_", MAX_FEISHU_ID_LENGTH);
 }
 
-export function validateFeishuMessageId(value: unknown): IdentifierValidationResult {
+export function validateFeishuMessageId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateFeishuPrefixedId(value, "om_", MAX_FEISHU_ID_LENGTH);
 }
 
-export function validateFeishuTenantKey(value: unknown): IdentifierValidationResult {
+export function validateFeishuTenantKey(
+  value: unknown,
+): IdentifierValidationResult {
   if (typeof value !== "string") return { ok: false, reason: "type" };
   if (value.length === 0) return { ok: false, reason: "empty" };
   if (value.length > MAX_FEISHU_TENANT_KEY_LENGTH) {
@@ -62,8 +72,9 @@ export function validateFeishuCallbackHandle(
     return { ok: false, reason: "format" };
   }
   if (
-    value.length !==
-      FEISHU_CALLBACK_HANDLE_PREFIX.length + FEISHU_CALLBACK_HANDLE_HASH_LENGTH
+    value.length
+    !== FEISHU_CALLBACK_HANDLE_PREFIX.length
+      + FEISHU_CALLBACK_HANDLE_HASH_LENGTH
   ) {
     return { ok: false, reason: "length" };
   }

@@ -93,16 +93,14 @@ function mergeFileDiffDetail(
     existing.fileDiff.diff || detail.fileDiff.diff
       ? `${existing.fileDiff.diff}\n${detail.fileDiff.diff}`
       : "";
-  const fileDiffRefs = (
-    fileDiff: AppServerThreadActivityDetail["fileDiff"],
-  ) => fileDiff?.diffRefs ?? (fileDiff?.diffRef ? [fileDiff.diffRef] : []);
+  const fileDiffRefs = (fileDiff: AppServerThreadActivityDetail["fileDiff"]) =>
+    fileDiff?.diffRefs ?? (fileDiff?.diffRef ? [fileDiff.diffRef] : []);
   const diffRefs = [
     ...fileDiffRefs(existing.fileDiff),
     ...fileDiffRefs(detail.fileDiff),
   ];
   const omittedReason =
-    detail.fileDiff.omittedReason ??
-    existing.fileDiff.omittedReason;
+    detail.fileDiff.omittedReason ?? existing.fileDiff.omittedReason;
 
   return {
     ...existing,
@@ -241,7 +239,10 @@ export function collectEditedFileGroups(params: {
       // Count only — the +/- stats render via the shared colored DiffStat
       // chip in the header (consistent with the thread-row dirty chip),
       // not as plain comma-separated text.
-      summary: formatChangedFileCount({ count: details.length, prefix: "Edited" }),
+      summary: formatChangedFileCount({
+        count: details.length,
+        prefix: "Edited",
+      }),
       additions,
       removals,
       live: bucket.live,

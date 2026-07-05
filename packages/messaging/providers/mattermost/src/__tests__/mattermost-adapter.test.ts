@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { MattermostAdapter, stripBotMention, summarizeThreadRoot } from "../mattermost-adapter.ts";
+import {
+  MattermostAdapter,
+  stripBotMention,
+  summarizeThreadRoot,
+} from "../mattermost-adapter.ts";
 import type {
   MessagingCallbackHandleRecord,
   MessagingCallbackHandleStore,
@@ -46,7 +50,9 @@ function fakeWebSocketClient(
   spies?: { userTyping: string[] },
   hooks?: WebSocketHooks,
 ): WebSocketClient {
-  let messageListener: ((m: { event: string; data?: Record<string, unknown> }) => void) | undefined;
+  let messageListener:
+    | ((m: { event: string; data?: Record<string, unknown> }) => void)
+    | undefined;
   let closeListener: ((connectFailCount: number) => void) | undefined;
   if (hooks) {
     hooks.fireMessage = (m) => {
@@ -96,7 +102,9 @@ function fakeClient4(spies: {
     root_id?: string;
     create_at: number;
   }>;
-  uploadFile?: (formData: FormData) => Promise<{ file_infos?: Array<{ id?: string }> }>;
+  uploadFile?: (
+    formData: FormData,
+  ) => Promise<{ file_infos?: Array<{ id?: string }> }>;
   uploadedFiles?: FormData[];
 }): Client4 {
   return {
@@ -124,7 +132,9 @@ function fakeClient4(spies: {
       if (spies.uploadFile) {
         return await spies.uploadFile(formData);
       }
-      return { file_infos: [{ id: `file-${(spies.uploadedFiles?.length ?? 1)}` }] };
+      return {
+        file_infos: [{ id: `file-${spies.uploadedFiles?.length ?? 1}` }],
+      };
     },
     // Stubs sufficient for `adapter.start()` to complete without
     // throwing — slash-command reconciliation runs against an empty
@@ -166,7 +176,13 @@ describe("MattermostAdapter — capability profile", () => {
   it("exposes the configured authorized actor IDs", () => {
     const adapter = new MattermostAdapter({
       callbackHandleStore: fakeStore,
-      config: { ...baseConfig, authorizedActorIds: [{ id: "alice", displayName: "" }, { id: "bob", displayName: "" }] },
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [
+          { id: "alice", displayName: "" },
+          { id: "bob", displayName: "" },
+        ],
+      },
       logger: silentLogger,
       websocketClient: fakeWebSocketClient(),
     });
@@ -234,7 +250,9 @@ describe("MattermostAdapter — capability profile", () => {
 
     expect(rejectedEvents).toEqual([
       expect.objectContaining({
-        actor: expect.objectContaining({ platformUserId: "otheruserabcdefghijklmn123" }),
+        actor: expect.objectContaining({
+          platformUserId: "otheruserabcdefghijklmn123",
+        }),
         channel: expect.objectContaining({
           conversation: expect.objectContaining({
             id: "channelabcdefghijklmn12345",
@@ -252,7 +270,8 @@ describe("MattermostAdapter — capability profile", () => {
       fireMessage: () => {},
       fireClose: () => {},
     };
-    const events: Array<{ kind: string; command?: string; rawText?: string }> = [];
+    const events: Array<{ kind: string; command?: string; rawText?: string }> =
+      [];
     const adapter = new MattermostAdapter({
       callbackHandleStore: fakeStore,
       client: fakeClient4({
@@ -381,7 +400,9 @@ describe("MattermostAdapter — outbound deliver", () => {
   function makeAdapter(spies: {
     createdPosts: CreatedPost[];
     patchedPosts: PatchedPost[];
-    uploadFile?: (formData: FormData) => Promise<{ file_infos?: Array<{ id?: string }> }>;
+    uploadFile?: (
+      formData: FormData,
+    ) => Promise<{ file_infos?: Array<{ id?: string }> }>;
     uploadedFiles?: FormData[];
   }) {
     return new MattermostAdapter({
@@ -412,21 +433,27 @@ describe("MattermostAdapter — outbound deliver", () => {
     };
   }
 
-  function makeMessageIntent(
-    audit: { channel: MessagingChannelRef; actor?: { platformUserId: string } },
-  ): MessagingSurfaceIntent {
+  function makeMessageIntent(audit: {
+    channel: MessagingChannelRef;
+    actor?: { platformUserId: string };
+  }): MessagingSurfaceIntent {
     return {
       id: "intent-msg-1",
       kind: "message",
       createdAt: 1_700_000_000_000,
-      capabilityProfile: { text: { maxLength: 16_383, encoding: "characters" } },
+      capabilityProfile: {
+        text: { maxLength: 16_383, encoding: "characters" },
+      },
       parts: [{ type: "text", text: "hello" }],
       audit,
     } as unknown as MessagingSurfaceIntent;
   }
 
   it("resolves outbound target via intent.audit.channel (regression: f0974752)", async () => {
-    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+    };
     const adapter = makeAdapter(spies);
 
     const result = await adapter.deliver(
@@ -469,7 +496,10 @@ describe("MattermostAdapter — outbound deliver", () => {
   }
 
   it("discards stream updates when streaming is off without touching the channel", async () => {
-    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+    };
     const adapter = makeAdapter(spies); // baseConfig: streaming off
 
     const result = await adapter.deliver(
@@ -479,7 +509,10 @@ describe("MattermostAdapter — outbound deliver", () => {
         isFinal: false,
         sequence: 1,
         policy: "inherit",
-        audit: { channel: dmChannel("dm-1"), actor: { platformUserId: "user-1" } },
+        audit: {
+          channel: dmChannel("dm-1"),
+          actor: { platformUserId: "user-1" },
+        },
       }),
     );
 
@@ -489,7 +522,10 @@ describe("MattermostAdapter — outbound deliver", () => {
   });
 
   it("posts the first stream chunk then patches it for the rest of the turn", async () => {
-    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+    };
     const adapter = new MattermostAdapter({
       callbackHandleStore: fakeStore,
       client: fakeClient4(spies),
@@ -498,20 +534,41 @@ describe("MattermostAdapter — outbound deliver", () => {
       websocketClient: fakeWebSocketClient(),
       now: () => 1_700_000_000_000,
     });
-    const audit = { channel: dmChannel("dm-1"), actor: { platformUserId: "user-1" } };
+    const audit = {
+      channel: dmChannel("dm-1"),
+      actor: { platformUserId: "user-1" },
+    };
 
     const first = await adapter.deliver(
-      makeStreamIntent({ id: "s1", text: "Partial", isFinal: false, sequence: 1, audit }),
+      makeStreamIntent({
+        id: "s1",
+        text: "Partial",
+        isFinal: false,
+        sequence: 1,
+        audit,
+      }),
     );
     expect(first.outcome).toBe("presented");
 
     const second = await adapter.deliver(
-      makeStreamIntent({ id: "s2", text: "Partial answer", isFinal: false, sequence: 2, audit }),
+      makeStreamIntent({
+        id: "s2",
+        text: "Partial answer",
+        isFinal: false,
+        sequence: 2,
+        audit,
+      }),
     );
     expect(second.outcome).toBe("updated");
 
     const final = await adapter.deliver(
-      makeStreamIntent({ id: "s3", text: "Partial answer, done.", isFinal: true, sequence: 3, audit }),
+      makeStreamIntent({
+        id: "s3",
+        text: "Partial answer, done.",
+        isFinal: true,
+        sequence: 3,
+        audit,
+      }),
     );
     expect(final.outcome).toBe("updated");
 
@@ -523,7 +580,10 @@ describe("MattermostAdapter — outbound deliver", () => {
   });
 
   it("splits a long text-only message across multiple posts", async () => {
-    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+    };
     const adapter = makeAdapter(spies);
     const longText = "This is a full sentence that keeps going. ".repeat(500); // ~21k chars
 
@@ -531,7 +591,9 @@ describe("MattermostAdapter — outbound deliver", () => {
       id: "intent-long",
       kind: "message",
       createdAt: 1_700_000_000_000,
-      capabilityProfile: { text: { maxLength: 16_383, encoding: "characters" } },
+      capabilityProfile: {
+        text: { maxLength: 16_383, encoding: "characters" },
+      },
       parts: [{ type: "text", text: longText }],
       audit: {
         channel: dmChannel("dm-1"),
@@ -547,14 +609,19 @@ describe("MattermostAdapter — outbound deliver", () => {
   });
 
   it("returns failed outcome when neither audit.channel nor opaque postId is present", async () => {
-    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+    };
     const adapter = makeAdapter(spies);
 
     const result = await adapter.deliver({
       id: "intent-orphan",
       kind: "message",
       createdAt: 1_700_000_000_000,
-      capabilityProfile: { text: { maxLength: 16_383, encoding: "characters" } },
+      capabilityProfile: {
+        text: { maxLength: 16_383, encoding: "characters" },
+      },
       parts: [{ type: "text", text: "orphan" }],
     } as unknown as MessagingSurfaceIntent);
 
@@ -563,7 +630,10 @@ describe("MattermostAdapter — outbound deliver", () => {
   });
 
   it("threads replies under root_id when conversation.kind is thread", async () => {
-    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+    };
     const adapter = makeAdapter(spies);
 
     await adapter.deliver(
@@ -617,7 +687,10 @@ describe("MattermostAdapter — outbound deliver", () => {
   });
 
   it("clears attachments on patchPost when delivery.replaceMarkup is true and intent has no buttons", async () => {
-    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+    };
     const adapter = makeAdapter(spies);
 
     // First, produce a surface to update — gives us a targetSurface with opaque state.
@@ -637,7 +710,9 @@ describe("MattermostAdapter — outbound deliver", () => {
       id: "intent-update-1",
       kind: "message",
       createdAt: 1_700_000_000_000,
-      capabilityProfile: { text: { maxLength: 16_383, encoding: "characters" } },
+      capabilityProfile: {
+        text: { maxLength: 16_383, encoding: "characters" },
+      },
       parts: [{ type: "text", text: "edited" }],
       delivery: { mode: "update", replaceMarkup: true },
       targetSurface: initial.surface,
@@ -670,7 +745,10 @@ describe("MattermostAdapter — typing indicator", () => {
       state: "active",
       createdAt: 1_700_000_000_000,
       audit: {
-        channel: { channel: "mattermost", conversation: { id: "dm-typing", kind: "dm" } },
+        channel: {
+          channel: "mattermost",
+          conversation: { id: "dm-typing", kind: "dm" },
+        },
       },
     } as unknown as MessagingSurfaceIntent);
 
@@ -696,7 +774,10 @@ describe("MattermostAdapter — typing indicator", () => {
       state: "idle",
       createdAt: 1_700_000_000_000,
       audit: {
-        channel: { channel: "mattermost", conversation: { id: "dm-typing", kind: "dm" } },
+        channel: {
+          channel: "mattermost",
+          conversation: { id: "dm-typing", kind: "dm" },
+        },
       },
     } as unknown as MessagingSurfaceIntent);
 
@@ -723,7 +804,10 @@ describe("MattermostAdapter — conversation kind round-trip", () => {
       },
     };
 
-    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+    };
     const adapter = new MattermostAdapter({
       callbackHandleStore: trackingStore,
       client: fakeClient4(spies),
@@ -748,7 +832,10 @@ describe("MattermostAdapter — conversation kind round-trip", () => {
       actions: [{ id: "action-resume", label: "Resume" }],
       allowedActorIds: ["user-1", "user-2"],
       audit: {
-        channel: { channel: "mattermost", conversation: { id: "dm-id", kind: "dm" } },
+        channel: {
+          channel: "mattermost",
+          conversation: { id: "dm-id", kind: "dm" },
+        },
         actor: { platformUserId: "user-1" },
         bindingId: "binding-1",
       },
@@ -776,7 +863,10 @@ describe("MattermostAdapter — conversation kind round-trip", () => {
         return record;
       },
     };
-    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+    };
     const adapter = new MattermostAdapter({
       callbackHandleStore: trackingStore,
       client: fakeClient4(spies),
@@ -798,7 +888,10 @@ describe("MattermostAdapter — conversation kind round-trip", () => {
     await adapter.deliver({
       ...baseIntent,
       audit: {
-        channel: { channel: "mattermost", conversation: { id: "channel-1", kind: "channel" } },
+        channel: {
+          channel: "mattermost",
+          conversation: { id: "channel-1", kind: "channel" },
+        },
         actor: { platformUserId: "user-1" },
         bindingId: "binding-1",
       },
@@ -806,7 +899,10 @@ describe("MattermostAdapter — conversation kind round-trip", () => {
     await adapter.deliver({
       ...baseIntent,
       audit: {
-        channel: { channel: "mattermost", conversation: { id: "channel-2", kind: "channel" } },
+        channel: {
+          channel: "mattermost",
+          conversation: { id: "channel-2", kind: "channel" },
+        },
         actor: { platformUserId: "user-1" },
         bindingId: "binding-2",
       },
@@ -866,10 +962,17 @@ describe("MattermostAdapter — slash command response_url", () => {
       const adapter = new MattermostAdapter({
         callbackHandleStore: fakeStore,
         client: fakeClient4(spies),
-        config: { ...baseConfig, authorizedActorIds: [{ id: "harold-user-id", displayName: "" }] },
+        config: {
+          ...baseConfig,
+          authorizedActorIds: [{ id: "harold-user-id", displayName: "" }],
+        },
         logger: silentLogger,
         websocketClient: fakeWebSocketClient(),
-        callbackServer: { start: async () => {}, stop: async () => {}, signContext: () => ({ hmac: "x", issuedAt: 0 }) } as never,
+        callbackServer: {
+          start: async () => {},
+          stop: async () => {},
+          signContext: () => ({ hmac: "x", issuedAt: 0 }),
+        } as never,
         now: () => 1_700_000_000_000,
       });
       // start() populates botUserId via getMe() — required because
@@ -883,11 +986,22 @@ describe("MattermostAdapter — slash command response_url", () => {
         id: "intent-picker-1",
         kind: "thread_picker",
         createdAt: 1_700_000_000_000,
-        capabilityProfile: { text: { maxLength: 16_383, encoding: "characters" } },
+        capabilityProfile: {
+          text: { maxLength: 16_383, encoding: "characters" },
+        },
         prompt: "Choose a thread",
-        page: { actions: [], items: [], pageIndex: 0, pageSize: 10, totalItems: 0 },
+        page: {
+          actions: [],
+          items: [],
+          pageIndex: 0,
+          pageSize: 10,
+          totalItems: 0,
+        },
         audit: {
-          channel: { channel: "mattermost", conversation: { id: "channel-1", kind: "channel" } },
+          channel: {
+            channel: "mattermost",
+            conversation: { id: "channel-1", kind: "channel" },
+          },
           actor: { platformUserId: "harold-user-id" },
         },
         targetSurface: {
@@ -895,7 +1009,8 @@ describe("MattermostAdapter — slash command response_url", () => {
           id: "slashcmd-event-1",
           state: {
             opaque: {
-              responseUrl: "https://mattermost.example.com/hooks/commands/abc123",
+              responseUrl:
+                "https://mattermost.example.com/hooks/commands/abc123",
               responseUrlInvokerUserId: "harold-user-id",
             },
           },
@@ -915,7 +1030,10 @@ describe("MattermostAdapter — slash command response_url", () => {
       });
       // Surface ref should reflect the recovered post_id + root_id
       // so subsequent updates target the right post in the thread.
-      const opaque = (result.surface?.state?.opaque ?? {}) as Record<string, unknown>;
+      const opaque = (result.surface?.state?.opaque ?? {}) as Record<
+        string,
+        unknown
+      >;
       expect(opaque.postId).toBe("picker-post-1");
       expect(opaque.rootId).toBe("thread-root-1");
     } finally {
@@ -926,7 +1044,7 @@ describe("MattermostAdapter — slash command response_url", () => {
   it("falls back to createPost when response_url POST returns non-2xx", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () =>
-      ({ ok: false, status: 410 } as Response)) as typeof fetch;
+      ({ ok: false, status: 410 }) as Response) as typeof fetch;
 
     try {
       const spies = {
@@ -939,7 +1057,11 @@ describe("MattermostAdapter — slash command response_url", () => {
         config: baseConfig,
         logger: silentLogger,
         websocketClient: fakeWebSocketClient(),
-        callbackServer: { start: async () => {}, stop: async () => {}, signContext: () => ({ hmac: "x", issuedAt: 0 }) } as never,
+        callbackServer: {
+          start: async () => {},
+          stop: async () => {},
+          signContext: () => ({ hmac: "x", issuedAt: 0 }),
+        } as never,
         now: () => 1_700_000_000_000,
       });
       await adapter.start(async () => {});
@@ -947,11 +1069,22 @@ describe("MattermostAdapter — slash command response_url", () => {
         id: "intent-fallback-1",
         kind: "thread_picker",
         createdAt: 1_700_000_000_000,
-        capabilityProfile: { text: { maxLength: 16_383, encoding: "characters" } },
+        capabilityProfile: {
+          text: { maxLength: 16_383, encoding: "characters" },
+        },
         prompt: "Choose a thread",
-        page: { actions: [], items: [], pageIndex: 0, pageSize: 10, totalItems: 0 },
+        page: {
+          actions: [],
+          items: [],
+          pageIndex: 0,
+          pageSize: 10,
+          totalItems: 0,
+        },
         audit: {
-          channel: { channel: "mattermost", conversation: { id: "channel-1", kind: "channel" } },
+          channel: {
+            channel: "mattermost",
+            conversation: { id: "channel-1", kind: "channel" },
+          },
           actor: { platformUserId: "user-1" },
         },
         targetSurface: {
@@ -959,7 +1092,8 @@ describe("MattermostAdapter — slash command response_url", () => {
           id: "slashcmd-event-2",
           state: {
             opaque: {
-              responseUrl: "https://mattermost.example.com/hooks/commands/expired",
+              responseUrl:
+                "https://mattermost.example.com/hooks/commands/expired",
             },
           },
         },
@@ -992,7 +1126,8 @@ describe("summarizeThreadRoot", () => {
   });
 
   it("truncates messages over 50 chars with an ellipsis", () => {
-    const long = "How much wood would a woodchuck chuck if a woodchuck could chuck wood?";
+    const long =
+      "How much wood would a woodchuck chuck if a woodchuck could chuck wood?";
     const result = summarizeThreadRoot(long);
     expect(result.endsWith("…")).toBe(true);
     expect(result.length).toBeLessThanOrEqual(50);
@@ -1007,7 +1142,9 @@ describe("summarizeThreadRoot", () => {
 describe("stripBotMention", () => {
   it("returns undefined when text doesn't start with the mention", () => {
     expect(stripBotMention("hello world", "pwragent")).toBeUndefined();
-    expect(stripBotMention("user said: @pwragent resume", "pwragent")).toBeUndefined();
+    expect(
+      stripBotMention("user said: @pwragent resume", "pwragent"),
+    ).toBeUndefined();
   });
 
   it("strips the @<botUsername> prefix and returns the remainder", () => {
@@ -1063,7 +1200,8 @@ describe("stripBotMention", () => {
 describe("MattermostAdapter — response_url echo dedup", () => {
   it("does not dispatch a text event for posts we created via response_url", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => ({ ok: true, status: 200 } as Response)) as typeof fetch;
+    globalThis.fetch = (async () =>
+      ({ ok: true, status: 200 }) as Response) as typeof fetch;
 
     try {
       const spies = {
@@ -1088,7 +1226,10 @@ describe("MattermostAdapter — response_url echo dedup", () => {
       const adapter = new MattermostAdapter({
         callbackHandleStore: fakeStore,
         client: fakeClient4(spies),
-        config: { ...baseConfig, authorizedActorIds: [{ id: "harold-user-id", displayName: "" }] },
+        config: {
+          ...baseConfig,
+          authorizedActorIds: [{ id: "harold-user-id", displayName: "" }],
+        },
         logger: silentLogger,
         websocketClient: fakeWebSocketClient(undefined, wsHooks),
         callbackServer: {
@@ -1109,10 +1250,15 @@ describe("MattermostAdapter — response_url echo dedup", () => {
         id: "intent-status-1",
         kind: "status",
         createdAt: 1_700_000_000_000,
-        capabilityProfile: { text: { maxLength: 16_383, encoding: "characters" } },
+        capabilityProfile: {
+          text: { maxLength: 16_383, encoding: "characters" },
+        },
         text: "Binding: Wood chuck joke (codex)",
         audit: {
-          channel: { channel: "mattermost", conversation: { id: "channel-1", kind: "channel" } },
+          channel: {
+            channel: "mattermost",
+            conversation: { id: "channel-1", kind: "channel" },
+          },
           actor: { platformUserId: "harold-user-id" },
         },
         targetSurface: {
@@ -1120,7 +1266,8 @@ describe("MattermostAdapter — response_url echo dedup", () => {
           id: "slashcmd-event-1",
           state: {
             opaque: {
-              responseUrl: "https://mattermost.example.com/hooks/commands/abc123",
+              responseUrl:
+                "https://mattermost.example.com/hooks/commands/abc123",
               responseUrlInvokerUserId: "harold-user-id",
             },
           },

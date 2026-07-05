@@ -90,7 +90,9 @@ export class AppServerMetadataService {
     };
   }
 
-  listSkills(params?: { cwd?: string; cwds?: string[] }): { data: Array<{ cwd?: string; skills: SkillSummary[] }> } {
+  listSkills(params?: { cwd?: string; cwds?: string[] }): {
+    data: Array<{ cwd?: string; skills: SkillSummary[] }>;
+  } {
     const cwds = normalizeCwds(params);
     if (cwds.length === 0) {
       return { data: [] };

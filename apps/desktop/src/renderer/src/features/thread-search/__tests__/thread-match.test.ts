@@ -24,7 +24,9 @@ function pr(number: number, title?: string): PrSummary {
   };
 }
 
-function thread(partial: Partial<NavigationThreadSummary>): NavigationThreadSummary {
+function thread(
+  partial: Partial<NavigationThreadSummary>,
+): NavigationThreadSummary {
   return {
     source: "codex",
     id: "t1",
@@ -115,7 +117,9 @@ describe("threadMatchesQuery", () => {
     title: "Messaging bug",
     gitBranch: "fix/messaging",
     prs: [pr(779)],
-    linkedDirectories: [{ id: "d", label: "PwrAgent", path: "/x", kind: "local" }],
+    linkedDirectories: [
+      { id: "d", label: "PwrAgent", path: "/x", kind: "local" },
+    ],
   });
 
   it("matches id, title, branch, PR number (with or without #), and directory", () => {

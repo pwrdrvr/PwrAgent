@@ -29,13 +29,15 @@ export function resolveScratchProjectsRoots(options?: {
   const roots = [resolveScratchProjectsRoot(options)];
   if (resolveActiveProfileName(options) === "default") {
     roots.push(path.join(resolvePwragentRoot(options), "projects"));
-    roots.push(path.join(options?.homeDir ?? os.homedir(), ".pwragnt", "projects"));
+    roots.push(
+      path.join(options?.homeDir ?? os.homedir(), ".pwragnt", "projects"),
+    );
   }
   return roots;
 }
 
 export async function createScratchProjectDirectory(
-  now = new Date()
+  now = new Date(),
 ): Promise<string> {
   const projectsRoot = resolveScratchProjectsRoot();
   await fs.mkdir(projectsRoot, { recursive: true });

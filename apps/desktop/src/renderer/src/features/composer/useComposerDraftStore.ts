@@ -43,8 +43,14 @@ export type ComposerDraftStore = {
   getPendingSteer(scopeKey: string): ComposerPendingSteerSnapshot | undefined;
   getQueuedTurn(scopeKey: string): ComposerQueuedTurnSnapshot | undefined;
   getQueuedTurns(scopeKey: string): ComposerQueuedTurnSnapshot[];
-  removeQueuedTurnAt(scopeKey: string, index: number): ComposerQueuedTurnSnapshot | undefined;
-  removeQueuedTurnById(scopeKey: string, id: string): ComposerQueuedTurnSnapshot | undefined;
+  removeQueuedTurnAt(
+    scopeKey: string,
+    index: number,
+  ): ComposerQueuedTurnSnapshot | undefined;
+  removeQueuedTurnById(
+    scopeKey: string,
+    id: string,
+  ): ComposerQueuedTurnSnapshot | undefined;
   shiftQueuedTurn(scopeKey: string): ComposerQueuedTurnSnapshot | undefined;
   listRecoveryCandidates?(
     request: ListComposerDraftRecoveryCandidatesRequest,
@@ -54,16 +60,26 @@ export type ComposerDraftStore = {
     snapshot: ComposerDraftSnapshot,
     status: ComposerDraftLifecycle,
   ): void;
-  setPendingSteer(scopeKey: string, snapshot: ComposerPendingSteerSnapshot): void;
+  setPendingSteer(
+    scopeKey: string,
+    snapshot: ComposerPendingSteerSnapshot,
+  ): void;
   setQueuedTurn(scopeKey: string, snapshot: ComposerQueuedTurnSnapshot): void;
-  setQueuedTurns(scopeKey: string, snapshots: ComposerQueuedTurnSnapshot[]): void;
+  setQueuedTurns(
+    scopeKey: string,
+    snapshots: ComposerQueuedTurnSnapshot[],
+  ): void;
   set(scopeKey: string, snapshot: ComposerDraftSnapshot): void;
 };
 
 export function useComposerDraftStore(): ComposerDraftStore {
   const storeRef = useRef(new Map<string, ComposerDraftSnapshot>());
-  const pendingSteerStoreRef = useRef(new Map<string, ComposerPendingSteerSnapshot>());
-  const queuedTurnStoreRef = useRef(new Map<string, ComposerQueuedTurnSnapshot[]>());
+  const pendingSteerStoreRef = useRef(
+    new Map<string, ComposerPendingSteerSnapshot>(),
+  );
+  const queuedTurnStoreRef = useRef(
+    new Map<string, ComposerQueuedTurnSnapshot[]>(),
+  );
 
   return useMemo(
     () => ({
@@ -78,8 +94,10 @@ export function useComposerDraftStore(): ComposerDraftStore {
         queuedTurnStoreRef.current.delete(scopeKey);
       },
       getPendingSteer: (scopeKey) => pendingSteerStoreRef.current.get(scopeKey),
-      getQueuedTurn: (scopeKey) => queuedTurnStoreRef.current.get(scopeKey)?.[0],
-      getQueuedTurns: (scopeKey) => queuedTurnStoreRef.current.get(scopeKey) ?? [],
+      getQueuedTurn: (scopeKey) =>
+        queuedTurnStoreRef.current.get(scopeKey)?.[0],
+      getQueuedTurns: (scopeKey) =>
+        queuedTurnStoreRef.current.get(scopeKey) ?? [],
       removeQueuedTurnAt: (scopeKey, index) => {
         const current = queuedTurnStoreRef.current.get(scopeKey) ?? [];
         if (index < 0 || index >= current.length) {

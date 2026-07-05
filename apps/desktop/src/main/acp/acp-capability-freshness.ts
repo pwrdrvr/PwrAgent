@@ -43,17 +43,17 @@ export function shouldReprobeAcpCapabilities(
   // cached — see the doc comment above. Probe *errors* don't set
   // `lastDiscoveredAt`, so they fall under "never probed" and also re-probe.
   if (
-    cached === undefined ||
-    cached.runtimeCapabilities === undefined ||
-    cached.lastDiscoveredAt === undefined
+    cached === undefined
+    || cached.runtimeCapabilities === undefined
+    || cached.lastDiscoveredAt === undefined
   ) {
     return true;
   }
   // CLI upgraded/downgraded since the last probe → capabilities may differ.
   if (
-    discoveredVersion !== undefined &&
-    cached.version !== undefined &&
-    discoveredVersion !== cached.version
+    discoveredVersion !== undefined
+    && cached.version !== undefined
+    && discoveredVersion !== cached.version
   ) {
     return true;
   }

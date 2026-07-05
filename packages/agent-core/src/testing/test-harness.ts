@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AppServerNotification, AppServerTurnInputItem, ThreadState } from "../app-server/internal-contract.js";
+import type {
+  AppServerNotification,
+  AppServerTurnInputItem,
+  ThreadState,
+} from "../app-server/internal-contract.js";
 import { CodexAppServer } from "../app-server/codex-app-server.js";
 import { AppServerSessionState } from "../app-server/session-state.js";
 import type {
@@ -89,12 +93,16 @@ export class FakeProvider implements AppServerProvider {
 
 export function createTestHarness(options?: {
   provider?: AppServerProvider;
-  requestHandler?: (method: string, params: Record<string, unknown>) => Promise<unknown> | unknown;
+  requestHandler?: (
+    method: string,
+    params: Record<string, unknown>,
+  ) => Promise<unknown> | unknown;
   sessionState?: AppServerSessionState;
 }) {
   const provider = options?.provider ?? new FakeProvider();
   const notifications: AppServerNotification[] = [];
-  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const requests: Array<{ method: string; params: Record<string, unknown> }> =
+    [];
   const server = new CodexAppServer({
     provider,
     sessionState: options?.sessionState,
@@ -125,7 +133,9 @@ export async function createTemporaryTestDirectory(): Promise<{
   path: string;
   cleanup: () => Promise<void>;
 }> {
-  const tempPath = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-agent-core-"));
+  const tempPath = await fs.mkdtemp(
+    path.join(os.tmpdir(), "pwragent-agent-core-"),
+  );
   return {
     path: tempPath,
     cleanup: async () => {

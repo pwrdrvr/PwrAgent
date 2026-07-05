@@ -202,11 +202,7 @@ export type MessagingThreadBindingSummary = {
 };
 
 /** Check states drive the PR chip dot color only. */
-export type PrChipState =
-  | "failing"
-  | "passing"
-  | "pending"
-  | "unknown";
+export type PrChipState = "failing" | "passing" | "pending" | "unknown";
 
 export type PrLegacyChipState = "merged" | "draft" | "closed";
 
@@ -252,8 +248,10 @@ export type PrSummary = {
 export function normalizePullRequestProvider(
   provider: PullRequestProvider | undefined,
 ): PullRequestProvider {
-  return (provider ?? DEFAULT_PULL_REQUEST_PROVIDER).trim().toLowerCase()
-    || DEFAULT_PULL_REQUEST_PROVIDER;
+  return (
+    (provider ?? DEFAULT_PULL_REQUEST_PROVIDER).trim().toLowerCase()
+    || DEFAULT_PULL_REQUEST_PROVIDER
+  );
 }
 
 export function buildPullRequestStatusKey(
@@ -349,20 +347,23 @@ function isEmptyNavigationLaunchpadProviderSettings(
   return !settings || Object.keys(settings).length === 0;
 }
 
-function seedNavigationLaunchpadProviderSettings<T extends NavigationLaunchpadDefaults>(
+function seedNavigationLaunchpadProviderSettings<
+  T extends NavigationLaunchpadDefaults,
+>(
   launchpad: T,
 ): Partial<Record<AppServerBackendKind, NavigationLaunchpadProviderSettings>> {
   const providerSettings = { ...(launchpad.providerSettings ?? {}) };
-  providerSettings[launchpad.backend] = mergeNavigationLaunchpadProviderSettings(
-    providerSettings[launchpad.backend] ?? {},
-    extractNavigationLaunchpadProviderSettings(launchpad),
-  );
+  providerSettings[launchpad.backend] =
+    mergeNavigationLaunchpadProviderSettings(
+      providerSettings[launchpad.backend] ?? {},
+      extractNavigationLaunchpadProviderSettings(launchpad),
+    );
   return providerSettings;
 }
 
-function clearNavigationLaunchpadProviderFields<T extends NavigationLaunchpadDefaults>(
-  launchpad: T,
-): T {
+function clearNavigationLaunchpadProviderFields<
+  T extends NavigationLaunchpadDefaults,
+>(launchpad: T): T {
   return {
     ...launchpad,
     executionMode: "default",
@@ -697,7 +698,9 @@ export function isAcpBackendId(value: string): value is AcpBackendId {
   if (!value.startsWith(ACP_BACKEND_ID_PREFIX)) {
     return false;
   }
-  return ACP_REGISTRY_ID_PATTERN.test(value.slice(ACP_BACKEND_ID_PREFIX.length));
+  return ACP_REGISTRY_ID_PATTERN.test(
+    value.slice(ACP_BACKEND_ID_PREFIX.length),
+  );
 }
 
 export function isAppServerBackendKind(

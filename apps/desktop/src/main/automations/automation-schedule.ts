@@ -30,7 +30,11 @@ export function computeNextAutomationRunAt(
     case "interval":
       return computeNextIntervalRunAt(schedule, after);
     case "weekly":
-      return computeNextWeeklyRunAt(schedule.daysOfWeek, schedule.timeOfDay, after);
+      return computeNextWeeklyRunAt(
+        schedule.daysOfWeek,
+        schedule.timeOfDay,
+        after,
+      );
     case "weekdays":
       return computeNextWeeklyRunAt(
         ["monday", "tuesday", "wednesday", "thursday", "friday"],
@@ -61,7 +65,8 @@ function computeNextIntervalRunAt(
   schedule: Extract<AutomationScheduleDefinition, { kind: "interval" }>,
   after: number,
 ): number {
-  const intervalMs = schedule.every * (schedule.unit === "minutes" ? MINUTE_MS : HOUR_MS);
+  const intervalMs =
+    schedule.every * (schedule.unit === "minutes" ? MINUTE_MS : HOUR_MS);
   const anchorAt = schedule.anchorAt ?? after;
   if (after < anchorAt) return anchorAt;
   const elapsed = after - anchorAt;
@@ -74,7 +79,9 @@ function computeNextWeeklyRunAt(
   timeOfDay: { hour: number; minute: number },
   after: number,
 ): number {
-  const allowedDays = new Set(daysOfWeek.map((day) => WEEKDAY_TO_DATE_DAY[day]));
+  const allowedDays = new Set(
+    daysOfWeek.map((day) => WEEKDAY_TO_DATE_DAY[day]),
+  );
   const afterDate = new Date(after);
   const startOfDay = new Date(
     afterDate.getFullYear(),
@@ -100,5 +107,7 @@ function computeNextWeeklyRunAt(
 }
 
 function assertNeverSchedule(schedule: never): never {
-  throw new Error(`Unsupported automation schedule: ${JSON.stringify(schedule)}`);
+  throw new Error(
+    `Unsupported automation schedule: ${JSON.stringify(schedule)}`,
+  );
 }

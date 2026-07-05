@@ -1,4 +1,7 @@
-import type { AppServerNotification, ThreadReplayItem } from "./internal-contract.js";
+import type {
+  AppServerNotification,
+  ThreadReplayItem,
+} from "./internal-contract.js";
 import { AppServerSessionState } from "./session-state.js";
 import { PendingInputCoordinator } from "./pending-input.js";
 import type {
@@ -10,7 +13,10 @@ import type {
 type TurnRunnerOptions = {
   state: AppServerSessionState;
   emit: (notification: AppServerNotification) => Promise<void>;
-  requestClient?: (method: string, params: Record<string, unknown>) => Promise<unknown> | unknown;
+  requestClient?: (
+    method: string,
+    params: Record<string, unknown>,
+  ) => Promise<unknown> | unknown;
 };
 
 type ActiveExecution = {
@@ -37,11 +43,13 @@ export class TurnRunner {
     this.requestClient = options.requestClient;
   }
 
-  attach(params: {
-    threadId: string;
-    turnId: string;
-    handle: ProviderActiveTurn;
-  } & TurnRunnerCallbacks): void {
+  attach(
+    params: {
+      threadId: string;
+      turnId: string;
+      handle: ProviderActiveTurn;
+    } & TurnRunnerCallbacks,
+  ): void {
     const pendingInput = new PendingInputCoordinator({
       requestClient: this.requestClient,
       onResolved: async (requestId) => {
@@ -60,7 +68,9 @@ export class TurnRunner {
       turnId: params.turnId,
       pendingInput,
     };
-    execution.unsubscribe = params.handle.subscribe?.((event) => this.onProviderEvent(execution, event));
+    execution.unsubscribe = params.handle.subscribe?.((event) =>
+      this.onProviderEvent(execution, event),
+    );
     this.executions.set(params.turnId, execution);
     void this.completeTurn(params, execution);
   }
@@ -98,7 +108,8 @@ export class TurnRunner {
         });
         this.state.upsertItem(execution.threadId, item);
         await this.emit({
-          method: event.type === "item_started" ? "item/started" : "item/completed",
+          method:
+            event.type === "item_started" ? "item/started" : "item/completed",
           params: {
             threadId: execution.threadId,
             turnId: execution.turnId,
@@ -222,7 +233,9 @@ export class TurnRunner {
     this.state.completeRun(turnId);
     this.state.appendAssistant(threadId, assistantText, {
       sources: result.sources,
-      data: result.providerMetadata ? { providerMetadata: result.providerMetadata } : undefined,
+      data: result.providerMetadata
+        ? { providerMetadata: result.providerMetadata }
+        : undefined,
     });
     this.state.setPreviousResponseId(threadId, result.providerResponseId);
     await this.emit({

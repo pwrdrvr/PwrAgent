@@ -1,6 +1,9 @@
 type TomlValue = string | number | boolean;
 
-export function parseFlatToml(contents: string, filePath: string): Record<string, TomlValue> {
+export function parseFlatToml(
+  contents: string,
+  filePath: string,
+): Record<string, TomlValue> {
   const values: Record<string, TomlValue> = {};
 
   for (const [index, rawLine] of contents.split(/\r?\n/).entries()) {
@@ -9,7 +12,9 @@ export function parseFlatToml(contents: string, filePath: string): Record<string
       continue;
     }
     if (line.startsWith("[") && line.endsWith("]")) {
-      throw new Error(`Unsupported TOML table on line ${index + 1} in ${filePath}`);
+      throw new Error(
+        `Unsupported TOML table on line ${index + 1} in ${filePath}`,
+      );
     }
 
     const separatorIndex = line.indexOf("=");
@@ -28,7 +33,9 @@ export function parseFlatToml(contents: string, filePath: string): Record<string
   return values;
 }
 
-export function stringifyFlatToml(values: Record<string, TomlValue | undefined>): string {
+export function stringifyFlatToml(
+  values: Record<string, TomlValue | undefined>,
+): string {
   return Object.entries(values)
     .filter(([, value]) => value !== undefined)
     .sort(([left], [right]) => left.localeCompare(right))
@@ -37,7 +44,11 @@ export function stringifyFlatToml(values: Record<string, TomlValue | undefined>)
     .concat("\n");
 }
 
-function parseValue(value: string, filePath: string, lineNumber: number): TomlValue {
+function parseValue(
+  value: string,
+  filePath: string,
+  lineNumber: number,
+): TomlValue {
   if (value === "true") {
     return true;
   }
@@ -47,7 +58,7 @@ function parseValue(value: string, filePath: string, lineNumber: number): TomlVa
   if (/^-?\d+(?:\.\d+)?$/.test(value)) {
     return Number(value);
   }
-  if (value.startsWith("\"") && value.endsWith("\"")) {
+  if (value.startsWith('"') && value.endsWith('"')) {
     return unescapeQuotedString(value.slice(1, -1), filePath, lineNumber);
   }
 
@@ -68,7 +79,7 @@ function stripInlineComment(line: string): string {
       escaped = inQuotedString;
       continue;
     }
-    if (character === "\"") {
+    if (character === '"') {
       inQuotedString = !inQuotedString;
       continue;
     }
@@ -97,9 +108,11 @@ function unescapeQuotedString(
     index += 1;
     const escape = value[index];
     if (escape === undefined) {
-      throw new Error(`Invalid TOML escape on line ${lineNumber} in ${filePath}`);
+      throw new Error(
+        `Invalid TOML escape on line ${lineNumber} in ${filePath}`,
+      );
     }
-    if (escape === "\\" || escape === "\"") {
+    if (escape === "\\" || escape === '"') {
       result += escape;
       continue;
     }
@@ -111,7 +124,9 @@ function unescapeQuotedString(
       result += "\t";
       continue;
     }
-    throw new Error(`Unsupported TOML escape \\${escape} on line ${lineNumber} in ${filePath}`);
+    throw new Error(
+      `Unsupported TOML escape \\${escape} on line ${lineNumber} in ${filePath}`,
+    );
   }
 
   return result;

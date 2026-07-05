@@ -72,8 +72,8 @@ function elementContainsSelection(element: HTMLElement | null): boolean {
   for (let index = 0; index < selection.rangeCount; index += 1) {
     const range = selection.getRangeAt(index);
     if (
-      element.contains(range.startContainer) ||
-      element.contains(range.endContainer)
+      element.contains(range.startContainer)
+      || element.contains(range.endContainer)
     ) {
       return true;
     }
@@ -162,9 +162,7 @@ export function EnvActionRunsView(props: {
           ) : null}
         </header>
       ) : null}
-      <div
-        className={`env-action-runs env-action-runs--${props.placement}`}
-      >
+      <div className={`env-action-runs env-action-runs--${props.placement}`}>
         {orderedRuns.map((run) => (
           <EnvActionRunEntry
             key={run.runId}
@@ -253,9 +251,9 @@ export function EnvActionRunEntry(props: {
             {props.environmentName ? ` · ${props.environmentName}` : ""}
             {meta.length > 0 ? ` · ${meta.join(" · ")}` : ""}
           </span>
-          {props.placement === "sidebar" &&
-          typeof run.startedAt === "number" &&
-          run.startedAt > 0 ? (
+          {props.placement === "sidebar"
+          && typeof run.startedAt === "number"
+          && run.startedAt > 0 ? (
             <time
               className="composer__queued-env-action-time"
               dateTime={new Date(run.startedAt).toISOString()}
@@ -347,9 +345,7 @@ export function EnvActionRunEntry(props: {
           <div className="composer__queued-env-action-section-label">
             Output
             {outputLineCount
-              ? ` · ${outputLineCount} line${
-                  outputLineCount === 1 ? "" : "s"
-                }`
+              ? ` · ${outputLineCount} line${outputLineCount === 1 ? "" : "s"}`
               : ""}
           </div>
           <EnvActionOutputBlock output={output} status={status} />
@@ -472,10 +468,7 @@ function EnvActionOutputBlock(props: {
         return current;
       }
 
-      if (
-        current.rawOutput &&
-        props.output.startsWith(current.rawOutput)
-      ) {
+      if (current.rawOutput && props.output.startsWith(current.rawOutput)) {
         const appended = props.output.slice(current.rawOutput.length);
         if (!appended) {
           return { ...current, rawOutput: props.output };

@@ -15,7 +15,9 @@ const runtimeMock = vi.hoisted(() => ({
 const settingsServiceMock = vi.hoisted(() => ({
   readSettings: vi.fn(),
   resolveSlackBotTokenSync: vi.fn(),
-  writeConfigPatch: vi.fn(async () => ({ configPath: "/tmp/pwragent-config.toml" })),
+  writeConfigPatch: vi.fn(async () => ({
+    configPath: "/tmp/pwragent-config.toml",
+  })),
 }));
 const pairingStoreMock = vi.hoisted(() => ({
   markStatus: vi.fn(),
@@ -137,7 +139,9 @@ describe("messaging status ipc", () => {
     pairingStoreMock.markStatus.mockReset();
     pairingStoreMock.recordApproval.mockReset();
     activityLogMock.getPlatformActivitySummary.mockClear();
-    activityLogMock.getPlatformActivitySummary.mockReturnValue({ summaries: [] });
+    activityLogMock.getPlatformActivitySummary.mockReturnValue({
+      summaries: [],
+    });
     activityLogMock.record.mockClear();
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockClear();
     leaseCoordinatorMock.applyLatestConfig.mockClear();
@@ -147,9 +151,8 @@ describe("messaging status ipc", () => {
   });
 
   it("loads startup eligibility diagnostics when enabling messaging at runtime", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
     const { MESSAGING_SET_ENABLED_CHANNEL } = await import("../../shared/ipc");
 
     registerMessagingStatusIpcHandlers();
@@ -179,10 +182,10 @@ describe("messaging status ipc", () => {
   });
 
   it("approves LINE user pairing into authorized users", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } =
+      await import("../../shared/ipc");
     const entry = {
       id: "pairing-line-user",
       platform: "line",
@@ -191,7 +194,10 @@ describe("messaging status ipc", () => {
       status: "observed",
       generatedAt: 1_000,
       expiresAt: 2_000,
-      observedActor: { id: "U0123456789abcdef0123456789abcdef", displayName: "Harold" },
+      observedActor: {
+        id: "U0123456789abcdef0123456789abcdef",
+        displayName: "Harold",
+      },
       observedChat: { id: "U0123456789abcdef0123456789abcdef", kind: "dm" },
     };
     const consumed = { ...entry, status: "consumed" };
@@ -202,7 +208,10 @@ describe("messaging status ipc", () => {
     registerMessagingStatusIpcHandlers();
 
     await expect(
-      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id }),
+      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+        {},
+        { entryId: entry.id },
+      ),
     ).resolves.toMatchObject({ added: true, entry: consumed });
 
     expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
@@ -214,7 +223,10 @@ describe("messaging status ipc", () => {
         },
       },
     });
-    expect(runtimeMock.deliverPairingOutcome).toHaveBeenCalledWith(consumed, "approved");
+    expect(runtimeMock.deliverPairingOutcome).toHaveBeenCalledWith(
+      consumed,
+      "approved",
+    );
     expect(leaseCoordinatorMock.applyLatestConfig).toHaveBeenCalledWith(
       runtimeMock,
       expect.any(Function),
@@ -223,15 +235,21 @@ describe("messaging status ipc", () => {
   });
 
   it("approves LINE group and room pairing into separate bucket lists", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } =
+      await import("../../shared/ipc");
     const approve = async (entry: Record<string, unknown>) => {
       runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
-      pairingStoreMock.markStatus.mockReturnValue({ ...entry, status: "consumed" });
+      pairingStoreMock.markStatus.mockReturnValue({
+        ...entry,
+        status: "consumed",
+      });
       registerMessagingStatusIpcHandlers();
-      await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id });
+      await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+        {},
+        { entryId: entry.id },
+      );
     };
 
     settingsServiceMock.readSettings.mockResolvedValue(lineSettingsSnapshot());
@@ -271,7 +289,10 @@ describe("messaging status ipc", () => {
       messaging: {
         line: {
           authorizedGroups: [
-            { id: "C0123456789abcdef0123456789abcdef", displayName: "LINE group" },
+            {
+              id: "C0123456789abcdef0123456789abcdef",
+              displayName: "LINE group",
+            },
           ],
         },
       },
@@ -280,7 +301,10 @@ describe("messaging status ipc", () => {
       messaging: {
         line: {
           authorizedRooms: [
-            { id: "R0123456789abcdef0123456789abcdef", displayName: "LINE room" },
+            {
+              id: "R0123456789abcdef0123456789abcdef",
+              displayName: "LINE room",
+            },
           ],
         },
       },
@@ -288,10 +312,10 @@ describe("messaging status ipc", () => {
   });
 
   it("approves Slack observed pairing into the requested allowlist", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } =
+      await import("../../shared/ipc");
     const entry = {
       id: "pairing-slack-channel",
       platform: "slack",
@@ -326,9 +350,7 @@ describe("messaging status ipc", () => {
     expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
       messaging: {
         slack: {
-          authorizedChannels: [
-            { id: "C012ABCDEF0", displayName: "hi" },
-          ],
+          authorizedChannels: [{ id: "C012ABCDEF0", displayName: "hi" }],
         },
       },
     });
@@ -346,19 +368,17 @@ describe("messaging status ipc", () => {
     expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
       messaging: {
         slack: {
-          authorizedUserIds: [
-            { id: "U012ABCDEF0", displayName: "Harold" },
-          ],
+          authorizedUserIds: [{ id: "U012ABCDEF0", displayName: "Harold" }],
         },
       },
     });
   });
 
   it("keeps a Slack request observed and records the target when consume is false", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } =
+      await import("../../shared/ipc");
     const entry = {
       id: "pairing-slack-stay",
       platform: "slack",
@@ -393,9 +413,7 @@ describe("messaging status ipc", () => {
     expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
       messaging: {
         slack: {
-          authorizedWorkspaces: [
-            { id: "T025C2NKT", displayName: "" },
-          ],
+          authorizedWorkspaces: [{ id: "T025C2NKT", displayName: "" }],
         },
       },
     });
@@ -414,10 +432,10 @@ describe("messaging status ipc", () => {
   });
 
   it("confirms a user-only approval and notes the channel is still gated", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } =
+      await import("../../shared/ipc");
     const entry = {
       id: "pairing-slack-actor-note",
       platform: "slack",
@@ -455,10 +473,10 @@ describe("messaging status ipc", () => {
   });
 
   it("maps a Slack thread pairing to the channel name and team ID, not the thread text", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } =
+      await import("../../shared/ipc");
     // Pairing sent as a thread reply in #signals-chat: title is the thread's
     // root message ("hi"), parentTitle is the channel name, bucketId the team.
     const entry = {
@@ -497,7 +515,9 @@ describe("messaging status ipc", () => {
     expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
       messaging: {
         slack: {
-          authorizedChannels: [{ id: "G01N9LZU287", displayName: "signals-chat" }],
+          authorizedChannels: [
+            { id: "G01N9LZU287", displayName: "signals-chat" },
+          ],
         },
       },
     });
@@ -515,10 +535,10 @@ describe("messaging status ipc", () => {
   });
 
   it("maps a Slack channel-level pairing (no thread) to the channel name", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } =
+      await import("../../shared/ipc");
     // Pairing sent directly in #signals-chat (not a thread): the channel name
     // is the chat title, there is no parentTitle, bucketId is the team.
     const entry = {
@@ -551,17 +571,19 @@ describe("messaging status ipc", () => {
     expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
       messaging: {
         slack: {
-          authorizedChannels: [{ id: "G01N9LZU287", displayName: "signals-chat" }],
+          authorizedChannels: [
+            { id: "G01N9LZU287", displayName: "signals-chat" },
+          ],
         },
       },
     });
   });
 
   it("resolves the Slack workspace name for a team approval when available", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } =
+      await import("../../shared/ipc");
     const entry = {
       id: "pairing-slack-teamname",
       platform: "slack",
@@ -610,10 +632,10 @@ describe("messaging status ipc", () => {
   });
 
   it("falls back to a blank Slack workspace name when the lookup fails", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } =
+      await import("../../shared/ipc");
     const entry = {
       id: "pairing-slack-teamname-fail",
       platform: "slack",
@@ -633,7 +655,9 @@ describe("messaging status ipc", () => {
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
     settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
     settingsServiceMock.resolveSlackBotTokenSync.mockReturnValue("xoxb-token");
-    slackProviderMock.resolveContact.mockRejectedValue(new Error("network down"));
+    slackProviderMock.resolveContact.mockRejectedValue(
+      new Error("network down"),
+    );
     pairingStoreMock.recordApproval.mockReturnValue(entry);
 
     registerMessagingStatusIpcHandlers();
@@ -653,18 +677,26 @@ describe("messaging status ipc", () => {
   });
 
   it("approves Feishu user and group pairing into the Feishu allowlists", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } =
+      await import("../../shared/ipc");
     const approve = async (entry: Record<string, unknown>) => {
       runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
-      pairingStoreMock.markStatus.mockReturnValue({ ...entry, status: "consumed" });
+      pairingStoreMock.markStatus.mockReturnValue({
+        ...entry,
+        status: "consumed",
+      });
       registerMessagingStatusIpcHandlers();
-      await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id });
+      await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+        {},
+        { entryId: entry.id },
+      );
     };
 
-    settingsServiceMock.readSettings.mockResolvedValue(feishuSettingsSnapshot());
+    settingsServiceMock.readSettings.mockResolvedValue(
+      feishuSettingsSnapshot(),
+    );
 
     await approve({
       id: "pairing-feishu-user",
@@ -706,10 +738,16 @@ describe("messaging status ipc", () => {
       messaging: {
         feishu: {
           authorizedChats: [
-            { id: "oc_071623e2edfe83f4783761cf7fab1601", displayName: "Development" },
+            {
+              id: "oc_071623e2edfe83f4783761cf7fab1601",
+              displayName: "Development",
+            },
           ],
           authorizedUserIds: [
-            { id: "ou_fa23371f44e1e45ef8eb1848c3797042", displayName: "Harold" },
+            {
+              id: "ou_fa23371f44e1e45ef8eb1848c3797042",
+              displayName: "Harold",
+            },
           ],
         },
       },
@@ -718,7 +756,10 @@ describe("messaging status ipc", () => {
       messaging: {
         feishu: {
           authorizedChats: [
-            { id: "oc_071623e2edfe83f4783761cf7fab1601", displayName: "Development" },
+            {
+              id: "oc_071623e2edfe83f4783761cf7fab1601",
+              displayName: "Development",
+            },
           ],
         },
       },
@@ -732,10 +773,10 @@ describe("messaging status ipc", () => {
     // still polling. Asserting the IPC routes through to the lease
     // coordinator's `shutdown` (which both stops the runtime AND
     // releases its lease, mirroring the SIGTERM cleanup).
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_SHUTDOWN_RUNTIME_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_SHUTDOWN_RUNTIME_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerMessagingStatusIpcHandlers();
 
@@ -758,12 +799,10 @@ describe("messaging status ipc", () => {
       ],
     };
     activityLogMock.getPlatformActivitySummary.mockReturnValue(summary);
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL } = await import(
-      "../../shared/ipc"
-    );
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerMessagingStatusIpcHandlers();
 
@@ -780,10 +819,10 @@ describe("messaging status ipc", () => {
     // logged but the spawn proceeds. Otherwise a stuck adapter
     // teardown would strand the operator with no main window.
     leaseCoordinatorMock.shutdown.mockRejectedValueOnce(new Error("boom"));
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_SHUTDOWN_RUNTIME_CHANNEL } = await import("../../shared/ipc");
+    const { registerMessagingStatusIpcHandlers } =
+      await import("../ipc/messaging-status");
+    const { MESSAGING_SHUTDOWN_RUNTIME_CHANNEL } =
+      await import("../../shared/ipc");
 
     registerMessagingStatusIpcHandlers();
 

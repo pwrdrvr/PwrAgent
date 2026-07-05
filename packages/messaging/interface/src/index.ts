@@ -81,8 +81,7 @@ export const MESSAGING_PAIRING_COMMAND_ALIASES = [
   MESSAGING_PAIRING_COMMAND,
   "pwragent_pair",
 ] as const;
-export const MESSAGING_PAIRING_TOKEN_PATTERN =
-  /^[1-9A-HJ-NP-Za-km-z]{32}$/;
+export const MESSAGING_PAIRING_TOKEN_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32}$/;
 export const MESSAGING_PAIRING_SCAN_MAX_CHARS = 512;
 
 export const MESSAGING_DELIVERY_OUTCOMES = [
@@ -180,10 +179,14 @@ function* pairingScanTokens(text: string): Generator<string> {
   }
 }
 
-export function isMessagingPairingCommand(command: string | undefined): boolean {
+export function isMessagingPairingCommand(
+  command: string | undefined,
+): boolean {
   if (!command) return false;
   const normalized = command.replace(/^\//, "").toLowerCase();
-  return MESSAGING_PAIRING_COMMAND_ALIASES.some((alias) => alias === normalized);
+  return MESSAGING_PAIRING_COMMAND_ALIASES.some(
+    (alias) => alias === normalized,
+  );
 }
 
 function isAsciiWhitespace(charCode: number): boolean {
@@ -202,21 +205,25 @@ function isAsciiWhitespace(charCode: number): boolean {
   // long token and `extractMessagingPairingToken` fails to find
   // the command/token pair — silently dropping pairing attempts.
   if (charCode <= 0x20) {
-    return charCode === 0x20
+    return (
+      charCode === 0x20
       || charCode === 0x09
       || charCode === 0x0a
       || charCode === 0x0b
       || charCode === 0x0c
-      || charCode === 0x0d;
+      || charCode === 0x0d
+    );
   }
-  return charCode === 0x00a0
+  return (
+    charCode === 0x00a0
     || charCode === 0x2007
     || charCode === 0x2008
     || charCode === 0x2009
     || charCode === 0x200a
     || charCode === 0x202f
     || charCode === 0x205f
-    || charCode === 0x3000;
+    || charCode === 0x3000
+  );
 }
 
 export type MessagingRateLimitInfo = {
@@ -617,7 +624,9 @@ export function layoutMessagingActionRows<T>(
   flushAuto();
   flushExplicit();
 
-  return typeof options.maxRows === "number" ? rows.slice(0, options.maxRows) : rows;
+  return typeof options.maxRows === "number"
+    ? rows.slice(0, options.maxRows)
+    : rows;
 }
 
 export type MessagingChoice = MessagingSurfaceAction & {
@@ -636,7 +645,10 @@ function layoutAutomaticActionRows<T>(
 ): T[][] {
   const defaultColumns = Math.max(
     1,
-    Math.min(options.maxColumns, Math.floor(options.defaultColumns ?? options.maxColumns)),
+    Math.min(
+      options.maxColumns,
+      Math.floor(options.defaultColumns ?? options.maxColumns),
+    ),
   );
   const rows: T[][] = [];
   let currentRow: T[] = [];
@@ -914,7 +926,8 @@ export function messagingQuestionnaireActions(
     });
   }
   if (messagingQuestionnaireAnswerComplete(answer)) {
-    const isFinalQuestion = normalized.currentIndex >= normalized.questions.length - 1;
+    const isFinalQuestion =
+      normalized.currentIndex >= normalized.questions.length - 1;
     actions.push({
       id: isFinalQuestion ? "questionnaire:submit" : "questionnaire:next",
       label: isFinalQuestion ? "Submit" : "Next",
@@ -1210,7 +1223,12 @@ export type MessagingInboundMediaEvent = MessagingInboundBaseEvent & {
 
 export type MessagingInboundLifecycleEvent = MessagingInboundBaseEvent & {
   kind: "lifecycle";
-  lifecycle: "bound" | "detached" | "revoked" | "adapter_started" | "adapter_stopped";
+  lifecycle:
+    | "bound"
+    | "detached"
+    | "revoked"
+    | "adapter_started"
+    | "adapter_stopped";
 };
 
 export type MessagingInboundEvent =
@@ -1324,10 +1342,7 @@ export type MessagingThreadTopicLinkRecord = {
   updatedAt: number;
 };
 
-export type MessagingTopicCleanupProposalAction =
-  | "keep"
-  | "close"
-  | "delete";
+export type MessagingTopicCleanupProposalAction = "keep" | "close" | "delete";
 
 export type MessagingTopicCleanupProposalItem = {
   id: string;
@@ -1647,14 +1662,16 @@ export function applyActionCapabilityLimits<T extends MessagingSurfaceAction>(
   }
   const max = profile.actions.maxActions;
   const labelLimit = profile.actions.maxLabelLength;
-  const limited = actions.length > max
-    ? truncateActionsByPriority(actions, max)
-    : actions;
+  const limited =
+    actions.length > max ? truncateActionsByPriority(actions, max) : actions;
   return limited.map((action) => {
     if (action.label.length <= labelLimit) {
       return action;
     }
-    return { ...action, label: truncateMessagingLabel(action.label, labelLimit) };
+    return {
+      ...action,
+      label: truncateMessagingLabel(action.label, labelLimit),
+    };
   });
 }
 
@@ -1687,7 +1704,9 @@ export function truncateActionsByPriority<T extends MessagingSurfaceAction>(
     }
     return left.index - right.index;
   });
-  const keptIndices = new Set(indexed.slice(0, maxActions).map((entry) => entry.index));
+  const keptIndices = new Set(
+    indexed.slice(0, maxActions).map((entry) => entry.index),
+  );
   return actions.filter((_, index) => keptIndices.has(index));
 }
 

@@ -24,11 +24,7 @@ export type MessagingDeliveryAdmission =
     }
   | {
       outcome: "dropped";
-      reason:
-        | "cool-off"
-        | "slow-mode"
-        | "budget-exhausted"
-        | "missing-scope";
+      reason: "cool-off" | "slow-mode" | "budget-exhausted" | "missing-scope";
       slowMode: boolean;
     };
 
@@ -144,7 +140,9 @@ export class MessagingDeliveryBudget {
       return false;
     }
     this.pruneState(state, scope, this.now());
-    return state.slowModeUntil !== undefined && state.slowModeUntil > this.now();
+    return (
+      state.slowModeUntil !== undefined && state.slowModeUntil > this.now()
+    );
   }
 
   private stateFor(scope: MessagingDeliveryScope): ScopeState {
@@ -163,7 +161,9 @@ export class MessagingDeliveryBudget {
   ): void {
     const intervalMs = budgetIntervalMs(scope);
     const cutoff = now - intervalMs;
-    state.timestamps = state.timestamps.filter((timestamp) => timestamp > cutoff);
+    state.timestamps = state.timestamps.filter(
+      (timestamp) => timestamp > cutoff,
+    );
     if (state.coolOffUntil !== undefined && state.coolOffUntil <= now) {
       state.coolOffUntil = undefined;
     }
@@ -202,7 +202,10 @@ function budgetLimit(scope: MessagingDeliveryScope): number {
 }
 
 function budgetIntervalMs(scope: MessagingDeliveryScope): number {
-  return Math.max(1, Math.floor(scope.budget?.intervalMs ?? DEFAULT_INTERVAL_MS));
+  return Math.max(
+    1,
+    Math.floor(scope.budget?.intervalMs ?? DEFAULT_INTERVAL_MS),
+  );
 }
 
 function budgetReserved(scope: MessagingDeliveryScope): number {

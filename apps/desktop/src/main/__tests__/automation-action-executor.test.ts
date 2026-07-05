@@ -126,7 +126,8 @@ describe("executeAutomationOutputActions", () => {
     const deliver = vi.fn(async () => ({ ok: true, message: "presented" }));
     const unregisterUnsupported =
       registerAutomationSourceMessageDeliveryHandler(unsupported);
-    const unregisterDeliver = registerAutomationSourceMessageDeliveryHandler(deliver);
+    const unregisterDeliver =
+      registerAutomationSourceMessageDeliveryHandler(deliver);
 
     try {
       await expect(
@@ -214,7 +215,11 @@ describe("executeAutomationOutputActions", () => {
     await expect(
       executeAutomationOutputActions({
         actions: [
-          { id: "slack-thread", kind: "source_message", destination: "source_thread" },
+          {
+            id: "slack-thread",
+            kind: "source_message",
+            destination: "source_thread",
+          },
         ],
         artifact: artifact({
           actionResults: [

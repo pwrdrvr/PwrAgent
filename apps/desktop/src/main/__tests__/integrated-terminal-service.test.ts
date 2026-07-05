@@ -19,7 +19,9 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 }));
 
 beforeEach(() => {
-  settingsServiceMock.resolveIntegratedTerminalWindowsShell.mockReturnValue("auto");
+  settingsServiceMock.resolveIntegratedTerminalWindowsShell.mockReturnValue(
+    "auto",
+  );
   settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
     SHELL: "/bin/sh",
   });

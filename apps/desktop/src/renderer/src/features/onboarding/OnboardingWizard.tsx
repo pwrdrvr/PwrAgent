@@ -85,15 +85,15 @@ function railIndexForStep(step: WizardStep): RailIndex | -1 {
   if (step === "thread-presentation") return 0;
   if (step === "models-providers") return 1;
   if (
-    step === "codex-profile" ||
-    step === "name-codex-profiles" ||
-    step === "shared-codex-login"
+    step === "codex-profile"
+    || step === "name-codex-profiles"
+    || step === "shared-codex-login"
   )
     return 2;
   if (
-    step === "messaging-safety" ||
-    step === "messaging-providers" ||
-    step === "provider-setup"
+    step === "messaging-safety"
+    || step === "messaging-providers"
+    || step === "provider-setup"
   )
     return 3;
   if (step === "done") return 4;
@@ -176,7 +176,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const [density, setDensity] = useState<DesktopAppearanceDensity>(
     props.initialDensity,
   );
-  const [theme, setTheme] = useState<DesktopAppearanceTheme>(props.initialTheme);
+  const [theme, setTheme] = useState<DesktopAppearanceTheme>(
+    props.initialTheme,
+  );
   // When the operator launched with a missing-named profile, default
   // to Isolated mode: the requested name becomes the single profile
   // we're setting up, paired with a Codex auth profile of the same
@@ -184,7 +186,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // if they change their mind.
   const [codexProfileModel, setCodexProfileModel] =
     useState<DesktopCodexProfileModel>(
-      props.bootInfo?.decisionKind === "missing-named-profile" && !props.isReplay
+      props.bootInfo?.decisionKind === "missing-named-profile"
+        && !props.isReplay
         ? "isolated"
         : props.initialCodexProfileModel,
     );
@@ -246,9 +249,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // override others — e.g. "personal profile uses my personal xAI
   // key, work profile uses the work xAI key." A row without an
   // entry here inherits the global `bufferedGrokKey` at graduation.
-  const [xaiKeyByProfile, setXaiKeyByProfile] = useState<Record<string, string>>(
-    {},
-  );
+  const [xaiKeyByProfile, setXaiKeyByProfile] = useState<
+    Record<string, string>
+  >({});
   const setXaiKeyForProfile = useCallback(
     (profileName: string, value: string): void => {
       setXaiKeyByProfile((prev) => ({ ...prev, [profileName]: value }));
@@ -313,7 +316,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       if (event.key !== "Escape" || submitting) return;
       event.preventDefault();
       if (bootInfoModeRef.current === "bootstrap") {
-        setDismissModalOpen((prev) => !prev ? true : prev);
+        setDismissModalOpen((prev) => (!prev ? true : prev));
       } else {
         props.onDismiss(false);
       }
@@ -355,9 +358,10 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // Shared without addressing that gives them a non-working profile.
   // The wizard routes them through `shared-codex-login` first; if
   // they're already logged in, that step is skipped.
-  const codexDefaultProfile = props.settings.snapshot?.models.codex.profiles.profiles.find(
-    (entry) => entry.name === "",
-  );
+  const codexDefaultProfile =
+    props.settings.snapshot?.models.codex.profiles.profiles.find(
+      (entry) => entry.name === "",
+    );
   const sharedNeedsLogin =
     codexProfileModel === "shared" && !codexDefaultProfile?.hasAuthFile;
 
@@ -495,8 +499,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   }, [orderedProviders.length, prevStep, providerSetupIndex, step]);
   const goNext = useCallback(() => {
     if (
-      step === "provider-setup" &&
-      providerSetupIndex + 1 < orderedProviders.length
+      step === "provider-setup"
+      && providerSetupIndex + 1 < orderedProviders.length
     ) {
       setProviderSetupIndex((i) => i + 1);
       return;
@@ -548,9 +552,11 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       const nonEmpty = filterBufferedSecrets(secrets);
       if (Object.keys(nonEmpty).length === 0) return;
       try {
-        await api.writeSecretsToProfile({ profile: targetProfile, secrets: nonEmpty });
+        await api.writeSecretsToProfile({
+          profile: targetProfile,
+          secrets: nonEmpty,
+        });
       } catch (caught) {
-        // eslint-disable-next-line no-console
         console.warn(
           `Onboarding: writeSecretsToProfile failed for "${targetProfile}"`,
           caught,
@@ -599,7 +605,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         try {
           await api.shutdownMessagingRuntime();
         } catch (caught) {
-          // eslint-disable-next-line no-console
           console.warn(
             "Onboarding: shutdownMessagingRuntime failed before spawn — "
               + "child process may collide with stale adapters",
@@ -619,7 +624,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       // straight into it. Production builds relaunch reliably, so they
       // keep the spawn-and-switch path below.
       if (import.meta.env.DEV && props.bootInfo?.mode === "bootstrap") {
-        // eslint-disable-next-line no-console
         console.info(
           `Onboarding: profile "${targetProfile}" is set up and ready. Dev mode `
             + "can't open a second app instance, so PwrAgent will exit now — "
@@ -631,7 +635,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           try {
             await api.quitApp();
           } catch (caught) {
-            // eslint-disable-next-line no-console
             console.warn(
               "Onboarding: quitApp after graduation (dev) failed",
               caught,
@@ -643,7 +646,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       try {
         await api.openPwrAgentProfile({ profile: targetProfile });
       } catch (caught) {
-        // eslint-disable-next-line no-console
         console.warn(
           `Onboarding: failed to auto-switch into "${targetProfile}"`,
           caught,
@@ -662,14 +664,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             // alive gives the operator a fallback window if the
             // spawn never came up. Bad outcome, but better than
             // both windows gone.
-            // eslint-disable-next-line no-console
+
             console.warn(
               `Onboarding: spawned "${targetProfile}" didn't report alive within timeout; keeping bootstrap window open`,
             );
             return;
           }
         } catch (caught) {
-          // eslint-disable-next-line no-console
           console.warn(
             "Onboarding: waitForProfileAlive failed; skipping quit",
             caught,
@@ -693,7 +694,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         try {
           await api.quitApp();
         } catch (caught) {
-          // eslint-disable-next-line no-console
           console.warn("Onboarding: quitApp after graduation failed", caught);
         }
       }
@@ -778,7 +778,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             const resolvedGrokKey =
               override !== undefined && override.length > 0
                 ? override
-                : bufferedSecrets.grokApiKey ?? "";
+                : (bufferedSecrets.grokApiKey ?? "");
             await writeBufferedSecretsIfAny(target, {
               ...bufferedSecrets,
               grokApiKey: resolvedGrokKey,
@@ -799,7 +799,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
                   targetProfile: switchTo,
                 });
               } catch (caught) {
-                // eslint-disable-next-line no-console
                 console.warn(
                   `Onboarding: graduateBootstrapConfigToProfile failed for "${switchTo}"`,
                   caught,
@@ -851,7 +850,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               }
               await openTargetAndQuitBootstrapIfNeeded(defaultName);
             } catch (caught) {
-              // eslint-disable-next-line no-console
               console.warn(
                 "Onboarding: shared-default provisioning failed",
                 caught,
@@ -933,7 +931,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       }
       await openTargetAndQuitBootstrapIfNeeded(defaultName);
     } catch (caught) {
-      // eslint-disable-next-line no-console
       console.warn("Onboarding: skipAndUseDefault failed", caught);
     } finally {
       setSubmitting(false);
@@ -1024,7 +1021,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               settings={props.settings}
               desktopApi={props.desktopApi}
               bufferedGrokKey={bufferedGrokKey}
-              onBufferGrokKey={(value) => setBufferedSecret("grokApiKey", value)}
+              onBufferGrokKey={(value) =>
+                setBufferedSecret("grokApiKey", value)
+              }
             />
           ) : null}
           {step === "welcome" ? <WelcomeStep /> : null}
@@ -1078,9 +1077,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               // post-launch Settings trip. Shared mode collapses to a
               // single profile so we skip the notice.
               multiProfileTarget={
-                codexProfileModel !== "shared" &&
-                !isReplay &&
-                codexProfileNames.length >= 1
+                codexProfileModel !== "shared"
+                && !isReplay
+                && codexProfileNames.length >= 1
                   ? {
                       firstProfileName: codexProfileNames[0]!,
                       otherProfileNames: codexProfileNames.slice(1),
@@ -1203,16 +1202,16 @@ function DismissConfirmModal(props: {
           Skip setup?
         </h2>
         <p className="onboarding-wizard__dismiss-modal-prose">
-          If you skip, PwrAgent will create a <code>default</code> profile
-          that <strong>reuses your existing Codex login</strong> at{" "}
+          If you skip, PwrAgent will create a <code>default</code> profile that{" "}
+          <strong>reuses your existing Codex login</strong> at{" "}
           <code>~/.codex/</code> — which probably means you&rsquo;ll see all
           your existing Codex Desktop threads in the sidebar.
         </p>
         <p className="onboarding-wizard__dismiss-modal-prose">
           If that&rsquo;s not what you want — for example, you wanted an
-          isolated PwrAgent profile separate from your Codex account —
-          click <strong>Exit PwrAgent</strong> instead, then relaunch and
-          walk through the wizard with Isolated or Multiple selected.
+          isolated PwrAgent profile separate from your Codex account — click{" "}
+          <strong>Exit PwrAgent</strong> instead, then relaunch and walk through
+          the wizard with Isolated or Multiple selected.
         </p>
         <div className="onboarding-wizard__dismiss-modal-actions">
           <button
@@ -1259,7 +1258,6 @@ export function validateProfileNames(names: readonly string[]): boolean {
   const set = new Set(normalized);
   return set.size === normalized.length;
 }
-
 
 /* ----------------------------------------------------------------
    Chrome — titlebar, step rail, footer
@@ -1329,7 +1327,10 @@ function WizardRail(props: {
   chosenCodexProfileModel: DesktopCodexProfileModel;
 }) {
   const labelOverrides: Record<number, string> = {
-    0: props.currentIndex > 0 ? densityLabel(props.chosenDensity) : "Thread presentation",
+    0:
+      props.currentIndex > 0
+        ? densityLabel(props.chosenDensity)
+        : "Thread presentation",
     1: "Models / Providers",
     2:
       props.currentIndex > 2
@@ -1348,7 +1349,11 @@ function WizardRail(props: {
               ? "current"
               : "pending";
         const numLabel =
-          state === "done" ? `Step ${idx + 1} ✓` : idx === 4 ? "Done" : `Step ${idx + 1}`;
+          state === "done"
+            ? `Step ${idx + 1} ✓`
+            : idx === 4
+              ? "Done"
+              : `Step ${idx + 1}`;
         return (
           <div
             key={idx}
@@ -1419,20 +1424,21 @@ function WizardFooter(props: {
   onFinish: () => void;
 }) {
   const showBack =
-    props.step !== "welcome" &&
-    props.step !== "done" &&
-    props.step !== "bootstrap-confirm" &&
-    !props.submitting;
+    props.step !== "welcome"
+    && props.step !== "done"
+    && props.step !== "bootstrap-confirm"
+    && !props.submitting;
   // `messaging-safety` and `bootstrap-confirm` render their own
   // Skip/Continue (or Quit/Continue) buttons in the body, so the
   // footer doesn't show a redundant exit link on those screens.
   const showSkip =
-    props.step !== "done" &&
-    props.step !== "messaging-safety" &&
-    props.step !== "bootstrap-confirm";
+    props.step !== "done"
+    && props.step !== "messaging-safety"
+    && props.step !== "bootstrap-confirm";
   const skipLabel = (() => {
     if (props.step === "messaging-providers") return "Skip messaging setup";
-    if (props.step === "provider-setup") return `Skip ${props.currentProviderName}`;
+    if (props.step === "provider-setup")
+      return `Skip ${props.currentProviderName}`;
     return "Skip setup";
   })();
 
@@ -1452,7 +1458,9 @@ function WizardFooter(props: {
     } else if (props.codexLoginDeferred) {
       hint = "Logins deferred — finish from Settings → Profiles later";
     } else {
-      hint = isSingle ? "Log in to continue" : "Log in to each profile to continue";
+      hint = isSingle
+        ? "Log in to continue"
+        : "Log in to each profile to continue";
     }
   } else if (props.step === "messaging-providers") {
     hint =
@@ -1498,8 +1506,8 @@ function WizardFooter(props: {
       </button>
     );
   } else if (
-    props.step === "thread-presentation" ||
-    props.step === "codex-profile"
+    props.step === "thread-presentation"
+    || props.step === "codex-profile"
   ) {
     primary = (
       <button
@@ -1548,8 +1556,7 @@ function WizardFooter(props: {
       </button>
     );
   } else if (props.step === "provider-setup") {
-    const isLast =
-      props.providerSetupIndex + 1 >= props.providerSetupTotal;
+    const isLast = props.providerSetupIndex + 1 >= props.providerSetupTotal;
     primary = (
       <button
         type="button"
@@ -1587,9 +1594,7 @@ function WizardFooter(props: {
             continueLocked ? " is-soft-disabled" : ""
           }`}
           aria-disabled={continueLocked || undefined}
-          aria-describedby={
-            continueLocked ? MESSAGING_GATE_HINT_ID : undefined
-          }
+          aria-describedby={continueLocked ? MESSAGING_GATE_HINT_ID : undefined}
           onClick={() => {
             if (props.submitting) return;
             if (!props.acknowledged) {
@@ -1634,10 +1639,10 @@ function WizardFooter(props: {
         </button>
       ) : null}
       <span className="onboarding-wizard__spacer" />
-      {props.step === "name-codex-profiles" &&
-      !props.codexLoginDeferred &&
-      !props.codexAuthAllAuthed &&
-      props.codexAuthNamedRows > 0 ? (
+      {props.step === "name-codex-profiles"
+      && !props.codexLoginDeferred
+      && !props.codexAuthAllAuthed
+      && props.codexAuthNamedRows > 0 ? (
         <button
           type="button"
           className="onboarding-wizard__btn onboarding-wizard__btn--microlink"
@@ -1646,9 +1651,9 @@ function WizardFooter(props: {
           I&rsquo;ll log in later
         </button>
       ) : null}
-      {props.step === "shared-codex-login" &&
-      !props.sharedLoginDeferred &&
-      !props.sharedAuthed ? (
+      {props.step === "shared-codex-login"
+      && !props.sharedLoginDeferred
+      && !props.sharedAuthed ? (
         <button
           type="button"
           className="onboarding-wizard__btn onboarding-wizard__btn--microlink"
@@ -1712,7 +1717,8 @@ function BackendRequirementsStep(props: {
   // The actual encrypt + write to the chosen profile's state.db
   // happens at Finish via `writeSecretsToProfile` — see the comment
   // on `WriteDesktopSecretsToProfileRequest` for why we defer.
-  const grokOk = Boolean(grokKey?.configured) || props.bufferedGrokKey.length > 0;
+  const grokOk =
+    Boolean(grokKey?.configured) || props.bufferedGrokKey.length > 0;
 
   const [refreshing, setRefreshing] = useState(false);
   const [grokKeyInput, setGrokKeyInput] = useState("");
@@ -1723,7 +1729,6 @@ function BackendRequirementsStep(props: {
     try {
       await props.desktopApi.refreshCodexDiscovery({});
     } catch (caught) {
-      // eslint-disable-next-line no-console
       console.warn("Onboarding: refreshCodexDiscovery failed", caught);
     } finally {
       setRefreshing(false);
@@ -1747,9 +1752,9 @@ function BackendRequirementsStep(props: {
           Pick at least one model backend to continue
         </h1>
         <p className="onboarding-wizard__sub">
-          PwrAgent runs on top of one or both of these providers. You only
-          need one to get started — the rest of the wizard configures
-          profiles and (optionally) messaging on top.
+          PwrAgent runs on top of one or both of these providers. You only need
+          one to get started — the rest of the wizard configures profiles and
+          (optionally) messaging on top.
         </p>
       </header>
 
@@ -1771,7 +1776,8 @@ function BackendRequirementsStep(props: {
           >
             {codexOk ? (
               <>
-                ✓ Found{codexCandidate?.version ? ` v${codexCandidate.version}` : ""}
+                ✓ Found
+                {codexCandidate?.version ? ` v${codexCandidate.version}` : ""}
               </>
             ) : (
               "Not found"
@@ -1795,8 +1801,8 @@ function BackendRequirementsStep(props: {
             <details className="onboarding-wizard__prereq-paths">
               <summary>
                 Searched {discovery?.candidates.length ?? 0} location
-                {discovery && discovery.candidates.length === 1 ? "" : "s"}{" "}
-                — none with a usable Codex
+                {discovery && discovery.candidates.length === 1 ? "" : "s"} —
+                none with a usable Codex
               </summary>
               <ul>
                 {discovery?.candidates.map((candidate) => (
@@ -1804,10 +1810,10 @@ function BackendRequirementsStep(props: {
                     <code>{candidate.command}</code>
                     <span className="onboarding-wizard__prereq-paths-reason">
                       {candidate.executable
-                        ? candidate.failureReason ?? "no version"
+                        ? (candidate.failureReason ?? "no version")
                         : candidate.failureReason === "not_found"
                           ? "not found"
-                          : candidate.failureReason ?? "not executable"}
+                          : (candidate.failureReason ?? "not executable")}
                     </span>
                   </li>
                 ))}
@@ -1845,8 +1851,8 @@ function BackendRequirementsStep(props: {
           <div>
             <div className="onboarding-wizard__prereq-title">xAI API key</div>
             <div className="onboarding-wizard__prereq-sub">
-              Required for the Grok backend. Encrypted with your OS keychain
-              and saved to the profile you pick on the next steps.
+              Required for the Grok backend. Encrypted with your OS keychain and
+              saved to the profile you pick on the next steps.
             </div>
           </div>
           <span
@@ -1941,8 +1947,8 @@ function BootstrapConfirmStep(props: {
         Set up <code>{name}</code>?
       </h1>
       <p className="onboarding-wizard__sub onboarding-wizard__sub--center">
-        PwrAgent doesn&rsquo;t know a profile named <code>{name}</code> yet.
-        You started this run via{" "}
+        PwrAgent doesn&rsquo;t know a profile named <code>{name}</code> yet. You
+        started this run via{" "}
         {props.source === "missing-named" ? (
           <>
             <code>--profile</code> or <code>PWRAGENT_PROFILE</code>
@@ -1950,21 +1956,21 @@ function BootstrapConfirmStep(props: {
         ) : (
           "the launch environment"
         )}
-        , so we can either walk you through creating it (paired with a
-        new Codex auth profile of the same name) or quit so you can
-        re-launch with a different name.
+        , so we can either walk you through creating it (paired with a new Codex
+        auth profile of the same name) or quit so you can re-launch with a
+        different name.
       </p>
       <ul className="onboarding-wizard__bootstrap-confirm-points">
         <li>
-          <strong>What you&rsquo;ll do next:</strong> pick how PwrAgent
-          relates to your Codex install (Shared / Isolated / Multiple),
-          log into the Codex auth profile, and choose your theme +
-          messaging preferences. Takes a couple of minutes.
+          <strong>What you&rsquo;ll do next:</strong> pick how PwrAgent relates
+          to your Codex install (Shared / Isolated / Multiple), log into the
+          Codex auth profile, and choose your theme + messaging preferences.
+          Takes a couple of minutes.
         </li>
         <li>
-          <strong>What you won&rsquo;t do:</strong> overwrite your
-          existing <code>~/.codex/</code> default session, lose any
-          threads, or commit to messaging — that part is optional.
+          <strong>What you won&rsquo;t do:</strong> overwrite your existing{" "}
+          <code>~/.codex/</code> default session, lose any threads, or commit to
+          messaging — that part is optional.
         </li>
       </ul>
       <div className="onboarding-wizard__bootstrap-confirm-actions">
@@ -1986,8 +1992,8 @@ function BootstrapConfirmStep(props: {
         </button>
       </div>
       <p className="onboarding-wizard__bootstrap-confirm-hint">
-        Tip: launch without <code>--profile</code> / <code>PWRAGENT_PROFILE</code>{" "}
-        to pick from existing profiles instead.
+        Tip: launch without <code>--profile</code> /{" "}
+        <code>PWRAGENT_PROFILE</code> to pick from existing profiles instead.
       </p>
     </div>
   );
@@ -2005,8 +2011,8 @@ function WelcomeStep() {
       <p className="onboarding-wizard__sub">
         Pick how your thread list looks, which model backend you&rsquo;ll run
         on, how PwrAgent relates to your Codex install, and (optionally) a
-        messaging platform. Every choice persists in Settings and is
-        reversible at any time.
+        messaging platform. Every choice persists in Settings and is reversible
+        at any time.
       </p>
       <ol className="onboarding-wizard__welcome-list">
         <li>
@@ -2035,9 +2041,7 @@ function WelcomeStep() {
         <li>
           <span className="onboarding-wizard__welcome-num">3</span>
           <div>
-            <div className="onboarding-wizard__welcome-row-title">
-              Profiles
-            </div>
+            <div className="onboarding-wizard__welcome-row-title">Profiles</div>
             <div className="onboarding-wizard__welcome-row-sub">
               Share your existing Codex login, isolate a fresh one, or set up
               several at once.
@@ -2087,13 +2091,15 @@ function ThreadPresentationStep(props: {
           role="radiogroup"
           aria-label="Theme"
         >
-          {(
-            [
-              { value: "system" as const, label: "Follow System", meta: "Match OS" },
-              { value: "light" as const, label: "Light", meta: "Always light" },
-              { value: "dark" as const, label: "Dark", meta: "Always dark" },
-            ]
-          ).map((option) => (
+          {[
+            {
+              value: "system" as const,
+              label: "Follow System",
+              meta: "Match OS",
+            },
+            { value: "light" as const, label: "Light", meta: "Always light" },
+            { value: "dark" as const, label: "Dark", meta: "Always dark" },
+          ].map((option) => (
             <button
               key={option.value}
               type="button"
@@ -2103,7 +2109,9 @@ function ThreadPresentationStep(props: {
               onClick={() => props.onThemeChange(option.value)}
             >
               <span>{option.label}</span>
-              <span className="onboarding-wizard__segmented-meta">{option.meta}</span>
+              <span className="onboarding-wizard__segmented-meta">
+                {option.meta}
+              </span>
             </button>
           ))}
         </div>
@@ -2209,7 +2217,10 @@ function MessagingSafetyStep(props: {
    * `undefined` for Shared mode (only one profile exists — no
    * disambiguation needed).
    */
-  multiProfileTarget?: { firstProfileName: string; otherProfileNames: readonly string[] };
+  multiProfileTarget?: {
+    firstProfileName: string;
+    otherProfileNames: readonly string[];
+  };
 }) {
   // Replay the attention ring ONLY when the parent's nonce actually
   // changes during this step's lifetime — i.e. the operator clicked the
@@ -2237,17 +2248,17 @@ function MessagingSafetyStep(props: {
         Messaging is optional — and worth thinking about first
       </h1>
       <p className="onboarding-wizard__sub onboarding-wizard__sub--center">
-        Connecting a chat platform lets you drive PwrAgent from your phone.
-        You can also skip this and stay on the desktop. Either way, three
-        principles to read before you decide.
+        Connecting a chat platform lets you drive PwrAgent from your phone. You
+        can also skip this and stay on the desktop. Either way, three principles
+        to read before you decide.
       </p>
       {props.multiProfileTarget
       && props.multiProfileTarget.otherProfileNames.length > 0 ? (
         <div className="onboarding-wizard__safety-multi-notice" role="note">
           <strong>Heads up:</strong> we'll set up messaging for{" "}
           <code>{props.multiProfileTarget.firstProfileName}</code> here. The
-          other profile{props.multiProfileTarget.otherProfileNames.length === 1 ? "" : "s"}{" "}
-          (
+          other profile
+          {props.multiProfileTarget.otherProfileNames.length === 1 ? "" : "s"} (
           {props.multiProfileTarget.otherProfileNames.map((name, i) => (
             <span key={name}>
               {i > 0 ? ", " : ""}
@@ -2255,10 +2266,12 @@ function MessagingSafetyStep(props: {
             </span>
           ))}
           ) start without messaging. To configure messaging for{" "}
-          {props.multiProfileTarget.otherProfileNames.length === 1 ? "it" : "them"},
-          open each profile after the wizard finishes and use{" "}
-          <strong>Settings → Messaging</strong>. Each profile needs its own
-          bot — one bot token can only be polled by one process at a time.
+          {props.multiProfileTarget.otherProfileNames.length === 1
+            ? "it"
+            : "them"}
+          , open each profile after the wizard finishes and use{" "}
+          <strong>Settings → Messaging</strong>. Each profile needs its own bot
+          — one bot token can only be polled by one process at a time.
         </div>
       ) : null}
       <ul className="onboarding-wizard__safety-list">
@@ -2268,13 +2281,13 @@ function MessagingSafetyStep(props: {
         </li>
         <li>
           <strong>If you do connect a work device,</strong> connect only the
-          work messaging platform — never personal messaging platforms — on
-          that device.
+          work messaging platform — never personal messaging platforms — on that
+          device.
         </li>
         <li>
           <strong>Talk to your security team</strong> before connecting a work
-          device to anything. Sadly, we know what the answer often will be.
-          Act responsibly.
+          device to anything. Sadly, we know what the answer often will be. Act
+          responsibly.
         </li>
       </ul>
       <label
@@ -2291,11 +2304,11 @@ function MessagingSafetyStep(props: {
           aria-hidden
         />
         <span className="onboarding-wizard__safety-ack-text">
-          <strong>I understand.</strong> I have carefully evaluated whether
-          and how to proceed with connecting an agent to messaging platforms.
-          All risk — including risk to my employment — is my own. I agree to
-          hold PwrDrvr LLC and all PwrAgent contributors harmless for the
-          outcomes of any actions I take here.
+          <strong>I understand.</strong> I have carefully evaluated whether and
+          how to proceed with connecting an agent to messaging platforms. All
+          risk — including risk to my employment — is my own. I agree to hold
+          PwrDrvr LLC and all PwrAgent contributors harmless for the outcomes of
+          any actions I take here.
         </span>
         {flashKey > 0 ? (
           // Keyed on the local flash counter so each genuine
@@ -2332,8 +2345,8 @@ function MessagingSafetyStep(props: {
         ) : null}
       </span>
       <p className="onboarding-wizard__safety-fork-hint">
-        You can always add or change messaging providers later from
-        Settings → Messaging.
+        You can always add or change messaging providers later from Settings →
+        Messaging.
       </p>
     </div>
   );
@@ -2465,7 +2478,9 @@ function MessagingProvidersStep(props: {
                 />
               </span>
               <span className="onboarding-wizard__provider-name">
-                <span className="onboarding-wizard__provider-icon">{row.icon}</span>
+                <span className="onboarding-wizard__provider-icon">
+                  {row.icon}
+                </span>
                 {row.name}
                 {row.recommended ? (
                   <span className="onboarding-wizard__provider-rec">
@@ -2511,8 +2526,8 @@ function DoneStep(props: {
   }, [props.acknowledged, props.messagingProviders]);
   const codexSummary = useMemo(() => {
     if (
-      props.codexProfileModel === "multiple" &&
-      props.codexProfileNames?.length
+      props.codexProfileModel === "multiple"
+      && props.codexProfileNames?.length
     ) {
       return `Multiple — ${props.codexProfileNames
         .map((n) => n.trim())
@@ -2623,7 +2638,9 @@ function DensityCompactPreview() {
   return (
     <div className="onboarding-wizard__mini">
       <div className="onboarding-wizard__mini-row is-active">
-        <span className="onboarding-wizard__mini-title">PwrAgent - Release</span>
+        <span className="onboarding-wizard__mini-title">
+          PwrAgent - Release
+        </span>
         <MiniPinChip />
         <span className="onboarding-wizard__mini-time">2h</span>
       </div>
@@ -2633,7 +2650,9 @@ function DensityCompactPreview() {
         <span className="onboarding-wizard__mini-time">May 7</span>
       </div>
       <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-title">Text Mode for Button Platforms</span>
+        <span className="onboarding-wizard__mini-title">
+          Text Mode for Button Platforms
+        </span>
         <MiniPinChip />
         <MiniPrChip num="352" status="ok" />
         <span className="onboarding-wizard__mini-emoji">👀</span>
@@ -2641,7 +2660,9 @@ function DensityCompactPreview() {
       </div>
       <div className="onboarding-wizard__mini-row">
         <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">Automation scheduling system</span>
+        <span className="onboarding-wizard__mini-title">
+          Automation scheduling system
+        </span>
         <MiniPinChip />
         <MiniPrChip num="376" status="ok" />
         <span className="onboarding-wizard__mini-emoji">🏃</span>
@@ -2649,14 +2670,18 @@ function DensityCompactPreview() {
       </div>
       <div className="onboarding-wizard__mini-row">
         <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">OCR image tags and descriptions</span>
+        <span className="onboarding-wizard__mini-title">
+          OCR image tags and descriptions
+        </span>
         <MiniPinChip />
         <MiniPrChip num="30" status="merged" />
         <span className="onboarding-wizard__mini-emoji">🙏</span>
         <span className="onboarding-wizard__mini-time">3h</span>
       </div>
       <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-title">App image cache disk usage</span>
+        <span className="onboarding-wizard__mini-title">
+          App image cache disk usage
+        </span>
         <MiniPinChip />
         <MiniPrChip num="46" status="draft" />
         <span className="onboarding-wizard__mini-emoji">👀</span>
@@ -2664,7 +2689,9 @@ function DensityCompactPreview() {
       </div>
       <div className="onboarding-wizard__mini-row">
         <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">Pass PDFs through directly</span>
+        <span className="onboarding-wizard__mini-title">
+          Pass PDFs through directly
+        </span>
         <MiniPinChip />
         <MiniPrChip num="386" status="ok" />
         <span className="onboarding-wizard__mini-time">2d</span>
@@ -2683,7 +2710,9 @@ function DensityMissionControlPreview() {
   return (
     <div className="onboarding-wizard__mini">
       <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc is-active">
-        <span className="onboarding-wizard__mini-title">PwrAgent - Release</span>
+        <span className="onboarding-wizard__mini-title">
+          PwrAgent - Release
+        </span>
         <span className="onboarding-wizard__mini-time">2h</span>
         <div className="onboarding-wizard__mini-meta">
           <MiniMetaChip>OpenAI</MiniMetaChip>
@@ -2703,7 +2732,9 @@ function DensityMissionControlPreview() {
         </div>
       </div>
       <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
-        <span className="onboarding-wizard__mini-title">Text Mode for Button Platforms</span>
+        <span className="onboarding-wizard__mini-title">
+          Text Mode for Button Platforms
+        </span>
         <span className="onboarding-wizard__mini-time">2d</span>
         <div className="onboarding-wizard__mini-meta">
           <MiniMetaChip>OpenAI</MiniMetaChip>
@@ -2716,7 +2747,9 @@ function DensityMissionControlPreview() {
       </div>
       <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
         <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">Automation scheduling system</span>
+        <span className="onboarding-wizard__mini-title">
+          Automation scheduling system
+        </span>
         <span className="onboarding-wizard__mini-time">2d</span>
         <div className="onboarding-wizard__mini-meta">
           <MiniMetaChip>OpenAI</MiniMetaChip>
@@ -2760,7 +2793,9 @@ function CodexDiagramIsolated() {
       <div className="onboarding-wizard__codex-multi-pairs">
         <div className="onboarding-wizard__codex-multi-pair">
           <CodexNode label="pwragent" avatar="PA" accent compact tight />
-          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
+          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">
+            →
+          </span>
           <CodexNode
             label="pwragent"
             avatar="CX"
@@ -2806,7 +2841,9 @@ function CodexDiagramMultiple() {
       <div className="onboarding-wizard__codex-multi-pairs">
         <div className="onboarding-wizard__codex-multi-pair">
           <CodexNode label="work" avatar="PA" accent compact tight />
-          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
+          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">
+            →
+          </span>
           <CodexNode
             label="work"
             avatar="CX"
@@ -2817,7 +2854,9 @@ function CodexDiagramMultiple() {
         </div>
         <div className="onboarding-wizard__codex-multi-pair">
           <CodexNode label="personal" avatar="PA" accent compact tight />
-          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
+          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">
+            →
+          </span>
           <CodexNode
             label="personal"
             avatar="CX"
@@ -2828,7 +2867,9 @@ function CodexDiagramMultiple() {
         </div>
         <div className="onboarding-wizard__codex-multi-pair">
           <CodexNode label="projects" avatar="PA" accent compact tight />
-          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
+          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">
+            →
+          </span>
           <CodexNode
             label="projects"
             avatar="CX"
@@ -2920,7 +2961,10 @@ function NameCodexProfilesStep(props: {
   /** Called whenever the per-row login states change, so the wizard
    *  root can gate the footer Continue button on "all named rows
    *  authenticated". `namedRows` excludes blank inputs. */
-  onAuthStateChange: (snapshot: { allAuthed: boolean; namedRows: number }) => void;
+  onAuthStateChange: (snapshot: {
+    allAuthed: boolean;
+    namedRows: number;
+  }) => void;
   /** Global xAI key from Models / Providers step (renderer buffer,
    *  not yet written to a keychain). When a row's per-profile
    *  override is unset, this value graduates to that profile. */
@@ -2935,7 +2979,9 @@ function NameCodexProfilesStep(props: {
   // Login state keyed by the *committed* row name, so name edits before
   // Login is clicked don't carry orphan state, and so a Back-out and
   // re-entry to this step preserves authenticated rows.
-  const [loginStates, setLoginStates] = useState<Record<string, RowLoginState>>({});
+  const [loginStates, setLoginStates] = useState<Record<string, RowLoginState>>(
+    {},
+  );
   const apiRef = useRef(props.desktopApi);
   apiRef.current = props.desktopApi;
 
@@ -2949,7 +2995,12 @@ function NameCodexProfilesStep(props: {
     const trimmed = name.trim();
     if (!trimmed) return false;
     const state = stateFor(trimmed).kind;
-    return state === "starting" || state === "waiting" || state === "checking" || state === "ok";
+    return (
+      state === "starting"
+      || state === "waiting"
+      || state === "checking"
+      || state === "ok"
+    );
   };
 
   const setAt = (idx: number, value: string): void => {
@@ -2983,9 +3034,9 @@ function NameCodexProfilesStep(props: {
     async (name: string): Promise<void> => {
       const api = apiRef.current;
       if (
-        !api?.createCodexAuthProfile ||
-        !api.startCodexAuthProfileLogin ||
-        !isValidProfileName(name)
+        !api?.createCodexAuthProfile
+        || !api.startCodexAuthProfileLogin
+        || !isValidProfileName(name)
       ) {
         return;
       }
@@ -3046,7 +3097,9 @@ function NameCodexProfilesStep(props: {
       } else {
         setLoginStates((prev) => {
           const previousUrl =
-            prev[name] && "url" in prev[name]! ? (prev[name] as { url?: string }).url : undefined;
+            prev[name] && "url" in prev[name]!
+              ? (prev[name] as { url?: string }).url
+              : undefined;
           return {
             ...prev,
             [name]: {
@@ -3065,15 +3118,18 @@ function NameCodexProfilesStep(props: {
     }
   }, []);
 
-  const copyLoginUrl = useCallback(async (url: string | undefined): Promise<void> => {
-    const api = apiRef.current;
-    if (!url || !api?.copyText) return;
-    try {
-      await api.copyText(url);
-    } catch {
-      // Best-effort; nothing to recover.
-    }
-  }, []);
+  const copyLoginUrl = useCallback(
+    async (url: string | undefined): Promise<void> => {
+      const api = apiRef.current;
+      if (!url || !api?.copyText) return;
+      try {
+        await api.copyText(url);
+      } catch {
+        // Best-effort; nothing to recover.
+      }
+    },
+    [],
+  );
 
   // Auto-recheck on window focus: when the operator finishes the OAuth
   // dance in a browser, focus returns to PwrAgent. Re-poll every row
@@ -3102,7 +3158,9 @@ function NameCodexProfilesStep(props: {
       if (stateFor(name).kind !== "idle") continue;
       void (async () => {
         try {
-          const result = await api.checkCodexAuthProfileStatus!({ profile: name });
+          const result = await api.checkCodexAuthProfileStatus!({
+            profile: name,
+          });
           if (result.authenticated) {
             setStateFor(name, {
               kind: "ok",
@@ -3125,12 +3183,12 @@ function NameCodexProfilesStep(props: {
 
   // Propagate auth completion to the wizard root for Continue gating.
   useEffect(() => {
-  const validNames = props.names
+    const validNames = props.names
       .map((name) => normalizeProfileName(name))
       .filter(Boolean);
     const allAuthed =
-      validNames.length > 0 &&
-      validNames.every((name) => stateFor(name).kind === "ok");
+      validNames.length > 0
+      && validNames.every((name) => stateFor(name).kind === "ok");
     props.onAuthStateChange({ allAuthed, namedRows: validNames.length });
     // stateFor is derived from loginStates; depending on names + loginStates
     // is sufficient to drive the snapshot.
@@ -3154,18 +3212,18 @@ function NameCodexProfilesStep(props: {
               Click <strong>Log in</strong> to start the Codex OAuth flow for
               that profile. Tip: focus the browser window that&rsquo;s already
               signed in to the right account first, or use{" "}
-              <strong>Copy URL</strong> to paste the login link into the
-              browser you want.
+              <strong>Copy URL</strong> to paste the login link into the browser
+              you want.
             </>
           ) : (
             <>
               Up to 5. Each name becomes <strong>both</strong> a new PwrAgent
-              profile and a matching Codex auth profile of the same name.
-              Click <strong>Log in</strong> on each row to start the Codex
-              OAuth flow for that profile. Tip: focus the browser window
-              that&rsquo;s already signed in to the right account first, or
-              use <strong>Copy URL</strong> to paste the link into the browser
-              you want.
+              profile and a matching Codex auth profile of the same name. Click{" "}
+              <strong>Log in</strong> on each row to start the Codex OAuth flow
+              for that profile. Tip: focus the browser window that&rsquo;s
+              already signed in to the right account first, or use{" "}
+              <strong>Copy URL</strong> to paste the link into the browser you
+              want.
             </>
           )}
         </p>
@@ -3175,7 +3233,9 @@ function NameCodexProfilesStep(props: {
           const trimmed = name.trim();
           const normalized = normalizeProfileName(name);
           const valid = trimmed === "" || Boolean(normalized);
-          const state = normalized ? stateFor(normalized) : { kind: "idle" as const };
+          const state = normalized
+            ? stateFor(normalized)
+            : { kind: "idle" as const };
           const locked = isRowLocked(normalized);
           return (
             <div
@@ -3183,7 +3243,9 @@ function NameCodexProfilesStep(props: {
               className={`onboarding-wizard__profile-row onboarding-wizard__profile-row--has-login is-${state.kind}`}
             >
               <div className="onboarding-wizard__profile-row-top">
-                <span className="onboarding-wizard__profile-num">{idx + 1}</span>
+                <span className="onboarding-wizard__profile-num">
+                  {idx + 1}
+                </span>
                 <input
                   type="text"
                   className={`onboarding-wizard__profile-input${valid ? "" : " is-invalid"}`}
@@ -3199,7 +3261,9 @@ function NameCodexProfilesStep(props: {
                   state={state}
                   onLogin={() => void startLogin(normalized)}
                   onCheck={() => void refreshStatus(normalized)}
-                  onCopyUrl={() => void copyLoginUrl("url" in state ? state.url : undefined)}
+                  onCopyUrl={() =>
+                    void copyLoginUrl("url" in state ? state.url : undefined)
+                  }
                 />
                 {!isSingle && props.names.length > 1 ? (
                   <button
@@ -3455,12 +3519,11 @@ function SharedCodexLoginStep(props: {
           Log in to your Codex account
         </h1>
         <p className="onboarding-wizard__sub">
-          You picked <strong>Shared</strong> — PwrAgent will reuse your
-          existing Codex install at <code>~/.codex/</code>. We just need to
-          confirm you&rsquo;re signed in. If you&rsquo;ve already logged in
-          via Codex Desktop or the <code>codex</code> CLI, this step is
-          probably already green; otherwise click <strong>Log in</strong>{" "}
-          below.
+          You picked <strong>Shared</strong> — PwrAgent will reuse your existing
+          Codex install at <code>~/.codex/</code>. We just need to confirm
+          you&rsquo;re signed in. If you&rsquo;ve already logged in via Codex
+          Desktop or the <code>codex</code> CLI, this step is probably already
+          green; otherwise click <strong>Log in</strong> below.
         </p>
       </header>
       <div className="onboarding-wizard__profile-list">
@@ -3657,321 +3720,323 @@ type ProviderSetupConfig = {
   pairingOptions?: readonly ProviderPairingOption[];
 };
 
-const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = {
-  telegram: {
-    id: "telegram",
-    intro: (
-      <>
-        Message <strong>@BotFather</strong> on Telegram, send <code>/newbot</code>,
-        pick a name. BotFather replies with a bot token — paste it below.
-      </>
-    ),
-    fields: [
-      {
-        kind: "secret",
-        name: "telegramBotToken",
-        label: "Bot token",
-        sub: "Stored in your system keychain.",
-        placeholder: "0000000000:AAEx………",
-      },
-    ],
-    pairingTitle: "Pair a Telegram conversation",
-    pairingOptions: [
-      {
-        scope: "user_dm",
-        label: "Pair your DMs",
-        help: (
-          <>
-            From <strong>your</strong> Telegram account, open the chat with
-            your new bot and send the pairing message below. PwrAgent sees the
-            message land and finishes pairing automatically — you can use
-            Telegram on any device, the pairing is between your account and
-            the bot.
-          </>
-        ),
-      },
-      {
-        scope: "bucket",
-        label: "Pair a Supergroup / Forum (just you + the bot)",
-        help: (
-          <>
-            <p>
-              Add the bot to a supergroup or forum that contains only you and
-              it, then send the pairing message inside any topic. Threads will
-              land in that topic. Best for keeping the bot conversation in its
-              own room separate from your DMs.
-            </p>
-            <p className="onboarding-wizard__pairing-warning">
-              <strong>⚠ Telegram bot privacy:</strong> by default BotFather
-              ships new bots with <em>privacy mode on</em>, which means the
-              bot can&rsquo;t see plain messages in groups — only commands,
-              @mentions, and replies. If your pairing message never gets a
-              reply from the bot, you need to do <strong>one</strong> of:
-            </p>
-            <ul className="onboarding-wizard__pairing-warning-list">
-              <li>
-                <strong>@mention the bot</strong> in your pair message — e.g.{" "}
-                <code>@yourbot pair &lt;token&gt;</code>. You&rsquo;ll need to
-                @mention it on every message you want the bot to see.
-              </li>
-              <li>
-                <strong>Make the bot an admin</strong> in the group. Admins
-                always see all messages regardless of privacy mode.
-              </li>
-              <li>
-                <strong>Turn privacy mode off</strong> in BotFather:{" "}
-                <code>/mybots</code> → pick your bot → Bot Settings → Group
-                Privacy → Turn off. The bot then sees every message in groups
-                it&rsquo;s a member of.
-              </li>
-            </ul>
-          </>
-        ),
-      },
-    ],
-  },
-  discord: {
-    id: "discord",
-    intro: (
-      <>
-        Discord Developer Portal → create an Application → Bot tab → reset
-        token. Paste it below along with the Application ID (General
-        Information tab).
-      </>
-    ),
-    fields: [
-      {
-        kind: "secret",
-        name: "discordBotToken",
-        label: "Bot token",
-        placeholder: "Paste from Bot → Reset Token",
-      },
-      {
-        kind: "text",
-        key: "applicationId",
-        label: "Application ID",
-        sub: "Found under General Information → Application ID.",
-        placeholder: "1480556454498009352",
-      },
-    ],
-    pairingTitle: "Pair a Discord conversation",
-    pairingOptions: [
-      {
-        scope: "user_dm",
-        label: "Pair your DMs with the bot",
-        help: (
-          <>
-            Invite the bot to a guild (Developer Portal → OAuth2 URL
-            Generator, scopes <code>bot</code> + <code>applications.commands</code>),
-            then DM the bot the pairing message below from your Discord
-            account.
-          </>
-        ),
-      },
-    ],
-  },
-  mattermost: {
-    id: "mattermost",
-    intro: (
-      <>
-        In your Mattermost server: System Console → Integrations → Bot
-        Accounts → create a bot, copy the token. Also set the server URL and
-        a callback base URL reachable from the Mattermost host.
-      </>
-    ),
-    fields: [
-      {
-        kind: "text",
-        key: "serverUrl",
-        label: "Server URL",
-        placeholder: "https://chat.example.com",
-      },
-      {
-        kind: "secret",
-        name: "mattermostBotToken",
-        label: "Bot token",
-      },
-      {
-        kind: "secret",
-        name: "mattermostHmacSecret",
-        label: "HMAC signing secret",
-        sub: "Verifies incoming webhook callbacks. Generate any high-entropy string.",
-      },
-      {
-        kind: "text",
-        key: "callbackBaseUrl",
-        label: "Callback base URL",
-        sub: "Public URL Mattermost will POST events to (tunnel or LAN).",
-        placeholder: "https://pwragent.tail.example.ts.net",
-      },
-    ],
-    pairingTitle: "Pair a Mattermost conversation",
-    pairingOptions: [
-      {
-        scope: "user_dm",
-        label: "Pair your DMs with the bot",
-        help: (
-          <>
-            From your Mattermost account, open a direct message with the bot
-            and post the pairing message below.
-          </>
-        ),
-      },
-    ],
-  },
-  feishu: {
-    id: "feishu",
-    intro: (
-      <>
-        Feishu / Lark Open Platform → create a custom app → copy App ID,
-        App Secret, Encrypt Key, and Verification Token. Pick which tenant
-        region to use and the inbound mode.
-      </>
-    ),
-    fields: [
-      {
-        kind: "segmented",
-        key: "tenantRegion",
-        label: "Tenant region",
-        options: [
-          { label: "Lark (international)", value: "lark" },
-          { label: "Feishu (China)", value: "feishu" },
-        ],
-      },
-      {
-        kind: "segmented",
-        key: "inboundMode",
-        label: "Inbound mode",
-        sub: "Persistent uses long-polling; Webhook needs a public callback URL.",
-        options: [
-          { label: "Persistent", value: "persistent" },
-          { label: "Webhook", value: "webhook" },
-        ],
-      },
-      { kind: "secret", name: "feishuAppId", label: "App ID" },
-      { kind: "secret", name: "feishuAppSecret", label: "App secret" },
-      { kind: "secret", name: "feishuEncryptKey", label: "Encrypt key" },
-      {
-        kind: "secret",
-        name: "feishuVerificationToken",
-        label: "Verification token",
-      },
-    ],
-    pairingTitle: "Pair a Feishu / Lark conversation",
-    pairingOptions: [
-      {
-        scope: "user_dm",
-        label: "Pair your DMs with the bot",
-        help: (
-          <>
-            Open a 1:1 chat with the bot inside Feishu / Lark and post the
-            pairing message below.
-          </>
-        ),
-      },
-    ],
-  },
-  slack: {
-    id: "slack",
-    intro: (
-      <>
-        Slack app config → Install App → grab the Bot User OAuth Token. Pick
-        Socket Mode (easiest, requires App-Level Token) or Events API
-        (requires a public signing secret + callback URL).
-      </>
-    ),
-    fields: [
-      {
-        kind: "segmented",
-        key: "inboundMode",
-        label: "Inbound mode",
-        sub: "Socket Mode is recommended — no public URL needed.",
-        options: [
-          { label: "Socket Mode", value: "socket" },
-          { label: "Events API", value: "events" },
-        ],
-      },
-      { kind: "secret", name: "slackBotToken", label: "Bot token (xoxb-…)" },
-      {
-        kind: "secret",
-        name: "slackAppToken",
-        label: "App-level token (xapp-…)",
-        sub: "Required for Socket Mode. Generate under Basic Information → App-Level Tokens.",
-      },
-      {
-        kind: "secret",
-        name: "slackSigningSecret",
-        label: "Signing secret",
-        sub: "Required for Events API. Found under Basic Information → App Credentials.",
-      },
-      {
-        kind: "text",
-        key: "workspaceUrl",
-        label: "Workspace URL",
-        placeholder: "https://your-team.slack.com",
-      },
-    ],
-    pairingTitle: "Pair a Slack conversation",
-    pairingOptions: [
-      {
-        scope: "observed",
-        label: "Pair from Slack",
-        help: (
-          <>
-            Send the pairing message in a Slack DM or channel. PwrAgent will
-            show what it saw so you can approve the user or the channel.
-          </>
-        ),
-      },
-    ],
-  },
-  line: {
-    id: "line",
-    intro: (
-      <>
-        LINE Developers → Messaging API channel → copy the Channel Access
-        Token and Channel Secret. LINE is webhook-only inbound, so you need a
-        public HTTPS URL pointing at this machine (Cloudflare Tunnel, Tailscale
-        Funnel, ngrok, etc.).
-      </>
-    ),
-    fields: [
-      {
-        kind: "secret",
-        name: "lineChannelAccessToken",
-        label: "Channel access token",
-      },
-      { kind: "secret", name: "lineChannelSecret", label: "Channel secret" },
-      {
-        kind: "text",
-        key: "botUserId",
-        label: "Bot user ID",
-        sub: "Found under Messaging API tab — starts with U.",
-        placeholder: "U1234567890abcdef…",
-      },
-      {
-        kind: "text",
-        key: "callbackBaseUrl",
-        label: "Public callback URL",
-        sub: "Must be reachable over HTTPS from LINE's servers.",
-        placeholder: "https://pwragent.tail.example.ts.net",
-      },
-    ],
-    pairingTitle: "Pair a LINE conversation",
-    pairingOptions: [
-      {
-        scope: "user_dm",
-        label: "Pair your DMs with the bot",
-        help: (
-          <>
-            From your LINE account, add the bot as a friend and post the
-            pairing message in the 1:1 chat.
-          </>
-        ),
-      },
-    ],
-  },
-};
+const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> =
+  {
+    telegram: {
+      id: "telegram",
+      intro: (
+        <>
+          Message <strong>@BotFather</strong> on Telegram, send{" "}
+          <code>/newbot</code>, pick a name. BotFather replies with a bot token
+          — paste it below.
+        </>
+      ),
+      fields: [
+        {
+          kind: "secret",
+          name: "telegramBotToken",
+          label: "Bot token",
+          sub: "Stored in your system keychain.",
+          placeholder: "0000000000:AAEx………",
+        },
+      ],
+      pairingTitle: "Pair a Telegram conversation",
+      pairingOptions: [
+        {
+          scope: "user_dm",
+          label: "Pair your DMs",
+          help: (
+            <>
+              From <strong>your</strong> Telegram account, open the chat with
+              your new bot and send the pairing message below. PwrAgent sees the
+              message land and finishes pairing automatically — you can use
+              Telegram on any device, the pairing is between your account and
+              the bot.
+            </>
+          ),
+        },
+        {
+          scope: "bucket",
+          label: "Pair a Supergroup / Forum (just you + the bot)",
+          help: (
+            <>
+              <p>
+                Add the bot to a supergroup or forum that contains only you and
+                it, then send the pairing message inside any topic. Threads will
+                land in that topic. Best for keeping the bot conversation in its
+                own room separate from your DMs.
+              </p>
+              <p className="onboarding-wizard__pairing-warning">
+                <strong>⚠ Telegram bot privacy:</strong> by default BotFather
+                ships new bots with <em>privacy mode on</em>, which means the
+                bot can&rsquo;t see plain messages in groups — only commands,
+                @mentions, and replies. If your pairing message never gets a
+                reply from the bot, you need to do <strong>one</strong> of:
+              </p>
+              <ul className="onboarding-wizard__pairing-warning-list">
+                <li>
+                  <strong>@mention the bot</strong> in your pair message — e.g.{" "}
+                  <code>@yourbot pair &lt;token&gt;</code>. You&rsquo;ll need to
+                  @mention it on every message you want the bot to see.
+                </li>
+                <li>
+                  <strong>Make the bot an admin</strong> in the group. Admins
+                  always see all messages regardless of privacy mode.
+                </li>
+                <li>
+                  <strong>Turn privacy mode off</strong> in BotFather:{" "}
+                  <code>/mybots</code> → pick your bot → Bot Settings → Group
+                  Privacy → Turn off. The bot then sees every message in groups
+                  it&rsquo;s a member of.
+                </li>
+              </ul>
+            </>
+          ),
+        },
+      ],
+    },
+    discord: {
+      id: "discord",
+      intro: (
+        <>
+          Discord Developer Portal → create an Application → Bot tab → reset
+          token. Paste it below along with the Application ID (General
+          Information tab).
+        </>
+      ),
+      fields: [
+        {
+          kind: "secret",
+          name: "discordBotToken",
+          label: "Bot token",
+          placeholder: "Paste from Bot → Reset Token",
+        },
+        {
+          kind: "text",
+          key: "applicationId",
+          label: "Application ID",
+          sub: "Found under General Information → Application ID.",
+          placeholder: "1480556454498009352",
+        },
+      ],
+      pairingTitle: "Pair a Discord conversation",
+      pairingOptions: [
+        {
+          scope: "user_dm",
+          label: "Pair your DMs with the bot",
+          help: (
+            <>
+              Invite the bot to a guild (Developer Portal → OAuth2 URL
+              Generator, scopes <code>bot</code> +{" "}
+              <code>applications.commands</code>), then DM the bot the pairing
+              message below from your Discord account.
+            </>
+          ),
+        },
+      ],
+    },
+    mattermost: {
+      id: "mattermost",
+      intro: (
+        <>
+          In your Mattermost server: System Console → Integrations → Bot
+          Accounts → create a bot, copy the token. Also set the server URL and a
+          callback base URL reachable from the Mattermost host.
+        </>
+      ),
+      fields: [
+        {
+          kind: "text",
+          key: "serverUrl",
+          label: "Server URL",
+          placeholder: "https://chat.example.com",
+        },
+        {
+          kind: "secret",
+          name: "mattermostBotToken",
+          label: "Bot token",
+        },
+        {
+          kind: "secret",
+          name: "mattermostHmacSecret",
+          label: "HMAC signing secret",
+          sub: "Verifies incoming webhook callbacks. Generate any high-entropy string.",
+        },
+        {
+          kind: "text",
+          key: "callbackBaseUrl",
+          label: "Callback base URL",
+          sub: "Public URL Mattermost will POST events to (tunnel or LAN).",
+          placeholder: "https://pwragent.tail.example.ts.net",
+        },
+      ],
+      pairingTitle: "Pair a Mattermost conversation",
+      pairingOptions: [
+        {
+          scope: "user_dm",
+          label: "Pair your DMs with the bot",
+          help: (
+            <>
+              From your Mattermost account, open a direct message with the bot
+              and post the pairing message below.
+            </>
+          ),
+        },
+      ],
+    },
+    feishu: {
+      id: "feishu",
+      intro: (
+        <>
+          Feishu / Lark Open Platform → create a custom app → copy App ID, App
+          Secret, Encrypt Key, and Verification Token. Pick which tenant region
+          to use and the inbound mode.
+        </>
+      ),
+      fields: [
+        {
+          kind: "segmented",
+          key: "tenantRegion",
+          label: "Tenant region",
+          options: [
+            { label: "Lark (international)", value: "lark" },
+            { label: "Feishu (China)", value: "feishu" },
+          ],
+        },
+        {
+          kind: "segmented",
+          key: "inboundMode",
+          label: "Inbound mode",
+          sub: "Persistent uses long-polling; Webhook needs a public callback URL.",
+          options: [
+            { label: "Persistent", value: "persistent" },
+            { label: "Webhook", value: "webhook" },
+          ],
+        },
+        { kind: "secret", name: "feishuAppId", label: "App ID" },
+        { kind: "secret", name: "feishuAppSecret", label: "App secret" },
+        { kind: "secret", name: "feishuEncryptKey", label: "Encrypt key" },
+        {
+          kind: "secret",
+          name: "feishuVerificationToken",
+          label: "Verification token",
+        },
+      ],
+      pairingTitle: "Pair a Feishu / Lark conversation",
+      pairingOptions: [
+        {
+          scope: "user_dm",
+          label: "Pair your DMs with the bot",
+          help: (
+            <>
+              Open a 1:1 chat with the bot inside Feishu / Lark and post the
+              pairing message below.
+            </>
+          ),
+        },
+      ],
+    },
+    slack: {
+      id: "slack",
+      intro: (
+        <>
+          Slack app config → Install App → grab the Bot User OAuth Token. Pick
+          Socket Mode (easiest, requires App-Level Token) or Events API
+          (requires a public signing secret + callback URL).
+        </>
+      ),
+      fields: [
+        {
+          kind: "segmented",
+          key: "inboundMode",
+          label: "Inbound mode",
+          sub: "Socket Mode is recommended — no public URL needed.",
+          options: [
+            { label: "Socket Mode", value: "socket" },
+            { label: "Events API", value: "events" },
+          ],
+        },
+        { kind: "secret", name: "slackBotToken", label: "Bot token (xoxb-…)" },
+        {
+          kind: "secret",
+          name: "slackAppToken",
+          label: "App-level token (xapp-…)",
+          sub: "Required for Socket Mode. Generate under Basic Information → App-Level Tokens.",
+        },
+        {
+          kind: "secret",
+          name: "slackSigningSecret",
+          label: "Signing secret",
+          sub: "Required for Events API. Found under Basic Information → App Credentials.",
+        },
+        {
+          kind: "text",
+          key: "workspaceUrl",
+          label: "Workspace URL",
+          placeholder: "https://your-team.slack.com",
+        },
+      ],
+      pairingTitle: "Pair a Slack conversation",
+      pairingOptions: [
+        {
+          scope: "observed",
+          label: "Pair from Slack",
+          help: (
+            <>
+              Send the pairing message in a Slack DM or channel. PwrAgent will
+              show what it saw so you can approve the user or the channel.
+            </>
+          ),
+        },
+      ],
+    },
+    line: {
+      id: "line",
+      intro: (
+        <>
+          LINE Developers → Messaging API channel → copy the Channel Access
+          Token and Channel Secret. LINE is webhook-only inbound, so you need a
+          public HTTPS URL pointing at this machine (Cloudflare Tunnel,
+          Tailscale Funnel, ngrok, etc.).
+        </>
+      ),
+      fields: [
+        {
+          kind: "secret",
+          name: "lineChannelAccessToken",
+          label: "Channel access token",
+        },
+        { kind: "secret", name: "lineChannelSecret", label: "Channel secret" },
+        {
+          kind: "text",
+          key: "botUserId",
+          label: "Bot user ID",
+          sub: "Found under Messaging API tab — starts with U.",
+          placeholder: "U1234567890abcdef…",
+        },
+        {
+          kind: "text",
+          key: "callbackBaseUrl",
+          label: "Public callback URL",
+          sub: "Must be reachable over HTTPS from LINE's servers.",
+          placeholder: "https://pwragent.tail.example.ts.net",
+        },
+      ],
+      pairingTitle: "Pair a LINE conversation",
+      pairingOptions: [
+        {
+          scope: "user_dm",
+          label: "Pair your DMs with the bot",
+          help: (
+            <>
+              From your LINE account, add the bot as a friend and post the
+              pairing message in the 1:1 chat.
+            </>
+          ),
+        },
+      ],
+    },
+  };
 
 function ProviderSetupStep(props: {
   provider: OnboardingProvider;
@@ -4024,7 +4089,11 @@ function ProviderSetupStep(props: {
       <div className="onboarding-wizard__provider-fields">
         {config.fields.map((field) => (
           <ProviderFieldRow
-            key={field.kind === "secret" ? `secret:${field.name}` : `text:${field.key}`}
+            key={
+              field.kind === "secret"
+                ? `secret:${field.name}`
+                : `text:${field.key}`
+            }
             field={field}
             provider={props.provider}
             snapshot={snapshot}
@@ -4126,11 +4195,14 @@ function ProviderIdentityProbe(props: {
   snapshot?: DesktopSettingsSnapshot;
   desktopApi?: DesktopApi;
 }) {
-  const [result, setResult] = useState<SettingsCredentialTestResult | undefined>(
-    undefined,
-  );
+  const [result, setResult] = useState<
+    SettingsCredentialTestResult | undefined
+  >(undefined);
   const [running, setRunning] = useState(false);
-  const configured = isPlatformPrimarySecretConfigured(props.provider, props.snapshot);
+  const configured = isPlatformPrimarySecretConfigured(
+    props.provider,
+    props.snapshot,
+  );
   const desktopApi = props.desktopApi;
   const probeKind: SettingsCredentialTestKind = props.provider;
 
@@ -4320,7 +4392,9 @@ export function SecretFieldRow(props: {
   return (
     <div className="onboarding-wizard__field">
       <div className="onboarding-wizard__field-head">
-        <span className="onboarding-wizard__field-label">{props.field.label}</span>
+        <span className="onboarding-wizard__field-label">
+          {props.field.label}
+        </span>
         <span className="onboarding-wizard__field-status">
           {buffered ? (
             <span className="onboarding-wizard__field-pill is-ok">✓ Ready</span>
@@ -4412,7 +4486,9 @@ function TextFieldRow(props: {
   return (
     <div className="onboarding-wizard__field">
       <div className="onboarding-wizard__field-head">
-        <span className="onboarding-wizard__field-label">{props.field.label}</span>
+        <span className="onboarding-wizard__field-label">
+          {props.field.label}
+        </span>
         <span className="onboarding-wizard__field-status">
           {stored ? (
             <span className="onboarding-wizard__field-pill is-ok">✓ saved</span>
@@ -4431,7 +4507,9 @@ function TextFieldRow(props: {
           placeholder={props.field.placeholder}
           value={value}
           disabled={props.saving || busy}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value)}
+          onChange={(e: ChangeEvent<HTMLInputElement>) =>
+            setValue(e.target.value)
+          }
           onBlur={() => void save()}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
@@ -4477,7 +4555,9 @@ function SegmentedFieldRow(props: {
   return (
     <div className="onboarding-wizard__field">
       <div className="onboarding-wizard__field-head">
-        <span className="onboarding-wizard__field-label">{props.field.label}</span>
+        <span className="onboarding-wizard__field-label">
+          {props.field.label}
+        </span>
       </div>
       {props.field.sub ? (
         <span className="onboarding-wizard__field-sub">{props.field.sub}</span>
@@ -4551,18 +4631,18 @@ function PairingBlock(props: {
     },
     [],
   );
-  const [resolution, setResolution] = useState<"observed" | "approved" | undefined>(
-    undefined,
-  );
+  const [resolution, setResolution] = useState<
+    "observed" | "approved" | undefined
+  >(undefined);
   // Captured display info for the observed actor/chat — used to render
   // the inline "Approve @huntharo …" affordance and to seed the
   // session pairing list on approval.
-  const [observedActorLabel, setObservedActorLabel] = useState<string | undefined>(
-    undefined,
-  );
-  const [observedChatLabel, setObservedChatLabel] = useState<string | undefined>(
-    undefined,
-  );
+  const [observedActorLabel, setObservedActorLabel] = useState<
+    string | undefined
+  >(undefined);
+  const [observedChatLabel, setObservedChatLabel] = useState<
+    string | undefined
+  >(undefined);
   const [observedChatKind, setObservedChatKind] = useState<string | undefined>(
     undefined,
   );
@@ -4586,14 +4666,18 @@ function PairingBlock(props: {
   const entryIdRef = useRef<string | undefined>(undefined);
   entryIdRef.current = entryId;
 
-  const activeOption = props.options.find((o) => o.scope === scope) ?? props.options[0];
+  const activeOption =
+    props.options.find((o) => o.scope === scope) ?? props.options[0];
 
   useEffect(() => {
     if (!props.desktopApi?.onMessagingPairingChanged) return;
     return props.desktopApi.onMessagingPairingChanged((event) => {
       if (event.entry.platform !== props.platform) return;
       if (event.entry.id !== entryIdRef.current) return;
-      if (event.entry.status === "observed" || event.entry.status === "approved") {
+      if (
+        event.entry.status === "observed"
+        || event.entry.status === "approved"
+      ) {
         setResolution(event.entry.status);
         setObservedActorLabel(
           event.entry.observedActor?.displayName
@@ -4634,7 +4718,9 @@ function PairingBlock(props: {
   };
 
   // Generic single-shot approve for non-Slack platforms.
-  const approve = async (target?: MessagingPairingApprovalTarget): Promise<void> => {
+  const approve = async (
+    target?: MessagingPairingApprovalTarget,
+  ): Promise<void> => {
     const id = entryIdRef.current;
     if (!id || approving || !props.desktopApi?.approveMessagingPairing) return;
     setApproving(true);
@@ -4800,9 +4886,13 @@ function PairingBlock(props: {
               ✓ paired ({paired.length})
             </span>
           ) : resolution === "approved" ? (
-            <span className="onboarding-wizard__field-pill is-ok">✓ paired</span>
+            <span className="onboarding-wizard__field-pill is-ok">
+              ✓ paired
+            </span>
           ) : resolution === "observed" ? (
-            <span className="onboarding-wizard__field-pill is-ok">✓ message seen</span>
+            <span className="onboarding-wizard__field-pill is-ok">
+              ✓ message seen
+            </span>
           ) : entryId ? (
             <span className="onboarding-wizard__field-pill is-warn">
               waiting for message…
@@ -4813,17 +4903,14 @@ function PairingBlock(props: {
       {paired.length > 0 ? (
         <ul className="onboarding-wizard__paired-list">
           {paired.map((entry) => (
-            <li
-              key={entry.entryId}
-              className="onboarding-wizard__paired-row"
-            >
+            <li key={entry.entryId} className="onboarding-wizard__paired-row">
               <span className="onboarding-wizard__paired-scope">
                 {labelForPairingScope(props.platform, entry.scope)}
               </span>
               <span className="onboarding-wizard__paired-actor">
                 {entry.chat && entry.chat !== entry.actor
                   ? entry.chat
-                  : entry.actor ?? "(no display name reported)"}
+                  : (entry.actor ?? "(no display name reported)")}
               </span>
             </li>
           ))}
@@ -4832,7 +4919,11 @@ function PairingBlock(props: {
       {isActiveFlow ? (
         <>
           {props.options.length > 1 ? (
-            <div className="onboarding-wizard__segmented" role="radiogroup" aria-label="Pairing target">
+            <div
+              className="onboarding-wizard__segmented"
+              role="radiogroup"
+              aria-label="Pairing target"
+            >
               {props.options.map((option) => (
                 <button
                   key={option.scope}
@@ -4853,7 +4944,9 @@ function PairingBlock(props: {
             // scope surfaces a bot-privacy gotcha with bullets). Nested
             // `<p>` would be invalid HTML and React would silently
             // hoist children out, breaking the styling.
-            <div className="onboarding-wizard__field-sub">{activeOption.help}</div>
+            <div className="onboarding-wizard__field-sub">
+              {activeOption.help}
+            </div>
           ) : null}
           {message && resolution !== "observed" ? (
             // Pairing tokens are one-time-use; once the bot has
@@ -4875,7 +4968,9 @@ function PairingBlock(props: {
             <button
               type="button"
               className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-              disabled={busy || !props.desktopApi?.generateMessagingPairingToken}
+              disabled={
+                busy || !props.desktopApi?.generateMessagingPairingToken
+              }
               onClick={() => void generate()}
             >
               {busy ? "Generating…" : "Generate pairing code"}
@@ -4890,7 +4985,8 @@ function PairingBlock(props: {
                 <span>
                   Message received from{" "}
                   <strong>{observedActorLabel ?? "this contact"}</strong>
-                  {observedChatLabel && observedChatLabel !== observedActorLabel ? (
+                  {observedChatLabel
+                  && observedChatLabel !== observedActorLabel ? (
                     <>
                       {" in "}
                       <strong>{observedChatLabel}</strong>
@@ -4924,7 +5020,8 @@ function PairingBlock(props: {
                             type="button"
                             className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
                             disabled={
-                              approving || !props.desktopApi?.approveMessagingPairing
+                              approving
+                              || !props.desktopApi?.approveMessagingPairing
                             }
                             onClick={() => void approveTarget(target)}
                           >
@@ -4936,7 +5033,8 @@ function PairingBlock(props: {
                         type="button"
                         className="onboarding-wizard__btn onboarding-wizard__btn--primary"
                         disabled={
-                          approving || !props.desktopApi?.approveMessagingPairing
+                          approving
+                          || !props.desktopApi?.approveMessagingPairing
                         }
                         onClick={() => void finishPairing()}
                       >
@@ -4955,7 +5053,9 @@ function PairingBlock(props: {
                 <button
                   type="button"
                   className="onboarding-wizard__btn onboarding-wizard__btn--primary"
-                  disabled={approving || !props.desktopApi?.approveMessagingPairing}
+                  disabled={
+                    approving || !props.desktopApi?.approveMessagingPairing
+                  }
                   onClick={() => void approve()}
                 >
                   {approving ? "Approving…" : "Approve"}
@@ -5025,7 +5125,9 @@ function readSecretState(
   // Walk the messaging snapshot and find the matching secret by name. The
   // type-level mapping from secret-name to snapshot path is awkward to
   // express, so we lean on a small lookup table maintained inline.
-  const map: Partial<Record<DesktopSettingsSecretName, DesktopSettingsSecretState>> = {
+  const map: Partial<
+    Record<DesktopSettingsSecretName, DesktopSettingsSecretState>
+  > = {
     telegramBotToken: snapshot.messaging.telegram.botToken,
     discordBotToken: snapshot.messaging.discord.botToken,
     mattermostBotToken: snapshot.messaging.mattermost.botToken,
@@ -5096,7 +5198,17 @@ function providerIcon(id: OnboardingProvider, size: number) {
 
 function CloseIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
       <path d="M18 6L6 18M6 6l12 12" />
     </svg>
   );
@@ -5104,7 +5216,17 @@ function CloseIcon() {
 
 function ShieldIcon() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
     </svg>
   );
@@ -5112,7 +5234,17 @@ function ShieldIcon() {
 
 function CheckIcon() {
   return (
-    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <svg
+      width="32"
+      height="32"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
       <path d="M20 6L9 17l-5-5" />
     </svg>
   );

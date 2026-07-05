@@ -2,7 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerReadThreadResponse, AppServerThreadSummary } from "@pwragent/shared";
+import type {
+  AppServerReadThreadResponse,
+  AppServerThreadSummary,
+} from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
@@ -12,7 +15,9 @@ let stateDb: StateDb;
 let tempDir: string;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-thread-search-service-"));
+  tempDir = mkdtempSync(
+    path.join(os.tmpdir(), "pwragent-thread-search-service-"),
+  );
   stateDb = StateDb.open(path.join(tempDir, "state.db"));
 });
 
@@ -34,10 +39,15 @@ describe("ThreadSearchService", () => {
 
     const response = await service.search({ query: "branch drift" });
 
-    expect(response.results.map((result) => result.threadId)).toEqual(["thread-1"]);
+    expect(response.results.map((result) => result.threadId)).toEqual([
+      "thread-1",
+    ]);
     expect(response.searchedScopes).toEqual(["metadata", "projection"]);
     expect(response.unavailableScopes).toEqual([
-      expect.objectContaining({ scope: "provider_content", reason: "unsupported" }),
+      expect.objectContaining({
+        scope: "provider_content",
+        reason: "unsupported",
+      }),
     ]);
   });
 
@@ -82,15 +92,18 @@ describe("ThreadSearchService", () => {
 
   it("prunes stale active projection rows after refreshing provider threads", async () => {
     const store = new ThreadSearchStore(stateDb);
-    store.upsertThread(threadSummary({ id: "stale", title: "Stale branch drift" }));
-    const service = new ThreadSearchService(
-      store,
-      async () => [threadSummary({ id: "active", title: "Active branch drift" })],
+    store.upsertThread(
+      threadSummary({ id: "stale", title: "Stale branch drift" }),
     );
+    const service = new ThreadSearchService(store, async () => [
+      threadSummary({ id: "active", title: "Active branch drift" }),
+    ]);
 
     const response = await service.search({ query: "branch drift" });
 
-    expect(response.results.map((result) => result.threadId)).toEqual(["active"]);
+    expect(response.results.map((result) => result.threadId)).toEqual([
+      "active",
+    ]);
     expect(
       store
         .search({ query: "branch drift", limit: 10 })
@@ -100,7 +113,9 @@ describe("ThreadSearchService", () => {
 
   it("hydrates active and archived threads when archived results are included", async () => {
     const listThreads = vi.fn(
-      async (request: { archived?: boolean }): Promise<AppServerThreadSummary[]> =>
+      async (request: {
+        archived?: boolean;
+      }): Promise<AppServerThreadSummary[]> =>
         request.archived
           ? [
               threadSummary({
@@ -118,7 +133,10 @@ describe("ThreadSearchService", () => {
               }),
             ],
     );
-    const service = new ThreadSearchService(new ThreadSearchStore(stateDb), listThreads);
+    const service = new ThreadSearchService(
+      new ThreadSearchStore(stateDb),
+      listThreads,
+    );
 
     const response = await service.search({
       filters: { includeArchived: true },
@@ -163,12 +181,17 @@ describe("ThreadSearchService", () => {
 
     const response = await service.search({ query: "vector models" });
 
-    expect(response.results.map((result) => result.threadId)).toEqual(["thread-1"]);
+    expect(response.results.map((result) => result.threadId)).toEqual([
+      "thread-1",
+    ]);
     expect(response.results[0]?.matchReasons).toContainEqual(
       expect.objectContaining({ kind: "provider_content_match" }),
     );
     expect(response.unavailableScopes).not.toContainEqual(
-      expect.objectContaining({ scope: "provider_content", reason: "unsupported" }),
+      expect.objectContaining({
+        scope: "provider_content",
+        reason: "unsupported",
+      }),
     );
   });
 });

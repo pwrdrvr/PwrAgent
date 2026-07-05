@@ -145,11 +145,16 @@ describe("buildApplicationMenuTemplate", () => {
 
   it("routes profile menu clicks through the shared profile opener", () => {
     const openProfile = vi.fn();
-    const items = submenuItems(buildTemplate(false, { openProfile }), "Profiles");
+    const items = submenuItems(
+      buildTemplate(false, { openProfile }),
+      "Profiles",
+    );
 
-    (items.find((item) => item.label === "work")?.click as
-      | (() => void)
-      | undefined)?.();
+    (
+      items.find((item) => item.label === "work")?.click as
+        | (() => void)
+        | undefined
+    )?.();
 
     expect(openProfile).toHaveBeenCalledWith("work");
   });
@@ -161,12 +166,16 @@ describe("buildApplicationMenuTemplate", () => {
       "Profiles",
     );
 
-    (items.find((item) => item.label === "New Profile…")?.click as
-      | (() => void)
-      | undefined)?.();
-    (items.find((item) => item.label === "Manage Profiles…")?.click as
-      | (() => void)
-      | undefined)?.();
+    (
+      items.find((item) => item.label === "New Profile…")?.click as
+        | (() => void)
+        | undefined
+    )?.();
+    (
+      items.find((item) => item.label === "Manage Profiles…")?.click as
+        | (() => void)
+        | undefined
+    )?.();
 
     expect(openProfilesSettings).toHaveBeenCalledTimes(2);
   });
@@ -201,25 +210,29 @@ describe("buildApplicationMenuTemplate", () => {
 
     it("invokes the openNewThread action on click", () => {
       const openNewThread = vi.fn();
-      const items = submenuItems(buildTemplate(false, { openNewThread }), "File");
+      const items = submenuItems(
+        buildTemplate(false, { openNewThread }),
+        "File",
+      );
 
-      (items.find((item) => item.label === "New Thread")?.click as
-        | (() => void)
-        | undefined)?.();
+      (
+        items.find((item) => item.label === "New Thread")?.click as
+          | (() => void)
+          | undefined
+      )?.();
 
       expect(openNewThread).toHaveBeenCalledOnce();
     });
 
     it("keeps Quit available on non-Mac platforms after inserting New Thread", () => {
-      const items = submenuItems(buildTemplate(false, { isMac: false }), "File");
+      const items = submenuItems(
+        buildTemplate(false, { isMac: false }),
+        "File",
+      );
 
-      expect(items.map((item) => item.label ?? item.role ?? item.type)).toEqual([
-        "New Thread",
-        "separator",
-        "close",
-        "separator",
-        "Quit",
-      ]);
+      expect(items.map((item) => item.label ?? item.role ?? item.type)).toEqual(
+        ["New Thread", "separator", "close", "separator", "Quit"],
+      );
     });
   });
 
@@ -245,7 +258,10 @@ describe("buildApplicationMenuTemplate", () => {
 
     it("invokes the openSettings action on click", () => {
       const openSettings = vi.fn();
-      const items = submenuItems(buildTemplate(false, { openSettings }), "PwrAgent");
+      const items = submenuItems(
+        buildTemplate(false, { openSettings }),
+        "PwrAgent",
+      );
       const settings = items.find((item) => item.label === "Settings…");
       expect(settings).toBeDefined();
       // `click` on MenuItemConstructorOptions takes (menuItem, browserWindow, event)
@@ -322,15 +338,14 @@ describe("buildApplicationMenuTemplate", () => {
     });
 
     it("lists open windows on non-Mac platforms", () => {
-      const items = submenuItems(buildTemplate(false, { isMac: false }), "Window");
+      const items = submenuItems(
+        buildTemplate(false, { isMac: false }),
+        "Window",
+      );
 
-      expect(items.map((item) => item.label ?? item.role ?? item.type)).toEqual([
-        "minimize",
-        "close",
-        "separator",
-        "PwrAgent",
-        "Logs",
-      ]);
+      expect(items.map((item) => item.label ?? item.role ?? item.type)).toEqual(
+        ["minimize", "close", "separator", "PwrAgent", "Logs"],
+      );
       expect(items[3]?.type).toBeUndefined();
       expect(items[3]?.checked).toBeUndefined();
       expect(items[4]?.type).toBeUndefined();

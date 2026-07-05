@@ -73,7 +73,11 @@ type HistoryStacks = {
   forward: NavigationHistoryLocation[];
 };
 
-const EMPTY_STACKS: HistoryStacks = { back: [], cursor: undefined, forward: [] };
+const EMPTY_STACKS: HistoryStacks = {
+  back: [],
+  cursor: undefined,
+  forward: [],
+};
 
 /**
  * Browser-style back/forward history over the app shell's navigation
@@ -210,8 +214,8 @@ export function useNavigationHistory(args: {
   }, []);
 
   const canGoBack =
-    stacks.back.length > 0 ||
-    (current === undefined && stacks.cursor !== undefined);
+    stacks.back.length > 0
+    || (current === undefined && stacks.cursor !== undefined);
   const canGoForward = stacks.forward.length > 0;
 
   return useMemo(

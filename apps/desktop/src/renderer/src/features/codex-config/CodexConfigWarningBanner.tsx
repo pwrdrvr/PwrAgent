@@ -11,7 +11,10 @@ type ConfigWarningNotice = {
 };
 
 function noticeFromEvent(event: AgentEvent): ConfigWarningNotice | undefined {
-  if (event.backend !== "codex" || event.notification.method !== "configWarning") {
+  if (
+    event.backend !== "codex"
+    || event.notification.method !== "configWarning"
+  ) {
     return undefined;
   }
 
@@ -32,11 +35,7 @@ function noticeFromEvent(event: AgentEvent): ConfigWarningNotice | undefined {
   const configPath =
     typeof rawConfigPath === "string" ? rawConfigPath.trim() : undefined;
   const details = typeof rawDetails === "string" ? rawDetails : null;
-  const id = [
-    summary,
-    trustedProjectPath ?? "",
-    configPath ?? "",
-  ].join("\n");
+  const id = [summary, trustedProjectPath ?? "", configPath ?? ""].join("\n");
 
   return {
     id,
@@ -49,7 +48,9 @@ function noticeFromEvent(event: AgentEvent): ConfigWarningNotice | undefined {
 
 export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
   const [notice, setNotice] = useState<ConfigWarningNotice | null>(null);
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [trusting, setTrusting] = useState(false);
   const [trustError, setTrustError] = useState<string | null>(null);
   const desktopApi = props.desktopApi;
@@ -77,7 +78,8 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
     };
 
     const unsubscribe = desktopApi.onAgentEvent?.(applyEvent);
-    void desktopApi.getLatestCodexConfigWarning?.()
+    void desktopApi
+      .getLatestCodexConfigWarning?.()
       .then((response) => {
         if (response.event) {
           applyEvent(response.event);
@@ -135,10 +137,14 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
   return (
     <aside className="codex-config-warning-banner" role="alert">
       <div className="codex-config-warning-banner__content">
-        <p className="codex-config-warning-banner__eyebrow">Codex config warning</p>
+        <p className="codex-config-warning-banner__eyebrow">
+          Codex config warning
+        </p>
         <p className="codex-config-warning-banner__message">{notice.summary}</p>
         {notice.details ? (
-          <p className="codex-config-warning-banner__detail">{notice.details}</p>
+          <p className="codex-config-warning-banner__detail">
+            {notice.details}
+          </p>
         ) : null}
         {trustError ? (
           <p className="codex-config-warning-banner__error">{trustError}</p>

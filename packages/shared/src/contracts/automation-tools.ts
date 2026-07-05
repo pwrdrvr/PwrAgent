@@ -220,8 +220,8 @@ export function isAutomationInspectionOperationName(
   value: unknown,
 ): value is AutomationInspectionOperationName {
   return (
-    typeof value === "string" &&
-    AUTOMATION_INSPECTION_OPERATION_NAMES.includes(
+    typeof value === "string"
+    && AUTOMATION_INSPECTION_OPERATION_NAMES.includes(
       value as AutomationInspectionOperationName,
     )
   );
@@ -247,7 +247,9 @@ export function normalizeAutomationInspectionRunLimit(value: unknown): number {
   });
 }
 
-export function normalizeAutomationInspectionEventLimit(value: unknown): number {
+export function normalizeAutomationInspectionEventLimit(
+  value: unknown,
+): number {
   return normalizeAutomationInspectionLimit(value, {
     defaultValue: DEFAULT_AUTOMATION_INSPECTION_EVENT_LIMIT,
     maxValue: MAX_AUTOMATION_INSPECTION_EVENT_LIMIT,

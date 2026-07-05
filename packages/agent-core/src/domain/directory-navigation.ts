@@ -40,7 +40,9 @@ function canonicalizeNavigationPath(value: string): string {
 
 function normalizeComparablePath(value?: string): string | undefined {
   const normalized = value?.trim();
-  return normalized ? canonicalizeNavigationPath(normalized) || undefined : undefined;
+  return normalized
+    ? canonicalizeNavigationPath(normalized) || undefined
+    : undefined;
 }
 
 function normalizeGitOriginUrl(value?: string): string | undefined {
@@ -64,7 +66,9 @@ function normalizeGitOriginUrl(value?: string): string | undefined {
 }
 
 function isInternalDirectoryLabel(value?: string): boolean {
-  return Boolean(value?.startsWith("directory:") || value?.startsWith("workspace:"));
+  return Boolean(
+    value?.startsWith("directory:") || value?.startsWith("workspace:"),
+  );
 }
 
 function displayDirectoryLabel(params: {
@@ -114,7 +118,9 @@ function matchCodexChatsRoot(value: string): string | undefined {
   return codexChatsRootMatch?.[1];
 }
 
-function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescriptor {
+function classifyDirectory(
+  directory: LinkedDirectorySummary,
+): DirectoryDescriptor {
   // Canonicalize separators up front so a directory keyed via different path
   // representations (Windows `C:\…` vs the forward-slashed `C:/…` we normalize
   // codex/git paths to) collapses to ONE directory row instead of duplicating.
@@ -255,7 +261,11 @@ function normalizeDirectoryDescriptor(
     return params.managedWorktreeOriginDescriptor ?? descriptor;
   }
 
-  if (descriptor.path || descriptor.kind !== "directory" || !params.stablePath) {
+  if (
+    descriptor.path
+    || descriptor.kind !== "directory"
+    || !params.stablePath
+  ) {
     return descriptor;
   }
 
@@ -328,9 +338,7 @@ function ensureSummary(
   return created;
 }
 
-function workspaceRootSet(
-  workspaceRoots?: string[],
-): Set<string> | undefined {
+function workspaceRootSet(workspaceRoots?: string[]): Set<string> | undefined {
   const roots = new Set(
     (workspaceRoots ?? [])
       .map(normalizeComparablePath)
@@ -355,10 +363,10 @@ function hasPersistableLaunchpadState(
   launchpad: DirectoryLaunchpadOverlayState,
 ): boolean {
   return (
-    launchpad.prompt.trim().length > 0 ||
-    (launchpad.imageAttachments?.length ?? 0) > 0 ||
-    launchpad.registeredAt !== undefined ||
-    launchpad.settingsTouchedAt !== undefined
+    launchpad.prompt.trim().length > 0
+    || (launchpad.imageAttachments?.length ?? 0) > 0
+    || launchpad.registeredAt !== undefined
+    || launchpad.settingsTouchedAt !== undefined
   );
 }
 
@@ -372,9 +380,11 @@ function compareWorkspaceSummaryPreference(
       preferredWorkspaceRoots.map((root, index) => [root, index]),
     );
     const leftRootRank =
-      rootRank.get(normalizeComparablePath(left.path) ?? "") ?? Number.MAX_SAFE_INTEGER;
+      rootRank.get(normalizeComparablePath(left.path) ?? "")
+      ?? Number.MAX_SAFE_INTEGER;
     const rightRootRank =
-      rootRank.get(normalizeComparablePath(right.path) ?? "") ?? Number.MAX_SAFE_INTEGER;
+      rootRank.get(normalizeComparablePath(right.path) ?? "")
+      ?? Number.MAX_SAFE_INTEGER;
     if (leftRootRank !== rightRootRank) {
       return leftRootRank - rightRootRank;
     }
@@ -382,12 +392,14 @@ function compareWorkspaceSummaryPreference(
 
   const leftLaunchpadUpdatedAt = left.launchpad?.updatedAt ?? 0;
   const rightLaunchpadUpdatedAt = right.launchpad?.updatedAt ?? 0;
-  const launchpadUpdatedDelta = rightLaunchpadUpdatedAt - leftLaunchpadUpdatedAt;
+  const launchpadUpdatedDelta =
+    rightLaunchpadUpdatedAt - leftLaunchpadUpdatedAt;
   if (launchpadUpdatedDelta !== 0) {
     return launchpadUpdatedDelta;
   }
 
-  const updatedDelta = (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
+  const updatedDelta =
+    (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
   return updatedDelta !== 0 ? updatedDelta : left.key.localeCompare(right.key);
 }
 
@@ -426,12 +438,13 @@ function collapseWorkspaceSummaries(params: {
       thread.inbox.inInbox,
     ]),
   );
-  const threadKeys = [...new Set(workspaces.flatMap((summary) => summary.threadKeys))]
-    .sort(
-      (left, right) =>
-        (threadOrder.get(left) ?? Number.MAX_SAFE_INTEGER) -
-        (threadOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
-    );
+  const threadKeys = [
+    ...new Set(workspaces.flatMap((summary) => summary.threadKeys)),
+  ].sort(
+    (left, right) =>
+      (threadOrder.get(left) ?? Number.MAX_SAFE_INTEGER)
+      - (threadOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
+  );
   const latestUpdatedAt = Math.max(
     ...workspaces.map((summary) => summary.latestUpdatedAt ?? 0),
   );
@@ -482,8 +495,8 @@ function sortDirectoryThreadKeysByCreation(
     ...summary,
     threadKeys: [...summary.threadKeys].sort(
       (left, right) =>
-        (threadOrder.get(left) ?? Number.MAX_SAFE_INTEGER) -
-        (threadOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
+        (threadOrder.get(left) ?? Number.MAX_SAFE_INTEGER)
+        - (threadOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
     ),
   }));
 }
@@ -527,7 +540,10 @@ export function buildDirectorySummaries(params: {
         if (thread.inbox.inInbox) {
           summary.needsAttentionCount += 1;
         }
-        summary.latestUpdatedAt = Math.max(summary.latestUpdatedAt ?? 0, thread.updatedAt ?? 0);
+        summary.latestUpdatedAt = Math.max(
+          summary.latestUpdatedAt ?? 0,
+          thread.updatedAt ?? 0,
+        );
       }
       continue;
     }
@@ -549,7 +565,9 @@ export function buildDirectorySummaries(params: {
         managedWorktreeOriginDescriptor,
         stablePath,
       });
-      if (!isAllowedWorkspaceRoot(normalizedDescriptor, allowedWorkspaceRoots)) {
+      if (
+        !isAllowedWorkspaceRoot(normalizedDescriptor, allowedWorkspaceRoots)
+      ) {
         continue;
       }
       if (!descriptorsByKey.has(normalizedDescriptor.key)) {
@@ -576,11 +594,14 @@ export function buildDirectorySummaries(params: {
     );
   }
 
-  for (const [directoryKey, launchpad] of Object.entries(params.launchpadsByKey ?? {})) {
+  for (const [directoryKey, launchpad] of Object.entries(
+    params.launchpadsByKey ?? {},
+  )) {
     if (!launchpad || !hasPersistableLaunchpadState(launchpad)) {
       continue;
     }
-    const launchpadPath = launchpad.directoryPath ?? pathFromDirectoryKey(directoryKey);
+    const launchpadPath =
+      launchpad.directoryPath ?? pathFromDirectoryKey(directoryKey);
     const launchpadLabel = displayDirectoryLabel({
       kind: launchpad.directoryKind,
       label: launchpad.directoryLabel,
@@ -610,10 +631,15 @@ export function buildDirectorySummaries(params: {
       directoryLabel: launchpadLabel,
       directoryPath: launchpadPath,
     };
-    summary.latestUpdatedAt = Math.max(summary.latestUpdatedAt ?? 0, launchpad.updatedAt);
+    summary.latestUpdatedAt = Math.max(
+      summary.latestUpdatedAt ?? 0,
+      launchpad.updatedAt,
+    );
   }
 
-  for (const [directoryKey, gitStatus] of Object.entries(params.gitStatusByKey ?? {})) {
+  for (const [directoryKey, gitStatus] of Object.entries(
+    params.gitStatusByKey ?? {},
+  )) {
     if (!gitStatus) {
       continue;
     }
@@ -629,14 +655,16 @@ export function buildDirectorySummaries(params: {
   // `unlinked` bucket is a synthetic roll-up of threads with no
   // linked directory and isn't user-pinnable, so we skip it here
   // even though the IPC handler also rejects pinning that key.
-  for (const [directoryKey, overlay] of Object.entries(params.directoryOverlayByKey ?? {})) {
+  for (const [directoryKey, overlay] of Object.entries(
+    params.directoryOverlayByKey ?? {},
+  )) {
     if (!overlay?.pinnedRank) {
       continue;
     }
     const summary = summaries.get(directoryKey);
     if (
-      summary &&
-      (summary.kind === "directory" || summary.kind === "workspace")
+      summary
+      && (summary.kind === "directory" || summary.kind === "workspace")
     ) {
       summary.pinnedRank = overlay.pinnedRank;
     }

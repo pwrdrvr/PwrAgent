@@ -27,7 +27,9 @@ export type DesktopSettingsState = {
   writeConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
 };
 
-export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsState {
+export function useDesktopSettings(
+  desktopApi?: DesktopApi,
+): DesktopSettingsState {
   const [snapshot, setSnapshot] = useState<DesktopSettingsSnapshot>();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -44,7 +46,9 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
       const response = await desktopApi.readSettings({});
       setSnapshot(response.snapshot);
     } catch (readError) {
-      setError(readError instanceof Error ? readError.message : String(readError));
+      setError(
+        readError instanceof Error ? readError.message : String(readError),
+      );
     } finally {
       setLoading(false);
     }
@@ -72,7 +76,9 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         }
         return true;
       } catch (writeError) {
-        setError(writeError instanceof Error ? writeError.message : String(writeError));
+        setError(
+          writeError instanceof Error ? writeError.message : String(writeError),
+        );
         try {
           const response = await desktopApi.readSettings?.({});
           if (response) {
@@ -90,7 +96,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   );
 
   const replaceSecret = useCallback(
-    async (secret: DesktopSettingsSecretName, value: string): Promise<boolean> => {
+    async (
+      secret: DesktopSettingsSecretName,
+      value: string,
+    ): Promise<boolean> => {
       if (!desktopApi?.replaceSettingsSecret) {
         setError("Settings are unavailable.");
         return false;
@@ -107,7 +116,9 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         }
         return true;
       } catch (writeError) {
-        setError(writeError instanceof Error ? writeError.message : String(writeError));
+        setError(
+          writeError instanceof Error ? writeError.message : String(writeError),
+        );
         return false;
       } finally {
         setSaving(false);
@@ -134,7 +145,9 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         }
         return true;
       } catch (writeError) {
-        setError(writeError instanceof Error ? writeError.message : String(writeError));
+        setError(
+          writeError instanceof Error ? writeError.message : String(writeError),
+        );
         return false;
       } finally {
         setSaving(false);

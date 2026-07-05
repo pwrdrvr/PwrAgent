@@ -5,7 +5,7 @@ function buildFixture() {
   return {
     metadata: {
       backend: "codex" as const,
-      scenario: "replay-client-test"
+      scenario: "replay-client-test",
     },
     steps: [
       {
@@ -15,10 +15,10 @@ function buildFixture() {
         result: {
           serverInfo: {
             name: "Replay Codex",
-            version: "1.0.0"
+            version: "1.0.0",
           },
-          methods: ["thread/list", "thread/read"]
-        }
+          methods: ["thread/list", "thread/read"],
+        },
       },
       {
         id: "list-1",
@@ -31,8 +31,8 @@ function buildFixture() {
             titleSource: "explicit" as const,
             source: "codex" as const,
             linkedDirectories: [],
-          }
-        ]
+          },
+        ],
       },
       {
         id: "notif-1",
@@ -45,10 +45,10 @@ function buildFixture() {
             turn: {
               id: "turn-1",
               status: "completed" as const,
-              output: [{ type: "text" as const, text: "Done." }]
-            }
-          }
-        }
+              output: [{ type: "text" as const, text: "Done." }],
+            },
+          },
+        },
       },
       {
         id: "req-1",
@@ -58,11 +58,11 @@ function buildFixture() {
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            requestId: "approval-1"
-          }
-        }
-      }
-    ]
+            requestId: "approval-1",
+          },
+        },
+      },
+    ],
   };
 }
 
@@ -70,7 +70,7 @@ function buildInterleavedFixture() {
   return {
     metadata: {
       backend: "codex" as const,
-      scenario: "replay-client-interleaved-test"
+      scenario: "replay-client-interleaved-test",
     },
     steps: [
       {
@@ -80,10 +80,10 @@ function buildInterleavedFixture() {
         result: {
           serverInfo: {
             name: "Replay Codex",
-            version: "1.0.0"
+            version: "1.0.0",
           },
-          methods: ["thread/list"]
-        }
+          methods: ["thread/list"],
+        },
       },
       {
         id: "notif-1",
@@ -96,10 +96,10 @@ function buildInterleavedFixture() {
             turn: {
               id: "turn-1",
               status: "completed" as const,
-              output: [{ type: "text" as const, text: "Done." }]
-            }
-          }
-        }
+              output: [{ type: "text" as const, text: "Done." }],
+            },
+          },
+        },
       },
       {
         id: "list-1",
@@ -112,10 +112,10 @@ function buildInterleavedFixture() {
             titleSource: "explicit" as const,
             source: "codex" as const,
             linkedDirectories: [],
-          }
-        ]
-      }
-    ]
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -123,7 +123,7 @@ function buildConcurrentResponseFixture() {
   return {
     metadata: {
       backend: "codex" as const,
-      scenario: "replay-client-concurrent-response-test"
+      scenario: "replay-client-concurrent-response-test",
     },
     steps: [
       {
@@ -133,16 +133,16 @@ function buildConcurrentResponseFixture() {
         result: {
           serverInfo: {
             name: "Replay Codex",
-            version: "1.0.0"
+            version: "1.0.0",
           },
-          methods: ["thread/read", "skills/list", "turn/start"]
-        }
+          methods: ["thread/read", "skills/list", "turn/start"],
+        },
       },
       {
         id: "skills-list-1",
         kind: "response" as const,
         method: "skills/list" as const,
-        result: []
+        result: [],
       },
       {
         id: "thread-read-1",
@@ -153,9 +153,9 @@ function buildConcurrentResponseFixture() {
           messages: [],
           pagination: {
             supportsPagination: false,
-            hasPreviousPage: false
-          }
-        }
+            hasPreviousPage: false,
+          },
+        },
       },
       {
         id: "turn-start-1",
@@ -163,10 +163,10 @@ function buildConcurrentResponseFixture() {
         method: "turn/start" as const,
         result: {
           threadId: "thread-1",
-          turnId: "turn-1"
-        }
-      }
-    ]
+          turnId: "turn-1",
+        },
+      },
+    ],
   };
 }
 
@@ -182,16 +182,16 @@ describe("ReplayClient", () => {
     await expect(client.getInitializeResult()).resolves.toEqual({
       serverInfo: {
         name: "Replay Codex",
-        version: "1.0.0"
+        version: "1.0.0",
       },
-      methods: ["thread/list", "thread/read"]
+      methods: ["thread/list", "thread/read"],
     });
 
     await expect(client.listThreads()).resolves.toEqual([
       expect.objectContaining({
         id: "thread-1",
-        title: "Replay thread"
-      })
+        title: "Replay thread",
+      }),
     ]);
 
     await client.advance({ stepId: "notif-1" });
@@ -209,12 +209,12 @@ describe("ReplayClient", () => {
     expect(client.getPendingRequest()).toMatchObject({
       method: "turn/requestApproval",
       params: {
-        requestId: "approval-1"
-      }
+        requestId: "approval-1",
+      },
     });
 
     await expect(client.advance()).rejects.toThrow(
-      "Replay is waiting for request approval-1"
+      "Replay is waiting for request approval-1",
     );
 
     await client.respondToPendingRequest("approval-1");
@@ -230,11 +230,11 @@ describe("ReplayClient", () => {
     });
 
     await expect(client.getInitializeResult()).resolves.toMatchObject({
-      methods: ["thread/list"]
+      methods: ["thread/list"],
     });
 
     await expect(client.listThreads()).rejects.toThrow(
-      "Replay fixture expected live step notif-1 before response thread/list"
+      "Replay fixture expected live step notif-1 before response thread/list",
     );
 
     await client.advance({ stepId: "notif-1" });
@@ -242,8 +242,8 @@ describe("ReplayClient", () => {
 
     await expect(client.listThreads()).resolves.toEqual([
       expect.objectContaining({
-        id: "thread-1"
-      })
+        id: "thread-1",
+      }),
     ]);
   });
 
@@ -251,12 +251,14 @@ describe("ReplayClient", () => {
     const client = ReplayClient.fromFixture(buildConcurrentResponseFixture());
 
     await expect(client.getInitializeResult()).resolves.toMatchObject({
-      methods: ["thread/read", "skills/list", "turn/start"]
+      methods: ["thread/read", "skills/list", "turn/start"],
     });
 
-    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+    await expect(
+      client.readThread({ threadId: "thread-1" }),
+    ).resolves.toMatchObject({
       entries: [],
-      messages: []
+      messages: [],
     });
 
     await expect(client.listSkills()).resolves.toEqual([]);
@@ -264,15 +266,15 @@ describe("ReplayClient", () => {
     await expect(
       client.startTurn({
         threadId: "thread-1",
-        input: [{ type: "text", text: "Need approval coverage." }]
-      })
+        input: [{ type: "text", text: "Need approval coverage." }],
+      }),
     ).resolves.toEqual({
       threadId: "thread-1",
-      turnId: "turn-1"
+      turnId: "turn-1",
     });
     expect(client.getLastStartTurnParams()).toEqual({
       threadId: "thread-1",
-      input: [{ type: "text", text: "Need approval coverage." }]
+      input: [{ type: "text", text: "Need approval coverage." }],
     });
   });
 
@@ -280,22 +282,26 @@ describe("ReplayClient", () => {
     const client = ReplayClient.fromFixture(buildConcurrentResponseFixture());
 
     await expect(client.getInitializeResult()).resolves.toMatchObject({
-      methods: ["thread/read", "skills/list", "turn/start"]
+      methods: ["thread/read", "skills/list", "turn/start"],
     });
     await expect(client.getInitializeResult()).resolves.toMatchObject({
-      methods: ["thread/read", "skills/list", "turn/start"]
+      methods: ["thread/read", "skills/list", "turn/start"],
     });
 
     await expect(client.listSkills()).resolves.toEqual([]);
     await expect(client.listSkills()).resolves.toEqual([]);
 
-    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+    await expect(
+      client.readThread({ threadId: "thread-1" }),
+    ).resolves.toMatchObject({
       entries: [],
-      messages: []
+      messages: [],
     });
-    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+    await expect(
+      client.readThread({ threadId: "thread-1" }),
+    ).resolves.toMatchObject({
       entries: [],
-      messages: []
+      messages: [],
     });
   });
 });

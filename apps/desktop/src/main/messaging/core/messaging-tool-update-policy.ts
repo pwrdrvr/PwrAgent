@@ -68,7 +68,9 @@ export class MessagingToolUpdatePolicy {
   constructor(options?: {
     clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
     now?: () => number;
-    onBatchReady?: (delivery: MessagingToolUpdatePolicyDelivery) => void | Promise<void>;
+    onBatchReady?: (
+      delivery: MessagingToolUpdatePolicyDelivery,
+    ) => void | Promise<void>;
     setTimer?: (
       callback: () => void,
       delayMs: number,

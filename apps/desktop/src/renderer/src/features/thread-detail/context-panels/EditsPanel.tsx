@@ -114,7 +114,12 @@ function useOtherWorktreeChanges(params: {
     const listChanges = params.desktopApi?.listWorktreeOtherChanges;
     const worktreePath = params.worktreeRoot?.trim();
     if (!listChanges || !worktreePath) {
-      setState({ changes: [], totalChanges: 0, truncated: false, loading: false });
+      setState({
+        changes: [],
+        totalChanges: 0,
+        truncated: false,
+        loading: false,
+      });
       return;
     }
 
@@ -137,7 +142,12 @@ function useOtherWorktreeChanges(params: {
       })
       .catch(() => {
         if (!cancelled) {
-          setState({ changes: [], totalChanges: 0, truncated: false, loading: false });
+          setState({
+            changes: [],
+            totalChanges: 0,
+            truncated: false,
+            loading: false,
+          });
         }
       });
 
@@ -208,7 +218,10 @@ function FileSizeStat(props: { bytes: number }) {
     return null;
   }
   return (
-    <span className="diff-stat diff-stat--chip file-size-stat" aria-label={label}>
+    <span
+      className="diff-stat diff-stat--chip file-size-stat"
+      aria-label={label}
+    >
       {label}
     </span>
   );
@@ -266,7 +279,9 @@ export function EditsPanel(props: EditsPanelProps) {
             dockTooltip.hide();
             props.onDockChange(dockedAbove ? "sidebar" : "above");
           }}
-          onMouseEnter={(event) => dockTooltip.show(event.currentTarget, dockLabel)}
+          onMouseEnter={(event) =>
+            dockTooltip.show(event.currentTarget, dockLabel)
+          }
           onMouseLeave={dockTooltip.hide}
           onFocus={(event) => dockTooltip.show(event.currentTarget, dockLabel)}
           onBlur={dockTooltip.hide}
@@ -297,14 +312,12 @@ export function EditsPanel(props: EditsPanelProps) {
             onScrollToTurn={props.onScrollToTurn}
             showSingleGroupHeader
           />
-        ) : (
-          !hasOtherChanges && !otherChanges.loading ? (
-            <p className="context-empty">
-              No uncommitted file edits yet. Edits from agent turns accumulate
-              here until they are committed.
-            </p>
-          ) : null
-        )}
+        ) : !hasOtherChanges && !otherChanges.loading ? (
+          <p className="context-empty">
+            No uncommitted file edits yet. Edits from agent turns accumulate
+            here until they are committed.
+          </p>
+        ) : null}
       </div>
     </section>
   );

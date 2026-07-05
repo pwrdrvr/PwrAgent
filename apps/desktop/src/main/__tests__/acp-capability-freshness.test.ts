@@ -71,12 +71,18 @@ describe("shouldReprobeAcpCapabilities", () => {
 
   it("does not treat an unknown discovered version as a change", () => {
     expect(
-      shouldReprobeAcpCapabilities(record({ version: "0.2.3" }), undefined, NOW),
+      shouldReprobeAcpCapabilities(
+        record({ version: "0.2.3" }),
+        undefined,
+        NOW,
+      ),
     ).toBe(false);
   });
 
   it("probes when the cached probe is older than the freshness window", () => {
-    const stale = record({ lastDiscoveredAt: NOW - ACP_CAPABILITY_MAX_AGE_MS - 1 });
+    const stale = record({
+      lastDiscoveredAt: NOW - ACP_CAPABILITY_MAX_AGE_MS - 1,
+    });
     expect(shouldReprobeAcpCapabilities(stale, "0.2.3", NOW)).toBe(true);
   });
 
@@ -87,11 +93,11 @@ describe("shouldReprobeAcpCapabilities", () => {
 
   it("honors a custom maxAgeMs", () => {
     const rec = record({ lastDiscoveredAt: NOW - 5_000 });
-    expect(shouldReprobeAcpCapabilities(rec, "0.2.3", NOW, { maxAgeMs: 1_000 })).toBe(
-      true,
-    );
-    expect(shouldReprobeAcpCapabilities(rec, "0.2.3", NOW, { maxAgeMs: 10_000 })).toBe(
-      false,
-    );
+    expect(
+      shouldReprobeAcpCapabilities(rec, "0.2.3", NOW, { maxAgeMs: 1_000 }),
+    ).toBe(true);
+    expect(
+      shouldReprobeAcpCapabilities(rec, "0.2.3", NOW, { maxAgeMs: 10_000 }),
+    ).toBe(false);
   });
 });

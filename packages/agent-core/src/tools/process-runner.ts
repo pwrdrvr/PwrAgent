@@ -56,7 +56,9 @@ export type ProcessRunResult = {
 
 const DEFAULT_KILL_GRACE_MS = 1_000;
 
-export async function runProcess(options: ProcessRunOptions): Promise<ProcessRunResult> {
+export async function runProcess(
+  options: ProcessRunOptions,
+): Promise<ProcessRunResult> {
   const outputLimitBytes =
     options.outputLimitBytes ?? DEFAULT_PROCESS_OUTPUT_LIMIT_BYTES;
   const stdout = new CappedOutputBuffer(outputLimitBytes);

@@ -2,7 +2,10 @@ import type {
   AcpBackendId,
   BackendAcpSessionRuntimeState,
 } from "@pwragent/shared";
-import type { AcpRuntimeClient, AcpSessionMetadata } from "./acp-backend-adapter";
+import type {
+  AcpRuntimeClient,
+  AcpSessionMetadata,
+} from "./acp-backend-adapter";
 import type {
   ThreadTitleAdapterParams,
   ThreadTitleAdapterResult,
@@ -30,7 +33,9 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
     parentSession?: AcpSessionMetadata;
     session: AcpSessionMetadata;
   }) => Promise<void>;
-  private readonly getClient: (backend: AcpBackendId) => Promise<AcpRuntimeClient>;
+  private readonly getClient: (
+    backend: AcpBackendId,
+  ) => Promise<AcpRuntimeClient>;
   private readonly getSession: (
     backend: AcpBackendId,
     threadId: string,
@@ -106,10 +111,10 @@ function parseAcpTitleObject(text: string): unknown {
 
   const jsonObject = extractJsonObject(trimmed);
   const parsed =
-    tryParseJson(trimmed) ??
-    tryParseJson(escapeNewlinesInsideJsonStrings(trimmed)) ??
-    tryParseJson(jsonObject) ??
-    tryParseJson(escapeNewlinesInsideJsonStrings(jsonObject));
+    tryParseJson(trimmed)
+    ?? tryParseJson(escapeNewlinesInsideJsonStrings(trimmed))
+    ?? tryParseJson(jsonObject)
+    ?? tryParseJson(escapeNewlinesInsideJsonStrings(jsonObject));
   if (parsed) {
     return parsed;
   }
@@ -119,7 +124,7 @@ function parseAcpTitleObject(text: string): unknown {
 
 function stripMarkdownFence(text: string): string {
   const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return fence ? fence[1]?.trim() ?? "" : text;
+  return fence ? (fence[1]?.trim() ?? "") : text;
 }
 
 function extractJsonObject(text: string): string {

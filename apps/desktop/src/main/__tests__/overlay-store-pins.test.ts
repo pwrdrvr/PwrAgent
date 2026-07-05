@@ -135,13 +135,18 @@ describe("SqliteOverlayStore — thread pins", () => {
     });
 
     await expect(
-      store.getThreadOverlayState({ backend: "acp:gemini", threadId: "thread-1" }),
+      store.getThreadOverlayState({
+        backend: "acp:gemini",
+        threadId: "thread-1",
+      }),
     ).resolves.toMatchObject({
       backend: "acp:gemini",
       pinnedRank: "1024",
     });
 
-    const rows = stateDb.raw.prepare("SELECT thread_id FROM threads").all() as Array<{
+    const rows = stateDb.raw
+      .prepare("SELECT thread_id FROM threads")
+      .all() as Array<{
       thread_id: string;
     }>;
     expect(rows.map((row) => row.thread_id)).toEqual(["acp%3Agemini:thread-1"]);

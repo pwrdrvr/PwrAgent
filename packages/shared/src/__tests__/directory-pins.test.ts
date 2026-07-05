@@ -42,7 +42,11 @@ describe("directory pins", () => {
     const sorted = [
       makeDirectory({ key: "delta", pinnedRank: "2048", latestUpdatedAt: 100 }),
       makeDirectory({ key: "alpha", pinnedRank: "2048", latestUpdatedAt: 100 }),
-      makeDirectory({ key: "charlie", pinnedRank: "2048", latestUpdatedAt: 100 }),
+      makeDirectory({
+        key: "charlie",
+        pinnedRank: "2048",
+        latestUpdatedAt: 100,
+      }),
     ].sort(comparePinnedDirectories);
 
     expect(sorted.map((directory) => directory.key)).toEqual([

@@ -160,8 +160,8 @@ export function isThreadSearchContentMode(
   value: unknown,
 ): value is ThreadSearchContentMode {
   return (
-    typeof value === "string" &&
-    THREAD_SEARCH_CONTENT_MODES.includes(value as ThreadSearchContentMode)
+    typeof value === "string"
+    && THREAD_SEARCH_CONTENT_MODES.includes(value as ThreadSearchContentMode)
   );
 }
 
@@ -169,8 +169,8 @@ export function isThreadSearchSemanticMode(
   value: unknown,
 ): value is ThreadSearchSemanticMode {
   return (
-    typeof value === "string" &&
-    THREAD_SEARCH_SEMANTIC_MODES.includes(value as ThreadSearchSemanticMode)
+    typeof value === "string"
+    && THREAD_SEARCH_SEMANTIC_MODES.includes(value as ThreadSearchSemanticMode)
   );
 }
 

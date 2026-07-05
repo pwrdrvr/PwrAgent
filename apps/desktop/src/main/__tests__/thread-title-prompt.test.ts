@@ -23,7 +23,9 @@ describe("thread title prompt", () => {
   });
 
   it("builds a prompt from the user's first prompt", () => {
-    const prompt = buildThreadTitlePrompt("  Investigate PROJECT-123 in pr 456  ");
+    const prompt = buildThreadTitlePrompt(
+      "  Investigate PROJECT-123 in pr 456  ",
+    );
 
     expect(prompt).toContain("Investigate PROJECT-123 in pr 456");
     expect(prompt).not.toContain("{{USER_PROMPT}}");

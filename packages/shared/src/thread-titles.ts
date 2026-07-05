@@ -24,11 +24,16 @@ function normalizeTitleInput(value: string | undefined): string | undefined {
   }
 
   const withoutSkillLinks = trimmed.replace(LEADING_SKILL_LINK_RE, "");
-  const withoutSkillTokens = withoutSkillLinks.replace(LEADING_SKILL_TOKEN_RE, "");
+  const withoutSkillTokens = withoutSkillLinks.replace(
+    LEADING_SKILL_TOKEN_RE,
+    "",
+  );
   return withoutSkillTokens || trimmed;
 }
 
-export function shortenDerivedThreadTitle(value: string | undefined): string | undefined {
+export function shortenDerivedThreadTitle(
+  value: string | undefined,
+): string | undefined {
   const normalized = normalizeTitleInput(value);
   if (!normalized) {
     return undefined;
@@ -45,7 +50,10 @@ export function shortenDerivedThreadTitle(value: string | undefined): string | u
     return candidate;
   }
 
-  const breakpointWindow = candidate.slice(0, MAX_DERIVED_THREAD_TITLE_LENGTH + 1);
+  const breakpointWindow = candidate.slice(
+    0,
+    MAX_DERIVED_THREAD_TITLE_LENGTH + 1,
+  );
   const punctuationBreaks = [
     breakpointWindow.lastIndexOf(". "),
     breakpointWindow.lastIndexOf("? "),

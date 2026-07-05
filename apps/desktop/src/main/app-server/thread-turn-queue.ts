@@ -75,7 +75,9 @@ export type ThreadTurnQueueLifecycleEvent =
     };
 
 export type ThreadTurnQueueOptions = {
-  startTurn: (entry: ThreadTurnQueueEntry) => Promise<ThreadTurnQueueStartResult>;
+  startTurn: (
+    entry: ThreadTurnQueueEntry,
+  ) => Promise<ThreadTurnQueueStartResult>;
   isThreadActive?: (params: {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
@@ -98,8 +100,8 @@ export class ThreadTurnQueue {
   constructor(private readonly options: ThreadTurnQueueOptions) {}
 
   async submit(
-    input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
-      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    input: Omit<ThreadTurnQueueEntry, "id" | "createdAt">
+      & Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
   ): Promise<ThreadTurnQueueSubmissionResult> {
     const entry: ThreadTurnQueueEntry = {
       ...input,
@@ -108,7 +110,12 @@ export class ThreadTurnQueue {
     };
     const key = this.keyFor(entry);
 
-    if (!this.canStartImmediately({ backend: entry.backend, threadId: entry.threadId })) {
+    if (
+      !this.canStartImmediately({
+        backend: entry.backend,
+        threadId: entry.threadId,
+      })
+    ) {
       const queue = this.queueFor(key);
       queue.push(entry);
       const position = queue.length;
@@ -130,10 +137,10 @@ export class ThreadTurnQueue {
   }): boolean {
     const key = this.keyFor(params);
     return (
-      !this.startingKeys.has(key) &&
-      !this.runningEntries.has(key) &&
-      this.queueFor(key).length === 0 &&
-      !(this.options.isThreadActive?.(params) ?? false)
+      !this.startingKeys.has(key)
+      && !this.runningEntries.has(key)
+      && this.queueFor(key).length === 0
+      && !(this.options.isThreadActive?.(params) ?? false)
     );
   }
 
@@ -148,7 +155,10 @@ export class ThreadTurnQueue {
     return [...this.queuedEntries.values()].flatMap((queue) => [...queue]);
   }
 
-  cancelEntry(entryId: string, reason?: string): ThreadTurnQueueEntry | undefined {
+  cancelEntry(
+    entryId: string,
+    reason?: string,
+  ): ThreadTurnQueueEntry | undefined {
     for (const [key, queue] of this.queuedEntries.entries()) {
       const index = queue.findIndex((entry) => entry.id === entryId);
       if (index === -1) continue;
@@ -195,10 +205,10 @@ export class ThreadTurnQueue {
     try {
       const running = this.runningEntries.get(key);
       if (
-        running &&
-        (params.turnId === undefined ||
-          running.turnId === undefined ||
-          running.turnId === params.turnId)
+        running
+        && (params.turnId === undefined
+          || running.turnId === undefined
+          || running.turnId === params.turnId)
       ) {
         this.runningEntries.delete(key);
         await this.emit({
@@ -231,7 +241,9 @@ export class ThreadTurnQueue {
     }
   }
 
-  private async startEntry(entry: ThreadTurnQueueEntry): Promise<ThreadTurnQueueStartResult> {
+  private async startEntry(
+    entry: ThreadTurnQueueEntry,
+  ): Promise<ThreadTurnQueueStartResult> {
     const key = this.keyFor(entry);
     this.startingKeys.add(key);
     try {
@@ -243,7 +255,8 @@ export class ThreadTurnQueue {
       await this.emit({ type: "started", entry, turnId: result.turnId });
       return result;
     } catch (error) {
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const normalized =
+        error instanceof Error ? error : new Error(String(error));
       await this.emit({ type: "failed", entry, error: normalized });
       throw normalized;
     } finally {

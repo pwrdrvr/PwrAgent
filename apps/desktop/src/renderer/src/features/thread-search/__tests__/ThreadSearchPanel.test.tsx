@@ -3,40 +3,46 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ThreadSearchResponse } from "@pwragent/shared";
-import { basename, highlightSnippet, ThreadSearchPanel } from "../ThreadSearchPanel";
+import {
+  basename,
+  highlightSnippet,
+  ThreadSearchPanel,
+} from "../ThreadSearchPanel";
 import type { DesktopApi } from "../../../lib/desktop-api";
 
 describe("ThreadSearchPanel", () => {
   it("submits a search and opens a result", async () => {
-    const searchThreads = vi.fn(async (): Promise<ThreadSearchResponse> => ({
-      backend: "all",
-      contentMode: "available",
-      fetchedAt: 1_000,
-      filters: { backend: "all", includeArchived: false },
-      query: "branch drift",
-      results: [
-        {
-          backend: "codex",
-          confidence: "medium",
-          identityKey: "codex:thread-1",
-          linkedDirectories: [],
-          matchReasons: [{ kind: "provider_content_match" }],
-          score: 25,
-          snippets: [
-            {
-              scope: "provider_content",
-              text: "Asked about branch drift screenshots.",
-            },
-          ],
-          source: "codex",
-          threadId: "thread-1",
-          title: "Screenshots",
-        },
-      ],
-      searchedScopes: ["metadata", "projection"],
-      semanticMode: "disabled",
-      unavailableScopes: [],
-    }));
+    const searchThreads = vi.fn(
+      async (): Promise<ThreadSearchResponse> => ({
+        backend: "all",
+        contentMode: "available",
+        fetchedAt: 1_000,
+        filters: { backend: "all", includeArchived: false },
+        query: "branch drift",
+        results: [
+          {
+            backend: "codex",
+            confidence: "medium",
+            identityKey: "codex:thread-1",
+            linkedDirectories: [],
+            matchReasons: [{ kind: "provider_content_match" }],
+            score: 25,
+            snippets: [
+              {
+                scope: "provider_content",
+                text: "Asked about branch drift screenshots.",
+              },
+            ],
+            source: "codex",
+            threadId: "thread-1",
+            title: "Screenshots",
+          },
+        ],
+        searchedScopes: ["metadata", "projection"],
+        semanticMode: "disabled",
+        unavailableScopes: [],
+      }),
+    );
     const onOpenResult = vi.fn();
 
     render(
@@ -94,7 +100,9 @@ describe("basename", () => {
 
 describe("highlightSnippet", () => {
   it("wraps each query token occurrence in a <mark>, case-insensitively", () => {
-    const { container } = render(<>{highlightSnippet("the Bar and a bar", "bar")}</>);
+    const { container } = render(
+      <>{highlightSnippet("the Bar and a bar", "bar")}</>,
+    );
     const marks = container.querySelectorAll("mark");
     expect(marks).toHaveLength(2);
     expect(marks[0]).toHaveTextContent("Bar");
@@ -104,7 +112,9 @@ describe("highlightSnippet", () => {
   });
 
   it("treats regex-special characters in the query as literals", () => {
-    const { container } = render(<>{highlightSnippet("use a+b not axb", "a+b")}</>);
+    const { container } = render(
+      <>{highlightSnippet("use a+b not axb", "a+b")}</>,
+    );
     const marks = container.querySelectorAll("mark");
     expect(marks).toHaveLength(1);
     expect(marks[0]).toHaveTextContent("a+b");

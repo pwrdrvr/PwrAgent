@@ -245,7 +245,11 @@ function createSnapshot(
         appId: { configured: false, source: "unset", writable: true },
         appSecret: { configured: false, source: "unset", writable: true },
         encryptKey: { configured: false, source: "unset", writable: true },
-        verificationToken: { configured: false, source: "unset", writable: true },
+        verificationToken: {
+          configured: false,
+          source: "unset",
+          writable: true,
+        },
         inboundMode: { value: "persistent", source: "default" },
         tenantRegion: { value: "feishu", source: "default" },
         tenantUrl: { value: "", source: "default" },
@@ -259,7 +263,11 @@ function createSnapshot(
       line: {
         enabled: { value: false, source: "default" },
         streamingResponses: { value: false, source: "default" },
-        channelAccessToken: { configured: false, source: "unset", writable: true },
+        channelAccessToken: {
+          configured: false,
+          source: "unset",
+          writable: true,
+        },
         channelSecret: { configured: false, source: "unset", writable: true },
         webhookUrl: { value: "", source: "default" },
         callbackBaseUrl: { value: "", source: "default" },
@@ -493,21 +501,23 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const sections = screen.getByRole("navigation", { name: "Settings sections" });
-    expect(within(sections).getByRole("button", { name: "General" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    const sections = screen.getByRole("navigation", {
+      name: "Settings sections",
+    });
+    expect(
+      within(sections).getByRole("button", { name: "General" }),
+    ).toHaveAttribute("aria-current", "page");
 
-    expect(screen.getByRole("heading", { name: "Updates" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Updates" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Latest/ })).toHaveAttribute(
       "aria-checked",
       "true",
     );
-    expect(screen.getByRole("switch", { name: "Developer Mode" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
+    expect(
+      screen.getByRole("switch", { name: "Developer Mode" }),
+    ).toHaveAttribute("aria-checked", "false");
     expect(
       screen.getByRole("button", { name: "Start Capture (Immediate)" }),
     ).toBeInTheDocument();
@@ -538,7 +548,9 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Start Capture (Immediate)" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Start Capture (Immediate)" }),
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
@@ -557,7 +569,9 @@ describe("SettingsScreen", () => {
       "true",
     );
     expect(screen.getByRole("radio", { name: /3 snapshots/ })).toBeDisabled();
-    fireEvent.click(screen.getByRole("switch", { name: "Smart heap snapshots" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Smart heap snapshots" }),
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
@@ -569,7 +583,9 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("switch", { name: "Desktop notifications" }),
     ).toHaveAttribute("aria-checked", "false");
-    fireEvent.click(screen.getByRole("switch", { name: "Desktop notifications" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Desktop notifications" }),
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
@@ -595,7 +611,9 @@ describe("SettingsScreen", () => {
       await screen.findByText(/Update available: v1.0.0-beta.8/),
     ).toBeInTheDocument();
 
-    expect(screen.getByRole("heading", { name: "Pasted images" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Pasted images" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "1536 patches" })).toHaveAttribute(
       "aria-checked",
       "true",
@@ -609,13 +627,21 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(within(sections).getByRole("button", { name: "Applications" }));
+    fireEvent.click(
+      within(sections).getByRole("button", { name: "Applications" }),
+    );
     expect(screen.getByRole("heading", { name: "Editor" })).toBeInTheDocument();
     expect(screen.getByText("VS Code")).toBeInTheDocument();
-    expect(screen.getByText("/Applications/Visual Studio Code.app")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Terminal" })).toBeInTheDocument();
+    expect(
+      screen.getByText("/Applications/Visual Studio Code.app"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Terminal" }),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("Terminal").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("/System/Applications/Utilities/Terminal.app")).toBeInTheDocument();
+    expect(
+      screen.getByText("/System/Applications/Utilities/Terminal.app"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Ghostty")).toBeInTheDocument();
     expect(screen.getByText("/Applications/Ghostty.app")).toBeInTheDocument();
 
@@ -630,10 +656,16 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
-    expect(screen.queryByRole("radiogroup", { name: "Chat Reply Composer" })).not.toBeInTheDocument();
+    fireEvent.click(
+      within(sections).getByRole("button", { name: "Experimental" }),
+    );
+    expect(
+      screen.queryByRole("radiogroup", { name: "Chat Reply Composer" }),
+    ).not.toBeInTheDocument();
     openDiscontinuedDrawer();
-    fireEvent.click(screen.getByRole("switch", { name: "Enable diff condensation" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Enable diff condensation" }),
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { diffCondensation: { enabled: true } },
@@ -690,8 +722,12 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(within(sections).getByRole("button", { name: "Messaging" }));
-    expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument();
+    fireEvent.click(
+      within(sections).getByRole("button", { name: "Messaging" }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "General" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Medium" })).toHaveAttribute(
       "aria-checked",
       "true",
@@ -729,17 +765,27 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
-    expect(screen.getByText("Authorized Groups / Supergroups")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Telegram" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Authorized Groups / Supergroups"),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("radio", { name: "Group/supergroup chat" }),
     ).toBeInTheDocument();
     // Five providers expose a streaming toggle; LINE has no message-edit API so
     // it deliberately has none.
-    expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(5);
-    expect(screen.getAllByText(/reach platform rate limits much sooner/)).toHaveLength(5);
+    expect(
+      screen.getAllByText(/does not make turns finish sooner/),
+    ).toHaveLength(5);
+    expect(
+      screen.getAllByText(/reach platform rate limits much sooner/),
+    ).toHaveLength(5);
     fireEvent.click(
-      screen.getAllByRole("switch", { name: "Streaming Responses (Advanced)" })[0]!,
+      screen.getAllByRole("switch", {
+        name: "Streaming Responses (Advanced)",
+      })[0]!,
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -753,13 +799,17 @@ describe("SettingsScreen", () => {
     expect(screen.getAllByText("unset").length).toBeGreaterThanOrEqual(5);
     expect(screen.getAllByText("default").length).toBeGreaterThanOrEqual(2);
 
-    fireEvent.click(within(sections).getByRole("button", { name: "AI Providers" }));
+    fireEvent.click(
+      within(sections).getByRole("button", { name: "AI Providers" }),
+    );
     expect(screen.getByRole("heading", { name: "Codex" })).toBeInTheDocument();
     // The selected command appears in two places now: the pathrow
     // list (Codex discovery candidates) AND the SettingsTestBlock's
     // default name (it shows the path the Test button would invoke).
     // Both are correct.
-    expect(screen.getAllByText("/usr/local/bin/codex").length).toBeGreaterThanOrEqual(2);
+    expect(
+      screen.getAllByText("/usr/local/bin/codex").length,
+    ).toBeGreaterThanOrEqual(2);
     expect(
       screen.getByRole("radio", { name: "Auto Discovery - Use Newest" }),
     ).toHaveAttribute("aria-checked", "true");
@@ -786,8 +836,12 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    expect(screen.getAllByText("System default").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("/home/example/.codex/profiles/work")).toBeInTheDocument();
+    expect(screen.getAllByText("System default").length).toBeGreaterThanOrEqual(
+      1,
+    );
+    expect(
+      screen.getByText("/home/example/.codex/profiles/work"),
+    ).toBeInTheDocument();
     expect(screen.getByText("work@example.com")).toBeInTheDocument();
     fireEvent.click(useButtons[1]!);
     await waitFor(() => {
@@ -800,15 +854,22 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(within(sections).getByRole("button", { name: "Worktrees" }));
-    expect(screen.getByRole("heading", { name: "Storage location" })).toBeInTheDocument();
+    fireEvent.click(
+      within(sections).getByRole("button", { name: "Worktrees" }),
+    );
     expect(
-      screen.getByRole("radio", { name: "User home" }),
-    ).toHaveAttribute("aria-checked", "true");
+      screen.getByRole("heading", { name: "Storage location" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "User home" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     expect(
       screen.getByRole("radio", { name: "In repository" }),
     ).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText("/home/example/.pwragent/worktrees")).toBeInTheDocument();
+    expect(
+      screen.getByText("/home/example/.pwragent/worktrees"),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("radio", { name: "In repository" }));
     await waitFor(() => {
@@ -820,13 +881,14 @@ describe("SettingsScreen", () => {
     fireEvent.click(
       within(sections).getByRole("button", { name: "Archived Threads" }),
     );
-    expect(screen.getByRole("heading", { name: "Archived threads" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Archived threads" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(within(sections).getByRole("button", { name: "General" }));
-    expect(within(sections).getByRole("button", { name: "Experimental" })).not.toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    expect(
+      within(sections).getByRole("button", { name: "Experimental" }),
+    ).not.toHaveAttribute("aria-current", "page");
   }, 15_000);
 
   it("saves the hot CPU heap snapshot limit when heap capture is armed", async () => {
@@ -850,7 +912,9 @@ describe("SettingsScreen", () => {
 
     render(<SettingsScreen settings={settings} onClose={() => undefined} />);
 
-    expect(screen.getByRole("radio", { name: /3 snapshots/ })).not.toBeDisabled();
+    expect(
+      screen.getByRole("radio", { name: /3 snapshots/ }),
+    ).not.toBeDisabled();
     fireEvent.click(screen.getByRole("radio", { name: /3 snapshots/ }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -961,10 +1025,7 @@ describe("SettingsScreen", () => {
     const settings = createSettingsState(snapshot);
 
     render(
-      <SettingsScreen
-        initialSection="experimental"
-        settings={settings}
-      />,
+      <SettingsScreen initialSection="experimental" settings={settings} />,
     );
 
     openDiscontinuedDrawer();
@@ -987,10 +1048,7 @@ describe("SettingsScreen", () => {
     const settings = createSettingsState(snapshot);
 
     render(
-      <SettingsScreen
-        initialSection="experimental"
-        settings={settings}
-      />,
+      <SettingsScreen initialSection="experimental" settings={settings} />,
     );
 
     const questionsSwitch = screen.getByRole("switch", {
@@ -1012,10 +1070,7 @@ describe("SettingsScreen", () => {
     const settings = createSettingsState(snapshot);
 
     render(
-      <SettingsScreen
-        initialSection="experimental"
-        settings={settings}
-      />,
+      <SettingsScreen initialSection="experimental" settings={settings} />,
     );
 
     const refreshSwitch = screen.getByRole("switch", {
@@ -1074,7 +1129,9 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByText("Needs to come back to the active thread list."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "PwrAgnt" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "PwrAgnt" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("/repo/PwrAgnt")).toBeInTheDocument();
     expect(listThreads).toHaveBeenCalledWith({ archived: true });
 
@@ -1087,9 +1144,13 @@ describe("SettingsScreen", () => {
       });
     });
     await waitFor(() => {
-      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Archived code review"),
+      ).not.toBeInTheDocument();
     });
-    expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Restored Archived code review."),
+    ).toBeInTheDocument();
   });
 
   it("groups archived threads by project before restoration", async () => {
@@ -1164,9 +1225,11 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const pwrAgentGroup = (await screen.findByRole("heading", {
-      name: "PwrAgnt",
-    })).closest("section")!;
+    const pwrAgentGroup = (
+      await screen.findByRole("heading", {
+        name: "PwrAgnt",
+      })
+    ).closest("section")!;
     expect(within(pwrAgentGroup).getByText("2 threads")).toBeInTheDocument();
     const firstPwrAgentThread = within(pwrAgentGroup).getByText(
       "First PwrAgent thread",
@@ -1175,13 +1238,15 @@ describe("SettingsScreen", () => {
       "Second PwrAgent thread",
     );
     expect(
-      firstPwrAgentThread.compareDocumentPosition(secondPwrAgentThread) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      firstPwrAgentThread.compareDocumentPosition(secondPwrAgentThread)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
-    const otherGroup = screen.getByRole("heading", {
-      name: "OtherProject",
-    }).closest("section")!;
+    const otherGroup = screen
+      .getByRole("heading", {
+        name: "OtherProject",
+      })
+      .closest("section")!;
     expect(within(otherGroup).getByText("1 thread")).toBeInTheDocument();
     expect(
       within(otherGroup).getByText("Other project thread"),
@@ -1205,8 +1270,7 @@ describe("SettingsScreen", () => {
               id: "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
               label: "PwrSnap",
               path: "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
-              worktreePath:
-                "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
+              worktreePath: "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
               kind: "worktree" as const,
             },
           ],
@@ -1224,8 +1288,7 @@ describe("SettingsScreen", () => {
               id: "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
               label: "PwrSnap",
               path: "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
-              worktreePath:
-                "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
+              worktreePath: "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
               kind: "worktree" as const,
             },
           ],
@@ -1243,9 +1306,11 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const pwrSnapGroup = (await screen.findByRole("heading", {
-      name: "PwrSnap",
-    })).closest("section")!;
+    const pwrSnapGroup = (
+      await screen.findByRole("heading", {
+        name: "PwrSnap",
+      })
+    ).closest("section")!;
     expect(within(pwrSnapGroup).getByText("2 threads")).toBeInTheDocument();
     expect(
       within(pwrSnapGroup).getByText("Testing env setup"),
@@ -1262,7 +1327,8 @@ describe("SettingsScreen", () => {
   });
 
   it("groups active-profile scratch projects as Workspaces and hides inactive profile roots", async () => {
-    const activeWorkspaceRoot = "/Users/huntharo/.pwragent/profiles/dev/projects";
+    const activeWorkspaceRoot =
+      "/Users/huntharo/.pwragent/profiles/dev/projects";
     const listThreads = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: 3_000,
@@ -1322,13 +1388,17 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const workspacesGroup = (await screen.findByRole("heading", {
-      name: "Workspaces",
-    })).closest("section")!;
+    const workspacesGroup = (
+      await screen.findByRole("heading", {
+        name: "Workspaces",
+      })
+    ).closest("section")!;
     expect(within(workspacesGroup).getByText("2 threads")).toBeInTheDocument();
     expect(within(workspacesGroup).getByText("lions roar")).toBeInTheDocument();
     expect(within(workspacesGroup).getByText("what's up")).toBeInTheDocument();
-    expect(within(workspacesGroup).getByText(activeWorkspaceRoot)).toBeInTheDocument();
+    expect(
+      within(workspacesGroup).getByText(activeWorkspaceRoot),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "2026-05-10-844f31" }),
     ).not.toBeInTheDocument();
@@ -1345,27 +1415,30 @@ describe("SettingsScreen", () => {
     const listThreads = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: 3_000,
-      threads: Array.from({ length: 25 }, (_, index): AppServerThreadSummary => {
-        const threadNumber = index + 1;
-        const threadId = `thread-${threadNumber}`;
-        return {
-          id: threadId,
-          title: `Archived thread ${String(threadNumber).padStart(2, "0")}`,
-          titleSource: "explicit",
-          createdAt: 1_000,
-          updatedAt: 1_000 + threadNumber,
-          worktreeSnapshots: [createArchivedSnapshot(threadId, threadNumber)],
-          linkedDirectories: [
-            {
-              id: "directory-1",
-              label: "PwrAgnt",
-              path: "/repo/PwrAgnt",
-              kind: "local",
-            },
-          ],
-          source: "codex",
-        };
-      }),
+      threads: Array.from(
+        { length: 25 },
+        (_, index): AppServerThreadSummary => {
+          const threadNumber = index + 1;
+          const threadId = `thread-${threadNumber}`;
+          return {
+            id: threadId,
+            title: `Archived thread ${String(threadNumber).padStart(2, "0")}`,
+            titleSource: "explicit",
+            createdAt: 1_000,
+            updatedAt: 1_000 + threadNumber,
+            worktreeSnapshots: [createArchivedSnapshot(threadId, threadNumber)],
+            linkedDirectories: [
+              {
+                id: "directory-1",
+                label: "PwrAgnt",
+                path: "/repo/PwrAgnt",
+                kind: "local",
+              },
+            ],
+            source: "codex",
+          };
+        },
+      ),
     }));
 
     render(
@@ -1377,9 +1450,11 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const pwrAgentGroup = (await screen.findByRole("heading", {
-      name: "PwrAgnt",
-    })).closest("section")!;
+    const pwrAgentGroup = (
+      await screen.findByRole("heading", {
+        name: "PwrAgnt",
+      })
+    ).closest("section")!;
     expect(
       within(pwrAgentGroup).getByText("Archived thread 25"),
     ).toBeInTheDocument();
@@ -1446,7 +1521,9 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
     await waitFor(() => {
-      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Archived code review"),
+      ).not.toBeInTheDocument();
     });
 
     await act(async () => {
@@ -1458,9 +1535,13 @@ describe("SettingsScreen", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Archived code review"),
+      ).not.toBeInTheDocument();
     });
-    expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Restored Archived code review."),
+    ).toBeInTheDocument();
   });
 
   it("shows ACP agents inside the consolidated AI Providers section", async () => {
@@ -1603,7 +1684,9 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(dialog).toHaveTextContent("work is logged in.");
     });
-    expect(dialog).not.toHaveTextContent("Codex login exited before emitting a login link");
+    expect(dialog).not.toHaveTextContent(
+      "Codex login exited before emitting a login link",
+    );
   });
 
   it("shows resolved gh discovery details and saves an alternate candidate", async () => {
@@ -1652,11 +1735,16 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const ghPanel = screen.getByRole("heading", { name: "GitHub CLI (gh)" })
+    const ghPanel = screen
+      .getByRole("heading", { name: "GitHub CLI (gh)" })
       .closest("section")!;
     expect(await within(ghPanel).findByText("Path:")).toBeInTheDocument();
-    expect(within(ghPanel).getAllByText("/opt/homebrew/bin/gh").length).toBeGreaterThanOrEqual(1);
-    expect(within(ghPanel).getAllByText("2.88.1").length).toBeGreaterThanOrEqual(1);
+    expect(
+      within(ghPanel).getAllByText("/opt/homebrew/bin/gh").length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      within(ghPanel).getAllByText("2.88.1").length,
+    ).toBeGreaterThanOrEqual(1);
     expect(within(ghPanel).getByText("Signed in as")).toBeInTheDocument();
 
     fireEvent.click(within(ghPanel).getByRole("button", { name: "Use" }));
@@ -1716,15 +1804,23 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const gitPanel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
-    expect(within(gitPanel).getAllByText("/opt/homebrew/bin/git").length).toBeGreaterThanOrEqual(1);
+    const gitPanel = screen
+      .getByRole("heading", { name: "Git" })
+      .closest("section")!;
+    expect(
+      within(gitPanel).getAllByText("/opt/homebrew/bin/git").length,
+    ).toBeGreaterThanOrEqual(1);
     expect(within(gitPanel).getByText(/Apple's Git at/)).toBeInTheDocument();
-    expect(within(gitPanel).queryByText("/usr/local/bin/git")).not.toBeInTheDocument();
+    expect(
+      within(gitPanel).queryByText("/usr/local/bin/git"),
+    ).not.toBeInTheDocument();
     expect(
       within(gitPanel).getByText("sudo xcodebuild -license"),
     ).toBeInTheDocument();
 
-    fireEvent.click(within(gitPanel).getByRole("button", { name: "Copy command" }));
+    fireEvent.click(
+      within(gitPanel).getByRole("button", { name: "Copy command" }),
+    );
     await waitFor(() => {
       expect(copyTextMock).toHaveBeenCalledWith("sudo xcodebuild -license");
     });
@@ -1734,15 +1830,21 @@ describe("SettingsScreen", () => {
     const settings = createSettingsState();
     render(<SettingsScreen settings={settings} onClose={() => undefined} />);
 
-    const sections = screen.getByRole("navigation", { name: "Settings sections" });
-    fireEvent.click(within(sections).getByRole("button", { name: "Messaging" }));
+    const sections = screen.getByRole("navigation", {
+      name: "Settings sections",
+    });
+    fireEvent.click(
+      within(sections).getByRole("button", { name: "Messaging" }),
+    );
 
     expect(
       screen.getByRole("heading", { name: "Mattermost" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Server URL")).toBeInTheDocument();
     expect(screen.getAllByText("Callback Base URL").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Register slash commands").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("Register slash commands").length,
+    ).toBeGreaterThan(0);
     // The slash command prefix field should be disabled while
     // registerSlashCommands is off.
     const prefixInput = screen.getAllByLabelText("Slash command prefix")[0]!;
@@ -1786,8 +1888,12 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(screen.getByText(/Authorization defaults closed/)).toBeInTheDocument();
-    expect(screen.getByText(/Rejected Telegram DMs show the peer ID/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Authorization defaults closed/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Rejected Telegram DMs show the peer ID/),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add" })[0]!);
     const telegramUserIds = screen.getByLabelText("Authorized User IDs ID 1");
@@ -1839,15 +1945,16 @@ describe("SettingsScreen", () => {
       "placeholder",
       "https://line-webhook.example.com/",
     );
-    expect(screen.getByPlaceholderText("http://127.0.0.1:47822")).toHaveAccessibleName(
-      "Local Webhook Listener",
-    );
-    expect(screen.getByPlaceholderText("http://127.0.0.1:47822")).toHaveAttribute(
-      "placeholder",
-      "http://127.0.0.1:47822",
-    );
+    expect(
+      screen.getByPlaceholderText("http://127.0.0.1:47822"),
+    ).toHaveAccessibleName("Local Webhook Listener");
+    expect(
+      screen.getByPlaceholderText("http://127.0.0.1:47822"),
+    ).toHaveAttribute("placeholder", "http://127.0.0.1:47822");
     expect(screen.getByText(/forwards LINE webhooks/)).toBeInTheDocument();
-    expect(screen.queryByText("https://line-callback.example.com/")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("https://line-callback.example.com/"),
+    ).not.toBeInTheDocument();
   });
 
   it("treats Feishu tenant and webhook URLs as optional overrides", () => {
@@ -1873,7 +1980,10 @@ describe("SettingsScreen", () => {
 
   it("shows the Feishu local webhook listener only for webhook mode", () => {
     const snapshot = createSnapshot();
-    snapshot.messaging.feishu.inboundMode = { value: "webhook", source: "config" };
+    snapshot.messaging.feishu.inboundMode = {
+      value: "webhook",
+      source: "config",
+    };
 
     render(
       <SettingsScreen
@@ -1887,8 +1997,12 @@ describe("SettingsScreen", () => {
       .getAllByLabelText("Local Webhook Listener")
       .find((input) => !input.hasAttribute("placeholder"));
     expect(feishuLocalWebhook).toHaveValue("");
-    expect(screen.getByText(/Default:/)).toHaveTextContent("http://127.0.0.1:47823");
-    expect(screen.getByText(/Only used when Webhook is selected/)).toBeInTheDocument();
+    expect(screen.getByText(/Default:/)).toHaveTextContent(
+      "http://127.0.0.1:47823",
+    );
+    expect(
+      screen.getByText(/Only used when Webhook is selected/),
+    ).toBeInTheDocument();
   });
 
   it("looks up blank messaging display names from the settings screen", async () => {
@@ -2059,7 +2173,9 @@ describe("SettingsScreen", () => {
     const initialPairingChangedCallbacks = [...pairingChangedCallbacks];
     fireEvent.click(screen.getAllByRole("button", { name: "Generate" })[0]!);
     expect(await screen.findByText(pairingMessage)).toBeInTheDocument();
-    expect(pairingChangedCallbacks).toHaveLength(initialPairingChangedCallbacks.length);
+    expect(pairingChangedCallbacks).toHaveLength(
+      initialPairingChangedCallbacks.length,
+    );
 
     act(() => {
       for (const callback of initialPairingChangedCallbacks) {
@@ -2070,7 +2186,11 @@ describe("SettingsScreen", () => {
             status: "observed",
             observedAt: 3,
             observedActor: { id: "8460800771", displayName: "Harold Hunt" },
-            observedChat: { id: "8460800771", kind: "dm", title: "Harold Hunt" },
+            observedChat: {
+              id: "8460800771",
+              kind: "dm",
+              title: "Harold Hunt",
+            },
           },
         });
       }
@@ -2152,7 +2272,8 @@ describe("SettingsScreen", () => {
     const desktopApi = {
       approveMessagingPairing,
       listMessagingPairingRequests: vi.fn(async (request) => ({
-        entries: !approved && request?.platform === "telegram" ? [observedEntry] : [],
+        entries:
+          !approved && request?.platform === "telegram" ? [observedEntry] : [],
       })),
       onMessagingPairingChanged: vi.fn(() => () => undefined),
     } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
@@ -2184,12 +2305,16 @@ describe("SettingsScreen", () => {
     expect(requestCard).toHaveTextContent("Phone +15551234567");
     expect(requestCard).toHaveTextContent("DM peer ID 8460800771");
 
-    fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {
-      name: "Approve",
-    }));
+    fireEvent.click(
+      within(requestCard as HTMLElement).getByRole("button", {
+        name: "Approve",
+      }),
+    );
 
     await waitFor(() => {
-      expect(approveMessagingPairing).toHaveBeenCalledWith({ entryId: "pairing-1" });
+      expect(approveMessagingPairing).toHaveBeenCalledWith({
+        entryId: "pairing-1",
+      });
     });
     await waitFor(() => {
       expect(refreshSpy).toHaveBeenCalled();
@@ -2263,9 +2388,11 @@ describe("SettingsScreen", () => {
     expect(requestCard).toHaveTextContent("Channel ID C012ABCDEF0");
     expect(requestCard).toHaveTextContent("team-alerts");
 
-    fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {
-      name: "Approve channel",
-    }));
+    fireEvent.click(
+      within(requestCard as HTMLElement).getByRole("button", {
+        name: "Approve channel",
+      }),
+    );
 
     await waitFor(() => {
       expect(approveMessagingPairing).toHaveBeenCalledWith({
@@ -2275,9 +2402,11 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {
-      name: "Approve user",
-    }));
+    fireEvent.click(
+      within(requestCard as HTMLElement).getByRole("button", {
+        name: "Approve user",
+      }),
+    );
 
     await waitFor(() => {
       expect(approveMessagingPairing).toHaveBeenCalledWith({
@@ -2288,9 +2417,11 @@ describe("SettingsScreen", () => {
     });
 
     // A workspace was observed, so a team approval is offered too.
-    fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {
-      name: "Approve team",
-    }));
+    fireEvent.click(
+      within(requestCard as HTMLElement).getByRole("button", {
+        name: "Approve team",
+      }),
+    );
 
     await waitFor(() => {
       expect(approveMessagingPairing).toHaveBeenCalledWith({
@@ -2397,9 +2528,9 @@ describe("SettingsScreen", () => {
     const warningPolicy = screen.getByRole("combobox", {
       name: "Authorized User IDs Full Access warning 1",
     });
-    expect(warningPolicy.closest(".settings-authorized-list__policy")).toHaveTextContent(
-      "Full Access warning",
-    );
+    expect(
+      warningPolicy.closest(".settings-authorized-list__policy"),
+    ).toHaveTextContent("Full Access warning");
     expect(warningPolicy).toHaveAttribute(
       "title",
       "Controls whether this user sees the Full Access warning before escalation.",
@@ -2428,7 +2559,9 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
           slack: {
-            authorizedUserIds: [{ id: "U079K80HTGS", displayName: "Harold Hunt" }],
+            authorizedUserIds: [
+              { id: "U079K80HTGS", displayName: "Harold Hunt" },
+            ],
           },
         },
       });
@@ -2475,13 +2608,15 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
     expect(slackControls.getByText("Authorized Team IDs")).toBeInTheDocument();
     expect(slackControls.getByText("Team access default")).toBeInTheDocument();
-    expect(slackControls.getByText("Channel access default")).toBeInTheDocument();
-    expect(slackControls.getByText("Channel response default")).toBeInTheDocument();
+    expect(
+      slackControls.getByText("Channel access default"),
+    ).toBeInTheDocument();
+    expect(
+      slackControls.getByText("Channel response default"),
+    ).toBeInTheDocument();
     expect(slackControls.getByText("Authorized Channels")).toBeInTheDocument();
     expect(
-      slackControls.getByText(
-        /Require listed channels is the safest default/i,
-      ),
+      slackControls.getByText(/Require listed channels is the safest default/i),
     ).toBeInTheDocument();
 
     fireEvent.click(slackControls.getByRole("radio", { name: "Any channel" }));
@@ -2496,7 +2631,9 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(slackControls.getByRole("radio", { name: "Every message" }));
+    fireEvent.click(
+      slackControls.getByRole("radio", { name: "Every message" }),
+    );
 
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -2520,8 +2657,11 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const signingSecretInput = screen.getByLabelText("Signing Secret (Optional)");
-    const signingSecretControls = signingSecretInput.closest(".settings-secret");
+    const signingSecretInput = screen.getByLabelText(
+      "Signing Secret (Optional)",
+    );
+    const signingSecretControls =
+      signingSecretInput.closest(".settings-secret");
     expect(signingSecretInput).toBeEnabled();
     expect(signingSecretControls).not.toBeNull();
 
@@ -2553,8 +2693,12 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(screen.getByRole("radio", { name: "Socket Mode" })).toBeInTheDocument();
-    expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: "Socket Mode" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("radio", { name: "Events API" }),
+    ).not.toBeInTheDocument();
   });
 
   it("sanitizes manually entered messaging display names before saving", async () => {
@@ -2586,9 +2730,7 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
           telegram: {
-            authorizedUserIds: [
-              { id: "8460800771", displayName: "Harold" },
-            ],
+            authorizedUserIds: [{ id: "8460800771", displayName: "Harold" }],
           },
         },
       });
@@ -2611,11 +2753,7 @@ describe("SettingsScreen", () => {
       },
     });
     let resolveLookup:
-      | ((value: {
-          status: "ok";
-          id: string;
-          displayName: string;
-        }) => void)
+      | ((value: { status: "ok"; id: string; displayName: string }) => void)
       | undefined;
     const resolveMessagingContact = vi.fn(
       () =>
@@ -2718,7 +2856,9 @@ describe("SettingsScreen", () => {
     );
 
     expect(screen.getByText("@huntharo")).toBeInTheDocument();
-    expect(screen.getByText(/That looks like a Telegram username/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/That looks like a Telegram username/),
+    ).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", {
         name: "Remove Authorized User IDs row 1",
@@ -2738,7 +2878,9 @@ describe("SettingsScreen", () => {
 
   it("returns to the previous app surface", () => {
     const onClose = vi.fn();
-    render(<SettingsScreen settings={createSettingsState()} onClose={onClose} />);
+    render(
+      <SettingsScreen settings={createSettingsState()} onClose={onClose} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /Exit Settings/i }));
 
@@ -2774,27 +2916,35 @@ describe("SettingsScreen", () => {
         },
       })),
     }));
-    const setDefaultPwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => {
-      defaultProfile = profile;
-      return { profile };
-    });
-    const deletePwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => {
-      profileNames = profileNames.filter((name) => name !== profile);
-      if (defaultProfile === profile) defaultProfile = "default";
-      return { deleted: true, profile };
-    });
-    const openPwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => ({
-      opened: true,
-      profile,
-    }));
-    const createPwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => {
-      profileNames = [...profileNames, profile];
-      return {
+    const setDefaultPwrAgentProfile = vi.fn(
+      async ({ profile }: { profile: string }) => {
+        defaultProfile = profile;
+        return { profile };
+      },
+    );
+    const deletePwrAgentProfile = vi.fn(
+      async ({ profile }: { profile: string }) => {
+        profileNames = profileNames.filter((name) => name !== profile);
+        if (defaultProfile === profile) defaultProfile = "default";
+        return { deleted: true, profile };
+      },
+    );
+    const openPwrAgentProfile = vi.fn(
+      async ({ profile }: { profile: string }) => ({
+        opened: true,
         profile,
-        profileDir: `/home/example/.pwragent/profiles/${profile}`,
-        created: true,
-      };
-    });
+      }),
+    );
+    const createPwrAgentProfile = vi.fn(
+      async ({ profile }: { profile: string }) => {
+        profileNames = [...profileNames, profile];
+        return {
+          profile,
+          profileDir: `/home/example/.pwragent/profiles/${profile}`,
+          created: true,
+        };
+      },
+    );
     const setPwrAgentProfileCodexProfile = vi.fn(
       async (request: { profile: string; codexProfile: string }) => request,
     );
@@ -2813,7 +2963,7 @@ describe("SettingsScreen", () => {
         desktopApi={desktopApi}
         initialSection="profiles"
         settings={createSettingsState()}
-      onClose={() => undefined}
+        onClose={() => undefined}
       />,
     );
 
@@ -2829,13 +2979,19 @@ describe("SettingsScreen", () => {
       { target: { value: "My Work" } },
     );
     expect(within(createDialog).getByText("my-work")).toBeInTheDocument();
-    fireEvent.click(within(createDialog).getByRole("button", { name: "Add profile" }));
+    fireEvent.click(
+      within(createDialog).getByRole("button", { name: "Add profile" }),
+    );
     await waitFor(() => {
-      expect(createPwrAgentProfile).toHaveBeenCalledWith({ profile: "my-work" });
+      expect(createPwrAgentProfile).toHaveBeenCalledWith({
+        profile: "my-work",
+      });
     });
 
     expect(await screen.findByText("scratch")).toBeInTheDocument();
-    expect(screen.getByText("/home/example/.pwragent/profiles/dev")).toBeInTheDocument();
+    expect(
+      screen.getByText("/home/example/.pwragent/profiles/dev"),
+    ).toBeInTheDocument();
 
     const scratchRow = screen
       .getByText("scratch")
@@ -2858,7 +3014,9 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(within(scratchRow).getByRole("button", { name: "Use on startup" }));
+    fireEvent.click(
+      within(scratchRow).getByRole("button", { name: "Use on startup" }),
+    );
     await waitFor(() => {
       expect(setDefaultPwrAgentProfile).toHaveBeenCalledWith({
         profile: "scratch",
@@ -2871,17 +3029,25 @@ describe("SettingsScreen", () => {
     });
 
     fireEvent.click(within(scratchRow).getByRole("button", { name: "Delete" }));
-    const dialog = await screen.findByRole("dialog", { name: "Delete profile?" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Delete profile?",
+    });
     expect(dialog).toHaveClass("settings-confirm-dialog--danger");
     expect(dialog).toHaveTextContent("Move scratch to Trash.");
-    expect(dialog).toHaveTextContent("Close any other PwrAgent windows using this profile first.");
-    expect(dialog).toHaveTextContent("Codex auth homes under ~/.codex are not deleted.");
+    expect(dialog).toHaveTextContent(
+      "Close any other PwrAgent windows using this profile first.",
+    );
+    expect(dialog).toHaveTextContent(
+      "Codex auth homes under ~/.codex are not deleted.",
+    );
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Move profile to Trash" }),
     );
 
     await waitFor(() => {
-      expect(deletePwrAgentProfile).toHaveBeenCalledWith({ profile: "scratch" });
+      expect(deletePwrAgentProfile).toHaveBeenCalledWith({
+        profile: "scratch",
+      });
     });
     await waitFor(() => {
       expect(container.querySelector(".settings-confirm-dialog")).toBeNull();
@@ -2949,7 +3115,9 @@ describe("SettingsScreen", () => {
     const workRow = screen
       .getByText("/home/example/.pwragent/profiles/work")
       .closest(".settings-profile-row") as HTMLElement;
-    fireEvent.click(within(workRow).getByRole("button", { name: "Use on startup" }));
+    fireEvent.click(
+      within(workRow).getByRole("button", { name: "Use on startup" }),
+    );
 
     await waitFor(() => {
       expect(setDefaultProfile).toHaveBeenCalledWith("work");
@@ -2992,14 +3160,18 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(await screen.findByText("PwrAgent is licensed under MIT.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("PwrAgent is licensed under MIT."),
+    ).toBeInTheDocument();
     expect(screen.getByText("https://pwragent.ai")).toBeInTheDocument();
     expect(screen.getByText("https://docs.pwragent.ai")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open changelog" }));
     expect(openChangelogWindow).toHaveBeenCalledOnce();
 
-    fireEvent.click(screen.getByRole("button", { name: "Third-party notices" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Third-party notices" }),
+    );
     expect(openThirdPartyNoticesWindow).toHaveBeenCalledOnce();
 
     fireEvent.click(screen.getByRole("button", { name: "View MIT license" }));
@@ -3044,9 +3216,7 @@ describe("SettingsScreen", () => {
 
     // Brand lives in the nav masthead (left column), NOT inside the
     // title bar. Brand text + accent split.
-    const brandAccent = container.querySelector(
-      ".settings-nav__brand-accent",
-    );
+    const brandAccent = container.querySelector(".settings-nav__brand-accent");
     expect(brandAccent).not.toBeNull();
     expect(brandAccent?.closest(".settings-nav__masthead")).not.toBeNull();
     expect(brandAccent?.closest(".settings-titlebar")).toBeNull();
@@ -3243,7 +3413,9 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("switch", { name: "Escalate to Full Access" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Escalate to Full Access" }),
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: { allowFullAccessEscalation: false },
@@ -3406,9 +3578,17 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Settings config did not load");
-    expect(screen.getByRole("alert")).toHaveTextContent("line 3: expected a key");
-    expect(screen.getByRole("alert")).toHaveTextContent("/tmp/pwragent/config.toml");
-    expect(screen.queryByRole("radio", { name: "TipTap with chips" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Settings config did not load",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "line 3: expected a key",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "/tmp/pwragent/config.toml",
+    );
+    expect(
+      screen.queryByRole("radio", { name: "TipTap with chips" }),
+    ).not.toBeInTheDocument();
   });
 });

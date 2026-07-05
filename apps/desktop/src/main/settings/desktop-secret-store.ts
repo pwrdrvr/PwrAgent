@@ -66,13 +66,20 @@ export class MemoryDesktopSecretStore implements DesktopSecretStore {
     return this.values.get(name);
   }
 
-  async getSecret(name: DesktopSettingsSecretName): Promise<string | undefined> {
+  async getSecret(
+    name: DesktopSettingsSecretName,
+  ): Promise<string | undefined> {
     return this.getSecretSync(name);
   }
 
-  async setSecret(name: DesktopSettingsSecretName, value: string): Promise<void> {
+  async setSecret(
+    name: DesktopSettingsSecretName,
+    value: string,
+  ): Promise<void> {
     if (!this.state.available) {
-      throw new Error(this.state.unavailableReason ?? "Secret storage unavailable");
+      throw new Error(
+        this.state.unavailableReason ?? "Secret storage unavailable",
+      );
     }
     this.values.set(name, value);
   }

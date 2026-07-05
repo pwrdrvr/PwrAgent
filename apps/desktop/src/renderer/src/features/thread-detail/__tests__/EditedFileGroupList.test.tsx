@@ -52,18 +52,24 @@ describe("EditedFileGroupList Show more / Show less", () => {
     fireEvent.click(toggle);
     expect(screen.getByText("Edited turn 2")).toBeInTheDocument();
     expect(screen.getByText("Edited turn 1")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show less" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Show less" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Show less" }));
     expect(screen.queryByText("Edited turn 2")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show 2 more" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Show 2 more" }),
+    ).toBeInTheDocument();
   });
 
   it("does not render the toggle when there are 3 or fewer groups", () => {
     render(<EditedFileGroupList groups={groups(3)} />);
 
     expect(screen.getByText("Edited turn 1")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Show \d+ more/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows aggregate added and removed totals above the All files list", () => {
@@ -250,8 +256,12 @@ describe("EditedFileGroupList Show more / Show less", () => {
     // per-turn grouping, so no Show more / Show less affordance.
     render(<EditedFileGroupList groups={groups(5)} view="files" />);
 
-    expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Show less" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Show \d+ more/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Show less" }),
+    ).not.toBeInTheDocument();
   });
 
   it("flags gitignored files with a per-file chip and a group count", () => {

@@ -93,7 +93,10 @@ export async function readAppLicenseDocument(
 }
 
 export async function readAppChangelogDocument(): Promise<AppChangelogDocument> {
-  const content = await readFile(resolveBundledDocumentPath("CHANGELOG.md"), "utf8");
+  const content = await readFile(
+    resolveBundledDocumentPath("CHANGELOG.md"),
+    "utf8",
+  );
   return {
     kind: "changelog",
     title: "Changelog",
@@ -104,7 +107,9 @@ export async function readAppChangelogDocument(): Promise<AppChangelogDocument> 
 export function registerAppMetadataIpcHandlers(): void {
   unsubscribeAppLogEntries?.();
   unsubscribeAppLogEntries = subscribeAppLogEntries((entry) => {
-    for (const webContents of subscribersForChannel(APP_LOG_ENTRY_EVENT_CHANNEL)) {
+    for (const webContents of subscribersForChannel(
+      APP_LOG_ENTRY_EVENT_CHANNEL,
+    )) {
       if (!webContents.isDestroyed()) {
         webContents.send(APP_LOG_ENTRY_EVENT_CHANNEL, entry);
       }
@@ -119,25 +124,27 @@ export function registerAppMetadataIpcHandlers(): void {
   ipcMain.removeHandler(APP_LOG_SNAPSHOT_READ_CHANNEL);
   ipcMain.removeHandler(APP_LOG_DEBUG_COLLECTION_SET_CHANNEL);
   ipcMain.removeHandler(APP_LOG_WINDOW_OPEN_CHANNEL);
-  ipcMain.handle(APP_METADATA_READ_CHANNEL, async (): Promise<AppMetadata> =>
-    resolveAppMetadata(),
+  ipcMain.handle(
+    APP_METADATA_READ_CHANNEL,
+    async (): Promise<AppMetadata> => resolveAppMetadata(),
   );
   ipcMain.handle(
     APP_LICENSE_DOCUMENT_READ_CHANNEL,
-    async (
-      _event,
-      kind: AppLicenseDocumentKind,
-    ): Promise<AppLicenseDocument> => readAppLicenseDocument(kind),
+    async (_event, kind: AppLicenseDocumentKind): Promise<AppLicenseDocument> =>
+      readAppLicenseDocument(kind),
   );
   ipcMain.handle(
     APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
     async (): Promise<AppChangelogDocument> => readAppChangelogDocument(),
   );
-  ipcMain.handle(APP_CHANGELOG_WINDOW_OPEN_CHANNEL, async (event): Promise<void> => {
-    showChangelogWindow({
-      sourceWindow: BrowserWindow.fromWebContents(event.sender),
-    });
-  });
+  ipcMain.handle(
+    APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
+    async (event): Promise<void> => {
+      showChangelogWindow({
+        sourceWindow: BrowserWindow.fromWebContents(event.sender),
+      });
+    },
+  );
   ipcMain.handle(
     APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL,
     async (event): Promise<void> => {

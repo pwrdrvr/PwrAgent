@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getDesktopMessagingStore, resetDesktopMessagingStoreForTests, setDesktopMessagingStoreForTests } from "../messaging/desktop-messaging-store";
+import {
+  getDesktopMessagingStore,
+  resetDesktopMessagingStoreForTests,
+  setDesktopMessagingStoreForTests,
+} from "../messaging/desktop-messaging-store";
 import { initializeAppState, resetAppStateForTests } from "../state/app-state";
 import fs from "node:fs";
 import os from "node:os";

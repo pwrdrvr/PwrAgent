@@ -23,7 +23,10 @@ export class AcpClientRequestHandler {
       return { outcome: "denied", reason: "path-outside-workspace" };
     }
     if (this.options.executionMode !== "full-access") {
-      return { outcome: "permission-required", reason: "write-requires-approval" };
+      return {
+        outcome: "permission-required",
+        reason: "write-requires-approval",
+      };
     }
 
     await mkdir(path.dirname(request.path), { recursive: true });
@@ -59,7 +62,10 @@ export class AcpClientRequestHandler {
     return this.options.workspaceRoots.some((root) => {
       const resolvedRoot = path.resolve(root);
       const relative = path.relative(resolvedRoot, resolved);
-      return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+      return (
+        relative === ""
+        || (!relative.startsWith("..") && !path.isAbsolute(relative))
+      );
     });
   }
 }

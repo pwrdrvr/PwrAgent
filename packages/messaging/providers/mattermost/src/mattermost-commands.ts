@@ -86,14 +86,16 @@ const CANONICAL_COMMAND_BASES: readonly CanonicalCommandBase[] = [
     base: "resume",
     displayNameSuffix: "Resume",
     description: "Bind this conversation to a PwrAgent thread.",
-    autoCompleteDesc: "Choose a PwrAgent thread to control from this conversation.",
+    autoCompleteDesc:
+      "Choose a PwrAgent thread to control from this conversation.",
     autoCompleteHint: "[--projects | --new | <args>]",
   },
   {
     base: "agent",
     displayNameSuffix: "Agent",
     description: "Bind this conversation to a PwrAgent Agent thread.",
-    autoCompleteDesc: "Choose a PwrAgent Agent thread to control from this conversation.",
+    autoCompleteDesc:
+      "Choose a PwrAgent Agent thread to control from this conversation.",
     autoCompleteHint: "[<filter>]",
   },
   {
@@ -113,7 +115,8 @@ const CANONICAL_COMMAND_BASES: readonly CanonicalCommandBase[] = [
     base: "detach",
     displayNameSuffix: "Detach",
     description: "Detach this conversation from its current PwrAgent thread.",
-    autoCompleteDesc: "Detach this conversation from its current PwrAgent thread.",
+    autoCompleteDesc:
+      "Detach this conversation from its current PwrAgent thread.",
   },
   {
     base: "monitor",
@@ -125,7 +128,8 @@ const CANONICAL_COMMAND_BASES: readonly CanonicalCommandBase[] = [
     base: "help",
     displayNameSuffix: "Help",
     description: "Show available PwrAgent commands and how to invoke them.",
-    autoCompleteDesc: "Show available PwrAgent commands and how to invoke them.",
+    autoCompleteDesc:
+      "Show available PwrAgent commands and how to invoke them.",
   },
 ];
 
@@ -154,7 +158,9 @@ export function desiredMattermostCommands(
       displayName: `PwrAgent ${base.displayNameSuffix}`,
       description: base.description,
       autoCompleteDesc: base.autoCompleteDesc,
-      ...(base.autoCompleteHint ? { autoCompleteHint: base.autoCompleteHint } : {}),
+      ...(base.autoCompleteHint
+        ? { autoCompleteHint: base.autoCompleteHint }
+        : {}),
     });
   }
   return specs;
@@ -203,13 +209,20 @@ export type MattermostCommandRecord = {
   auto_complete_hint: string;
 };
 
-export type MattermostCommandCreateRequest = Omit<MattermostCommandRecord, "id" | "token">;
+export type MattermostCommandCreateRequest = Omit<
+  MattermostCommandRecord,
+  "id" | "token"
+>;
 
 export type MattermostCommandsApi = {
   /** Returns commands custom to this team that the bot has permission to see. */
   getCustomTeamCommands(teamId: string): Promise<MattermostCommandRecord[]>;
-  addCommand(command: MattermostCommandCreateRequest): Promise<MattermostCommandRecord>;
-  editCommand(command: MattermostCommandRecord): Promise<MattermostCommandRecord>;
+  addCommand(
+    command: MattermostCommandCreateRequest,
+  ): Promise<MattermostCommandRecord>;
+  editCommand(
+    command: MattermostCommandRecord,
+  ): Promise<MattermostCommandRecord>;
   deleteCommand(id: string): Promise<unknown>;
 };
 

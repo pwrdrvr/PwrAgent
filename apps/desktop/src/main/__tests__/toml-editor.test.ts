@@ -129,11 +129,7 @@ describe("applyTomlEdits", () => {
   });
 
   it("appends a new key to an existing section before trailing blank lines", () => {
-    const source = [
-      "[messaging.telegram]",
-      "enabled = true",
-      "",
-    ].join("\n");
+    const source = ["[messaging.telegram]", "enabled = true", ""].join("\n");
 
     const result = applyTomlEdits(source, [
       {
@@ -329,9 +325,7 @@ describe("applyTomlEdits", () => {
 
   it("ignores a delete for a key that does not exist", () => {
     const source = "[s]\nx = 1\n";
-    const result = applyTomlEdits(source, [
-      { op: "delete", path: ["s", "y"] },
-    ]);
+    const result = applyTomlEdits(source, [{ op: "delete", path: ["s", "y"] }]);
     expect(result).toBe(source);
   });
 
@@ -425,7 +419,7 @@ describe("applyTomlEdits", () => {
 
 describe("parseTomlTables", () => {
   it("parses float values", () => {
-    const tables = parseTomlTables('[s]\nratio = 1.5\nneg = -2.25\n', "/x");
+    const tables = parseTomlTables("[s]\nratio = 1.5\nneg = -2.25\n", "/x");
     expect(tables.s.ratio).toBe(1.5);
     expect(tables.s.neg).toBe(-2.25);
   });
@@ -457,10 +451,7 @@ describe("parseTomlTables", () => {
   it("warns and uses the first occurrence when a section appears twice", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      const tables = parseTomlTables(
-        "[s]\nx = 1\n\n[s]\ny = 2\n",
-        "/x",
-      );
+      const tables = parseTomlTables("[s]\nx = 1\n\n[s]\ny = 2\n", "/x");
       expect(tables.s.x).toBe(1);
       expect(tables.s.y).toBeUndefined();
       expect(warn).toHaveBeenCalledWith(
@@ -503,14 +494,7 @@ describe("parseTomlTables", () => {
 
 describe("applyTomlEdits with duplicate sections", () => {
   it("edits the first occurrence and leaves the second untouched", () => {
-    const source = [
-      "[s]",
-      "x = 1",
-      "",
-      "[s]",
-      "y = 2",
-      "",
-    ].join("\n");
+    const source = ["[s]", "x = 1", "", "[s]", "y = 2", ""].join("\n");
 
     const result = applyTomlEdits(source, [
       { op: "set", path: ["s", "x"], value: 99 },

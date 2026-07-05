@@ -38,8 +38,6 @@ describe("messaging contact label sanitization", () => {
   });
 
   it("sanitizes handles without adding an at-sign", () => {
-    expect(sanitizeMessagingContactHandle("@hun<tharo> user")).toBe(
-      "hunuser",
-    );
+    expect(sanitizeMessagingContactHandle("@hun<tharo> user")).toBe("hunuser");
   });
 });

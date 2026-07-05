@@ -3,10 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  PWRAGENT_HOME_ENV,
-  PWRAGENT_PROFILE_ENV,
-} from "../profile";
+import { PWRAGENT_HOME_ENV, PWRAGENT_PROFILE_ENV } from "../profile";
 import { migrateIfNeeded } from "../state/migration";
 import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 
@@ -137,7 +134,8 @@ describe("state migration", () => {
     );
 
     expect(outcome.status).toBe("fresh-install");
-    if (outcome.status !== "fresh-install") throw new Error("expected fresh install");
+    if (outcome.status !== "fresh-install")
+      throw new Error("expected fresh install");
     expect(fs.existsSync(devConfigPath)).toBe(false);
     expect(readProfileName(outcome.dbPath)).toBe("dev");
   });

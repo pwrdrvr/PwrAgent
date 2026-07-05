@@ -17,8 +17,12 @@ describe("renderer payload boundary", () => {
     expect(sanitized.notification.params.diff).toContain(
       "PwrAgent renderer boundary: truncated",
     );
-    expect(sanitized.notification.params.diff).toContain("$.notification.params.diff");
-    expect(sanitized.notification.params.diff).not.toContain("x".repeat(60_000));
+    expect(sanitized.notification.params.diff).toContain(
+      "$.notification.params.diff",
+    );
+    expect(sanitized.notification.params.diff).not.toContain(
+      "x".repeat(60_000),
+    );
   });
 
   it("preserves renderer image URLs on image message parts", () => {

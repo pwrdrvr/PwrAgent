@@ -9,10 +9,7 @@ import type {
   MessagingConversationKind,
 } from "./messaging";
 
-export const AUTOMATION_BACKLOG_POLICIES = [
-  "coalesce",
-  "drop_missed",
-] as const;
+export const AUTOMATION_BACKLOG_POLICIES = ["coalesce", "drop_missed"] as const;
 
 export type AutomationBacklogPolicy =
   (typeof AUTOMATION_BACKLOG_POLICIES)[number];
@@ -299,8 +296,9 @@ export function automationDeliversViaMessagingActions(
   }
   return outputActions.some(
     (action) =>
-      action.enabled !== false &&
-      (action.kind === "source_message" || action.kind === "messaging_target"),
+      action.enabled !== false
+      && (action.kind === "source_message"
+        || action.kind === "messaging_target"),
   );
 }
 
@@ -322,8 +320,8 @@ export function automationSuppressesBindingBroadcast(automation: {
   triggers?: AutomationTriggerDefinition[];
 }): boolean {
   if (
-    Array.isArray(automation.triggers) &&
-    automation.triggers.some((trigger) => trigger.kind === "inbound_message")
+    Array.isArray(automation.triggers)
+    && automation.triggers.some((trigger) => trigger.kind === "inbound_message")
   ) {
     return true;
   }
@@ -609,7 +607,8 @@ export function validateAutomationScheduleDefinition(
       if (!Number.isInteger(schedule.every) || schedule.every < 1) {
         return {
           ok: false,
-          error: "Interval schedules must run every whole number greater than zero.",
+          error:
+            "Interval schedules must run every whole number greater than zero.",
         };
       }
       if (!AUTOMATION_INTERVAL_UNITS.includes(schedule.unit)) {
@@ -674,16 +673,20 @@ export function formatAutomationScheduleSummary(
 function validateTimeOfDay(
   timeOfDay: AutomationTimeOfDay,
 ): AutomationScheduleValidationResult {
-  if (!Number.isInteger(timeOfDay.hour) || timeOfDay.hour < 0 || timeOfDay.hour > 23) {
+  if (
+    !Number.isInteger(timeOfDay.hour)
+    || timeOfDay.hour < 0
+    || timeOfDay.hour > 23
+  ) {
     return {
       ok: false,
       error: "Schedule hour must be a whole number from 0 through 23.",
     };
   }
   if (
-    !Number.isInteger(timeOfDay.minute) ||
-    timeOfDay.minute < 0 ||
-    timeOfDay.minute > 59
+    !Number.isInteger(timeOfDay.minute)
+    || timeOfDay.minute < 0
+    || timeOfDay.minute > 59
   ) {
     return {
       ok: false,
@@ -719,5 +722,7 @@ function formatTimeOfDay(timeOfDay: AutomationTimeOfDay): string {
 }
 
 function assertNeverSchedule(schedule: never): never {
-  throw new Error(`Unsupported automation schedule: ${JSON.stringify(schedule)}`);
+  throw new Error(
+    `Unsupported automation schedule: ${JSON.stringify(schedule)}`,
+  );
 }

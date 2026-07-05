@@ -17,13 +17,21 @@ describe("LINE identifier validation", () => {
     expect(validateLineRoomId("R0123456789abcdef0123456789abcdef")).toEqual({
       ok: true,
     });
-    expect(validateLineCallbackHandle("line:abcDEF012_-xyz789A")).toEqual({ ok: true });
+    expect(validateLineCallbackHandle("line:abcDEF012_-xyz789A")).toEqual({
+      ok: true,
+    });
   });
 
   it("rejects malformed LINE IDs", () => {
-    expect(validateLineUserId("U0123456789ABCDEF0123456789ABCDEF").ok).toBe(false);
-    expect(validateLineGroupId("U0123456789abcdef0123456789abcdef").ok).toBe(false);
-    expect(validateLineRoomId("R0123456789abcdef0123456789abcde").ok).toBe(false);
+    expect(validateLineUserId("U0123456789ABCDEF0123456789ABCDEF").ok).toBe(
+      false,
+    );
+    expect(validateLineGroupId("U0123456789abcdef0123456789abcdef").ok).toBe(
+      false,
+    );
+    expect(validateLineRoomId("R0123456789abcdef0123456789abcde").ok).toBe(
+      false,
+    );
     expect(validateLineCallbackHandle("line:abcDEF012_-").ok).toBe(false);
     expect(validateLineCallbackHandle("line:bad/slash").ok).toBe(false);
   });

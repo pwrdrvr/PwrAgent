@@ -9,7 +9,7 @@ type ActionRunsPanelProps = {
   onDismissRun?: (run: CodexEnvironmentActionRun) => void;
   onStopRun?: (
     run: CodexEnvironmentActionRun,
-    mode: "stop" | "terminate"
+    mode: "stop" | "terminate",
   ) => void;
   runs: CodexEnvironmentActionRun[];
 };
@@ -21,7 +21,9 @@ export function ActionRunsPanel(props: ActionRunsPanelProps) {
         <EnvActionRunsView
           environmentName={props.environmentName}
           onShowAboveComposer={
-            props.dock === "sidebar" ? () => props.onDockChange("above") : undefined
+            props.dock === "sidebar"
+              ? () => props.onDockChange("above")
+              : undefined
           }
           onDismiss={props.onDismissRun}
           onStop={props.onStopRun}

@@ -1,4 +1,7 @@
-import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
+import type {
+  AppServerBackendKind,
+  ThreadExecutionMode,
+} from "./normalized-app-server";
 
 export type BackendSourceKind = "builtin" | "acp";
 

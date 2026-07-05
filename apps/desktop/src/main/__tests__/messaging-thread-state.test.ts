@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  NavigationSnapshot,
-} from "@pwragent/shared";
+import type { NavigationSnapshot } from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
   MessagingActiveTurnSummary,
@@ -18,7 +16,11 @@ describe("resolveMessagingThreadState", () => {
       updatedAt: 1000,
     } satisfies MessagingActiveTurnSummary;
 
-    const state = resolveMessagingThreadState({ activeTurn, binding, navigation });
+    const state = resolveMessagingThreadState({
+      activeTurn,
+      binding,
+      navigation,
+    });
 
     expect(state).toMatchObject({
       activeTurn,

@@ -32,7 +32,8 @@ export function useEditCommitStates(params: {
   // A stable signature of the {key → paths} inputs so we only re-resolve when
   // the actual groups/files change, not on every transcript re-render.
   const groupsInput = useMemo(
-    () => groups.map((group) => ({ key: group.key, paths: editGroupPaths(group) })),
+    () =>
+      groups.map((group) => ({ key: group.key, paths: editGroupPaths(group) })),
     [groups],
   );
   const groupsSignature = useMemo(
@@ -70,7 +71,12 @@ export function useEditCommitStates(params: {
     // groupsSignature stands in for groupsInput (deep value), refreshKey for
     // the worktree's working state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desktopApi?.resolveEditCommitStates, worktreePath, groupsSignature, refreshKey]);
+  }, [
+    desktopApi?.resolveEditCommitStates,
+    worktreePath,
+    groupsSignature,
+    refreshKey,
+  ]);
 
   return states;
 }

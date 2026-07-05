@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  NavigationSnapshot,
-} from "@pwragent/shared";
+import type { NavigationSnapshot } from "@pwragent/shared";
 import type {
   MessagingBrowseSessionRecord,
   MessagingCapabilityProfile,
@@ -179,7 +177,10 @@ describe("messaging resume browser", () => {
         ],
         actions: expect.arrayContaining([
           expect.objectContaining({ id: "browse:mode:recents" }),
-          expect.objectContaining({ id: "browse:mode:new", label: "New Agent" }),
+          expect.objectContaining({
+            id: "browse:mode:new",
+            label: "New Agent",
+          }),
           expect.objectContaining({ id: "browse:cancel" }),
         ]),
       },
@@ -199,14 +200,16 @@ describe("messaging resume browser", () => {
             title: "Messaging - Streaming Responses",
             titleSource: "explicit",
             source: "grok",
-            projectKey: "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
+            projectKey:
+              "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
             linkedDirectories: [
               {
                 id: "/repo/pwragent",
                 kind: "worktree",
                 label: "PwrAgent",
                 path: "/repo/pwragent",
-                worktreePath: "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
+                worktreePath:
+                  "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
               },
             ],
             inbox: {
@@ -236,7 +239,9 @@ describe("messaging resume browser", () => {
     expect(intent.fallbackText).toContain(
       "1. Messaging - Streaming Responses (PwrAgent)",
     );
-    expect(intent.fallbackText).not.toContain("launchpad-pwragent-main-moohzbj1");
+    expect(intent.fallbackText).not.toContain(
+      "launchpad-pwragent-main-moohzbj1",
+    );
   });
 
   it("filters Grok worktree threads by the primary project selection", () => {
@@ -250,14 +255,16 @@ describe("messaging resume browser", () => {
             title: "Messaging - Streaming Responses",
             titleSource: "explicit",
             source: "grok",
-            projectKey: "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
+            projectKey:
+              "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
             linkedDirectories: [
               {
                 id: "/repo/pwragent",
                 kind: "worktree",
                 label: "PwrAgent",
                 path: "/repo/pwragent",
-                worktreePath: "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
+                worktreePath:
+                  "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
               },
             ],
             inbox: {
@@ -295,7 +302,9 @@ describe("messaging resume browser", () => {
     expect(intent.fallbackText).toContain(
       "1. Messaging - Streaming Responses (PwrAgent)",
     );
-    expect(intent.fallbackText).not.toContain("launchpad-pwragent-main-moohzbj1");
+    expect(intent.fallbackText).not.toContain(
+      "launchpad-pwragent-main-moohzbj1",
+    );
   });
 
   it("renders a new-thread project picker", () => {

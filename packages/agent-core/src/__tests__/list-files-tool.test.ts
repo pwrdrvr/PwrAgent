@@ -14,9 +14,19 @@ describe("list_files tool", () => {
   it("returns repository-relative paths for a nested workspace scope", async () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
-    await fs.mkdir(path.join(workspace.path, "src", "nested"), { recursive: true });
-    await fs.writeFile(path.join(workspace.path, "src", "app.ts"), "export {};\n", "utf8");
-    await fs.writeFile(path.join(workspace.path, "src", "nested", "util.ts"), "export {};\n", "utf8");
+    await fs.mkdir(path.join(workspace.path, "src", "nested"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(workspace.path, "src", "app.ts"),
+      "export {};\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(workspace.path, "src", "nested", "util.ts"),
+      "export {};\n",
+      "utf8",
+    );
     const tool = createListFilesTool();
 
     const result = await tool.execute(
@@ -43,7 +53,11 @@ describe("list_files tool", () => {
     await Promise.all(
       Array.from({ length: 100 }, async (_, index) => {
         await fs.writeFile(
-          path.join(workspace.path, "src", `file-${String(index).padStart(3, "0")}.ts`),
+          path.join(
+            workspace.path,
+            "src",
+            `file-${String(index).padStart(3, "0")}.ts`,
+          ),
           "export {};\n",
           "utf8",
         );

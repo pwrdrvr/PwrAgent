@@ -5,8 +5,14 @@ describe("Codex metadata contract", () => {
   it("returns thread discovery aliases over the same session state", async () => {
     const { server } = createTestHarness();
 
-    await server.request("thread/start", { cwd: "/repo/one", model: "grok-4.20-reasoning" });
-    await server.request("thread/name/set", { threadId: "thread-1", name: "Thread one" });
+    await server.request("thread/start", {
+      cwd: "/repo/one",
+      model: "grok-4.20-reasoning",
+    });
+    await server.request("thread/name/set", {
+      threadId: "thread-1",
+      name: "Thread one",
+    });
 
     expect(await server.request("thread/list", { filter: "ignored" })).toEqual(
       await server.request("thread/loaded/list", {}),
@@ -18,14 +24,17 @@ describe("Codex metadata contract", () => {
 
     const models = await server.request("model/list", {});
     const rateLimits = await server.request("account/rateLimits/read", {});
-    const account = await server.request("account/read", { refreshToken: "ignored" });
+    const account = await server.request("account/read", {
+      refreshToken: "ignored",
+    });
 
     expect(models).toEqual({
       data: [
         {
           id: "grok-4.20-reasoning",
           label: "Grok 4.20 Reasoning",
-          description: "Default Grok 4.20 reasoning model for higher-accuracy turns.",
+          description:
+            "Default Grok 4.20 reasoning model for higher-accuracy turns.",
           current: true,
           supportsReasoning: false,
           supportsFast: false,
@@ -95,8 +104,13 @@ describe("Codex metadata contract", () => {
       cwd: "/repo/workspace",
       cwds: ["/repo/one", "/repo/two"],
     });
-    const experimentalFeatures = await server.request("experimentalFeature/list", { limit: 100 });
-    const mcpServers = await server.request("mcpServerStatus/list", { limit: 100 });
+    const experimentalFeatures = await server.request(
+      "experimentalFeature/list",
+      { limit: 100 },
+    );
+    const mcpServers = await server.request("mcpServerStatus/list", {
+      limit: 100,
+    });
 
     expect(skills).toEqual({
       data: [
@@ -111,7 +125,8 @@ describe("Codex metadata contract", () => {
           name: "grok-responses",
           stage: "beta",
           displayName: "Grok Responses",
-          description: "Routes Codex-style turns through the xAI Responses API.",
+          description:
+            "Routes Codex-style turns through the xAI Responses API.",
           enabled: true,
           defaultEnabled: true,
         },

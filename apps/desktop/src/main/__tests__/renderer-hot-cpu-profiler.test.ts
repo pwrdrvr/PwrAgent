@@ -161,15 +161,18 @@ describe("RendererHotCpuProfiler", () => {
       expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
     });
 
-    expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(1, "Profiler.enable");
-    expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(2, "Profiler.start");
+    expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(
+      1,
+      "Profiler.enable",
+    );
+    expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(
+      2,
+      "Profiler.start",
+    );
 
     await vi.waitFor(async () => {
       const profile = JSON.parse(
-        await fs.readFile(
-          sessionResult.session.createProfilePath(1),
-          "utf8",
-        ),
+        await fs.readFile(sessionResult.session.createProfilePath(1), "utf8"),
       );
       expect(profile).toMatchObject({ nodes: [{ id: 1 }] });
     });
@@ -194,10 +197,7 @@ describe("RendererHotCpuProfiler", () => {
     });
 
     const profile = JSON.parse(
-      await fs.readFile(
-        sessionResult.session.createProfilePath(1),
-        "utf8",
-      ),
+      await fs.readFile(sessionResult.session.createProfilePath(1), "utf8"),
     );
     expect(profile).toMatchObject({ nodes: [{ id: 1 }] });
 
@@ -205,7 +205,9 @@ describe("RendererHotCpuProfiler", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    const samples = (await fs.readFile(sessionResult.session.samplesPath, "utf8"))
+    const samples = (
+      await fs.readFile(sessionResult.session.samplesPath, "utf8")
+    )
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
@@ -321,7 +323,9 @@ describe("RendererHotCpuProfiler", () => {
       createMetric(4, 101),
       createMetric(0, 110),
     ];
-    const getAppMetrics = vi.fn(() => [metrics.shift() ?? createMetric(0, 101)]);
+    const getAppMetrics = vi.fn(() => [
+      metrics.shift() ?? createMetric(0, 101),
+    ]);
     const profiler = new RendererHotCpuProfiler({
       config,
       getAppMetrics,
@@ -342,7 +346,9 @@ describe("RendererHotCpuProfiler", () => {
       await vi.advanceTimersByTimeAsync(config.intervalMs);
       await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(2));
       await vi.advanceTimersByTimeAsync(config.intervalMs);
-      await vi.waitFor(() => expect(debuggerApi.attach).toHaveBeenCalledWith("1.3"));
+      await vi.waitFor(() =>
+        expect(debuggerApi.attach).toHaveBeenCalledWith("1.3"),
+      );
 
       expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.start");
       expect(getAppMetrics).toHaveBeenCalledTimes(3);
@@ -459,10 +465,7 @@ describe("RendererHotCpuProfiler", () => {
 
     const { target, debuggerApi } = createTarget();
     let nowCallCount = 0;
-    const metrics = [
-      createMetric(0, 100),
-      createMetric(4, 101.2),
-    ];
+    const metrics = [createMetric(0, 100), createMetric(4, 101.2)];
     const profiler = new RendererHotCpuProfiler({
       config,
       getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
@@ -623,7 +626,9 @@ describe("RendererHotCpuProfiler", () => {
       await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(2));
       await vi.advanceTimersByTimeAsync(config.intervalMs);
       await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(3));
-      await vi.waitFor(() => expect(debuggerApi.attach).toHaveBeenCalledWith("1.3"));
+      await vi.waitFor(() =>
+        expect(debuggerApi.attach).toHaveBeenCalledWith("1.3"),
+      );
       await vi.advanceTimersByTimeAsync(config.profileDurationMs);
 
       await vi.waitFor(() => {
@@ -679,7 +684,10 @@ describe("RendererHotCpuProfiler", () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: "heap-snapshot-written",
-          detail: expect.objectContaining({ phase: "start", snapshotNumber: 1 }),
+          detail: expect.objectContaining({
+            phase: "start",
+            snapshotNumber: 1,
+          }),
         }),
         expect.objectContaining({
           type: "heap-snapshot-written",
@@ -865,7 +873,9 @@ describe("RendererHotCpuProfiler", () => {
     expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(1);
     expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
     expect(
-      debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.stop"),
+      debuggerApi.sendCommand.mock.calls.filter(
+        ([method]) => method === "Profiler.stop",
+      ),
     ).toHaveLength(1);
   });
 
@@ -911,7 +921,9 @@ describe("RendererHotCpuProfiler", () => {
 
     await profiler.start();
     await vi.waitFor(async () => {
-      const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
+      const events = (
+        await fs.readFile(sessionResult.session.eventsPath, "utf8")
+      )
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
@@ -1004,7 +1016,9 @@ describe("RendererHotCpuProfiler", () => {
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(20);
     expect(
-      debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.stop"),
+      debuggerApi.sendCommand.mock.calls.filter(
+        ([method]) => method === "Profiler.stop",
+      ),
     ).toHaveLength(1);
   });
 
@@ -1029,7 +1043,9 @@ describe("RendererHotCpuProfiler", () => {
 
     vi.useFakeTimers();
 
-    const stopCommand = deferred<{ profile: { nodes: Array<{ id: number }> } }>();
+    const stopCommand = deferred<{
+      profile: { nodes: Array<{ id: number }> };
+    }>();
     const { target, debuggerApi } = createTarget();
     debuggerApi.sendCommand.mockImplementation(async (method: string) => {
       if (method === "Profiler.stop") {

@@ -272,7 +272,10 @@ describe("PwrAgent profiles", () => {
       // "dev" and try to use the missing dir; now we surface the
       // mismatch so the wizard can ask "set up dev again, or pick
       // something else?".
-      fs.rmSync(path.join(root, "profiles", "dev"), { recursive: true, force: true });
+      fs.rmSync(path.join(root, "profiles", "dev"), {
+        recursive: true,
+        force: true,
+      });
       const decision = resolveProfileBootDecision({ env });
       expect(decision).toEqual({
         kind: "missing-default-profile",
@@ -287,7 +290,9 @@ describe("PwrAgent profiles", () => {
       // The pre-#524 behavior was "fall back to default" — we keep
       // that on the migration path so existing operators aren't sent
       // through the wizard on upgrade.
-      fs.mkdirSync(path.join(root, "profiles", "default", "state"), { recursive: true });
+      fs.mkdirSync(path.join(root, "profiles", "default", "state"), {
+        recursive: true,
+      });
       const decision = resolveProfileBootDecision({ env });
       expect(decision).toEqual({
         kind: "open",
@@ -378,7 +383,9 @@ describe("PwrAgent profiles", () => {
   describe("bootstrap profile (.bootstrap/)", () => {
     it("resolves to a sibling of profiles/, not a child", () => {
       const { env, root } = createRoot();
-      expect(resolveBootstrapProfileDir({ env })).toBe(path.join(root, ".bootstrap"));
+      expect(resolveBootstrapProfileDir({ env })).toBe(
+        path.join(root, ".bootstrap"),
+      );
       expect(resolveBootstrapProfilePath("config.toml", { env })).toBe(
         path.join(root, ".bootstrap", "config.toml"),
       );
@@ -407,7 +414,11 @@ describe("PwrAgent profiles", () => {
       // Wizard wrote some choices mid-flow. A second ensure call
       // (e.g. operator quit + relaunch without graduating) must
       // preserve them — the marker is only seeded on first creation.
-      fs.writeFileSync(configPath, "[general]\n[appearance]\ntheme = \"dark\"\n", "utf8");
+      fs.writeFileSync(
+        configPath,
+        '[general]\n[appearance]\ntheme = "dark"\n',
+        "utf8",
+      );
       const second = ensureBootstrapProfileDir({ env });
       expect(second.created).toBe(false);
       expect(fs.readFileSync(configPath, "utf8")).toContain('theme = "dark"');

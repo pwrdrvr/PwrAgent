@@ -15,7 +15,9 @@ import {
 
 export const RENDERER_SEQUENCE_KEY = "__rendererSequence" as const;
 
-export function readRendererSequence(entry: object | undefined): number | undefined {
+export function readRendererSequence(
+  entry: object | undefined,
+): number | undefined {
   if (!entry) {
     return undefined;
   }
@@ -23,26 +25,39 @@ export function readRendererSequence(entry: object | undefined): number | undefi
   return typeof value === "number" ? value : undefined;
 }
 
-export function withRendererSequence<T extends object>(entry: T, sequence: number): T {
+export function withRendererSequence<T extends object>(
+  entry: T,
+  sequence: number,
+): T {
   return { ...entry, [RENDERER_SEQUENCE_KEY]: sequence } as T;
 }
 
 export function getNotificationItem(
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  return typeof params.item === "object" && params.item !== null && !Array.isArray(params.item)
-    ? params.item as Record<string, unknown>
+  return typeof params.item === "object"
+    && params.item !== null
+    && !Array.isArray(params.item)
+    ? (params.item as Record<string, unknown>)
     : undefined;
 }
 
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+function readString(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function readNumber(record: Record<string, unknown> | undefined, key: string): number | undefined {
+function readNumber(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
   const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function readFiniteNumber(
@@ -60,14 +75,11 @@ function readFiniteNumber(
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined;
 }
 
-function findFirstNestedValue(
-  value: unknown,
-  keys: string[],
-): unknown {
+function findFirstNestedValue(value: unknown, keys: string[]): unknown {
   const record = readRecord(value);
   if (!record) {
     return undefined;
@@ -91,7 +103,10 @@ function findFirstNestedValue(
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    ? value.filter(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.trim() !== "",
+      )
     : [];
 }
 
@@ -102,57 +117,66 @@ function normalizeTimestamp(value: unknown): number | undefined {
   return value < 1_000_000_000_000 ? value * 1_000 : value;
 }
 
-function readToolArgument(item: Record<string, unknown>, key: string): string | undefined {
-  const argumentsRecord =
-    readRecord(item.arguments) ?? readRecord(item.input);
+function readToolArgument(
+  item: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const argumentsRecord = readRecord(item.arguments) ?? readRecord(item.input);
   return readString(argumentsRecord, key);
 }
 
 function readToolOutputText(item: Record<string, unknown>): string | undefined {
-  const toolName = readString(item, "toolName") ?? readString(item, "tool_name");
+  const toolName =
+    readString(item, "toolName") ?? readString(item, "tool_name");
   const data = readRecord(item.data);
   const output =
-    readString(data, "output") ??
-    readString(data, "text") ??
-    readString(data, "result") ??
-    readString(item, "text");
+    readString(data, "output")
+    ?? readString(data, "text")
+    ?? readString(data, "result")
+    ?? readString(item, "text");
   return output && output !== toolName ? output : undefined;
 }
 
-function readCommandOutputText(item: Record<string, unknown>): string | undefined {
+function readCommandOutputText(
+  item: Record<string, unknown>,
+): string | undefined {
   const data = readRecord(item.data);
   return (
-    readString(item, "aggregatedOutput") ??
-    readString(item, "aggregated_output") ??
-    readString(item, "output") ??
-    readString(data, "aggregatedOutput") ??
-    readString(data, "aggregated_output") ??
-    readString(data, "output")
+    readString(item, "aggregatedOutput")
+    ?? readString(item, "aggregated_output")
+    ?? readString(item, "output")
+    ?? readString(data, "aggregatedOutput")
+    ?? readString(data, "aggregated_output")
+    ?? readString(data, "output")
   );
 }
 
 function readExitCode(item: Record<string, unknown>): number | undefined {
   const data = readRecord(item.data);
-  return readNumber(item, "exitCode") ?? readNumber(item, "exit_code") ??
-    readNumber(data, "exitCode") ?? readNumber(data, "exit_code");
+  return (
+    readNumber(item, "exitCode")
+    ?? readNumber(item, "exit_code")
+    ?? readNumber(data, "exitCode")
+    ?? readNumber(data, "exit_code")
+  );
 }
 
 function readElapsedMs(item: Record<string, unknown>): number | undefined {
   const data = readRecord(item.data);
   const direct =
-    readNumber(item, "durationMs") ??
-    readNumber(item, "elapsedMs") ??
-    readNumber(data, "durationMs") ??
-    readNumber(data, "elapsedMs");
+    readNumber(item, "durationMs")
+    ?? readNumber(item, "elapsedMs")
+    ?? readNumber(data, "durationMs")
+    ?? readNumber(data, "elapsedMs");
   if (typeof direct === "number") {
     return direct;
   }
 
   const startedAt = normalizeTimestamp(item.startedAt);
   const completedAt = normalizeTimestamp(item.completedAt);
-  return typeof startedAt === "number" &&
-    typeof completedAt === "number" &&
-    completedAt >= startedAt
+  return typeof startedAt === "number"
+    && typeof completedAt === "number"
+    && completedAt >= startedAt
     ? completedAt - startedAt
     : undefined;
 }
@@ -217,7 +241,7 @@ function readDisplayCommand(command: string | undefined): string | undefined {
 function buildLiveCommandDetail(
   item: Record<string, unknown>,
   command: string | undefined,
-  elapsedMs: number | undefined
+  elapsedMs: number | undefined,
 ): AppServerThreadCommandDetail | undefined {
   const displayCommand = readDisplayCommand(command);
   if (!displayCommand) {
@@ -226,9 +250,10 @@ function buildLiveCommandDetail(
 
   const output = readCommandOutputText(item);
   const exitCode = readExitCode(item);
-  const cwd = readString(item, "cwd") ??
-    readString(item, "workingDirectory") ??
-    readString(item, "working_directory");
+  const cwd =
+    readString(item, "cwd")
+    ?? readString(item, "workingDirectory")
+    ?? readString(item, "working_directory");
   return {
     displayCommand,
     rawCommand: command,
@@ -293,8 +318,8 @@ export function buildTokenUsageActivityEntry(params: {
     cost ? `${formatTokenUsageUsd(cost.totalUsd)} list price` : undefined,
   ].filter((part): part is string => Boolean(part));
   const summaryPrefix =
-    params.summaryPrefix ??
-    (scope === "latest-request" ? "Latest request usage" : "Usage");
+    params.summaryPrefix
+    ?? (scope === "latest-request" ? "Latest request usage" : "Usage");
 
   const details: AppServerThreadActivityDetail[] = [
     {
@@ -367,11 +392,13 @@ export function buildTokenUsageActivityEntry(params: {
     details.push({
       id: `${params.id}-cost-unavailable`,
       kind: "read",
-      label: `Cost unavailable: no local pricing entry for ${formatUnpricedModelName({
-        fastMode: params.fastMode,
-        model: params.model,
-        serviceTier: params.serviceTier,
-      })}`,
+      label: `Cost unavailable: no local pricing entry for ${formatUnpricedModelName(
+        {
+          fastMode: params.fastMode,
+          model: params.model,
+          serviceTier: params.serviceTier,
+        },
+      )}`,
       status: "completed",
     });
   }
@@ -394,8 +421,7 @@ export function buildTaskMonitorUsageActivityEntry(params: {
 }): AppServerThreadActivityEntry | undefined {
   const data = readRecord(params.item.data);
   const monitorUsage =
-    readRecord(data?.monitorUsage) ??
-    readRecord(params.item.monitorUsage);
+    readRecord(data?.monitorUsage) ?? readRecord(params.item.monitorUsage);
   if (!monitorUsage) {
     return undefined;
   }
@@ -410,28 +436,32 @@ export function buildTaskMonitorUsageActivityEntry(params: {
   return buildTokenUsageActivityEntry({
     id: params.id,
     model,
-    summaryPrefix: phase === "completion" ? "Monitor usage" : "Monitor usage so far",
+    summaryPrefix:
+      phase === "completion" ? "Monitor usage" : "Monitor usage so far",
     tokenUsage: { total: tokenUsage },
     turn: params.turn,
   });
 }
 
-function normalizeTokenUsage(tokenUsage: unknown): NormalizedTokenUsage | undefined {
+function normalizeTokenUsage(
+  tokenUsage: unknown,
+): NormalizedTokenUsage | undefined {
   const root =
-    readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
-    readRecord(tokenUsage);
+    readRecord(
+      findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"]),
+    ) ?? readRecord(tokenUsage);
   if (!root) {
     return undefined;
   }
 
   const latestUsageRecord =
-    readRecord(findFirstNestedValue(root, ["last", "last_token_usage"])) ??
-    readRecord(root.last) ??
-    readRecord(root.last_token_usage);
+    readRecord(findFirstNestedValue(root, ["last", "last_token_usage"]))
+    ?? readRecord(root.last)
+    ?? readRecord(root.last_token_usage);
   const totalUsageRecord =
-    readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
-    readRecord(root.total) ??
-    readRecord(root.total_token_usage);
+    readRecord(findFirstNestedValue(root, ["total", "total_token_usage"]))
+    ?? readRecord(root.total)
+    ?? readRecord(root.total_token_usage);
   const currentUsageRecord = latestUsageRecord ?? totalUsageRecord ?? root;
   const tokens = readTokenBreakdown(currentUsageRecord);
   if (!tokens) {
@@ -444,28 +474,37 @@ function normalizeTokenUsage(tokenUsage: unknown): NormalizedTokenUsage | undefi
   };
 }
 
-function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdown | undefined {
-  const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
+function readTokenBreakdown(
+  record: Record<string, unknown>,
+): TokenUsageBreakdown | undefined {
+  const explicitTotal = readFiniteNumber(record, [
+    "totalTokens",
+    "total_tokens",
+  ]);
   const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]);
   const cachedInputTokens = readFiniteNumber(record, [
     "cachedInputTokens",
     "cached_input_tokens",
   ]);
-  const outputTokens = readFiniteNumber(record, ["outputTokens", "output_tokens"]);
+  const outputTokens = readFiniteNumber(record, [
+    "outputTokens",
+    "output_tokens",
+  ]);
   const reasoningOutputTokens = readFiniteNumber(record, [
     "reasoningOutputTokens",
     "reasoning_output_tokens",
   ]);
   const derivedTotal =
     (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningOutputTokens ?? 0);
-  const totalTokens = explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
+  const totalTokens =
+    explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
 
   if (
-    totalTokens === undefined &&
-    inputTokens === undefined &&
-    cachedInputTokens === undefined &&
-    outputTokens === undefined &&
-    reasoningOutputTokens === undefined
+    totalTokens === undefined
+    && inputTokens === undefined
+    && cachedInputTokens === undefined
+    && outputTokens === undefined
+    && reasoningOutputTokens === undefined
   ) {
     return undefined;
   }
@@ -500,7 +539,9 @@ function formatUnpricedModelName(params: {
     .join(" ");
 }
 
-function readCommandActionLabel(item: Record<string, unknown>): string | undefined {
+function readCommandActionLabel(
+  item: Record<string, unknown>,
+): string | undefined {
   const actions = Array.isArray(item.commandActions) ? item.commandActions : [];
   for (const action of actions) {
     const record = readRecord(action);
@@ -532,7 +573,7 @@ function readCommandActionLabel(item: Record<string, unknown>): string | undefin
 }
 
 function readCommandActivityKind(
-  item: Record<string, unknown>
+  item: Record<string, unknown>,
 ): AppServerThreadActivityDetail["kind"] {
   const actions = Array.isArray(item.commandActions) ? item.commandActions : [];
   for (const action of actions) {
@@ -541,7 +582,11 @@ function readCommandActivityKind(
       continue;
     }
     const actionType = readString(record, "type");
-    if (actionType === "read" || actionType === "search" || actionType === "listFiles") {
+    if (
+      actionType === "read"
+      || actionType === "search"
+      || actionType === "listFiles"
+    ) {
       return "read";
     }
   }
@@ -571,14 +616,16 @@ function readItemSources(item: Record<string, unknown>): AppServerSource[] {
   });
 }
 
-function normalizeItemStatus(value: unknown): AppServerThreadActivityDetail["status"] {
+function normalizeItemStatus(
+  value: unknown,
+): AppServerThreadActivityDetail["status"] {
   if (value === "inProgress") {
     return "in_progress";
   }
-  return value === "completed" ||
-    value === "failed" ||
-    value === "cancelled" ||
-    value === "in_progress"
+  return value === "completed"
+    || value === "failed"
+    || value === "cancelled"
+    || value === "in_progress"
     ? value
     : "in_progress";
 }
@@ -591,7 +638,9 @@ function summarizeToolOutput(text: string | undefined): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
+  return normalized.length > 180
+    ? `${normalized.slice(0, 177)}...`
+    : normalized;
 }
 
 function summarizeJsonValue(value: unknown): string | undefined {
@@ -613,7 +662,7 @@ function summarizeJsonValue(value: unknown): string | undefined {
 
 function formatLiveToolName(
   toolName: string,
-  status: AppServerThreadActivityDetail["status"]
+  status: AppServerThreadActivityDetail["status"],
 ): string {
   if (toolName === "search_web") {
     return status === "in_progress" ? "Searching Web" : "Searched Web";
@@ -630,7 +679,7 @@ function formatLiveToolName(
 function formatMcpToolName(
   serverName: string | undefined,
   toolName: string,
-  status: AppServerThreadActivityDetail["status"]
+  status: AppServerThreadActivityDetail["status"],
 ): string {
   const action = status === "in_progress" ? "Using MCP" : "Used MCP";
   return `${action} ${serverName ? `${serverName}/` : ""}${toolName}`;
@@ -640,7 +689,7 @@ function buildLiveToolLabel(
   item: Record<string, unknown>,
   itemType: string,
   status: AppServerThreadActivityDetail["status"],
-  toolName: string
+  toolName: string,
 ): string {
   if (itemType === "collabagenttoolcall") {
     return formatCollabAgentToolLabel({
@@ -653,22 +702,25 @@ function buildLiveToolLabel(
   if (itemType === "commandexecution") {
     const command = readString(item, "command");
     return (
-      readCommandActionLabel(item) ??
-      (command ? formatCommandLabel(command) : undefined) ??
-      formatLiveToolName(toolName, status)
+      readCommandActionLabel(item)
+      ?? (command ? formatCommandLabel(command) : undefined)
+      ?? formatLiveToolName(toolName, status)
     );
   }
 
   if (itemType === "functioncall" && toolName === "exec_command") {
     const command =
-      readToolArgument(item, "cmd") ??
-      readToolArgument(item, "command") ??
-      readToolArgument(item, "displayCommand");
-    return command ? formatCommandLabel(command) : formatLiveToolName(toolName, status);
+      readToolArgument(item, "cmd")
+      ?? readToolArgument(item, "command")
+      ?? readToolArgument(item, "displayCommand");
+    return command
+      ? formatCommandLabel(command)
+      : formatLiveToolName(toolName, status);
   }
 
   if (itemType === "mcptoolcall") {
-    const serverName = readString(item, "server") ?? readString(item, "serverName");
+    const serverName =
+      readString(item, "server") ?? readString(item, "serverName");
     return formatMcpToolName(serverName, toolName, status);
   }
 
@@ -725,7 +777,7 @@ function formatCollabAgentToolLabel(params: {
 function buildCollabAgentCommandDetail(
   item: Record<string, unknown>,
   toolName: string,
-  receiverThreadIds: string[]
+  receiverThreadIds: string[],
 ): AppServerThreadCommandDetail {
   const prompt = readString(item, "prompt");
   const model = readString(item, "model");
@@ -733,12 +785,16 @@ function buildCollabAgentCommandDetail(
     readString(item, "reasoningEffort") ?? readString(item, "reasoning_effort");
   const stateSummary = formatCollabAgentStates(readRecord(item.agentsStates));
   const output = [
-    receiverThreadIds.length > 0 ? `Agents: ${receiverThreadIds.join(", ")}` : undefined,
+    receiverThreadIds.length > 0
+      ? `Agents: ${receiverThreadIds.join(", ")}`
+      : undefined,
     model ? `Model: ${model}` : undefined,
     reasoningEffort ? `Reasoning effort: ${reasoningEffort}` : undefined,
     prompt ? `Prompt: ${truncateActivityText(prompt, 1_000)}` : undefined,
     stateSummary ? `Agent states:\n${stateSummary}` : undefined,
-  ].filter((entry): entry is string => Boolean(entry)).join("\n\n");
+  ]
+    .filter((entry): entry is string => Boolean(entry))
+    .join("\n\n");
 
   return {
     displayCommand:
@@ -751,7 +807,7 @@ function buildCollabAgentCommandDetail(
 }
 
 function formatCollabAgentStates(
-  states: Record<string, unknown> | undefined
+  states: Record<string, unknown> | undefined,
 ): string | undefined {
   if (!states) {
     return undefined;
@@ -788,58 +844,67 @@ function shortAgentId(agentId: string): string {
 
 function truncateActivityText(text: string, maxLength: number): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 3)}...`
+    : normalized;
 }
 
 export function buildLiveToolDetails(
-  item: Record<string, unknown>
+  item: Record<string, unknown>,
 ): AppServerThreadActivityDetail[] {
-  const itemType = readString(item, "type")?.replace(/[-_\s]/g, "").toLowerCase();
+  const itemType = readString(item, "type")
+    ?.replace(/[-_\s]/g, "")
+    .toLowerCase();
   if (
-    itemType !== "dynamictoolcall" &&
-    itemType !== "commandexecution" &&
-    itemType !== "functioncall" &&
-    itemType !== "mcptoolcall" &&
-    itemType !== "collabagenttoolcall" &&
-    itemType !== "websearch"
+    itemType !== "dynamictoolcall"
+    && itemType !== "commandexecution"
+    && itemType !== "functioncall"
+    && itemType !== "mcptoolcall"
+    && itemType !== "collabagenttoolcall"
+    && itemType !== "websearch"
   ) {
     return [];
   }
 
   const itemId =
-    readString(item, "id") ??
-    readString(item, "itemId") ??
-    readString(item, "item_id") ??
-    readString(item, "call_id") ??
-    readString(item, "callId") ??
-    "tool";
+    readString(item, "id")
+    ?? readString(item, "itemId")
+    ?? readString(item, "item_id")
+    ?? readString(item, "call_id")
+    ?? readString(item, "callId")
+    ?? "tool";
   const toolName =
-    readString(item, "tool") ??
-    readString(item, "toolName") ??
-    readString(item, "tool_name") ??
-    readString(item, "name") ??
-    (itemType === "websearch" ? "web search" : "tool");
+    readString(item, "tool")
+    ?? readString(item, "toolName")
+    ?? readString(item, "tool_name")
+    ?? readString(item, "name")
+    ?? (itemType === "websearch" ? "web search" : "tool");
   const status = normalizeItemStatus(item.status);
   const query = readToolArgument(item, "query") ?? readToolArgument(item, "q");
   const preview =
     itemType === "mcptoolcall"
-      ? summarizeJsonValue(item.error) ?? summarizeJsonValue(item.result)
+      ? (summarizeJsonValue(item.error) ?? summarizeJsonValue(item.result))
       : summarizeToolOutput(readToolOutputText(item));
   const elapsedMs = readElapsedMs(item);
   const command =
     itemType === "commandexecution"
       ? readString(item, "command")
       : itemType === "functioncall" && toolName === "exec_command"
-        ? readToolArgument(item, "cmd") ??
-          readToolArgument(item, "command") ??
-          readToolArgument(item, "displayCommand")
+        ? (readToolArgument(item, "cmd")
+          ?? readToolArgument(item, "command")
+          ?? readToolArgument(item, "displayCommand"))
         : undefined;
-  const isExecFunctionCall = itemType === "functioncall" && toolName === "exec_command";
+  const isExecFunctionCall =
+    itemType === "functioncall" && toolName === "exec_command";
   const commandDetail =
     itemType === "commandexecution" || isExecFunctionCall
       ? buildLiveCommandDetail(item, command, elapsedMs)
       : itemType === "collabagenttoolcall"
-        ? buildCollabAgentCommandDetail(item, toolName, readStringArray(item.receiverThreadIds))
+        ? buildCollabAgentCommandDetail(
+            item,
+            toolName,
+            readStringArray(item.receiverThreadIds),
+          )
         : undefined;
   const details: AppServerThreadActivityDetail[] = [
     {
@@ -849,9 +914,9 @@ export function buildLiveToolDetails(
           ? readCommandActivityKind(item)
           : isExecFunctionCall
             ? "command"
-          : itemType === "websearch" || toolName.startsWith("search_")
-            ? "read"
-            : "command",
+            : itemType === "websearch" || toolName.startsWith("search_")
+              ? "read"
+              : "command",
       label: [
         buildLiveToolLabel(item, itemType, status, toolName),
         elapsedMs ? ` (${formatElapsedMs(elapsedMs)})` : "",
@@ -881,7 +946,7 @@ export function buildLiveToolDetails(
 }
 
 export function buildMcpProgressDetail(
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
 ): AppServerThreadActivityDetail | undefined {
   const itemId = readString(params, "itemId");
   const message = readString(params, "message");
@@ -898,7 +963,7 @@ export function buildMcpProgressDetail(
 }
 
 export function summarizeActivityStatus(
-  details: AppServerThreadActivityDetail[]
+  details: AppServerThreadActivityDetail[],
 ): AppServerThreadActivityEntry["status"] {
   if (details.some((detail) => detail.status === "failed")) {
     return "failed";
@@ -909,7 +974,9 @@ export function summarizeActivityStatus(
   if (details.some((detail) => detail.status === "cancelled")) {
     return "cancelled";
   }
-  return details.some((detail) => detail.status === "completed") ? "completed" : undefined;
+  return details.some((detail) => detail.status === "completed")
+    ? "completed"
+    : undefined;
 }
 
 // Derive a short tool/command name from an activity detail label for the
@@ -925,15 +992,21 @@ function commandSummaryName(label: string): string | undefined {
   return trimmed.split(":")[0]?.split(" - ")[0]?.trim() || undefined;
 }
 
-export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]): string {
-  const primaryDetails = details.filter((detail) => !detail.id.includes("-source-"));
-  const readCount = primaryDetails.filter((detail) => detail.kind === "read").length;
+export function summarizeLiveActivity(
+  details: AppServerThreadActivityDetail[],
+): string {
+  const primaryDetails = details.filter(
+    (detail) => !detail.id.includes("-source-"),
+  );
+  const readCount = primaryDetails.filter(
+    (detail) => detail.kind === "read",
+  ).length;
   const commandLabels = [
     ...new Set(
       primaryDetails
         .filter((detail) => detail.kind !== "read")
         .map((detail) => commandSummaryName(detail.label))
-        .filter(Boolean)
+        .filter(Boolean),
     ),
   ];
   const parts: string[] = [];
@@ -952,7 +1025,7 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
 
 export function mergeCommandDetail(
   existing: AppServerThreadCommandDetail | undefined,
-  next: AppServerThreadCommandDetail | undefined
+  next: AppServerThreadCommandDetail | undefined,
 ): AppServerThreadCommandDetail | undefined {
   const displayCommand = next?.displayCommand ?? existing?.displayCommand;
   if (!displayCommand) {
@@ -979,7 +1052,7 @@ export function mergeCommandDetail(
 
 export function mergeActivityDetails(
   current: AppServerThreadActivityDetail[],
-  next: AppServerThreadActivityDetail[]
+  next: AppServerThreadActivityDetail[],
 ): AppServerThreadActivityDetail[] {
   const merged = [...current];
   for (const detail of next) {
@@ -1001,7 +1074,7 @@ export function mergeActivityDetails(
 
 export function appendCommandOutputDelta(
   entry: AppServerThreadActivityEntry,
-  params: { delta: string; itemId: string }
+  params: { delta: string; itemId: string },
 ): AppServerThreadActivityEntry {
   const details = entry.details.map((detail) => {
     if (detail.id !== params.itemId) {
@@ -1071,7 +1144,7 @@ export function formatChangedFileSummary(params: {
   const parts = [formatChangedFileCount(params)];
   if (params.additions > 0 || params.removals > 0) {
     parts.push(
-      `+${params.additions.toLocaleString()}, -${params.removals.toLocaleString()}`
+      `+${params.additions.toLocaleString()}, -${params.removals.toLocaleString()}`,
     );
   }
   return parts.join(", ");
@@ -1079,7 +1152,7 @@ export function formatChangedFileSummary(params: {
 
 export function parseFileChangeOutput(
   delta: string,
-  entryId: string
+  entryId: string,
 ): AppServerThreadActivityDetail[] {
   const changes = new Map<string, Set<"add" | "delete" | "update">>();
 
@@ -1096,7 +1169,8 @@ export function parseFileChangeOutput(
       continue;
     }
 
-    const existing = changes.get(path) ?? new Set<"add" | "delete" | "update">();
+    const existing =
+      changes.get(path) ?? new Set<"add" | "delete" | "update">();
     existing.add(kind);
     changes.set(path, existing);
   }

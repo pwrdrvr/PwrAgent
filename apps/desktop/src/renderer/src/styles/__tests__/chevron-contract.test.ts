@@ -18,7 +18,7 @@ const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
 function ruleBody(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = css.match(
-    new RegExp(`(?:^|\\n)${escaped}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`)
+    new RegExp(`(?:^|\\n)${escaped}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`),
   );
   if (!match?.groups?.body) {
     throw new Error(`Expected app.css to define ${selector}`);
@@ -31,11 +31,16 @@ function ruleBody(selector: string): string {
 // is the collapsed state; for the settings header the base is the expanded
 // state because the panel defaults to open — either way the contract is the
 // same: collapsed -> rotate(-45deg), expanded -> rotate(45deg).)
-const INLINE_CHEVRONS: Array<{ name: string; collapsed: string; expanded: string }> = [
+const INLINE_CHEVRONS: Array<{
+  name: string;
+  collapsed: string;
+  expanded: string;
+}> = [
   {
     name: "transcript activity entry",
     collapsed: ".transcript-activity__chevron",
-    expanded: '.transcript-activity__toggle[aria-expanded="true"] .transcript-activity__chevron',
+    expanded:
+      '.transcript-activity__toggle[aria-expanded="true"] .transcript-activity__chevron',
   },
   {
     name: "transcript activity nested detail",
@@ -56,18 +61,23 @@ const INLINE_CHEVRONS: Array<{ name: string; collapsed: string; expanded: string
   },
   {
     name: "settings section header",
-    collapsed: ".settings-panel--is-collapsed .settings-section__chevron::before",
+    collapsed:
+      ".settings-panel--is-collapsed .settings-section__chevron::before",
     expanded: ".settings-section__chevron::before",
   },
   {
     name: "edited-files group toggle",
-    collapsed: '.edited-file-groups__group-toggle[aria-expanded="false"] .live-work-rail__chevron',
-    expanded: '.edited-file-groups__group-toggle[aria-expanded="true"] .live-work-rail__chevron',
+    collapsed:
+      '.edited-file-groups__group-toggle[aria-expanded="false"] .live-work-rail__chevron',
+    expanded:
+      '.edited-file-groups__group-toggle[aria-expanded="true"] .live-work-rail__chevron',
   },
   {
     name: "live-work-rail file toggle",
-    collapsed: '.live-work-rail__file-toggle[aria-expanded="false"] .live-work-rail__chevron',
-    expanded: '.live-work-rail__file-toggle[aria-expanded="true"] .live-work-rail__chevron',
+    collapsed:
+      '.live-work-rail__file-toggle[aria-expanded="false"] .live-work-rail__chevron',
+    expanded:
+      '.live-work-rail__file-toggle[aria-expanded="true"] .live-work-rail__chevron',
   },
 ];
 
@@ -89,7 +99,7 @@ describe("chevron disclosure direction contract", () => {
       // "rotate(-45deg)" never contains the substring "rotate(45deg)", so
       // this guards against an expanded value leaking into a collapsed rule.
       expect(body).not.toContain("rotate(45deg)");
-    }
+    },
   );
 
   it.each(INLINE_CHEVRONS)(
@@ -98,14 +108,17 @@ describe("chevron disclosure direction contract", () => {
       const body = ruleBody(expanded);
       expect(body).toContain("rotate(45deg)");
       expect(body).not.toContain("rotate(-45deg)");
-    }
+    },
   );
 
-  it.each(UNFILLED_BASE_RULES)("%s is an unfilled border chevron", (selector) => {
-    const body = ruleBody(selector);
-    expect(body).toContain("border-right");
-    expect(body).toContain("border-bottom");
-  });
+  it.each(UNFILLED_BASE_RULES)(
+    "%s is an unfilled border chevron",
+    (selector) => {
+      const body = ruleBody(selector);
+      expect(body).toContain("border-right");
+      expect(body).toContain("border-bottom");
+    },
+  );
 
   it("never uses the old 180deg flip (rotate(225deg)) anywhere", () => {
     // The pre-#795 transcript/directory chevrons flipped down->up via
@@ -118,7 +131,11 @@ describe("chevron disclosure direction contract", () => {
     // Intentionally NOT the unfilled -45/45 language: filled = navigation
     // tree, unfilled = inline content disclosure. A solid triangle via
     // border-left that swings 0 -> 90deg.
-    expect(ruleBody(".thread-row__subthread-toggle::before")).toContain("border-left");
-    expect(ruleBody(".thread-row__subthread-toggle.is-open::before")).toContain("rotate(90deg)");
+    expect(ruleBody(".thread-row__subthread-toggle::before")).toContain(
+      "border-left",
+    );
+    expect(ruleBody(".thread-row__subthread-toggle.is-open::before")).toContain(
+      "rotate(90deg)",
+    );
   });
 });

@@ -99,7 +99,9 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
           help="Thread-centric coding agent. Built by PwrDrvr LLC."
         />
         <div className="settings-panel" role="alert">
-          <p className="settings-row__error">Could not load app info: {error}</p>
+          <p className="settings-row__error">
+            Could not load app info: {error}
+          </p>
         </div>
       </SettingsSectionStack>
     );
@@ -263,13 +265,19 @@ function UpdateResultStatus({ result }: { result: AppUpdateCheckResult }) {
     return <p className="settings-empty">{result.reason}</p>;
   }
   if (result.status === "error") {
-    return <p className="settings-row__error">Update check failed: {result.message}</p>;
+    return (
+      <p className="settings-row__error">
+        Update check failed: {result.message}
+      </p>
+    );
   }
   if (result.status === "checking") {
     return <p className="settings-empty">Checking for updates…</p>;
   }
   if (result.status === "no-update") {
-    return <p className="settings-empty">You're up to date (v{result.version}).</p>;
+    return (
+      <p className="settings-empty">You're up to date (v{result.version}).</p>
+    );
   }
   if (result.status === "downloaded") {
     return (

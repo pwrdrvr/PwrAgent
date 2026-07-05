@@ -24,7 +24,11 @@ import type {
 export function buildTelegramPatchDelta(
   snapshot: DesktopSettingsSnapshot["messaging"]["telegram"],
   candidate: DesktopSettingsSnapshot["messaging"]["telegram"],
-): NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["telegram"]> | undefined {
+):
+  | NonNullable<
+      NonNullable<DesktopSettingsConfigPatch["messaging"]>["telegram"]
+    >
+  | undefined {
   const patch: NonNullable<
     NonNullable<DesktopSettingsConfigPatch["messaging"]>["telegram"]
   > = {};
@@ -35,7 +39,9 @@ export function buildTelegramPatchDelta(
   if (snapshot.responseMode.value !== candidate.responseMode.value) {
     patch.responseMode = candidate.responseMode.value;
   }
-  if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
+  if (
+    snapshot.streamingResponses.value !== candidate.streamingResponses.value
+  ) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }
   if (
@@ -61,7 +67,9 @@ export function buildTelegramPatchDelta(
 export function buildDiscordPatchDelta(
   snapshot: DesktopSettingsSnapshot["messaging"]["discord"],
   candidate: DesktopSettingsSnapshot["messaging"]["discord"],
-): NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["discord"]> | undefined {
+):
+  | NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["discord"]>
+  | undefined {
   const patch: NonNullable<
     NonNullable<DesktopSettingsConfigPatch["messaging"]>["discord"]
   > = {};
@@ -69,7 +77,9 @@ export function buildDiscordPatchDelta(
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
   }
-  if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
+  if (
+    snapshot.streamingResponses.value !== candidate.streamingResponses.value
+  ) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }
   if (snapshot.applicationId.value !== candidate.applicationId.value) {
@@ -98,7 +108,11 @@ export function buildDiscordPatchDelta(
 export function buildMattermostPatchDelta(
   snapshot: DesktopSettingsSnapshot["messaging"]["mattermost"],
   candidate: DesktopSettingsSnapshot["messaging"]["mattermost"],
-): NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["mattermost"]> | undefined {
+):
+  | NonNullable<
+      NonNullable<DesktopSettingsConfigPatch["messaging"]>["mattermost"]
+    >
+  | undefined {
   const patch: NonNullable<
     NonNullable<DesktopSettingsConfigPatch["messaging"]>["mattermost"]
   > = {};
@@ -106,7 +120,9 @@ export function buildMattermostPatchDelta(
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
   }
-  if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
+  if (
+    snapshot.streamingResponses.value !== candidate.streamingResponses.value
+  ) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }
   if (snapshot.serverUrl.value !== candidate.serverUrl.value) {
@@ -115,11 +131,14 @@ export function buildMattermostPatchDelta(
   if (snapshot.callbackBaseUrl.value !== candidate.callbackBaseUrl.value) {
     patch.callbackBaseUrl = candidate.callbackBaseUrl.value;
   }
-  if (snapshot.slashCommandPrefix.value !== candidate.slashCommandPrefix.value) {
+  if (
+    snapshot.slashCommandPrefix.value !== candidate.slashCommandPrefix.value
+  ) {
     patch.slashCommandPrefix = candidate.slashCommandPrefix.value;
   }
   if (
-    snapshot.registerSlashCommands.value !== candidate.registerSlashCommands.value
+    snapshot.registerSlashCommands.value
+    !== candidate.registerSlashCommands.value
   ) {
     patch.registerSlashCommands = candidate.registerSlashCommands.value;
   }
@@ -154,7 +173,9 @@ export function buildMattermostPatchDelta(
 export function buildSlackPatchDelta(
   snapshot: DesktopSettingsSnapshot["messaging"]["slack"],
   candidate: DesktopSettingsSnapshot["messaging"]["slack"],
-): NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["slack"]> | undefined {
+):
+  | NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["slack"]>
+  | undefined {
   const patch: NonNullable<
     NonNullable<DesktopSettingsConfigPatch["messaging"]>["slack"]
   > = {};
@@ -165,7 +186,9 @@ export function buildSlackPatchDelta(
   if (snapshot.responseMode.value !== candidate.responseMode.value) {
     patch.responseMode = candidate.responseMode.value;
   }
-  if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
+  if (
+    snapshot.streamingResponses.value !== candidate.streamingResponses.value
+  ) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }
   if (snapshot.workspaceUrl.value !== candidate.workspaceUrl.value) {
@@ -198,11 +221,14 @@ export function buildSlackPatchDelta(
   ) {
     patch.channelUserAccessMode = candidate.channelUserAccessMode.value;
   }
-  if (snapshot.slashCommandPrefix.value !== candidate.slashCommandPrefix.value) {
+  if (
+    snapshot.slashCommandPrefix.value !== candidate.slashCommandPrefix.value
+  ) {
     patch.slashCommandPrefix = candidate.slashCommandPrefix.value;
   }
   if (
-    snapshot.registerSlashCommands.value !== candidate.registerSlashCommands.value
+    snapshot.registerSlashCommands.value
+    !== candidate.registerSlashCommands.value
   ) {
     patch.registerSlashCommands = candidate.registerSlashCommands.value;
   }
@@ -237,7 +263,9 @@ export function buildSlackPatchDelta(
 export function buildFeishuPatchDelta(
   snapshot: DesktopSettingsSnapshot["messaging"]["feishu"],
   candidate: DesktopSettingsSnapshot["messaging"]["feishu"],
-): NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["feishu"]> | undefined {
+):
+  | NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["feishu"]>
+  | undefined {
   const patch: NonNullable<
     NonNullable<DesktopSettingsConfigPatch["messaging"]>["feishu"]
   > = {};
@@ -245,7 +273,9 @@ export function buildFeishuPatchDelta(
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
   }
-  if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
+  if (
+    snapshot.streamingResponses.value !== candidate.streamingResponses.value
+  ) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }
   if (snapshot.inboundMode.value !== candidate.inboundMode.value) {
@@ -260,11 +290,14 @@ export function buildFeishuPatchDelta(
   if (snapshot.callbackBaseUrl.value !== candidate.callbackBaseUrl.value) {
     patch.callbackBaseUrl = candidate.callbackBaseUrl.value;
   }
-  if (snapshot.slashCommandPrefix.value !== candidate.slashCommandPrefix.value) {
+  if (
+    snapshot.slashCommandPrefix.value !== candidate.slashCommandPrefix.value
+  ) {
     patch.slashCommandPrefix = candidate.slashCommandPrefix.value;
   }
   if (
-    snapshot.registerSlashCommands.value !== candidate.registerSlashCommands.value
+    snapshot.registerSlashCommands.value
+    !== candidate.registerSlashCommands.value
   ) {
     patch.registerSlashCommands = candidate.registerSlashCommands.value;
   }
@@ -299,7 +332,9 @@ export function buildFeishuPatchDelta(
 export function buildLinePatchDelta(
   snapshot: DesktopSettingsSnapshot["messaging"]["line"],
   candidate: DesktopSettingsSnapshot["messaging"]["line"],
-): NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["line"]> | undefined {
+):
+  | NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["line"]>
+  | undefined {
   const patch: NonNullable<
     NonNullable<DesktopSettingsConfigPatch["messaging"]>["line"]
   > = {};
@@ -307,7 +342,9 @@ export function buildLinePatchDelta(
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
   }
-  if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
+  if (
+    snapshot.streamingResponses.value !== candidate.streamingResponses.value
+  ) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }
   if (snapshot.webhookUrl.value !== candidate.webhookUrl.value) {
@@ -354,11 +391,11 @@ function authorizedContactArrayEqual(
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
     if (
-      a[i]?.id !== b[i]?.id ||
-      a[i]?.displayName !== b[i]?.displayName ||
-      a[i]?.fullAccessWarningOverride !== b[i]?.fullAccessWarningOverride ||
-      a[i]?.fullAccessWarningDismissed !== b[i]?.fullAccessWarningDismissed ||
-      a[i]?.responseMode !== b[i]?.responseMode
+      a[i]?.id !== b[i]?.id
+      || a[i]?.displayName !== b[i]?.displayName
+      || a[i]?.fullAccessWarningOverride !== b[i]?.fullAccessWarningOverride
+      || a[i]?.fullAccessWarningDismissed !== b[i]?.fullAccessWarningDismissed
+      || a[i]?.responseMode !== b[i]?.responseMode
     ) {
       return false;
     }

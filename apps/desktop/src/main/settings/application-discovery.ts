@@ -140,7 +140,12 @@ const EDITORS: KnownApplication[] = [
     ],
     binaryNames: ["idea"],
     binaryPaths: [
-      ...applicationExecutablePaths("IntelliJ IDEA.app", "Contents", "MacOS", "idea"),
+      ...applicationExecutablePaths(
+        "IntelliJ IDEA.app",
+        "Contents",
+        "MacOS",
+        "idea",
+      ),
       ...applicationExecutablePaths(
         "IntelliJ IDEA CE.app",
         "Contents",
@@ -169,17 +174,25 @@ const TERMINALS: KnownApplication[] = [
     binaryNames: ["ghostty"],
     binaryPaths: [
       "/Applications/Ghostty.app/Contents/MacOS/ghostty",
-      path.join(os.homedir(), "Applications/Ghostty.app/Contents/MacOS/ghostty"),
+      path.join(
+        os.homedir(),
+        "Applications/Ghostty.app/Contents/MacOS/ghostty",
+      ),
       ...homebrewBinaryPaths("ghostty"),
     ],
     macOpenStrategy: "ghostty-applescript",
-    terminalWorkingDirectoryArg: (targetPath) => [`--working-directory=${targetPath}`],
+    terminalWorkingDirectoryArg: (targetPath) => [
+      `--working-directory=${targetPath}`,
+    ],
   },
   {
     id: "iterm",
     kind: "terminal",
     name: "iTerm",
-    appPaths: [...applicationPaths("iTerm.app"), ...applicationPaths("iTerm2.app")],
+    appPaths: [
+      ...applicationPaths("iTerm.app"),
+      ...applicationPaths("iTerm2.app"),
+    ],
   },
   {
     id: "wezterm",
@@ -197,7 +210,10 @@ const TERMINALS: KnownApplication[] = [
     appPaths: applicationPaths("Alacritty.app"),
     binaryNames: ["alacritty"],
     binaryPaths: homebrewBinaryPaths("alacritty"),
-    terminalWorkingDirectoryArg: (targetPath) => ["--working-directory", targetPath],
+    terminalWorkingDirectoryArg: (targetPath) => [
+      "--working-directory",
+      targetPath,
+    ],
   },
   {
     id: "kitty",
@@ -230,8 +246,13 @@ function homebrewBinaryPaths(binaryName: string): string[] {
   ];
 }
 
-function applicationExecutablePaths(appName: string, ...segments: string[]): string[] {
-  return applicationPaths(appName).map((appPath) => path.join(appPath, ...segments));
+function applicationExecutablePaths(
+  appName: string,
+  ...segments: string[]
+): string[] {
+  return applicationPaths(appName).map((appPath) =>
+    path.join(appPath, ...segments),
+  );
 }
 
 async function pathExists(candidatePath: string): Promise<boolean> {
@@ -271,7 +292,10 @@ async function resolveBinary(
   }
 
   const bundledPath = appPath
-    ? await resolveBundledApplicationCliPath(appPath, application.binaryNames ?? [])
+    ? await resolveBundledApplicationCliPath(
+        appPath,
+        application.binaryNames ?? [],
+      )
     : undefined;
   if (bundledPath) {
     return bundledPath;
@@ -290,12 +314,14 @@ export async function resolveBundledApplicationCliPath(
 
   return await firstExistingPath(
     binaryNames.map((binaryName) =>
-      path.join(appPath, "Contents", "Resources", "app", "bin", binaryName)
-    )
+      path.join(appPath, "Contents", "Resources", "app", "bin", binaryName),
+    ),
   );
 }
 
-async function firstExistingPath(candidates: string[]): Promise<string | undefined> {
+async function firstExistingPath(
+  candidates: string[],
+): Promise<string | undefined> {
   for (const candidatePath of candidates) {
     if (await pathExists(candidatePath)) {
       return candidatePath;
@@ -324,7 +350,9 @@ async function discoverApplication(
     source: appPath ? "application" : "path",
     appPath,
     executablePath,
-    iconDataUrl: appPath ? await readApplicationIconDataUrl(appPath) : undefined,
+    iconDataUrl: appPath
+      ? await readApplicationIconDataUrl(appPath)
+      : undefined,
     canOpenWorkspace: application.canOpenWorkspace ?? true,
   };
 }
@@ -334,16 +362,22 @@ export async function discoverDesktopApplications(params?: {
 }): Promise<DesktopApplicationsSnapshot> {
   const env = params?.env ?? process.env;
   const [editors, terminals] = await Promise.all([
-    Promise.all(EDITORS.map((application) => discoverApplication(application, env))),
-    Promise.all(TERMINALS.map((application) => discoverApplication(application, env))),
+    Promise.all(
+      EDITORS.map((application) => discoverApplication(application, env)),
+    ),
+    Promise.all(
+      TERMINALS.map((application) => discoverApplication(application, env)),
+    ),
   ]);
 
   return {
     editors: editors.filter(
-      (candidate): candidate is DesktopApplicationDiscoveryCandidate => Boolean(candidate),
+      (candidate): candidate is DesktopApplicationDiscoveryCandidate =>
+        Boolean(candidate),
     ),
     terminals: terminals.filter(
-      (candidate): candidate is DesktopApplicationDiscoveryCandidate => Boolean(candidate),
+      (candidate): candidate is DesktopApplicationDiscoveryCandidate =>
+        Boolean(candidate),
     ),
     preferredEditorId: { value: "", source: "default" },
     preferredTerminalId: { value: "", source: "default" },
@@ -383,7 +417,8 @@ export async function openDesktopApplication(
   }
 
   const knownApplication = [...EDITORS, ...TERMINALS].find(
-    (candidate) => candidate.id === application.id && candidate.kind === application.kind,
+    (candidate) =>
+      candidate.id === application.id && candidate.kind === application.kind,
   );
 
   if (application.kind === "terminal") {
@@ -391,7 +426,11 @@ export async function openDesktopApplication(
     return { opened: true };
   }
 
-  const invocation = buildEditorLaunchInvocation(application, targetPath, request);
+  const invocation = buildEditorLaunchInvocation(
+    application,
+    targetPath,
+    request,
+  );
   if (await captureApplicationOpenIfRequested(request, invocation, env)) {
     return { opened: true };
   }
@@ -428,7 +467,10 @@ function editorCliArgs(
   targetPath: string,
   request: OpenDesktopApplicationRequest,
 ): string[] {
-  if (supportsJetBrainsLineArgs(applicationId) && isPositiveInteger(request.targetLine)) {
+  if (
+    supportsJetBrainsLineArgs(applicationId)
+    && isPositiveInteger(request.targetLine)
+  ) {
     const args = ["--line", String(request.targetLine)];
     if (isPositiveInteger(request.targetColumn)) {
       args.push("--column", String(request.targetColumn));
@@ -437,7 +479,10 @@ function editorCliArgs(
     return args;
   }
 
-  if (!supportsVsCodeGoto(applicationId) || !isPositiveInteger(request.targetLine)) {
+  if (
+    !supportsVsCodeGoto(applicationId)
+    || !isPositiveInteger(request.targetLine)
+  ) {
     return [targetPath];
   }
 
@@ -453,9 +498,9 @@ function supportsJetBrainsLineArgs(applicationId: string): boolean {
 
 function supportsVsCodeGoto(applicationId: string): boolean {
   return (
-    applicationId === "vscode" ||
-    applicationId === "cursor" ||
-    applicationId === "windsurf"
+    applicationId === "vscode"
+    || applicationId === "cursor"
+    || applicationId === "windsurf"
   );
 }
 
@@ -506,14 +551,17 @@ async function openTerminal(
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
   if (
-    process.platform === "darwin" &&
-    knownApplication?.macOpenStrategy === "ghostty-applescript"
+    process.platform === "darwin"
+    && knownApplication?.macOpenStrategy === "ghostty-applescript"
   ) {
     await openGhosttyWithAppleScript(targetPath, env);
     return;
   }
 
-  if (application.executablePath && knownApplication?.terminalWorkingDirectoryArg) {
+  if (
+    application.executablePath
+    && knownApplication?.terminalWorkingDirectoryArg
+  ) {
     await spawnDetached(
       application.executablePath,
       knownApplication.terminalWorkingDirectoryArg(targetPath),
@@ -549,10 +597,14 @@ async function openGhosttyWithAppleScript(
   targetPath: string,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  await execFile("/usr/bin/osascript", buildGhosttyAppleScriptArgs(targetPath), {
-    env,
-    timeout: 10_000,
-  });
+  await execFile(
+    "/usr/bin/osascript",
+    buildGhosttyAppleScriptArgs(targetPath),
+    {
+      env,
+      timeout: 10_000,
+    },
+  );
 }
 
 export function buildGhosttyAppleScriptArgs(targetPath: string): string[] {
@@ -602,7 +654,9 @@ async function spawnDetached(
   });
 }
 
-async function readApplicationIconDataUrl(appPath: string): Promise<string | undefined> {
+async function readApplicationIconDataUrl(
+  appPath: string,
+): Promise<string | undefined> {
   const iconPath = findApplicationIconPath(appPath);
   if (!iconPath) {
     log.warn("application-icon-not-found", { appPath });
@@ -620,7 +674,9 @@ async function readApplicationIconDataUrl(appPath: string): Promise<string | und
     // the whole process with an uncatchable SIGTRAP on some OS builds (the v1
     // beta crash on macOS 26).
     const fileBytes = await readFile(iconPath);
-    const source = isIcnsBuffer(fileBytes) ? extractIcnsPng(fileBytes) : fileBytes;
+    const source = isIcnsBuffer(fileBytes)
+      ? extractIcnsPng(fileBytes)
+      : fileBytes;
     if (!source) {
       log.warn("application-icon-empty", { appPath, iconPath });
       return undefined;

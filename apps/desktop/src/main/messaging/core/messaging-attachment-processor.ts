@@ -1,9 +1,5 @@
-import type {
-  AppServerTurnInputItem,
-} from "@pwragent/shared";
-import type {
-  MessagingAttachmentDescriptor,
-} from "@pwragent/messaging-interface";
+import type { AppServerTurnInputItem } from "@pwragent/shared";
+import type { MessagingAttachmentDescriptor } from "@pwragent/messaging-interface";
 import type { ImageUploadQualityProfile } from "../../../shared/image-normalization";
 import { normalizeMessagingImageAttachment } from "../attachment-image-normalization";
 import type { MessagingAdapter } from "./messaging-adapter";
@@ -71,7 +67,10 @@ export async function processMessagingAttachments(params: {
       });
       continue;
     }
-    if (attachment.sizeBytes && attachment.sizeBytes > policy.maxAttachmentBytes) {
+    if (
+      attachment.sizeBytes
+      && attachment.sizeBytes > policy.maxAttachmentBytes
+    ) {
       rejections.push({
         name: attachment.name,
         reason: "Attachment is larger than the configured limit.",
@@ -173,7 +172,10 @@ export async function processMessagingAttachments(params: {
     } catch (error) {
       rejections.push({
         name: attachment.name,
-        reason: error instanceof Error ? error.message : "Attachment could not be read.",
+        reason:
+          error instanceof Error
+            ? error.message
+            : "Attachment could not be read.",
       });
     }
   }
@@ -204,7 +206,9 @@ function formatAttachmentText(params: {
   return [
     `Attached file: \`${params.fileName}\``,
     `Type: ${params.mimeType} | Size: ${formatByteSize(params.sizeBytes)}`,
-    params.truncated ? "Content was truncated to the configured limit." : undefined,
+    params.truncated
+      ? "Content was truncated to the configured limit."
+      : undefined,
     "",
     `${fence}${markdownLanguageFor(params.fileName, params.mimeType)}`,
     params.content,
@@ -242,9 +246,9 @@ function markdownLanguageFor(fileName: string, mimeType: string): string {
     return "toml";
   }
   if (
-    lowerName.endsWith(".yaml") ||
-    lowerName.endsWith(".yml") ||
-    lowerMime.includes("yaml")
+    lowerName.endsWith(".yaml")
+    || lowerName.endsWith(".yml")
+    || lowerMime.includes("yaml")
   ) {
     return "yaml";
   }

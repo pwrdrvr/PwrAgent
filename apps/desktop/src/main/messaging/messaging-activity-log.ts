@@ -108,37 +108,40 @@ export class MessagingActivityLog {
       .run(entry.platform, createdAt, createdAt);
   }
 
-  list(params: {
-    limit?: number;
-    sinceId?: number;
-  } = {}): MessagingActivityEntry[] {
+  list(
+    params: {
+      limit?: number;
+      sinceId?: number;
+    } = {},
+  ): MessagingActivityEntry[] {
     const limit = Math.min(
       Math.max(params.limit ?? DEFAULT_LIST_LIMIT, 1),
       MAX_LIST_LIMIT,
     );
-    const rows = params.sinceId !== undefined
-      ? (this.stateDb.raw
-          .prepare(
-            `SELECT id, platform, kind, thread_id, binding_id, conversation_id,
+    const rows =
+      params.sinceId !== undefined
+        ? (this.stateDb.raw
+            .prepare(
+              `SELECT id, platform, kind, thread_id, binding_id, conversation_id,
                     conversation_title, actor_id, actor_display_name, summary,
                     created_at, payload
              FROM messaging_activity_log
              WHERE id > ? AND kind <> 'outbound'
              ORDER BY id DESC
              LIMIT ?`,
-          )
-          .all(params.sinceId, limit) as RawActivityRow[])
-      : (this.stateDb.raw
-          .prepare(
-            `SELECT id, platform, kind, thread_id, binding_id, conversation_id,
+            )
+            .all(params.sinceId, limit) as RawActivityRow[])
+        : (this.stateDb.raw
+            .prepare(
+              `SELECT id, platform, kind, thread_id, binding_id, conversation_id,
                     conversation_title, actor_id, actor_display_name, summary,
                     created_at, payload
              FROM messaging_activity_log
              WHERE kind <> 'outbound'
              ORDER BY id DESC
              LIMIT ?`,
-          )
-          .all(limit) as RawActivityRow[]);
+            )
+            .all(limit) as RawActivityRow[]);
     return rows.map(rowToEntry);
   }
 

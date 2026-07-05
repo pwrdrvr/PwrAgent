@@ -14,7 +14,10 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
+import ReactMarkdown, {
+  type Components,
+  type UrlTransform,
+} from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AppIcon } from "../../components/AppIcon";
@@ -30,7 +33,10 @@ type ThreadMarkdownProps = {
   className?: string;
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    | "copyText"
+    | "openApplication"
+    | "openMarkdownFileViewer"
+    | "readMarkdownFile"
   >;
   fileViewerContext?: MarkdownFileViewerContext;
   skills?: AppServerSkillSummary[];
@@ -50,10 +56,13 @@ type MarkdownViewerTarget = LocalFileTarget & {
   label: string;
 };
 
-export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
+export const ThreadMarkdown = memo(function ThreadMarkdown(
+  props: ThreadMarkdownProps,
+) {
   const markdownText = useMemo(
-    () => protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
-    [props.text]
+    () =>
+      protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
+    [props.text],
   );
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
@@ -61,21 +70,24 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     () =>
       props.applications?.editors.find(
         (application) =>
-          application.canOpenWorkspace &&
-          application.id === props.applications?.preferredEditorId.value
-      ) ?? props.applications?.editors.find((application) => application.canOpenWorkspace),
-    [props.applications]
+          application.canOpenWorkspace
+          && application.id === props.applications?.preferredEditorId.value,
+      )
+      ?? props.applications?.editors.find(
+        (application) => application.canOpenWorkspace,
+      ),
+    [props.applications],
   );
   const skillsByPath = useMemo(
     () =>
       new Map(
         (props.skills ?? [])
-          .filter(
-            (skill): skill is AppServerSkillSummary & { path: string } => Boolean(skill.path)
+          .filter((skill): skill is AppServerSkillSummary & { path: string } =>
+            Boolean(skill.path),
           )
-          .map((skill) => [skill.path, skill])
+          .map((skill) => [skill.path, skill]),
       ),
-    [props.skills]
+    [props.skills],
   );
 
   const openLocalFileInEditor = useCallback(
@@ -97,17 +109,24 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         });
       return true;
     },
-    [editorApplication, props.desktopApi]
+    [editorApplication, props.desktopApi],
   );
 
   const openLocalFileLink = useCallback(
-    (event: MouseEvent<HTMLAnchorElement>, href: string, label: string): void => {
+    (
+      event: MouseEvent<HTMLAnchorElement>,
+      href: string,
+      label: string,
+    ): void => {
       const target = localFileTargetFromHref(href);
       if (!target) {
         return;
       }
 
-      if (isMarkdownFilePath(target.path) && props.desktopApi?.readMarkdownFile) {
+      if (
+        isMarkdownFilePath(target.path)
+        && props.desktopApi?.readMarkdownFile
+      ) {
         event.preventDefault();
         setMarkdownViewerTarget({
           ...target,
@@ -120,16 +139,17 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         event.preventDefault();
       }
     },
-    [openLocalFileInEditor, props.desktopApi]
+    [openLocalFileInEditor, props.desktopApi],
   );
 
   const components = useMemo<Components>(
     () => ({
       a(anchorProps) {
-        const href = typeof anchorProps.href === "string" ? anchorProps.href : "";
+        const href =
+          typeof anchorProps.href === "string" ? anchorProps.href : "";
         const localTarget = localFileTargetFromHref(href);
         const isLocalMarkdownFile = Boolean(
-          localTarget && isMarkdownFilePath(localTarget.path)
+          localTarget && isMarkdownFilePath(localTarget.path),
         );
         const skillPath = normalizeSkillPath(href);
         const label = extractTextContent(anchorProps.children).trim();
@@ -140,11 +160,12 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         }
 
         if (
-          skillPath &&
-          (skillsByPath.has(skillPath) || label.startsWith("$"))
+          skillPath
+          && (skillsByPath.has(skillPath) || label.startsWith("$"))
         ) {
           const skill = skillsByPath.get(skillPath) ?? {
-            name: label.replace(/^\$/, "") || skillPath.split("/").pop() || "skill",
+            name:
+              label.replace(/^\$/, "") || skillPath.split("/").pop() || "skill",
             path: skillPath,
           };
 
@@ -203,8 +224,8 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       },
       blockquote(blockquoteProps) {
         const copyText = normalizeBlockquoteCopyText(
-          sourceForNode(markdownText, blockquoteProps.node) ??
-            extractTextContent(blockquoteProps.children)
+          sourceForNode(markdownText, blockquoteProps.node)
+            ?? extractTextContent(blockquoteProps.children),
         );
 
         return (
@@ -227,42 +248,74 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         );
       },
       code(codeProps) {
-        const className = typeof codeProps.className === "string" ? codeProps.className : "";
+        const className =
+          typeof codeProps.className === "string" ? codeProps.className : "";
         const isBlockCode = className.includes("language-");
 
         return (
           <code
-            className={isBlockCode ? codeProps.className : "transcript-message__code"}
+            className={
+              isBlockCode ? codeProps.className : "transcript-message__code"
+            }
           >
             {codeProps.children}
           </code>
         );
       },
       h1(headingProps) {
-        return <h1 className="transcript-message__heading">{headingProps.children}</h1>;
+        return (
+          <h1 className="transcript-message__heading">
+            {headingProps.children}
+          </h1>
+        );
       },
       h2(headingProps) {
-        return <h2 className="transcript-message__heading">{headingProps.children}</h2>;
+        return (
+          <h2 className="transcript-message__heading">
+            {headingProps.children}
+          </h2>
+        );
       },
       h3(headingProps) {
-        return <h3 className="transcript-message__heading">{headingProps.children}</h3>;
+        return (
+          <h3 className="transcript-message__heading">
+            {headingProps.children}
+          </h3>
+        );
       },
       h4(headingProps) {
-        return <h4 className="transcript-message__heading">{headingProps.children}</h4>;
+        return (
+          <h4 className="transcript-message__heading">
+            {headingProps.children}
+          </h4>
+        );
       },
       h5(headingProps) {
-        return <h5 className="transcript-message__heading">{headingProps.children}</h5>;
+        return (
+          <h5 className="transcript-message__heading">
+            {headingProps.children}
+          </h5>
+        );
       },
       h6(headingProps) {
-        return <h6 className="transcript-message__heading">{headingProps.children}</h6>;
+        return (
+          <h6 className="transcript-message__heading">
+            {headingProps.children}
+          </h6>
+        );
       },
       hr() {
         return <hr className="transcript-message__rule" />;
       },
       img(imageProps) {
-        const altText = typeof imageProps.alt === "string" ? imageProps.alt : "";
-        const src = typeof imageProps.src === "string" ? denormalizeMarkdownUrl(imageProps.src) : "";
-        const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
+        const altText =
+          typeof imageProps.alt === "string" ? imageProps.alt : "";
+        const src =
+          typeof imageProps.src === "string"
+            ? denormalizeMarkdownUrl(imageProps.src)
+            : "";
+        const title =
+          typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
 
         return (
           <span className="thread-markdown__image-literal">
@@ -271,7 +324,9 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         );
       },
       ol(listProps) {
-        return <ol className="transcript-message__list">{listProps.children}</ol>;
+        return (
+          <ol className="transcript-message__list">{listProps.children}</ol>
+        );
       },
       p(paragraphProps) {
         return (
@@ -307,12 +362,18 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       table(tableProps) {
         return (
           <div className="thread-markdown__table-scroll" tabIndex={0}>
-            <table className="thread-markdown__table">{tableProps.children}</table>
+            <table className="thread-markdown__table">
+              {tableProps.children}
+            </table>
           </div>
         );
       },
       tbody(tableBodyProps) {
-        return <tbody className="thread-markdown__tbody">{tableBodyProps.children}</tbody>;
+        return (
+          <tbody className="thread-markdown__tbody">
+            {tableBodyProps.children}
+          </tbody>
+        );
       },
       td(tableCellProps) {
         return (
@@ -335,13 +396,21 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         );
       },
       thead(tableHeadProps) {
-        return <thead className="thread-markdown__thead">{tableHeadProps.children}</thead>;
+        return (
+          <thead className="thread-markdown__thead">
+            {tableHeadProps.children}
+          </thead>
+        );
       },
       tr(tableRowProps) {
-        return <tr className="thread-markdown__tr">{tableRowProps.children}</tr>;
+        return (
+          <tr className="thread-markdown__tr">{tableRowProps.children}</tr>
+        );
       },
       ul(listProps) {
-        return <ul className="transcript-message__list">{listProps.children}</ul>;
+        return (
+          <ul className="transcript-message__list">{listProps.children}</ul>
+        );
       },
     }),
     [
@@ -351,7 +420,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       openLocalFileLink,
       props.desktopApi,
       skillsByPath,
-    ]
+    ],
   );
 
   return (
@@ -393,7 +462,10 @@ function MarkdownDocumentModal(props: {
   applications?: DesktopApplicationsSnapshot;
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    | "copyText"
+    | "openApplication"
+    | "openMarkdownFileViewer"
+    | "readMarkdownFile"
   >;
   editorApplication?: EditorApplication;
   fileViewerContext?: MarkdownFileViewerContext;
@@ -441,7 +513,10 @@ function MarkdownDocumentModal(props: {
         if (cancelled) return;
         setLoadState({
           status: "error",
-          error: error instanceof Error ? error.message : "Markdown file could not be read.",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Markdown file could not be read.",
         });
       });
 
@@ -518,7 +593,9 @@ function MarkdownDocumentModal(props: {
       >
         <header className="markdown-document-modal__head">
           <div className="markdown-document-modal__title-wrap">
-            <h2 className="markdown-document-modal__title">{props.target.label}</h2>
+            <h2 className="markdown-document-modal__title">
+              {props.target.label}
+            </h2>
             <p className="markdown-document-modal__path">{props.target.path}</p>
           </div>
           <div className="markdown-document-modal__actions">
@@ -549,8 +626,9 @@ function MarkdownDocumentModal(props: {
                 aria-label="Open in detached files window"
                 title="Open in detached files window"
                 onClick={() => {
-                  const context = props.fileViewerContext ??
-                    fallbackFileViewerContext(props.target.path);
+                  const context =
+                    props.fileViewerContext
+                    ?? fallbackFileViewerContext(props.target.path);
                   void props.desktopApi
                     ?.openMarkdownFileViewer?.({
                       context,
@@ -563,7 +641,10 @@ function MarkdownDocumentModal(props: {
                       },
                     })
                     .catch((error: unknown) => {
-                      console.error("Failed to open markdown file viewer", error);
+                      console.error(
+                        "Failed to open markdown file viewer",
+                        error,
+                      );
                     });
                 }}
               >
@@ -584,7 +665,9 @@ function MarkdownDocumentModal(props: {
 
         <div className="markdown-document-modal__body">
           {loadState.status === "loading" ? (
-            <p className="markdown-document-modal__status">Loading document...</p>
+            <p className="markdown-document-modal__status">
+              Loading document...
+            </p>
           ) : null}
           {loadState.status === "error" ? (
             <p className="markdown-document-modal__status markdown-document-modal__status--error">
@@ -623,9 +706,9 @@ function protectComposerHyphenListItems(markdown: string): string {
         if (!fence) {
           fence = { marker, length: sequence.length };
         } else if (
-          marker === fence.marker &&
-          sequence.length >= fence.length &&
-          trailing.trim() === ""
+          marker === fence.marker
+          && sequence.length >= fence.length
+          && trailing.trim() === ""
         ) {
           fence = undefined;
         }
@@ -664,9 +747,9 @@ function isSafeMarkdownUrl(url: string): boolean {
   }
 
   if (
-    parsed.protocol === "https:" ||
-    parsed.protocol === "mailto:" ||
-    parsed.protocol === "file:"
+    parsed.protocol === "https:"
+    || parsed.protocol === "mailto:"
+    || parsed.protocol === "file:"
   ) {
     return true;
   }
@@ -677,10 +760,10 @@ function isSafeMarkdownUrl(url: string): boolean {
 function isLoopbackHost(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
   return (
-    normalized === "localhost" ||
-    normalized === "127.0.0.1" ||
-    normalized === "::1" ||
-    normalized.endsWith(".localhost")
+    normalized === "localhost"
+    || normalized === "127.0.0.1"
+    || normalized === "::1"
+    || normalized.endsWith(".localhost")
   );
 }
 
@@ -695,22 +778,21 @@ function isImplicitBareAutolink(params: {
   }
 
   return (
-    !source.startsWith("<") &&
-    !source.startsWith("[") &&
-    !/^[a-z][a-z\d+.-]*:/i.test(source)
+    !source.startsWith("<")
+    && !source.startsWith("[")
+    && !/^[a-z][a-z\d+.-]*:/i.test(source)
   );
 }
 
 function dataColKind(node: unknown): string | undefined {
-  const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
+  const properties = (
+    node as { properties?: Record<string, unknown> } | undefined
+  )?.properties;
   const value = properties?.["dataColKind"] ?? properties?.["data-col-kind"];
   return typeof value === "string" ? value : undefined;
 }
 
-function sourceForNode(
-  markdown: string,
-  node: unknown,
-): string | undefined {
+function sourceForNode(markdown: string, node: unknown): string | undefined {
   const position = (
     node as {
       position?: {
@@ -723,10 +805,10 @@ function sourceForNode(
   const end = position?.end?.offset;
 
   if (
-    typeof start !== "number" ||
-    typeof end !== "number" ||
-    start < 0 ||
-    end < start
+    typeof start !== "number"
+    || typeof end !== "number"
+    || start < 0
+    || end < start
   ) {
     return undefined;
   }
@@ -736,7 +818,9 @@ function sourceForNode(
 
 function normalizeSkillPath(href: string): string | undefined {
   if (href.startsWith("file://")) {
-    return stripFileLineSuffix(decodeURIComponent(href.replace(/^file:\/\//, "")));
+    return stripFileLineSuffix(
+      decodeURIComponent(href.replace(/^file:\/\//, "")),
+    );
   }
 
   if (href.startsWith("/")) {
@@ -746,11 +830,11 @@ function normalizeSkillPath(href: string): string | undefined {
   return undefined;
 }
 
-function localFileTargetFromHref(
-  href: string
-): LocalFileTarget | undefined {
+function localFileTargetFromHref(href: string): LocalFileTarget | undefined {
   if (href.startsWith("file://")) {
-    return splitFileLineSuffix(decodeURIComponent(href.replace(/^file:\/\//, "")));
+    return splitFileLineSuffix(
+      decodeURIComponent(href.replace(/^file:\/\//, "")),
+    );
   }
 
   if (href.startsWith("/")) {
@@ -776,8 +860,11 @@ function openFileInEditorLabel(fileLabel: string, editorName: string): string {
   return `${openFileInEditorTitle(editorName)}: ${fileLabel}`;
 }
 
-function fallbackFileViewerContext(filePath: string): MarkdownFileViewerContext {
-  const directory = filePath.slice(0, Math.max(0, filePath.lastIndexOf("/"))) || filePath;
+function fallbackFileViewerContext(
+  filePath: string,
+): MarkdownFileViewerContext {
+  const directory =
+    filePath.slice(0, Math.max(0, filePath.lastIndexOf("/"))) || filePath;
   return {
     key: `files:${directory}`,
     title: "Files",
@@ -838,7 +925,9 @@ function extractTextContent(node: ReactNode): string {
   }
 
   if (typeof node === "object" && "props" in node) {
-    return extractTextContent((node as { props?: { children?: ReactNode } }).props?.children);
+    return extractTextContent(
+      (node as { props?: { children?: ReactNode } }).props?.children,
+    );
   }
 
   return "";

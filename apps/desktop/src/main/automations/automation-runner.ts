@@ -1,4 +1,7 @@
-import type { AutomationRunSummary, ThreadExecutionMode } from "@pwragent/shared";
+import type {
+  AutomationRunSummary,
+  ThreadExecutionMode,
+} from "@pwragent/shared";
 import type { AutomationGateRunResult } from "@pwragent/shared";
 import { automationSuppressesBindingBroadcast } from "@pwragent/shared";
 import type {
@@ -17,10 +20,13 @@ export type AutomationTurnQueue = {
     threadId: AutomationRecord["threadId"];
   }): boolean;
   submit(
-    entry: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
-      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    entry: Omit<ThreadTurnQueueEntry, "id" | "createdAt">
+      & Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
   ): Promise<ThreadTurnQueueSubmissionResult>;
-  updateQueuedInput?(entryId: string, input: ThreadTurnQueueEntry["input"]): void;
+  updateQueuedInput?(
+    entryId: string,
+    input: ThreadTurnQueueEntry["input"],
+  ): void;
 };
 
 export type AutomationRunner = {

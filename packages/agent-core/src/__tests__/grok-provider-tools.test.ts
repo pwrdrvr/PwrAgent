@@ -63,7 +63,9 @@ function createStreamTextMock(params: {
 
 function collectSubscribedEvents(
   subscribe: ProviderActiveTurnLike["subscribe"],
-  onRequestInput?: (event: Extract<ProviderTurnEvent, { type: "request_input" }>) => void,
+  onRequestInput?: (
+    event: Extract<ProviderTurnEvent, { type: "request_input" }>,
+  ) => void,
 ) {
   const events: ProviderTurnEvent[] = [];
   const unsubscribe = subscribe?.(async (event) => {
@@ -83,7 +85,10 @@ function createStubToolExecutor(): {
   executor: ToolExecutor;
   calls: Array<{ invocation: ToolInvocation; context: ToolExecutionContext }>;
 } {
-  const calls: Array<{ invocation: ToolInvocation; context: ToolExecutionContext }> = [];
+  const calls: Array<{
+    invocation: ToolInvocation;
+    context: ToolExecutionContext;
+  }> = [];
   const tools: ToolDescriptor[] = [
     {
       name: "search_code",
@@ -167,7 +172,9 @@ describe("GrokProvider tool loop", () => {
     const streamTextImpl = createStreamTextMock({
       text: "Needle located.",
       responseId: "resp_final_1",
-      toolCalls: [{ id: "call_search", name: "search_code", input: { query: "needle" } }],
+      toolCalls: [
+        { id: "call_search", name: "search_code", input: { query: "needle" } },
+      ],
     });
     const { executor, calls } = createStubToolExecutor();
     const provider = new GrokProvider({
@@ -253,7 +260,9 @@ describe("GrokProvider tool loop", () => {
       text: "",
       reasoningText: "Needle located.",
       responseId: "resp_reasoning_final",
-      toolCalls: [{ id: "call_search", name: "search_code", input: { query: "needle" } }],
+      toolCalls: [
+        { id: "call_search", name: "search_code", input: { query: "needle" } },
+      ],
       steps: [
         {
           toolResults: [
@@ -268,12 +277,14 @@ describe("GrokProvider tool loop", () => {
         },
       ],
     });
-    const generateTextImpl = vi.fn(async (_params: Record<string, unknown>) => ({
-      text: "Needle located.",
-      response: { id: "resp_retry_final" },
-      sources: [],
-      providerMetadata: undefined,
-    }));
+    const generateTextImpl = vi.fn(
+      async (_params: Record<string, unknown>) => ({
+        text: "Needle located.",
+        response: { id: "resp_retry_final" },
+        sources: [],
+        providerMetadata: undefined,
+      }),
+    );
     const { executor } = createStubToolExecutor();
     const provider = new GrokProvider({
       apiKey: "test-key",
@@ -363,7 +374,9 @@ describe("GrokProvider tool loop", () => {
       apiKey: "test-key",
       streamTextImpl,
     });
-    const executor = new LocalToolExecutor(new ToolRegistry([createShellCommandTool()]));
+    const executor = new LocalToolExecutor(
+      new ToolRegistry([createShellCommandTool()]),
+    );
 
     const activeTurn = provider.startTurn({
       thread: {
@@ -376,9 +389,12 @@ describe("GrokProvider tool loop", () => {
       input: [{ type: "text", text: "Touch a file." }],
       tools: executor,
     });
-    const { events } = collectSubscribedEvents(activeTurn.subscribe, (event) => {
-      void event.respond({ decision: "decline" });
-    });
+    const { events } = collectSubscribedEvents(
+      activeTurn.subscribe,
+      (event) => {
+        void event.respond({ decision: "decline" });
+      },
+    );
 
     await expect(activeTurn.result).resolves.toMatchObject({
       assistantText: "Shell step complete.",

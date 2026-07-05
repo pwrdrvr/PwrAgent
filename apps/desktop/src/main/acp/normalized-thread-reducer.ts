@@ -103,8 +103,13 @@ class NormalizedThreadReducer {
   thread(): NormalizedThread {
     const messages = this.entries
       .filter((e): e is NormalizedMessageEntry => e.type === "message")
-      .map(({ type: _t, turn: _turn, ...message }) => message satisfies NormalizedMessage);
-    const lastUserMessage = [...messages].reverse().find((m) => m.role === "user")?.text;
+      .map(
+        ({ type: _t, turn: _turn, ...message }) =>
+          message satisfies NormalizedMessage,
+      );
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find((m) => m.role === "user")?.text;
     const lastAssistantMessage = [...messages]
       .reverse()
       .find((m) => m.role === "assistant")?.text;
@@ -150,9 +155,13 @@ class NormalizedThreadReducer {
       // separate, so preserve the streamed final entry.
       return;
     }
-    const reasoningIndex = this.messageEntryByItem.get(`reasoning:${message.id}`);
+    const reasoningIndex = this.messageEntryByItem.get(
+      `reasoning:${message.id}`,
+    );
     if (reasoningIndex !== undefined) {
-      const reasoningEntry = this.entries[reasoningIndex] as NormalizedMessageEntry;
+      const reasoningEntry = this.entries[
+        reasoningIndex
+      ] as NormalizedMessageEntry;
       if (reasoningEntry.text === message.text) {
         return;
       }

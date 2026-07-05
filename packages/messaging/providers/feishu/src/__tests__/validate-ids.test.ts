@@ -19,8 +19,14 @@ describe("Feishu ID validators", () => {
   });
 
   it("rejects malformed values without complex regexes", () => {
-    expect(validateFeishuOpenId("oc_123")).toEqual({ ok: false, reason: "format" });
-    expect(validateFeishuChatId("oc_")).toEqual({ ok: false, reason: "format" });
+    expect(validateFeishuOpenId("oc_123")).toEqual({
+      ok: false,
+      reason: "format",
+    });
+    expect(validateFeishuChatId("oc_")).toEqual({
+      ok: false,
+      reason: "format",
+    });
     expect(validateFeishuTenantKey("tenant key")).toEqual({
       ok: false,
       reason: "format",

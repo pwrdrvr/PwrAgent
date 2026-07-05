@@ -77,12 +77,12 @@ function resolveQuitDialogTheme(): "dark" | "light" {
 export async function showQuitConfirmationDialog(
   options: QuitConfirmationDialogOptions,
 ): Promise<QuitConfirmationDialogResult> {
-  const token = `${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2)}`;
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const navigationPrefix = `pwragent-quit-confirmation://${token}/`;
   const parent =
-    options.parent && !options.parent.isDestroyed() ? options.parent : undefined;
+    options.parent && !options.parent.isDestroyed()
+      ? options.parent
+      : undefined;
   const colorScheme = resolveQuitDialogTheme();
   const palette = QUIT_DIALOG_PALETTES[colorScheme];
   const window = new BrowserWindow({
@@ -136,9 +136,9 @@ export async function showQuitConfirmationDialog(
       event.preventDefault();
       const result = url.slice(navigationPrefix.length);
       if (
-        result === "manual-confirm" ||
-        result === "manual-cancel" ||
-        result === "countdown-expired"
+        result === "manual-confirm"
+        || result === "manual-cancel"
+        || result === "countdown-expired"
       ) {
         finish(result);
       }

@@ -186,7 +186,9 @@ export type DiscordGatewayEvent =
       t: "INTERACTION_CREATE";
     };
 
-export type DiscordGatewayListener = (event: DiscordGatewayEvent) => void | Promise<void>;
+export type DiscordGatewayListener = (
+  event: DiscordGatewayEvent,
+) => void | Promise<void>;
 
 export type DiscordGatewayConnection = {
   close(): Promise<void>;
@@ -209,7 +211,10 @@ export type DiscordGuildInfo = {
 export type DiscordApi = DiscordApplicationCommandApi & {
   getChannel(channelId: string): Promise<DiscordChannelInfo>;
   getGuild(guildId: string): Promise<DiscordGuildInfo>;
-  updateChannelName(channelId: string, request: { name: string }): Promise<void>;
+  updateChannelName(
+    channelId: string,
+    request: { name: string },
+  ): Promise<void>;
   createInteractionResponse(
     interactionId: string,
     interactionToken: string,
@@ -250,9 +255,13 @@ export type DiscordProviderAdapter = {
   channel: "discord";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
-  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  resolveDeliveryScope?(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
-  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateAuthorization?(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void>;
   updateRenderingPreferences?(
     update: MessagingAdapterRenderingPreferencesUpdate,
   ): Promise<void>;
@@ -263,13 +272,16 @@ export type DiscordProviderAdapter = {
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
-  start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
+  start?(
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void>;
   stop?(): Promise<void>;
 };
 
 export class DiscordAdapter implements DiscordProviderAdapter {
   readonly channel = "discord" as const;
-  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "externalized";
+  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy =
+    "externalized";
   readonly capabilityProfile: MessagingCapabilityProfile = {
     actions: {
       maxActions: 25,
@@ -324,8 +336,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private readonly channelCache = new Map<string, DiscordChannelInfo>();
   private readonly guildCache = new Map<string, DiscordGuildInfo>();
   private readonly unauthorizedGuildLogKeys = new Set<string>();
-  private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
-  private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
+  private readonly inboundRejectedListeners =
+    new Set<MessagingInboundRejectedListener>();
+  private readonly rateLimitListeners = new Set<
+    (info: MessagingRateLimitInfo) => void
+  >();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
   // Per-stream posted messages, keyed by `intent.stream.key`. A response longer
@@ -347,7 +362,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return this.options.config.authorizedActorIds.map((contact) => contact.id);
   }
 
-  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+  async updateAuthorization(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void> {
     this.options.config.authorizedActorIds = discordContactsFromIds(
       update.authorizedActorIds,
       this.options.config.authorizedActorIds,
@@ -380,12 +397,16 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     };
   }
 
-  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+  resolveDeliveryScope(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined {
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
   }
 
-  async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
+  async start(
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void> {
     await this.reconcileApplicationCommands();
     this.listener = listener;
     this.unsubscribeGateway = this.gateway.onEvent(async (event) => {
@@ -421,7 +442,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
     const data = new Uint8Array(await response.arrayBuffer());
     if (data.byteLength > request.maxBytes) {
-      throw new Error("Discord attachment exceeds the configured download limit.");
+      throw new Error(
+        "Discord attachment exceeds the configured download limit.",
+      );
     }
     return {
       data,
@@ -431,7 +454,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     };
   }
 
-  async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
+  async deliver(
+    intent: MessagingSurfaceIntent,
+  ): Promise<MessagingDeliveryResult> {
     const target = this.resolveTarget(intent);
     if (!target) {
       return {
@@ -490,7 +515,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       await Promise.all(callbackHandleWrites);
       const imageUpload = uploadableImagePart(intent);
       const imageUrl = imageUpload ? undefined : this.firstImageUrl(intent);
-      const files = [...uploadableFileParts(intent), ...(imageUpload ? [imageUpload] : [])];
+      const files = [
+        ...uploadableFileParts(intent),
+        ...(imageUpload ? [imageUpload] : []),
+      ];
       const chunks = splitDiscordContent(
         (files.length > 0
           ? textForDiscordIntentWithoutUploads(intent)
@@ -500,11 +528,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         components ?? (intent.delivery?.replaceMarkup ? [] : undefined);
 
       if (
-        target.applicationId &&
-        target.interactionToken &&
-        chunks.length === 1 &&
-        !imageUrl &&
-        files.length === 0
+        target.applicationId
+        && target.interactionToken
+        && chunks.length === 1
+        && !imageUrl
+        && files.length === 0
       ) {
         const message = await this.api.updateInteractionOriginalResponse(
           target.applicationId,
@@ -515,7 +543,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
             content: chunks[0] ?? " ",
           },
         );
-        const pinned = await this.pinMessageIfRequested(intent, message, target);
+        const pinned = await this.pinMessageIfRequested(
+          intent,
+          message,
+          target,
+        );
         return {
           channel: this.channel,
           deliveredAt: this.now(),
@@ -525,10 +557,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       }
 
       if (
-        intent.delivery?.mode === "update" &&
-        target.messageId &&
-        chunks.length === 1 &&
-        !imageUrl
+        intent.delivery?.mode === "update"
+        && target.messageId
+        && chunks.length === 1
+        && !imageUrl
       ) {
         try {
           const message = await this.api.updateMessage(
@@ -541,7 +573,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
               files: filesForDiscordRequest(files),
             },
           );
-          const pinned = await this.pinMessageIfRequested(intent, message, target);
+          const pinned = await this.pinMessageIfRequested(
+            intent,
+            message,
+            target,
+          );
           return {
             channel: this.channel,
             deliveredAt: this.now(),
@@ -575,7 +611,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
                   },
                 ]
               : undefined,
-          files: index === chunks.length - 1 ? filesForDiscordRequest(files) : undefined,
+          files:
+            index === chunks.length - 1
+              ? filesForDiscordRequest(files)
+              : undefined,
         };
         messages.push(await this.api.createMessage(target.channelId, request));
         deliveredSideEffects = true;
@@ -590,8 +629,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         deliveredAt: this.now(),
         outcome: pinned
           ? "pinned"
-          : intent.delivery?.mode === "update" ? "presented_new" : "presented",
-        surface: lastMessage ? this.surfaceForMessage(lastMessage, target) : undefined,
+          : intent.delivery?.mode === "update"
+            ? "presented_new"
+            : "presented",
+        surface: lastMessage
+          ? this.surfaceForMessage(lastMessage, target)
+          : undefined,
       };
     } catch (error) {
       const message = errorMessage(error);
@@ -621,7 +664,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return false;
     }
     try {
-      await this.api.pinMessage(message.channel_id || target.channelId, message.id);
+      await this.api.pinMessage(
+        message.channel_id || target.channelId,
+        message.id,
+      );
       return true;
     } catch (error) {
       this.options.logger?.warn?.(
@@ -636,11 +682,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     target: { channelId: string; guildId?: string; messageId?: string },
   ): Promise<MessagingDeliveryResult> {
     if (
-      intent.policy === "disabled" ||
-      (
-        this.options.config.streamingResponses !== true &&
-        intent.policy !== "enabled"
-      )
+      intent.policy === "disabled"
+      || (this.options.config.streamingResponses !== true
+        && intent.policy !== "enabled")
     ) {
       return {
         channel: this.channel,
@@ -655,11 +699,17 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     // and new ones are posted as the response spills over.
     const chunks = splitDiscordContent(intent.text || " ");
     if (chunks.length === 0) {
-      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
     }
     const anchors =
-      this.streamSurfaces.get(intent.stream.key) ??
-      (target.messageId ? [{ messageId: target.messageId, content: "" }] : []);
+      this.streamSurfaces.get(intent.stream.key)
+      ?? (target.messageId
+        ? [{ messageId: target.messageId, content: "" }]
+        : []);
     let firstOutcome: "presented" | "updated" | undefined;
     try {
       for (let index = 0; index < chunks.length; index += 1) {
@@ -674,11 +724,18 @@ export class DiscordAdapter implements DiscordProviderAdapter {
             firstOutcome ??= "updated";
             continue;
           }
-          await this.api.updateMessage(target.channelId, anchor.messageId, request);
+          await this.api.updateMessage(
+            target.channelId,
+            anchor.messageId,
+            request,
+          );
           anchor.content = content;
           firstOutcome ??= "updated";
         } else {
-          const message = await this.api.createMessage(target.channelId, request);
+          const message = await this.api.createMessage(
+            target.channelId,
+            request,
+          );
           anchors[index] = { messageId: message.id, content };
           firstOutcome ??= "presented";
         }
@@ -729,7 +786,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return {
         channel: this.channel,
         conversation,
-        errorMessage: "Discord name sync is only available inside Discord threads.",
+        errorMessage:
+          "Discord name sync is only available inside Discord threads.",
         outcome: "unsupported",
         title,
         updatedAt: this.now(),
@@ -771,7 +829,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
   }
 
-  private async handleMessageCreate(message: DiscordMessageCreateDispatch): Promise<void> {
+  private async handleMessageCreate(
+    message: DiscordMessageCreateDispatch,
+  ): Promise<void> {
     const listener = this.listener;
     if (!listener) {
       return;
@@ -789,12 +849,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
             this.options.config.applicationId,
           )
         : undefined;
-    const isPairingMessage = message.content !== undefined
-      ? Boolean(extractMessagingPairingToken(message.content))
-      : false;
+    const isPairingMessage =
+      message.content !== undefined
+        ? Boolean(extractMessagingPairingToken(message.content))
+        : false;
     if (
-      !isPairingMessage &&
-      !this.isAuthorizedMessageSource(message, {
+      !isPairingMessage
+      && !this.isAuthorizedMessageSource(message, {
         actionable:
           isPairingMessage
           || mentionRemainder !== undefined
@@ -804,19 +865,27 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return;
     }
 
-    const channel = await this.channelFromDiscord(message.channel_id, message.guild_id, {
-      // Best-effort DM peer name from the message author when the
-      // conversation is a DM (no guild). Channel + thread breadcrumbs
-      // are resolved via REST inside channelFromDiscord (cached).
-      dmPeerName: message.guild_id
-        ? undefined
-        : (message.author.global_name ?? message.author.username),
-    });
+    const channel = await this.channelFromDiscord(
+      message.channel_id,
+      message.guild_id,
+      {
+        // Best-effort DM peer name from the message author when the
+        // conversation is a DM (no guild). Channel + thread breadcrumbs
+        // are resolved via REST inside channelFromDiscord (cached).
+        dmPeerName: message.guild_id
+          ? undefined
+          : (message.author.global_name ?? message.author.username),
+      },
+    );
     const receivedAt = this.now();
-    const routingState = this.routingStateFromDiscord(message.channel_id, message.guild_id, {
-      channelType: message.channel_type,
-      isThread: message.is_thread,
-    });
+    const routingState = this.routingStateFromDiscord(
+      message.channel_id,
+      message.guild_id,
+      {
+        channelType: message.channel_type,
+        isThread: message.is_thread,
+      },
+    );
     const hasAttachments = Boolean(message.attachments?.length);
 
     // `<@botUserId> <verb>` text mention → command. Run BEFORE the
@@ -833,12 +902,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     // created since 2016).
     if (message.content !== undefined) {
       if (
-        mentionRemainder !== undefined &&
+        mentionRemainder !== undefined
         // A bare mention caption has no command verb. Let the media
         // branch handle the upload so bound conversations can send it
         // to the thread; unbound conversations will get the
         // controller's normal "bind before attachments" response.
-        !(mentionRemainder.length === 0 && hasAttachments)
+        && !(mentionRemainder.length === 0 && hasAttachments)
       ) {
         // Synthesize the slash form so the controller sees the same
         // `MessagingInboundCommandEvent` shape as a `/`-prefixed
@@ -849,8 +918,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         // through to the standard attachment / slash / text paths
         // below — the original `message.content` is dispatched as
         // media or plain text rather than a half-recognized command.
-        const synthRaw = mentionRemainder.length === 0 ? "/help" : `/${mentionRemainder}`;
-        const mentionCommandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(synthRaw);
+        const synthRaw =
+          mentionRemainder.length === 0 ? "/help" : `/${mentionRemainder}`;
+        const mentionCommandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(
+          synthRaw,
+        );
         if (mentionCommandMatch) {
           await listener({
             id: `discord:message:${message.id}`,
@@ -878,7 +950,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         attachments,
         actor: this.actorFromUser(message.author),
         channel,
-        disposition: attachments.some((attachment) => attachment.disposition === "available")
+        disposition: attachments.some(
+          (attachment) => attachment.disposition === "available",
+        )
           ? "available"
           : "unsupported",
         media: {
@@ -900,7 +974,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       );
     }
 
-    const commandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(message.content);
+    const commandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(
+      message.content,
+    );
     await listener({
       id: `discord:message:${message.id}`,
       kind: commandMatch ? "command" : "text",
@@ -936,30 +1012,50 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const commandName = interaction.data?.name?.toLowerCase();
     if (!this.isAuthorizedInteractionSource(interaction, actor)) {
       if (customId) {
-        await this.api.createInteractionResponse(interaction.id, interaction.token, {
-          type: 6,
-        });
+        await this.api.createInteractionResponse(
+          interaction.id,
+          interaction.token,
+          {
+            type: 6,
+          },
+        );
       } else if (commandName) {
-        await this.api.createInteractionResponse(interaction.id, interaction.token, {
-          type: 5,
-        });
+        await this.api.createInteractionResponse(
+          interaction.id,
+          interaction.token,
+          {
+            type: 5,
+          },
+        );
       }
       return;
     }
 
     if (customId) {
-      await this.api.createInteractionResponse(interaction.id, interaction.token, {
-        type: 6,
-      });
+      await this.api.createInteractionResponse(
+        interaction.id,
+        interaction.token,
+        {
+          type: 6,
+        },
+      );
       await this.handleComponentInteraction(interaction, actor, customId);
       return;
     }
 
     if (commandName) {
-      await this.api.createInteractionResponse(interaction.id, interaction.token, {
-        type: 5,
-      });
-      await this.handleApplicationCommandInteraction(interaction, actor, commandName);
+      await this.api.createInteractionResponse(
+        interaction.id,
+        interaction.token,
+        {
+          type: 5,
+        },
+      );
+      await this.handleApplicationCommandInteraction(
+        interaction,
+        actor,
+        commandName,
+      );
     }
   }
 
@@ -1050,13 +1146,31 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     });
   }
 
-  private validateMessageIdentifiers(message: DiscordMessageCreateDispatch): boolean {
+  private validateMessageIdentifiers(
+    message: DiscordMessageCreateDispatch,
+  ): boolean {
     return (
-      this.validateIdentifier("message.id", message.id, validateDiscordSnowflake)
-      && this.validateIdentifier("channel_id", message.channel_id, validateDiscordSnowflake)
-      && this.validateIdentifier("user.id", message.author.id, validateDiscordSnowflake)
+      this.validateIdentifier(
+        "message.id",
+        message.id,
+        validateDiscordSnowflake,
+      )
+      && this.validateIdentifier(
+        "channel_id",
+        message.channel_id,
+        validateDiscordSnowflake,
+      )
+      && this.validateIdentifier(
+        "user.id",
+        message.author.id,
+        validateDiscordSnowflake,
+      )
       && (message.guild_id === undefined
-        || this.validateIdentifier("guild_id", message.guild_id, validateDiscordSnowflake))
+        || this.validateIdentifier(
+          "guild_id",
+          message.guild_id,
+          validateDiscordSnowflake,
+        ))
       && this.validateAttachments(message.attachments ?? [])
     );
   }
@@ -1066,8 +1180,16 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     actor: DiscordUser,
   ): boolean {
     return (
-      this.validateIdentifier("interaction.id", interaction.id, validateDiscordSnowflake)
-      && this.validateIdentifier("channel_id", interaction.channel_id, validateDiscordSnowflake)
+      this.validateIdentifier(
+        "interaction.id",
+        interaction.id,
+        validateDiscordSnowflake,
+      )
+      && this.validateIdentifier(
+        "channel_id",
+        interaction.channel_id,
+        validateDiscordSnowflake,
+      )
       && this.validateIdentifier("user.id", actor.id, validateDiscordSnowflake)
       && this.validateIdentifier(
         "interaction.token",
@@ -1081,7 +1203,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           validateDiscordSnowflake,
         ))
       && (interaction.guild_id === undefined
-        || this.validateIdentifier("guild_id", interaction.guild_id, validateDiscordSnowflake))
+        || this.validateIdentifier(
+          "guild_id",
+          interaction.guild_id,
+          validateDiscordSnowflake,
+        ))
       && (interaction.message?.id === undefined
         || this.validateIdentifier(
           "message.id",
@@ -1102,7 +1228,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   ): boolean {
     for (const attachment of attachments) {
       if (
-        !this.validateIdentifier("attachment.id", attachment.id, validateDiscordSnowflake)
+        !this.validateIdentifier(
+          "attachment.id",
+          attachment.id,
+          validateDiscordSnowflake,
+        )
         || !this.validateIdentifier(
           "attachment.url",
           attachment.url,
@@ -1145,25 +1275,32 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       })
     ) {
       if (options.actionable) {
-        this.emitInboundRejected(this.rejectedEventFromMessage(message, {
-          kind: "command",
-          reason: "unauthorized-conversation",
-        }));
+        this.emitInboundRejected(
+          this.rejectedEventFromMessage(message, {
+            kind: "command",
+            reason: "unauthorized-conversation",
+          }),
+        );
       }
       return false;
     }
     if (!this.isAuthorizedActor(message.author.id)) {
       if (!message.guild_id || options.actionable) {
-        this.options.logger?.warn?.("discord inbound ignored unauthorized actor", {
-          actorId: message.author.id,
-          channelId: message.channel_id,
-          guildId: message.guild_id,
-          actionable: options.actionable,
-        });
-        this.emitInboundRejected(this.rejectedEventFromMessage(message, {
-          kind: options.actionable ? "command" : "text",
-          reason: "unauthorized-actor",
-        }));
+        this.options.logger?.warn?.(
+          "discord inbound ignored unauthorized actor",
+          {
+            actorId: message.author.id,
+            channelId: message.channel_id,
+            guildId: message.guild_id,
+            actionable: options.actionable,
+          },
+        );
+        this.emitInboundRejected(
+          this.rejectedEventFromMessage(message, {
+            kind: options.actionable ? "command" : "text",
+            reason: "unauthorized-actor",
+          }),
+        );
       }
       return false;
     }
@@ -1181,21 +1318,30 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         surface: "interaction",
       })
     ) {
-      this.emitInboundRejected(this.rejectedEventFromInteraction(interaction, actor, {
-        reason: "unauthorized-conversation",
-      }));
+      this.emitInboundRejected(
+        this.rejectedEventFromInteraction(interaction, actor, {
+          reason: "unauthorized-conversation",
+        }),
+      );
       return false;
     }
     if (!this.isAuthorizedActor(actor.id)) {
-      this.options.logger?.warn?.("discord interaction ignored unauthorized actor", {
-        actorId: actor.id,
-        channelId: interaction.channel_id,
-        guildId: interaction.guild_id,
-        interactionKind: interaction.data?.custom_id ? "component" : "command",
-      });
-      this.emitInboundRejected(this.rejectedEventFromInteraction(interaction, actor, {
-        reason: "unauthorized-actor",
-      }));
+      this.options.logger?.warn?.(
+        "discord interaction ignored unauthorized actor",
+        {
+          actorId: actor.id,
+          channelId: interaction.channel_id,
+          guildId: interaction.guild_id,
+          interactionKind: interaction.data?.custom_id
+            ? "component"
+            : "command",
+        },
+      );
+      this.emitInboundRejected(
+        this.rejectedEventFromInteraction(interaction, actor, {
+          reason: "unauthorized-actor",
+        }),
+      );
       return false;
     }
     return true;
@@ -1221,10 +1367,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       const logKey = `non-guild:${channelType ?? "unknown"}`;
       if (!this.unauthorizedGuildLogKeys.has(logKey)) {
         this.unauthorizedGuildLogKeys.add(logKey);
-        this.options.logger?.warn?.("discord inbound ignored unauthorized non-guild conversation", {
-          channelType: channelType ?? null,
-          surface,
-        });
+        this.options.logger?.warn?.(
+          "discord inbound ignored unauthorized non-guild conversation",
+          {
+            channelType: channelType ?? null,
+            surface,
+          },
+        );
       }
       return false;
     }
@@ -1234,10 +1383,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
     if (!this.unauthorizedGuildLogKeys.has(guildId)) {
       this.unauthorizedGuildLogKeys.add(guildId);
-      this.options.logger?.warn?.("discord inbound ignored unauthorized guild", {
-        guildId,
-        surface,
-      });
+      this.options.logger?.warn?.(
+        "discord inbound ignored unauthorized guild",
+        {
+          guildId,
+          surface,
+        },
+      );
     }
     return false;
   }
@@ -1269,7 +1421,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       .update(JSON.stringify([intent.id, action.id, action.value ?? null]))
       .digest("base64url")
       .slice(0, 24)}`;
-    if (Buffer.byteLength(customId, "utf8") > DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES) {
+    if (
+      Buffer.byteLength(customId, "utf8")
+      > DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES
+    ) {
       throw new Error("Discord component custom_id exceeds limit.");
     }
 
@@ -1292,10 +1447,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           value: action.value,
         })
         .catch((error) => {
-          this.options.logger?.warn?.("discord callback handle persist failed", {
-            error: error instanceof Error ? error.message : String(error),
-            handle: customId,
-          });
+          this.options.logger?.warn?.(
+            "discord callback handle persist failed",
+            {
+              error: error instanceof Error ? error.message : String(error),
+              handle: customId,
+            },
+          );
         });
       if (pendingWrites) {
         pendingWrites.push(write);
@@ -1306,9 +1464,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return customId;
   }
 
-  private resolveTarget(
-    intent: MessagingSurfaceIntent,
-  ):
+  private resolveTarget(intent: MessagingSurfaceIntent):
     | {
         applicationId?: string;
         channelId: string;
@@ -1349,14 +1505,18 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return typeof opaque.channelId === "string"
       ? {
           applicationId:
-            typeof opaque.applicationId === "string" ? opaque.applicationId : undefined,
+            typeof opaque.applicationId === "string"
+              ? opaque.applicationId
+              : undefined,
           channelId: opaque.channelId,
-          guildId: typeof opaque.guildId === "string" ? opaque.guildId : undefined,
+          guildId:
+            typeof opaque.guildId === "string" ? opaque.guildId : undefined,
           interactionToken:
             typeof opaque.interactionToken === "string"
               ? opaque.interactionToken
               : undefined,
-          messageId: typeof opaque.messageId === "string" ? opaque.messageId : undefined,
+          messageId:
+            typeof opaque.messageId === "string" ? opaque.messageId : undefined,
         }
       : undefined;
   }
@@ -1474,17 +1634,23 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
 
     const signalId = ++this.typingSignalSequence;
-    const timeout = this.createTypingSignalTimeout(channelId, leaseMs, signalId);
+    const timeout = this.createTypingSignalTimeout(
+      channelId,
+      leaseMs,
+      signalId,
+    );
     const interval = setInterval(() => {
       const current = this.typingSignals.get(channelId);
       if (!current || current.signalId !== signalId) {
         return;
       }
-      void this.sendTypingSignal(channelId, signalId, "interval").catch((error) => {
-        this.options.logger?.warn?.(
-          `discord typing request failed signal=${signalId} source=interval channel=${channelId} error=${errorMessage(error)}`,
-        );
-      });
+      void this.sendTypingSignal(channelId, signalId, "interval").catch(
+        (error) => {
+          this.options.logger?.warn?.(
+            `discord typing request failed signal=${signalId} source=interval channel=${channelId} error=${errorMessage(error)}`,
+          );
+        },
+      );
     }, DISCORD_TYPING_SIGNAL_INTERVAL_MS);
     (interval as { unref?: () => void }).unref?.();
     this.typingSignals.set(channelId, {
@@ -1539,7 +1705,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return;
     }
     clearTimeout(signal.timeout);
-    signal.timeout = this.createTypingSignalTimeout(channelId, leaseMs, signal.signalId);
+    signal.timeout = this.createTypingSignalTimeout(
+      channelId,
+      leaseMs,
+      signal.signalId,
+    );
     this.options.logger?.debug(
       `discord typing lease refreshed signal=${signal.signalId} leaseMs=${leaseMs} channel=${channelId}`,
     );
@@ -1603,10 +1773,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     // make legacy thread bindings unfindable. Thread vs channel is
     // distinguishable from data shape (ancestorTitle populated → it
     // came from a thread).
-    const breadcrumbs = await this.lookupChannelBreadcrumbs(
-      channelId,
-      guildId,
-    );
+    const breadcrumbs = await this.lookupChannelBreadcrumbs(channelId, guildId);
     return {
       channel: this.channel,
       conversation: {
@@ -1727,10 +1894,14 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       ),
       receivedAt: this.now(),
       reason: options.reason,
-      routingState: this.routingStateFromDiscord(message.channel_id, message.guild_id, {
-        channelType: message.channel_type,
-        isThread: message.is_thread,
-      }),
+      routingState: this.routingStateFromDiscord(
+        message.channel_id,
+        message.guild_id,
+        {
+          channelType: message.channel_type,
+          isThread: message.is_thread,
+        },
+      ),
     };
   }
 
@@ -1747,7 +1918,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       channel: this.basicChannelRef(
         interaction.channel_id,
         interaction.guild_id,
-        this.discordConversationKind(interaction.guild_id, interaction.channel_type),
+        this.discordConversationKind(
+          interaction.guild_id,
+          interaction.channel_type,
+        ),
       ),
       receivedAt: this.now(),
       reason: options.reason,
@@ -1823,9 +1997,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     url: string;
   }): MessagingAttachmentDescriptor {
     const mimeType = attachment.content_type;
-    const kind = attachmentKindFromDiscordMimeType(mimeType, attachment.filename);
-    const available =
-      kind === "file" || kind === "image" || kind === "gif";
+    const kind = attachmentKindFromDiscordMimeType(
+      mimeType,
+      attachment.filename,
+    );
+    const available = kind === "file" || kind === "image" || kind === "gif";
     return {
       id: `discord:attachment:${attachment.id}`,
       kind,
@@ -1863,7 +2039,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   }
 }
 
-function uploadableFileParts(intent: MessagingSurfaceIntent): MessagingFilePart[] {
+function uploadableFileParts(
+  intent: MessagingSurfaceIntent,
+): MessagingFilePart[] {
   if (intent.kind !== "message") {
     return [];
   }
@@ -1874,7 +2052,9 @@ function uploadableFileParts(intent: MessagingSurfaceIntent): MessagingFilePart[
   );
 }
 
-function uploadableImagePart(intent: MessagingSurfaceIntent): MessagingFilePart | undefined {
+function uploadableImagePart(
+  intent: MessagingSurfaceIntent,
+): MessagingFilePart | undefined {
   if (intent.kind !== "message") {
     return undefined;
   }
@@ -1898,7 +2078,9 @@ function uploadableImagePart(intent: MessagingSurfaceIntent): MessagingFilePart 
   };
 }
 
-function textForDiscordIntentWithoutUploads(intent: MessagingSurfaceIntent): string {
+function textForDiscordIntentWithoutUploads(
+  intent: MessagingSurfaceIntent,
+): string {
   if (intent.kind !== "message") {
     return textForDiscordIntent(intent);
   }
@@ -1907,8 +2089,8 @@ function textForDiscordIntentWithoutUploads(intent: MessagingSurfaceIntent): str
     ...intent,
     parts: intent.parts.filter(
       (part) =>
-        !(part.type === "file" && part.data !== undefined) &&
-        !(part.type === "image" && part.url.startsWith("data:image/")),
+        !(part.type === "file" && part.data !== undefined)
+        && !(part.type === "image" && part.url.startsWith("data:image/")),
     ),
   });
 }
@@ -2064,9 +2246,12 @@ class DiscordRestApi implements DiscordApi {
     interactionToken: string,
     request: DiscordInteractionResponseRequest,
   ): Promise<void> {
-    await this.rest.post(Routes.interactionCallback(interactionId, interactionToken), {
-      body: request,
-    });
+    await this.rest.post(
+      Routes.interactionCallback(interactionId, interactionToken),
+      {
+        body: request,
+      },
+    );
   }
 
   async updateInteractionOriginalResponse(
@@ -2204,7 +2389,9 @@ class DiscordJsGatewayConnection implements DiscordGatewayConnection {
   }
 
   private async emit(event: DiscordGatewayEvent): Promise<void> {
-    await Promise.all([...this.listeners].map(async (listener) => listener(event)));
+    await Promise.all(
+      [...this.listeners].map(async (listener) => listener(event)),
+    );
   }
 }
 
@@ -2384,22 +2571,26 @@ function isDiscordThreadConversation(
   }
 
   return (
-    opaque.channelType === 10 ||
-    opaque.channelType === 11 ||
-    opaque.channelType === 12
+    opaque.channelType === 10
+    || opaque.channelType === 11
+    || opaque.channelType === 12
   );
 }
 
 function sanitizeDiscordThreadName(title: string): string {
   const normalized = title.replace(/\s+/g, " ").trim();
-  return Array.from(normalized || "PwrAgent thread").slice(0, 100).join("");
+  return Array.from(normalized || "PwrAgent thread")
+    .slice(0, 100)
+    .join("");
 }
 
-function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | undefined {
-  return intent.kind === "thread_picker" ||
-    intent.kind === "project_picker" ||
-    intent.kind === "single_select" ||
-    intent.kind === "confirmation"
+function browseSessionIdForIntent(
+  intent: MessagingSurfaceIntent,
+): string | undefined {
+  return intent.kind === "thread_picker"
+    || intent.kind === "project_picker"
+    || intent.kind === "single_select"
+    || intent.kind === "confirmation"
     ? intent.browseSessionId
     : undefined;
 }
@@ -2414,7 +2605,9 @@ function discordContactsFromIds(
   ids: readonly string[],
   previous: readonly { id: string; displayName: string }[] | undefined,
 ): { id: string; displayName: string }[] {
-  const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
+  const previousById = new Map(
+    (previous ?? []).map((contact) => [contact.id, contact]),
+  );
   return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 
@@ -2455,8 +2648,8 @@ function errorMessage(error: unknown): string {
 
 function retryAfterMsFromError(error: unknown): number | undefined {
   const retryAfterMs =
-    readNumberProperty(error, "retryAfter") ??
-    readNumberProperty(error, "retryAfterMs");
+    readNumberProperty(error, "retryAfter")
+    ?? readNumberProperty(error, "retryAfterMs");
   if (retryAfterMs !== undefined) {
     return Math.ceil(retryAfterMs);
   }
@@ -2464,7 +2657,8 @@ function retryAfterMsFromError(error: unknown): number | undefined {
   if (retryAfterSeconds !== undefined) {
     return Math.ceil(retryAfterSeconds * 1000);
   }
-  const status = readNumberProperty(error, "status") ?? readNumberProperty(error, "code");
+  const status =
+    readNumberProperty(error, "status") ?? readNumberProperty(error, "code");
   return status === 429 ? 1_000 : undefined;
 }
 

@@ -36,10 +36,12 @@ describe("transcript disclosure chevron placement", () => {
         entries={[]}
         skills={[]}
         onToggle={vi.fn()}
-      />
+      />,
     );
 
-    const toggle = container.querySelector(".transcript-work-phase-group__toggle");
+    const toggle = container.querySelector(
+      ".transcript-work-phase-group__toggle",
+    );
     expect(toggle).not.toBeNull();
 
     const children = [...(toggle as HTMLElement).children];
@@ -48,6 +50,8 @@ describe("transcript disclosure chevron placement", () => {
     // Migrated off the literal "v"/"^" text glyph to a CSS border chevron,
     // so the element carries no text of its own.
     expect(children[0]?.textContent).toBe("");
-    expect((toggle as HTMLElement).textContent).toContain("3 previous messages");
+    expect((toggle as HTMLElement).textContent).toContain(
+      "3 previous messages",
+    );
   });
 });

@@ -125,12 +125,9 @@ describe("GrokRolloutStore", () => {
       await fs.mkdir(threadDir, { recursive: true });
       await fs.writeFile(
         threadTomlPath,
-        [
-          'thread_id = "thread-1"',
-          "created_at = 1",
-          "updated_at = 2",
-          "",
-        ].join("\n"),
+        ['thread_id = "thread-1"', "created_at = 1", "updated_at = 2", ""].join(
+          "\n",
+        ),
       );
       await fs.writeFile(rolloutPath, "{not-json}\n");
 
@@ -200,19 +197,25 @@ describe("GrokRolloutStore", () => {
         model: "grok-4.20-non-reasoning",
       });
       state.setThreadName("thread-archive", "Archive me");
-      state.appendInput("thread-archive", [{ type: "text", text: "Keep history" }]);
+      state.appendInput("thread-archive", [
+        { type: "text", text: "Keep history" },
+      ]);
       state.setPreviousResponseId("thread-archive", "resp_archive");
 
       state.archiveThread("thread-archive");
 
+      expect(await exists(path.join(temp.path, "threads/thread-archive"))).toBe(
+        false,
+      );
       expect(
-        await exists(path.join(temp.path, "threads/thread-archive")),
-      ).toBe(false);
-      expect(
-        await exists(path.join(temp.path, "archived_threads/thread-archive/thread.toml")),
+        await exists(
+          path.join(temp.path, "archived_threads/thread-archive/thread.toml"),
+        ),
       ).toBe(true);
       expect(
-        await exists(path.join(temp.path, "archived_threads/thread-archive/rollout.jsonl")),
+        await exists(
+          path.join(temp.path, "archived_threads/thread-archive/rollout.jsonl"),
+        ),
       ).toBe(true);
 
       const archived = new AppServerSessionState({
@@ -225,7 +228,9 @@ describe("GrokRolloutStore", () => {
           title: "Archive me",
         },
       ]);
-      expect(archived.getPreviousResponseId("thread-archive")).toBe("resp_archive");
+      expect(archived.getPreviousResponseId("thread-archive")).toBe(
+        "resp_archive",
+      );
 
       archived.unarchiveThread("thread-archive");
 
@@ -233,7 +238,9 @@ describe("GrokRolloutStore", () => {
         await exists(path.join(temp.path, "archived_threads/thread-archive")),
       ).toBe(false);
       expect(
-        await exists(path.join(temp.path, "threads/thread-archive/thread.toml")),
+        await exists(
+          path.join(temp.path, "threads/thread-archive/thread.toml"),
+        ),
       ).toBe(true);
       const restored = new AppServerSessionState({
         store: new GrokRolloutStore(temp.path),
@@ -244,7 +251,9 @@ describe("GrokRolloutStore", () => {
           title: "Archive me",
         },
       ]);
-      expect(restored.readThread("thread-archive").lastUserMessage).toBe("Keep history");
+      expect(restored.readThread("thread-archive").lastUserMessage).toBe(
+        "Keep history",
+      );
     } finally {
       await temp.cleanup();
     }
@@ -282,7 +291,9 @@ describe("GrokRolloutStore", () => {
 
       expect(await exists(threadDir)).toBe(false);
       expect(
-        await exists(path.join(temp.path, "archived_threads/thread-old-archive")),
+        await exists(
+          path.join(temp.path, "archived_threads/thread-old-archive"),
+        ),
       ).toBe(true);
       expect(state.listThreads()).toEqual([]);
       expect(state.listThreads({ archived: true })).toMatchObject([

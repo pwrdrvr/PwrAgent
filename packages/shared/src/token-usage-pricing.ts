@@ -24,7 +24,13 @@ export type ThreadUsageSettingsSnapshot = {
   observedAt?: number;
   reasoningEffort?: string;
   serviceTier?: string;
-  settingsSource?: "event" | "turn-context" | "observed-settings" | "thread-overlay" | "monitor" | "unknown";
+  settingsSource?:
+    | "event"
+    | "turn-context"
+    | "observed-settings"
+    | "thread-overlay"
+    | "monitor"
+    | "unknown";
   settingsConfidence?: "exact" | "observed" | "fallback" | "unknown";
 };
 
@@ -387,9 +393,9 @@ export function estimateOpenAiTokenUsageCost(params: {
   });
   const entry = OPENAI_PRICING_CATALOG.find(
     (candidate) =>
-      candidate.model === model &&
-      candidate.serviceTier === serviceTier &&
-      pricingEntryAppliesAt(candidate, params.at),
+      candidate.model === model
+      && candidate.serviceTier === serviceTier
+      && pricingEntryAppliesAt(candidate, params.at),
   );
   if (!entry) {
     return undefined;
@@ -397,9 +403,9 @@ export function estimateOpenAiTokenUsageCost(params: {
 
   const standardEntry = OPENAI_PRICING_CATALOG.find(
     (candidate) =>
-      candidate.model === model &&
-      candidate.serviceTier === "standard" &&
-      pricingEntryAppliesAt(candidate, params.at),
+      candidate.model === model
+      && candidate.serviceTier === "standard"
+      && pricingEntryAppliesAt(candidate, params.at),
   );
   const uncachedInputCostMicros = calculateTokenCostMicros(
     params.uncachedInputTokens,
@@ -481,9 +487,9 @@ export function estimateOpenAiCodexCreditUsage(params: {
   });
   const entry = OPENAI_CODEX_CREDITS_CATALOG.find(
     (candidate) =>
-      candidate.model === model &&
-      candidate.serviceTier === serviceTier &&
-      pricingEntryAppliesAt(candidate, params.at),
+      candidate.model === model
+      && candidate.serviceTier === serviceTier
+      && pricingEntryAppliesAt(candidate, params.at),
   );
   if (!entry) {
     return undefined;
@@ -618,9 +624,13 @@ function tokenUsageRateMultiplier(
   return Math.abs(multiplier - 1) < 0.001 ? undefined : multiplier;
 }
 
-function toPublicRate(entry: PricingCatalogEntry): TokenUsagePricingCatalogRate {
+function toPublicRate(
+  entry: PricingCatalogEntry,
+): TokenUsagePricingCatalogRate {
   return {
-    cachedInputMicrosPerMillion: dollarsToMicros(entry.cachedInputUsdPerMillion),
+    cachedInputMicrosPerMillion: dollarsToMicros(
+      entry.cachedInputUsdPerMillion,
+    ),
     cachedInputUsdPerMillion: entry.cachedInputUsdPerMillion,
     catalogId: entry.catalogId,
     catalogVersion: entry.catalogVersion,
@@ -648,7 +658,10 @@ function pricingEntryAppliesAt(
   if (at === undefined) {
     return entry.effectiveTo === undefined;
   }
-  return entry.effectiveFrom <= at && (entry.effectiveTo === undefined || entry.effectiveTo > at);
+  return (
+    entry.effectiveFrom <= at
+    && (entry.effectiveTo === undefined || entry.effectiveTo > at)
+  );
 }
 
 function buildPricingRateId(entry: PricingCatalogEntry): string {
@@ -670,14 +683,20 @@ function buildCodexCreditRateId(entry: CodexCreditsCatalogEntry): string {
   ].join(":");
 }
 
-function calculateTokenCostMicros(tokens: number, usdPerMillion: number): number {
+function calculateTokenCostMicros(
+  tokens: number,
+  usdPerMillion: number,
+): number {
   if (tokens <= 0 || usdPerMillion <= 0) {
     return 0;
   }
   return Math.round((tokens * dollarsToMicros(usdPerMillion)) / 1_000_000);
 }
 
-function calculateTokenCreditMicros(tokens: number, creditsPerMillion: number): number {
+function calculateTokenCreditMicros(
+  tokens: number,
+  creditsPerMillion: number,
+): number {
   if (tokens <= 0 || creditsPerMillion <= 0) {
     return 0;
   }

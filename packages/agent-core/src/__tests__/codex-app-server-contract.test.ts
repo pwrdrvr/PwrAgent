@@ -53,26 +53,29 @@ describe("Codex app-server contract", () => {
       cwd: "/repo/workspace",
     });
 
-    await expect(server.request("thread/archive", { threadId: "thread-1" }))
-      .resolves.toMatchObject({
-        threadId: "thread-1",
-        archived: true,
-        threadName: undefined,
-        firstUserMessage: undefined,
-        cwd: "/repo/workspace",
-        model: undefined,
-        modelProvider: "xai",
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
-        serviceTier: undefined,
-        reasoningEffort: undefined,
-        createdAt: expect.any(Number),
-        updatedAt: expect.any(Number),
-      });
+    await expect(
+      server.request("thread/archive", { threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      threadId: "thread-1",
+      archived: true,
+      threadName: undefined,
+      firstUserMessage: undefined,
+      cwd: "/repo/workspace",
+      model: undefined,
+      modelProvider: "xai",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      serviceTier: undefined,
+      reasoningEffort: undefined,
+      createdAt: expect.any(Number),
+      updatedAt: expect.any(Number),
+    });
     await expect(server.request("thread/list", {})).resolves.toEqual({
       threads: [],
     });
-    await expect(server.request("thread/list", { archived: true })).resolves.toEqual({
+    await expect(
+      server.request("thread/list", { archived: true }),
+    ).resolves.toEqual({
       threads: [
         expect.objectContaining({
           threadId: "thread-1",
@@ -81,7 +84,7 @@ describe("Codex app-server contract", () => {
       ],
     });
     await expect(
-      server.request("thread/read", { threadId: "thread-1" })
+      server.request("thread/read", { threadId: "thread-1" }),
     ).resolves.toMatchObject({
       threadId: "thread-1",
       thread: {
@@ -89,11 +92,12 @@ describe("Codex app-server contract", () => {
         cwd: "/repo/workspace",
       },
     });
-    await expect(server.request("thread/unarchive", { threadId: "thread-1" }))
-      .resolves.toMatchObject({
-        threadId: "thread-1",
-        archived: undefined,
-      });
+    await expect(
+      server.request("thread/unarchive", { threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      threadId: "thread-1",
+      archived: undefined,
+    });
     await expect(server.request("thread/list", {})).resolves.toEqual({
       threads: [
         expect.objectContaining({
@@ -300,7 +304,7 @@ describe("Codex app-server contract", () => {
       server.request("thread/read", {
         threadId: "thread-1",
         includeTurns: false,
-      })
+      }),
     ).resolves.toMatchObject({
       threadId: "thread-1",
       thread: {
@@ -338,7 +342,7 @@ describe("Codex app-server contract", () => {
         includeTurns: true,
         before: latestPage.pagination.previousCursor,
         limit: 2,
-      })
+      }),
     ).resolves.toMatchObject({
       messages: [
         { role: "user", text: "First ask" },

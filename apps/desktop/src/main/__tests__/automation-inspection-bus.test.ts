@@ -353,10 +353,7 @@ describe("AutomationInspectionBus", () => {
   });
 });
 
-function createAutomation(params: {
-  id: string;
-  threadId?: string;
-}) {
+function createAutomation(params: { id: string; threadId?: string }) {
   return store.createAutomation({
     id: params.id,
     backend: "codex",

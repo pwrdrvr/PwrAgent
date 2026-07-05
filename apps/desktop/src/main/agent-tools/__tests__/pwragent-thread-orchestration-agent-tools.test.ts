@@ -59,7 +59,13 @@ describe("pwragent thread orchestration agent tools", () => {
               enum: ["none", "subthread"],
             }),
             workspaceMode: expect.objectContaining({
-              enum: ["same", "same_workspace", "project_local", "new_worktree", "none"],
+              enum: [
+                "same",
+                "same_workspace",
+                "project_local",
+                "new_worktree",
+                "none",
+              ],
             }),
             cwd: expect.objectContaining({
               description: expect.stringContaining("another project"),
@@ -85,7 +91,9 @@ describe("pwragent thread orchestration agent tools", () => {
               enum: ["move-branch", "detached-changes", "new-branch"],
             }),
             sourcePath: expect.objectContaining({
-              description: expect.stringContaining("multiple linked directories"),
+              description: expect.stringContaining(
+                "multiple linked directories",
+              ),
             }),
           }),
         }),

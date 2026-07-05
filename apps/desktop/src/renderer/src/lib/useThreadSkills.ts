@@ -34,14 +34,16 @@ export function useThreadSkills(params: {
   const { desktopApi, launchpad, thread } = params;
   const requestVersionsRef = useRef<Record<string, number>>({});
   const stateByThreadKeyRef = useRef<Record<string, SkillState>>({});
-  const [stateByThreadKey, setStateByThreadKey] = useState<Record<string, SkillState>>({});
+  const [stateByThreadKey, setStateByThreadKey] = useState<
+    Record<string, SkillState>
+  >({});
   const skillTarget = useMemo(() => {
     if (thread) {
       const cwds = [
         ...new Set(
           thread.linkedDirectories
             .map((directory) => directory.worktreePath ?? directory.path)
-            .filter(Boolean)
+            .filter(Boolean),
         ),
       ];
 
@@ -54,7 +56,9 @@ export function useThreadSkills(params: {
     }
 
     if (launchpad?.backend === "codex") {
-      const cwds = launchpad.directoryPath?.trim() ? [launchpad.directoryPath.trim()] : [];
+      const cwds = launchpad.directoryPath?.trim()
+        ? [launchpad.directoryPath.trim()]
+        : [];
       return {
         backend: launchpad.backend,
         cwds,
@@ -183,9 +187,9 @@ export function useThreadSkills(params: {
       }
 
       if (
-        !threadId ||
-        event.notification.method !== "thread/availableCommands/updated" ||
-        event.notification.params.threadId !== threadId
+        !threadId
+        || event.notification.method !== "thread/availableCommands/updated"
+        || event.notification.params.threadId !== threadId
       ) {
         return;
       }
@@ -193,9 +197,11 @@ export function useThreadSkills(params: {
       const commands = Array.isArray(
         (event.notification.params as { commands?: unknown }).commands,
       )
-        ? ((event.notification.params as {
-            commands: AppServerAvailableCommandSummary[];
-          }).commands)
+        ? (
+            event.notification.params as {
+              commands: AppServerAvailableCommandSummary[];
+            }
+          ).commands
         : [];
       requestVersionsRef.current[key] =
         (requestVersionsRef.current[key] ?? 0) + 1;
@@ -234,7 +240,7 @@ export function useThreadSkills(params: {
     }
 
     return [...deduped.values()].sort((left, right) =>
-      left.name.localeCompare(right.name)
+      left.name.localeCompare(right.name),
     );
   }, [state?.response?.data]);
 
@@ -251,7 +257,7 @@ export function useThreadSkills(params: {
     }
 
     return [...deduped.values()].sort((left, right) =>
-      left.name.localeCompare(right.name)
+      left.name.localeCompare(right.name),
     );
   }, [skillTarget?.backend, state?.response?.data]);
 

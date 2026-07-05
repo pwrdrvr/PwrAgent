@@ -28,7 +28,9 @@ describe("backend identity helpers", () => {
   it("builds ACP backend ids from registry ids", () => {
     expect(buildAcpBackendId("gemini")).toBe("acp:gemini");
     expect(buildAcpBackendId(" open-code ")).toBe("acp:open-code");
-    expect(() => buildAcpBackendId("../bad")).toThrow("Invalid ACP registry id");
+    expect(() => buildAcpBackendId("../bad")).toThrow(
+      "Invalid ACP registry id",
+    );
   });
 
   it("keeps legacy built-in thread keys stable", () => {

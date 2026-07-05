@@ -190,15 +190,18 @@ function CodexAuthProfileCreateDialog(props: {
   const authenticatedRef = useRef(false);
   const normalizedName = normalizeProfileName(profileName);
   const hasInput = profileName.trim().length > 0;
-  const existingNames = new Set(props.existingProfiles.map((profile) => profile.name));
-  const nameExists = hasInput && Boolean(normalizedName) && existingNames.has(normalizedName);
+  const existingNames = new Set(
+    props.existingProfiles.map((profile) => profile.name),
+  );
+  const nameExists =
+    hasInput && Boolean(normalizedName) && existingNames.has(normalizedName);
   const canSubmit = Boolean(
     props.desktopApi?.createCodexAuthProfile
-      && props.desktopApi.startCodexAuthProfileLogin
-      && props.desktopApi.checkCodexAuthProfileStatus
-      && hasInput
-      && normalizedName
-      && !nameExists,
+    && props.desktopApi.startCodexAuthProfileLogin
+    && props.desktopApi.checkCodexAuthProfileStatus
+    && hasInput
+    && normalizedName
+    && !nameExists,
   );
 
   const startLogin = async () => {
@@ -208,7 +211,9 @@ function CodexAuthProfileCreateDialog(props: {
     setLoginUrl(undefined);
     setStatusDetail(undefined);
     try {
-      await props.desktopApi!.createCodexAuthProfile!({ profile: normalizedName });
+      await props.desktopApi!.createCodexAuthProfile!({
+        profile: normalizedName,
+      });
       const login = await props.desktopApi!.startCodexAuthProfileLogin!({
         profile: normalizedName,
       });
@@ -225,7 +230,9 @@ function CodexAuthProfileCreateDialog(props: {
       setStep("waiting");
     } catch (nextError) {
       if (!authenticatedRef.current) {
-        setError(nextError instanceof Error ? nextError.message : String(nextError));
+        setError(
+          nextError instanceof Error ? nextError.message : String(nextError),
+        );
       }
     } finally {
       setBusy(false);
@@ -268,7 +275,9 @@ function CodexAuthProfileCreateDialog(props: {
       }
     } catch (nextError) {
       if (!options?.auto) {
-        setError(nextError instanceof Error ? nextError.message : String(nextError));
+        setError(
+          nextError instanceof Error ? nextError.message : String(nextError),
+        );
       }
     } finally {
       setBusy(false);
@@ -297,7 +306,9 @@ function CodexAuthProfileCreateDialog(props: {
         <h2 id="create-codex-profile-heading">Create Codex profile</h2>
         {step === "form" ? (
           <>
-            <p>Name the Codex auth profile to create under ~/.codex/profiles.</p>
+            <p>
+              Name the Codex auth profile to create under ~/.codex/profiles.
+            </p>
             <input
               aria-label="Codex profile name"
               className="settings-input"
@@ -316,7 +327,9 @@ function CodexAuthProfileCreateDialog(props: {
               </p>
             ) : null}
             {nameExists ? (
-              <p className="settings-row__error">That profile already exists.</p>
+              <p className="settings-row__error">
+                That profile already exists.
+              </p>
             ) : null}
           </>
         ) : step === "authenticated" ? (
@@ -326,9 +339,8 @@ function CodexAuthProfileCreateDialog(props: {
         ) : (
           <>
             <p>
-              A browser window should open for{" "}
-              <strong>{normalizedName}</strong>. Complete the Codex login, then
-              check status here.
+              A browser window should open for <strong>{normalizedName}</strong>
+              . Complete the Codex login, then check status here.
             </p>
             {loginUrl ? (
               <p className="settings-codex-profile-dialog__status">
@@ -429,8 +441,8 @@ function CodexAuthProfileLoginDialog(props: {
   const authenticatedRef = useRef(false);
   const canLogin = Boolean(
     props.desktopApi?.startCodexAuthProfileLogin
-      && props.desktopApi.checkCodexAuthProfileStatus
-      && props.profile,
+    && props.desktopApi.checkCodexAuthProfileStatus
+    && props.profile,
   );
 
   const startLogin = async () => {
@@ -454,7 +466,9 @@ function CodexAuthProfileLoginDialog(props: {
       setStarted(true);
     } catch (nextError) {
       if (!authenticatedRef.current) {
-        setError(nextError instanceof Error ? nextError.message : String(nextError));
+        setError(
+          nextError instanceof Error ? nextError.message : String(nextError),
+        );
       }
     } finally {
       setBusy(false);
@@ -502,7 +516,9 @@ function CodexAuthProfileLoginDialog(props: {
       }
     } catch (nextError) {
       if (!options?.auto) {
-        setError(nextError instanceof Error ? nextError.message : String(nextError));
+        setError(
+          nextError instanceof Error ? nextError.message : String(nextError),
+        );
       }
     } finally {
       setBusy(false);
@@ -536,9 +552,11 @@ function CodexAuthProfileLoginDialog(props: {
         ) : (
           <>
             <p>
-              {started ? "A browser window should open" : "Starting Codex login"} for{" "}
-              <strong>{props.displayName}</strong>. Complete the Codex login, then
-              check status here.
+              {started
+                ? "A browser window should open"
+                : "Starting Codex login"}{" "}
+              for <strong>{props.displayName}</strong>. Complete the Codex
+              login, then check status here.
             </p>
             {loginUrl ? (
               <p className="settings-codex-profile-dialog__status">

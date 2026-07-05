@@ -15,7 +15,9 @@ import {
 
 type FakeProvider = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
-  start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
+  start(
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void>;
 };
 
 describe("messaging interface package", () => {
@@ -23,7 +25,10 @@ describe("messaging interface package", () => {
     const provider: FakeProvider = {
       async deliver(intent) {
         return {
-          channel: intent.kind === "dismiss" ? intent.targetSurface.channel : "telegram",
+          channel:
+            intent.kind === "dismiss"
+              ? intent.targetSurface.channel
+              : "telegram",
           deliveredAt: 1000,
           outcome: "presented",
         };
@@ -84,7 +89,9 @@ describe("messaging interface package", () => {
     const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
 
     expect(extractMessagingPairingToken(`pair ${token}`)).toBe(token);
-    expect(extractMessagingPairingToken(`@PwrAgentBot pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`@PwrAgentBot pair ${token}`)).toBe(
+      token,
+    );
     expect(extractMessagingPairingToken(`please pair ${token}`)).toBe(token);
     expect(extractMessagingPairingToken(`pwragent_pair ${token}`)).toBe(token);
     expect(extractMessagingPairingToken(`/pair ${token}`)).toBe(token);
@@ -134,9 +141,15 @@ describe("messaging interface package", () => {
     const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
     const largePayload = "x".repeat(1_000_000);
 
-    expect(extractMessagingPairingToken(`pair ${token} ${largePayload}`)).toBe(token);
-    expect(extractMessagingPairingToken(`${largePayload} pair ${token}`)).toBeUndefined();
-    expect(extractMessagingPairingToken(`pair ${largePayload}`)).toBeUndefined();
+    expect(extractMessagingPairingToken(`pair ${token} ${largePayload}`)).toBe(
+      token,
+    );
+    expect(
+      extractMessagingPairingToken(`${largePayload} pair ${token}`),
+    ).toBeUndefined();
+    expect(
+      extractMessagingPairingToken(`pair ${largePayload}`),
+    ).toBeUndefined();
   });
 
   it("normalizes legacy questionnaire intents before deriving actions", () => {
@@ -226,7 +239,8 @@ describe("messaging interface package", () => {
       seed = (seed * 1_103_515_245 + 12_345) & 0x7fffffff;
       return seed;
     };
-    const alphabet = "pair/PWRAGENT_  \t\r\n'\";--0123456789ABCDEFGHJKLMNPQRSTUVWXYZxyz";
+    const alphabet =
+      "pair/PWRAGENT_  \t\r\n'\";--0123456789ABCDEFGHJKLMNPQRSTUVWXYZxyz";
 
     for (let caseIndex = 0; caseIndex < 500; caseIndex += 1) {
       const length = next() % 2048;

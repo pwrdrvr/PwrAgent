@@ -8,10 +8,12 @@ export type RuntimeMessagingOverride = {
   reason?: string;
 };
 
-export function resolveRuntimeMessagingOverride(options: {
-  argv?: readonly string[];
-  env?: NodeJS.ProcessEnv;
-} = {}): RuntimeMessagingOverride {
+export function resolveRuntimeMessagingOverride(
+  options: {
+    argv?: readonly string[];
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): RuntimeMessagingOverride {
   return resolveRuntimeDisableOverride({
     arg: DISABLE_MESSAGING_ARG,
     envKey: DISABLE_MESSAGING_ENV,
@@ -25,10 +27,12 @@ export type RuntimeAutomationsOverride = {
   reason?: string;
 };
 
-export function resolveRuntimeAutomationsOverride(options: {
-  argv?: readonly string[];
-  env?: NodeJS.ProcessEnv;
-} = {}): RuntimeAutomationsOverride {
+export function resolveRuntimeAutomationsOverride(
+  options: {
+    argv?: readonly string[];
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): RuntimeAutomationsOverride {
   return resolveRuntimeDisableOverride({
     arg: DISABLE_AUTOMATIONS_ARG,
     envKey: DISABLE_AUTOMATIONS_ENV,

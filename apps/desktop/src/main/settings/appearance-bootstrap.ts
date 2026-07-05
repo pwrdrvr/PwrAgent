@@ -112,7 +112,8 @@ export function readBootstrapAppearance(
   try {
     const config = readDesktopSettingsConfig(configPath);
     return {
-      theme: config.general?.appearance?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
+      theme:
+        config.general?.appearance?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
       density:
         config.general?.appearance?.density
         ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
@@ -142,13 +143,17 @@ export function parseBootstrapAppearanceArg(
     try {
       const raw = JSON.parse(arg.slice(BOOTSTRAP_APPEARANCE_ARG_PREFIX.length));
       const theme =
-        raw && typeof raw.theme === "string"
-          && (raw.theme === "system" || raw.theme === "dark" || raw.theme === "light")
+        raw
+        && typeof raw.theme === "string"
+        && (raw.theme === "system"
+          || raw.theme === "dark"
+          || raw.theme === "light")
           ? (raw.theme as DesktopAppearanceTheme)
           : DESKTOP_APPEARANCE_THEME_DEFAULT;
       const density =
-        raw && typeof raw.density === "string"
-          && (raw.density === "mission-control" || raw.density === "compact")
+        raw
+        && typeof raw.density === "string"
+        && (raw.density === "mission-control" || raw.density === "compact")
           ? (raw.density as DesktopAppearanceDensity)
           : DESKTOP_APPEARANCE_DENSITY_DEFAULT;
       return { theme, density };

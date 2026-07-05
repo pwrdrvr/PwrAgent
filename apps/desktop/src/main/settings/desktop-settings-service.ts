@@ -193,7 +193,7 @@ type DesktopSettingsServiceOptions = {
   secretStore: DesktopSecretStore;
   now?: () => number;
   resolveCodexShellEnv?: (
-    env: NodeJS.ProcessEnv
+    env: NodeJS.ProcessEnv,
   ) => NodeJS.ProcessEnv | undefined;
   /**
    * Side-effect hook invoked from `writeConfigPatch` whenever a write
@@ -257,12 +257,9 @@ function clampInteger(value: number, maxValue: number): number {
 }
 
 function defaultLoginShellCandidates(env: NodeJS.ProcessEnv): string[] {
-  return [
-    env.SHELL?.trim(),
-    "/bin/zsh",
-    "/bin/bash",
-    "/bin/sh",
-  ].filter((shell): shell is string => Boolean(shell));
+  return [env.SHELL?.trim(), "/bin/zsh", "/bin/bash", "/bin/sh"].filter(
+    (shell): shell is string => Boolean(shell),
+  );
 }
 
 function extractMarkedEnv(output: string): NodeJS.ProcessEnv | undefined {
@@ -374,8 +371,8 @@ export class DesktopSettingsService {
     this.env = options.env ?? process.env;
     this.argv = options.argv ?? process.argv;
     this.configPath =
-      options.configPath ??
-      resolveDesktopConfigPath({ argv: this.argv, env: this.env });
+      options.configPath
+      ?? resolveDesktopConfigPath({ argv: this.argv, env: this.env });
     this.now = options.now ?? Date.now;
     this.startupCodexHome = resolveCodexHomeForProfile(
       this.readConfig().config.models?.codex?.profile,
@@ -494,9 +491,10 @@ export class DesktopSettingsService {
     const slackTeamAuthorizationMode = this.resolveSlackTeamAuthorizationMode(
       config.messaging?.slack?.teamAuthorizationMode,
     );
-    const slackChannelAuthorizationMode = this.resolveSlackChannelAuthorizationMode(
-      config.messaging?.slack?.channelAuthorizationMode,
-    );
+    const slackChannelAuthorizationMode =
+      this.resolveSlackChannelAuthorizationMode(
+        config.messaging?.slack?.channelAuthorizationMode,
+      );
     const slackDmAccessMode = this.resolveSlackDmAccessMode(
       config.messaging?.slack?.dmAccessMode,
     );
@@ -543,9 +541,10 @@ export class DesktopSettingsService {
         hotCpuProfilingTriggerMode: this.resolveHotCpuProfileTriggerMode(
           config.general?.hotCpuProfilingTriggerMode,
         ),
-        hotCpuProfilingSlowburnThresholdPercent: this.resolveHotCpuSlowburnThresholdPercent(
-          config.general?.hotCpuProfilingSlowburnThresholdPercent,
-        ),
+        hotCpuProfilingSlowburnThresholdPercent:
+          this.resolveHotCpuSlowburnThresholdPercent(
+            config.general?.hotCpuProfilingSlowburnThresholdPercent,
+          ),
         hotCpuProfilingCaptureHeapSnapshot: this.resolveConfigBoolean(
           config.general?.hotCpuProfilingCaptureHeapSnapshot,
           false,
@@ -558,9 +557,7 @@ export class DesktopSettingsService {
           false,
         ),
         appearance: {
-          theme: this.resolveAppearanceTheme(
-            config.general?.appearance?.theme,
-          ),
+          theme: this.resolveAppearanceTheme(config.general?.appearance?.theme),
           density: this.resolveAppearanceDensity(
             config.general?.appearance?.density,
           ),
@@ -650,15 +647,18 @@ export class DesktopSettingsService {
         ),
         activeContextTab: {
           value: config.ui?.activeContextTab ?? "info",
-          source: config.ui?.activeContextTab === undefined ? "default" : "config",
+          source:
+            config.ui?.activeContextTab === undefined ? "default" : "config",
         },
         editedFilesDock: {
           value: config.ui?.editedFilesDock ?? "above",
-          source: config.ui?.editedFilesDock === undefined ? "default" : "config",
+          source:
+            config.ui?.editedFilesDock === undefined ? "default" : "config",
         },
         actionRunsDock: {
           value: config.ui?.actionRunsDock ?? "above",
-          source: config.ui?.actionRunsDock === undefined ? "default" : "config",
+          source:
+            config.ui?.actionRunsDock === undefined ? "default" : "config",
         },
       },
       messaging: {
@@ -931,7 +931,10 @@ export class DesktopSettingsService {
       },
       models: {
         codex: {
-          path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
+          path: this.resolveString(
+            config.models?.codex?.path,
+            CODEX_COMMAND_ENV,
+          ),
           profile: this.resolveConfigString(config.models?.codex?.profile),
           discovery: codexDiscovery,
           profiles: codexProfiles,
@@ -975,7 +978,10 @@ export class DesktopSettingsService {
         preferredEditorId,
         preferredTerminalId,
         gh: {
-          path: this.resolveString(config.applications?.gh?.path, GH_COMMAND_ENV),
+          path: this.resolveString(
+            config.applications?.gh?.path,
+            GH_COMMAND_ENV,
+          ),
           discovery: ghDiscovery,
         },
         git: {
@@ -1037,8 +1043,9 @@ export class DesktopSettingsService {
   }
 
   resolveUpdateChannel(): DesktopUpdateChannel {
-    return this.resolveUpdateChannelValue(this.readConfig().config.updates?.channel)
-      .value;
+    return this.resolveUpdateChannelValue(
+      this.readConfig().config.updates?.channel,
+    ).value;
   }
 
   resolveDeveloperMode(): boolean {
@@ -1128,8 +1135,8 @@ export class DesktopSettingsService {
    * gate stays dormant until the wizard PR flips the constant.
    */
   resolveOnboardingCompleted(): boolean {
-    return this.resolveOnboarding(this.readConfig().config.onboarding)
-      .completed.value;
+    return this.resolveOnboarding(this.readConfig().config.onboarding).completed
+      .value;
   }
 
   /**
@@ -1235,7 +1242,10 @@ export class DesktopSettingsService {
   }
 
   resolveSlackSigningSecretSync(): string | undefined {
-    return this.resolveSecretSync("slackSigningSecret", SLACK_SIGNING_SECRET_ENV);
+    return this.resolveSecretSync(
+      "slackSigningSecret",
+      SLACK_SIGNING_SECRET_ENV,
+    );
   }
 
   resolveFeishuAppIdSync(): string | undefined {
@@ -1259,10 +1269,12 @@ export class DesktopSettingsService {
 
   resolveFeishuTenantUrlSync(): string | undefined {
     const config = this.readConfig().config.messaging?.feishu;
-    const tenantRegion = this.resolveFeishuTenantRegion(config?.tenantRegion).value;
+    const tenantRegion = this.resolveFeishuTenantRegion(
+      config?.tenantRegion,
+    ).value;
     const configTenantUrl =
-      config?.tenantUrl === FEISHU_DEFAULT_TENANT_URL ||
-        config?.tenantUrl === LARK_DEFAULT_TENANT_URL
+      config?.tenantUrl === FEISHU_DEFAULT_TENANT_URL
+      || config?.tenantUrl === LARK_DEFAULT_TENANT_URL
         ? undefined
         : config?.tenantUrl;
     return (
@@ -1322,31 +1334,32 @@ export class DesktopSettingsService {
     }
 
     const targetEnv = this.ensureBaseCodexSpawnEnv();
-    this.codexSpawnEnvHydrationPromise = resolveInteractiveLoginShellEnvAsync(this.env)
-      .then((shellEnv) => {
-        const logger = getMainLogger("pwragent:shell-environment");
-        if (!shellEnv || Object.keys(shellEnv).length === 0) {
-          logger.warn("login-shell-env-merge-empty", {
-            parentPathLength: this.env.PATH?.length ?? 0,
-            parentShell: this.env.SHELL,
-            shellCandidates: defaultLoginShellCandidates(this.env),
-          });
-          return targetEnv;
-        }
-
-        logger.info("login-shell-env-merged", {
-          keys: Object.keys(shellEnv).length,
+    this.codexSpawnEnvHydrationPromise = resolveInteractiveLoginShellEnvAsync(
+      this.env,
+    ).then((shellEnv) => {
+      const logger = getMainLogger("pwragent:shell-environment");
+      if (!shellEnv || Object.keys(shellEnv).length === 0) {
+        logger.warn("login-shell-env-merge-empty", {
           parentPathLength: this.env.PATH?.length ?? 0,
-          hydratedPathLength: shellEnv.PATH?.length ?? 0,
-          hadNvmDir: Boolean(shellEnv.NVM_DIR),
-          hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
+          parentShell: this.env.SHELL,
+          shellCandidates: defaultLoginShellCandidates(this.env),
         });
-        Object.assign(targetEnv, shellEnv);
-        if (this.startupCodexHome) {
-          targetEnv.CODEX_HOME = this.startupCodexHome;
-        }
         return targetEnv;
+      }
+
+      logger.info("login-shell-env-merged", {
+        keys: Object.keys(shellEnv).length,
+        parentPathLength: this.env.PATH?.length ?? 0,
+        hydratedPathLength: shellEnv.PATH?.length ?? 0,
+        hadNvmDir: Boolean(shellEnv.NVM_DIR),
+        hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
       });
+      Object.assign(targetEnv, shellEnv);
+      if (this.startupCodexHome) {
+        targetEnv.CODEX_HOME = this.startupCodexHome;
+      }
+      return targetEnv;
+    });
 
     return await this.codexSpawnEnvHydrationPromise;
   }
@@ -1364,29 +1377,28 @@ export class DesktopSettingsService {
     }
 
     const targetEnv = this.ensureBaseTerminalSpawnEnv();
-    this.terminalSpawnEnvHydrationPromise = resolveInteractiveLoginShellEnvAsync(
-      this.env,
-    ).then((shellEnv) => {
-      const logger = getMainLogger("pwragent:shell-environment");
-      if (!shellEnv || Object.keys(shellEnv).length === 0) {
-        logger.warn("terminal-login-shell-env-merge-empty", {
-          parentPathLength: this.env.PATH?.length ?? 0,
-          parentShell: this.env.SHELL,
-          shellCandidates: defaultLoginShellCandidates(this.env),
-        });
-        return targetEnv;
-      }
+    this.terminalSpawnEnvHydrationPromise =
+      resolveInteractiveLoginShellEnvAsync(this.env).then((shellEnv) => {
+        const logger = getMainLogger("pwragent:shell-environment");
+        if (!shellEnv || Object.keys(shellEnv).length === 0) {
+          logger.warn("terminal-login-shell-env-merge-empty", {
+            parentPathLength: this.env.PATH?.length ?? 0,
+            parentShell: this.env.SHELL,
+            shellCandidates: defaultLoginShellCandidates(this.env),
+          });
+          return targetEnv;
+        }
 
-      logger.info("terminal-login-shell-env-merged", {
-        keys: Object.keys(shellEnv).length,
-        parentPathLength: this.env.PATH?.length ?? 0,
-        hydratedPathLength: shellEnv.PATH?.length ?? 0,
-        hadNvmDir: Boolean(shellEnv.NVM_DIR),
-        hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
+        logger.info("terminal-login-shell-env-merged", {
+          keys: Object.keys(shellEnv).length,
+          parentPathLength: this.env.PATH?.length ?? 0,
+          hydratedPathLength: shellEnv.PATH?.length ?? 0,
+          hadNvmDir: Boolean(shellEnv.NVM_DIR),
+          hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
+        });
+        Object.assign(targetEnv, shellEnv);
+        return targetEnv;
       });
-      Object.assign(targetEnv, shellEnv);
-      return targetEnv;
-    });
 
     return await this.terminalSpawnEnvHydrationPromise;
   }
@@ -1431,7 +1443,9 @@ export class DesktopSettingsService {
   }
 
   private defaultDeveloperMode(): boolean {
-    return this.options.defaultDeveloperMode ?? this.env.NODE_ENV !== "production";
+    return (
+      this.options.defaultDeveloperMode ?? this.env.NODE_ENV !== "production"
+    );
   }
 
   private resolveComposer(
@@ -1572,17 +1586,18 @@ export class DesktopSettingsService {
     configValue: DesktopIntegratedTerminalWindowsShell | undefined,
   ): DesktopSettingsValue<DesktopIntegratedTerminalWindowsShell> {
     return {
-      value:
-        configValue ?? DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
+      value: configValue ?? DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }
 
   private resolveOnboarding(
-    configValue: {
-      completed?: boolean;
-      completedSource?: DesktopOnboardingCompletedSource;
-    } | undefined,
+    configValue:
+      | {
+          completed?: boolean;
+          completedSource?: DesktopOnboardingCompletedSource;
+        }
+      | undefined,
   ): DesktopOnboardingSnapshot {
     // Reader rule: missing `[onboarding]` table is the migration signal.
     // Pre-existing profiles have no marker, so they keep the historical
@@ -1599,11 +1614,12 @@ export class DesktopSettingsService {
         : { value: completedFromConfig, source: "config" };
     const completedSource: DesktopSettingsValue<
       DesktopOnboardingCompletedSource | ""
-    > = sourceFromConfig !== undefined
-      ? { value: sourceFromConfig, source: "config" }
-      : inferredMigrated
-        ? { value: "migrated", source: "default" }
-        : { value: "", source: "default" };
+    > =
+      sourceFromConfig !== undefined
+        ? { value: sourceFromConfig, source: "config" }
+        : inferredMigrated
+          ? { value: "migrated", source: "default" }
+          : { value: "", source: "default" };
     return { completed, completedSource };
   }
 
@@ -1782,7 +1798,9 @@ export class DesktopSettingsService {
       value: configValue ?? "feishu",
       source: configValue === undefined ? "default" : "config",
       ...(envValue !== undefined
-        ? { error: `Invalid Feishu tenant region for ${FEISHU_TENANT_REGION_ENV}` }
+        ? {
+            error: `Invalid Feishu tenant region for ${FEISHU_TENANT_REGION_ENV}`,
+          }
         : {}),
     };
   }
@@ -1803,7 +1821,9 @@ export class DesktopSettingsService {
       value: configValue ?? "persistent",
       source: configValue === undefined ? "default" : "config",
       ...(envValue !== undefined
-        ? { error: `Invalid Feishu / Lark inbound mode for ${FEISHU_INBOUND_MODE_ENV}` }
+        ? {
+            error: `Invalid Feishu / Lark inbound mode for ${FEISHU_INBOUND_MODE_ENV}`,
+          }
         : {}),
     };
   }
@@ -1821,9 +1841,9 @@ export class DesktopSettingsService {
       };
     }
     if (
-      configValue === FEISHU_DEFAULT_TENANT_URL ||
-      configValue === LARK_DEFAULT_TENANT_URL ||
-      configValue === feishuTenantUrlForRegion(tenantRegion)
+      configValue === FEISHU_DEFAULT_TENANT_URL
+      || configValue === LARK_DEFAULT_TENANT_URL
+      || configValue === feishuTenantUrlForRegion(tenantRegion)
     ) {
       return {
         value: "",
@@ -2029,7 +2049,8 @@ export class DesktopSettingsService {
 
     try {
       const configured = await this.options.secretStore.hasSecret(secret);
-      const accessError = this.options.secretStore.getSecretAccessError?.(secret);
+      const accessError =
+        this.options.secretStore.getSecretAccessError?.(secret);
       return {
         configured,
         source: configured ? "keychain" : "unset",
@@ -2058,5 +2079,7 @@ export class DesktopSettingsService {
 }
 
 function feishuTenantUrlForRegion(region: "feishu" | "lark"): string {
-  return region === "lark" ? LARK_DEFAULT_TENANT_URL : FEISHU_DEFAULT_TENANT_URL;
+  return region === "lark"
+    ? LARK_DEFAULT_TENANT_URL
+    : FEISHU_DEFAULT_TENANT_URL;
 }

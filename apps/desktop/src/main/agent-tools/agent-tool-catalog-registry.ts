@@ -44,9 +44,13 @@ export function resolveAgentToolCatalogs(params: {
   const automationDynamicTools = automationRouter.buildDynamicToolSpecs();
   const appRouter = buildPwrAgentAppToolRouter(params.appManagementHandler);
   const appDynamicTools = appRouter.buildDynamicToolSpecs();
-  const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler);
+  const threadRouter = buildPwrAgentThreadToolRouter(
+    params.threadInspectionHandler,
+  );
   const threadDynamicTools = threadRouter.buildDynamicToolSpecs();
-  const messagingRouter = buildPwrAgentMessagingToolRouter(params.messagingHandler);
+  const messagingRouter = buildPwrAgentMessagingToolRouter(
+    params.messagingHandler,
+  );
   const messagingDynamicTools = messagingRouter.buildDynamicToolSpecs();
   const threadOrchestrationRouter = buildPwrAgentThreadOrchestrationToolRouter(
     params.threadOrchestrationHandler,

@@ -39,15 +39,17 @@ export function buildMessagingAcpRuntimeModeSummary(params: {
     runtimeCapabilities?.configOptions?.filter(isRuntimeModeConfigOption) ?? [];
   const configChoices = modeConfigOptions.flatMap((option) => {
     const currentModeValue =
-      params.runtime?.currentModeId &&
-      option.values.some((value) => value.value === params.runtime?.currentModeId)
+      params.runtime?.currentModeId
+      && option.values.some(
+        (value) => value.value === params.runtime?.currentModeId,
+      )
         ? params.runtime.currentModeId
         : undefined;
     const currentValue =
-      currentModeValue ??
-      params.runtime?.configValues?.[option.id] ??
-      option.currentValue ??
-      defaultConfigOptionValue(option);
+      currentModeValue
+      ?? params.runtime?.configValues?.[option.id]
+      ?? option.currentValue
+      ?? defaultConfigOptionValue(option);
     return option.values.map((value) => ({
       description: value.description,
       label: formatMessagingAcpRuntimeModeLabel(value.label || value.value),
@@ -79,9 +81,9 @@ export function buildMessagingAcpRuntimeModeSummary(params: {
     })) ?? [];
   if (modeChoices.length > 0) {
     const currentValue =
-      params.runtime?.currentModeId ??
-      runtimeCapabilities?.modes?.currentModeId ??
-      defaultRuntimeModeValue(modeChoices);
+      params.runtime?.currentModeId
+      ?? runtimeCapabilities?.modes?.currentModeId
+      ?? defaultRuntimeModeValue(modeChoices);
     const choices = modeChoices.map((choice) => ({
       ...choice,
       selected: choice.value === currentValue,
@@ -107,8 +109,8 @@ export function resolveAcpRuntimeModeValue(
   runtime: BackendAcpSessionRuntimeState | undefined,
 ): string | undefined {
   return (
-    runtime?.currentModeId ??
-    (runtime?.configValues
+    runtime?.currentModeId
+    ?? (runtime?.configValues
       ? Object.entries(runtime.configValues).find(([key]) =>
           isFallbackRuntimeModeConfigKey(key),
         )?.[1]
@@ -137,7 +139,9 @@ export function messagingAcpRuntimeValueLooksPrivileged(
   return value === "yolo";
 }
 
-function isRuntimeModeConfigOption(option: BackendAcpRuntimeConfigOption): boolean {
+function isRuntimeModeConfigOption(
+  option: BackendAcpRuntimeConfigOption,
+): boolean {
   return option.category === "mode";
 }
 
@@ -145,8 +149,8 @@ function defaultRuntimeModeValue(
   choices: MessagingAcpRuntimeModeChoice[],
 ): string | undefined {
   return (
-    choices.find((choice) => choice.value === "default")?.value ??
-    choices[0]?.value
+    choices.find((choice) => choice.value === "default")?.value
+    ?? choices[0]?.value
   );
 }
 
@@ -154,8 +158,8 @@ function defaultConfigOptionValue(
   option: BackendAcpRuntimeConfigOption,
 ): string | undefined {
   return (
-    option.values.find((value) => value.value === "default")?.value ??
-    option.values[0]?.value
+    option.values.find((value) => value.value === "default")?.value
+    ?? option.values[0]?.value
   );
 }
 
@@ -167,8 +171,8 @@ function labelForRuntimeValue(
     return "Agent default";
   }
   return (
-    choices.find((choice) => choice.value === value)?.label ??
-    formatMessagingAcpRuntimeModeLabel(value)
+    choices.find((choice) => choice.value === value)?.label
+    ?? formatMessagingAcpRuntimeModeLabel(value)
   );
 }
 

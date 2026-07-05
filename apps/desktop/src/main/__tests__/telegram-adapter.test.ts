@@ -90,12 +90,16 @@ describe("TelegramAdapter", () => {
       warn: vi.fn(),
     };
     const catchHandler = vi.fn<(handler: (error: unknown) => void) => void>();
-    const onHandler = vi.fn<
-      (filter: string, handler: (context: unknown) => void | Promise<void>) => void
-    >();
-    const start = vi.fn<(options?: { allowed_updates?: string[] }) => Promise<void>>(
-      async () => {},
-    );
+    const onHandler =
+      vi.fn<
+        (
+          filter: string,
+          handler: (context: unknown) => void | Promise<void>,
+        ) => void
+      >();
+    const start = vi.fn<
+      (options?: { allowed_updates?: string[] }) => Promise<void>
+    >(async () => {});
     const stop = vi.fn<() => void>();
     const bot: TelegramBotLike = {
       api: api as unknown as TelegramBotApi,
@@ -218,7 +222,9 @@ describe("TelegramAdapter", () => {
   it("normalizes /resume and renders a thread picker with inline keyboard handles", async () => {
     const harness = await createControllerHarness();
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.adapter.handleUpdate({
       update_id: 1,
       message: {
@@ -275,7 +281,8 @@ describe("TelegramAdapter", () => {
     const request = harness.api.sendMessage.mock.calls.at(-1)?.[0];
     expect(request?.text).toContain("Choose a thread to resume");
     expect(request?.text).not.toContain("1. Thread one");
-    const callbackData = request?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data;
+    const callbackData =
+      request?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data;
     const secondCallbackData =
       request?.reply_markup?.inline_keyboard[1]?.[0]?.callback_data;
     expect(callbackData).toMatch(/^tg:/);
@@ -332,7 +339,8 @@ describe("TelegramAdapter", () => {
     });
 
     const request = harness.api.sendMessage.mock.calls.at(-1)?.[0];
-    const callbackData = request?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data;
+    const callbackData =
+      request?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data;
     await expect(
       harness.store.resolveCallbackHandle({
         actorId: "42",
@@ -355,7 +363,9 @@ describe("TelegramAdapter", () => {
 
   it("treats `@PwrAgentBot resume` as the /resume command", async () => {
     const harness = await createControllerHarness();
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.adapter.handleUpdate({
       update_id: 1,
       message: {
@@ -384,9 +394,7 @@ describe("TelegramAdapter", () => {
         chat_id: 777,
         reply_markup: {
           inline_keyboard: expect.arrayContaining([
-            [
-              expect.objectContaining({ text: "1. Thread one" }),
-            ],
+            [expect.objectContaining({ text: "1. Thread one" })],
           ]),
         },
       }),
@@ -578,7 +586,9 @@ describe("TelegramAdapter", () => {
   it("renders the generic help menu for unbound Telegram text without Markdown artifacts", async () => {
     const harness = await createControllerHarness();
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.adapter.handleUpdate({
       update_id: 1,
       message: {
@@ -1481,7 +1491,8 @@ describe("TelegramAdapter", () => {
       const api = createApi();
       const pendingTyping = deferred<boolean>();
       api.sendChatAction.mockImplementationOnce(
-        async (_request: TelegramSendChatActionRequest) => await pendingTyping.promise,
+        async (_request: TelegramSendChatActionRequest) =>
+          await pendingTyping.promise,
       );
       const adapter = new TelegramAdapter({
         api: api as unknown as TelegramBotApi,
@@ -1554,7 +1565,9 @@ describe("TelegramAdapter", () => {
         threadId: "thread-1",
         updatedAt: 1000,
       });
-      await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+      await harness.adapter.start((event) =>
+        harness.controller.handleInboundEvent(event),
+      );
       await harness.adapter.handleUpdate({
         update_id: 3,
         message: {
@@ -1624,7 +1637,9 @@ describe("TelegramAdapter", () => {
       const callsAfterCompletion = harness.api.sendChatAction.mock.calls.length;
       await vi.advanceTimersByTimeAsync(10_000);
 
-      expect(harness.api.sendChatAction).toHaveBeenCalledTimes(callsAfterCompletion);
+      expect(harness.api.sendChatAction).toHaveBeenCalledTimes(
+        callsAfterCompletion,
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -1731,18 +1746,21 @@ describe("TelegramAdapter", () => {
 
     await adapter.start(async () => {});
 
-    expect(logger.debug).toHaveBeenCalledWith("telegram startup token diagnostics", {
-      length: 18,
-      trimmedLength: 16,
-      hasColon: true,
-      hasSurroundingWhitespace: true,
-      hasAnyWhitespace: true,
-      botIdLength: 5,
-      botIdIsNumeric: true,
-      secretLength: 10,
-      secretPresent: true,
-      matchesExpectedShape: true,
-    });
+    expect(logger.debug).toHaveBeenCalledWith(
+      "telegram startup token diagnostics",
+      {
+        length: 18,
+        trimmedLength: 16,
+        hasColon: true,
+        hasSurroundingWhitespace: true,
+        hasAnyWhitespace: true,
+        botIdLength: 5,
+        botIdIsNumeric: true,
+        secretLength: 10,
+        secretPresent: true,
+        matchesExpectedShape: true,
+      },
+    );
     expect(JSON.stringify(logger.debug.mock.calls)).not.toContain("test-token");
   });
 
@@ -1752,13 +1770,16 @@ describe("TelegramAdapter", () => {
       debug: vi.fn(),
       warn: vi.fn(),
     };
-    const httpError = Object.assign(new Error("Network request for 'getWebhookInfo' failed!"), {
-      name: "HttpError",
-      error: {
-        status: 502,
-        statusText: "Bad Gateway",
+    const httpError = Object.assign(
+      new Error("Network request for 'getWebhookInfo' failed!"),
+      {
+        name: "HttpError",
+        error: {
+          status: 502,
+          statusText: "Bad Gateway",
+        },
       },
-    });
+    );
     api.getWebhookInfo.mockRejectedValueOnce(httpError);
     const adapter = new TelegramAdapter({
       api: api as unknown as TelegramBotApi,
@@ -2058,7 +2079,9 @@ describe("TelegramAdapter", () => {
   it("resolves callback handles and acknowledges callback queries", async () => {
     const harness = await createControllerHarness();
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.adapter.handleUpdate({
       update_id: 1,
       message: {
@@ -2075,8 +2098,8 @@ describe("TelegramAdapter", () => {
       },
     });
     const callbackData =
-      harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup?.inline_keyboard[0]?.[0]
-        ?.callback_data ?? "";
+      harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup
+        ?.inline_keyboard[0]?.[0]?.callback_data ?? "";
 
     await harness.adapter.handleUpdate({
       callback_query: {
@@ -2117,7 +2140,9 @@ describe("TelegramAdapter", () => {
   it("edits the topic resume picker when a thread is selected", async () => {
     const harness = await createControllerHarness();
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.adapter.handleUpdate({
       update_id: 1,
       message: {
@@ -2138,8 +2163,8 @@ describe("TelegramAdapter", () => {
       },
     });
     const callbackData =
-      harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup?.inline_keyboard[0]?.[0]
-        ?.callback_data ?? "";
+      harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup
+        ?.inline_keyboard[0]?.[0]?.callback_data ?? "";
 
     await harness.adapter.handleUpdate({
       callback_query: {
@@ -2178,7 +2203,9 @@ describe("TelegramAdapter", () => {
   it("resolves persisted callback handles after adapter restart", async () => {
     const harness = await createControllerHarness();
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.adapter.handleUpdate({
       update_id: 1,
       message: {
@@ -2195,8 +2222,8 @@ describe("TelegramAdapter", () => {
       },
     });
     const callbackData =
-      harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup?.inline_keyboard[0]?.[0]
-        ?.callback_data ?? "";
+      harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup
+        ?.inline_keyboard[0]?.[0]?.callback_data ?? "";
     const restartedAdapter = new TelegramAdapter({
       api: harness.api as unknown as TelegramBotApi,
       config: {
@@ -2208,7 +2235,9 @@ describe("TelegramAdapter", () => {
       pollOnStart: false,
       store: harness.store,
     });
-    await restartedAdapter.start((event) => harness.controller.handleInboundEvent(event));
+    await restartedAdapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
 
     await restartedAdapter.handleUpdate({
       callback_query: {
@@ -2261,7 +2290,9 @@ describe("TelegramAdapter", () => {
       threadId: "thread-1",
       updatedAt: 1000,
     });
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.adapter.handleUpdate({
       update_id: 3,
       message: {
@@ -2294,7 +2325,9 @@ describe("TelegramAdapter", () => {
   it("drops matching usernames with different Telegram numeric ids before controller dispatch", async () => {
     const harness = await createControllerHarness();
 
-    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.start((event) =>
+      harness.controller.handleInboundEvent(event),
+    );
     await harness.adapter.handleUpdate({
       update_id: 4,
       message: {
@@ -2481,7 +2514,9 @@ describe("TelegramAdapter", () => {
         channel: "telegram",
         botToken: "telegram-token",
         authorizedActorIds: [{ id: "42", displayName: "" }],
-        authorizedSupergroupIds: [{ id: "-1003711601984", displayName: "PwrDrvr" }],
+        authorizedSupergroupIds: [
+          { id: "-1003711601984", displayName: "PwrDrvr" },
+        ],
       },
       pollOnStart: false,
     });
@@ -2819,22 +2854,24 @@ async function createControllerHarness(): Promise<{
   };
 }
 
-function createApi(overrides?: Partial<{
-  answerCallbackQuery: ReturnType<typeof vi.fn>;
-  deleteWebhook: ReturnType<typeof vi.fn>;
-  editForumTopic: ReturnType<typeof vi.fn>;
-  editMessageText: ReturnType<typeof vi.fn>;
-  getMe: ReturnType<typeof vi.fn>;
-  getWebhookInfo: ReturnType<typeof vi.fn>;
-  getFile: ReturnType<typeof vi.fn>;
-  pinChatMessage: ReturnType<typeof vi.fn>;
-  sendChatAction: ReturnType<typeof vi.fn>;
-  sendDocument: ReturnType<typeof vi.fn>;
-  sendMessage: ReturnType<typeof vi.fn>;
-  sendPhoto: ReturnType<typeof vi.fn>;
-  setMyCommands: ReturnType<typeof vi.fn>;
-  unpinChatMessage: ReturnType<typeof vi.fn>;
-}>): {
+function createApi(
+  overrides?: Partial<{
+    answerCallbackQuery: ReturnType<typeof vi.fn>;
+    deleteWebhook: ReturnType<typeof vi.fn>;
+    editForumTopic: ReturnType<typeof vi.fn>;
+    editMessageText: ReturnType<typeof vi.fn>;
+    getMe: ReturnType<typeof vi.fn>;
+    getWebhookInfo: ReturnType<typeof vi.fn>;
+    getFile: ReturnType<typeof vi.fn>;
+    pinChatMessage: ReturnType<typeof vi.fn>;
+    sendChatAction: ReturnType<typeof vi.fn>;
+    sendDocument: ReturnType<typeof vi.fn>;
+    sendMessage: ReturnType<typeof vi.fn>;
+    sendPhoto: ReturnType<typeof vi.fn>;
+    setMyCommands: ReturnType<typeof vi.fn>;
+    unpinChatMessage: ReturnType<typeof vi.fn>;
+  }>,
+): {
   answerCallbackQuery: ReturnType<typeof vi.fn>;
   deleteWebhook: ReturnType<typeof vi.fn>;
   editForumTopic: ReturnType<typeof vi.fn>;
@@ -2853,7 +2890,9 @@ function createApi(overrides?: Partial<{
   return {
     answerCallbackQuery: vi.fn(async () => true),
     deleteWebhook: vi.fn(async () => true),
-    editForumTopic: vi.fn(async (_request: TelegramEditForumTopicRequest) => true),
+    editForumTopic: vi.fn(
+      async (_request: TelegramEditForumTopicRequest) => true,
+    ),
     editMessageText: vi.fn(async (request: TelegramEditMessageTextRequest) => ({
       chat: {
         id: Number(request.chat_id),
@@ -2861,11 +2900,19 @@ function createApi(overrides?: Partial<{
       },
       message_id: request.message_id,
     })),
-    getMe: vi.fn(async () => ({ id: 100, is_bot: true, username: "PwrAgentBot" })),
+    getMe: vi.fn(async () => ({
+      id: 100,
+      is_bot: true,
+      username: "PwrAgentBot",
+    })),
     getWebhookInfo: vi.fn(async () => ({ url: "" })),
     getFile: vi.fn(async () => ({ file_path: "documents/streaming-logs.txt" })),
-    pinChatMessage: vi.fn(async (_request: TelegramPinChatMessageRequest) => true),
-    sendChatAction: vi.fn(async (_request: TelegramSendChatActionRequest) => true),
+    pinChatMessage: vi.fn(
+      async (_request: TelegramPinChatMessageRequest) => true,
+    ),
+    sendChatAction: vi.fn(
+      async (_request: TelegramSendChatActionRequest) => true,
+    ),
     sendDocument: vi.fn(async (request: TelegramSendDocumentRequest) => ({
       chat: {
         id: Number(request.chat_id),
@@ -2888,7 +2935,9 @@ function createApi(overrides?: Partial<{
       message_id: 201,
     })),
     setMyCommands: vi.fn(async () => true),
-    unpinChatMessage: vi.fn(async (_request: TelegramUnpinChatMessageRequest) => true),
+    unpinChatMessage: vi.fn(
+      async (_request: TelegramUnpinChatMessageRequest) => true,
+    ),
     ...overrides,
   };
 }

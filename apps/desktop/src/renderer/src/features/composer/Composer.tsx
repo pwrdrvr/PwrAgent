@@ -96,7 +96,7 @@ type ComposerProps = {
   addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage?: (
     text: string,
-    imageParts?: AppServerThreadImagePart[]
+    imageParts?: AppServerThreadImagePart[],
   ) => string;
   backends?: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
@@ -132,7 +132,7 @@ type ComposerProps = {
     directoryKey: string,
     input?: AppServerTurnInputItem[],
     collaborationMode?: AppServerCollaborationModeRequest,
-    reviewTarget?: AppServerReviewTarget
+    reviewTarget?: AppServerReviewTarget,
   ) => Promise<void>;
   /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
   onCancelLaunchpad?: (directoryKey: string) => void;
@@ -140,7 +140,7 @@ type ComposerProps = {
   onDismissEnvActionRun?: (run: CodexEnvironmentActionRun) => void;
   onStopEnvActionRun?: (
     run: CodexEnvironmentActionRun,
-    mode: "stop" | "terminate"
+    mode: "stop" | "terminate",
   ) => void;
   hiddenEnvActionRunIds?: ReadonlySet<string>;
   showEnvActionAnchors?: boolean;
@@ -172,7 +172,7 @@ type ComposerProps = {
         | "imageAttachments"
       >
     >,
-    options?: { stickySettingsChanged?: boolean }
+    options?: { stickySettingsChanged?: boolean },
   ) => Promise<void>;
   removeOptimisticMessage?: (id: string) => void;
   /**
@@ -204,16 +204,16 @@ type ComposerProps = {
   }) => Promise<void>;
   onCancelExecutionModeQueue?: () => Promise<void>;
   onHandoffThreadWorkspace?: (
-    request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
+    request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">,
   ) => Promise<void>;
   onBeforeStartTurn?: () => Promise<boolean>;
   onSetThreadModelSettings?: (
     patch: Partial<
       Pick<
-      NavigationThreadSummary,
-      "model" | "reasoningEffort" | "serviceTier" | "fastMode"
+        NavigationThreadSummary,
+        "model" | "reasoningEffort" | "serviceTier" | "fastMode"
       >
-    >
+    >,
   ) => Promise<void>;
   threadModelSettingsError?: string;
 };
@@ -380,8 +380,8 @@ function slashCommandMatchesText(
 ): boolean {
   const normalizedText = text.toLowerCase();
   return (
-    command.label.toLowerCase() === normalizedText ||
-    (command.aliases ?? []).some(
+    command.label.toLowerCase() === normalizedText
+    || (command.aliases ?? []).some(
       (alias) => `/${alias}`.toLowerCase() === normalizedText,
     )
   );
@@ -416,16 +416,20 @@ const REVIEW_TARGET_OPTIONS: Array<{
 
 const REVIEW_PREFERRED_BASE_BRANCHES = ["main", "master", "develop", "trunk"];
 
-function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
+function getDefaultModelOption(
+  backend?: BackendSummary,
+): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
   return (
-    models.find((model) => model.current) ??
-    models.find((model) => model.supportsReasoning) ??
-    models[0]
+    models.find((model) => model.current)
+    ?? models.find((model) => model.supportsReasoning)
+    ?? models[0]
   );
 }
 
-function getDefaultReasoningEffort(backend?: BackendSummary): string | undefined {
+function getDefaultReasoningEffort(
+  backend?: BackendSummary,
+): string | undefined {
   const reasoningEfforts = backend?.launchpadOptions?.reasoningEfforts ?? [];
   return reasoningEfforts.includes(DEFAULT_REASONING_EFFORT)
     ? DEFAULT_REASONING_EFFORT
@@ -464,8 +468,8 @@ function buildReviewBranchOptions(params: {
       return true;
     }
     return (
-      value.startsWith("origin/") &&
-      currentBranches.has(value.slice("origin/".length))
+      value.startsWith("origin/")
+      && currentBranches.has(value.slice("origin/".length))
     );
   };
   const upstreamBranch = params.directory?.gitStatus?.upstreamBranch?.replace(
@@ -490,8 +494,8 @@ function buildReviewBranchOptions(params: {
   ): void => {
     const value = candidate?.trim();
     if (
-      value &&
-      (optionsForCandidate?.allowCurrent || !isCurrentBranch(value))
+      value
+      && (optionsForCandidate?.allowCurrent || !isCurrentBranch(value))
     ) {
       options.add(value);
     }
@@ -515,8 +519,8 @@ function buildReviewBranchOptions(params: {
     ?.trim()
     .replace(/^origin\//, "");
   if (
-    reportedDefaultBranch &&
-    REVIEW_PREFERRED_BASE_BRANCHES.includes(reportedDefaultBranch)
+    reportedDefaultBranch
+    && REVIEW_PREFERRED_BASE_BRANCHES.includes(reportedDefaultBranch)
   ) {
     pushPreferredDefault(reportedDefaultBranch);
   }
@@ -543,14 +547,14 @@ function buildReviewBranchPickerOptions(params: {
   thread?: NavigationThreadSummary;
 }): LaunchpadBranchOption[] {
   const details =
-    params.directory?.gitStatus?.baseBranchDetails ??
-    params.directory?.gitStatus?.branchDetails ??
-    [];
+    params.directory?.gitStatus?.baseBranchDetails
+    ?? params.directory?.gitStatus?.branchDetails
+    ?? [];
   const detailByName = new Map(details.map((detail) => [detail.name, detail]));
   const currentBranch = normalizeSelectableLaunchpadBranch(
-    params.directory?.gitStatus?.currentBranch ??
-      params.thread?.gitBranch ??
-      params.thread?.observedGitBranch,
+    params.directory?.gitStatus?.currentBranch
+      ?? params.thread?.gitBranch
+      ?? params.thread?.observedGitBranch,
   );
   const defaultBranch = normalizeSelectableLaunchpadBranch(
     params.directory?.gitStatus?.defaultBranch,
@@ -574,7 +578,9 @@ function buildReviewCommitOptions(
   return (directory?.gitStatus?.recentCommits ?? []).slice(0, 20);
 }
 
-function getLaunchpadDirectoryKeyFromScope(scopeKey: string): string | undefined {
+function getLaunchpadDirectoryKeyFromScope(
+  scopeKey: string,
+): string | undefined {
   return scopeKey.startsWith("launchpad:")
     ? scopeKey.slice("launchpad:".length)
     : undefined;
@@ -597,7 +603,7 @@ function createReviewConfig(params: {
 }
 
 function buildConfiguredReviewCommand(
-  config: ReviewConfigState | undefined
+  config: ReviewConfigState | undefined,
 ): { displayText: string; target: AppServerReviewTarget } | undefined {
   if (!config?.target) {
     return undefined;
@@ -639,11 +645,16 @@ function buildConfiguredReviewCommand(
     : undefined;
 }
 
-function findSlashCommandTrigger(text: string, caret: number): {
-  end: number;
-  query: string;
-  start: number;
-} | undefined {
+function findSlashCommandTrigger(
+  text: string,
+  caret: number,
+):
+  | {
+      end: number;
+      query: string;
+      start: number;
+    }
+  | undefined {
   const prefix = text.slice(0, caret);
   if (/\s$/.test(prefix)) {
     return undefined;
@@ -699,9 +710,7 @@ function QueuedImageAttachments(props: {
         />
       ))}
       {overflowCount > 0 ? (
-        <span className="composer__queued-image-count">
-          +{overflowCount}
-        </span>
+        <span className="composer__queued-image-count">+{overflowCount}</span>
       ) : null}
     </div>
   );
@@ -721,9 +730,9 @@ function sameThreadEnvActionStartingKey(
 ): boolean {
   if (!left || !right) return false;
   return (
-    left.backend === right.backend &&
-    left.threadId === right.threadId &&
-    left.actionId === right.actionId
+    left.backend === right.backend
+    && left.threadId === right.threadId
+    && left.actionId === right.actionId
   );
 }
 
@@ -751,11 +760,16 @@ const envActionAnchorSessionStartedAt = Date.now();
 // tested without standing up the full Composer; consumers should still
 // reach the anchor through the Composer.
 export function EnvActionAnchorList(props: {
-  runtime?: Pick<CodexThreadEnvironmentRuntime, "actionRuns" | "environmentName"> | undefined;
+  runtime?:
+    | Pick<CodexThreadEnvironmentRuntime, "actionRuns" | "environmentName">
+    | undefined;
   hiddenRunIds?: ReadonlySet<string>;
   onDismissRun?: (run: CodexEnvironmentActionRun) => void;
   onMoveToSidebar?: () => void;
-  onStopRun?: (run: CodexEnvironmentActionRun, mode: "stop" | "terminate") => void;
+  onStopRun?: (
+    run: CodexEnvironmentActionRun,
+    mode: "stop" | "terminate",
+  ) => void;
 }): ReactNode {
   const runs = readCodexEnvironmentActionRuns(props.runtime);
   const visible = runs.filter((run) => {
@@ -830,10 +844,10 @@ function collectTextFragments(value: unknown): string[] {
 
   const record = value as Record<string, unknown>;
   const directText = ["text", "content", "message", "input"].flatMap((key) =>
-    typeof record[key] === "string" ? [record[key] as string] : []
+    typeof record[key] === "string" ? [record[key] as string] : [],
   );
   const nestedText = ["content", "parts", "input", "item"].flatMap((key) =>
-    typeof record[key] === "string" ? [] : collectTextFragments(record[key])
+    typeof record[key] === "string" ? [] : collectTextFragments(record[key]),
   );
   return [...directText, ...nestedText];
 }
@@ -849,18 +863,18 @@ function collectImageUrls(value: unknown): string[] {
 
   const record = value as Record<string, unknown>;
   const directImages = Object.entries(record).flatMap(([key, entry]) =>
-    typeof entry === "string" &&
-    (key === "url" ||
-      key === "image_url" ||
-      key === "imageUrl" ||
-      key === "image" ||
-      key === "src" ||
-      entry.startsWith("data:image/"))
+    typeof entry === "string"
+    && (key === "url"
+      || key === "image_url"
+      || key === "imageUrl"
+      || key === "image"
+      || key === "src"
+      || entry.startsWith("data:image/"))
       ? [entry]
-      : []
+      : [],
   );
   const nestedImages = Object.values(record).flatMap((entry) =>
-    typeof entry === "string" ? [] : collectImageUrls(entry)
+    typeof entry === "string" ? [] : collectImageUrls(entry),
   );
   return [...directImages, ...nestedImages];
 }
@@ -872,7 +886,7 @@ function notificationIncludesDraftContent(
   const preview = draft.text.trim();
   if (preview) {
     return collectTextFragments(params).some((fragment) =>
-      fragment.includes(preview)
+      fragment.includes(preview),
     );
   }
 
@@ -892,7 +906,7 @@ function isSteerInjectionOpportunity(method: string): boolean {
 }
 
 function parseStaleSteerError(
-  error: unknown
+  error: unknown,
 ): { activeTurnId?: string; active: boolean } | undefined {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
@@ -901,10 +915,7 @@ function parseStaleSteerError(
   }
 
   const activeTurnMatch = message.match(/found `([^`]+)`/);
-  if (
-    normalized.includes("expected active turn id") &&
-    activeTurnMatch?.[1]
-  ) {
+  if (normalized.includes("expected active turn id") && activeTurnMatch?.[1]) {
     return {
       active: true,
       activeTurnId: activeTurnMatch[1],
@@ -951,11 +962,11 @@ function reviewSubmissionKey(command: {
   }
 }
 
-function HighlightedAutocompleteLabel(props: {
-  label: string;
-  query: string;
-}) {
-  if (!props.query || !props.label.toLowerCase().startsWith(props.query.toLowerCase())) {
+function HighlightedAutocompleteLabel(props: { label: string; query: string }) {
+  if (
+    !props.query
+    || !props.label.toLowerCase().startsWith(props.query.toLowerCase())
+  ) {
     return <span>{props.label}</span>;
   }
 
@@ -980,7 +991,9 @@ function createComposerSkillToken(
   };
 }
 
-function getComposerSkillTokensSignature(skillTokens: ComposerSkillToken[]): string {
+function getComposerSkillTokensSignature(
+  skillTokens: ComposerSkillToken[],
+): string {
   return JSON.stringify(
     skillTokens.map((token) => ({
       id: token.id,
@@ -1040,8 +1053,8 @@ function hydrateComposerDraft(
     }
 
     const matchingSkill =
-      skills.find((skill) => skill.path === part.path) ??
-      skills.find((skill) => skill.name === part.name);
+      skills.find((skill) => skill.path === part.path)
+      ?? skills.find((skill) => skill.name === part.name);
     skillTokens.push(
       createComposerSkillToken(
         matchingSkill ?? {
@@ -1068,19 +1081,19 @@ function adjustSkillTokenIndexesForTextChange(params: {
 
   let prefixLength = 0;
   while (
-    prefixLength < currentDraft.length &&
-    prefixLength < nextDraft.length &&
-    currentDraft[prefixLength] === nextDraft[prefixLength]
+    prefixLength < currentDraft.length
+    && prefixLength < nextDraft.length
+    && currentDraft[prefixLength] === nextDraft[prefixLength]
   ) {
     prefixLength += 1;
   }
 
   let suffixLength = 0;
   while (
-    suffixLength < currentDraft.length - prefixLength &&
-    suffixLength < nextDraft.length - prefixLength &&
-    currentDraft[currentDraft.length - 1 - suffixLength] ===
-      nextDraft[nextDraft.length - 1 - suffixLength]
+    suffixLength < currentDraft.length - prefixLength
+    && suffixLength < nextDraft.length - prefixLength
+    && currentDraft[currentDraft.length - 1 - suffixLength]
+      === nextDraft[nextDraft.length - 1 - suffixLength]
   ) {
     suffixLength += 1;
   }
@@ -1190,7 +1203,8 @@ function ComposerDropdown(props: {
   const [open, setOpen] = useState(false);
   const listboxId = useId();
   const selectedOption =
-    props.options.find((option) => option.value === props.value) ?? props.options[0];
+    props.options.find((option) => option.value === props.value)
+    ?? props.options[0];
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
   const Icon = props.icon;
 
@@ -1253,7 +1267,9 @@ function ComposerDropdown(props: {
               ) : (
                 <span aria-hidden="true" className="composer-dropdown__check" />
               )}
-              <span className="composer-dropdown__option-label">{option.label}</span>
+              <span className="composer-dropdown__option-label">
+                {option.label}
+              </span>
             </button>
           ))}
         </div>
@@ -1309,7 +1325,9 @@ function BranchPicker(props: {
   // priority order. Everything else follows in recency order. When the three
   // anchors are the same branch (the common case) this is a single pinned row.
   const { pinnedOptions, restOptions } = useMemo(() => {
-    const byName = new Map(props.options.map((option) => [option.name, option]));
+    const byName = new Map(
+      props.options.map((option) => [option.name, option]),
+    );
     const pinnedNames = new Set<string>();
     const pinned: LaunchpadBranchOption[] = [];
     const addPin = (option?: LaunchpadBranchOption): void => {
@@ -1321,7 +1339,9 @@ function BranchPicker(props: {
     addPin(byName.get(props.value));
     addPin(props.options.find((option) => option.isDefault));
     addPin(props.options.find((option) => option.current));
-    const rest = props.options.filter((option) => !pinnedNames.has(option.name));
+    const rest = props.options.filter(
+      (option) => !pinnedNames.has(option.name),
+    );
     return { pinnedOptions: pinned, restOptions: rest };
   }, [props.options, props.value]);
 
@@ -1376,8 +1396,8 @@ function BranchPicker(props: {
 
   const nowMs = Date.now();
   const selectedOption =
-    props.options.find((option) => option.name === props.value) ??
-    props.options[0];
+    props.options.find((option) => option.name === props.value)
+    ?? props.options[0];
 
   const commit = (name: string): void => {
     setOpen(false);
@@ -1544,7 +1564,9 @@ function BranchPicker(props: {
             role="listbox"
           >
             {flatVisible.length === 0 ? (
-              <p className="branch-picker__empty">No branches match your filter.</p>
+              <p className="branch-picker__empty">
+                No branches match your filter.
+              </p>
             ) : (
               <>
                 {visiblePinned.map((option, index) =>
@@ -1621,9 +1643,7 @@ function ReviewBranchPicker(props: {
     setOpen(false);
   };
 
-  const handleKeyDown = (
-    event: ReactKeyboardEvent<HTMLInputElement>,
-  ): void => {
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
     if (event.key === "ArrowDown") {
       if (visibleOptions.length === 0) {
         return;
@@ -1733,13 +1753,21 @@ function ReviewBranchPicker(props: {
                   onClick={() => commit(option.name)}
                   onMouseEnter={() => setActiveIndex(index)}
                 >
-                  <span aria-hidden="true" className="branch-picker__option-check">
+                  <span
+                    aria-hidden="true"
+                    className="branch-picker__option-check"
+                  >
                     {isSelected ? "✓" : ""}
                   </span>
-                  <span aria-hidden="true" className="branch-picker__option-icon">
+                  <span
+                    aria-hidden="true"
+                    className="branch-picker__option-icon"
+                  >
                     <BranchIcon size={12} />
                   </span>
-                  <span className="branch-picker__option-name">{option.name}</span>
+                  <span className="branch-picker__option-name">
+                    {option.name}
+                  </span>
                   {option.current ? (
                     <span
                       aria-hidden="true"
@@ -1765,7 +1793,10 @@ function ReviewBranchPicker(props: {
                     </span>
                   ) : null}
                   {relativeTime ? (
-                    <span aria-hidden="true" className="branch-picker__option-time">
+                    <span
+                      aria-hidden="true"
+                      className="branch-picker__option-time"
+                    >
                       {relativeTime}
                     </span>
                   ) : null}
@@ -1799,7 +1830,8 @@ function ReviewCommitPicker(props: {
     }
     return props.options
       .filter((option) => {
-        const haystack = `${option.sha} ${option.shortSha} ${option.subject}`.toLowerCase();
+        const haystack =
+          `${option.sha} ${option.shortSha} ${option.subject}`.toLowerCase();
         return haystack.includes(query);
       })
       .slice(0, 20);
@@ -1834,9 +1866,7 @@ function ReviewCommitPicker(props: {
     setOpen(false);
   };
 
-  const handleKeyDown = (
-    event: ReactKeyboardEvent<HTMLInputElement>,
-  ): void => {
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
     if (event.key === "ArrowDown") {
       if (visibleOptions.length === 0) {
         return;
@@ -2036,8 +2066,9 @@ export function Composer(props: ComposerProps) {
   const skillListboxId = useId();
   const slashListboxId = useId();
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
-  const pendingProgrammaticComposerChangeRef =
-    useRef<PendingProgrammaticComposerChange | undefined>(undefined);
+  const pendingProgrammaticComposerChangeRef = useRef<
+    PendingProgrammaticComposerChange | undefined
+  >(undefined);
   const composerScopeKey = props.launchpad
     ? `launchpad:${props.launchpad.directoryKey}`
     : props.thread
@@ -2060,16 +2091,21 @@ export function Composer(props: ComposerProps) {
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const submittedDraftScopeKeysRef = useRef<Set<string>>(new Set());
-  const recoveryCycleRef = useRef<{
-    activeIndex?: number;
-    candidates: ComposerDraftSnapshot[];
-    scopeKey: string;
-  } | undefined>(undefined);
+  const recoveryCycleRef = useRef<
+    | {
+        activeIndex?: number;
+        candidates: ComposerDraftSnapshot[];
+        scopeKey: string;
+      }
+    | undefined
+  >(undefined);
   const recoveryEligibilityVersionRef = useRef(0);
   const recoveryLookupSequenceRef = useRef(0);
   const recoveringDraftRef = useRef(false);
   const composerSelectionRequestSequenceRef = useRef(0);
-  const deletedSkillTokenHistoryRef = useRef<DeletedSkillTokenHistoryEntry[]>([]);
+  const deletedSkillTokenHistoryRef = useRef<DeletedSkillTokenHistoryEntry[]>(
+    [],
+  );
   const latestDraftSnapshotRef = useRef<{
     scopeKey: string;
     snapshot: ComposerDraftSnapshot;
@@ -2078,22 +2114,24 @@ export function Composer(props: ComposerProps) {
     snapshot: {
       draft: savedInitialDraft?.draft ?? hydratedInitialLaunchpad?.draft ?? "",
       editorDocument:
-        savedInitialDraft?.editorDocument ??
-        (props.launchpad?.editorDocument as JSONContent | undefined),
+        savedInitialDraft?.editorDocument
+        ?? (props.launchpad?.editorDocument as JSONContent | undefined),
       imageAttachments:
-        savedInitialDraft?.imageAttachments ??
-        props.launchpad?.imageAttachments ??
-        [],
+        savedInitialDraft?.imageAttachments
+        ?? props.launchpad?.imageAttachments
+        ?? [],
       skillTokens:
-        savedInitialDraft?.skillTokens ?? hydratedInitialLaunchpad?.skillTokens ?? [],
+        savedInitialDraft?.skillTokens
+        ?? hydratedInitialLaunchpad?.skillTokens
+        ?? [],
     },
   });
   const launchpadUpdateRef = useRef(props.onUpdateLaunchpad);
   const [draft, setDraft] = useState(
-    latestDraftSnapshotRef.current.snapshot.draft
+    latestDraftSnapshotRef.current.snapshot.draft,
   );
   const [editorDocument, setEditorDocument] = useState(
-    latestDraftSnapshotRef.current.snapshot.editorDocument
+    latestDraftSnapshotRef.current.snapshot.editorDocument,
   );
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuRef = useDismissableMenu<HTMLDivElement>(
@@ -2118,7 +2156,7 @@ export function Composer(props: ComposerProps) {
   const [interrupting, setInterrupting] = useState(false);
   const [steering, setSteering] = useState(false);
   const [queuedTurns, setQueuedTurnsState] = useState<QueuedTurnDraft[]>(
-    savedInitialQueuedTurns ?? []
+    savedInitialQueuedTurns ?? [],
   );
   const queuedAutoReleaseAttemptIdRef = useRef<string | undefined>(undefined);
   const serverQueuedTurnEntryIdsRef = useRef(new Map<string, string>());
@@ -2142,21 +2180,24 @@ export function Composer(props: ComposerProps) {
   >(
     savedInitialPendingSteer
       ? { ...savedInitialPendingSteer, status: "pending" }
-      : undefined
+      : undefined,
   );
   const [activeTurnId, setActiveTurnId] = useState<string | undefined>(
-    props.activeTurnId
+    props.activeTurnId,
   );
   const [sendError, setSendError] = useState<string>();
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [threadEnvActionStarting, setThreadEnvActionStartingState] =
     useState<ThreadEnvActionStartingKey>();
-  const threadEnvActionStartingRef =
-    useRef<ThreadEnvActionStartingKey | undefined>(undefined);
-  const threadEnvActionStartingTimeoutRef = useRef<number | undefined>(undefined);
-  const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
-    latestDraftSnapshotRef.current.snapshot.imageAttachments
+  const threadEnvActionStartingRef = useRef<
+    ThreadEnvActionStartingKey | undefined
+  >(undefined);
+  const threadEnvActionStartingTimeoutRef = useRef<number | undefined>(
+    undefined,
   );
+  const [imageAttachments, setImageAttachments] = useState<
+    ComposerImageAttachment[]
+  >(latestDraftSnapshotRef.current.snapshot.imageAttachments);
   // Per-attachment content signature (`<size>:<hash>`) cache used to reject
   // exact-duplicate pastes. Computed lazily on first use and kept only in
   // memory — signatures are never part of the persisted draft snapshot.
@@ -2178,7 +2219,7 @@ export function Composer(props: ComposerProps) {
   // Escape-to-close is owned by `ImageLightbox` itself.
   const [planModeEnabled, setPlanModeEnabled] = useState(false);
   const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
-    latestDraftSnapshotRef.current.snapshot.skillTokens
+    latestDraftSnapshotRef.current.snapshot.skillTokens,
   );
   const [composerSelectionRequest, setComposerSelectionRequest] = useState<{
     id: string;
@@ -2186,7 +2227,8 @@ export function Composer(props: ComposerProps) {
   }>();
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
-  const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
+  const [dismissedAutocompleteKey, setDismissedAutocompleteKey] =
+    useState<string>();
 
   const setThreadEnvActionStarting = (
     next: ThreadEnvActionStartingKey | undefined,
@@ -2198,7 +2240,13 @@ export function Composer(props: ComposerProps) {
   const clearThreadEnvActionStarting = (
     key?: ThreadEnvActionStartingKey,
   ): void => {
-    if (key && !sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
+    if (
+      key
+      && !sameThreadEnvActionStartingKey(
+        threadEnvActionStartingRef.current,
+        key,
+      )
+    ) {
       return;
     }
     if (threadEnvActionStartingTimeoutRef.current !== undefined) {
@@ -2222,7 +2270,9 @@ export function Composer(props: ComposerProps) {
     key: ThreadEnvActionStartingKey,
     elapsedMs: number,
   ): void => {
-    if (!sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
+    if (
+      !sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)
+    ) {
       return;
     }
     if (threadEnvActionStartingTimeoutRef.current !== undefined) {
@@ -2235,7 +2285,9 @@ export function Composer(props: ComposerProps) {
       return;
     }
     threadEnvActionStartingTimeoutRef.current = window.setTimeout(() => {
-      if (!sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)) {
+      if (
+        !sameThreadEnvActionStartingKey(threadEnvActionStartingRef.current, key)
+      ) {
         return;
       }
       threadEnvActionStartingTimeoutRef.current = undefined;
@@ -2261,16 +2313,18 @@ export function Composer(props: ComposerProps) {
     maxHeight: number;
     placement: "above" | "below";
   }>({ maxHeight: 320, placement: "above" });
-  const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
+  const [activeOptimisticMessageId, setActiveOptimisticMessageId] =
+    useState<string>();
   const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
   const isLaunchpad = Boolean(props.launchpad && props.directory);
   const launchpad = props.launchpad;
   const backend = useMemo(
     () =>
-      props.backends?.find((candidate) =>
-        candidate.kind === (props.launchpad?.backend ?? props.thread?.source)
+      props.backends?.find(
+        (candidate) =>
+          candidate.kind === (props.launchpad?.backend ?? props.thread?.source),
       ),
-    [props.backends, props.launchpad?.backend, props.thread?.source]
+    [props.backends, props.launchpad?.backend, props.thread?.source],
   );
   const supportsReview =
     backend?.kind.startsWith("acp:") === true
@@ -2282,10 +2336,12 @@ export function Composer(props: ComposerProps) {
         ? command.name.slice(1)
         : command.name;
       return (
-        commandName === "compact" &&
-        (!props.thread || !command.backend || command.backend === props.thread.source)
+        commandName === "compact"
+        && (!props.thread
+          || !command.backend
+          || command.backend === props.thread.source)
       );
-    })
+    }),
   );
 
   const selectionStart = Math.min(
@@ -2293,15 +2349,14 @@ export function Composer(props: ComposerProps) {
     draft.length,
   );
   const isDraftStoreScope = (scopeKey: string): boolean =>
-    scopeKey === "empty" ||
-    scopeKey.startsWith("thread:") ||
-    scopeKey.startsWith("launchpad:");
+    scopeKey === "empty"
+    || scopeKey.startsWith("thread:")
+    || scopeKey.startsWith("launchpad:");
   const canonicalDraft = useMemo(
     () => serializeDraftWithSkillTokens(draft, skillTokens),
-    [draft, skillTokens]
+    [draft, skillTokens],
   );
-  const hasComposerContent =
-    draft.trim().length > 0 || skillTokens.length > 0;
+  const hasComposerContent = draft.trim().length > 0 || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
   launchpadUpdateRef.current = props.onUpdateLaunchpad;
   latestDraftSnapshotRef.current = {
@@ -2332,9 +2387,7 @@ export function Composer(props: ComposerProps) {
     imageAttachments: [],
     skillTokens: [],
   });
-  const clearSubmittedComposerDraftForStart = (
-    scopeKey: string,
-  ): void => {
+  const clearSubmittedComposerDraftForStart = (scopeKey: string): void => {
     clearComposerDraftSnapshot(scopeKey);
     latestDraftSnapshotRef.current = {
       scopeKey,
@@ -2346,10 +2399,10 @@ export function Composer(props: ComposerProps) {
   const hasLiveComposerContent = (): boolean => {
     const latest = latestDraftSnapshotRef.current;
     return Boolean(
-      (inputRef.current?.value ?? latest.snapshot.draft).trim() ||
-        (inputRef.current?.skillTokenCount ??
-          latest.snapshot.skillTokens.length) > 0 ||
-        latest.snapshot.imageAttachments.length > 0,
+      (inputRef.current?.value ?? latest.snapshot.draft).trim()
+      || (inputRef.current?.skillTokenCount
+        ?? latest.snapshot.skillTokens.length) > 0
+      || latest.snapshot.imageAttachments.length > 0,
     );
   };
   const updateVisibleDraft = (
@@ -2370,7 +2423,7 @@ export function Composer(props: ComposerProps) {
           currentDraft: draft,
           nextDraft,
           skillTokens: current,
-        })
+        }),
       );
     }
     setDraft(nextDraft);
@@ -2384,16 +2437,16 @@ export function Composer(props: ComposerProps) {
     }
 
     if (
-      !state.draft.trim() &&
-      state.skillTokens.length === 0 &&
-      state.imageAttachments.length === 0
+      !state.draft.trim()
+      && state.skillTokens.length === 0
+      && state.imageAttachments.length === 0
     ) {
       const previous = latestDraftSnapshotRef.current;
       if (
-        previous.scopeKey === scopeKey &&
-        (previous.snapshot.draft.trim() ||
-          previous.snapshot.skillTokens.length > 0 ||
-          previous.snapshot.imageAttachments.length > 0)
+        previous.scopeKey === scopeKey
+        && (previous.snapshot.draft.trim()
+          || previous.snapshot.skillTokens.length > 0
+          || previous.snapshot.imageAttachments.length > 0)
       ) {
         recordComposerDraftHistory(scopeKey, previous.snapshot, "abandoned");
       }
@@ -2488,22 +2541,22 @@ export function Composer(props: ComposerProps) {
     const liveSkillTokenCount =
       inputRef.current?.skillTokenCount ?? latestSnapshot.skillTokens.length;
     const latestSnapshotIsCleared =
-      !latestSnapshot.draft.trim() &&
-      latestSnapshot.skillTokens.length === 0 &&
-      latestSnapshot.imageAttachments.length === 0;
+      !latestSnapshot.draft.trim()
+      && latestSnapshot.skillTokens.length === 0
+      && latestSnapshot.imageAttachments.length === 0;
 
     if (
-      latestSnapshotIsCleared &&
-      liveDraft === submittedSnapshot.draft &&
-      liveSkillTokenCount === submittedSnapshot.skillTokens.length
+      latestSnapshotIsCleared
+      && liveDraft === submittedSnapshot.draft
+      && liveSkillTokenCount === submittedSnapshot.skillTokens.length
     ) {
       return false;
     }
 
     return Boolean(
-      liveDraft.trim() ||
-        liveSkillTokenCount > 0 ||
-        latestSnapshot.imageAttachments.length > 0,
+      liveDraft.trim()
+      || liveSkillTokenCount > 0
+      || latestSnapshot.imageAttachments.length > 0,
     );
   };
   const recoverSubmittedComposerDraft = (
@@ -2542,19 +2595,15 @@ export function Composer(props: ComposerProps) {
       });
     });
   };
-  const isRecoveryLookupCurrent = (
-    request: RecoveryLookupRequest,
-  ): boolean =>
-    recoveryLookupSequenceRef.current === request.lookupId &&
-    recoveryEligibilityVersionRef.current === request.version &&
-    activeComposerScopeKeyRef.current === request.scopeKey &&
-    latestDraftSnapshotRef.current.scopeKey === request.scopeKey &&
-    !hasLiveComposerContent();
+  const isRecoveryLookupCurrent = (request: RecoveryLookupRequest): boolean =>
+    recoveryLookupSequenceRef.current === request.lookupId
+    && recoveryEligibilityVersionRef.current === request.version
+    && activeComposerScopeKeyRef.current === request.scopeKey
+    && latestDraftSnapshotRef.current.scopeKey === request.scopeKey
+    && !hasLiveComposerContent();
   const getOrCreateRecoveryCycle = async (
     request?: RecoveryLookupRequest,
-  ): Promise<
-    NonNullable<typeof recoveryCycleRef.current> | undefined
-  > => {
+  ): Promise<NonNullable<typeof recoveryCycleRef.current> | undefined> => {
     if (!draftStore.listRecoveryCandidates) {
       return undefined;
     }
@@ -2571,7 +2620,10 @@ export function Composer(props: ComposerProps) {
           threadId: props.thread?.id,
         })
         .catch((error) => {
-          console.warn("Failed to list composer draft recovery candidates", error);
+          console.warn(
+            "Failed to list composer draft recovery candidates",
+            error,
+          );
           return [];
         });
       if (response.length === 0) {
@@ -2600,9 +2652,9 @@ export function Composer(props: ComposerProps) {
         }))
         .filter(
           (candidate) =>
-            candidate.draft.trim() ||
-            candidate.skillTokens.length > 0 ||
-            candidate.imageAttachments.length > 0,
+            candidate.draft.trim()
+            || candidate.skillTokens.length > 0
+            || candidate.imageAttachments.length > 0,
         );
       const uniqueCandidates = dedupeComposerDraftSnapshots(candidates);
       if (uniqueCandidates.length === 0) {
@@ -2690,10 +2742,10 @@ export function Composer(props: ComposerProps) {
 
     const snapshots = state.filter(
       (entry) =>
-        entry.reviewCommand ||
-        entry.text.trim() ||
-        entry.imageAttachments.length > 0 ||
-        entry.input?.length,
+        entry.reviewCommand
+        || entry.text.trim()
+        || entry.imageAttachments.length > 0
+        || entry.input?.length,
     );
 
     if (snapshots.length === 0) {
@@ -2740,15 +2792,20 @@ export function Composer(props: ComposerProps) {
   };
   const removeLocalQueuedTurn = (queued: QueuedTurnDraft): void => {
     setQueuedTurnsState((current) =>
-      current.filter((candidate) => candidate.id !== queued.id)
+      current.filter((candidate) => candidate.id !== queued.id),
     );
   };
-  const claimQueuedTurn = (queued: QueuedTurnDraft): QueuedTurnDraft | undefined => {
+  const claimQueuedTurn = (
+    queued: QueuedTurnDraft,
+  ): QueuedTurnDraft | undefined => {
     if (!isQueuedTurnStoreScope(composerScopeKey)) {
       return queued;
     }
 
-    const claimed = draftStore.removeQueuedTurnById(composerScopeKey, queued.id);
+    const claimed = draftStore.removeQueuedTurnById(
+      composerScopeKey,
+      queued.id,
+    );
     if (!claimed) {
       removeLocalQueuedTurn(queued);
       return undefined;
@@ -2848,8 +2905,13 @@ export function Composer(props: ComposerProps) {
 
     void updateLaunchpad(directoryKey, {
       imageAttachments:
-        snapshot.imageAttachments.length > 0 ? snapshot.imageAttachments : undefined,
-      prompt: serializeDraftWithSkillTokens(snapshot.draft, snapshot.skillTokens),
+        snapshot.imageAttachments.length > 0
+          ? snapshot.imageAttachments
+          : undefined,
+      prompt: serializeDraftWithSkillTokens(
+        snapshot.draft,
+        snapshot.skillTokens,
+      ),
     });
   };
   const flushComposerDraftSnapshot = (
@@ -2896,8 +2958,13 @@ export function Composer(props: ComposerProps) {
         skill,
       }))
       .filter(
-        (match): match is { index: number; score: number; skill: AppServerSkillSummary } =>
-          match.score !== undefined
+        (
+          match,
+        ): match is {
+          index: number;
+          score: number;
+          skill: AppServerSkillSummary;
+        } => match.score !== undefined,
       )
       .sort((left, right) => {
         if (left.score !== right.score) {
@@ -2910,7 +2977,7 @@ export function Composer(props: ComposerProps) {
   const slashCommandSuggestions = useMemo(() => {
     const commands =
       props.providerCommands?.map((command) =>
-        providerCommandToSlashSuggestion(command, props.backends)
+        providerCommandToSlashSuggestion(command, props.backends),
       ) ?? [];
     return supportsReview ? [...SLASH_COMMANDS, ...commands] : commands;
   }, [props.backends, props.providerCommands, supportsReview]);
@@ -2924,17 +2991,18 @@ export function Composer(props: ComposerProps) {
     return slashCommandSuggestions.filter((command) => {
       const aliases = command.aliases ?? [];
       return (
-        command.label.toLowerCase().startsWith(typed) ||
-        aliases.some((alias) => `/${alias}`.toLowerCase().startsWith(typed)) ||
-        command.description.toLowerCase().includes(query)
+        command.label.toLowerCase().startsWith(typed)
+        || aliases.some((alias) => `/${alias}`.toLowerCase().startsWith(typed))
+        || command.description.toLowerCase().includes(query)
       );
     });
   }, [slashCommandSuggestions, slashTrigger?.query]);
-  const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
-    ? "skills"
-    : slashTrigger && filteredSlashCommands.length > 0
-      ? "slash"
-      : undefined;
+  const availableAutocompleteKind: AutocompleteKind | undefined =
+    trigger && filteredSkills.length > 0
+      ? "skills"
+      : slashTrigger && filteredSlashCommands.length > 0
+        ? "slash"
+        : undefined;
   const autocompleteKey =
     availableAutocompleteKind === "skills" && trigger
       ? `skills:${trigger.start}:${trigger.end}:${trigger.query}`
@@ -2978,9 +3046,10 @@ export function Composer(props: ComposerProps) {
     [props.directory],
   );
   const isBareReviewCommand = draft.trim() === "/review";
-  const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
+  const isCompactCommand =
+    supportsCompactCommand && draft.trim() === "/compact";
   const isReviewComposerOpen = Boolean(
-    supportsReview && reviewConfig && isBareReviewCommand
+    supportsReview && reviewConfig && isBareReviewCommand,
   );
 
   useEffect(() => {
@@ -3043,7 +3112,9 @@ export function Composer(props: ComposerProps) {
       setImageAttachments(saved?.imageAttachments ?? []);
       setSkillTokens(saved?.skillTokens ?? []);
       setPendingSteerState(
-        savedPendingSteer ? { ...savedPendingSteer, status: "pending" } : undefined
+        savedPendingSteer
+          ? { ...savedPendingSteer, status: "pending" }
+          : undefined,
       );
       setQueuedTurnsState(savedQueuedTurns);
     } else {
@@ -3054,7 +3125,7 @@ export function Composer(props: ComposerProps) {
     setInterrupting(false);
     setSteering(false);
     setServerQueuedTurnEntryIdState(
-      serverQueuedTurnEntryIdsRef.current.get(composerScopeKey)
+      serverQueuedTurnEntryIdsRef.current.get(composerScopeKey),
     );
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
@@ -3071,9 +3142,9 @@ export function Composer(props: ComposerProps) {
       return;
     }
     if (
-      latest.snapshot.draft.trim() ||
-      latest.snapshot.skillTokens.length > 0 ||
-      latest.snapshot.imageAttachments.length > 0
+      latest.snapshot.draft.trim()
+      || latest.snapshot.skillTokens.length > 0
+      || latest.snapshot.imageAttachments.length > 0
     ) {
       return;
     }
@@ -3138,9 +3209,12 @@ export function Composer(props: ComposerProps) {
       const gap = 10;
       const rect = inputWrap.getBoundingClientRect();
       const availableAbove = rect.top - viewportPadding - gap;
-      const availableBelow = window.innerHeight - rect.bottom - viewportPadding - gap;
+      const availableBelow =
+        window.innerHeight - rect.bottom - viewportPadding - gap;
       const placement =
-        availableAbove >= 180 || availableAbove >= availableBelow ? "above" : "below";
+        availableAbove >= 180 || availableAbove >= availableBelow
+          ? "above"
+          : "below";
       const available = placement === "above" ? availableAbove : availableBelow;
       setAutocompleteLayout({
         placement,
@@ -3249,33 +3323,33 @@ export function Composer(props: ComposerProps) {
 
     return props.desktopApi.onAgentEvent((event) => {
       const notificationThreadId =
-        "threadId" in event.notification.params &&
-        typeof event.notification.params.threadId === "string"
+        "threadId" in event.notification.params
+        && typeof event.notification.params.threadId === "string"
           ? event.notification.params.threadId
           : undefined;
       const statusRecord =
-        event.notification.method === "thread/status/changed" &&
-        typeof event.notification.params.status === "object" &&
-        event.notification.params.status !== null
+        event.notification.method === "thread/status/changed"
+        && typeof event.notification.params.status === "object"
+        && event.notification.params.status !== null
           ? (event.notification.params.status as { type?: unknown })
           : undefined;
       const startedTurnRecord =
-        event.notification.method === "turn/started" &&
-        typeof event.notification.params.turn === "object" &&
-        event.notification.params.turn !== null
+        event.notification.method === "turn/started"
+        && typeof event.notification.params.turn === "object"
+        && event.notification.params.turn !== null
           ? (event.notification.params.turn as { id?: unknown })
           : undefined;
       const startedTurnId =
         typeof startedTurnRecord?.id === "string"
           ? startedTurnRecord.id
-          : event.notification.method === "turn/started" &&
-              typeof event.notification.params.turnId === "string"
+          : event.notification.method === "turn/started"
+              && typeof event.notification.params.turnId === "string"
             ? event.notification.params.turnId
             : undefined;
       const turnQueueRecord =
-        event.notification.method === "thread/turnQueue/updated" &&
-        typeof event.notification.params === "object" &&
-        event.notification.params !== null
+        event.notification.method === "thread/turnQueue/updated"
+        && typeof event.notification.params === "object"
+        && event.notification.params !== null
           ? (event.notification.params as {
               errorMessage?: unknown;
               queueEntryId?: unknown;
@@ -3285,11 +3359,11 @@ export function Composer(props: ComposerProps) {
           : undefined;
 
       if (
-        notificationThreadId &&
-        typeof turnQueueRecord?.queueEntryId === "string" &&
-        turnQueueRecord.queueEntryId ===
-          serverQueuedTurnEntryIdsRef.current.get(
-            getThreadComposerScopeKey(event.backend, notificationThreadId)
+        notificationThreadId
+        && typeof turnQueueRecord?.queueEntryId === "string"
+        && turnQueueRecord.queueEntryId
+          === serverQueuedTurnEntryIdsRef.current.get(
+            getThreadComposerScopeKey(event.backend, notificationThreadId),
           )
       ) {
         const queueScopeKey = getThreadComposerScopeKey(
@@ -3299,26 +3373,26 @@ export function Composer(props: ComposerProps) {
         const queueEventIsCurrentThread =
           event.backend === thread.source && notificationThreadId === thread.id;
         if (
-          queueEventIsCurrentThread &&
-          turnQueueRecord.status === "started" &&
-          typeof turnQueueRecord.turnId === "string"
+          queueEventIsCurrentThread
+          && turnQueueRecord.status === "started"
+          && typeof turnQueueRecord.turnId === "string"
         ) {
           updateActiveTurnId(turnQueueRecord.turnId);
           props.onActiveTurnIdChange?.(turnQueueRecord.turnId);
           props.onPendingStatusChange?.("Thinking");
         }
         if (
-          turnQueueRecord.status === "terminal" ||
-          turnQueueRecord.status === "failed" ||
-          turnQueueRecord.status === "cancelled"
+          turnQueueRecord.status === "terminal"
+          || turnQueueRecord.status === "failed"
+          || turnQueueRecord.status === "cancelled"
         ) {
           globalQueuedTurnReleaseScopeKeys.delete(queueScopeKey);
           updateServerQueuedTurnEntryId(undefined, queueScopeKey);
           if (
-            queueEventIsCurrentThread &&
-            !activeTurnIdRef.current &&
-            (turnQueueRecord.status === "failed" ||
-              turnQueueRecord.status === "cancelled")
+            queueEventIsCurrentThread
+            && !activeTurnIdRef.current
+            && (turnQueueRecord.status === "failed"
+              || turnQueueRecord.status === "cancelled")
           ) {
             if (activeOptimisticMessageId) {
               props.removeOptimisticMessage?.(activeOptimisticMessageId);
@@ -3333,20 +3407,26 @@ export function Composer(props: ComposerProps) {
                 ? turnQueueRecord.errorMessage
                 : turnQueueRecord.status === "cancelled"
                   ? "Queued turn was cancelled before it started."
-                  : "Queued turn failed before it started."
+                  : "Queued turn failed before it started.",
             );
           }
         }
       }
 
-      if (event.backend !== thread.source || notificationThreadId !== thread.id) {
+      if (
+        event.backend !== thread.source
+        || notificationThreadId !== thread.id
+      ) {
         return;
       }
 
       if (
-        pendingSteer?.status === "steering" &&
-        event.notification.method === "item/completed" &&
-        notificationIncludesDraftContent(event.notification.params, pendingSteer)
+        pendingSteer?.status === "steering"
+        && event.notification.method === "item/completed"
+        && notificationIncludesDraftContent(
+          event.notification.params,
+          pendingSteer,
+        )
       ) {
         setPendingSteer(undefined);
         setSteering(false);
@@ -3354,20 +3434,20 @@ export function Composer(props: ComposerProps) {
       }
 
       if (
-        pendingSteer?.status === "pending" &&
-        activeTurnIdRef.current &&
-        isSteerInjectionOpportunity(event.notification.method)
+        pendingSteer?.status === "pending"
+        && activeTurnIdRef.current
+        && isSteerInjectionOpportunity(event.notification.method)
       ) {
         void submitPendingSteer(pendingSteer);
       }
 
       if (
-        event.notification.method === "turn/started" &&
-        typeof startedTurnId === "string"
+        event.notification.method === "turn/started"
+        && typeof startedTurnId === "string"
       ) {
         if (
-          activeReviewTurnIdRef.current &&
-          startedTurnId !== activeReviewTurnIdRef.current
+          activeReviewTurnIdRef.current
+          && startedTurnId !== activeReviewTurnIdRef.current
         ) {
           // Codex reviews can surface a separate turn/started id while all
           // review items and the terminal event stay on review/start's turn.
@@ -3380,29 +3460,29 @@ export function Composer(props: ComposerProps) {
       }
 
       if (
-        event.notification.method === "turn/completed" ||
-        event.notification.method === "turn/failed" ||
-        event.notification.method === "turn/cancelled"
+        event.notification.method === "turn/completed"
+        || event.notification.method === "turn/failed"
+        || event.notification.method === "turn/cancelled"
       ) {
         const terminalTurnId =
           typeof event.notification.params.turnId === "string"
             ? event.notification.params.turnId
             : undefined;
         if (
-          activeTurnIdRef.current &&
-          terminalTurnId &&
-          terminalTurnId !== activeTurnIdRef.current
+          activeTurnIdRef.current
+          && terminalTurnId
+          && terminalTurnId !== activeTurnIdRef.current
         ) {
           return;
         }
         const clearsReleasedQueuedTurn =
-          Boolean(activeTurnIdRef.current) &&
-          (!terminalTurnId || terminalTurnId === activeTurnIdRef.current);
+          Boolean(activeTurnIdRef.current)
+          && (!terminalTurnId || terminalTurnId === activeTurnIdRef.current);
 
         if (
-          activeOptimisticMessageId &&
-          (event.notification.method === "turn/failed" ||
-            event.notification.method === "turn/cancelled")
+          activeOptimisticMessageId
+          && (event.notification.method === "turn/failed"
+            || event.notification.method === "turn/cancelled")
         ) {
           props.removeOptimisticMessage?.(activeOptimisticMessageId);
         }
@@ -3433,18 +3513,18 @@ export function Composer(props: ComposerProps) {
       }
 
       if (
-        event.notification.method === "thread/status/changed" &&
-        statusRecord?.type === "idle"
+        event.notification.method === "thread/status/changed"
+        && statusRecord?.type === "idle"
       ) {
         if (
-          activeReviewTurnIdRef.current &&
-          activeTurnIdRef.current === activeReviewTurnIdRef.current
+          activeReviewTurnIdRef.current
+          && activeTurnIdRef.current === activeReviewTurnIdRef.current
         ) {
           return;
         }
         if (
-          activeTurnIdRef.current &&
-          activeTurnIdRef.current === confirmedActiveTurnIdRef.current
+          activeTurnIdRef.current
+          && activeTurnIdRef.current === confirmedActiveTurnIdRef.current
         ) {
           return;
         }
@@ -3475,7 +3555,8 @@ export function Composer(props: ComposerProps) {
     }
 
     const editorDocumentChanged =
-      JSON.stringify(launchpad.editorDocument) !== JSON.stringify(editorDocument);
+      JSON.stringify(launchpad.editorDocument)
+      !== JSON.stringify(editorDocument);
     if (canonicalDraft === launchpad.prompt && !editorDocumentChanged) {
       return;
     }
@@ -3486,7 +3567,8 @@ export function Composer(props: ComposerProps) {
       }
 
       void props.onUpdateLaunchpad?.(launchpad.directoryKey, {
-        imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
+        imageAttachments:
+          imageAttachments.length > 0 ? imageAttachments : undefined,
         prompt: canonicalDraft,
         editorDocument: editorDocument as Record<string, unknown> | undefined,
       });
@@ -3504,30 +3586,42 @@ export function Composer(props: ComposerProps) {
     props.onUpdateLaunchpad,
   ]);
 
-  const submitReviewCommand = async (reviewCommand: {
-    displayText: string;
-    target: AppServerReviewTarget;
-  }, options?: {
-    queueClaimed?: boolean;
-    queued?: QueuedTurnDraft;
-  }): Promise<void> => {
+  const submitReviewCommand = async (
+    reviewCommand: {
+      displayText: string;
+      target: AppServerReviewTarget;
+    },
+    options?: {
+      queueClaimed?: boolean;
+      queued?: QueuedTurnDraft;
+    },
+  ): Promise<void> => {
     const submissionKey = reviewSubmissionKey(reviewCommand);
     if (
-      sendingRef.current &&
-      inFlightReviewSubmissionKeyRef.current === submissionKey
+      sendingRef.current
+      && inFlightReviewSubmissionKeyRef.current === submissionKey
     ) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
-      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(
+        options?.queued,
+        options?.queueClaimed,
+      );
       return;
     }
     if (props.disabled) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
-      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(
+        options?.queued,
+        options?.queueClaimed,
+      );
       return;
     }
     if (!supportsReview) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
-      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(
+        options?.queued,
+        options?.queueClaimed,
+      );
       setSendError("Selected backend does not support reviews.");
       return;
     }
@@ -3549,8 +3643,8 @@ export function Composer(props: ComposerProps) {
       const submittedScopeKey = composerScopeKey;
       markComposerDraftSubmitted(submittedScopeKey);
       props.onPendingStatusChange?.(
-        props.launchpad.codexEnvironmentId &&
-          selectedCodexEnvironment?.setupScript
+        props.launchpad.codexEnvironmentId
+          && selectedCodexEnvironment?.setupScript
           ? "Running environment setup"
           : "Reviewing",
       );
@@ -3559,7 +3653,7 @@ export function Composer(props: ComposerProps) {
           props.launchpad.directoryKey,
           undefined,
           undefined,
-          reviewCommand.target
+          reviewCommand.target,
         );
         clearSubmittedComposerDraft(submittedScopeKey);
         setReviewConfig(undefined);
@@ -3568,7 +3662,10 @@ export function Composer(props: ComposerProps) {
         inFlightReviewSubmissionKeyRef.current = undefined;
         props.onPendingStatusChange?.(undefined);
         restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
-        releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
+        releaseQueuedTurnScopeLockIfClaimed(
+          options?.queued,
+          options?.queueClaimed,
+        );
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
         updateSending(false);
@@ -3580,12 +3677,15 @@ export function Composer(props: ComposerProps) {
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
-      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(
+        options?.queued,
+        options?.queueClaimed,
+      );
       return;
     }
 
     const optimisticReviewId = props.addOptimisticReviewEntry?.(
-      reviewCommand.displayText
+      reviewCommand.displayText,
     );
     setActiveOptimisticMessageId(optimisticReviewId);
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
@@ -3616,11 +3716,7 @@ export function Composer(props: ComposerProps) {
           removeQueuedTurn(options.queued);
         }
       } else {
-        recordComposerDraftHistory(
-          composerScopeKey,
-          submittedSnapshot,
-          "sent",
-        );
+        recordComposerDraftHistory(composerScopeKey, submittedSnapshot, "sent");
       }
     } catch (error) {
       if (optimisticReviewId) {
@@ -3636,7 +3732,10 @@ export function Composer(props: ComposerProps) {
       updateActiveTurnId(undefined);
       props.onActiveTurnIdChange?.(undefined);
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
-      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(
+        options?.queued,
+        options?.queueClaimed,
+      );
       setSendError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -3699,11 +3798,7 @@ export function Composer(props: ComposerProps) {
       });
       updateActiveTurnId(response.turnId);
       props.onActiveTurnIdChange?.(response.turnId);
-      recordComposerDraftHistory(
-        submittedScopeKey,
-        submittedSnapshot,
-        "sent",
-      );
+      recordComposerDraftHistory(submittedScopeKey, submittedSnapshot, "sent");
     } catch (error) {
       latestDraftSnapshotRef.current = {
         scopeKey: submittedScopeKey,
@@ -3728,7 +3823,7 @@ export function Composer(props: ComposerProps) {
       createReviewConfig({
         directory: props.directory,
         thread: props.thread,
-      })
+      }),
     );
     updateVisibleDraft("/review");
     setDismissedAutocompleteKey(autocompleteKey);
@@ -3777,8 +3872,8 @@ export function Composer(props: ComposerProps) {
   const getReviewConfigWithTarget = (
     target: ReviewTargetChoice,
   ): ReviewConfigState => ({
-    ...(reviewConfig ??
-      createReviewConfig({
+    ...(reviewConfig
+      ?? createReviewConfig({
         directory: props.directory,
         thread: props.thread,
       })),
@@ -3790,8 +3885,8 @@ export function Composer(props: ComposerProps) {
     options?: { focusDetail?: boolean },
   ): void => {
     setReviewConfig((current) => ({
-      ...(current ??
-        createReviewConfig({
+      ...(current
+        ?? createReviewConfig({
           directory: props.directory,
           thread: props.thread,
         })),
@@ -3803,15 +3898,13 @@ export function Composer(props: ComposerProps) {
     }
   };
 
-  const submitFocusedReviewTarget = (
-    target: ReviewTargetChoice,
-  ): void => {
+  const submitFocusedReviewTarget = (target: ReviewTargetChoice): void => {
     const nextConfig = getReviewConfigWithTarget(target);
     setReviewConfig(nextConfig);
     setSendError(undefined);
     if (
-      (target === "commit" && !nextConfig.commit.trim()) ||
-      (target === "custom" && !nextConfig.customInstructions.trim())
+      (target === "commit" && !nextConfig.commit.trim())
+      || (target === "custom" && !nextConfig.customInstructions.trim())
     ) {
       focusReviewDetail(target);
       return;
@@ -3847,8 +3940,8 @@ export function Composer(props: ComposerProps) {
     event.stopPropagation();
     const direction = event.key === "ArrowRight" ? 1 : -1;
     const nextIndex =
-      (index + direction + REVIEW_TARGET_OPTIONS.length) %
-      REVIEW_TARGET_OPTIONS.length;
+      (index + direction + REVIEW_TARGET_OPTIONS.length)
+      % REVIEW_TARGET_OPTIONS.length;
     selectReviewTarget(REVIEW_TARGET_OPTIONS[nextIndex]!.target);
     focusReviewOption(nextIndex);
   };
@@ -3862,7 +3955,10 @@ export function Composer(props: ComposerProps) {
     input: AppServerTurnInputItem[];
   } => {
     const turnSkills = listMentionedSkills(textDraft, props.skills);
-    const displayText = hydrateSkillLabelsWithMarkdown(textDraft.trim(), turnSkills);
+    const displayText = hydrateSkillLabelsWithMarkdown(
+      textDraft.trim(),
+      turnSkills,
+    );
     const imageParts = attachments.map((attachment, index) => ({
       type: "image" as const,
       url: attachment.url,
@@ -3913,7 +4009,11 @@ export function Composer(props: ComposerProps) {
           } satisfies AppServerCollaborationModeRequest)
         : undefined;
 
-    if (!queued && props.onBeforeStartTurn && !(await props.onBeforeStartTurn())) {
+    if (
+      !queued
+      && props.onBeforeStartTurn
+      && !(await props.onBeforeStartTurn())
+    ) {
       updateSending(false);
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       if (queued && options?.queueClaimed) {
@@ -3926,7 +4026,7 @@ export function Composer(props: ComposerProps) {
     props.onPendingStatusChange?.(collaborationMode ? "Planning" : "Thinking");
     const optimisticMessageId = props.addOptimisticUserMessage?.(
       payload.displayText,
-      payload.imageParts
+      payload.imageParts,
     );
     setActiveOptimisticMessageId(optimisticMessageId);
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
@@ -3945,11 +4045,14 @@ export function Composer(props: ComposerProps) {
         executionMode: props.thread.executionMode,
         collaborationMode,
         model: selectedModelOption?.id,
-        reasoningEffort: supportsReasoning ? selectedReasoningEffort : undefined,
-        serviceTier: selectedServiceTier,
-        fastMode: props.thread.source === "codex" && supportsFast
-          ? Boolean(currentSettings?.fastMode)
+        reasoningEffort: supportsReasoning
+          ? selectedReasoningEffort
           : undefined,
+        serviceTier: selectedServiceTier,
+        fastMode:
+          props.thread.source === "codex" && supportsFast
+            ? Boolean(currentSettings?.fastMode)
+            : undefined,
       });
       if (response.queueStatus === "queued") {
         updateServerQueuedTurnEntryId(response.queueEntryId ?? response.turnId);
@@ -3962,11 +4065,7 @@ export function Composer(props: ComposerProps) {
           removeQueuedTurn(queued);
         }
       } else {
-        recordComposerDraftHistory(
-          composerScopeKey,
-          submittedSnapshot,
-          "sent",
-        );
+        recordComposerDraftHistory(composerScopeKey, submittedSnapshot, "sent");
       }
     } catch (error) {
       if (optimisticMessageId) {
@@ -4018,14 +4117,14 @@ export function Composer(props: ComposerProps) {
       return;
     }
     if (
-      !queuedTurn ||
-      globalQueuedTurnReleaseScopeKeys.has(composerScopeKey) ||
-      props.threadBusy ||
-      activeTurnId ||
-      serverQueuedTurnEntryId ||
-      sending ||
-      props.launchpad ||
-      props.disabled
+      !queuedTurn
+      || globalQueuedTurnReleaseScopeKeys.has(composerScopeKey)
+      || props.threadBusy
+      || activeTurnId
+      || serverQueuedTurnEntryId
+      || sending
+      || props.launchpad
+      || props.disabled
     ) {
       return;
     }
@@ -4051,10 +4150,10 @@ export function Composer(props: ComposerProps) {
 
   useEffect(() => {
     if (
-      !pendingSteer ||
-      pendingSteer.status !== "pending" ||
-      activeTurnId ||
-      props.launchpad
+      !pendingSteer
+      || pendingSteer.status !== "pending"
+      || activeTurnId
+      || props.launchpad
     ) {
       return;
     }
@@ -4123,13 +4222,15 @@ export function Composer(props: ComposerProps) {
   };
 
   const shouldQueueThreadSubmit = (): boolean =>
-    !props.launchpad &&
-    (Boolean(props.threadBusy) ||
-      Boolean(activeTurnIdRef.current) ||
-      Boolean(serverQueuedTurnEntryIdsRef.current.get(composerScopeKey)) ||
-      sendingRef.current);
+    !props.launchpad
+    && (Boolean(props.threadBusy)
+      || Boolean(activeTurnIdRef.current)
+      || Boolean(serverQueuedTurnEntryIdsRef.current.get(composerScopeKey))
+      || sendingRef.current);
 
-  const submitPendingSteer = async (pending: QueuedTurnDraft): Promise<void> => {
+  const submitPendingSteer = async (
+    pending: QueuedTurnDraft,
+  ): Promise<void> => {
     const turnId = activeTurnIdRef.current;
     if (!props.thread || !turnId || !props.desktopApi?.steerTurn) {
       setSendError("Steering is not available for this backend.");
@@ -4148,10 +4249,10 @@ export function Composer(props: ComposerProps) {
     setSendError(undefined);
     setSteering(true);
     updatePendingSteer((current) =>
-      current?.text === pending.text &&
-      current.imageAttachments === pending.imageAttachments
+      current?.text === pending.text
+      && current.imageAttachments === pending.imageAttachments
         ? { ...current, status: "steering" }
-        : current
+        : current,
     );
     props.onPendingStatusChange?.("Steering");
     try {
@@ -4176,17 +4277,21 @@ export function Composer(props: ComposerProps) {
         }
         setPendingSteer(undefined);
         setSendError(undefined);
-        const nextActiveTurnId = staleSteer.active ? staleSteer.activeTurnId : undefined;
+        const nextActiveTurnId = staleSteer.active
+          ? staleSteer.activeTurnId
+          : undefined;
         updateActiveTurnId(nextActiveTurnId);
         props.onActiveTurnIdChange?.(nextActiveTurnId);
-        props.onPendingStatusChange?.(staleSteer.active ? "Thinking" : undefined);
+        props.onPendingStatusChange?.(
+          staleSteer.active ? "Thinking" : undefined,
+        );
         return;
       }
       updatePendingSteer((current) =>
-        current?.text === pending.text &&
-        current.imageAttachments === pending.imageAttachments
+        current?.text === pending.text
+        && current.imageAttachments === pending.imageAttachments
           ? { ...current, status: "pending" }
-          : current
+          : current,
       );
       props.onPendingStatusChange?.("Thinking");
       setSendError(error instanceof Error ? error.message : String(error));
@@ -4197,7 +4302,12 @@ export function Composer(props: ComposerProps) {
 
   const createPendingSteer = (pending: QueuedTurnDraft): boolean => {
     const turnId = activeTurnIdRef.current;
-    if (!props.thread || !turnId || !props.desktopApi?.steerTurn || !supportsSteering) {
+    if (
+      !props.thread
+      || !turnId
+      || !props.desktopApi?.steerTurn
+      || !supportsSteering
+    ) {
       setSendError("Steering is not available for this model.");
       return false;
     }
@@ -4227,7 +4337,11 @@ export function Composer(props: ComposerProps) {
   };
 
   const steerCurrentDraft = (): void => {
-    if (!props.thread || !activeTurnIdRef.current || !props.desktopApi?.steerTurn) {
+    if (
+      !props.thread
+      || !activeTurnIdRef.current
+      || !props.desktopApi?.steerTurn
+    ) {
       queueCurrentDraft();
       setSendError("Steering is not available for this backend.");
       return;
@@ -4255,12 +4369,17 @@ export function Composer(props: ComposerProps) {
     }
   };
 
-  const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
-    const reviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
+  const submitTurn = async (
+    mode: "default" | "steer" = "default",
+  ): Promise<void> => {
+    const reviewCommand = supportsReview
+      ? parseReviewCommand(draft)
+      : undefined;
     if (
-      reviewCommand &&
-      sendingRef.current &&
-      inFlightReviewSubmissionKeyRef.current === reviewSubmissionKey(reviewCommand)
+      reviewCommand
+      && sendingRef.current
+      && inFlightReviewSubmissionKeyRef.current
+        === reviewSubmissionKey(reviewCommand)
     ) {
       return;
     }
@@ -4274,11 +4393,11 @@ export function Composer(props: ComposerProps) {
         steerCurrentDraft();
       } else if (reviewCommand && isBareReviewCommand) {
         setReviewConfig(
-          reviewConfig ??
-            createReviewConfig({
+          reviewConfig
+            ?? createReviewConfig({
               directory: props.directory,
               thread: props.thread,
-            })
+            }),
         );
         setSendError(undefined);
       } else if (reviewCommand) {
@@ -4296,11 +4415,11 @@ export function Composer(props: ComposerProps) {
     if (reviewCommand) {
       if (isBareReviewCommand) {
         setReviewConfig(
-          reviewConfig ??
-            createReviewConfig({
+          reviewConfig
+            ?? createReviewConfig({
               directory: props.directory,
               thread: props.thread,
-            })
+            }),
         );
         setSendError(undefined);
         return;
@@ -4311,14 +4430,15 @@ export function Composer(props: ComposerProps) {
     }
 
     const payload = buildTurnPayload(canonicalDraft, imageAttachments);
-    const collaborationMode = planModeEnabled && supportsPlanMode
-      ? ({
-          mode: "plan",
-          settings: {
-            developerInstructions: null,
-          },
-        } satisfies AppServerCollaborationModeRequest)
-      : undefined;
+    const collaborationMode =
+      planModeEnabled && supportsPlanMode
+        ? ({
+            mode: "plan",
+            settings: {
+              developerInstructions: null,
+            },
+          } satisfies AppServerCollaborationModeRequest)
+        : undefined;
 
     if (payload.input.length === 0 || props.disabled) {
       return;
@@ -4331,8 +4451,8 @@ export function Composer(props: ComposerProps) {
       const submittedScopeKey = composerScopeKey;
       markComposerDraftSubmitted(submittedScopeKey);
       props.onPendingStatusChange?.(
-        props.launchpad.codexEnvironmentId &&
-          selectedCodexEnvironment?.setupScript
+        props.launchpad.codexEnvironmentId
+          && selectedCodexEnvironment?.setupScript
           ? "Running environment setup"
           : collaborationMode
             ? "Planning"
@@ -4342,7 +4462,7 @@ export function Composer(props: ComposerProps) {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
           payload.input,
-          collaborationMode
+          collaborationMode,
         );
         clearSubmittedComposerDraft(submittedScopeKey);
         if (collaborationMode) {
@@ -4369,10 +4489,10 @@ export function Composer(props: ComposerProps) {
   const stopTurn = async (): Promise<void> => {
     const turnId = activeTurnIdRef.current;
     if (
-      !props.thread ||
-      !turnId ||
-      !props.desktopApi?.interruptTurn ||
-      interrupting
+      !props.thread
+      || !turnId
+      || !props.desktopApi?.interruptTurn
+      || interrupting
     ) {
       return;
     }
@@ -4405,7 +4525,7 @@ export function Composer(props: ComposerProps) {
           ? "Waiting for approval"
           : props.pendingUserInputActive
             ? "Waiting for input"
-            : "Thinking"
+            : "Thinking",
       );
       setSendError(error instanceof Error ? error.message : String(error));
     }
@@ -4425,14 +4545,16 @@ export function Composer(props: ComposerProps) {
       draft.length,
     );
     const trigger =
-      findSkillTrigger(draft, selectionStart) ?? findSkillTrigger(draft, draft.length);
+      findSkillTrigger(draft, selectionStart)
+      ?? findSkillTrigger(draft, draft.length);
     if (!trigger) {
       return;
     }
 
     const before = draft.slice(0, trigger.start);
     const after = draft.slice(Math.max(trigger.end, selectionEnd));
-    const nextAfter = after.length > 0 && !/^\s/.test(after) ? ` ${after}` : after;
+    const nextAfter =
+      after.length > 0 && !/^\s/.test(after) ? ` ${after}` : after;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
     const nextSkillTokens = [
@@ -4491,7 +4613,8 @@ export function Composer(props: ComposerProps) {
     const after = draft.slice(Math.max(trigger.end, selectionEnd));
     const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
     const nextDraft = `${before}${command.insertText}${needsTrailingSpace ? " " : ""}${after}`;
-    const nextSelection = before.length + command.insertText.length + (needsTrailingSpace ? 1 : 0);
+    const nextSelection =
+      before.length + command.insertText.length + (needsTrailingSpace ? 1 : 0);
 
     updateVisibleDraft(nextDraft);
     setActiveSlashIndex(0);
@@ -4503,7 +4626,9 @@ export function Composer(props: ComposerProps) {
 
   const removeImageAttachment = (id: string): void => {
     setImageAttachments((current) => {
-      const nextAttachments = current.filter((attachment) => attachment.id !== id);
+      const nextAttachments = current.filter(
+        (attachment) => attachment.id !== id,
+      );
       saveComposerDraftSnapshot(composerScopeKey, {
         draft,
         editorDocument,
@@ -4528,7 +4653,9 @@ export function Composer(props: ComposerProps) {
     });
   };
 
-  const showComposerNotice = (notice: Omit<AppNoticeToastNotice, "id">): void => {
+  const showComposerNotice = (
+    notice: Omit<AppNoticeToastNotice, "id">,
+  ): void => {
     props.onShowNotice?.({
       id: `composer-notice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ...notice,
@@ -4654,8 +4781,8 @@ export function Composer(props: ComposerProps) {
             },
             path: normalized.conversionPath,
             resized:
-              normalized.original.width !== normalized.width ||
-              normalized.original.height !== normalized.height,
+              normalized.original.width !== normalized.width
+              || normalized.original.height !== normalized.height,
           });
           return {
             id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
@@ -4666,7 +4793,7 @@ export function Composer(props: ComposerProps) {
             width: normalized.width,
             height: normalized.height,
           };
-        })
+        }),
       );
 
       if (activeComposerScopeKeyRef.current !== pasteScope.key) {
@@ -4749,7 +4876,9 @@ export function Composer(props: ComposerProps) {
       }
 
       setSendError(
-        error instanceof Error ? error.message : "The pasted image could not be read."
+        error instanceof Error
+          ? error.message
+          : "The pasted image could not be read.",
       );
     }
   };
@@ -4771,7 +4900,7 @@ export function Composer(props: ComposerProps) {
         | "codexEnvironmentExecutionTarget"
         | "codexEnvironmentActionId"
       >
-    >
+    >,
   ): void => {
     if (!props.launchpad || !props.onUpdateLaunchpad) {
       return;
@@ -4797,10 +4926,10 @@ export function Composer(props: ComposerProps) {
 
   const runThreadCodexEnvironmentAction = async (): Promise<void> => {
     if (
-      !props.thread ||
-      !props.desktopApi?.runCodexEnvironmentAction ||
-      !selectedThreadCodexAction ||
-      !currentThreadEnvActionStartingKey
+      !props.thread
+      || !props.desktopApi?.runCodexEnvironmentAction
+      || !selectedThreadCodexAction
+      || !currentThreadEnvActionStartingKey
     ) {
       return;
     }
@@ -4838,10 +4967,7 @@ export function Composer(props: ComposerProps) {
     environmentId?: string,
     actionId?: string,
   ): Promise<void> => {
-    if (
-      !props.thread ||
-      !props.desktopApi?.setCodexThreadEnvironment
-    ) {
+    if (!props.thread || !props.desktopApi?.setCodexThreadEnvironment) {
       return;
     }
 
@@ -4874,9 +5000,9 @@ export function Composer(props: ComposerProps) {
     }
 
     if (
-      props.thread &&
-      props.thread.executionMode !== executionMode &&
-      !props.updatingExecutionMode
+      props.thread
+      && props.thread.executionMode !== executionMode
+      && !props.updatingExecutionMode
     ) {
       setSendError(undefined);
       void props.onSetExecutionMode?.(executionMode);
@@ -4887,11 +5013,13 @@ export function Composer(props: ComposerProps) {
     executionMode: ThreadExecutionMode,
   ): void => {
     const currentExecutionMode =
-      props.launchpad?.executionMode ?? props.thread?.executionMode ?? "default";
+      props.launchpad?.executionMode
+      ?? props.thread?.executionMode
+      ?? "default";
     if (
-      currentExecutionMode === "default" &&
-      executionMode === "full-access" &&
-      !props.fullAccessRiskWarningDismissed
+      currentExecutionMode === "default"
+      && executionMode === "full-access"
+      && !props.fullAccessRiskWarningDismissed
     ) {
       setFullAccessRiskDontWarnAgain(false);
       setFullAccessRiskError(undefined);
@@ -4912,7 +5040,9 @@ export function Composer(props: ComposerProps) {
       setFullAccessRiskDialogOpen(false);
       applyExecutionModeSelection("full-access");
     } catch (error) {
-      setFullAccessRiskError(error instanceof Error ? error.message : String(error));
+      setFullAccessRiskError(
+        error instanceof Error ? error.message : String(error),
+      );
     } finally {
       setFullAccessRiskSaving(false);
     }
@@ -4921,10 +5051,10 @@ export function Composer(props: ComposerProps) {
   const handleThreadModelSettingsPatch = (
     patch: Partial<
       Pick<
-      NavigationThreadSummary,
-      "model" | "reasoningEffort" | "serviceTier" | "fastMode"
+        NavigationThreadSummary,
+        "model" | "reasoningEffort" | "serviceTier" | "fastMode"
       >
-    >
+    >,
   ): void => {
     if (!props.thread || !props.onSetThreadModelSettings) {
       return;
@@ -4937,35 +5067,39 @@ export function Composer(props: ComposerProps) {
   const currentSettings = props.launchpad ?? props.thread;
   const modelOptions = backend?.launchpadOptions?.models ?? [];
   const selectedModelOption =
-    modelOptions.find((option) => option.id === currentSettings?.model) ??
-    getDefaultModelOption(backend);
+    modelOptions.find((option) => option.id === currentSettings?.model)
+    ?? getDefaultModelOption(backend);
   // Image attachments are allowed unless the active model explicitly reports
   // no image support (Codex Spark) or the ACP agent advertises
   // `prompt.image: false`. `undefined` on either signal means "assume
   // supported" so existing backends keep working.
   const imagesSupported =
-    selectedModelOption?.supportsImage !== false &&
-    backend?.acp?.runtime?.agentCapabilities?.prompt?.image !== false;
+    selectedModelOption?.supportsImage !== false
+    && backend?.acp?.runtime?.agentCapabilities?.prompt?.image !== false;
   const imagesUnsupportedLabel =
     selectedModelOption?.label ?? currentSettings?.model ?? "This mode";
   const supportsReasoning =
-    selectedModelOption?.supportsReasoning ??
-    Boolean(backend?.launchpadOptions?.reasoningEfforts?.length);
+    selectedModelOption?.supportsReasoning
+    ?? Boolean(backend?.launchpadOptions?.reasoningEfforts?.length);
   const selectedReasoningEffort = supportsReasoning
     ? getReasoningEffortValue(backend, currentSettings?.reasoningEffort)
     : undefined;
   const supportsFast =
     backend?.kind === "codex"
-      ? selectedModelOption?.supportsFast ??
-        backend.launchpadOptions?.supportsFastMode ??
-        false
+      ? (selectedModelOption?.supportsFast
+        ?? backend.launchpadOptions?.supportsFastMode
+        ?? false)
       : false;
   const selectedServiceTier =
-    currentSettings?.serviceTier ?? backend?.launchpadOptions?.serviceTiers?.[0];
-  const acpRuntimeModeControl = getAcpRuntimeModeControl(backend, currentSettings);
+    currentSettings?.serviceTier
+    ?? backend?.launchpadOptions?.serviceTiers?.[0];
+  const acpRuntimeModeControl = getAcpRuntimeModeControl(
+    backend,
+    currentSettings,
+  );
   const providerOptions =
     props.backends?.filter(
-      (candidate) => candidate.available && candidate.capabilities.createThread
+      (candidate) => candidate.available && candidate.capabilities.createThread,
     ) ?? [];
   const availableExecutionModes =
     backend?.executionModes.filter((mode) => mode.available) ?? [];
@@ -4973,16 +5107,18 @@ export function Composer(props: ComposerProps) {
   const supportsPlanMode =
     (props.launchpad?.backend ?? props.thread?.source) === "codex";
   const supportsSteering =
-    Boolean(backend?.capabilities.steerTurn) &&
-    selectedModelOption?.supportsSteering !== false &&
-    props.thread?.source !== "grok";
+    Boolean(backend?.capabilities.steerTurn)
+    && selectedModelOption?.supportsSteering !== false
+    && props.thread?.source !== "grok";
   const launchpadSubmitting = isLaunchpad && sending;
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
   const launchpadWorkspaceValue =
-    props.launchpad &&
-    launchpadWorkspaceOptions.some((option) => option.value === props.launchpad?.workMode)
+    props.launchpad
+    && launchpadWorkspaceOptions.some(
+      (option) => option.value === props.launchpad?.workMode,
+    )
       ? props.launchpad.workMode
       : "local";
   // Pure function of the launchpad draft + directory git status; memoize so
@@ -5002,19 +5138,20 @@ export function Composer(props: ComposerProps) {
   );
   const threadCodexEnvironmentOptions =
     props.thread?.codexEnvironmentOptions ?? [];
-  const selectedThreadCodexEnvironmentOption = threadCodexEnvironmentOptions.find(
-    (environment) =>
-      environment.id === props.thread?.codexEnvironmentRuntime?.environmentId,
-  );
+  const selectedThreadCodexEnvironmentOption =
+    threadCodexEnvironmentOptions.find(
+      (environment) =>
+        environment.id === props.thread?.codexEnvironmentRuntime?.environmentId,
+    );
   const runtimeThreadCodexEnvironmentActions =
     props.thread?.codexEnvironmentRuntime?.actions ?? [];
   const threadCodexEnvironmentActions =
     runtimeThreadCodexEnvironmentActions.length > 0
       ? runtimeThreadCodexEnvironmentActions
-      : selectedThreadCodexEnvironmentOption?.actions ?? [];
+      : (selectedThreadCodexEnvironmentOption?.actions ?? []);
   const selectedThreadCodexEnvironmentForAction =
-    selectedThreadCodexEnvironmentOption ??
-    (props.thread?.codexEnvironmentRuntime
+    selectedThreadCodexEnvironmentOption
+    ?? (props.thread?.codexEnvironmentRuntime
       ? {
           id: props.thread.codexEnvironmentRuntime.environmentId,
           name: props.thread.codexEnvironmentRuntime.environmentName,
@@ -5047,50 +5184,56 @@ export function Composer(props: ComposerProps) {
     threadEnvActionStarting,
     currentThreadEnvActionStartingKey,
   );
-  const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
+  const threadWorkspace = props.thread
+    ? getThreadWorkspace(props.thread)
+    : undefined;
   const workspaceOpenPath = getComposerWorkspaceOpenPath({
     directory: props.directory,
     launchpad: props.launchpad,
     threadWorkspace,
   });
-  const editorApplication = props.applications?.editors.find(
-    (application) =>
-      application.canOpenWorkspace &&
-      application.id === props.applications?.preferredEditorId.value,
-  ) ?? props.applications?.editors.find(
-    (application) => application.canOpenWorkspace,
-  );
-  const terminalApplication = props.applications?.terminals.find(
-    (application) =>
-      application.canOpenWorkspace &&
-      application.id === props.applications?.preferredTerminalId.value,
-  ) ?? props.applications?.terminals.find(
-    (application) => application.canOpenWorkspace,
-  );
+  const editorApplication =
+    props.applications?.editors.find(
+      (application) =>
+        application.canOpenWorkspace
+        && application.id === props.applications?.preferredEditorId.value,
+    )
+    ?? props.applications?.editors.find(
+      (application) => application.canOpenWorkspace,
+    );
+  const terminalApplication =
+    props.applications?.terminals.find(
+      (application) =>
+        application.canOpenWorkspace
+        && application.id === props.applications?.preferredTerminalId.value,
+    )
+    ?? props.applications?.terminals.find(
+      (application) => application.canOpenWorkspace,
+    );
   const sourceBranch =
     threadWorkspace?.mode === "worktree"
-      ? props.thread?.observedGitBranch ??
-        props.thread?.gitBranch ??
-        props.directory?.gitStatus?.currentBranch
-      : props.directory?.gitStatus?.currentBranch ??
-        props.thread?.observedGitBranch ??
-        props.thread?.gitBranch;
+      ? (props.thread?.observedGitBranch
+        ?? props.thread?.gitBranch
+        ?? props.directory?.gitStatus?.currentBranch)
+      : (props.directory?.gitStatus?.currentBranch
+        ?? props.thread?.observedGitBranch
+        ?? props.thread?.gitBranch);
   const branchOptions = getLeaveLocalBranchOptions({
     currentBranch: sourceBranch,
     directory: props.directory,
   });
   const canHandoffThreadWorkspace = Boolean(
-    props.thread &&
-      threadWorkspace &&
-      isThreadWorkspaceHandoffEligible({ sourceBranch, threadWorkspace }) &&
-      props.onHandoffThreadWorkspace &&
-      props.thread.workspaceHandoff?.available !== false &&
-      !sending &&
-      !activeTurnId &&
-      !serverQueuedTurnEntryId &&
-      !props.pendingRequestActive &&
-      !props.pendingUserInputActive &&
-      !handoffSubmitting
+    props.thread
+    && threadWorkspace
+    && isThreadWorkspaceHandoffEligible({ sourceBranch, threadWorkspace })
+    && props.onHandoffThreadWorkspace
+    && props.thread.workspaceHandoff?.available !== false
+    && !sending
+    && !activeTurnId
+    && !serverQueuedTurnEntryId
+    && !props.pendingRequestActive
+    && !props.pendingUserInputActive
+    && !handoffSubmitting,
   );
 
   useEffect(() => {
@@ -5100,7 +5243,7 @@ export function Composer(props: ComposerProps) {
   }, [activeTurnId]);
 
   const openHandoffDialog = (
-    direction: HandoffThreadWorkspaceRequest["direction"]
+    direction: HandoffThreadWorkspaceRequest["direction"],
   ): void => {
     setWorkspaceMenuOpen(false);
     setHandoffError(undefined);
@@ -5130,10 +5273,12 @@ export function Composer(props: ComposerProps) {
         repositoryPath: threadWorkspace.repositoryPath,
         sourcePath: threadWorkspace.sourcePath,
         sourceBranch,
-        ...(handoffDialog === "local-to-worktree" && handoffStrategy === "move-branch"
+        ...(handoffDialog === "local-to-worktree"
+        && handoffStrategy === "move-branch"
           ? { leaveLocalBranch: leaveLocalBranch || undefined }
           : {}),
-        ...(handoffDialog === "local-to-worktree" && handoffStrategy === "new-branch"
+        ...(handoffDialog === "local-to-worktree"
+        && handoffStrategy === "new-branch"
           ? { newBranchName: newLocalBranch || undefined }
           : {}),
       });
@@ -5153,7 +5298,9 @@ export function Composer(props: ComposerProps) {
       return;
     }
     if (!workspaceOpenPath) {
-      setApplicationOpenError("No workspace path is available for this thread.");
+      setApplicationOpenError(
+        "No workspace path is available for this thread.",
+      );
       return;
     }
 
@@ -5165,16 +5312,18 @@ export function Composer(props: ComposerProps) {
         targetPath: workspaceOpenPath,
       });
     } catch (error) {
-      setApplicationOpenError(error instanceof Error ? error.message : String(error));
+      setApplicationOpenError(
+        error instanceof Error ? error.message : String(error),
+      );
     }
   };
 
   const handoffDisabled =
-    handoffSubmitting ||
-    !sourceBranch ||
-    (handoffDialog === "local-to-worktree" &&
-      ((localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
-        (localHandoffStrategy === "new-branch" && !newLocalBranch.trim())));
+    handoffSubmitting
+    || !sourceBranch
+    || (handoffDialog === "local-to-worktree"
+      && ((localHandoffStrategy === "move-branch" && !leaveLocalBranch)
+        || (localHandoffStrategy === "new-branch" && !newLocalBranch.trim())));
 
   const commitActiveAutocomplete = (): void => {
     if (autocompleteKind === "skills") {
@@ -5187,13 +5336,13 @@ export function Composer(props: ComposerProps) {
       : undefined;
     const exactSlashCommand = currentSlashText
       ? filteredSlashCommands.find((command) =>
-          slashCommandMatchesText(command, currentSlashText)
+          slashCommandMatchesText(command, currentSlashText),
         )
       : undefined;
     applySlashCommand(
-      exactSlashCommand ??
-        filteredSlashCommands[activeSlashIndex] ??
-        filteredSlashCommands[0]!
+      exactSlashCommand
+        ?? filteredSlashCommands[activeSlashIndex]
+        ?? filteredSlashCommands[0]!,
     );
   };
 
@@ -5222,11 +5371,11 @@ export function Composer(props: ComposerProps) {
     return (
       (currentSlashText
         ? filteredSlashCommands.find((candidate) =>
-            slashCommandMatchesText(candidate, currentSlashText)
+            slashCommandMatchesText(candidate, currentSlashText),
           )
-        : undefined) ??
-      filteredSlashCommands[activeSlashIndex] ??
-      filteredSlashCommands[0]
+        : undefined)
+      ?? filteredSlashCommands[activeSlashIndex]
+      ?? filteredSlashCommands[0]
     );
   };
 
@@ -5234,10 +5383,10 @@ export function Composer(props: ComposerProps) {
     event: ReactKeyboardEvent<HTMLElement>,
   ): boolean => {
     if (
-      event.key.toLowerCase() !== "z" ||
-      (!event.metaKey && !event.ctrlKey) ||
-      event.shiftKey ||
-      deletedSkillTokenHistoryRef.current.length === 0
+      event.key.toLowerCase() !== "z"
+      || (!event.metaKey && !event.ctrlKey)
+      || event.shiftKey
+      || deletedSkillTokenHistoryRef.current.length === 0
     ) {
       return false;
     }
@@ -5287,7 +5436,7 @@ export function Composer(props: ComposerProps) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       updateActiveAutocompleteIndex((current) =>
-        Math.min(current + 1, autocompleteLength - 1)
+        Math.min(current + 1, autocompleteLength - 1),
       );
       return;
     }
@@ -5302,7 +5451,7 @@ export function Composer(props: ComposerProps) {
       event.preventDefault();
       const pageStep = getAutocompletePageStep();
       updateActiveAutocompleteIndex((current) =>
-        Math.min(current + pageStep, autocompleteLength - 1)
+        Math.min(current + pageStep, autocompleteLength - 1),
       );
       return;
     }
@@ -5310,7 +5459,9 @@ export function Composer(props: ComposerProps) {
     if (event.key === "PageUp") {
       event.preventDefault();
       const pageStep = getAutocompletePageStep();
-      updateActiveAutocompleteIndex((current) => Math.max(current - pageStep, 0));
+      updateActiveAutocompleteIndex((current) =>
+        Math.max(current - pageStep, 0),
+      );
       return;
     }
 
@@ -5327,9 +5478,9 @@ export function Composer(props: ComposerProps) {
 
     const optionHasFocus = event.currentTarget instanceof HTMLButtonElement;
     if (
-      (event.key === "Tab" && !event.shiftKey) ||
-      event.key === "Enter" ||
-      (event.key === " " && optionHasFocus)
+      (event.key === "Tab" && !event.shiftKey)
+      || event.key === "Enter"
+      || (event.key === " " && optionHasFocus)
     ) {
       if (event.key === "Enter" && event.shiftKey) {
         return;
@@ -5339,10 +5490,7 @@ export function Composer(props: ComposerProps) {
         event.key === "Enter" && autocompleteKind === "slash"
           ? getActiveSlashCommand()
           : undefined;
-      if (
-        slashCommand &&
-        runSlashCommand(slashCommand)
-      ) {
+      if (slashCommand && runSlashCommand(slashCommand)) {
         return;
       }
       commitActiveAutocomplete();
@@ -5370,9 +5518,9 @@ export function Composer(props: ComposerProps) {
       const nextSkillTokensSignature =
         getComposerSkillTokensSignature(nextSkillTokens);
       if (
-        nextDraft === pendingProgrammaticChange.staleDraft &&
-        nextSkillTokensSignature ===
-          pendingProgrammaticChange.staleSkillTokensSignature
+        nextDraft === pendingProgrammaticChange.staleDraft
+        && nextSkillTokensSignature
+          === pendingProgrammaticChange.staleSkillTokensSignature
       ) {
         return;
       }
@@ -5380,8 +5528,7 @@ export function Composer(props: ComposerProps) {
     }
 
     const deletedSkillTokenHistoryEntry =
-      nextSkillTokens &&
-      nextSkillTokens.length < skillTokens.length
+      nextSkillTokens && nextSkillTokens.length < skillTokens.length
         ? (() => {
             const nextTokenIds = new Set(
               nextSkillTokens.map((token) => token.id),
@@ -5400,11 +5547,11 @@ export function Composer(props: ComposerProps) {
         : undefined;
     const storedSkillTokens = nextSkillTokens ?? skillTokens;
     const preserveRecoveryCycle =
-      !recoveringDraftRef.current &&
-      recoveryCycleRef.current?.candidates.some(
+      !recoveringDraftRef.current
+      && recoveryCycleRef.current?.candidates.some(
         (candidate) =>
-          getComposerDraftSnapshotSignature(candidate) ===
-          getComposerDraftSnapshotSignature({
+          getComposerDraftSnapshotSignature(candidate)
+          === getComposerDraftSnapshotSignature({
             draft: nextDraft,
             editorDocument: metadata?.editorDocument,
             imageAttachments,
@@ -5441,15 +5588,15 @@ export function Composer(props: ComposerProps) {
 
     if (!hasAutocomplete) {
       const liveHasComposerContent = Boolean(
-        (inputRef.current?.value ?? draft).trim() ||
-          (inputRef.current?.skillTokenCount ?? skillTokens.length) > 0,
+        (inputRef.current?.value ?? draft).trim()
+        || (inputRef.current?.skillTokenCount ?? skillTokens.length) > 0,
       );
       const liveHasAnyComposerContent =
         liveHasComposerContent || imageAttachments.length > 0;
       const recoveryCycle = recoveryCycleRef.current;
       const liveSelectionAtStart =
-        (inputRef.current?.selectionStart ?? 0) === 0 &&
-        (inputRef.current?.selectionEnd ?? 0) === 0;
+        (inputRef.current?.selectionStart ?? 0) === 0
+        && (inputRef.current?.selectionEnd ?? 0) === 0;
       const canCycleActiveRecovery =
         recoveryCycle?.scopeKey === composerScopeKey && liveSelectionAtStart;
       if (recoveryCycle && !canCycleActiveRecovery) {
@@ -5457,29 +5604,29 @@ export function Composer(props: ComposerProps) {
         recoveryEligibilityVersionRef.current += 1;
       }
       if (
-        recoveryCycle &&
-        canCycleActiveRecovery &&
-        liveHasAnyComposerContent &&
-        event.key !== "ArrowUp" &&
-        event.key !== "ArrowDown"
+        recoveryCycle
+        && canCycleActiveRecovery
+        && liveHasAnyComposerContent
+        && event.key !== "ArrowUp"
+        && event.key !== "ArrowDown"
       ) {
         recoveryCycleRef.current = undefined;
         recoveryEligibilityVersionRef.current += 1;
       }
       if (
-        event.key === "ArrowUp" &&
-        (!liveHasComposerContent || canCycleActiveRecovery) &&
-        (imageAttachments.length === 0 || canCycleActiveRecovery)
+        event.key === "ArrowUp"
+        && (!liveHasComposerContent || canCycleActiveRecovery)
+        && (imageAttachments.length === 0 || canCycleActiveRecovery)
       ) {
         event.preventDefault();
         void recoverPreviousComposerDraft();
         return;
       }
       if (
-        event.key === "ArrowDown" &&
-        liveHasAnyComposerContent &&
-        canCycleActiveRecovery &&
-        (imageAttachments.length === 0 || canCycleActiveRecovery)
+        event.key === "ArrowDown"
+        && liveHasAnyComposerContent
+        && canCycleActiveRecovery
+        && (imageAttachments.length === 0 || canCycleActiveRecovery)
       ) {
         event.preventDefault();
         recoverNextComposerDraft();
@@ -5619,10 +5766,11 @@ export function Composer(props: ComposerProps) {
               <dl className="workspace-handoff-dialog__summary">
                 <div>
                   <dt>
-                    {handoffDialog === "worktree-to-local" && sourceBranch === "HEAD"
+                    {handoffDialog === "worktree-to-local"
+                    && sourceBranch === "HEAD"
                       ? "Detached HEAD to move"
-                      : handoffDialog === "local-to-worktree" &&
-                          localHandoffStrategy === "detached-changes"
+                      : handoffDialog === "local-to-worktree"
+                          && localHandoffStrategy === "detached-changes"
                         ? "Current branch"
                         : "Branch to move"}
                   </dt>
@@ -5642,14 +5790,17 @@ export function Composer(props: ComposerProps) {
                       disabled={handoffSubmitting}
                       role="radio"
                       type="button"
-                      onClick={() => setLocalHandoffStrategy("detached-changes")}
+                      onClick={() =>
+                        setLocalHandoffStrategy("detached-changes")
+                      }
                     >
                       <span className="workspace-handoff-dialog__strategy-title">
                         Handoff to Detached HEAD
                       </span>
                       <span>
-                        Keep Local on the current branch. Create a detached worktree at
-                        the current branch tip and move dirty non-ignored changes on top.
+                        Keep Local on the current branch. Create a detached
+                        worktree at the current branch tip and move dirty
+                        non-ignored changes on top.
                       </span>
                     </button>
                     <button
@@ -5664,8 +5815,8 @@ export function Composer(props: ComposerProps) {
                         Handoff to New Branch
                       </span>
                       <span>
-                        Keep Local on this branch. Create a named branch in the new
-                        worktree and move dirty non-ignored changes on top.
+                        Keep Local on this branch. Create a named branch in the
+                        new worktree and move dirty non-ignored changes on top.
                       </span>
                     </button>
                     <button
@@ -5680,8 +5831,8 @@ export function Composer(props: ComposerProps) {
                         Handoff Current Branch
                       </span>
                       <span>
-                        Move this branch into the new worktree, then switch this checkout to
-                        a selected branch.
+                        Move this branch into the new worktree, then switch this
+                        checkout to a selected branch.
                       </span>
                     </button>
                   </div>
@@ -5691,9 +5842,13 @@ export function Composer(props: ComposerProps) {
                       <select
                         aria-label="Leave current checkout on"
                         className="composer__select"
-                        disabled={handoffSubmitting || branchOptions.length === 0}
+                        disabled={
+                          handoffSubmitting || branchOptions.length === 0
+                        }
                         value={leaveLocalBranch}
-                        onChange={(event) => setLeaveLocalBranch(event.target.value)}
+                        onChange={(event) =>
+                          setLeaveLocalBranch(event.target.value)
+                        }
                       >
                         {branchOptions.map((branch) => (
                           <option key={branch} value={branch}>
@@ -5713,29 +5868,32 @@ export function Composer(props: ComposerProps) {
                         spellCheck={false}
                         type="text"
                         value={newLocalBranch}
-                        onChange={(event) => setNewLocalBranch(event.target.value)}
+                        onChange={(event) =>
+                          setNewLocalBranch(event.target.value)
+                        }
                       />
                     </label>
                   ) : null}
                 </>
               ) : null}
-              {handoffDialog === "local-to-worktree" &&
-              localHandoffStrategy === "move-branch" &&
-              branchOptions.length === 0 ? (
+              {handoffDialog === "local-to-worktree"
+              && localHandoffStrategy === "move-branch"
+              && branchOptions.length === 0 ? (
                 <p className="workspace-handoff-dialog__note">
-                  No available local branch can be checked out before moving this branch.
+                  No available local branch can be checked out before moving
+                  this branch.
                 </p>
               ) : null}
-              {handoffDialog === "local-to-worktree" &&
-              localHandoffStrategy === "detached-changes" ? (
+              {handoffDialog === "local-to-worktree"
+              && localHandoffStrategy === "detached-changes" ? (
                 <p className="workspace-handoff-dialog__note">
                   The new worktree starts at the current tip of{" "}
-                  {sourceBranch ?? "this branch"} and receives dirty non-ignored changes on
-                  top.
+                  {sourceBranch ?? "this branch"} and receives dirty non-ignored
+                  changes on top.
                 </p>
               ) : null}
-              {handoffDialog === "local-to-worktree" &&
-              localHandoffStrategy === "new-branch" ? (
+              {handoffDialog === "local-to-worktree"
+              && localHandoffStrategy === "new-branch" ? (
                 <p className="workspace-handoff-dialog__note">
                   The new worktree creates{" "}
                   {newLocalBranch.trim() ? (
@@ -5743,15 +5901,17 @@ export function Composer(props: ComposerProps) {
                   ) : (
                     "a named branch"
                   )}{" "}
-                  at the current tip of {sourceBranch ?? "this branch"} and receives
-                  dirty non-ignored changes on top.
+                  at the current tip of {sourceBranch ?? "this branch"} and
+                  receives dirty non-ignored changes on top.
                 </p>
               ) : null}
               <p className="workspace-handoff-dialog__note">
                 Ignored files are not moved by handoff.
               </p>
               {handoffError ? (
-                <p className="workspace-handoff-dialog__error">{handoffError}</p>
+                <p className="workspace-handoff-dialog__error">
+                  {handoffError}
+                </p>
               ) : null}
               <div className="workspace-handoff-dialog__actions">
                 <button
@@ -5803,1089 +5963,1168 @@ export function Composer(props: ComposerProps) {
           above an input that already names itself was redundant
           chrome. */}
 
-      {props.showEnvActionAnchors === false ? null : (
-        <EnvActionAnchorList
-          runtime={props.thread?.codexEnvironmentRuntime}
-          hiddenRunIds={props.hiddenEnvActionRunIds}
-          onDismissRun={props.onDismissEnvActionRun}
-          onMoveToSidebar={props.onMoveEnvActionsToSidebar}
-          onStopRun={props.onStopEnvActionRun}
-        />
-      )}
-
-      {pendingSteer ? (
-        <div
-          className="composer__queued composer__queued--steer"
-          aria-label="Pending steer message"
-        >
-          <div className="composer__queued-copy">
-            <span className="composer__queued-label">
-              {pendingSteer.status === "steering" ? "Steering now" : "Pending steer"}
-            </span>
-            <span className="composer__queued-text">
-              {formatDraftPreview(pendingSteer)}
-            </span>
-          </div>
-          <QueuedImageAttachments attachments={pendingSteer.imageAttachments} />
-          <div className="composer__queued-actions">
-            {pendingSteer.status === "pending" ? (
-              <>
-                <button
-                  className="composer__secondary-action"
-                  type="button"
-                  onClick={() => {
-                    setComposerDraftFromCanonical(pendingSteer.text);
-                    setImageAttachments(pendingSteer.imageAttachments);
-                    setPendingSteer(undefined);
-                    requestAnimationFrame(() => inputRef.current?.focus());
-                  }}
-                >
-                  Edit
-                </button>
-                <button
-                  className="composer__secondary-action"
-                  type="button"
-                  onClick={() => {
-                    setPendingSteer(undefined);
-                  }}
-                >
-                  Delete
-                </button>
-              </>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      {props.thread?.queuedExecutionMode &&
-      props.thread.queuedExecutionMode !== props.thread.executionMode ? (
-        <div
-          className="composer__queued composer__queued--permissions"
-          aria-label="Queued permissions change"
-        >
-          <div className="composer__queued-copy">
-            <span className="composer__queued-label">Permissions queued</span>
-            <span className="composer__queued-text">
-              Will switch to{" "}
-              {formatExecutionModeLabel(props.thread.queuedExecutionMode)} when
-              the current turn ends
-            </span>
-          </div>
-          <div className="composer__queued-actions">
-            <button
-              className="composer__secondary-action"
-              type="button"
-              disabled={!props.onCancelExecutionModeQueue}
-              onClick={() => {
-                void props.onCancelExecutionModeQueue?.();
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {queuedTurns.map((queued, index) => (
-        <div
-          className="composer__queued"
-          aria-label={index === 0 ? "Queued message" : `Queued message ${index + 1}`}
-          key={`${index}:${queued.text}:${queued.imageAttachments.length}`}
-        >
-          <div className="composer__queued-copy">
-            <span className="composer__queued-label">
-              {index === 0 ? "Queued next" : `Queued #${index + 1}`}
-            </span>
-            <span className="composer__queued-text">
-              {formatDraftPreview(queued)}
-            </span>
-          </div>
-          <QueuedImageAttachments attachments={queued.imageAttachments} />
-          <div className="composer__queued-actions">
-            {supportsSteering && !queued.reviewCommand ? (
-              <button
-                className="composer__secondary-action"
-                disabled={props.disabled || steering || !activeTurnId}
-                type="button"
-                onClick={() => {
-                  steerQueuedTurn(queued);
-                }}
-              >
-                {steering ? "Steering..." : "Steer"}
-              </button>
-            ) : null}
-            <button
-              className="composer__secondary-action"
-              type="button"
-              onClick={() => {
-                setComposerDraftFromCanonical(queued.text);
-                setImageAttachments(queued.imageAttachments);
-                removeQueuedTurnAt(index);
-                requestAnimationFrame(() => inputRef.current?.focus());
-              }}
-            >
-              Edit
-            </button>
-            <button
-              className="composer__secondary-action"
-              type="button"
-              onClick={() => {
-                removeQueuedTurnAt(index);
-              }}
-            >
-              Delete
-            </button>
-          </div>
-        </div>
-      ))}
-
-      {imageAttachments.length > 0 ? (
-        <div className="composer__attachments" aria-label="Pasted images">
-          {imageAttachments.map((attachment, index) => {
-            const dimensions = formatImageDimensions(
-              attachment.width,
-              attachment.height,
-            );
-            return (
-              <div className="composer__attachment" key={attachment.id}>
-                <div className="composer__attachment-thumb">
-                  <button
-                    aria-label={`Expand ${attachment.name}`}
-                    className="composer__attachment-open"
-                    type="button"
-                    onClick={() => {
-                      setLightboxAttachment(attachment);
-                    }}
-                  >
-                    <img
-                      className="composer__attachment-preview"
-                      src={attachment.url}
-                      alt={formatPastedImageAlt(attachment, index)}
-                    />
-                  </button>
-                  <button
-                    aria-label={`Remove ${attachment.name}`}
-                    className="composer__attachment-remove"
-                    type="button"
-                    onClick={() => {
-                      removeImageAttachment(attachment.id);
-                    }}
-                  >
-                    <CloseIcon size={12} aria-hidden="true" />
-                  </button>
-                </div>
-                <div className="composer__attachment-chips">
-                  <span className="composer__attachment-chip">
-                    {formatBytes(attachment.size)}
-                  </span>
-                  {dimensions ? (
-                    <span className="composer__attachment-chip">{dimensions}</span>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-
-      {imageAttachments.length > 0 && !imagesSupported ? (
-        <p className="composer__meta composer__meta--warning" role="status">
-          {imagesUnsupportedLabel} doesn&apos;t support image attachments —
-          remove them or switch models before sending.
-        </p>
-      ) : null}
-
-      <div className="composer__input-wrap" ref={inputWrapRef}>
-        {isReviewComposerOpen ? (
-          <fieldset
-            className="composer__review-config"
-            aria-label="Review target"
-            onKeyDown={handleReviewConfigKeyDown}
-          >
-            <legend>Review target</legend>
-            <div className="composer__review-options">
-              {REVIEW_TARGET_OPTIONS.map((option, index) => (
-                <button
-                  key={option.target}
-                  ref={(element) => {
-                    reviewOptionRefs.current[index] = element;
-                  }}
-                  type="button"
-                  aria-pressed={reviewConfig?.target === option.target}
-                  className={`composer__review-option${reviewConfig?.target === option.target ? " is-active" : ""}`}
-                  tabIndex={reviewConfig?.target === option.target ? 0 : -1}
-                  onClick={() => {
-                    selectReviewTarget(option.target, {
-                      focusDetail:
-                        option.target === "commit" || option.target === "custom",
-                    });
-                  }}
-                  onKeyDown={(event) => handleReviewOptionKeyDown(event, index)}
-                >
-                  <span>{option.label}</span>
-                  <small>{option.description}</small>
-                </button>
-              ))}
-            </div>
-
-            {reviewConfig?.target === "baseBranch" ? (
-              <div className="composer__review-field">
-                <span>Base branch</span>
-                <ReviewBranchPicker
-                  ariaLabel="Base branch"
-                  options={reviewBranchPickerOptions}
-                  value={reviewConfig.branch}
-                  onChange={(branch) => {
-                    setReviewConfig((current) => ({
-                      ...(current ??
-                        createReviewConfig({
-                          directory: props.directory,
-                          thread: props.thread,
-                        })),
-                      branch,
-                      target: "baseBranch",
-                    }));
-                    setSendError(undefined);
-                  }}
-                />
-              </div>
-            ) : null}
-
-            {reviewConfig?.target === "commit" ? (
-              <div className="composer__review-field">
-                <ReviewCommitPicker
-                  inputRef={reviewCommitInputRef}
-                  options={reviewCommitOptions}
-                  value={reviewConfig.commit}
-                  onChange={(commit) => {
-                    setReviewConfig((current) => ({
-                      ...(current ??
-                        createReviewConfig({
-                          directory: props.directory,
-                          thread: props.thread,
-                        })),
-                      commit,
-                      target: "commit",
-                    }));
-                    setSendError(undefined);
-                  }}
-                />
-              </div>
-            ) : null}
-
-            {reviewConfig?.target === "custom" ? (
-              <label className="composer__review-field">
-                <span>Instructions</span>
-                <textarea
-                  className="composer__review-input composer__review-input--textarea"
-                  ref={reviewCustomTextareaRef}
-                  value={reviewConfig.customInstructions}
-                  onChange={(event) => {
-                    setReviewConfig((current) => ({
-                      ...(current ??
-                        createReviewConfig({
-                          directory: props.directory,
-                          thread: props.thread,
-                        })),
-                      customInstructions: event.target.value,
-                      target: "custom",
-                    }));
-                    setSendError(undefined);
-                  }}
-                />
-              </label>
-            ) : null}
-
-            <div className="composer__review-actions">
-              <button
-                type="button"
-                className="composer__secondary-action"
-                onClick={exitReviewComposer}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="composer__primary-action"
-                disabled={!buildConfiguredReviewCommand(reviewConfig)}
-                onClick={() => {
-                  void submitConfiguredReviewComposer();
-                }}
-              >
-                Start review
-              </button>
-            </div>
-          </fieldset>
-        ) : (
-          <ComposerTiptapInput
-            ref={inputRef}
-            id="thread-composer"
-            ariaActiveDescendant={activeAutocompleteOptionId}
-            ariaControls={autocompleteListboxId}
-            ariaExpanded={hasAutocomplete}
-            disabled={composerDisabled}
-            label={isLaunchpad ? "New thread" : "Reply"}
-            markdownConversion
-            placeholder={composerPlaceholder}
-            selectionRequest={composerSelectionRequest}
-            editorDocument={editorDocument}
-            skillTokens={skillTokens}
-            value={draft}
-            onChange={handleComposerChange}
-            onPaste={handlePaste}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-            onClick={handleComposerClick}
-            onKeyDown={handleTiptapComposerKeyDown}
+        {props.showEnvActionAnchors === false ? null : (
+          <EnvActionAnchorList
+            runtime={props.thread?.codexEnvironmentRuntime}
+            hiddenRunIds={props.hiddenEnvActionRunIds}
+            onDismissRun={props.onDismissEnvActionRun}
+            onMoveToSidebar={props.onMoveEnvActionsToSidebar}
+            onStopRun={props.onStopEnvActionRun}
           />
         )}
 
-        {autocompleteKind === "skills" ? (
+        {pendingSteer ? (
           <div
-            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
-            ref={autocompleteListRef}
-            role="listbox"
-            aria-label="Skills"
-            id={skillListboxId}
-            style={{ maxHeight: autocompleteLayout.maxHeight }}
+            className="composer__queued composer__queued--steer"
+            aria-label="Pending steer message"
           >
-            {filteredSkills.map((skill, index) => (
-              <button
-                key={skill.path ?? skill.name}
-                id={`${skillListboxId}-option-${index}`}
-                ref={(node) => {
-                  autocompleteOptionRefs.current[index] = node;
-                }}
-                aria-selected={index === activeSkillIndex}
-                className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
-                tabIndex={index === activeSkillIndex ? 0 : -1}
-                type="button"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  applySkill(skill);
-                }}
-                onClick={() => {
-                  applySkill(skill);
-                }}
-                onFocus={() => {
-                  setActiveSkillIndex(index);
-                }}
-                onKeyDown={handleAutocompleteKeyDown}
-              >
-                <span className="composer__autocomplete-title">
-                  <span aria-hidden="true">🧰</span>
-                  <HighlightedAutocompleteLabel
-                    label={`$${skill.name}`}
-                    query={trigger?.query ? `$${trigger.query}` : "$"}
-                  />
-                </span>
-                <span className="composer__autocomplete-meta">
-                  {skill.shortDescription || skill.description || skill.path}
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : autocompleteKind === "slash" ? (
-          <div
-            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
-            ref={autocompleteListRef}
-            role="listbox"
-            aria-label="Commands"
-            id={slashListboxId}
-            style={{ maxHeight: autocompleteLayout.maxHeight }}
-          >
-            {filteredSlashCommands.map((command, index) => (
-              <button
-                key={command.id}
-                id={`${slashListboxId}-option-${index}`}
-                ref={(node) => {
-                  autocompleteOptionRefs.current[index] = node;
-                }}
-                aria-selected={index === activeSlashIndex}
-                className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
-                tabIndex={index === activeSlashIndex ? 0 : -1}
-                type="button"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  applySlashCommand(command);
-                }}
-                onClick={() => {
-                  applySlashCommand(command);
-                }}
-                onFocus={() => {
-                  setActiveSlashIndex(index);
-                }}
-                onKeyDown={handleAutocompleteKeyDown}
-              >
-                <span className="composer__autocomplete-title">
-                  <span className="composer__autocomplete-token" aria-hidden="true">/</span>
-                  <HighlightedAutocompleteLabel
-                    label={command.label}
-                    query={slashTrigger ? `/${slashTrigger.query}` : "/"}
-                  />
-                  <span
-                    className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
-                  >
-                    {command.sourceLabel}
-                  </span>
-                </span>
-                <span className="composer__autocomplete-meta">
-                  {command.description}
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
-
-      {props.launchpad || props.thread ? (
-        <div
-          className="composer__setup"
-          aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
-        >
-          {props.launchpad && providerOptions.length > 0 ? (
-            <ComposerDropdown
-              id="composer-provider"
-              ariaLabel="Provider"
-              disabled={launchpadSubmitting}
-              value={props.launchpad.backend}
-              options={providerOptions.map((candidate) => ({
-                label: formatBackendLabel(candidate.kind, props.backends),
-                value: candidate.kind,
-              }))}
-              onChange={(value) => {
-                const currentLaunchpad = props.launchpad;
-                if (!currentLaunchpad) {
-                  return;
-                }
-                const nextBackend = value as NavigationLaunchpadDraft["backend"];
-                const nextBackendSummary = props.backends?.find(
-                  (candidate) => candidate.kind === nextBackend
-                );
-                const executionModeStillAvailable = nextBackendSummary?.executionModes.some(
-                  (mode) => mode.available && mode.mode === currentLaunchpad.executionMode
-                );
-                const nextModelOption = getDefaultModelOption(nextBackendSummary);
-                handleLaunchpadPatch({
-                  backend: nextBackend,
-                  executionMode: executionModeStillAvailable
-                    ? currentLaunchpad.executionMode
-                    : "default",
-                  model: nextModelOption?.id,
-                  reasoningEffort: nextModelOption?.supportsReasoning
-                    ? getDefaultReasoningEffort(nextBackendSummary)
-                    : undefined,
-                  serviceTier: undefined,
-                  fastMode: undefined,
-                  codexEnvironmentId: undefined,
-                  codexEnvironmentExecutionTarget: undefined,
-                  codexEnvironmentActionId: undefined,
-                });
-              }}
+            <div className="composer__queued-copy">
+              <span className="composer__queued-label">
+                {pendingSteer.status === "steering"
+                  ? "Steering now"
+                  : "Pending steer"}
+              </span>
+              <span className="composer__queued-text">
+                {formatDraftPreview(pendingSteer)}
+              </span>
+            </div>
+            <QueuedImageAttachments
+              attachments={pendingSteer.imageAttachments}
             />
-          ) : props.thread ? (
-            <span className="composer__fixed-value" aria-label="Provider">
-              {formatBackendLabel(props.thread.source, props.backends)}
-            </span>
-          ) : null}
-
-          {availableExecutionModes.length > 0 &&
-          (props.launchpad || (props.thread && props.onSetExecutionMode)) ? (
-            <ComposerDropdown
-              ariaLabel="Access mode"
-              compact
-              tone={
-                (props.launchpad?.executionMode ??
-                  props.thread?.executionMode ??
-                  "default") === "full-access"
-                  ? "danger"
-                  : undefined
-              }
-              disabled={launchpadSubmitting || Boolean(props.updatingExecutionMode)}
-              value={
-                props.launchpad?.executionMode ??
-                props.thread?.executionMode ??
-                "default"
-              }
-              options={availableExecutionModes.map((mode) => ({
-                label: formatExecutionModeLabel(mode.mode),
-                value: mode.mode,
-              }))}
-              onChange={(value) => {
-                const executionMode = value as ThreadExecutionMode;
-                requestExecutionModeSelection(executionMode);
-              }}
-            />
-          ) : null}
-
-          {acpRuntimeModeControl ? (
-            <ComposerDropdown
-              ariaLabel="Agent mode"
-              compact
-              disabled={
-                launchpadSubmitting ||
-                (!props.launchpad && !props.onSetAcpRuntimeOption)
-              }
-              value={acpRuntimeModeControl.value}
-              options={acpRuntimeModeControl.options}
-              onChange={(value) => {
-                if (props.launchpad) {
-                  const executionMode = acpRuntimeModeRequiresFullAccess(value)
-                    ? "full-access"
-                    : "default";
-                  handleLaunchpadPatch({
-                    executionMode,
-                    acpRuntime: {
-                      ...props.launchpad.acpRuntime,
-                      configValues:
-                        acpRuntimeModeControl.source === "configOption"
-                          ? {
-                              ...(props.launchpad.acpRuntime?.configValues ?? {}),
-                              [acpRuntimeModeControl.optionId]: value,
-                            }
-                          : props.launchpad.acpRuntime?.configValues,
-                      currentModeId:
-                        acpRuntimeModeControl.source === "mode"
-                          ? value
-                          : undefined,
-                    },
-                  });
-                  return;
-                }
-                void props.onSetAcpRuntimeOption?.({
-                  source: acpRuntimeModeControl.source,
-                  optionId: acpRuntimeModeControl.optionId,
-                  value,
-                });
-              }}
-            />
-          ) : null}
-
-          {props.launchpad &&
-          (props.onSelectDirectoryFromPicker || props.onPickAndRegisterDirectory) ? (
-            // Project picker (issue #223). Only render in the launchpad
-            // surface — once a thread exists, the directory binding is
-            // immutable. The current directory shows as the trigger
-            // value when the launchpad is anchored to an actual
-            // directory; the synthesized "workspace:new-thread"
-            // launchpad reads as "No selected project" instead.
-            <ProjectPicker
-              value={
-                props.directory && props.directory.kind === "directory"
-                  ? props.directory
-                  : undefined
-              }
-              directories={props.directories ?? []}
-              disabled={launchpadSubmitting}
-              pickError={props.pickDirectoryError}
-              picking={props.pickingDirectory}
-              onSelect={(directory) => {
-                props.onClearPickDirectoryError?.();
-                props.onSelectDirectoryFromPicker?.(directory);
-              }}
-              onSelectNoDirectory={
-                props.onSelectNoDirectoryFromPicker
-                  ? () => {
-                      props.onClearPickDirectoryError?.();
-                      props.onSelectNoDirectoryFromPicker?.();
-                    }
-                  : undefined
-              }
-              onPickFromDisk={() => {
-                props.onClearPickDirectoryError?.();
-                props.onPickAndRegisterDirectory?.();
-              }}
-            />
-          ) : null}
-
-          {props.thread && props.onPickAndAttachDirectoryToThread ? (
-            <>
-              <button
-                className="composer__action-button composer__attach-directory-button"
-                disabled={props.pickingDirectory}
-                type="button"
-                onClick={() => {
-                  props.onClearPickDirectoryError?.();
-                  props.onPickAndAttachDirectoryToThread?.();
-                }}
-              >
-                <FolderIcon size={14} aria-hidden="true" />
-                <span>{props.pickingDirectory ? "Adding" : "Add directory"}</span>
-              </button>
-              {props.pickDirectoryError ? (
-                <span className="composer__inline-error" role="alert">
-                  {props.pickDirectoryError}
-                </span>
-              ) : null}
-            </>
-          ) : null}
-
-          {props.launchpad ? (
-            <ComposerDropdown
-              ariaLabel="Workspace mode"
-              compact
-              disabled={
-                launchpadSubmitting ||
-                !props.onUpdateLaunchpad ||
-                launchpadWorkspaceOptions.length <= 1
-              }
-              value={launchpadWorkspaceValue}
-              options={launchpadWorkspaceOptions.map((option) => ({
-                label: option.label,
-                value: option.value,
-              }))}
-              onChange={(value) => {
-                handleLaunchpadPatch({
-                  workMode: value as NavigationLaunchpadDraft["workMode"],
-                });
-              }}
-            />
-          ) : workspaceLabel && threadWorkspace ? (
-            <div
-              className={`composer-dropdown composer-dropdown--compact${
-                workspaceMenuOpen ? " composer-dropdown--open" : ""
-              }`}
-              ref={workspaceMenuRef}
-            >
-              <button
-                aria-expanded={workspaceMenuOpen}
-                aria-haspopup="menu"
-                aria-label="Workspace mode"
-                className="composer-dropdown__button"
-                disabled={!canHandoffThreadWorkspace}
-                type="button"
-                value={threadWorkspace.mode}
-                onClick={() => setWorkspaceMenuOpen((open) => !open)}
-              >
-                <span className="composer-dropdown__label">{workspaceLabel}</span>
-              </button>
-              {workspaceMenuOpen ? (
-                <div className="composer-dropdown__menu" role="menu">
-                  <button className="composer-dropdown__option" disabled type="button">
-                    <span aria-hidden="true" className="composer-dropdown__check">
-                      ✓
-                    </span>
-                    {workspaceLabel}
-                  </button>
-                  <div className="composer-dropdown__separator" role="separator" />
+            <div className="composer__queued-actions">
+              {pendingSteer.status === "pending" ? (
+                <>
                   <button
-                    className="composer-dropdown__option"
-                    disabled={!canHandoffThreadWorkspace}
-                    role="menuitem"
+                    className="composer__secondary-action"
                     type="button"
                     onClick={() => {
-                      setWorkspaceMenuOpen(false);
-                      openHandoffDialog(
-                        threadWorkspace.mode === "worktree"
-                          ? "worktree-to-local"
-                          : "local-to-worktree"
-                      );
+                      setComposerDraftFromCanonical(pendingSteer.text);
+                      setImageAttachments(pendingSteer.imageAttachments);
+                      setPendingSteer(undefined);
+                      requestAnimationFrame(() => inputRef.current?.focus());
                     }}
                   >
-                    <span aria-hidden="true" className="composer-dropdown__check" />
-                    {threadWorkspace.mode === "worktree"
-                      ? "Handoff to Local"
-                      : "Handoff to New Worktree"}
+                    Edit
                   </button>
-                </div>
+                  <button
+                    className="composer__secondary-action"
+                    type="button"
+                    onClick={() => {
+                      setPendingSteer(undefined);
+                    }}
+                  >
+                    Delete
+                  </button>
+                </>
               ) : null}
             </div>
-          ) : null}
+          </div>
+        ) : null}
 
-          {props.launchpad &&
-          launchpadWorkspaceValue === "worktree" &&
-          launchpadBranchPickerOptions.length > 0 ? (
-            <BranchPicker
-              ariaLabel="Base branch"
-              id="launchpad-branch"
-              disabled={launchpadSubmitting}
-              projectLabel={props.directory?.label}
-              value={
-                normalizeSelectableLaunchpadBranch(props.launchpad.branchName) ??
-                normalizeSelectableLaunchpadBranch(props.directory?.gitStatus?.currentBranch) ??
-                props.directory?.gitStatus?.defaultBranch ??
-                ""
-              }
-              options={launchpadBranchPickerOptions}
-              onChange={(value) => {
-                handleLaunchpadPatch({ branchName: value || undefined });
-              }}
-            />
-          ) : null}
+        {props.thread?.queuedExecutionMode
+        && props.thread.queuedExecutionMode !== props.thread.executionMode ? (
+          <div
+            className="composer__queued composer__queued--permissions"
+            aria-label="Queued permissions change"
+          >
+            <div className="composer__queued-copy">
+              <span className="composer__queued-label">Permissions queued</span>
+              <span className="composer__queued-text">
+                Will switch to{" "}
+                {formatExecutionModeLabel(props.thread.queuedExecutionMode)}{" "}
+                when the current turn ends
+              </span>
+            </div>
+            <div className="composer__queued-actions">
+              <button
+                className="composer__secondary-action"
+                type="button"
+                disabled={!props.onCancelExecutionModeQueue}
+                onClick={() => {
+                  void props.onCancelExecutionModeQueue?.();
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
 
-          {(props.launchpad || props.thread) && backend?.launchpadOptions?.models?.length ? (
-            <ComposerDropdown
-              id="composer-model"
-              ariaLabel="Model"
-              disabled={launchpadSubmitting}
-              value={selectedModelOption?.id ?? ""}
-              options={backend.launchpadOptions.models.map((model) => ({
-                label: model.label ?? model.id,
-                value: model.id,
-              }))}
-              onChange={(value) => {
-                const model = value;
-                const nextModelOption = backend.launchpadOptions?.models?.find(
-                  (option) => option.id === model
-                );
-                const nextSupportsReasoning =
-                  nextModelOption?.supportsReasoning ??
-                  Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
-                const nextSupportsFast =
-                  backend.kind === "codex"
-                    ? nextModelOption?.supportsFast ??
-                      backend.launchpadOptions?.supportsFastMode ??
-                      false
-                    : false;
-                const patch = {
-                  model,
-                  reasoningEffort: nextSupportsReasoning
-                    ? getReasoningEffortValue(backend, currentSettings?.reasoningEffort)
-                    : undefined,
-                  ...(nextSupportsFast ? {} : { fastMode: undefined }),
-                };
-                if (props.launchpad) {
-                  handleLaunchpadPatch(patch);
-                  return;
-                }
-                handleThreadModelSettingsPatch(patch);
-              }}
-            />
-          ) : null}
+        {queuedTurns.map((queued, index) => (
+          <div
+            className="composer__queued"
+            aria-label={
+              index === 0 ? "Queued message" : `Queued message ${index + 1}`
+            }
+            key={`${index}:${queued.text}:${queued.imageAttachments.length}`}
+          >
+            <div className="composer__queued-copy">
+              <span className="composer__queued-label">
+                {index === 0 ? "Queued next" : `Queued #${index + 1}`}
+              </span>
+              <span className="composer__queued-text">
+                {formatDraftPreview(queued)}
+              </span>
+            </div>
+            <QueuedImageAttachments attachments={queued.imageAttachments} />
+            <div className="composer__queued-actions">
+              {supportsSteering && !queued.reviewCommand ? (
+                <button
+                  className="composer__secondary-action"
+                  disabled={props.disabled || steering || !activeTurnId}
+                  type="button"
+                  onClick={() => {
+                    steerQueuedTurn(queued);
+                  }}
+                >
+                  {steering ? "Steering..." : "Steer"}
+                </button>
+              ) : null}
+              <button
+                className="composer__secondary-action"
+                type="button"
+                onClick={() => {
+                  setComposerDraftFromCanonical(queued.text);
+                  setImageAttachments(queued.imageAttachments);
+                  removeQueuedTurnAt(index);
+                  requestAnimationFrame(() => inputRef.current?.focus());
+                }}
+              >
+                Edit
+              </button>
+              <button
+                className="composer__secondary-action"
+                type="button"
+                onClick={() => {
+                  removeQueuedTurnAt(index);
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
 
-          {(props.launchpad || props.thread) &&
-          supportsReasoning &&
-          backend?.launchpadOptions?.reasoningEfforts?.length ? (
-            <ComposerDropdown
-              id="composer-reasoning"
-              ariaLabel="Reasoning"
-              disabled={launchpadSubmitting}
-              value={selectedReasoningEffort ?? ""}
-              options={backend.launchpadOptions.reasoningEfforts.map((effort) => ({
-                label: effort,
-                value: effort,
-              }))}
-              onChange={(value) => {
-                const reasoningEffort = value;
-                if (props.launchpad) {
-                  handleLaunchpadPatch({ reasoningEffort });
-                  return;
-                }
-                handleThreadModelSettingsPatch({ reasoningEffort });
-              }}
-            />
-          ) : null}
+        {imageAttachments.length > 0 ? (
+          <div className="composer__attachments" aria-label="Pasted images">
+            {imageAttachments.map((attachment, index) => {
+              const dimensions = formatImageDimensions(
+                attachment.width,
+                attachment.height,
+              );
+              return (
+                <div className="composer__attachment" key={attachment.id}>
+                  <div className="composer__attachment-thumb">
+                    <button
+                      aria-label={`Expand ${attachment.name}`}
+                      className="composer__attachment-open"
+                      type="button"
+                      onClick={() => {
+                        setLightboxAttachment(attachment);
+                      }}
+                    >
+                      <img
+                        className="composer__attachment-preview"
+                        src={attachment.url}
+                        alt={formatPastedImageAlt(attachment, index)}
+                      />
+                    </button>
+                    <button
+                      aria-label={`Remove ${attachment.name}`}
+                      className="composer__attachment-remove"
+                      type="button"
+                      onClick={() => {
+                        removeImageAttachment(attachment.id);
+                      }}
+                    >
+                      <CloseIcon size={12} aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div className="composer__attachment-chips">
+                    <span className="composer__attachment-chip">
+                      {formatBytes(attachment.size)}
+                    </span>
+                    {dimensions ? (
+                      <span className="composer__attachment-chip">
+                        {dimensions}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
 
-          {(props.launchpad || props.thread) && backend?.launchpadOptions?.serviceTiers?.length ? (
-            <ComposerDropdown
-              id="composer-service-tier"
-              ariaLabel="Service tier"
-              disabled={launchpadSubmitting}
-              value={selectedServiceTier ?? ""}
-              options={backend.launchpadOptions.serviceTiers.map((tier) => ({
-                label: tier,
-                value: tier,
-              }))}
-              onChange={(value) => {
-                const serviceTier = value;
-                if (props.launchpad) {
-                  handleLaunchpadPatch({ serviceTier });
-                  return;
-                }
-                handleThreadModelSettingsPatch({ serviceTier });
-              }}
-            />
-          ) : null}
+        {imageAttachments.length > 0 && !imagesSupported ? (
+          <p className="composer__meta composer__meta--warning" role="status">
+            {imagesUnsupportedLabel} doesn&apos;t support image attachments —
+            remove them or switch models before sending.
+          </p>
+        ) : null}
 
-          {(props.launchpad || props.thread) && supportsFast ? (
-            <button
-              type="button"
-              className={`composer__toggle tooltip-target${
-                currentSettings?.fastMode ? " is-active" : ""
-              }`}
-              aria-label="Fast mode"
-              aria-pressed={Boolean(currentSettings?.fastMode)}
-              data-tooltip="Fast mode — faster, lower-latency responses"
-              disabled={launchpadSubmitting}
-              onClick={() => {
-                const next = !currentSettings?.fastMode;
-                if (props.launchpad) {
-                  handleLaunchpadPatch({ fastMode: next });
-                  return;
-                }
-                handleThreadModelSettingsPatch({ fastMode: next });
-              }}
+        <div className="composer__input-wrap" ref={inputWrapRef}>
+          {isReviewComposerOpen ? (
+            <fieldset
+              className="composer__review-config"
+              aria-label="Review target"
+              onKeyDown={handleReviewConfigKeyDown}
             >
-              <LightningIcon size={15} aria-hidden="true" />
-            </button>
-          ) : null}
+              <legend>Review target</legend>
+              <div className="composer__review-options">
+                {REVIEW_TARGET_OPTIONS.map((option, index) => (
+                  <button
+                    key={option.target}
+                    ref={(element) => {
+                      reviewOptionRefs.current[index] = element;
+                    }}
+                    type="button"
+                    aria-pressed={reviewConfig?.target === option.target}
+                    className={`composer__review-option${reviewConfig?.target === option.target ? " is-active" : ""}`}
+                    tabIndex={reviewConfig?.target === option.target ? 0 : -1}
+                    onClick={() => {
+                      selectReviewTarget(option.target, {
+                        focusDetail:
+                          option.target === "commit"
+                          || option.target === "custom",
+                      });
+                    }}
+                    onKeyDown={(event) =>
+                      handleReviewOptionKeyDown(event, index)
+                    }
+                  >
+                    <span>{option.label}</span>
+                    <small>{option.description}</small>
+                  </button>
+                ))}
+              </div>
 
-          {supportsPlanMode ? (
-            <button
-              type="button"
-              className={`composer__toggle tooltip-target${
-                planModeEnabled ? " is-active" : ""
-              }`}
-              aria-label="Plan mode"
-              aria-pressed={planModeEnabled}
-              data-tooltip="Plan mode — plan the work before making changes"
-              disabled={sending}
-              onClick={() => setPlanModeEnabled((current) => !current)}
+              {reviewConfig?.target === "baseBranch" ? (
+                <div className="composer__review-field">
+                  <span>Base branch</span>
+                  <ReviewBranchPicker
+                    ariaLabel="Base branch"
+                    options={reviewBranchPickerOptions}
+                    value={reviewConfig.branch}
+                    onChange={(branch) => {
+                      setReviewConfig((current) => ({
+                        ...(current
+                          ?? createReviewConfig({
+                            directory: props.directory,
+                            thread: props.thread,
+                          })),
+                        branch,
+                        target: "baseBranch",
+                      }));
+                      setSendError(undefined);
+                    }}
+                  />
+                </div>
+              ) : null}
+
+              {reviewConfig?.target === "commit" ? (
+                <div className="composer__review-field">
+                  <ReviewCommitPicker
+                    inputRef={reviewCommitInputRef}
+                    options={reviewCommitOptions}
+                    value={reviewConfig.commit}
+                    onChange={(commit) => {
+                      setReviewConfig((current) => ({
+                        ...(current
+                          ?? createReviewConfig({
+                            directory: props.directory,
+                            thread: props.thread,
+                          })),
+                        commit,
+                        target: "commit",
+                      }));
+                      setSendError(undefined);
+                    }}
+                  />
+                </div>
+              ) : null}
+
+              {reviewConfig?.target === "custom" ? (
+                <label className="composer__review-field">
+                  <span>Instructions</span>
+                  <textarea
+                    className="composer__review-input composer__review-input--textarea"
+                    ref={reviewCustomTextareaRef}
+                    value={reviewConfig.customInstructions}
+                    onChange={(event) => {
+                      setReviewConfig((current) => ({
+                        ...(current
+                          ?? createReviewConfig({
+                            directory: props.directory,
+                            thread: props.thread,
+                          })),
+                        customInstructions: event.target.value,
+                        target: "custom",
+                      }));
+                      setSendError(undefined);
+                    }}
+                  />
+                </label>
+              ) : null}
+
+              <div className="composer__review-actions">
+                <button
+                  type="button"
+                  className="composer__secondary-action"
+                  onClick={exitReviewComposer}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="composer__primary-action"
+                  disabled={!buildConfiguredReviewCommand(reviewConfig)}
+                  onClick={() => {
+                    void submitConfiguredReviewComposer();
+                  }}
+                >
+                  Start review
+                </button>
+              </div>
+            </fieldset>
+          ) : (
+            <ComposerTiptapInput
+              ref={inputRef}
+              id="thread-composer"
+              ariaActiveDescendant={activeAutocompleteOptionId}
+              ariaControls={autocompleteListboxId}
+              ariaExpanded={hasAutocomplete}
+              disabled={composerDisabled}
+              label={isLaunchpad ? "New thread" : "Reply"}
+              markdownConversion
+              placeholder={composerPlaceholder}
+              selectionRequest={composerSelectionRequest}
+              editorDocument={editorDocument}
+              skillTokens={skillTokens}
+              value={draft}
+              onChange={handleComposerChange}
+              onPaste={handlePaste}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              onClick={handleComposerClick}
+              onKeyDown={handleTiptapComposerKeyDown}
+            />
+          )}
+
+          {autocompleteKind === "skills" ? (
+            <div
+              className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+              ref={autocompleteListRef}
+              role="listbox"
+              aria-label="Skills"
+              id={skillListboxId}
+              style={{ maxHeight: autocompleteLayout.maxHeight }}
             >
-              <PlanIcon size={15} aria-hidden="true" />
-            </button>
+              {filteredSkills.map((skill, index) => (
+                <button
+                  key={skill.path ?? skill.name}
+                  id={`${skillListboxId}-option-${index}`}
+                  ref={(node) => {
+                    autocompleteOptionRefs.current[index] = node;
+                  }}
+                  aria-selected={index === activeSkillIndex}
+                  className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
+                  tabIndex={index === activeSkillIndex ? 0 : -1}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applySkill(skill);
+                  }}
+                  onClick={() => {
+                    applySkill(skill);
+                  }}
+                  onFocus={() => {
+                    setActiveSkillIndex(index);
+                  }}
+                  onKeyDown={handleAutocompleteKeyDown}
+                >
+                  <span className="composer__autocomplete-title">
+                    <span aria-hidden="true">🧰</span>
+                    <HighlightedAutocompleteLabel
+                      label={`$${skill.name}`}
+                      query={trigger?.query ? `$${trigger.query}` : "$"}
+                    />
+                  </span>
+                  <span className="composer__autocomplete-meta">
+                    {skill.shortDescription || skill.description || skill.path}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : autocompleteKind === "slash" ? (
+            <div
+              className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+              ref={autocompleteListRef}
+              role="listbox"
+              aria-label="Commands"
+              id={slashListboxId}
+              style={{ maxHeight: autocompleteLayout.maxHeight }}
+            >
+              {filteredSlashCommands.map((command, index) => (
+                <button
+                  key={command.id}
+                  id={`${slashListboxId}-option-${index}`}
+                  ref={(node) => {
+                    autocompleteOptionRefs.current[index] = node;
+                  }}
+                  aria-selected={index === activeSlashIndex}
+                  className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
+                  tabIndex={index === activeSlashIndex ? 0 : -1}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applySlashCommand(command);
+                  }}
+                  onClick={() => {
+                    applySlashCommand(command);
+                  }}
+                  onFocus={() => {
+                    setActiveSlashIndex(index);
+                  }}
+                  onKeyDown={handleAutocompleteKeyDown}
+                >
+                  <span className="composer__autocomplete-title">
+                    <span
+                      className="composer__autocomplete-token"
+                      aria-hidden="true"
+                    >
+                      /
+                    </span>
+                    <HighlightedAutocompleteLabel
+                      label={command.label}
+                      query={slashTrigger ? `/${slashTrigger.query}` : "/"}
+                    />
+                    <span
+                      className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
+                    >
+                      {command.sourceLabel}
+                    </span>
+                  </span>
+                  <span className="composer__autocomplete-meta">
+                    {command.description}
+                  </span>
+                </button>
+              ))}
+            </div>
           ) : null}
         </div>
-      ) : null}
 
-      {workspaceHandoffDialog}
-
-      {props.skillError ? <p className="composer__meta composer__meta--error">{props.skillError}</p> : null}
-      {props.unavailableReason ? (
-       <p className="composer__meta composer__meta--error">
-         {props.unavailableReason}
-       </p>
-      ) : null}
-      {props.launchpadError ? (
-        <CopyableComposerError
-          desktopApi={props.desktopApi}
-          label="Copy launchpad error"
-          text={props.launchpadError}
-        />
-      ) : null}
-      {sendError ? <p className="composer__meta composer__meta--error">{sendError}</p> : null}
-      {applicationOpenError ? (
-        <p className="composer__meta composer__meta--error">{applicationOpenError}</p>
-      ) : null}
-      {props.setExecutionModeError ? (
-        <p className="composer__meta composer__meta--error">
-          {props.setExecutionModeError}
-        </p>
-      ) : null}
-      {props.threadModelSettingsError ? (
-        <p className="composer__meta composer__meta--error">
-          {props.threadModelSettingsError}
-        </p>
-      ) : null}
-      {!props.skillError && props.skillLoading ? (
-        <p className="composer__meta">Loading skills…</p>
-      ) : null}
-      {props.launchpad &&
-      launchpadSubmitting &&
-      props.launchpad.codexEnvironmentId &&
-      selectedCodexEnvironment?.setupScript ? (
-        <p className="composer__meta">Running environment setup…</p>
-      ) : null}
-      {props.updatingExecutionMode ? (
-        <p className="composer__meta">
-          Switching to {formatExecutionModeLabel(props.updatingExecutionMode)}…
-        </p>
-      ) : null}
-      {props.disabled ? (
-        <p className="composer__meta">
-          {props.launchpad
-            ? "This backend is unavailable right now. Your draft stays here until send is available again."
-            : "This thread's backend is unavailable right now. You can keep drafting, but send is unavailable."}
-        </p>
-      ) : props.pendingRequestActive ? (
-        <p className="composer__meta">
-          Waiting for approval before this turn can continue.
-        </p>
-      ) : props.pendingUserInputActive ? (
-        <p className="composer__meta">
-          Waiting for input before this turn can continue.
-        </p>
-      ) : null}
-
-      <div className="composer__footer">
-        {launchpadCodexEnvironmentOptions.length > 0 ||
-        threadCodexEnvironmentOptions.length > 0 ||
-        props.thread?.codexEnvironmentRuntime ||
-        (workspaceOpenPath && (editorApplication || terminalApplication)) ? (
-          <div className="composer__application-actions" aria-label="Composer tools">
-            {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? (
+        {props.launchpad || props.thread ? (
+          <div
+            className="composer__setup"
+            aria-label={
+              props.launchpad ? "New thread settings" : "Thread settings"
+            }
+          >
+            {props.launchpad && providerOptions.length > 0 ? (
               <ComposerDropdown
-                ariaLabel="Environment"
-                compact
+                id="composer-provider"
+                ariaLabel="Provider"
                 disabled={launchpadSubmitting}
-                icon={FileCodeIcon}
-                value={props.launchpad.codexEnvironmentId ?? ""}
-                options={[
-                  { label: "No environment", value: "" },
-                  ...launchpadCodexEnvironmentOptions.map((environment) => ({
-                    label: environment.name,
-                    value: environment.id,
-                  })),
-                ]}
+                value={props.launchpad.backend}
+                options={providerOptions.map((candidate) => ({
+                  label: formatBackendLabel(candidate.kind, props.backends),
+                  value: candidate.kind,
+                }))}
                 onChange={(value) => {
-                  const environment = launchpadCodexEnvironmentOptions.find(
-                    (candidate) => candidate.id === value,
+                  const currentLaunchpad = props.launchpad;
+                  if (!currentLaunchpad) {
+                    return;
+                  }
+                  const nextBackend =
+                    value as NavigationLaunchpadDraft["backend"];
+                  const nextBackendSummary = props.backends?.find(
+                    (candidate) => candidate.kind === nextBackend,
                   );
+                  const executionModeStillAvailable =
+                    nextBackendSummary?.executionModes.some(
+                      (mode) =>
+                        mode.available
+                        && mode.mode === currentLaunchpad.executionMode,
+                    );
+                  const nextModelOption =
+                    getDefaultModelOption(nextBackendSummary);
                   handleLaunchpadPatch({
-                    codexEnvironmentId: environment?.id,
-                    codexEnvironmentExecutionTarget: environment
-                      ? props.launchpad?.codexEnvironmentExecutionTarget ?? "local"
+                    backend: nextBackend,
+                    executionMode: executionModeStillAvailable
+                      ? currentLaunchpad.executionMode
+                      : "default",
+                    model: nextModelOption?.id,
+                    reasoningEffort: nextModelOption?.supportsReasoning
+                      ? getDefaultReasoningEffort(nextBackendSummary)
                       : undefined,
+                    serviceTier: undefined,
+                    fastMode: undefined,
+                    codexEnvironmentId: undefined,
+                    codexEnvironmentExecutionTarget: undefined,
                     codexEnvironmentActionId: undefined,
                   });
                 }}
               />
+            ) : props.thread ? (
+              <span className="composer__fixed-value" aria-label="Provider">
+                {formatBackendLabel(props.thread.source, props.backends)}
+              </span>
             ) : null}
 
-            {!props.launchpad && threadCodexEnvironmentOptions.length > 0 ? (
+            {availableExecutionModes.length > 0
+            && (props.launchpad
+              || (props.thread && props.onSetExecutionMode)) ? (
               <ComposerDropdown
-                ariaLabel="Environment"
+                ariaLabel="Access mode"
                 compact
-                disabled={!props.desktopApi?.setCodexThreadEnvironment}
-                icon={FileCodeIcon}
-                value={props.thread?.codexEnvironmentRuntime?.environmentId ?? ""}
-                options={[
-                  { label: "No environment", value: "" },
-                  ...threadCodexEnvironmentOptions.map((environment) => ({
-                    label: environment.name,
-                    value: environment.id,
-                  })),
-                ]}
+                tone={
+                  (props.launchpad?.executionMode
+                    ?? props.thread?.executionMode
+                    ?? "default") === "full-access"
+                    ? "danger"
+                    : undefined
+                }
+                disabled={
+                  launchpadSubmitting || Boolean(props.updatingExecutionMode)
+                }
+                value={
+                  props.launchpad?.executionMode
+                  ?? props.thread?.executionMode
+                  ?? "default"
+                }
+                options={availableExecutionModes.map((mode) => ({
+                  label: formatExecutionModeLabel(mode.mode),
+                  value: mode.mode,
+                }))}
                 onChange={(value) => {
-                  const environment = threadCodexEnvironmentOptions.find(
-                    (candidate) => candidate.id === value,
-                  );
-                  const actionId = resolveSelectedCodexEnvironmentActionId({
-                    environment,
-                    actionIdByEnvironmentId:
-                      props.thread?.codexEnvironmentRuntime
-                        ?.selectedActionIdByEnvironmentId,
-                  });
-                  void setThreadCodexEnvironment(value || undefined, actionId);
+                  const executionMode = value as ThreadExecutionMode;
+                  requestExecutionModeSelection(executionMode);
                 }}
               />
             ) : null}
 
-            {props.thread?.codexEnvironmentRuntime ? (
-              // Split chip (issue #240 follow-up): the left segment runs the
-              // selected command (orange CTA hover); the right segment is the
-              // command picker. Click left to run, right to choose.
-              <div className="composer__run-split">
+            {acpRuntimeModeControl ? (
+              <ComposerDropdown
+                ariaLabel="Agent mode"
+                compact
+                disabled={
+                  launchpadSubmitting
+                  || (!props.launchpad && !props.onSetAcpRuntimeOption)
+                }
+                value={acpRuntimeModeControl.value}
+                options={acpRuntimeModeControl.options}
+                onChange={(value) => {
+                  if (props.launchpad) {
+                    const executionMode = acpRuntimeModeRequiresFullAccess(
+                      value,
+                    )
+                      ? "full-access"
+                      : "default";
+                    handleLaunchpadPatch({
+                      executionMode,
+                      acpRuntime: {
+                        ...props.launchpad.acpRuntime,
+                        configValues:
+                          acpRuntimeModeControl.source === "configOption"
+                            ? {
+                                ...(props.launchpad.acpRuntime?.configValues
+                                  ?? {}),
+                                [acpRuntimeModeControl.optionId]: value,
+                              }
+                            : props.launchpad.acpRuntime?.configValues,
+                        currentModeId:
+                          acpRuntimeModeControl.source === "mode"
+                            ? value
+                            : undefined,
+                      },
+                    });
+                    return;
+                  }
+                  void props.onSetAcpRuntimeOption?.({
+                    source: acpRuntimeModeControl.source,
+                    optionId: acpRuntimeModeControl.optionId,
+                    value,
+                  });
+                }}
+              />
+            ) : null}
+
+            {props.launchpad
+            && (props.onSelectDirectoryFromPicker
+              || props.onPickAndRegisterDirectory) ? (
+              // Project picker (issue #223). Only render in the launchpad
+              // surface — once a thread exists, the directory binding is
+              // immutable. The current directory shows as the trigger
+              // value when the launchpad is anchored to an actual
+              // directory; the synthesized "workspace:new-thread"
+              // launchpad reads as "No selected project" instead.
+              <ProjectPicker
+                value={
+                  props.directory && props.directory.kind === "directory"
+                    ? props.directory
+                    : undefined
+                }
+                directories={props.directories ?? []}
+                disabled={launchpadSubmitting}
+                pickError={props.pickDirectoryError}
+                picking={props.pickingDirectory}
+                onSelect={(directory) => {
+                  props.onClearPickDirectoryError?.();
+                  props.onSelectDirectoryFromPicker?.(directory);
+                }}
+                onSelectNoDirectory={
+                  props.onSelectNoDirectoryFromPicker
+                    ? () => {
+                        props.onClearPickDirectoryError?.();
+                        props.onSelectNoDirectoryFromPicker?.();
+                      }
+                    : undefined
+                }
+                onPickFromDisk={() => {
+                  props.onClearPickDirectoryError?.();
+                  props.onPickAndRegisterDirectory?.();
+                }}
+              />
+            ) : null}
+
+            {props.thread && props.onPickAndAttachDirectoryToThread ? (
+              <>
                 <button
-                  aria-label="Run"
-                  className="composer__run-split-play tooltip-target"
-                  data-tooltip={
-                    selectedThreadCodexAction
-                      ? `Run ${selectedThreadCodexAction.name}`
-                      : "Run command"
-                  }
-                  disabled={
-                    currentThreadEnvActionStarting ||
-                    !selectedThreadCodexAction ||
-                    !props.desktopApi?.runCodexEnvironmentAction
-                  }
+                  className="composer__action-button composer__attach-directory-button"
+                  disabled={props.pickingDirectory}
                   type="button"
                   onClick={() => {
-                    void runThreadCodexEnvironmentAction();
+                    props.onClearPickDirectoryError?.();
+                    props.onPickAndAttachDirectoryToThread?.();
                   }}
                 >
-                  {currentThreadEnvActionStarting ? (
-                    <span
-                      aria-hidden="true"
-                      className="composer__action-button-spinner"
-                    />
-                  ) : (
-                    <PlayIcon size={13} aria-hidden="true" />
-                  )}
+                  <FolderIcon size={14} aria-hidden="true" />
+                  <span>
+                    {props.pickingDirectory ? "Adding" : "Add directory"}
+                  </span>
                 </button>
-                <ComposerDropdown
-                  ariaLabel="Environment command"
-                  compact
-                  disabled={
-                    threadCodexEnvironmentActions.length === 0 ||
-                    !props.desktopApi?.runCodexEnvironmentAction
-                  }
-                  value={selectedThreadCodexAction?.id ?? ""}
-                  options={
-                    threadCodexEnvironmentActions.length > 0
-                      ? threadCodexEnvironmentActions.map((action) => ({
-                          label: action.name,
-                          value: action.id,
-                        }))
-                      : [{ label: "No commands", value: "" }]
-                  }
-                  onChange={(value) => {
-                    void setThreadCodexEnvironment(
-                      props.thread?.codexEnvironmentRuntime?.environmentId,
-                      value || undefined,
-                    );
-                  }}
-                />
+                {props.pickDirectoryError ? (
+                  <span className="composer__inline-error" role="alert">
+                    {props.pickDirectoryError}
+                  </span>
+                ) : null}
+              </>
+            ) : null}
+
+            {props.launchpad ? (
+              <ComposerDropdown
+                ariaLabel="Workspace mode"
+                compact
+                disabled={
+                  launchpadSubmitting
+                  || !props.onUpdateLaunchpad
+                  || launchpadWorkspaceOptions.length <= 1
+                }
+                value={launchpadWorkspaceValue}
+                options={launchpadWorkspaceOptions.map((option) => ({
+                  label: option.label,
+                  value: option.value,
+                }))}
+                onChange={(value) => {
+                  handleLaunchpadPatch({
+                    workMode: value as NavigationLaunchpadDraft["workMode"],
+                  });
+                }}
+              />
+            ) : workspaceLabel && threadWorkspace ? (
+              <div
+                className={`composer-dropdown composer-dropdown--compact${
+                  workspaceMenuOpen ? " composer-dropdown--open" : ""
+                }`}
+                ref={workspaceMenuRef}
+              >
+                <button
+                  aria-expanded={workspaceMenuOpen}
+                  aria-haspopup="menu"
+                  aria-label="Workspace mode"
+                  className="composer-dropdown__button"
+                  disabled={!canHandoffThreadWorkspace}
+                  type="button"
+                  value={threadWorkspace.mode}
+                  onClick={() => setWorkspaceMenuOpen((open) => !open)}
+                >
+                  <span className="composer-dropdown__label">
+                    {workspaceLabel}
+                  </span>
+                </button>
+                {workspaceMenuOpen ? (
+                  <div className="composer-dropdown__menu" role="menu">
+                    <button
+                      className="composer-dropdown__option"
+                      disabled
+                      type="button"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="composer-dropdown__check"
+                      >
+                        ✓
+                      </span>
+                      {workspaceLabel}
+                    </button>
+                    <div
+                      className="composer-dropdown__separator"
+                      role="separator"
+                    />
+                    <button
+                      className="composer-dropdown__option"
+                      disabled={!canHandoffThreadWorkspace}
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        setWorkspaceMenuOpen(false);
+                        openHandoffDialog(
+                          threadWorkspace.mode === "worktree"
+                            ? "worktree-to-local"
+                            : "local-to-worktree",
+                        );
+                      }}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="composer-dropdown__check"
+                      />
+                      {threadWorkspace.mode === "worktree"
+                        ? "Handoff to Local"
+                        : "Handoff to New Worktree"}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
-            {workspaceOpenPath && editorApplication ? (
-              <ComposerApplicationButton
-                application={editorApplication}
-                label={editorApplication.name}
-                onOpen={openWorkspaceApplication}
+            {props.launchpad
+            && launchpadWorkspaceValue === "worktree"
+            && launchpadBranchPickerOptions.length > 0 ? (
+              <BranchPicker
+                ariaLabel="Base branch"
+                id="launchpad-branch"
+                disabled={launchpadSubmitting}
+                projectLabel={props.directory?.label}
+                value={
+                  normalizeSelectableLaunchpadBranch(props.launchpad.branchName)
+                  ?? normalizeSelectableLaunchpadBranch(
+                    props.directory?.gitStatus?.currentBranch,
+                  )
+                  ?? props.directory?.gitStatus?.defaultBranch
+                  ?? ""
+                }
+                options={launchpadBranchPickerOptions}
+                onChange={(value) => {
+                  handleLaunchpadPatch({ branchName: value || undefined });
+                }}
               />
             ) : null}
-            {workspaceOpenPath && terminalApplication ? (
-              <ComposerApplicationButton
-                application={terminalApplication}
-                label={terminalApplication.name}
-                onOpen={openWorkspaceApplication}
+
+            {(props.launchpad || props.thread)
+            && backend?.launchpadOptions?.models?.length ? (
+              <ComposerDropdown
+                id="composer-model"
+                ariaLabel="Model"
+                disabled={launchpadSubmitting}
+                value={selectedModelOption?.id ?? ""}
+                options={backend.launchpadOptions.models.map((model) => ({
+                  label: model.label ?? model.id,
+                  value: model.id,
+                }))}
+                onChange={(value) => {
+                  const model = value;
+                  const nextModelOption =
+                    backend.launchpadOptions?.models?.find(
+                      (option) => option.id === model,
+                    );
+                  const nextSupportsReasoning =
+                    nextModelOption?.supportsReasoning
+                    ?? Boolean(
+                      backend.launchpadOptions?.reasoningEfforts?.length,
+                    );
+                  const nextSupportsFast =
+                    backend.kind === "codex"
+                      ? (nextModelOption?.supportsFast
+                        ?? backend.launchpadOptions?.supportsFastMode
+                        ?? false)
+                      : false;
+                  const patch = {
+                    model,
+                    reasoningEffort: nextSupportsReasoning
+                      ? getReasoningEffortValue(
+                          backend,
+                          currentSettings?.reasoningEffort,
+                        )
+                      : undefined,
+                    ...(nextSupportsFast ? {} : { fastMode: undefined }),
+                  };
+                  if (props.launchpad) {
+                    handleLaunchpadPatch(patch);
+                    return;
+                  }
+                  handleThreadModelSettingsPatch(patch);
+                }}
               />
+            ) : null}
+
+            {(props.launchpad || props.thread)
+            && supportsReasoning
+            && backend?.launchpadOptions?.reasoningEfforts?.length ? (
+              <ComposerDropdown
+                id="composer-reasoning"
+                ariaLabel="Reasoning"
+                disabled={launchpadSubmitting}
+                value={selectedReasoningEffort ?? ""}
+                options={backend.launchpadOptions.reasoningEfforts.map(
+                  (effort) => ({
+                    label: effort,
+                    value: effort,
+                  }),
+                )}
+                onChange={(value) => {
+                  const reasoningEffort = value;
+                  if (props.launchpad) {
+                    handleLaunchpadPatch({ reasoningEffort });
+                    return;
+                  }
+                  handleThreadModelSettingsPatch({ reasoningEffort });
+                }}
+              />
+            ) : null}
+
+            {(props.launchpad || props.thread)
+            && backend?.launchpadOptions?.serviceTiers?.length ? (
+              <ComposerDropdown
+                id="composer-service-tier"
+                ariaLabel="Service tier"
+                disabled={launchpadSubmitting}
+                value={selectedServiceTier ?? ""}
+                options={backend.launchpadOptions.serviceTiers.map((tier) => ({
+                  label: tier,
+                  value: tier,
+                }))}
+                onChange={(value) => {
+                  const serviceTier = value;
+                  if (props.launchpad) {
+                    handleLaunchpadPatch({ serviceTier });
+                    return;
+                  }
+                  handleThreadModelSettingsPatch({ serviceTier });
+                }}
+              />
+            ) : null}
+
+            {(props.launchpad || props.thread) && supportsFast ? (
+              <button
+                type="button"
+                className={`composer__toggle tooltip-target${
+                  currentSettings?.fastMode ? " is-active" : ""
+                }`}
+                aria-label="Fast mode"
+                aria-pressed={Boolean(currentSettings?.fastMode)}
+                data-tooltip="Fast mode — faster, lower-latency responses"
+                disabled={launchpadSubmitting}
+                onClick={() => {
+                  const next = !currentSettings?.fastMode;
+                  if (props.launchpad) {
+                    handleLaunchpadPatch({ fastMode: next });
+                    return;
+                  }
+                  handleThreadModelSettingsPatch({ fastMode: next });
+                }}
+              >
+                <LightningIcon size={15} aria-hidden="true" />
+              </button>
+            ) : null}
+
+            {supportsPlanMode ? (
+              <button
+                type="button"
+                className={`composer__toggle tooltip-target${
+                  planModeEnabled ? " is-active" : ""
+                }`}
+                aria-label="Plan mode"
+                aria-pressed={planModeEnabled}
+                data-tooltip="Plan mode — plan the work before making changes"
+                disabled={sending}
+                onClick={() => setPlanModeEnabled((current) => !current)}
+              >
+                <PlanIcon size={15} aria-hidden="true" />
+              </button>
             ) : null}
           </div>
-        ) : (
-          <span aria-hidden="true" className="composer__footer-spacer" />
-        )}
+        ) : null}
 
-        <div className="composer__actions">
-          <ContextWindowMoon contextWindow={props.contextWindow} />
-          {activeTurnId ? (
-            <button
-              className="button button--ghost"
-              disabled={props.disabled || interrupting}
-              type="button"
-              onClick={() => {
-                void stopTurn();
-              }}
+        {workspaceHandoffDialog}
+
+        {props.skillError ? (
+          <p className="composer__meta composer__meta--error">
+            {props.skillError}
+          </p>
+        ) : null}
+        {props.unavailableReason ? (
+          <p className="composer__meta composer__meta--error">
+            {props.unavailableReason}
+          </p>
+        ) : null}
+        {props.launchpadError ? (
+          <CopyableComposerError
+            desktopApi={props.desktopApi}
+            label="Copy launchpad error"
+            text={props.launchpadError}
+          />
+        ) : null}
+        {sendError ? (
+          <p className="composer__meta composer__meta--error">{sendError}</p>
+        ) : null}
+        {applicationOpenError ? (
+          <p className="composer__meta composer__meta--error">
+            {applicationOpenError}
+          </p>
+        ) : null}
+        {props.setExecutionModeError ? (
+          <p className="composer__meta composer__meta--error">
+            {props.setExecutionModeError}
+          </p>
+        ) : null}
+        {props.threadModelSettingsError ? (
+          <p className="composer__meta composer__meta--error">
+            {props.threadModelSettingsError}
+          </p>
+        ) : null}
+        {!props.skillError && props.skillLoading ? (
+          <p className="composer__meta">Loading skills…</p>
+        ) : null}
+        {props.launchpad
+        && launchpadSubmitting
+        && props.launchpad.codexEnvironmentId
+        && selectedCodexEnvironment?.setupScript ? (
+          <p className="composer__meta">Running environment setup…</p>
+        ) : null}
+        {props.updatingExecutionMode ? (
+          <p className="composer__meta">
+            Switching to {formatExecutionModeLabel(props.updatingExecutionMode)}
+            …
+          </p>
+        ) : null}
+        {props.disabled ? (
+          <p className="composer__meta">
+            {props.launchpad
+              ? "This backend is unavailable right now. Your draft stays here until send is available again."
+              : "This thread's backend is unavailable right now. You can keep drafting, but send is unavailable."}
+          </p>
+        ) : props.pendingRequestActive ? (
+          <p className="composer__meta">
+            Waiting for approval before this turn can continue.
+          </p>
+        ) : props.pendingUserInputActive ? (
+          <p className="composer__meta">
+            Waiting for input before this turn can continue.
+          </p>
+        ) : null}
+
+        <div className="composer__footer">
+          {launchpadCodexEnvironmentOptions.length > 0
+          || threadCodexEnvironmentOptions.length > 0
+          || props.thread?.codexEnvironmentRuntime
+          || (workspaceOpenPath
+            && (editorApplication || terminalApplication)) ? (
+            <div
+              className="composer__application-actions"
+              aria-label="Composer tools"
             >
-              {interrupting ? "Stopping…" : "Stop"}
-            </button>
-          ) : null}
-          {props.launchpad && props.onCancelLaunchpad ? (
+              {props.launchpad
+              && launchpadCodexEnvironmentOptions.length > 0 ? (
+                <ComposerDropdown
+                  ariaLabel="Environment"
+                  compact
+                  disabled={launchpadSubmitting}
+                  icon={FileCodeIcon}
+                  value={props.launchpad.codexEnvironmentId ?? ""}
+                  options={[
+                    { label: "No environment", value: "" },
+                    ...launchpadCodexEnvironmentOptions.map((environment) => ({
+                      label: environment.name,
+                      value: environment.id,
+                    })),
+                  ]}
+                  onChange={(value) => {
+                    const environment = launchpadCodexEnvironmentOptions.find(
+                      (candidate) => candidate.id === value,
+                    );
+                    handleLaunchpadPatch({
+                      codexEnvironmentId: environment?.id,
+                      codexEnvironmentExecutionTarget: environment
+                        ? (props.launchpad?.codexEnvironmentExecutionTarget
+                          ?? "local")
+                        : undefined,
+                      codexEnvironmentActionId: undefined,
+                    });
+                  }}
+                />
+              ) : null}
+
+              {!props.launchpad && threadCodexEnvironmentOptions.length > 0 ? (
+                <ComposerDropdown
+                  ariaLabel="Environment"
+                  compact
+                  disabled={!props.desktopApi?.setCodexThreadEnvironment}
+                  icon={FileCodeIcon}
+                  value={
+                    props.thread?.codexEnvironmentRuntime?.environmentId ?? ""
+                  }
+                  options={[
+                    { label: "No environment", value: "" },
+                    ...threadCodexEnvironmentOptions.map((environment) => ({
+                      label: environment.name,
+                      value: environment.id,
+                    })),
+                  ]}
+                  onChange={(value) => {
+                    const environment = threadCodexEnvironmentOptions.find(
+                      (candidate) => candidate.id === value,
+                    );
+                    const actionId = resolveSelectedCodexEnvironmentActionId({
+                      environment,
+                      actionIdByEnvironmentId:
+                        props.thread?.codexEnvironmentRuntime
+                          ?.selectedActionIdByEnvironmentId,
+                    });
+                    void setThreadCodexEnvironment(
+                      value || undefined,
+                      actionId,
+                    );
+                  }}
+                />
+              ) : null}
+
+              {props.thread?.codexEnvironmentRuntime ? (
+                // Split chip (issue #240 follow-up): the left segment runs the
+                // selected command (orange CTA hover); the right segment is the
+                // command picker. Click left to run, right to choose.
+                <div className="composer__run-split">
+                  <button
+                    aria-label="Run"
+                    className="composer__run-split-play tooltip-target"
+                    data-tooltip={
+                      selectedThreadCodexAction
+                        ? `Run ${selectedThreadCodexAction.name}`
+                        : "Run command"
+                    }
+                    disabled={
+                      currentThreadEnvActionStarting
+                      || !selectedThreadCodexAction
+                      || !props.desktopApi?.runCodexEnvironmentAction
+                    }
+                    type="button"
+                    onClick={() => {
+                      void runThreadCodexEnvironmentAction();
+                    }}
+                  >
+                    {currentThreadEnvActionStarting ? (
+                      <span
+                        aria-hidden="true"
+                        className="composer__action-button-spinner"
+                      />
+                    ) : (
+                      <PlayIcon size={13} aria-hidden="true" />
+                    )}
+                  </button>
+                  <ComposerDropdown
+                    ariaLabel="Environment command"
+                    compact
+                    disabled={
+                      threadCodexEnvironmentActions.length === 0
+                      || !props.desktopApi?.runCodexEnvironmentAction
+                    }
+                    value={selectedThreadCodexAction?.id ?? ""}
+                    options={
+                      threadCodexEnvironmentActions.length > 0
+                        ? threadCodexEnvironmentActions.map((action) => ({
+                            label: action.name,
+                            value: action.id,
+                          }))
+                        : [{ label: "No commands", value: "" }]
+                    }
+                    onChange={(value) => {
+                      void setThreadCodexEnvironment(
+                        props.thread?.codexEnvironmentRuntime?.environmentId,
+                        value || undefined,
+                      );
+                    }}
+                  />
+                </div>
+              ) : null}
+
+              {workspaceOpenPath && editorApplication ? (
+                <ComposerApplicationButton
+                  application={editorApplication}
+                  label={editorApplication.name}
+                  onOpen={openWorkspaceApplication}
+                />
+              ) : null}
+              {workspaceOpenPath && terminalApplication ? (
+                <ComposerApplicationButton
+                  application={terminalApplication}
+                  label={terminalApplication.name}
+                  onOpen={openWorkspaceApplication}
+                />
+              ) : null}
+            </div>
+          ) : (
+            <span aria-hidden="true" className="composer__footer-spacer" />
+          )}
+
+          <div className="composer__actions">
+            <ContextWindowMoon contextWindow={props.contextWindow} />
+            {activeTurnId ? (
+              <button
+                className="button button--ghost"
+                disabled={props.disabled || interrupting}
+                type="button"
+                onClick={() => {
+                  void stopTurn();
+                }}
+              >
+                {interrupting ? "Stopping…" : "Stop"}
+              </button>
+            ) : null}
+            {props.launchpad && props.onCancelLaunchpad ? (
+              <button
+                className="button button--ghost"
+                disabled={sending}
+                type="button"
+                onClick={() => {
+                  props.onCancelLaunchpad?.(props.launchpad!.directoryKey);
+                }}
+              >
+                Cancel
+              </button>
+            ) : null}
             <button
-              className="button button--ghost"
-              disabled={sending}
-              type="button"
-              onClick={() => {
-                props.onCancelLaunchpad?.(props.launchpad!.directoryKey);
-              }}
+              className="button button--primary"
+              disabled={
+                props.disabled
+                || steering
+                || (!activeTurnId && sending)
+                || (!hasComposerContent && imageAttachments.length === 0)
+              }
+              type="submit"
             >
-              Cancel
+              {activeTurnId || serverQueuedTurnEntryId || props.threadBusy
+                ? "Queue"
+                : sending
+                  ? props.launchpad
+                    ? "Starting…"
+                    : "Sending…"
+                  : props.launchpad
+                    ? "Start thread"
+                    : "Send"}
             </button>
-          ) : null}
-          <button
-            className="button button--primary"
-            disabled={
-              props.disabled ||
-              steering ||
-              (!activeTurnId && sending) ||
-              (!hasComposerContent && imageAttachments.length === 0)
-            }
-            type="submit"
-          >
-            {activeTurnId || serverQueuedTurnEntryId || props.threadBusy
-              ? "Queue"
-              : sending
-              ? props.launchpad
-                ? "Starting…"
-                : "Sending…"
-              : props.launchpad
-                ? "Start thread"
-                : "Send"}
-          </button>
+          </div>
         </div>
-      </div>
       </form>
       {fullAccessRiskDialog}
       {imageLightbox}
@@ -6902,11 +7141,14 @@ function ContextWindowMoon({
     return null;
   }
 
-  const phase = Math.min(CONTEXT_MOON_PHASES.length - 1, Math.max(0, contextWindow.phase));
+  const phase = Math.min(
+    CONTEXT_MOON_PHASES.length - 1,
+    Math.max(0, contextWindow.phase),
+  );
   const phaseLabel = CONTEXT_MOON_PHASES[phase];
   const percentLabel = `${Math.round(contextWindow.usedPercent)}%`;
   const tokenLabel = `${formatCompactNumber(
-    contextWindow.totalTokens
+    contextWindow.totalTokens,
   )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
   const label = `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
   const tooltip = buildContextWindowTooltip(contextWindow, phaseLabel);
@@ -6932,12 +7174,12 @@ function ContextWindowMoon({
 
 function buildContextWindowTooltip(
   contextWindow: ThreadContextWindowState,
-  phaseLabel: string
+  phaseLabel: string,
 ): string {
   const lines = [
     `Context window: ${Math.round(contextWindow.usedPercent)}% full (${phaseLabel})`,
     `Current snapshot: ${formatCompactNumber(contextWindow.totalTokens)} / ${formatCompactNumber(
-      contextWindow.modelContextWindow
+      contextWindow.modelContextWindow,
     )} tokens`,
   ];
 
@@ -6947,13 +7189,16 @@ function buildContextWindowTooltip(
         ? `, ${Math.round(contextWindow.remainingPercent)}% remaining`
         : "";
     lines.push(
-      `Remaining: ${formatCompactNumber(contextWindow.remainingTokens)} tokens${remainingPercent}`
+      `Remaining: ${formatCompactNumber(contextWindow.remainingTokens)} tokens${remainingPercent}`,
     );
   }
 
   const breakdown = [
     formatOptionalTokenDetail("input", contextWindow.inputTokens),
-    formatCachedTokenDetail(contextWindow.cachedInputTokens, contextWindow.inputTokens),
+    formatCachedTokenDetail(
+      contextWindow.cachedInputTokens,
+      contextWindow.inputTokens,
+    ),
     formatOptionalTokenDetail("output", contextWindow.outputTokens),
     formatOptionalTokenDetail("reasoning", contextWindow.reasoningOutputTokens),
   ].filter((detail): detail is string => Boolean(detail));
@@ -6965,19 +7210,19 @@ function buildContextWindowTooltip(
   if (typeof contextWindow.cumulativeTotalTokens === "number") {
     lines.push(
       `Cumulative usage reported: ${formatCompactNumber(
-        contextWindow.cumulativeTotalTokens
-      )} tokens`
+        contextWindow.cumulativeTotalTokens,
+      )} tokens`,
     );
     const cumulativeCachedInput = formatCachedInputSummary(
       contextWindow.cumulativeCachedInputTokens,
-      contextWindow.cumulativeInputTokens
+      contextWindow.cumulativeInputTokens,
     );
     if (cumulativeCachedInput) {
       lines.push(`Cumulative cached input: ${cumulativeCachedInput}`);
     }
     const cumulativeOutput = formatCumulativeOutputSummary(
       contextWindow.cumulativeOutputTokens,
-      contextWindow.cumulativeReasoningOutputTokens
+      contextWindow.cumulativeReasoningOutputTokens,
     );
     if (cumulativeOutput) {
       lines.push(`Cumulative output: ${cumulativeOutput}`);
@@ -6987,13 +7232,18 @@ function buildContextWindowTooltip(
   return lines.join("\n");
 }
 
-function formatOptionalTokenDetail(label: string, value: number | undefined): string | undefined {
-  return typeof value === "number" ? `${formatCompactNumber(value)} ${label}` : undefined;
+function formatOptionalTokenDetail(
+  label: string,
+  value: number | undefined,
+): string | undefined {
+  return typeof value === "number"
+    ? `${formatCompactNumber(value)} ${label}`
+    : undefined;
 }
 
 function formatCachedTokenDetail(
   cachedInputTokens: number | undefined,
-  inputTokens: number | undefined
+  inputTokens: number | undefined,
 ): string | undefined {
   if (typeof cachedInputTokens !== "number") {
     return undefined;
@@ -7005,7 +7255,7 @@ function formatCachedTokenDetail(
 
 function formatCumulativeOutputSummary(
   outputTokens: number | undefined,
-  reasoningOutputTokens: number | undefined
+  reasoningOutputTokens: number | undefined,
 ): string | undefined {
   const details = [
     formatOptionalTokenDetail("output", outputTokens),
@@ -7017,7 +7267,7 @@ function formatCumulativeOutputSummary(
 
 function formatCachedInputSummary(
   cachedInputTokens: number | undefined,
-  inputTokens: number | undefined
+  inputTokens: number | undefined,
 ): string | undefined {
   if (typeof cachedInputTokens !== "number") {
     return undefined;
@@ -7029,13 +7279,16 @@ function formatCachedInputSummary(
 
 function formatCachedInputPercent(
   cachedInputTokens: number,
-  inputTokens: number | undefined
+  inputTokens: number | undefined,
 ): string | undefined {
   if (typeof inputTokens !== "number" || inputTokens <= 0) {
     return undefined;
   }
 
-  const percent = Math.max(0, Math.min(100, (cachedInputTokens / inputTokens) * 100));
+  const percent = Math.max(
+    0,
+    Math.min(100, (cachedInputTokens / inputTokens) * 100),
+  );
   return formatPercent(percent);
 }
 
@@ -7056,7 +7309,9 @@ function formatCompactNumber(value: number): string {
   return String(Math.round(value));
 }
 
-function getImageFilesFromDataTransfer(dataTransfer: DataTransfer): ComposerImageFile[] {
+function getImageFilesFromDataTransfer(
+  dataTransfer: DataTransfer,
+): ComposerImageFile[] {
   const files: ComposerImageFile[] = [];
   const seenFiles = new Set<string>();
   let foundImageItem = false;
@@ -7071,7 +7326,9 @@ function getImageFilesFromDataTransfer(dataTransfer: DataTransfer): ComposerImag
       continue;
     }
 
-    const type = isImageMimeType(item.type) ? item.type : inferTransferImageType(file);
+    const type = isImageMimeType(item.type)
+      ? item.type
+      : inferTransferImageType(file);
     if (!type) {
       continue;
     }
@@ -7111,7 +7368,9 @@ function hasImageFiles(dataTransfer: DataTransfer): boolean {
     }
   }
 
-  return Array.from(dataTransfer.files).some((file) => Boolean(inferTransferImageType(file)));
+  return Array.from(dataTransfer.files).some((file) =>
+    Boolean(inferTransferImageType(file)),
+  );
 }
 
 function buildFileKey(file: File): string {
@@ -7132,7 +7391,10 @@ function isImageMimeType(type: string): boolean {
 }
 
 function isGifFile(file: File, type: string): boolean {
-  return inferTransferImageType(file) === "image/gif" || type.toLowerCase() === "image/gif";
+  return (
+    inferTransferImageType(file) === "image/gif"
+    || type.toLowerCase() === "image/gif"
+  );
 }
 
 function readFileAsImageDataUrl(file: File, mimeType: string): Promise<string> {
@@ -7145,7 +7407,9 @@ function readFileAsImageDataUrl(file: File, mimeType: string): Promise<string> {
           return;
         }
         if (/^data:[^,]*,/i.test(reader.result)) {
-          resolve(reader.result.replace(/^data:[^,]*,/i, `data:${mimeType};base64,`));
+          resolve(
+            reader.result.replace(/^data:[^,]*,/i, `data:${mimeType};base64,`),
+          );
           return;
         }
       }
@@ -7223,10 +7487,10 @@ function formatImageDimensions(
   height: number | undefined,
 ): string | undefined {
   if (
-    !width ||
-    !height ||
-    !Number.isFinite(width) ||
-    !Number.isFinite(height)
+    !width
+    || !height
+    || !Number.isFinite(width)
+    || !Number.isFinite(height)
   ) {
     return undefined;
   }
@@ -7240,7 +7504,7 @@ function formatPastedImageName(type: string, index: number): string {
 
 function formatPastedImageAlt(
   attachment: Pick<ComposerImageAttachment, "name">,
-  index: number
+  index: number,
 ): string {
   return attachment.name || `Pasted image ${index + 1}`;
 }
@@ -7268,7 +7532,7 @@ function formatBytes(size: number): string {
 
 function formatLaunchpadWorkspaceLabel(
   launchpad?: NavigationLaunchpadDraft,
-  directory?: NavigationDirectorySummary
+  directory?: NavigationDirectorySummary,
 ): string | undefined {
   if (!launchpad) {
     return undefined;
@@ -7293,27 +7557,28 @@ function formatLaunchpadWorkspaceLabel(
 
 function buildLaunchpadWorkspaceOptions(
   launchpad: NavigationLaunchpadDraft,
-  directory?: NavigationDirectorySummary
+  directory?: NavigationDirectorySummary,
 ): Array<{ value: NavigationLaunchpadDraft["workMode"]; label: string }> {
   const localLabel = formatLaunchpadWorkspaceLabel(
     { ...launchpad, workMode: "local" },
-    directory
+    directory,
   );
   if (isSameWorktreeSubthreadLaunchpad(launchpad.directoryKey)) {
     return [{ value: "local", label: localLabel ?? "Same worktree" }];
   }
 
   const canCreateWorktree = Boolean(
-    directory?.path &&
-      directory.kind === "directory" &&
-      (directory.gitStatus?.currentBranch ||
-        (directory.gitStatus?.branches?.length ?? 0) > 0 ||
-        (launchpad.workMode === "worktree" &&
-          Boolean(launchpad.parentThreadId)))
+    directory?.path
+    && directory.kind === "directory"
+    && (directory.gitStatus?.currentBranch
+      || (directory.gitStatus?.branches?.length ?? 0) > 0
+      || (launchpad.workMode === "worktree"
+        && Boolean(launchpad.parentThreadId))),
   );
-  const options: Array<{ value: NavigationLaunchpadDraft["workMode"]; label: string }> = [
-    { value: "local", label: localLabel ?? "Local" },
-  ];
+  const options: Array<{
+    value: NavigationLaunchpadDraft["workMode"];
+    label: string;
+  }> = [{ value: "local", label: localLabel ?? "Local" }];
 
   if (canCreateWorktree) {
     options.push({ value: "worktree", label: "New worktree" });
@@ -7322,7 +7587,9 @@ function buildLaunchpadWorkspaceOptions(
   return options;
 }
 
-function normalizeSelectableLaunchpadBranch(branch?: string): string | undefined {
+function normalizeSelectableLaunchpadBranch(
+  branch?: string,
+): string | undefined {
   const value = branch?.trim();
   if (!value || value.toUpperCase() === "HEAD") {
     return undefined;
@@ -7341,9 +7608,9 @@ function buildLaunchpadBranchPickerOptions(
   directory?: NavigationDirectorySummary,
 ): LaunchpadBranchOption[] {
   const details =
-    directory?.gitStatus?.baseBranchDetails ??
-    directory?.gitStatus?.branchDetails ??
-    [];
+    directory?.gitStatus?.baseBranchDetails
+    ?? directory?.gitStatus?.branchDetails
+    ?? [];
   const detailByName = new Map(details.map((detail) => [detail.name, detail]));
   const currentBranch = normalizeSelectableLaunchpadBranch(
     directory?.gitStatus?.currentBranch,
@@ -7373,7 +7640,9 @@ function buildLaunchpadBranchPickerOptions(
   const orderedNames =
     details.length > 0
       ? details.map((detail) => detail.name)
-      : (directory?.gitStatus?.baseBranches ?? directory?.gitStatus?.branches ?? []);
+      : (directory?.gitStatus?.baseBranches
+        ?? directory?.gitStatus?.branches
+        ?? []);
   for (const name of orderedNames) {
     push(name);
   }
@@ -7424,18 +7693,22 @@ function formatBranchRelativeTime(
   return `${Math.round(days / 365)}y ago`;
 }
 
-function formatThreadWorkspaceLabel(thread?: NavigationThreadSummary): string | undefined {
+function formatThreadWorkspaceLabel(
+  thread?: NavigationThreadSummary,
+): string | undefined {
   if (!thread) {
     return undefined;
   }
 
-  if (thread.linkedDirectories.some((directory) => directory.kind === "worktree")) {
+  if (
+    thread.linkedDirectories.some((directory) => directory.kind === "worktree")
+  ) {
     return "Worktree";
   }
 
   if (
-    thread.linkedDirectories.some((directory) => directory.kind === "local") ||
-    thread.projectKey
+    thread.linkedDirectories.some((directory) => directory.kind === "local")
+    || thread.projectKey
   ) {
     return "Local";
   }
@@ -7471,9 +7744,11 @@ function getComposerWorkspaceOpenPath(params: {
   return params.threadWorkspace?.sourcePath ?? params.directory?.path;
 }
 
-function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | undefined {
+function getThreadWorkspace(
+  thread: NavigationThreadSummary,
+): ThreadWorkspace | undefined {
   const worktreeDirectory = thread.linkedDirectories.find(
-    (directory) => directory.kind === "worktree"
+    (directory) => directory.kind === "worktree",
   );
   if (worktreeDirectory) {
     return {
@@ -7485,7 +7760,7 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
   }
 
   const localDirectory = thread.linkedDirectories.find(
-    (directory) => directory.kind === "local"
+    (directory) => directory.kind === "local",
   );
   if (localDirectory) {
     return {
@@ -7527,7 +7802,9 @@ function isThreadWorkspaceHandoffEligible(params: {
   return Boolean(params.sourceBranch?.trim());
 }
 
-function buildHandoffBranchSuggestion(sourceBranch: string | undefined): string {
+function buildHandoffBranchSuggestion(
+  sourceBranch: string | undefined,
+): string {
   const normalizedSource = sourceBranch
     ?.replace(/^refs\/heads\//, "")
     .trim()
@@ -7535,7 +7812,9 @@ function buildHandoffBranchSuggestion(sourceBranch: string | undefined): string 
     .replace(/\/+/g, "/")
     .replace(/^-+|-+$/g, "");
   const branchSlug =
-    normalizedSource && normalizedSource !== "HEAD" ? normalizedSource : "detached";
+    normalizedSource && normalizedSource !== "HEAD"
+      ? normalizedSource
+      : "detached";
   return `pwragent/${branchSlug}-handoff`;
 }
 
@@ -7545,16 +7824,17 @@ function getLeaveLocalBranchOptions(params: {
 }): string[] {
   const currentBranch = params.currentBranch?.trim();
   const explicitHandoffBranches = params.directory?.gitStatus?.handoffBranches;
-  const branches = explicitHandoffBranches ?? params.directory?.gitStatus?.branches ?? [];
+  const branches =
+    explicitHandoffBranches ?? params.directory?.gitStatus?.branches ?? [];
   const candidates = branches.filter(
-    (branch) => branch && branch !== "HEAD" && branch !== currentBranch
+    (branch) => branch && branch !== "HEAD" && branch !== currentBranch,
   );
   const defaultBranch = params.directory?.gitStatus?.defaultBranch;
   const preferred =
     defaultBranch && candidates.includes(defaultBranch)
       ? defaultBranch
       : ["main", "master", "develop", "trunk"].find((branch) =>
-          candidates.includes(branch)
+          candidates.includes(branch),
         );
   const ordered = preferred
     ? [preferred, ...candidates.filter((branch) => branch !== preferred)]

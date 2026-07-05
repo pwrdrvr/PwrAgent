@@ -14,7 +14,10 @@ import {
   HistoryNavButtons,
   type HistoryNavControls,
 } from "../chrome/HistoryNavButtons";
-import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
+import {
+  MastheadActions,
+  type MastheadActionsProps,
+} from "../chrome/MastheadActions";
 import { formatAutomationRelative } from "../automations/automation-format";
 
 type ThreadHeaderLayoutControls = {
@@ -55,7 +58,9 @@ type ThreadHeaderProps = {
   history?: HistoryNavControls;
 };
 
-function missingDirectoryPath(thread: NavigationThreadSummary): string | undefined {
+function missingDirectoryPath(
+  thread: NavigationThreadSummary,
+): string | undefined {
   const projectKey = thread.projectKey?.trim();
   if (!projectKey || thread.linkedDirectories.length > 0) {
     return undefined;
@@ -136,7 +141,10 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               {formatBackendLabel(props.thread.source)}
             </span>
             {props.thread.agent ? (
-              <span className="chip chip--mode" title={formatThreadAgentTitle(props.thread)}>
+              <span
+                className="chip chip--mode"
+                title={formatThreadAgentTitle(props.thread)}
+              >
                 Agent: {props.thread.agent.name}
               </span>
             ) : null}
@@ -198,8 +206,9 @@ export function ThreadHeader(props: ThreadHeaderProps) {
       ) : null}
       {branchDrifted ? (
         <p className="thread-header__warning" role="status">
-          Branch warning: this thread expects <code>{props.thread.gitBranch}</code>, but the
-          worktree is on <code>{props.thread.observedGitBranch}</code>.
+          Branch warning: this thread expects{" "}
+          <code>{props.thread.gitBranch}</code>, but the worktree is on{" "}
+          <code>{props.thread.observedGitBranch}</code>.
         </p>
       ) : null}
     </header>

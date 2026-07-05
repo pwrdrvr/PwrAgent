@@ -60,7 +60,11 @@ export class ProviderTranscriptThreadSearchAdapter {
           confidence: candidate.confidence === "high" ? "high" : "medium",
           matchReasons: [
             ...candidate.matchReasons,
-            { kind: "provider_content_match", field: snippet.field, weight: 25 },
+            {
+              kind: "provider_content_match",
+              field: snippet.field,
+              weight: 25,
+            },
           ],
           snippets: [
             ...candidate.snippets,
@@ -93,7 +97,9 @@ export class ProviderTranscriptThreadSearchAdapter {
 function findTranscriptSnippet(
   response: AppServerReadThreadResponse,
   terms: string[],
-): { field: string; text: string; truncated?: boolean; turnId?: string } | undefined {
+):
+  | { field: string; text: string; truncated?: boolean; turnId?: string }
+  | undefined {
   for (const message of response.replay.messages) {
     const text = message.text.trim();
     if (text && textMatchesTerms(text, terms)) {

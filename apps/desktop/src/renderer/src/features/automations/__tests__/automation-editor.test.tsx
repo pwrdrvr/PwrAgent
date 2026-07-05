@@ -227,7 +227,9 @@ describe("AutomationEditor", () => {
     });
     // The channel dropdown is populated from the authorized Slack channels.
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Alerts" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("option", { name: "Alerts" }),
+      ).toBeInTheDocument(),
     );
     fireEvent.change(screen.getByLabelText("Channel"), {
       target: { value: "C0ALERTS" },
@@ -283,10 +285,14 @@ describe("AutomationEditor", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
 
-    expect(screen.getByText(/Each matching inbound message starts/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Each matching inbound message starts/),
+    ).toBeInTheDocument();
     // The authorized group appears in the picker once settings load.
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("option", { name: "Ops Room" }),
+      ).toBeInTheDocument(),
     );
     fireEvent.change(screen.getByLabelText("Group"), {
       target: { value: "-1001234567890" },
@@ -355,10 +361,16 @@ describe("AutomationEditor", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
     await waitFor(() =>
-      expect(screen.queryByRole("option", { name: "Slack" })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole("option", { name: "Slack" }),
+      ).not.toBeInTheDocument(),
     );
-    expect(screen.getByRole("option", { name: "Telegram" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Telegram" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Ops Room" }),
+    ).toBeInTheDocument();
   });
 
   it("includes an MCP allowlist in the execution profile", async () => {
@@ -490,7 +502,9 @@ describe("AutomationEditor", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /Register with a code/ }),
     );
-    expect(await screen.findByText(/Send this code: ABC123/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Send this code: ABC123/),
+    ).toBeInTheDocument();
     // The code is copyable (the app root sets user-select: none).
     expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
 
@@ -564,7 +578,10 @@ describe("AutomationEditor", () => {
 
     await waitFor(() =>
       expect(desktopApi.startInboundPreview).toHaveBeenCalledWith(
-        expect.objectContaining({ conversationId: "-100", provider: "telegram" }),
+        expect.objectContaining({
+          conversationId: "-100",
+          provider: "telegram",
+        }),
       ),
     );
 
@@ -591,9 +608,9 @@ describe("AutomationEditor", () => {
     const nonMatching = screen.getByText("good morning");
     const matchRow = matching.closest(".automation-preview__item");
     expect(matchRow).toHaveClass("is-match");
-    expect(
-      nonMatching.closest(".automation-preview__item"),
-    ).not.toHaveClass("is-match");
+    expect(nonMatching.closest(".automation-preview__item")).not.toHaveClass(
+      "is-match",
+    );
 
     // The sender ID is visible (not just the display name) and copyable, and
     // "Use sender" drops it straight into the filter.
@@ -638,14 +655,18 @@ describe("AutomationEditor", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("option", { name: "Ops Room" }),
+      ).toBeInTheDocument(),
     );
     fireEvent.change(screen.getByLabelText("Group"), {
       target: { value: "-100" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Incidents" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("option", { name: "Incidents" }),
+      ).toBeInTheDocument(),
     );
     fireEvent.change(screen.getByLabelText("Topic"), {
       target: { value: "42" },
@@ -703,9 +724,13 @@ describe("AutomationEditor", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("option", { name: "Ops Room" }),
+      ).toBeInTheDocument(),
     );
-    fireEvent.change(screen.getByLabelText("Group"), { target: { value: "-100" } });
+    fireEvent.change(screen.getByLabelText("Group"), {
+      target: { value: "-100" },
+    });
     fireEvent.change(screen.getByLabelText("Text contains"), {
       target: { value: "ERROR" },
     });
@@ -756,14 +781,22 @@ describe("AutomationEditor", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("option", { name: "Ops Room" }),
+      ).toBeInTheDocument(),
     );
-    fireEvent.change(screen.getByLabelText("Group"), { target: { value: "-100" } });
+    fireEvent.change(screen.getByLabelText("Group"), {
+      target: { value: "-100" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Incidents" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("option", { name: "Incidents" }),
+      ).toBeInTheDocument(),
     );
-    fireEvent.change(screen.getByLabelText("Topic"), { target: { value: "42" } });
+    fireEvent.change(screen.getByLabelText("Topic"), {
+      target: { value: "42" },
+    });
     // Switch the group to manual entry — the previously chosen topic must clear.
     fireEvent.change(screen.getByLabelText("Group"), {
       target: { value: "__manual__" },
@@ -811,7 +844,9 @@ describe("AutomationEditor", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("option", { name: "Ops Room" }),
+      ).toBeInTheDocument(),
     );
     fireEvent.change(screen.getByLabelText("Group"), {
       target: { value: "-100" },
@@ -891,10 +926,16 @@ describe("AutomationEditor", () => {
 
     expect(screen.getByLabelText("Agent")).toHaveTextContent("Choose Agent");
     fireEvent.click(screen.getByLabelText("Agent"));
-    expect(screen.getByRole("option", { name: /Inbox Agent/ })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Ordinary work/ })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: /Inbox Agent/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: /Ordinary work/ }),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Threads" }));
-    expect(screen.getByRole("option", { name: /Ordinary work/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: /Ordinary work/ }),
+    ).toBeInTheDocument();
   });
 
   it("explains Agents and supports deferring Agent setup while drafting", async () => {
@@ -915,13 +956,16 @@ describe("AutomationEditor", () => {
     );
 
     fireEvent.click(screen.getByLabelText("Agent"));
-    fireEvent.click(screen.getByRole("option", { name: /I'll set this up later/ }));
+    fireEvent.click(
+      screen.getByRole("option", { name: /I'll set this up later/ }),
+    );
     expect(screen.getByLabelText("Agent")).toHaveTextContent(
       "I'll set this up later...",
     );
     fireEvent.click(screen.getByLabelText("Agent"));
-    expect(screen.getByRole("option", { name: /I'll set this up later/ }))
-      .toHaveAttribute("aria-selected", "true");
+    expect(
+      screen.getByRole("option", { name: /I'll set this up later/ }),
+    ).toHaveAttribute("aria-selected", "true");
     fireEvent.click(screen.getByLabelText("Agent"));
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "Draft automation" },
@@ -1176,7 +1220,9 @@ describe("AutomationEditor", () => {
   });
 });
 
-function buildAutomation(overrides: Partial<AutomationDetail> = {}): AutomationDetail {
+function buildAutomation(
+  overrides: Partial<AutomationDetail> = {},
+): AutomationDetail {
   return {
     backend: "codex",
     backlogPolicy: "coalesce",

@@ -8,13 +8,12 @@ export function registerWindowPointerIpcHandlers(): void {
     WINDOW_POINTER_SNAPSHOT_CHANNEL,
     async (event): Promise<WindowPointerSnapshot> => {
       const window = BrowserWindow.fromWebContents(event.sender);
-      const contentBounds =
-        window?.getContentBounds() ?? {
-          height: 0,
-          width: 0,
-          x: 0,
-          y: 0,
-        };
+      const contentBounds = window?.getContentBounds() ?? {
+        height: 0,
+        width: 0,
+        x: 0,
+        y: 0,
+      };
 
       return {
         contentBounds,

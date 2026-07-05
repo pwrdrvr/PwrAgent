@@ -1,7 +1,11 @@
 import path from "node:path";
 import { getHeapStatistics, writeHeapSnapshot } from "node:v8";
 import type { HeapMonitorConfig } from "./heap-monitor-config";
-import type { HeapSession, HeapSessionEvent, HeapSessionSample } from "./heap-session";
+import type {
+  HeapSession,
+  HeapSessionEvent,
+  HeapSessionSample,
+} from "./heap-session";
 import { getMainLogger } from "../log";
 
 const defaultHeapLogger = getMainLogger("pwragent:heap");
@@ -188,7 +192,8 @@ export class MainProcessHeapMonitor {
     try {
       const reading = this.readHeap();
       const previousUsedSize = this.previousSample?.usedSize ?? null;
-      const deltaBytes = previousUsedSize === null ? null : reading.heapUsed - previousUsedSize;
+      const deltaBytes =
+        previousUsedSize === null ? null : reading.heapUsed - previousUsedSize;
       const isBaseline = forceBaseline || this.previousSample === null;
       const sample: HeapSessionSample = {
         source: "main",
@@ -211,9 +216,9 @@ export class MainProcessHeapMonitor {
       this.previousSample = sample;
 
       if (
-        !isBaseline &&
-        deltaBytes !== null &&
-        deltaBytes >= this.config.deltaThresholdBytes
+        !isBaseline
+        && deltaBytes !== null
+        && deltaBytes >= this.config.deltaThresholdBytes
       ) {
         await this.handleThresholdCrossing(sample, deltaBytes);
       }
@@ -238,14 +243,18 @@ export class MainProcessHeapMonitor {
     }
 
     if (this.snapshotCount >= this.config.maxSnapshots) {
-      await this.logSnapshotSkip("max-snapshots", deltaBytes, sample.capturedAt);
+      await this.logSnapshotSkip(
+        "max-snapshots",
+        deltaBytes,
+        sample.capturedAt,
+      );
       return;
     }
 
     const nowMs = Date.parse(sample.capturedAt);
     if (
-      this.lastSnapshotAtMs !== null &&
-      nowMs - this.lastSnapshotAtMs < this.config.snapshotCooldownMs
+      this.lastSnapshotAtMs !== null
+      && nowMs - this.lastSnapshotAtMs < this.config.snapshotCooldownMs
     ) {
       await this.logSnapshotSkip("cooldown", deltaBytes, sample.capturedAt);
       return;
@@ -285,7 +294,9 @@ export class MainProcessHeapMonitor {
     });
 
     try {
-      const writtenPath = await Promise.resolve(this.writeSnapshot(options.filePath));
+      const writtenPath = await Promise.resolve(
+        this.writeSnapshot(options.filePath),
+      );
       const writtenFilename = path.basename(writtenPath);
       this.snapshotCount += 1;
       this.lastSnapshotAtMs = Date.parse(options.capturedAt);

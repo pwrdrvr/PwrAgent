@@ -20,15 +20,17 @@ export function selectAcpDistributionForPlatform(
   preferredKind?: AcpRegistryDistribution["kind"],
 ): AcpRegistryDistribution | undefined {
   const candidates = preferredKind
-    ? distributions.filter((distribution) => distribution.kind === preferredKind)
+    ? distributions.filter(
+        (distribution) => distribution.kind === preferredKind,
+      )
     : distributions;
   return (
-    candidates.find((distribution) => distribution.kind === "npx") ??
-    candidates.find((distribution) => distribution.kind === "uvx") ??
-    candidates.find(
+    candidates.find((distribution) => distribution.kind === "npx")
+    ?? candidates.find((distribution) => distribution.kind === "uvx")
+    ?? candidates.find(
       (distribution): distribution is AcpBinaryPlatformDistribution =>
-        distribution.kind === "binary" &&
-        platformNames.includes(normalizePlatformName(distribution.platform)),
+        distribution.kind === "binary"
+        && platformNames.includes(normalizePlatformName(distribution.platform)),
     )
   );
 }

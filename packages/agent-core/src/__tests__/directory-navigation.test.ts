@@ -472,7 +472,8 @@ describe("buildDirectorySummaries", () => {
   });
 
   it("filters profile-scoped workspace roots outside the active profile", () => {
-    const defaultProjectsRoot = "/Users/huntharo/.pwragent/profiles/default/projects";
+    const defaultProjectsRoot =
+      "/Users/huntharo/.pwragent/profiles/default/projects";
     const preProfileProjectsRoot = "/Users/huntharo/.pwragent/projects";
     const devProjectsRoot = "/Users/huntharo/.pwragent/profiles/dev/projects";
     const legacyProjectsRoot = "/Users/huntharo/.pwragnt/projects";
@@ -640,7 +641,8 @@ describe("buildDirectorySummaries", () => {
       ],
       launchpadsByKey: {
         "workspace:/Users/huntharo/.pwragent/profiles/default/projects": {
-          directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/default/projects",
+          directoryKey:
+            "workspace:/Users/huntharo/.pwragent/profiles/default/projects",
           directoryKind: "workspace",
           directoryLabel: "Workspaces",
           directoryPath: "/Users/huntharo/.pwragent/profiles/default/projects",
@@ -669,7 +671,8 @@ describe("buildDirectorySummaries", () => {
         needsAttentionCount: 1,
         latestUpdatedAt: 6_000,
         launchpad: expect.objectContaining({
-          directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/default/projects",
+          directoryKey:
+            "workspace:/Users/huntharo/.pwragent/profiles/default/projects",
           prompt: "Pending scratchpad draft",
         }),
       }),
@@ -693,7 +696,8 @@ describe("buildDirectorySummaries", () => {
           updatedAt: 2_000,
         },
         "workspace:/Users/huntharo/.pwragent/profiles/dev/projects": {
-          directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+          directoryKey:
+            "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
           directoryKind: "workspace",
           directoryLabel: "Workspaces",
           directoryPath: "/Users/huntharo/.pwragent/profiles/dev/projects",
@@ -717,7 +721,8 @@ describe("buildDirectorySummaries", () => {
         needsAttentionCount: 0,
         latestUpdatedAt: 4_000,
         launchpad: expect.objectContaining({
-          directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+          directoryKey:
+            "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
           prompt: "Profile draft",
         }),
       }),
@@ -876,7 +881,8 @@ describe("buildDirectorySummaries", () => {
               id: "dir-1",
               label: "PwrAgent",
               path: "/Users/huntharo/pwrdrvr/PwrAgent",
-              worktreePath: "/Users/huntharo/.codex/worktrees/repo-one/PwrAgent",
+              worktreePath:
+                "/Users/huntharo/.codex/worktrees/repo-one/PwrAgent",
               kind: "worktree",
             },
           ],
@@ -889,7 +895,8 @@ describe("buildDirectorySummaries", () => {
               id: "dir-2",
               label: "PwrAgent",
               path: "/Users/huntharo/pwrdrvr/PwrAgent",
-              worktreePath: "/Users/huntharo/.codex/worktrees/repo-two/PwrAgent",
+              worktreePath:
+                "/Users/huntharo/.codex/worktrees/repo-two/PwrAgent",
               kind: "worktree",
             },
           ],
@@ -1241,7 +1248,9 @@ describe("buildDirectorySummaries", () => {
     );
     expect(rowsWithThread).toHaveLength(1);
     // The repo row (a real checkout) wins over the worktree row.
-    expect(rowsWithThread[0]?.key).toBe("directory:/Users/huntharo/pwrdrvr/PwrAgnt");
+    expect(rowsWithThread[0]?.key).toBe(
+      "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+    );
   });
 
   it("keeps a worktree thread homed under its provider directory when another repo is attached", () => {
@@ -1308,7 +1317,8 @@ describe("materializeNavigationThreads", () => {
               id: "thread-worktree",
               label: "PwrAgent",
               path: "/Users/huntharo/github/PwrAgent",
-              worktreePath: "/Users/huntharo/.codex/worktrees/morkpkco/PwrAgent",
+              worktreePath:
+                "/Users/huntharo/.codex/worktrees/morkpkco/PwrAgent",
               kind: "local",
             },
           ],
@@ -1381,7 +1391,8 @@ describe("materializeNavigationThreads", () => {
         id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
         label: "GifGrabber",
         path: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
-        worktreePath: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
+        worktreePath:
+          "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
         kind: "worktree",
       },
     ]);
@@ -1421,10 +1432,9 @@ describe("materializeNavigationThreads", () => {
       ],
     });
 
-    expect(thread?.linkedDirectories.map((directory) => directory.label)).toEqual([
-      "PwrAgent",
-      "agent-kit",
-    ]);
+    expect(
+      thread?.linkedDirectories.map((directory) => directory.label),
+    ).toEqual(["PwrAgent", "agent-kit"]);
   });
 });
 
@@ -1584,9 +1594,7 @@ describe("buildNavigationSnapshotHash — directory pin invariant (Unit E, GATE)
 
     const pinned = {
       ...base,
-      directories: [
-        { ...base.directories[0]!, pinnedRank: "1024" },
-      ],
+      directories: [{ ...base.directories[0]!, pinnedRank: "1024" }],
     };
     const pinnedHash = buildNavigationSnapshotHash(pinned);
 

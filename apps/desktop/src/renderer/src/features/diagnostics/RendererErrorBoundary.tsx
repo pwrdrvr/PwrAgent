@@ -40,8 +40,8 @@ export class RendererErrorBoundary extends Component<
           <p className="eyebrow">PwrAgent</p>
           <h1>Renderer error</h1>
           <p>
-            The desktop renderer hit an unrecoverable UI error. Details were logged for
-            diagnosis.
+            The desktop renderer hit an unrecoverable UI error. Details were
+            logged for diagnosis.
           </p>
           <pre>{this.state.report.message}</pre>
         </main>
@@ -51,4 +51,3 @@ export class RendererErrorBoundary extends Component<
     return this.props.children;
   }
 }
-

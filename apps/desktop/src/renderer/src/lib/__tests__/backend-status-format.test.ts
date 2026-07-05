@@ -21,12 +21,14 @@ describe("backend status formatting", () => {
       ],
     } as BackendSummary;
 
-    expect(selectVisibleRateLimits(backend).map((limit) => limit.name)).toEqual([
-      "5h limit",
-      "Weekly limit",
-      "GPT-5.3-Codex-Spark 5h limit",
-      "GPT-5.3-Codex-Spark Weekly limit",
-    ]);
+    expect(selectVisibleRateLimits(backend).map((limit) => limit.name)).toEqual(
+      [
+        "5h limit",
+        "Weekly limit",
+        "GPT-5.3-Codex-Spark 5h limit",
+        "GPT-5.3-Codex-Spark Weekly limit",
+      ],
+    );
   });
 
   it("formats sub-24-hour resets as times", () => {

@@ -77,7 +77,9 @@ export async function resolveGitExecutable(
         failures.push(`${candidate}: ${result.error}`);
       }
 
-      throw new Error(`Git executable unavailable. Tried:\n${failures.join("\n")}`);
+      throw new Error(
+        `Git executable unavailable. Tried:\n${failures.join("\n")}`,
+      );
     })().finally(() => {
       resolvingGitExecutableByEnv.delete(cacheKey);
     });

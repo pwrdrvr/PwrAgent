@@ -1,4 +1,11 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -113,49 +120,58 @@ describe("codex environment runtime", () => {
         }),
       ]);
 
-      await expect(expectEventually(async () => await readFile(outputPath, "utf8"))).resolves.toBe(
-        "hydrated",
-      );
+      await expect(
+        expectEventually(async () => await readFile(outputPath, "utf8")),
+      ).resolves.toBe("hydrated");
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   }, 15_000);
 
   it("captures detached stdout and stderr in arrival order", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-output-order-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-env-output-order-"),
+    );
     try {
-      const detachedExit = new Promise<{ output: string }>((resolve, reject) => {
-        void startLocalCodexEnvironmentAction({
-          actionId: "start-dev",
-          runId: "test-run-output-order",
-          env: {
-            ...process.env,
-            SHELL: "/bin/sh",
-          },
-          onDetachedExit: resolve,
-          runtime: {
-            environmentId: "env",
-            environmentName: "Env",
-            executionTarget: "local",
-            cwd: root,
-            actions: [
-              {
-                id: "start-dev",
-                name: "Start dev",
-                command: [
-                  "printf 'stdout first\\n'",
-                  "sleep 0.05",
-                  "printf 'stderr second\\n' >&2",
-                  "sleep 0.05",
-                  "printf 'stdout third\\n'",
-                  "sleep 0.05",
-                  "printf 'stderr fourth\\n' >&2",
-                ].join("\n"),
-              },
-            ],
-          },
-        }).catch(reject);
-      });
+      const detachedExit = new Promise<{ output: string }>(
+        (resolve, reject) => {
+          void startLocalCodexEnvironmentAction({
+            actionId: "start-dev",
+            runId: "test-run-output-order",
+            env: {
+              ...process.env,
+              SHELL: "/bin/sh",
+            },
+            onDetachedExit: resolve,
+            runtime: {
+              environmentId: "env",
+              environmentName: "Env",
+              executionTarget: "local",
+              cwd: root,
+              actions: [
+                {
+                  id: "start-dev",
+                  name: "Start dev",
+                  command: [
+                    "printf 'stdout first\\n'",
+                    "sleep 0.05",
+                    "printf 'stderr second\\n' >&2",
+                    "sleep 0.05",
+                    "printf 'stdout third\\n'",
+                    "sleep 0.05",
+                    "printf 'stderr fourth\\n' >&2",
+                  ].join("\n"),
+                },
+              ],
+            },
+          }).catch(reject);
+        },
+      );
 
       await expect(detachedExit).resolves.toMatchObject({
         output: [
@@ -166,7 +182,12 @@ describe("codex environment runtime", () => {
         ].join("\n"),
       });
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   }, 15_000);
 
@@ -220,12 +241,19 @@ describe("codex environment runtime", () => {
         });
       }
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   }, 15_000);
 
   it("strips parent Electron runtime variables from detached actions", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-electron-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-env-electron-"),
+    );
     const shellPath = path.join(root, "test-shell.sh");
     const outputPath = path.join(root, "env.txt");
 
@@ -289,18 +317,27 @@ describe("codex environment runtime", () => {
         expectEventually(async () => {
           const output = await readFile(outputPath, "utf8");
           if (output !== expectedOutput) {
-            throw new Error(`Output is not complete yet: ${JSON.stringify(output)}`);
+            throw new Error(
+              `Output is not complete yet: ${JSON.stringify(output)}`,
+            );
           }
           return output;
         }),
       ).resolves.toBe(expectedOutput);
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
   it("falls back when the hydrated shell path is stale", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-shell-fallback-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-env-shell-fallback-"),
+    );
     const outputPath = path.join(root, "env.txt");
 
     try {
@@ -337,12 +374,19 @@ describe("codex environment runtime", () => {
         expectEventually(async () => await readFile(outputPath, "utf8")),
       ).resolves.toBe("fallback");
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
   it("falls back when the stale hydrated shell is a Windows absolute path", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-win-shell-fallback-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-env-win-shell-fallback-"),
+    );
     const outputPath = path.join(root, "env.txt");
 
     try {
@@ -379,7 +423,12 @@ describe("codex environment runtime", () => {
         expectEventually(async () => await readFile(outputPath, "utf8")),
       ).resolves.toBe("fallback");
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
@@ -439,7 +488,12 @@ describe("codex environment runtime", () => {
       }
       await expect(readFile(outputPath, "utf8")).resolves.toBe("setup");
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
@@ -507,7 +561,12 @@ describe("codex environment runtime", () => {
         "nvm:use --silent\ndone",
       );
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
@@ -552,12 +611,19 @@ describe("codex environment runtime", () => {
         "PWRAGENT_SHOULD_NOT_PERSIST",
       );
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
   it("omits command, PATH preview, and captured key names from successful setup logs", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-log-redact-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-env-log-redact-"),
+    );
     const toolPath = path.join(root, "node-bin");
 
     try {
@@ -601,7 +667,8 @@ describe("codex environment runtime", () => {
         (entry) => entry.message === "codex-environment-command-exit",
       );
       expect(exitLog?.payload).toMatchObject({
-        capturedEnvKeyCount: Object.keys(runtime?.shellEnvironment ?? {}).length,
+        capturedEnvKeyCount: Object.keys(runtime?.shellEnvironment ?? {})
+          .length,
         code: 0,
       });
       expect(exitLog?.payload).not.toHaveProperty("capturedEnvKeys");
@@ -612,12 +679,19 @@ describe("codex environment runtime", () => {
       expect(serializedLogs).not.toContain("/private/toolchain/bin");
       expect(serializedLogs).not.toContain("/private/nvm");
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
   it("does not persist allow-listed env values that contain URL credentials", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-capture-secret-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-env-capture-secret-"),
+    );
     const pnpmHome = path.join(root, "pnpm-home");
 
     try {
@@ -650,14 +724,23 @@ describe("codex environment runtime", () => {
         PNPM_HOME: pnpmHome,
       });
       expect(runtime?.shellEnvironment).not.toHaveProperty("NPM_CONFIG_PROXY");
-      expect(runtime?.shellEnvironment).not.toHaveProperty("npm_config_registry");
+      expect(runtime?.shellEnvironment).not.toHaveProperty(
+        "npm_config_registry",
+      );
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
   it("does not fail setup when PATH no longer contains env", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-capture-path-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-env-capture-path-"),
+    );
     const toolPath = path.join(root, "toolchain-bin");
 
     try {
@@ -690,38 +773,47 @@ describe("codex environment runtime", () => {
       });
       expect(runtime?.shellEnvironment?.PATH).toBe(toolPath);
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
   it("omits successful detached action commands from info logs", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-detached-log-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-env-detached-log-"),
+    );
 
     try {
-      const detachedExit = new Promise<{ output: string }>((resolve, reject) => {
-        void startLocalCodexEnvironmentAction({
-          actionId: "start-dev",
-          runId: "test-run-detached-log",
-          env: {
-            ...process.env,
-            SHELL: "/bin/sh",
-          },
-          onDetachedExit: resolve,
-          runtime: {
-            environmentId: "env",
-            environmentName: "Env",
-            executionTarget: "local",
-            cwd: root,
-            actions: [
-              {
-                id: "start-dev",
-                name: "Start dev",
-                command: "printf 'sensitive detached command output'",
-              },
-            ],
-          },
-        }).catch(reject);
-      });
+      const detachedExit = new Promise<{ output: string }>(
+        (resolve, reject) => {
+          void startLocalCodexEnvironmentAction({
+            actionId: "start-dev",
+            runId: "test-run-detached-log",
+            env: {
+              ...process.env,
+              SHELL: "/bin/sh",
+            },
+            onDetachedExit: resolve,
+            runtime: {
+              environmentId: "env",
+              environmentName: "Env",
+              executionTarget: "local",
+              cwd: root,
+              actions: [
+                {
+                  id: "start-dev",
+                  name: "Start dev",
+                  command: "printf 'sensitive detached command output'",
+                },
+              ],
+            },
+          }).catch(reject);
+        },
+      );
 
       await expect(detachedExit).resolves.toMatchObject({
         output: "sensitive detached command output",
@@ -746,7 +838,12 @@ describe("codex environment runtime", () => {
         "sensitive detached command output",
       );
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   }, 15_000);
 
@@ -768,7 +865,9 @@ describe("codex environment runtime", () => {
             updatedAt: Date.now(),
           }),
           set: () => {
-            throw new Error("setup-disabled environment should not update cache");
+            throw new Error(
+              "setup-disabled environment should not update cache",
+            );
           },
         },
         selection: {
@@ -786,7 +885,12 @@ describe("codex environment runtime", () => {
 
       expect(runtime?.shellEnvironment).toEqual(cachedEnvironment);
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
@@ -843,7 +947,12 @@ describe("codex environment runtime", () => {
 
       await expect(readFile(outputPath, "utf8")).resolves.toBe("before");
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
@@ -854,7 +963,9 @@ describe("codex environment runtime", () => {
     // and exits non-zero. The exit error suffix must surface the stdout
     // diagnostic, not the unrelated stderr chatter, so the failure dialog
     // and main.log line point at the real cause.
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-stdout-error-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-env-stdout-error-"),
+    );
     try {
       let error: unknown;
       try {
@@ -889,7 +1000,12 @@ describe("codex environment runtime", () => {
         "ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1",
       );
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
@@ -938,10 +1054,16 @@ describe("codex environment runtime", () => {
         },
       });
       expect(
-        ((error as { runtime?: { setupOutput?: string } }).runtime?.setupOutput ?? ""),
+        (error as { runtime?: { setupOutput?: string } }).runtime?.setupOutput
+          ?? "",
       ).not.toContain("after");
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
@@ -950,7 +1072,9 @@ describe("codex environment runtime", () => {
       return;
     }
 
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-timeout-exit-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-env-timeout-exit-"),
+    );
     const markerPath = path.join(root, "marker.txt");
     const markerShellPath = `'${markerPath.replace(/'/g, "'\\''")}'`;
 
@@ -996,7 +1120,12 @@ describe("codex environment runtime", () => {
         "before\nterm\nafter-term\n",
       );
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   }, 10_000);
 });
@@ -1014,17 +1143,19 @@ describe("buildExitErrorSuffix", () => {
   });
 
   it("returns the stdout-style content for modern CLI failures", () => {
-    expect(buildExitErrorSuffix("ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1")).toBe(
-      ": ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1",
-    );
+    expect(
+      buildExitErrorSuffix(
+        "ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1",
+      ),
+    ).toBe(": ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1");
   });
 
   it("preserves already-interleaved stdout and stderr order", () => {
     expect(
-      buildExitErrorSuffix("first stdout line\nfirst stderr line\nsecond stdout line"),
-    ).toBe(
-      ": first stdout line\nfirst stderr line\nsecond stdout line",
-    );
+      buildExitErrorSuffix(
+        "first stdout line\nfirst stderr line\nsecond stdout line",
+      ),
+    ).toBe(": first stdout line\nfirst stderr line\nsecond stdout line");
   });
 
   it("trims to the last 8 lines of combined output", () => {

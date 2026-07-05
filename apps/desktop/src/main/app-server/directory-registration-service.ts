@@ -104,10 +104,7 @@ export async function registerDirectoryFromDisk(
   try {
     const info = await statPath(candidate);
     if (!info.isDirectory()) {
-      return failed(
-        "not-a-directory",
-        `${candidate} is not a folder.`,
-      );
+      return failed("not-a-directory", `${candidate} is not a folder.`);
     }
   } catch (error) {
     return failed(
@@ -120,10 +117,9 @@ export async function registerDirectoryFromDisk(
 
   let repoRoot: string;
   try {
-    const toplevel = (await runGit(candidate, [
-      "rev-parse",
-      "--show-toplevel",
-    ])).trim();
+    const toplevel = (
+      await runGit(candidate, ["rev-parse", "--show-toplevel"])
+    ).trim();
     if (!toplevel) {
       return failed(
         "not-a-git-repo",
@@ -149,11 +145,9 @@ export async function registerDirectoryFromDisk(
   // empty string and we just leave `currentBranch` unset).
   let currentBranch: string | undefined;
   try {
-    const head = (await runGit(repoRoot, [
-      "rev-parse",
-      "--abbrev-ref",
-      "HEAD",
-    ])).trim();
+    const head = (
+      await runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"])
+    ).trim();
     if (head && head !== "HEAD") {
       currentBranch = head;
     }

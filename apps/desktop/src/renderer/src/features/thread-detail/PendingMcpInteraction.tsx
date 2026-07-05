@@ -12,7 +12,7 @@ type PendingMcpInteractionProps = {
   onChange: (state: PendingMcpInteractionState) => void;
   onSubmit: (
     state: PendingMcpInteractionState,
-    action: "accept" | "decline" | "cancel"
+    action: "accept" | "decline" | "cancel",
   ) => Promise<void> | void;
 };
 
@@ -22,7 +22,11 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   const toolParams = readToolParamsDisplay(props.state._meta);
 
   return (
-    <div className="transcript-mcp" role="group" aria-label="Pending MCP interaction">
+    <div
+      className="transcript-mcp"
+      role="group"
+      aria-label="Pending MCP interaction"
+    >
       <div className="transcript-mcp__header">
         <span className="chip chip--mode">
           {props.state.mode === "url" ? "MCP login" : "MCP approval"}
@@ -131,7 +135,8 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
           <span>{requiredText}</span>
         </div>
         <p className="transcript-mcp__field-help">
-          {props.field.description || "This MCP schema field is not supported yet."}
+          {props.field.description
+            || "This MCP schema field is not supported yet."}
         </p>
       </div>
     );
@@ -146,7 +151,11 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
           type="checkbox"
           onChange={(event) => {
             props.onChange(
-              updateMcpFieldValue(props.state, props.field.key, event.target.checked)
+              updateMcpFieldValue(
+                props.state,
+                props.field.key,
+                event.target.checked,
+              ),
             );
           }}
         />
@@ -169,7 +178,11 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
           value={props.field.value}
           onChange={(event) => {
             props.onChange(
-              updateMcpFieldValue(props.state, props.field.key, event.target.value)
+              updateMcpFieldValue(
+                props.state,
+                props.field.key,
+                event.target.value,
+              ),
             );
           }}
         >
@@ -211,10 +224,12 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
                 disabled={props.busy}
                 onClick={() => {
                   const nextValue = selected
-                    ? field.value.filter((value: string) => value !== option.value)
+                    ? field.value.filter(
+                        (value: string) => value !== option.value,
+                      )
                     : [...field.value, option.value];
                   props.onChange(
-                    updateMcpFieldValue(props.state, field.key, nextValue)
+                    updateMcpFieldValue(props.state, field.key, nextValue),
                   );
                 }}
               >
@@ -226,13 +241,18 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
           })}
         </div>
         {field.description ? (
-          <span className="transcript-mcp__field-help">{field.description}</span>
+          <span className="transcript-mcp__field-help">
+            {field.description}
+          </span>
         ) : null}
       </fieldset>
     );
   }
 
-  const field = props.field as Extract<PendingMcpField, { kind: "string" | "number" }>;
+  const field = props.field as Extract<
+    PendingMcpField,
+    { kind: "string" | "number" }
+  >;
 
   return (
     <label className="transcript-mcp__field">
@@ -258,7 +278,7 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
                 : null
               : event.target.value;
           props.onChange(
-            updateMcpFieldValue(props.state, field.key, nextValue)
+            updateMcpFieldValue(props.state, field.key, nextValue),
           );
         }}
       />
@@ -273,14 +293,14 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
 
 function readStringMeta(
   meta: Record<string, unknown> | null,
-  key: string
+  key: string,
 ): string | undefined {
   const value = meta?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function readToolParamsDisplay(
-  meta: Record<string, unknown> | null
+  meta: Record<string, unknown> | null,
 ): Array<{ label: string; value: unknown }> {
   const raw = meta?.tool_params_display;
   if (!Array.isArray(raw)) {

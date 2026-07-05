@@ -20,7 +20,9 @@ describe("isBranchDrifted", () => {
   });
 
   it("returns true when expected is HEAD and observed is a named branch", () => {
-    expect(isBranchDrifted("HEAD", "fix/release-skill-squash-merge")).toBe(true);
+    expect(isBranchDrifted("HEAD", "fix/release-skill-squash-merge")).toBe(
+      true,
+    );
   });
 
   it("returns true when observed is HEAD and expected is a named branch", () => {

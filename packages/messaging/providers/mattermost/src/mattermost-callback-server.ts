@@ -1,5 +1,10 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import {
   logMattermostInvalidIdentifier,
   validateMattermostId,
@@ -64,7 +69,10 @@ export type MattermostCallbackHandlerResult = {
 export type MattermostCallbackHandler = (
   body: MattermostInteractiveCallbackBody,
   rawBody: string,
-) => Promise<MattermostCallbackHandlerResult | void> | MattermostCallbackHandlerResult | void;
+) =>
+  | Promise<MattermostCallbackHandlerResult | void>
+  | MattermostCallbackHandlerResult
+  | void;
 
 /**
  * Slash-command POST body, form-decoded. Mattermost sends commands as
@@ -117,7 +125,10 @@ export type MattermostSlashCommandResult = {
 export type MattermostSlashCommandHandler = (
   body: MattermostSlashCommandBody,
   rawBody: string,
-) => Promise<MattermostSlashCommandResult | void> | MattermostSlashCommandResult | void;
+) =>
+  | Promise<MattermostSlashCommandResult | void>
+  | MattermostSlashCommandResult
+  | void;
 
 export type MattermostCallbackServerConfig = {
   /**
@@ -240,9 +251,7 @@ export function createMattermostCallbackServer(
       response.end(JSON.stringify(payload));
     };
 
-    const respondCommandAck = (
-      result?: MattermostSlashCommandResult,
-    ): void => {
+    const respondCommandAck = (result?: MattermostSlashCommandResult): void => {
       response.statusCode = 200;
       response.setHeader("Content-Type", "application/json");
       const payload: Record<string, unknown> = {};
@@ -272,7 +281,10 @@ export function createMattermostCallbackServer(
           // 1 MB is a generous absolute upper bound that protects the
           // listener from accidental abuse without rejecting legitimate
           // attachment-heavy posts.
-          config.logger.warn("mattermost callback body exceeded 1 MB; dropping", {});
+          config.logger.warn(
+            "mattermost callback body exceeded 1 MB; dropping",
+            {},
+          );
           respondInteractiveAck();
           return;
         }
@@ -295,7 +307,9 @@ export function createMattermostCallbackServer(
     // works for both, which matters because the operator's tunnel may
     // map the public URL to ANY localhost path.
     const contentType = (request.headers["content-type"] ?? "").toLowerCase();
-    const isFormEncoded = contentType.includes("application/x-www-form-urlencoded");
+    const isFormEncoded = contentType.includes(
+      "application/x-www-form-urlencoded",
+    );
 
     if (isFormEncoded) {
       await handleSlashCommand({
@@ -330,12 +344,15 @@ export function createMattermostCallbackServer(
     }
 
     if (!intentId || !actionId || issuedAtRaw === undefined || !providedHmac) {
-      config.logger.warn("mattermost callback context missing required fields", {
-        hasIntentId: Boolean(intentId),
-        hasActionId: Boolean(actionId),
-        hasIssuedAt: issuedAtRaw !== undefined,
-        hasHmac: Boolean(providedHmac),
-      });
+      config.logger.warn(
+        "mattermost callback context missing required fields",
+        {
+          hasIntentId: Boolean(intentId),
+          hasActionId: Boolean(actionId),
+          hasIssuedAt: issuedAtRaw !== undefined,
+          hasHmac: Boolean(providedHmac),
+        },
+      );
       respondInteractiveAck();
       return;
     }
@@ -396,17 +413,23 @@ export function createMattermostCallbackServer(
       return;
     }
     if (!cfg.slashCommandHandler) {
-      cfg.logger.warn("mattermost slash command received but no handler registered", {
-        command: body.command,
-      });
+      cfg.logger.warn(
+        "mattermost slash command received but no handler registered",
+        {
+          command: body.command,
+        },
+      );
       respond();
       return;
     }
     const validTokens = cfg.validSlashCommandTokens;
     if (!validTokens || validTokens.size === 0) {
-      cfg.logger.warn("mattermost slash command rejected — no tokens registered", {
-        command: body.command,
-      });
+      cfg.logger.warn(
+        "mattermost slash command rejected — no tokens registered",
+        {
+          command: body.command,
+        },
+      );
       respond();
       return;
     }
@@ -509,14 +532,39 @@ function validateInteractiveCallbackIdentifiers(
   logger: MattermostCallbackServerConfig["logger"],
 ): boolean {
   return (
-    validateMattermostIdentifier("user_id", body.user_id, validateMattermostId, logger)
-    && validateMattermostIdentifier("channel_id", body.channel_id, validateMattermostId, logger)
+    validateMattermostIdentifier(
+      "user_id",
+      body.user_id,
+      validateMattermostId,
+      logger,
+    )
+    && validateMattermostIdentifier(
+      "channel_id",
+      body.channel_id,
+      validateMattermostId,
+      logger,
+    )
     && (body.team_id === undefined
-      || validateMattermostIdentifier("team_id", body.team_id, validateMattermostId, logger))
+      || validateMattermostIdentifier(
+        "team_id",
+        body.team_id,
+        validateMattermostId,
+        logger,
+      ))
     && (body.post_id === undefined
-      || validateMattermostIdentifier("post_id", body.post_id, validateMattermostId, logger))
+      || validateMattermostIdentifier(
+        "post_id",
+        body.post_id,
+        validateMattermostId,
+        logger,
+      ))
     && (body.trigger_id === undefined
-      || validateMattermostIdentifier("trigger_id", body.trigger_id, validateMattermostId, logger))
+      || validateMattermostIdentifier(
+        "trigger_id",
+        body.trigger_id,
+        validateMattermostId,
+        logger,
+      ))
   );
 }
 
@@ -525,14 +573,44 @@ function validateSlashCommandIdentifiers(
   logger: MattermostCallbackServerConfig["logger"],
 ): boolean {
   return (
-    validateMattermostIdentifier("token", body.token, validateMattermostOpaqueToken, logger)
-    && validateMattermostIdentifier("team_id", body.team_id, validateMattermostId, logger)
-    && validateMattermostIdentifier("channel_id", body.channel_id, validateMattermostId, logger)
-    && validateMattermostIdentifier("user_id", body.user_id, validateMattermostId, logger)
+    validateMattermostIdentifier(
+      "token",
+      body.token,
+      validateMattermostOpaqueToken,
+      logger,
+    )
+    && validateMattermostIdentifier(
+      "team_id",
+      body.team_id,
+      validateMattermostId,
+      logger,
+    )
+    && validateMattermostIdentifier(
+      "channel_id",
+      body.channel_id,
+      validateMattermostId,
+      logger,
+    )
+    && validateMattermostIdentifier(
+      "user_id",
+      body.user_id,
+      validateMattermostId,
+      logger,
+    )
     && (body.trigger_id === undefined
-      || validateMattermostIdentifier("trigger_id", body.trigger_id, validateMattermostId, logger))
+      || validateMattermostIdentifier(
+        "trigger_id",
+        body.trigger_id,
+        validateMattermostId,
+        logger,
+      ))
     && (body.root_id === undefined
-      || validateMattermostIdentifier("root_id", body.root_id, validateMattermostId, logger))
+      || validateMattermostIdentifier(
+        "root_id",
+        body.root_id,
+        validateMattermostId,
+        logger,
+      ))
     && (body.response_url === undefined
       || validateMattermostIdentifier(
         "response_url",
@@ -567,7 +645,10 @@ function safeEqual(left: string, right: string): boolean {
     return false;
   }
   try {
-    return timingSafeEqual(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+    return timingSafeEqual(
+      Buffer.from(left, "utf8"),
+      Buffer.from(right, "utf8"),
+    );
   } catch {
     return false;
   }

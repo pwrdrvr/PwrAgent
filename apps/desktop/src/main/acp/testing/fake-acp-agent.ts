@@ -6,9 +6,14 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
     params?: Record<string, unknown>;
     timeoutMs?: number;
   }> = [];
-  readonly notifications: Array<{ method: string; params?: Record<string, unknown> }> = [];
+  readonly notifications: Array<{
+    method: string;
+    params?: Record<string, unknown>;
+  }> = [];
   closeCount = 0;
-  private listeners = new Set<(method: string, params: Record<string, unknown>) => void>();
+  private listeners = new Set<
+    (method: string, params: Record<string, unknown>) => void
+  >();
   private requestHandler:
     | ((
         method: string,
@@ -50,7 +55,10 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
     return {};
   }
 
-  async notify(method: string, params?: Record<string, unknown>): Promise<void> {
+  async notify(
+    method: string,
+    params?: Record<string, unknown>,
+  ): Promise<void> {
     this.notifications.push({ method, params });
   }
 
@@ -99,7 +107,10 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
     update: Record<string, unknown>;
   }): void {
     for (const listener of this.listeners) {
-      listener(params.method, { sessionId: params.sessionId, update: params.update });
+      listener(params.method, {
+        sessionId: params.sessionId,
+        update: params.update,
+      });
     }
   }
 

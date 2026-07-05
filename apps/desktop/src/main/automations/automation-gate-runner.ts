@@ -1,5 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
-import type { AutomationGateConfig, AutomationGateRunResult } from "@pwragent/shared";
+import type {
+  AutomationGateConfig,
+  AutomationGateRunResult,
+} from "@pwragent/shared";
 import { resolveWindowsBashShell } from "../windows-shell";
 
 const DEFAULT_GATE_TIMEOUT_MS = 60_000;
@@ -16,12 +19,16 @@ export type AutomationGateRunner = {
 };
 
 export class ShellAutomationGateRunner implements AutomationGateRunner {
-  async runGate(config: AutomationGateConfig): Promise<AutomationGateRunResult> {
+  async runGate(
+    config: AutomationGateConfig,
+  ): Promise<AutomationGateRunResult> {
     return await runShellGate(config);
   }
 }
 
-function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunResult> {
+function runShellGate(
+  config: AutomationGateConfig,
+): Promise<AutomationGateRunResult> {
   const command = config.command.trim();
   if (!command) {
     return Promise.resolve({
@@ -36,10 +43,11 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
 
   const startedAt = Date.now();
   const timeoutMs = config.timeoutMs ?? DEFAULT_GATE_TIMEOUT_MS;
-  const outputLimit = config.outputLimitChars ?? DEFAULT_GATE_OUTPUT_LIMIT_CHARS;
+  const outputLimit =
+    config.outputLimitChars ?? DEFAULT_GATE_OUTPUT_LIMIT_CHARS;
   const shell =
-    process.env.SHELL?.trim() ||
-    (process.platform === "win32" ? resolveWindowsBashShell() : "/bin/sh");
+    process.env.SHELL?.trim()
+    || (process.platform === "win32" ? resolveWindowsBashShell() : "/bin/sh");
 
   return new Promise((resolve) => {
     const child = spawn(shell, ["-lc", command], {
@@ -146,7 +154,8 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
       }
       const exitCode = typeof code === "number" ? code : undefined;
       finish({
-        status: exitCode === 0 ? "proceed" : exitCode === 10 ? "skip" : "failed",
+        status:
+          exitCode === 0 ? "proceed" : exitCode === 10 ? "skip" : "failed",
         command,
         cwd: config.cwd,
         exitCode,

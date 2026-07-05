@@ -108,7 +108,7 @@ type SidebarProps = {
   onJumpToThread?: (thread: NavigationThreadSummary) => void;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
-    preferredBackend?: AppServerBackendKind
+    preferredBackend?: AppServerBackendKind,
   ) => Promise<void>;
   onOpenSettings?: () => void;
   onOpenProfile?: (profile: string) => Promise<void>;
@@ -117,7 +117,10 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
   ) => Promise<void>;
-  onRenameThread?: (thread: NavigationThreadSummary, name: string) => Promise<void>;
+  onRenameThread?: (
+    thread: NavigationThreadSummary,
+    name: string,
+  ) => Promise<void>;
   onSetThreadReaction?: (
     thread: NavigationThreadSummary,
     emoji: string,
@@ -241,7 +244,9 @@ export function Sidebar(props: SidebarProps) {
   const [renameValidationError, setRenameValidationError] = useState<string>();
   const onArchiveThread = props.onArchiveThread ?? (async () => undefined);
   const onRenameThread = props.onRenameThread ?? (async () => undefined);
-  const [copiedRuntimeValue, setCopiedRuntimeValue] = useState<"branch" | "cwd">();
+  const [copiedRuntimeValue, setCopiedRuntimeValue] = useState<
+    "branch" | "cwd"
+  >();
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const runtimeGitRefLabel = props.runtimeIdentity
     ? formatRuntimeGitRef(props.runtimeIdentity)
@@ -250,8 +255,10 @@ export function Sidebar(props: SidebarProps) {
     ? runtimeGitRefCopyValue(props.runtimeIdentity)
     : undefined;
   const currentActiveProfile = props.activeProfile
-    ? props.profiles?.find((profile) => profile.active)
-      ?? props.profiles?.find((profile) => profile.name === props.activeProfile)
+    ? (props.profiles?.find((profile) => profile.active)
+      ?? props.profiles?.find(
+        (profile) => profile.name === props.activeProfile,
+      ))
     : undefined;
   const [startupActiveProfile, setStartupActiveProfile] =
     useState<DesktopPwrAgentProfileSummary>();
@@ -261,21 +268,23 @@ export function Sidebar(props: SidebarProps) {
     }
   }, [currentActiveProfile, startupActiveProfile]);
   const activeProfile = startupActiveProfile ?? currentActiveProfile;
-  const codexBackend = props.backends.find((backend) => backend.kind === "codex");
+  const codexBackend = props.backends.find(
+    (backend) => backend.kind === "codex",
+  );
   const profileLabel = props.activeProfile
     ? formatProfileIdentityLabel(props.activeProfile, activeProfile)
     : undefined;
   const profileTooltip = props.activeProfile
     ? formatProfileIdentityTooltip({
-      activeProfile: props.activeProfile,
-      codexBackend,
-      profile: activeProfile,
-    })
+        activeProfile: props.activeProfile,
+        codexBackend,
+        profile: activeProfile,
+      })
     : undefined;
   const visibleThreads =
     props.browseMode === "recents"
-      ? props.recentThreads ?? props.threads
-      : props.inboxThreads ?? props.threads;
+      ? (props.recentThreads ?? props.threads)
+      : (props.inboxThreads ?? props.threads);
 
   useEffect(() => {
     if (!copiedRuntimeValue) {
@@ -292,25 +301,25 @@ export function Sidebar(props: SidebarProps) {
   const canRenameThread = (thread: NavigationThreadSummary): boolean =>
     props.backends.some(
       (backend) =>
-        backend.kind === thread.source &&
-        backend.available &&
-        backend.capabilities.renameThread
+        backend.kind === thread.source
+        && backend.available
+        && backend.capabilities.renameThread,
     );
 
   const canArchiveThread = (thread: NavigationThreadSummary): boolean =>
     props.backends.some(
       (backend) =>
-        backend.kind === thread.source &&
-        backend.available &&
-        backend.capabilities.archiveThread === true
+        backend.kind === thread.source
+        && backend.available
+        && backend.capabilities.archiveThread === true,
     );
 
   const canForkThread = (thread: NavigationThreadSummary): boolean =>
     props.backends.some(
       (backend) =>
-        backend.kind === thread.source &&
-        backend.available &&
-        backend.capabilities.forkThread === true
+        backend.kind === thread.source
+        && backend.available
+        && backend.capabilities.forkThread === true,
     );
 
   useEffect(() => {
@@ -386,12 +395,12 @@ export function Sidebar(props: SidebarProps) {
     const menuRect = menu.getBoundingClientRect();
     const nextPosition = placeThreadContextMenu(
       contextMenu.requestedPosition,
-      menuRect
+      menuRect,
     );
 
     if (
-      contextMenu.position?.x === nextPosition.x &&
-      contextMenu.position.y === nextPosition.y
+      contextMenu.position?.x === nextPosition.x
+      && contextMenu.position.y === nextPosition.y
     ) {
       return;
     }
@@ -419,8 +428,8 @@ export function Sidebar(props: SidebarProps) {
     );
 
     if (
-      directoryContextMenu.position?.x === nextPosition.x &&
-      directoryContextMenu.position.y === nextPosition.y
+      directoryContextMenu.position?.x === nextPosition.x
+      && directoryContextMenu.position.y === nextPosition.y
     ) {
       return;
     }
@@ -443,7 +452,7 @@ export function Sidebar(props: SidebarProps) {
 
   const openThreadContextMenu = (
     thread: NavigationThreadSummary,
-    position: ThreadContextMenuPosition
+    position: ThreadContextMenuPosition,
   ): void => {
     setRenameThread(undefined);
     // Symmetric with `openDirectoryContextMenu`'s
@@ -466,7 +475,9 @@ export function Sidebar(props: SidebarProps) {
     setContextMenu({ requestedPosition: position, pullRequest, thread });
   };
 
-  const requestRenameFromContextMenu = (thread: NavigationThreadSummary): void => {
+  const requestRenameFromContextMenu = (
+    thread: NavigationThreadSummary,
+  ): void => {
     setContextMenu(undefined);
     setRenameThread(thread);
     setRenameDraft(thread.title);
@@ -501,7 +512,9 @@ export function Sidebar(props: SidebarProps) {
     void props.onForkThread?.(thread, mode);
   };
 
-  const unlinkSubthreadFromContextMenu = (thread: NavigationThreadSummary): void => {
+  const unlinkSubthreadFromContextMenu = (
+    thread: NavigationThreadSummary,
+  ): void => {
     setContextMenu(undefined);
     void props.onSetThreadParent?.(thread, undefined);
   };
@@ -653,16 +666,16 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuChildThreadCount = contextMenu
     ? props.threads.filter(
         (thread) =>
-          thread.source === contextMenu.thread.source &&
-          thread.parentThreadId === contextMenu.thread.id,
+          thread.source === contextMenu.thread.source
+          && thread.parentThreadId === contextMenu.thread.id,
       ).length
     : 0;
   const contextMenuHasChildThreads = contextMenuChildThreadCount > 0;
   const contextMenuLocalPath = contextMenu?.thread.linkedDirectories.find(
-    (directory) => directory.kind === "local"
+    (directory) => directory.kind === "local",
   )?.path;
   const contextMenuWorktreePath = contextMenu?.thread.linkedDirectories.find(
-    (directory) => directory.kind === "worktree"
+    (directory) => directory.kind === "worktree",
   );
   const contextMenuWorktreeCopyPath =
     contextMenuWorktreePath?.worktreePath ?? contextMenuWorktreePath?.path;
@@ -680,11 +693,11 @@ export function Sidebar(props: SidebarProps) {
     contextMenu && contextMenuHasWorkspace && props.onCreateSubthread,
   );
   const contextMenuCanFork = Boolean(
-    contextMenu &&
-      contextMenu.thread.source === "codex" &&
-      contextMenuHasWorkspace &&
-      canForkThread(contextMenu.thread) &&
-      props.onForkThread,
+    contextMenu
+    && contextMenu.thread.source === "codex"
+    && contextMenuHasWorkspace
+    && canForkThread(contextMenu.thread)
+    && props.onForkThread,
   );
   const contextMenuCanUnlinkSubthread = Boolean(
     contextMenuIsSubthread && props.onSetThreadParent,
@@ -705,31 +718,33 @@ export function Sidebar(props: SidebarProps) {
   );
   const contextMenuPinnedThreadIndex = contextMenu
     ? pinnedThreadKeysInOrder.indexOf(
-        buildThreadIdentityKey(contextMenu.thread.source, contextMenu.thread.id),
+        buildThreadIdentityKey(
+          contextMenu.thread.source,
+          contextMenu.thread.id,
+        ),
       )
     : -1;
   const contextMenuPinnedThreadCount = pinnedThreadKeysInOrder.length;
   const contextMenuCanMoveUp =
     contextMenuShowMoveItems && contextMenuPinnedThreadIndex > 0;
   const contextMenuCanMoveDown =
-    contextMenuShowMoveItems &&
-    contextMenuPinnedThreadIndex >= 0 &&
-    contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1;
+    contextMenuShowMoveItems
+    && contextMenuPinnedThreadIndex >= 0
+    && contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1;
   const contextMenuHasTopActions =
-    contextMenuCanPin ||
-    contextMenuCanCreateSubthread ||
-    contextMenuCanFork ||
-    contextMenuCanUnlinkSubthread ||
-    contextMenuShowMoveItems ||
-    contextMenuCanRename ||
-    contextMenuCanArchive;
+    contextMenuCanPin
+    || contextMenuCanCreateSubthread
+    || contextMenuCanFork
+    || contextMenuCanUnlinkSubthread
+    || contextMenuShowMoveItems
+    || contextMenuCanRename
+    || contextMenuCanArchive;
 
   // Same shape as the thread context menu's "Move" items, applied
   // to the directory context menu. Directory pinning is global so
   // a single sorted array drives both adjacency checks.
   const directoryMenuShowMoveItems = Boolean(
-    directoryContextMenu?.directory.pinnedRank &&
-      props.onReorderDirectoryPins,
+    directoryContextMenu?.directory.pinnedRank && props.onReorderDirectoryPins,
   );
   const directoryMenuPinnedIndex = directoryContextMenu
     ? pinnedDirectoryKeysInOrder.indexOf(directoryContextMenu.directory.key)
@@ -737,9 +752,9 @@ export function Sidebar(props: SidebarProps) {
   const directoryMenuCanMoveUp =
     directoryMenuShowMoveItems && directoryMenuPinnedIndex > 0;
   const directoryMenuCanMoveDown =
-    directoryMenuShowMoveItems &&
-    directoryMenuPinnedIndex >= 0 &&
-    directoryMenuPinnedIndex < pinnedDirectoryKeysInOrder.length - 1;
+    directoryMenuShowMoveItems
+    && directoryMenuPinnedIndex >= 0
+    && directoryMenuPinnedIndex < pinnedDirectoryKeysInOrder.length - 1;
 
   return (
     <aside className="sidebar" aria-label="Threads">
@@ -771,7 +786,9 @@ export function Sidebar(props: SidebarProps) {
         onPointerDown={props.onResizeStart}
       />
       <header className="sidebar__masthead">
-        <p className="sidebar__brand">Pwr<span className="sidebar__brand-accent">Agent</span></p>
+        <p className="sidebar__brand">
+          Pwr<span className="sidebar__brand-accent">Agent</span>
+        </p>
 
         <div className="sidebar__masthead-actions">
           <MastheadActionButton
@@ -789,7 +806,27 @@ export function Sidebar(props: SidebarProps) {
             className={`sidebar__icon-button${props.automationsActive ? " is-active" : ""}`}
             onClick={props.onOpenAutomations}
           >
-            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/></svg>
+            <svg
+              aria-hidden="true"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M8 2v4" />
+              <path d="M16 2v4" />
+              <rect x="3" y="4" width="18" height="18" rx="2" />
+              <path d="M3 10h18" />
+              <path d="M8 14h.01" />
+              <path d="M12 14h.01" />
+              <path d="M16 14h.01" />
+              <path d="M8 18h.01" />
+              <path d="M12 18h.01" />
+            </svg>
           </MastheadActionButton>
           <MastheadActionButton
             ariaLabel="Open settings"
@@ -801,13 +838,28 @@ export function Sidebar(props: SidebarProps) {
             className={`sidebar__icon-button sidebar__masthead-settings${props.settingsActive ? " is-active" : ""}`}
             onClick={props.onOpenSettings}
           >
-            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg
+              aria-hidden="true"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
           </MastheadActionButton>
           <NewThreadButton
             creatingThread={Boolean(props.creatingThread)}
             directoryLabel={props.newThreadDirectoryLabel}
             onCreateThread={() => props.onCreateThread()}
-            onCreateThreadWithoutDirectory={props.onCreateThreadWithoutDirectory}
+            onCreateThreadWithoutDirectory={
+              props.onCreateThreadWithoutDirectory
+            }
           />
         </div>
       </header>
@@ -825,7 +877,9 @@ export function Sidebar(props: SidebarProps) {
             <RuntimeIdentityButton
               copied={copiedRuntimeValue === "branch"}
               copyLabel={
-                props.runtimeIdentity.detachedHead ? "commit SHA" : "branch name"
+                props.runtimeIdentity.detachedHead
+                  ? "commit SHA"
+                  : "branch name"
               }
               label={runtimeGitRefLabel}
               value={runtimeGitRefValue}
@@ -884,16 +938,27 @@ export function Sidebar(props: SidebarProps) {
       ) : null}
 
       {props.createThreadError ? (
-        <p className="sidebar-error sidebar-error--masthead">{props.createThreadError}</p>
+        <p className="sidebar-error sidebar-error--masthead">
+          {props.createThreadError}
+        </p>
       ) : props.launchpadError ? (
-        <p className="sidebar-error sidebar-error--masthead">{props.launchpadError}</p>
+        <p className="sidebar-error sidebar-error--masthead">
+          {props.launchpadError}
+        </p>
       ) : props.archiveThreadError ? (
-        <p className="sidebar-error sidebar-error--masthead">{props.archiveThreadError}</p>
+        <p className="sidebar-error sidebar-error--masthead">
+          {props.archiveThreadError}
+        </p>
       ) : props.renameThreadError ? (
-        <p className="sidebar-error sidebar-error--masthead">{props.renameThreadError}</p>
+        <p className="sidebar-error sidebar-error--masthead">
+          {props.renameThreadError}
+        </p>
       ) : null}
 
-      <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
+      <section
+        className="sidebar__section sidebar__section--fill"
+        aria-label="Thread browser"
+      >
         <div className="lens-switch" role="tablist" aria-label="Thread lenses">
           {(["inbox", "recents", "directories"] as const).map((mode) => (
             <LensTab
@@ -937,29 +1002,27 @@ export function Sidebar(props: SidebarProps) {
               onSetReaction={props.onSetThreadReaction}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
             />
+          ) : visibleThreads.length === 0 ? (
+            <p className="sidebar-empty">No threads yet.</p>
           ) : (
-            visibleThreads.length === 0 ? (
-              <p className="sidebar-empty">No threads yet.</p>
-            ) : (
-              <RecentsList
-                approvalRequestThreadKeys={props.approvalRequestThreadKeys}
-                inputRequestThreadKeys={props.inputRequestThreadKeys}
-                composerSourceThreadKey={props.composerSourceThreadKey}
-                selectedThreadKey={props.selectedItemKey}
-                thinkingThreadKeys={props.thinkingThreadKeys}
-                threads={visibleThreads}
-                onOpenThreadContextMenu={openThreadContextMenu}
-                onOpenPullRequestContextMenu={openPullRequestContextMenu}
-                onPrefetchPullRequests={props.onPrefetchPullRequests}
-                onDetachPullRequest={detachPullRequest}
-                onReorderThreadPins={props.onReorderThreadPins}
-                onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
-                onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
-                onSelectThread={props.onSelectThread}
-                onSetReaction={props.onSetThreadReaction}
-                onUnbindMessagingBinding={props.onUnbindMessagingBinding}
-              />
-            )
+            <RecentsList
+              approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              inputRequestThreadKeys={props.inputRequestThreadKeys}
+              composerSourceThreadKey={props.composerSourceThreadKey}
+              selectedThreadKey={props.selectedItemKey}
+              thinkingThreadKeys={props.thinkingThreadKeys}
+              threads={visibleThreads}
+              onOpenThreadContextMenu={openThreadContextMenu}
+              onOpenPullRequestContextMenu={openPullRequestContextMenu}
+              onPrefetchPullRequests={props.onPrefetchPullRequests}
+              onDetachPullRequest={detachPullRequest}
+              onReorderThreadPins={props.onReorderThreadPins}
+              onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
+              onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
+              onSelectThread={props.onSelectThread}
+              onSetReaction={props.onSetThreadReaction}
+              onUnbindMessagingBinding={props.onUnbindMessagingBinding}
+            />
           )}
         </div>
       </section>
@@ -984,7 +1047,9 @@ export function Sidebar(props: SidebarProps) {
                   type="button"
                   onClick={() => togglePinFromContextMenu(contextMenu.thread)}
                 >
-                  {contextMenu.thread.pinnedRank ? "Unpin Thread" : "Pin Thread"}
+                  {contextMenu.thread.pinnedRank
+                    ? "Unpin Thread"
+                    : "Pin Thread"}
                 </button>
               ) : null}
               {contextMenuCanCreateSubthread || contextMenuCanFork ? (
@@ -1065,10 +1130,7 @@ export function Sidebar(props: SidebarProps) {
                         role="menuitem"
                         type="button"
                         onClick={() =>
-                          forkThreadFromContextMenu(
-                            contextMenu.thread,
-                            "local",
-                          )
+                          forkThreadFromContextMenu(contextMenu.thread, "local")
                         }
                       >
                         Fork in Local
@@ -1081,7 +1143,9 @@ export function Sidebar(props: SidebarProps) {
                 <button
                   role="menuitem"
                   type="button"
-                  onClick={() => unlinkSubthreadFromContextMenu(contextMenu.thread)}
+                  onClick={() =>
+                    unlinkSubthreadFromContextMenu(contextMenu.thread)
+                  }
                 >
                   Unlink from Parent
                 </button>
@@ -1128,7 +1192,9 @@ export function Sidebar(props: SidebarProps) {
                 <button
                   role="menuitem"
                   type="button"
-                  onClick={() => requestRenameFromContextMenu(contextMenu.thread)}
+                  onClick={() =>
+                    requestRenameFromContextMenu(contextMenu.thread)
+                  }
                 >
                   Rename Thread
                 </button>
@@ -1192,7 +1258,7 @@ export function Sidebar(props: SidebarProps) {
             <div className="thread-context-menu__separator" role="separator" />
           ) : null}
           {(contextMenu.thread.messagingBindings ?? []).length > 0
-            && props.onUnbindMessagingBinding ? (
+          && props.onUnbindMessagingBinding ? (
             <>
               <div className="thread-context-menu__section">
                 {(contextMenu.thread.messagingBindings ?? []).map((binding) => (
@@ -1213,7 +1279,10 @@ export function Sidebar(props: SidebarProps) {
                   </button>
                 ))}
               </div>
-              <div className="thread-context-menu__separator" role="separator" />
+              <div
+                className="thread-context-menu__separator"
+                role="separator"
+              />
             </>
           ) : null}
           <div className="thread-context-menu__section">
@@ -1222,7 +1291,9 @@ export function Sidebar(props: SidebarProps) {
                 <button
                   role="menuitem"
                   type="button"
-                  onClick={() => copyFromContextMenu(contextMenuPullRequest.url)}
+                  onClick={() =>
+                    copyFromContextMenu(contextMenuPullRequest.url)
+                  }
                 >
                   Copy Pull Request URL
                 </button>
@@ -1231,7 +1302,10 @@ export function Sidebar(props: SidebarProps) {
                     role="menuitem"
                     type="button"
                     onClick={() =>
-                      detachPullRequest(contextMenu.thread, contextMenuPullRequest)
+                      detachPullRequest(
+                        contextMenu.thread,
+                        contextMenuPullRequest,
+                      )
                     }
                   >
                     Detach Pull Request
@@ -1296,11 +1370,11 @@ export function Sidebar(props: SidebarProps) {
           role="menu"
           style={{
             left:
-              directoryContextMenu.position?.x ??
-              directoryContextMenu.requestedPosition.x,
+              directoryContextMenu.position?.x
+              ?? directoryContextMenu.requestedPosition.x,
             top:
-              directoryContextMenu.position?.y ??
-              directoryContextMenu.requestedPosition.y,
+              directoryContextMenu.position?.y
+              ?? directoryContextMenu.requestedPosition.y,
             visibility: directoryContextMenu.position ? undefined : "hidden",
           }}
           onClick={(event) => event.stopPropagation()}
@@ -1310,7 +1384,9 @@ export function Sidebar(props: SidebarProps) {
               role="menuitem"
               type="button"
               onClick={() =>
-                togglePinDirectoryFromContextMenu(directoryContextMenu.directory)
+                togglePinDirectoryFromContextMenu(
+                  directoryContextMenu.directory,
+                )
               }
             >
               {directoryContextMenu.directory.pinnedRank
@@ -1391,24 +1467,32 @@ export function Sidebar(props: SidebarProps) {
                     event.preventDefault();
                     submitRename();
                   } else if (
-                    (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
-                    !event.altKey &&
-                    !event.ctrlKey &&
-                    !event.metaKey &&
-                    !event.shiftKey &&
-                    event.currentTarget.selectionStart === 0 &&
-                    event.currentTarget.selectionEnd === event.currentTarget.value.length
+                    (event.key === "ArrowLeft" || event.key === "ArrowRight")
+                    && !event.altKey
+                    && !event.ctrlKey
+                    && !event.metaKey
+                    && !event.shiftKey
+                    && event.currentTarget.selectionStart === 0
+                    && event.currentTarget.selectionEnd
+                      === event.currentTarget.value.length
                   ) {
                     event.preventDefault();
                     const nextPosition =
-                      event.key === "ArrowLeft" ? 0 : event.currentTarget.value.length;
-                    event.currentTarget.setSelectionRange(nextPosition, nextPosition);
+                      event.key === "ArrowLeft"
+                        ? 0
+                        : event.currentTarget.value.length;
+                    event.currentTarget.setSelectionRange(
+                      nextPosition,
+                      nextPosition,
+                    );
                   }
                 }}
               />
             </label>
             {renameValidationError ? (
-              <p className="rename-thread-dialog__error">{renameValidationError}</p>
+              <p className="rename-thread-dialog__error">
+                {renameValidationError}
+              </p>
             ) : null}
             <div className="rename-thread-dialog__actions">
               <button
@@ -1429,7 +1513,6 @@ export function Sidebar(props: SidebarProps) {
           </section>
         </div>
       ) : null}
-
     </aside>
   );
 }
@@ -1451,9 +1534,7 @@ function formatProfileIdentityTooltip(params: {
   codexBackend?: BackendSummary;
   profile?: DesktopPwrAgentProfileSummary;
 }): string {
-  const lines = [
-    `PwrAgent profile: ${params.activeProfile}`,
-  ];
+  const lines = [`PwrAgent profile: ${params.activeProfile}`];
   const codexProfile = params.profile?.codexProfile;
   if (codexProfile) {
     lines.push(`Codex profile: ${codexProfile.name || "default"}`);
@@ -1466,11 +1547,15 @@ function formatProfileIdentityTooltip(params: {
       lines.push(`Plan: ${account.planType}`);
     }
   } else if (params.codexBackend?.unavailableReason) {
-    lines.push(`Codex account: unavailable (${params.codexBackend.unavailableReason})`);
+    lines.push(
+      `Codex account: unavailable (${params.codexBackend.unavailableReason})`,
+    );
   } else if (params.codexBackend) {
     lines.push("Codex account: not reported");
   }
-  const limits = params.codexBackend ? selectVisibleRateLimits(params.codexBackend) : [];
+  const limits = params.codexBackend
+    ? selectVisibleRateLimits(params.codexBackend)
+    : [];
   if (limits.length) {
     lines.push("Limits:");
     for (const limit of limits) {
@@ -1488,7 +1573,7 @@ function formatPlatformLabel(platform: string): string {
 
 function placeThreadContextMenu(
   requestedPosition: ThreadContextMenuPosition,
-  menuRect: DOMRect
+  menuRect: DOMRect,
 ): { x: number; y: number } {
   const viewportMargin = 8;
   const triggerGap = 4;
@@ -1499,7 +1584,8 @@ function placeThreadContextMenu(
 
   const belowTop = requestedPosition.y;
   const wouldOverflowBottom =
-    menuHeight > 0 && belowTop + menuHeight + viewportMargin > window.innerHeight;
+    menuHeight > 0
+    && belowTop + menuHeight + viewportMargin > window.innerHeight;
   const flippedTop =
     requestedPosition.anchorTop !== undefined
       ? requestedPosition.anchorTop - menuHeight - triggerGap
@@ -1509,7 +1595,7 @@ function placeThreadContextMenu(
     x: Math.max(viewportMargin, Math.min(requestedPosition.x, maxX)),
     y: Math.max(
       viewportMargin,
-      Math.min(wouldOverflowBottom ? flippedTop : belowTop, maxY)
+      Math.min(wouldOverflowBottom ? flippedTop : belowTop, maxY),
     ),
   };
 }
@@ -1572,8 +1658,12 @@ function LensTab(props: {
           tooltip.hide();
           props.onSelect();
         }}
-        onFocus={(event) => tooltip.show(event.currentTarget, props.tooltipText)}
-        onMouseEnter={(event) => tooltip.show(event.currentTarget, props.tooltipText)}
+        onFocus={(event) =>
+          tooltip.show(event.currentTarget, props.tooltipText)
+        }
+        onMouseEnter={(event) =>
+          tooltip.show(event.currentTarget, props.tooltipText)
+        }
         onMouseLeave={tooltip.hide}
       >
         {props.mode === "directories" ? (
@@ -1590,7 +1680,9 @@ function LensTab(props: {
             </span>
           </>
         ) : (
-          <span className="lens-switch__label">{browseModeLabels[props.mode]}</span>
+          <span className="lens-switch__label">
+            {browseModeLabels[props.mode]}
+          </span>
         )}
       </button>
       {tooltip.tooltipNode}
@@ -1625,7 +1717,9 @@ function MastheadActionButton(props: {
           props.onClick?.();
         }}
         onFocus={(event) => tooltip.show(event.currentTarget, tooltipLabel)}
-        onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipLabel)}
+        onMouseEnter={(event) =>
+          tooltip.show(event.currentTarget, tooltipLabel)
+        }
         onMouseLeave={tooltip.hide}
       >
         {props.children}
@@ -1652,20 +1746,27 @@ function RuntimeIdentityButton(props: {
     <>
       <button
         aria-label={`Copy ${
-          props.copyLabel ?? (props.valueKind === "cwd" ? "working directory" : "branch name")
+          props.copyLabel
+          ?? (props.valueKind === "cwd" ? "working directory" : "branch name")
         }`}
         className="runtime-identity__button path-copy-target"
         type="button"
         onBlur={tooltip.hide}
         onClick={() => {
-          void copyText(props.value).then(() => props.onCopied(props.valueKind));
+          void copyText(props.value).then(() =>
+            props.onCopied(props.valueKind),
+          );
         }}
         onFocus={(event) => tooltip.show(event.currentTarget, tooltipText)}
         onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipText)}
         onMouseLeave={tooltip.hide}
       >
         <span aria-hidden="true" className="runtime-identity__icon">
-          {props.valueKind === "cwd" ? <FolderIcon size={13} /> : <BranchIcon size={13} />}
+          {props.valueKind === "cwd" ? (
+            <FolderIcon size={13} />
+          ) : (
+            <BranchIcon size={13} />
+          )}
         </span>
         <span className="runtime-identity__text">{props.label}</span>
       </button>

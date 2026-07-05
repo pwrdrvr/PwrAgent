@@ -70,7 +70,9 @@ export function ProfilesSettings(props: {
         title="Profile list"
         description="Choose which profile opens when no environment profile is set, or open another profile in a new app instance."
         chip={
-          profiles.activeProfile ? `active:${profiles.activeProfile}` : "profiles"
+          profiles.activeProfile
+            ? `active:${profiles.activeProfile}`
+            : "profiles"
         }
         chipKind="ok"
       >
@@ -98,7 +100,10 @@ export function ProfilesSettings(props: {
                     value={profile.codexProfile.name}
                     onAfterProfilesChanged={props.onSettingsChanged}
                     onChange={async (codexProfile) => {
-                      await profiles.setCodexProfile(profile.name, codexProfile);
+                      await profiles.setCodexProfile(
+                        profile.name,
+                        codexProfile,
+                      );
                       if (profile.active) {
                         await props.onSettingsChanged();
                       }
@@ -187,7 +192,9 @@ function PwrAgentProfileRow(props: {
         <span className="settings-pathrow__path">{profile.profileDir}</span>
         <span className="settings-profile-row__meta">{lastUsed}</span>
         <div className="settings-profile-row__codex">
-          <span className="settings-profile-row__label">Codex auth profile</span>
+          <span className="settings-profile-row__label">
+            Codex auth profile
+          </span>
           {props.codexProfileControl}
           <span className="settings-profile-row__meta">
             Applies the next time this PwrAgent profile launches.
@@ -244,7 +251,9 @@ function ProfileDeleteDialog(props: {
   onConfirm: () => void;
 }) {
   const movingToTrash = props.platform === "darwin";
-  const actionLabel = movingToTrash ? "Move profile to Trash" : "Delete profile";
+  const actionLabel = movingToTrash
+    ? "Move profile to Trash"
+    : "Delete profile";
   return (
     <div className="settings-confirm-modal" role="presentation">
       <div
@@ -256,10 +265,11 @@ function ProfileDeleteDialog(props: {
         <h2 id="delete-profile-heading">Delete profile?</h2>
         {movingToTrash ? (
           <p>
-            Move <strong>{props.profile.displayName || props.profile.name}</strong>{" "}
-            to Trash. This removes it from PwrAgent and moves its profile folder,
-            including config, SQLite state, worktrees, and encrypted secret
-            records, to the macOS Trash.
+            Move{" "}
+            <strong>{props.profile.displayName || props.profile.name}</strong>{" "}
+            to Trash. This removes it from PwrAgent and moves its profile
+            folder, including config, SQLite state, worktrees, and encrypted
+            secret records, to the macOS Trash.
           </p>
         ) : (
           <p>
@@ -320,7 +330,8 @@ function ProfileCreateDialog(props: {
       >
         <h2 id="create-profile-heading">Add PwrAgent profile</h2>
         <p>
-          Create an isolated PwrAgent profile with its own config, state, and secrets.
+          Create an isolated PwrAgent profile with its own config, state, and
+          secrets.
         </p>
         <input
           aria-label="PwrAgent profile name"

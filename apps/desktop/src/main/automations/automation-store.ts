@@ -223,7 +223,10 @@ export class AutomationStore {
    * unparseable. Surfaced (read-only) via `getAutomationLoadIssues` so the UI
    * can warn the user; the underlying rows are never mutated.
    */
-  private readonly loadIssues = new Map<string, { name: string; reason: string }>();
+  private readonly loadIssues = new Map<
+    string,
+    { name: string; reason: string }
+  >();
 
   constructor(
     private readonly stateDb: StateDb,
@@ -291,26 +294,30 @@ export class AutomationStore {
     return record;
   }
 
-  updateAutomation(id: string, input: UpdateAutomationInput): AutomationRecord | undefined {
+  updateAutomation(
+    id: string,
+    input: UpdateAutomationInput,
+  ): AutomationRecord | undefined {
     const current = this.getAutomation(id, { includeDeleted: true });
     if (!current) return undefined;
     const now = input.now ?? Date.now();
     const triggers =
-      input.triggers ?? (
-        input.schedule
-          ? normalizeAutomationTriggers({ schedule: input.schedule })
-          : current.triggers
-      );
+      input.triggers
+      ?? (input.schedule
+        ? normalizeAutomationTriggers({ schedule: input.schedule })
+        : current.triggers);
     const schedule = scheduleFromTriggers(triggers);
     const nextRunAt =
-      input.nextRunAt === null ? undefined : input.nextRunAt ?? current.nextRunAt;
+      input.nextRunAt === null
+        ? undefined
+        : (input.nextRunAt ?? current.nextRunAt);
     const record: AutomationRecord = {
       ...current,
       backend: input.backend ?? current.backend,
       threadId: input.threadId ?? current.threadId,
       name: input.name ?? current.name,
       taskPrompt: input.taskPrompt ?? current.taskPrompt,
-      gate: input.gate === null ? undefined : input.gate ?? current.gate,
+      gate: input.gate === null ? undefined : (input.gate ?? current.gate),
       status: input.status ?? current.status,
       triggers,
       schedule,
@@ -321,7 +328,7 @@ export class AutomationStore {
       executionProfile:
         input.executionProfile === null
           ? undefined
-          : input.executionProfile ?? current.executionProfile,
+          : (input.executionProfile ?? current.executionProfile),
       outputActions: input.outputActions ?? current.outputActions,
       maxRunsPerHour:
         input.maxRunsPerHour === undefined
@@ -413,18 +420,23 @@ export class AutomationStore {
     if (!row) return undefined;
     const record = this.recordFromRow(row);
     if (!record) return undefined;
-    if (!options.includeDeleted && record.status === "deleted") return undefined;
+    if (!options.includeDeleted && record.status === "deleted")
+      return undefined;
     return record;
   }
 
-  listAutomations(options: { includeDeleted?: boolean } = {}): AutomationRecord[] {
+  listAutomations(
+    options: { includeDeleted?: boolean } = {},
+  ): AutomationRecord[] {
     const rows = this.stateDb.raw
       .prepare("SELECT * FROM automations ORDER BY updated_at DESC")
       .all() as AutomationRow[];
     return rows
       .map((row) => this.recordFromRow(row))
       .filter((record): record is AutomationRecord =>
-        Boolean(record && (options.includeDeleted || record.status !== "deleted")),
+        Boolean(
+          record && (options.includeDeleted || record.status !== "deleted"),
+        ),
       );
   }
 
@@ -461,7 +473,9 @@ export class AutomationStore {
     return rows
       .map((row) => this.recordFromRow(row))
       .filter((record): record is AutomationRecord =>
-        Boolean(record && (params.includeDeleted || record.status !== "deleted")),
+        Boolean(
+          record && (params.includeDeleted || record.status !== "deleted"),
+        ),
       );
   }
 
@@ -480,9 +494,11 @@ export class AutomationStore {
     const automation = this.getAutomation(input.automationId);
     if (!automation) return undefined;
     const now = input.now ?? Date.now();
-    const scheduledWindows = input.scheduledWindows ?? (
-      input.scheduledFor === undefined ? [] : [{ scheduledFor: input.scheduledFor }]
-    );
+    const scheduledWindows =
+      input.scheduledWindows
+      ?? (input.scheduledFor === undefined
+        ? []
+        : [{ scheduledFor: input.scheduledFor }]);
     const run: AutomationRunSummary = {
       id: input.id ?? `automation-run:${randomUUID()}`,
       automationId: automation.id,
@@ -538,7 +554,9 @@ export class AutomationStore {
     return nextRun;
   }
 
-  findPendingScheduledRun(automationId: string): AutomationRunSummary | undefined {
+  findPendingScheduledRun(
+    automationId: string,
+  ): AutomationRunSummary | undefined {
     const row = this.stateDb.raw
       .prepare(
         "SELECT * FROM automation_runs WHERE automation_id = ? AND trigger = 'scheduled' AND status IN ('pending', 'queued') ORDER BY updated_at DESC LIMIT 1",
@@ -547,7 +565,9 @@ export class AutomationStore {
     return row ? this.runFromRow(row) : undefined;
   }
 
-  listPendingOrQueuedRunsForAutomation(automationId: string): AutomationRunSummary[] {
+  listPendingOrQueuedRunsForAutomation(
+    automationId: string,
+  ): AutomationRunSummary[] {
     const rows = this.stateDb.raw
       .prepare(
         "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued') ORDER BY updated_at DESC, rowid DESC",
@@ -558,7 +578,9 @@ export class AutomationStore {
       .filter((run): run is AutomationRunSummary => Boolean(run));
   }
 
-  findActiveRunForAutomation(automationId: string): AutomationRunSummary | undefined {
+  findActiveRunForAutomation(
+    automationId: string,
+  ): AutomationRunSummary | undefined {
     const row = this.stateDb.raw
       .prepare(
         "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued', 'running') ORDER BY updated_at DESC, rowid DESC LIMIT 1",
@@ -581,7 +603,9 @@ export class AutomationStore {
     return row ? this.runFromRow(row) : undefined;
   }
 
-  findPendingRunForAutomation(automationId: string): AutomationRunSummary | undefined {
+  findPendingRunForAutomation(
+    automationId: string,
+  ): AutomationRunSummary | undefined {
     const row = this.stateDb.raw
       .prepare(
         "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued') ORDER BY created_at ASC, rowid ASC LIMIT 1",
@@ -622,7 +646,10 @@ export class AutomationStore {
 
   markRunTerminal(params: {
     runId: string;
-    status: Extract<AutomationRunStatus, "completed" | "failed" | "cancelled" | "skipped">;
+    status: Extract<
+      AutomationRunStatus,
+      "completed" | "failed" | "cancelled" | "skipped"
+    >;
     completedAt?: number;
     errorMessage?: string;
     now?: number;
@@ -648,7 +675,9 @@ export class AutomationStore {
     return row ? this.runFromRow(row) : undefined;
   }
 
-  getLatestRunForAutomation(automationId: string): AutomationRunSummary | undefined {
+  getLatestRunForAutomation(
+    automationId: string,
+  ): AutomationRunSummary | undefined {
     const row = this.stateDb.raw
       .prepare(
         "SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1",
@@ -665,7 +694,9 @@ export class AutomationStore {
       .prepare(
         "SELECT * FROM automation_runs WHERE backend = ? AND backend_turn_id = ? AND status = 'running' ORDER BY updated_at DESC, rowid DESC LIMIT 1",
       )
-      .get(params.backend, params.backendTurnId) as AutomationRunRow | undefined;
+      .get(params.backend, params.backendTurnId) as
+      | AutomationRunRow
+      | undefined;
     return row ? this.runFromRow(row) : undefined;
   }
 
@@ -677,7 +708,9 @@ export class AutomationStore {
       .prepare(
         "SELECT * FROM automation_runs WHERE backend = ? AND backend_turn_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1",
       )
-      .get(params.backend, params.backendTurnId) as AutomationRunRow | undefined;
+      .get(params.backend, params.backendTurnId) as
+      | AutomationRunRow
+      | undefined;
     return row ? this.runFromRow(row) : undefined;
   }
 
@@ -687,7 +720,9 @@ export class AutomationStore {
     const runRow = this.getRunRow(input.runId);
     if (!runRow) return undefined;
     const existing = this.getRunArtifactRow(input.runId);
-    const existingArtifact = existing ? this.artifactFromRow(existing) : undefined;
+    const existingArtifact = existing
+      ? this.artifactFromRow(existing)
+      : undefined;
     const now = input.now ?? Date.now();
     const artifact: AutomationRunArtifact = {
       runId: input.runId,
@@ -696,7 +731,8 @@ export class AutomationStore {
       finalText: input.finalText ?? existingArtifact?.finalText,
       errorMessage: input.errorMessage ?? existingArtifact?.errorMessage,
       outputDecision: input.outputDecision ?? existingArtifact?.outputDecision,
-      actionResults: input.actionResults ?? existingArtifact?.actionResults ?? [],
+      actionResults:
+        input.actionResults ?? existingArtifact?.actionResults ?? [],
       transcriptEvents:
         input.transcriptEvents ?? existingArtifact?.transcriptEvents ?? [],
       createdAt: existing?.created_at ?? now,
@@ -737,7 +773,10 @@ export class AutomationStore {
     return row ? this.artifactFromRow(row) : undefined;
   }
 
-  listRunsForAutomation(automationId: string, limit = 50): AutomationRunSummary[] {
+  listRunsForAutomation(
+    automationId: string,
+    limit = 50,
+  ): AutomationRunSummary[] {
     const rows = this.stateDb.raw
       .prepare(
         "SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?",
@@ -757,7 +796,11 @@ export class AutomationStore {
       .prepare(
         "SELECT * FROM automation_runs WHERE backend = ? AND thread_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?",
       )
-      .all(params.backend, params.threadId, params.limit ?? 50) as AutomationRunRow[];
+      .all(
+        params.backend,
+        params.threadId,
+        params.limit ?? 50,
+      ) as AutomationRunRow[];
     return rows
       .map((row) => this.runFromRow(row))
       .filter((run): run is AutomationRunSummary => Boolean(run));
@@ -766,7 +809,9 @@ export class AutomationStore {
   reconcileStartup(input: StartupReconciliationInput = {}): void {
     const now = input.now ?? Date.now();
     const rows = this.stateDb.raw
-      .prepare("SELECT * FROM automation_runs WHERE status IN ('pending', 'queued', 'running')")
+      .prepare(
+        "SELECT * FROM automation_runs WHERE status IN ('pending', 'queued', 'running')",
+      )
       .all() as AutomationRunRow[];
 
     const transaction = this.stateDb.raw.transaction(() => {
@@ -778,7 +823,8 @@ export class AutomationStore {
             ...run,
             status: "cancelled",
             completedAt: now,
-            errorMessage: "PwrAgent restarted before this local automation run completed.",
+            errorMessage:
+              "PwrAgent restarted before this local automation run completed.",
           },
           {
             backend: row.backend,
@@ -810,7 +856,10 @@ export class AutomationStore {
   buildThreadSummaries(): Record<string, AutomationThreadSummary> {
     const summaries: Record<string, AutomationThreadSummary> = {};
     for (const automation of this.listAutomations()) {
-      const key = buildThreadIdentityKey(automation.backend, automation.threadId);
+      const key = buildThreadIdentityKey(
+        automation.backend,
+        automation.threadId,
+      );
       const current = summaries[key] ?? {
         totalCount: 0,
         enabledCount: 0,
@@ -845,7 +894,8 @@ export class AutomationStore {
       current.lastRunAt = maxDefined(current.lastRunAt, automation.lastRunAt);
       current.pendingRunCount += runCounts.pending;
       current.coalescedWindowCount += runCounts.coalescedWindows;
-      current.skippedSinceLastCompletedCount += runCounts.skippedSinceLastCompleted;
+      current.skippedSinceLastCompletedCount +=
+        runCounts.skippedSinceLastCompleted;
       current.automations.push(item);
       summaries[key] = current;
     }
@@ -1081,7 +1131,10 @@ export class AutomationStore {
   private recordFromRow(row: AutomationRow): AutomationRecord | undefined {
     const payload = parseJson<AutomationPayload>(row.payload);
     if (!payload) {
-      this.noteAutomationLoadIssue(row, "The automation's stored data is corrupt.");
+      this.noteAutomationLoadIssue(
+        row,
+        "The automation's stored data is corrupt.",
+      );
       return undefined;
     }
     const triggers = normalizeAutomationTriggers({
@@ -1117,8 +1170,8 @@ export class AutomationStore {
       triggers,
       schedule,
       scheduleSummary:
-        payload.scheduleSummary ??
-        (schedule
+        payload.scheduleSummary
+        ?? (schedule
           ? formatAutomationScheduleSummary(schedule)
           : formatAutomationTriggerSummary(triggers)),
       backlogPolicy: row.backlog_policy,
@@ -1183,7 +1236,9 @@ export class AutomationStore {
       .get(runId) as AutomationRunRow | undefined;
   }
 
-  private getRunArtifactRow(runId: string): AutomationRunArtifactRow | undefined {
+  private getRunArtifactRow(
+    runId: string,
+  ): AutomationRunArtifactRow | undefined {
     return this.stateDb.raw
       .prepare("SELECT * FROM automation_run_artifacts WHERE run_id = ?")
       .get(runId) as AutomationRunArtifactRow | undefined;
@@ -1195,11 +1250,12 @@ export class AutomationStore {
     skippedSinceLastCompleted: number;
   } {
     const runs = this.listRunsForAutomation(automationId, this.runHistoryLimit);
-    const pendingRuns = runs.filter((run) =>
-      run.status === "pending" || run.status === "queued",
+    const pendingRuns = runs.filter(
+      (run) => run.status === "pending" || run.status === "queued",
     );
-    const latestCompletedAt = runs.find((run) => run.status === "completed")
-      ?.completedAt;
+    const latestCompletedAt = runs.find(
+      (run) => run.status === "completed",
+    )?.completedAt;
     return {
       pending: pendingRuns.length,
       coalescedWindows: pendingRuns.reduce(
@@ -1208,9 +1264,9 @@ export class AutomationStore {
       ),
       skippedSinceLastCompleted: runs.filter(
         (run) =>
-          run.status === "skipped" &&
-          (latestCompletedAt === undefined ||
-            (run.completedAt ?? run.scheduledFor ?? 0) > latestCompletedAt),
+          run.status === "skipped"
+          && (latestCompletedAt === undefined
+            || (run.completedAt ?? run.scheduledFor ?? 0) > latestCompletedAt),
       ).length,
     };
   }
@@ -1274,9 +1330,9 @@ function isSupportedAutomationTrigger(
   }
   if (trigger.kind === "inbound_message") {
     return Boolean(
-      trigger.id &&
-        trigger.conversation?.channel &&
-        trigger.conversation.conversationId,
+      trigger.id
+      && trigger.conversation?.channel
+      && trigger.conversation.conversationId,
     );
   }
   return false;
@@ -1291,7 +1347,9 @@ function scheduleFromTriggers(
 function formatAutomationTriggerSummary(
   triggers: AutomationTriggerDefinition[],
 ): string {
-  const inbound = triggers.find((trigger) => trigger.kind === "inbound_message");
+  const inbound = triggers.find(
+    (trigger) => trigger.kind === "inbound_message",
+  );
   if (inbound?.kind === "inbound_message") {
     return inbound.name ? `inbound: ${inbound.name}` : "inbound message";
   }
@@ -1322,8 +1380,8 @@ function isSupportedAutomationOutputAction(
   if (action.kind === "agent_context") return true;
   if (action.kind === "source_message") {
     return (
-      action.destination === "source_thread" ||
-      action.destination === "source_channel"
+      action.destination === "source_thread"
+      || action.destination === "source_channel"
     );
   }
   if (action.kind === "messaging_target") {
@@ -1332,14 +1390,19 @@ function isSupportedAutomationOutputAction(
   return false;
 }
 
-
-function minDefined(left: number | undefined, right: number | undefined): number | undefined {
+function minDefined(
+  left: number | undefined,
+  right: number | undefined,
+): number | undefined {
   if (left === undefined) return right;
   if (right === undefined) return left;
   return Math.min(left, right);
 }
 
-function maxDefined(left: number | undefined, right: number | undefined): number | undefined {
+function maxDefined(
+  left: number | undefined,
+  right: number | undefined,
+): number | undefined {
   if (left === undefined) return right;
   if (right === undefined) return left;
   return Math.max(left, right);

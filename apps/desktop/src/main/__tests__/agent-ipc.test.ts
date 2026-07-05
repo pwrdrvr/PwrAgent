@@ -34,18 +34,20 @@ const registry = {
     threadId: request.threadId,
     turnId: "turn-1",
   })),
-  submitTurn: vi.fn(async (request: StartTurnRequest & { origin: "manual" }) => ({
-    status: "started" as const,
-    entry: {
-      id: "queue-1",
-      backend: request.backend,
-      createdAt: 1,
-      input: request.input,
-      origin: request.origin,
-      threadId: request.threadId,
-    },
-    turnId: "turn-1",
-  })),
+  submitTurn: vi.fn(
+    async (request: StartTurnRequest & { origin: "manual" }) => ({
+      status: "started" as const,
+      entry: {
+        id: "queue-1",
+        backend: request.backend,
+        createdAt: 1,
+        input: request.input,
+        origin: request.origin,
+        threadId: request.threadId,
+      },
+      turnId: "turn-1",
+    }),
+  ),
   startReview: vi.fn(async (request: StartReviewRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -83,9 +85,11 @@ vi.mock("electron", () => ({
     ],
   },
   ipcMain: {
-    handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
-      handlers.set(channel, handler);
-    }),
+    handle: vi.fn(
+      (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
+        handlers.set(channel, handler);
+      },
+    ),
     removeHandler: vi.fn((channel: string) => {
       handlers.delete(channel);
     }),
@@ -127,10 +131,8 @@ describe("agent ipc", () => {
   });
 
   it("registers backend and agent handlers and broadcasts backend-tagged events", async () => {
-    const {
-      registerAgentIpcHandlers,
-      disposeAgentIpcHandlers,
-    } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } =
+      await import("../ipc/agent-ipc");
     const {
       AGENT_EVENT_CHANNEL,
       AGENT_INTERRUPT_TURN_CHANNEL,
@@ -155,11 +157,14 @@ describe("agent ipc", () => {
       threadId: "thread-1",
     });
     expect(
-      await handlers.get(AGENT_START_TURN_CHANNEL)?.({}, {
-        backend: "grok",
-        threadId: "thread-1",
-        input: [{ type: "text", text: "Ship it" }],
-      }),
+      await handlers.get(AGENT_START_TURN_CHANNEL)?.(
+        {},
+        {
+          backend: "grok",
+          threadId: "thread-1",
+          input: [{ type: "text", text: "Ship it" }],
+        },
+      ),
     ).toEqual({
       backend: "grok",
       queueEntryId: "queue-1",
@@ -168,11 +173,14 @@ describe("agent ipc", () => {
       turnId: "turn-1",
     });
     expect(
-      await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, {
-        backend: "grok",
-        threadId: "thread-1",
-        target: { type: "uncommittedChanges" },
-      }),
+      await handlers.get(AGENT_START_REVIEW_CHANNEL)?.(
+        {},
+        {
+          backend: "grok",
+          threadId: "thread-1",
+          target: { type: "uncommittedChanges" },
+        },
+      ),
     ).toEqual({
       backend: "grok",
       threadId: "thread-1",
@@ -180,32 +188,41 @@ describe("agent ipc", () => {
       turnId: "turn-review-1",
     });
     expect(
-      await handlers.get(AGENT_INTERRUPT_TURN_CHANNEL)?.({}, {
-        backend: "grok",
-        threadId: "thread-1",
-        turnId: "turn-1",
-      }),
+      await handlers.get(AGENT_INTERRUPT_TURN_CHANNEL)?.(
+        {},
+        {
+          backend: "grok",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      ),
     ).toEqual({
       backend: "grok",
       threadId: "thread-1",
       turnId: "turn-1",
     });
     expect(
-      await handlers.get(AGENT_STEER_TURN_CHANNEL)?.({}, {
-        backend: "codex",
-        threadId: "thread-1",
-        expectedTurnId: "turn-1",
-        input: [{ type: "text", text: "Course correct" }],
-      }),
+      await handlers.get(AGENT_STEER_TURN_CHANNEL)?.(
+        {},
+        {
+          backend: "codex",
+          threadId: "thread-1",
+          expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "Course correct" }],
+        },
+      ),
     ).toEqual({
       backend: "codex",
       threadId: "thread-1",
       turnId: "turn-1",
     });
     expect(
-      await handlers.get(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL)?.({}, {
-        directoryKey: "directory:/repo/app",
-      }),
+      await handlers.get(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL)?.(
+        {},
+        {
+          directoryKey: "directory:/repo/app",
+        },
+      ),
     ).toEqual({
       backend: "codex",
       threadId: "materialized:directory:/repo/app",
@@ -250,15 +267,13 @@ describe("agent ipc", () => {
   });
 
   it("caps oversized live agent event strings before broadcasting to renderer subscribers", async () => {
-    const {
-      registerAgentIpcHandlers,
-      disposeAgentIpcHandlers,
-    } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } =
+      await import("../ipc/agent-ipc");
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
     const oversizedOutput =
-      `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}` +
-      "x".repeat(80_000) +
-      "protocol-tail";
+      `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}`
+      + "x".repeat(80_000)
+      + "protocol-tail";
 
     registerAgentIpcHandlers();
 
@@ -297,7 +312,9 @@ describe("agent ipc", () => {
     );
     expect(typeof output).toBe("string");
     expect(output).toContain("PwrAgent renderer boundary: truncated");
-    expect(output).toContain("$.notification.params.item.data.aggregatedOutput");
+    expect(output).toContain(
+      "$.notification.params.item.data.aggregatedOutput",
+    );
     expect(output).toContain("protocol-tail");
     expect(output).not.toContain("x".repeat(60_000));
 
@@ -305,15 +322,13 @@ describe("agent ipc", () => {
   });
 
   it("caps oversized live diff payloads before broadcasting to renderer subscribers", async () => {
-    const {
-      registerAgentIpcHandlers,
-      disposeAgentIpcHandlers,
-    } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } =
+      await import("../ipc/agent-ipc");
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
     const oversizedDiff =
-      `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}` +
-      "x".repeat(80_000) +
-      "protocol-tail";
+      `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}`
+      + "x".repeat(80_000)
+      + "protocol-tail";
 
     registerAgentIpcHandlers();
 
@@ -351,10 +366,8 @@ describe("agent ipc", () => {
   });
 
   it("attaches pre-shaped live diff activity before broadcasting to renderer subscribers", async () => {
-    const {
-      registerAgentIpcHandlers,
-      disposeAgentIpcHandlers,
-    } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } =
+      await import("../ipc/agent-ipc");
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
     const diff = [
       "diff --git a/src/example.ts b/src/example.ts",

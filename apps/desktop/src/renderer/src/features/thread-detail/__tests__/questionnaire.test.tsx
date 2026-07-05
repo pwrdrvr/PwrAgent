@@ -12,7 +12,7 @@ import {
 } from "../questionnaire";
 
 function buildRequest(
-  questions: AppServerToolRequestUserInputNotification["params"]["questions"]
+  questions: AppServerToolRequestUserInputNotification["params"]["questions"],
 ): AppServerToolRequestUserInputNotification {
   return {
     method: "item/tool/requestUserInput",
@@ -39,15 +39,15 @@ describe("questionnaire helpers", () => {
           options: [
             {
               label: "Small patch (Recommended)",
-              description: "Keep this scoped."
+              description: "Keep this scoped.",
             },
             {
               label: "Large refactor",
-              description: "Touch adjacent flows."
-            }
-          ]
-        }
-      ])
+              description: "Touch adjacent flows.",
+            },
+          ],
+        },
+      ]),
     );
 
     expect(state).toBeDefined();
@@ -57,9 +57,9 @@ describe("questionnaire helpers", () => {
     expect(buildQuestionnaireResponse(answered)).toEqual({
       answers: {
         approach: {
-          answers: ["Small patch (Recommended)"]
-        }
-      }
+          answers: ["Small patch (Recommended)"],
+        },
+      },
     });
   });
 
@@ -74,8 +74,8 @@ describe("questionnaire helpers", () => {
           isSecret: false,
           options: [
             { label: "Small", description: "One component." },
-            { label: "Large", description: "Multiple components." }
-          ]
+            { label: "Large", description: "Multiple components." },
+          ],
         },
         {
           id: "tests",
@@ -85,10 +85,10 @@ describe("questionnaire helpers", () => {
           isSecret: false,
           options: [
             { label: "Unit only", description: "Fast coverage." },
-            { label: "Unit and E2E", description: "Full path." }
-          ]
-        }
-      ])
+            { label: "Unit and E2E", description: "Full path." },
+          ],
+        },
+      ]),
     );
 
     const firstAnswer = answerQuestionnaireOption(state!, "B");
@@ -102,12 +102,12 @@ describe("questionnaire helpers", () => {
     expect(backToFirst.answers[0]).toMatchObject({
       kind: "option",
       optionKey: "B",
-      value: "Large"
+      value: "Large",
     });
     expect(forwardAgain.answers[1]).toMatchObject({
       kind: "option",
       optionKey: "A",
-      value: "Unit only"
+      value: "Unit only",
     });
     expect(canSubmitQuestionnaire(forwardAgain)).toBe(true);
   });
@@ -121,23 +121,28 @@ describe("questionnaire helpers", () => {
           question: "What should I do instead?",
           isOther: true,
           isSecret: false,
-          options: null
-        }
-      ])
+          options: null,
+        },
+      ]),
     );
 
     expect(state).toBeDefined();
     expect(canSubmitQuestionnaire(state!)).toBe(false);
-    expect(canSubmitQuestionnaire(answerQuestionnaireText(state!, "   "))).toBe(false);
+    expect(canSubmitQuestionnaire(answerQuestionnaireText(state!, "   "))).toBe(
+      false,
+    );
 
-    const answered = answerQuestionnaireText(state!, "Use the smaller implementation.");
+    const answered = answerQuestionnaireText(
+      state!,
+      "Use the smaller implementation.",
+    );
     expect(canSubmitQuestionnaire(answered)).toBe(true);
     expect(buildQuestionnaireResponse(answered)).toEqual({
       answers: {
         other: {
-          answers: ["Use the smaller implementation."]
-        }
-      }
+          answers: ["Use the smaller implementation."],
+        },
+      },
     });
   });
 
@@ -152,10 +157,10 @@ describe("questionnaire helpers", () => {
             question: "This cannot be answered.",
             isOther: false,
             isSecret: false,
-            options: null
-          }
-        ])
-      )
+            options: null,
+          },
+        ]),
+      ),
     ).toBeUndefined();
   });
 });

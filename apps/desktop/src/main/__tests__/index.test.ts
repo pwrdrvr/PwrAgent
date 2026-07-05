@@ -251,13 +251,17 @@ vi.mock("../license-document-window", () => ({
 }));
 
 vi.mock("../ipc/image-normalization", () => ({
-  registerImageNormalizationIpcHandlers: registerImageNormalizationIpcHandlersMock,
-  disposeImageNormalizationIpcHandlers: disposeImageNormalizationIpcHandlersMock,
+  registerImageNormalizationIpcHandlers:
+    registerImageNormalizationIpcHandlersMock,
+  disposeImageNormalizationIpcHandlers:
+    disposeImageNormalizationIpcHandlersMock,
 }));
 
 vi.mock("../ipc/integrated-terminal", () => ({
-  registerIntegratedTerminalIpcHandlers: registerIntegratedTerminalIpcHandlersMock,
-  disposeIntegratedTerminalIpcHandlers: disposeIntegratedTerminalIpcHandlersMock,
+  registerIntegratedTerminalIpcHandlers:
+    registerIntegratedTerminalIpcHandlersMock,
+  disposeIntegratedTerminalIpcHandlers:
+    disposeIntegratedTerminalIpcHandlersMock,
 }));
 
 vi.mock("../ipc/composer-drafts", () => ({
@@ -602,7 +606,7 @@ describe("bootstrapApp", () => {
     ]);
     expect(protocolHandleMock).toHaveBeenCalledWith(
       "pwragent-image",
-      expect.any(Function)
+      expect.any(Function),
     );
     expect(startProfileFocusRequestWatcherMock).toHaveBeenCalledWith(
       "default",
@@ -764,9 +768,8 @@ describe("bootstrapApp", () => {
     await import("../index");
     await flushMicrotasks();
 
-    const watcherCalls = startProfileFocusRequestWatcherMock.mock.calls as unknown as Array<
-      [string, { onFocus: () => void }]
-    >;
+    const watcherCalls = startProfileFocusRequestWatcherMock.mock
+      .calls as unknown as Array<[string, { onFocus: () => void }]>;
     const onFocus = watcherCalls[0]?.[1].onFocus;
     expect(onFocus).toBeTypeOf("function");
     if (!onFocus) {
@@ -959,7 +962,9 @@ describe("bootstrapApp", () => {
         }>
       | undefined;
     const fileMenu = template?.find((item) => item.label === "File");
-    const newThread = fileMenu?.submenu?.find((menuItem) => menuItem.label === "New Thread");
+    const newThread = fileMenu?.submenu?.find(
+      (menuItem) => menuItem.label === "New Thread",
+    );
 
     newThread?.click?.();
 
@@ -1041,9 +1046,8 @@ describe("bootstrapApp", () => {
     await import("../index");
     await flushMicrotasks();
 
-    const watcherCalls = startProfileFocusRequestWatcherMock.mock.calls as unknown as Array<
-      [string, { onFocus: () => void }]
-    >;
+    const watcherCalls = startProfileFocusRequestWatcherMock.mock
+      .calls as unknown as Array<[string, { onFocus: () => void }]>;
     const onFocus = watcherCalls[0]?.[1].onFocus;
     expect(onFocus).toBeTypeOf("function");
     if (!onFocus) {
@@ -1074,9 +1078,9 @@ describe("bootstrapApp", () => {
     expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
-    expect(disposeAppServerIpcHandlersMock.mock.invocationCallOrder[0]).toBeLessThan(
-      disposeAppStateMock.mock.invocationCallOrder[0],
-    );
+    expect(
+      disposeAppServerIpcHandlersMock.mock.invocationCallOrder[0],
+    ).toBeLessThan(disposeAppStateMock.mock.invocationCallOrder[0]);
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1155,7 +1159,9 @@ describe("bootstrapApp", () => {
   });
 
   it("initializes app state in bootstrap mode when boot decision is no-profile-configured", async () => {
-    resolveProfileBootDecisionMock.mockReturnValue({ kind: "no-profile-configured" });
+    resolveProfileBootDecisionMock.mockReturnValue({
+      kind: "no-profile-configured",
+    });
     startupProfilerInstance.start.mockResolvedValue();
 
     await import("../index");

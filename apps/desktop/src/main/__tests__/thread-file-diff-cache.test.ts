@@ -54,9 +54,10 @@ describe("thread file diff cache", () => {
     const shaped = shapeReadThreadFileDiffsForRenderer(
       buildReadThreadResponse(diff),
     );
-    const detail = shaped.replay.entries[0]?.type === "activity"
-      ? shaped.replay.entries[0].details[0]
-      : undefined;
+    const detail =
+      shaped.replay.entries[0]?.type === "activity"
+        ? shaped.replay.entries[0].details[0]
+        : undefined;
 
     expect(detail?.fileDiff).toMatchObject({
       kind: "update",
@@ -86,9 +87,10 @@ describe("thread file diff cache", () => {
     entry.details[0]!.fileDiff!.omittedReason = "Large file diff omitted.";
 
     const shaped = shapeReadThreadFileDiffsForRenderer(response);
-    const detail = shaped.replay.entries[0]?.type === "activity"
-      ? shaped.replay.entries[0].details[0]
-      : undefined;
+    const detail =
+      shaped.replay.entries[0]?.type === "activity"
+        ? shaped.replay.entries[0].details[0]
+        : undefined;
 
     expect(detail?.fileDiff).toMatchObject({
       diff: "",

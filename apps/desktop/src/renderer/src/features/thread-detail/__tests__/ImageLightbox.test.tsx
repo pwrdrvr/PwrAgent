@@ -30,7 +30,11 @@ describe("ImageLightbox", () => {
   it("closes via the accent cookie button", () => {
     const onClose = vi.fn();
     render(
-      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
+      <ImageLightbox
+        src="https://example.test/cat.png"
+        alt="A cat"
+        onClose={onClose}
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
@@ -40,7 +44,11 @@ describe("ImageLightbox", () => {
   it("closes when the backdrop scrim is clicked", () => {
     const onClose = vi.fn();
     render(
-      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
+      <ImageLightbox
+        src="https://example.test/cat.png"
+        alt="A cat"
+        onClose={onClose}
+      />,
     );
 
     fireEvent.click(screen.getByRole("dialog", { name: "Expanded image" }));
@@ -50,7 +58,11 @@ describe("ImageLightbox", () => {
   it("does not close when the image content is clicked", () => {
     const onClose = vi.fn();
     render(
-      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
+      <ImageLightbox
+        src="https://example.test/cat.png"
+        alt="A cat"
+        onClose={onClose}
+      />,
     );
 
     fireEvent.click(screen.getByRole("img", { name: "A cat" }));
@@ -60,7 +72,11 @@ describe("ImageLightbox", () => {
   it("closes on Escape", () => {
     const onClose = vi.fn();
     render(
-      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
+      <ImageLightbox
+        src="https://example.test/cat.png"
+        alt="A cat"
+        onClose={onClose}
+      />,
     );
 
     fireEvent.keyDown(window, { key: "Escape" });
@@ -70,7 +86,11 @@ describe("ImageLightbox", () => {
   it("stops listening for Escape after unmount", () => {
     const onClose = vi.fn();
     const { unmount } = render(
-      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
+      <ImageLightbox
+        src="https://example.test/cat.png"
+        alt="A cat"
+        onClose={onClose}
+      />,
     );
 
     unmount();

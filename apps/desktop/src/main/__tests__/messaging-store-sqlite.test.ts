@@ -175,9 +175,9 @@ afterEach(async () => {
     stateDb.close();
   }
   await Promise.all(
-    tempDirs.splice(0).map((tempDir) =>
-      rm(tempDir, { recursive: true, force: true }),
-    ),
+    tempDirs
+      .splice(0)
+      .map((tempDir) => rm(tempDir, { recursive: true, force: true })),
   );
 });
 
@@ -254,27 +254,35 @@ describe("SqliteMessagingStore", () => {
 
     await store.revokeBinding({ bindingId: "binding-1", revokedAt: 3000 });
 
-    await expect(store.getPendingIntent("intent-1", { now: 1500 })).resolves
-      .toBeUndefined();
-    await expect(store.getPendingIntent("channel-intent", { now: 1500 })).resolves
-      .toBeUndefined();
+    await expect(
+      store.getPendingIntent("intent-1", { now: 1500 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.getPendingIntent("channel-intent", { now: 1500 }),
+    ).resolves.toBeUndefined();
     await expect(
       store.getPendingIntent("other-channel-intent", { now: 1500 }),
     ).resolves.toMatchObject({
       id: "other-channel-intent",
     });
-    await expect(store.getCallbackHandle("callback-1", { now: 1500 })).resolves
-      .toBeUndefined();
-    await expect(store.getCallbackHandle("other-callback", { now: 1500 })).resolves
-      .toMatchObject({
-        id: "other-callback",
+    await expect(
+      store.getCallbackHandle("callback-1", { now: 1500 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.getCallbackHandle("other-callback", { now: 1500 }),
+    ).resolves.toMatchObject({
+      id: "other-callback",
     });
   });
 
   it("deletes pending intents scoped to a thread", async () => {
     const store = await createStore();
-    await store.upsertBinding(buildBinding({ id: "binding-1", threadId: "thread-1" }));
-    await store.upsertBinding(buildBinding({ id: "binding-2", threadId: "thread-2" }));
+    await store.upsertBinding(
+      buildBinding({ id: "binding-1", threadId: "thread-1" }),
+    );
+    await store.upsertBinding(
+      buildBinding({ id: "binding-2", threadId: "thread-2" }),
+    );
     await store.upsertPendingIntent(
       buildPendingIntent({
         id: "intent-binding",
@@ -313,10 +321,15 @@ describe("SqliteMessagingStore", () => {
         threadId: "thread-1",
       }),
     ).resolves.toEqual(["intent-binding", "intent-request"]);
-    await expect(store.getPendingIntent("intent-binding")).resolves.toBeUndefined();
-    await expect(store.getPendingIntent("intent-request")).resolves.toBeUndefined();
-    await expect(store.getPendingIntent("intent-other-thread", { now: 1500 })).resolves
-      .toBeDefined();
+    await expect(
+      store.getPendingIntent("intent-binding"),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.getPendingIntent("intent-request"),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.getPendingIntent("intent-other-thread", { now: 1500 }),
+    ).resolves.toBeDefined();
   });
 
   it("finds active bindings scoped to a backend", async () => {
@@ -452,7 +465,9 @@ describe("SqliteMessagingStore", () => {
     );
 
     await expect(
-      store.findActiveMonitorSubscriptionForChannel(buildMonitorSubscription().channel),
+      store.findActiveMonitorSubscriptionForChannel(
+        buildMonitorSubscription().channel,
+      ),
     ).resolves.toMatchObject({
       id: "monitor:telegram:dm::chat-1",
       monitor: {
@@ -475,7 +490,9 @@ describe("SqliteMessagingStore", () => {
       },
     });
     await expect(
-      store.findActiveMonitorSubscriptionsForChannelKind({ channel: "telegram" }),
+      store.findActiveMonitorSubscriptionsForChannelKind({
+        channel: "telegram",
+      }),
     ).resolves.toHaveLength(1);
 
     await store.revokeMonitorSubscription({
@@ -483,12 +500,16 @@ describe("SqliteMessagingStore", () => {
       revokedAt: 3000,
     });
     await expect(
-      store.findActiveMonitorSubscriptionForChannel(buildMonitorSubscription().channel),
+      store.findActiveMonitorSubscriptionForChannel(
+        buildMonitorSubscription().channel,
+      ),
     ).resolves.toBeUndefined();
   });
 
   it("repairs a missing monitor subscription table on reopen", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-sqlite-msg-"));
+    const tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-sqlite-msg-"),
+    );
     tempDirs.push(tempDir);
     const dbPath = path.join(tempDir, "state.db");
     const initialDb = StateDb.open(dbPath);
@@ -504,10 +525,14 @@ describe("SqliteMessagingStore", () => {
     const store = new SqliteMessagingStore(reopenedDb);
 
     await expect(
-      store.findActiveMonitorSubscriptionsForChannelKind({ channel: "telegram" }),
+      store.findActiveMonitorSubscriptionsForChannelKind({
+        channel: "telegram",
+      }),
     ).resolves.toEqual([]);
     await expect(
-      store.findActiveMonitorSubscriptionForChannel(buildMonitorSubscription().channel),
+      store.findActiveMonitorSubscriptionForChannel(
+        buildMonitorSubscription().channel,
+      ),
     ).resolves.toBeUndefined();
   });
 
@@ -525,12 +550,14 @@ describe("SqliteMessagingStore", () => {
     await expect(
       store.deleteCallbackHandlesForBinding({ bindingId: "binding-1" }),
     ).resolves.toEqual(["callback-1"]);
-    await expect(store.getCallbackHandle("callback-1", { now: 1500 })).resolves
-      .toBeUndefined();
-    await expect(store.getCallbackHandle("other-callback", { now: 1500 })).resolves
-      .toMatchObject({
-        id: "other-callback",
-      });
+    await expect(
+      store.getCallbackHandle("callback-1", { now: 1500 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.getCallbackHandle("other-callback", { now: 1500 }),
+    ).resolves.toMatchObject({
+      id: "other-callback",
+    });
   });
 
   it("persists managed topics, thread-topic links, and cleanup proposals", async () => {
@@ -560,7 +587,9 @@ describe("SqliteMessagingStore", () => {
     ).resolves.toMatchObject({
       topicRecordId: "topic:telegram:-1001:100",
     });
-    await expect(store.getTopicCleanupProposal("proposal-1")).resolves.toMatchObject({
+    await expect(
+      store.getTopicCleanupProposal("proposal-1"),
+    ).resolves.toMatchObject({
       status: "pending",
       items: [expect.objectContaining({ action: "close" })],
     });

@@ -20,7 +20,10 @@ type TranscriptWorkPhaseGroupProps = {
   directoryPaths?: string[];
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    | "copyText"
+    | "openApplication"
+    | "openMarkdownFileViewer"
+    | "readMarkdownFile"
   >;
   entries: AppServerThreadEntry[];
   expanded: boolean;
@@ -32,7 +35,7 @@ type TranscriptWorkPhaseGroupProps = {
 };
 
 export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
-  props: TranscriptWorkPhaseGroupProps
+  props: TranscriptWorkPhaseGroupProps,
 ) {
   const hiddenRegionId = useId();
   const shouldRenderContent = !props.collapsible || props.expanded;
@@ -47,7 +50,10 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
           aria-expanded={props.expanded}
           onClick={props.onToggle}
         >
-          <span className="transcript-work-phase-group__chevron" aria-hidden="true" />
+          <span
+            className="transcript-work-phase-group__chevron"
+            aria-hidden="true"
+          />
           <span>
             <TranscriptWorkPhaseGroupLabel
               activeStartedAt={props.activeStartedAt}
@@ -64,7 +70,10 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
         </div>
       )}
       {shouldRenderContent ? (
-        <div id={hiddenRegionId} className="transcript-work-phase-group__content">
+        <div
+          id={hiddenRegionId}
+          className="transcript-work-phase-group__content"
+        >
           {props.entries.map((entry) =>
             renderEntry({
               applications: props.applications,
@@ -74,7 +83,7 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
               fileViewerContext: props.fileViewerContext,
               onOpenImage: props.onOpenImage,
               skills: props.skills,
-            })
+            }),
           )}
         </div>
       ) : null}
@@ -116,7 +125,10 @@ function renderEntry(params: {
   directoryPaths?: string[];
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    | "copyText"
+    | "openApplication"
+    | "openMarkdownFileViewer"
+    | "readMarkdownFile"
   >;
   entry: AppServerThreadEntry;
   fileViewerContext?: MarkdownFileViewerContext;

@@ -16,4 +16,3 @@ export type RendererErrorReport = {
   timestamp: string;
   userAgent: string;
 };
-

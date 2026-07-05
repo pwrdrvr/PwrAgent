@@ -21,7 +21,9 @@ export function windowsBashCandidates(): string[] {
     path.join(programFilesX86, "Git", "bin", "bash.exe"),
   ];
   if (localAppData) {
-    candidates.push(path.join(localAppData, "Programs", "Git", "bin", "bash.exe"));
+    candidates.push(
+      path.join(localAppData, "Programs", "Git", "bin", "bash.exe"),
+    );
   }
   // Last resort: rely on PATH resolution.
   candidates.push("bash.exe");

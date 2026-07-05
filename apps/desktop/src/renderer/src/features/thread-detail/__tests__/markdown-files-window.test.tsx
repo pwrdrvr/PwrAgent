@@ -58,10 +58,14 @@ describe("MarkdownFilesWindow", () => {
       await screen.findByRole("heading", { name: "docs/plan.md" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByLabelText("PwrAgent > Slack-to-Agent automation plan > Files"),
+      screen.getByLabelText(
+        "PwrAgent > Slack-to-Agent automation plan > Files",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText("Project: /repo/PwrAgent")).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "Plan" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Plan" }),
+    ).toBeInTheDocument();
     await waitFor(() => {
       expect(readMarkdownFileViewerSnapshot).toHaveBeenCalledWith({
         contextKey: "codex:thread-1",

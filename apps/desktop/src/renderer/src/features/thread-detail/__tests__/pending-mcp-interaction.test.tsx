@@ -21,7 +21,7 @@ describe("PendingMcpInteraction", () => {
         requestId: "mcp-request-1",
         serverName: "playwright",
         mode: "form",
-        message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+        message: 'Allow the playwright MCP server to run tool "browser_tabs"?',
         requestedSchema: {
           type: "object",
           properties: {},
@@ -36,10 +36,16 @@ describe("PendingMcpInteraction", () => {
     } satisfies AppServerMcpElicitationRequestNotification);
 
     render(
-      <PendingMcpInteraction state={state!} onChange={onChange} onSubmit={onSubmit} />
+      <PendingMcpInteraction
+        state={state!}
+        onChange={onChange}
+        onSubmit={onSubmit}
+      />,
     );
 
-    expect(screen.getByRole("group", { name: "Pending MCP interaction" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending MCP interaction" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("MCP approval")).toBeInTheDocument();
     expect(screen.getByText(/browser_tabs/)).toBeInTheDocument();
     expect(screen.getByText("[redacted]")).toBeInTheDocument();
@@ -81,7 +87,7 @@ describe("PendingMcpInteraction", () => {
           state = nextState;
         }}
         onSubmit={onSubmit}
-      />
+      />,
     );
 
     expect(screen.getByRole("button", { name: "Allow" })).toBeDisabled();
@@ -96,7 +102,7 @@ describe("PendingMcpInteraction", () => {
           state = nextState;
         }}
         onSubmit={onSubmit}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Allow" }));

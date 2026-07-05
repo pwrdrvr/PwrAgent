@@ -13,9 +13,9 @@ afterEach(() => {
 describe("useDurableComposerDraftStore", () => {
   it("flushes pending debounced draft saves on teardown", () => {
     vi.useFakeTimers();
-    const saveComposerDraft = vi.fn<NonNullable<DesktopApi["saveComposerDraft"]>>(
-      async (request) => ({ draft: request.draft }),
-    );
+    const saveComposerDraft = vi.fn<
+      NonNullable<DesktopApi["saveComposerDraft"]>
+    >(async (request) => ({ draft: request.draft }));
     const desktopApi = {
       saveComposerDraft,
     } as Partial<DesktopApi> as DesktopApi;

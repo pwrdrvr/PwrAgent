@@ -416,11 +416,11 @@ function assistantOutputForTurn(
   for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
     const entry = replay.entries[index];
     if (
-      entry?.type === "message" &&
-      entry.role === "assistant" &&
-      entry.turn?.id === turnId &&
-      entry.turn.status === "completed" &&
-      entry.text.trim()
+      entry?.type === "message"
+      && entry.role === "assistant"
+      && entry.turn?.id === turnId
+      && entry.turn.status === "completed"
+      && entry.text.trim()
     ) {
       return [{ type: "text", text: entry.text }];
     }
@@ -448,7 +448,10 @@ type BackendClient = {
   ): Promise<AppServerThreadSummary[]>;
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   restoreThread?(params: { threadId: string }): Promise<{ threadId: string }>;
-  renameThread?(params: { threadId: string; name: string }): Promise<{ threadId: string }>;
+  renameThread?(params: {
+    threadId: string;
+    name: string;
+  }): Promise<{ threadId: string }>;
   updateThreadMetadata?(params: {
     threadId: string;
     gitInfo?: {
@@ -469,12 +472,12 @@ type BackendClient = {
     cwds?: string[];
   }): Promise<AppServerListSkillsResponse["data"]>;
   onNotification(
-    listener: (notification: AppServerNotification) => void | Promise<void>
+    listener: (notification: AppServerNotification) => void | Promise<void>,
   ): () => void;
   onRequest?(
     listener: (
-      request: AppServerPendingRequestNotification
-    ) => Promise<unknown> | unknown
+      request: AppServerPendingRequestNotification,
+    ) => Promise<unknown> | unknown,
   ): () => void;
   readThread(params: {
     threadId: string;
@@ -482,7 +485,10 @@ type BackendClient = {
     before?: string;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
-  injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
+  injectThreadItems?(params: {
+    threadId: string;
+    items: unknown[];
+  }): Promise<void>;
   startThread(params: {
     cwd?: string;
     ephemeral?: boolean;
@@ -573,7 +579,9 @@ type BackendClient = {
 
 type BackendRegistryForkThreadRequest = ForkThreadRequest & {
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-  onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
+  onPreparedWorkspaceRollback?: (
+    rollback: (() => Promise<void>) | undefined,
+  ) => void;
   onCodexEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
   ) => void;
@@ -609,10 +617,10 @@ function resolveThreadWorkspaceCwd(
   );
 
   return (
-    resolveLinkedDirectoryWorkspaceCwd(providerDirectories) ??
-    resolveLinkedDirectoryWorkspaceCwd(thread.linkedDirectories) ??
-    resolveLinkedDirectoryWorkspaceCwd(overlayDirectories) ??
-    thread.projectKey
+    resolveLinkedDirectoryWorkspaceCwd(providerDirectories)
+    ?? resolveLinkedDirectoryWorkspaceCwd(thread.linkedDirectories)
+    ?? resolveLinkedDirectoryWorkspaceCwd(overlayDirectories)
+    ?? thread.projectKey
   );
 }
 
@@ -626,16 +634,20 @@ function linkedDirectoriesHaveSameWorkspaceIdentity(
 
   const leftPath = normalizeLinkedDirectoryIdentityPath(left.path);
   const rightPath = normalizeLinkedDirectoryIdentityPath(right.path);
-  const leftWorktreePath = normalizeLinkedDirectoryIdentityPath(left.worktreePath);
-  const rightWorktreePath = normalizeLinkedDirectoryIdentityPath(right.worktreePath);
+  const leftWorktreePath = normalizeLinkedDirectoryIdentityPath(
+    left.worktreePath,
+  );
+  const rightWorktreePath = normalizeLinkedDirectoryIdentityPath(
+    right.worktreePath,
+  );
   if (leftPath && rightPath && leftPath === rightPath) {
     return leftWorktreePath === rightWorktreePath;
   }
 
   return Boolean(
-    leftWorktreePath &&
-      rightWorktreePath &&
-      leftWorktreePath === rightWorktreePath,
+    leftWorktreePath
+    && rightWorktreePath
+    && leftWorktreePath === rightWorktreePath,
   );
 }
 
@@ -655,9 +667,9 @@ function resolveLinkedDirectoryWorkspaceCwd(
   }
 
   const directory =
-    linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
-    linkedDirectories.find((candidate) => candidate.kind === "local") ??
-    linkedDirectories[0];
+    linkedDirectories.find((candidate) => candidate.kind === "worktree")
+    ?? linkedDirectories.find((candidate) => candidate.kind === "local")
+    ?? linkedDirectories[0];
 
   return directory?.worktreePath ?? directory?.path;
 }
@@ -676,8 +688,8 @@ function overlayHasHandoffWorkspace(
 
 function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
   return (
-    directory.id.startsWith("pwragent-handoff:") ||
-    directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
+    directory.id.startsWith("pwragent-handoff:")
+    || directory.id.startsWith("pwragnt-handoff:") // legacy prefix from pre-rebrand data
   );
 }
 
@@ -691,7 +703,9 @@ function toDirectoryId(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
-function buildLocalLinkedDirectory(cwd: string | undefined): LinkedDirectorySummary[] {
+function buildLocalLinkedDirectory(
+  cwd: string | undefined,
+): LinkedDirectorySummary[] {
   const normalized = cwd?.trim();
   if (!normalized) {
     return [];
@@ -718,8 +732,11 @@ function buildWorktreeLinkedDirectory(params: {
   }
 
   const worktreePath = path.resolve(normalizedWorktreePath);
-  const repositoryPath = path.resolve(params.repositoryPath?.trim() || worktreePath);
-  const label = params.label?.trim() || path.basename(repositoryPath) || repositoryPath;
+  const repositoryPath = path.resolve(
+    params.repositoryPath?.trim() || worktreePath,
+  );
+  const label =
+    params.label?.trim() || path.basename(repositoryPath) || repositoryPath;
 
   return [
     {
@@ -748,26 +765,33 @@ function linkedDirectoryMatchesDetachArgs(
   }
   const requestedPath = normalizeLinkedDirectoryPathForMatch(args.path);
   if (
-    requestedPath &&
-    normalizeLinkedDirectoryPathForMatch(directory.path) === requestedPath
+    requestedPath
+    && normalizeLinkedDirectoryPathForMatch(directory.path) === requestedPath
   ) {
     return true;
   }
-  const requestedWorktreePath = normalizeLinkedDirectoryPathForMatch(args.worktreePath);
+  const requestedWorktreePath = normalizeLinkedDirectoryPathForMatch(
+    args.worktreePath,
+  );
   return Boolean(
-    requestedWorktreePath &&
-      normalizeLinkedDirectoryPathForMatch(directory.worktreePath) ===
-        requestedWorktreePath,
+    requestedWorktreePath
+    && normalizeLinkedDirectoryPathForMatch(directory.worktreePath)
+      === requestedWorktreePath,
   );
 }
 
-function isLikelyToolManagedWorktreePath(projectKey: string | undefined): boolean {
+function isLikelyToolManagedWorktreePath(
+  projectKey: string | undefined,
+): boolean {
   const normalized = projectKey?.trim();
   if (!normalized) {
     return false;
   }
 
-  return isToolManagedWorktreePath(normalized) || /[\\/]\.worktrees[\\/]/.test(normalized);
+  return (
+    isToolManagedWorktreePath(normalized)
+    || /[\\/]\.worktrees[\\/]/.test(normalized)
+  );
 }
 
 function hasCachedWorktreeDirectory(
@@ -807,8 +831,8 @@ function hasEquivalentLinkedDirectory(
         : undefined;
 
       return (
-        candidatePath === directoryPath &&
-        candidateWorktreePath === directoryWorktreePath
+        candidatePath === directoryPath
+        && candidateWorktreePath === directoryWorktreePath
       );
     }),
   );
@@ -817,8 +841,8 @@ function hasEquivalentLinkedDirectory(
 function pathContainsOrEquals(parentPath: string, childPath: string): boolean {
   const relativePath = path.relative(parentPath, childPath);
   return (
-    relativePath === "" ||
-    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
+    relativePath === ""
+    || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
   );
 }
 
@@ -921,7 +945,9 @@ function shouldRepairCachedDirectoryRelationship(params: {
         return false;
       }
 
-      return path.resolve(candidate.path) === path.resolve(params.directory.path);
+      return (
+        path.resolve(candidate.path) === path.resolve(params.directory.path)
+      );
     }),
   );
 }
@@ -930,8 +956,9 @@ function normalizeLinkedDirectoryKind(
   directory: LinkedDirectorySummary,
 ): LinkedDirectorySummary {
   if (
-    directory.kind === "local" &&
-    (directory.worktreePath?.trim() || isToolManagedWorktreePath(directory.path))
+    directory.kind === "local"
+    && (directory.worktreePath?.trim()
+      || isToolManagedWorktreePath(directory.path))
   ) {
     const worktreePath = directory.worktreePath?.trim() || directory.path;
     return {
@@ -1003,8 +1030,8 @@ function resolveExpectedThreadBranch(params: {
 
   const overlayObservedBranch = params.overlay?.observedGitBranch?.trim();
   if (
-    overlayObservedBranch &&
-    hasHandoffWorkspace(params.overlay?.extraLinkedDirectories)
+    overlayObservedBranch
+    && hasHandoffWorkspace(params.overlay?.extraLinkedDirectories)
   ) {
     return overlayObservedBranch;
   }
@@ -1020,10 +1047,10 @@ function shouldUseObservedBranchForDetachedHandoff(params: {
   const branch = params.branch?.trim();
   const observedBranch = params.observedBranch?.trim();
   return Boolean(
-    branch === "HEAD" &&
-      observedBranch &&
-      observedBranch !== "HEAD" &&
-      hasHandoffWorkspace(params.overlay?.extraLinkedDirectories),
+    branch === "HEAD"
+    && observedBranch
+    && observedBranch !== "HEAD"
+    && hasHandoffWorkspace(params.overlay?.extraLinkedDirectories),
   );
 }
 
@@ -1096,7 +1123,9 @@ function resolveBranchDriftExpectedBranch(params: {
   };
 }
 
-async function readCurrentGitBranch(sourcePath: string): Promise<string | undefined> {
+async function readCurrentGitBranch(
+  sourcePath: string,
+): Promise<string | undefined> {
   const result = await execFile(
     "git",
     ["-C", sourcePath, "rev-parse", "--abbrev-ref", "HEAD"],
@@ -1139,8 +1168,8 @@ function shouldInheritHandoffCodexEnvironmentRuntime(params: {
     return false;
   }
   return (
-    !params.requestedCwd ||
-    sameResolvedPath(params.requestedCwd, params.callerCwd)
+    !params.requestedCwd
+    || sameResolvedPath(params.requestedCwd, params.callerCwd)
   );
 }
 
@@ -1150,8 +1179,8 @@ function linkedDirectoryMatchesCwd(
 ): boolean {
   const resolvedCwd = path.resolve(cwd);
   return (
-    path.resolve(directory.worktreePath ?? directory.path) === resolvedCwd ||
-    path.resolve(directory.path) === resolvedCwd
+    path.resolve(directory.worktreePath ?? directory.path) === resolvedCwd
+    || path.resolve(directory.path) === resolvedCwd
   );
 }
 
@@ -1164,8 +1193,8 @@ function directoryContainsPath(
   }
   const relative = path.relative(path.resolve(directoryPath), targetPath);
   return (
-    relative === "" ||
-    (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+    relative === ""
+    || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
 }
 
@@ -1231,9 +1260,8 @@ function parsePullRequestReferenceUrl(
   if (!Number.isInteger(number) || number <= 0) {
     return undefined;
   }
-  const repoIndex = segments[markerIndex - 1] === "-"
-    ? markerIndex - 2
-    : markerIndex - 1;
+  const repoIndex =
+    segments[markerIndex - 1] === "-" ? markerIndex - 2 : markerIndex - 1;
   if (repoIndex <= 0) {
     return undefined;
   }
@@ -1304,19 +1332,21 @@ function pullRequestRepositoryKey(ref: PullRequestRepositoryRef): string {
   return `${normalizePullRequestProvider(ref.provider)}/${ref.org.toLowerCase()}/${ref.repo.toLowerCase()}`;
 }
 
-function buildPullRequestReferenceUrl(ref: PullRequestRepositoryRef & { number: number }): string {
+function buildPullRequestReferenceUrl(
+  ref: PullRequestRepositoryRef & { number: number },
+): string {
   const provider = normalizePullRequestProvider(ref.provider);
   const base = ref.urlBase?.replace(/\/+$/, "") || `https://${provider}`;
   const encodedPath = [...ref.org.split("/"), ref.repo]
     .map((part) => encodeURIComponent(part))
     .join("/");
-  const marker = provider.includes("gitlab")
-    ? "-/merge_requests"
-    : "pull";
+  const marker = provider.includes("gitlab") ? "-/merge_requests" : "pull";
   return `${base}/${encodedPath}/${marker}/${ref.number}`;
 }
 
-function normalizePositivePullRequestNumber(value: unknown): number | undefined {
+function normalizePositivePullRequestNumber(
+  value: unknown,
+): number | undefined {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     return undefined;
   }
@@ -1328,13 +1358,18 @@ type PendingServerRequest = {
   reject: (error: Error) => void;
 };
 
-type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle"> & {
+type ThreadTitleService = Pick<
+  ThreadTitleGenerationService,
+  "generateTitle"
+> & {
   canGenerateTitle?: (backend: AppServerBackendKind) => boolean;
 };
 
 type ThreadPullRequestStatusToolHandler = (
   args: CheckThreadPullRequestStatusToolArgs,
-) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
+) =>
+  | PwrAgentThreadInspectionResponse
+  | Promise<PwrAgentThreadInspectionResponse>;
 
 type ThreadTitleGenerationLogStatus =
   | ThreadTitleGenerationResult["status"]
@@ -1372,7 +1407,10 @@ function linkedDirectoryWorktreePath(
     return directory.path;
   }
 
-  if (directory.kind === "local" && isLikelyToolManagedWorktreePath(directory.path)) {
+  if (
+    directory.kind === "local"
+    && isLikelyToolManagedWorktreePath(directory.path)
+  ) {
     return directory.path;
   }
 
@@ -1486,9 +1524,7 @@ const EXECUTION_MODE_SUMMARIES: Record<
   },
 };
 
-const GEMINI_PRIVILEGED_APPROVAL_MODES = new Set([
-  "yolo",
-]);
+const GEMINI_PRIVILEGED_APPROVAL_MODES = new Set(["yolo"]);
 
 function acpRuntimeStateRequiresFullAccess(params: {
   runtime?: BackendAcpSessionRuntimeState;
@@ -1539,7 +1575,8 @@ function acpRuntimeModeDefaultsFromCapabilities(
   const state: BackendAcpSessionRuntimeState = {
     updatedAt: now,
     ...(Object.keys(configValues).length > 0 ? { configValues } : {}),
-    ...(modeConfigOptions.length === 0 && runtimeCapabilities?.modes?.currentModeId
+    ...(modeConfigOptions.length === 0
+    && runtimeCapabilities?.modes?.currentModeId
       ? { currentModeId: runtimeCapabilities.modes.currentModeId }
       : {}),
   };
@@ -1561,16 +1598,16 @@ function sanitizeAcpRuntimeForExecutionMode(params: {
     ? { ...runtime.configValues }
     : undefined;
   if (
-    configValues?.["approval-mode"] &&
-    GEMINI_PRIVILEGED_APPROVAL_MODES.has(configValues["approval-mode"])
+    configValues?.["approval-mode"]
+    && GEMINI_PRIVILEGED_APPROVAL_MODES.has(configValues["approval-mode"])
   ) {
     configValues["approval-mode"] = "default";
     changed = true;
   }
 
   const currentModeId =
-    runtime.currentModeId &&
-    GEMINI_PRIVILEGED_APPROVAL_MODES.has(runtime.currentModeId)
+    runtime.currentModeId
+    && GEMINI_PRIVILEGED_APPROVAL_MODES.has(runtime.currentModeId)
       ? "default"
       : runtime.currentModeId;
   if (currentModeId !== runtime.currentModeId) {
@@ -1586,19 +1623,23 @@ function sanitizeAcpRuntimeForExecutionMode(params: {
     : runtime;
 }
 
-function buildCapabilities(methods: string[], backend: AppServerBackendKind): BackendCapabilities {
+function buildCapabilities(
+  methods: string[],
+  backend: AppServerBackendKind,
+): BackendCapabilities {
   const supported = new Set(methods);
-  const assumeCodexAppServerSurface = backend === "codex" && methods.length === 0;
+  const assumeCodexAppServerSurface =
+    backend === "codex" && methods.length === 0;
 
   return {
     listThreads:
-      supported.has("thread/list") ||
-      supported.has("thread/loaded/list") ||
-      assumeCodexAppServerSurface,
+      supported.has("thread/list")
+      || supported.has("thread/loaded/list")
+      || assumeCodexAppServerSurface,
     createThread:
-      supported.has("thread/start") ||
-      supported.has("thread/new") ||
-      assumeCodexAppServerSurface,
+      supported.has("thread/start")
+      || supported.has("thread/new")
+      || assumeCodexAppServerSurface,
     // Empty Codex method lists are emitted by older supported app-server
     // surfaces that predate method discovery. PwrAgent's supported Codex
     // floor includes thread/fork, so keep the legacy "assume app-server
@@ -1606,11 +1647,14 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     // lists from feature-gated builds.
     forkThread: supported.has("thread/fork") || assumeCodexAppServerSurface,
     resumeThread: supported.has("thread/resume") || assumeCodexAppServerSurface,
-    archiveThread: supported.has("thread/archive") || assumeCodexAppServerSurface,
-    restoreThread: supported.has("thread/unarchive") || assumeCodexAppServerSurface,
+    archiveThread:
+      supported.has("thread/archive") || assumeCodexAppServerSurface,
+    restoreThread:
+      supported.has("thread/unarchive") || assumeCodexAppServerSurface,
     archiveWorktree: true,
     restoreWorktree: true,
-    renameThread: supported.has("thread/name/set") || assumeCodexAppServerSurface,
+    renameThread:
+      supported.has("thread/name/set") || assumeCodexAppServerSurface,
     readThread: supported.has("thread/read") || assumeCodexAppServerSurface,
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
     startReview: supported.has("review/start") || assumeCodexAppServerSurface,
@@ -1717,7 +1761,11 @@ function readNotificationProjectLabel(
     ? thread.linkedDirectories
     : [];
   for (const directory of linkedDirectories) {
-    if (!directory || typeof directory !== "object" || Array.isArray(directory)) {
+    if (
+      !directory
+      || typeof directory !== "object"
+      || Array.isArray(directory)
+    ) {
       continue;
     }
     const record = directory as Record<string, unknown>;
@@ -1770,19 +1818,19 @@ function readFileChangeApprovalFile(
   }
   const kind = readRecord(record.kind);
   const action =
-    readNonEmptyString(kind?.type) ??
-    readNonEmptyString(record.kind) ??
-    readNonEmptyString(record.action);
+    readNonEmptyString(kind?.type)
+    ?? readNonEmptyString(record.kind)
+    ?? readNonEmptyString(record.action);
   const directDiff =
-    readNonEmptyString(kind?.unified_diff) ??
-    readNonEmptyString(kind?.unifiedDiff) ??
-    readFileChangeApprovalDiff(record) ??
-    readFileChangeApprovalDiff(kind);
+    readNonEmptyString(kind?.unified_diff)
+    ?? readNonEmptyString(kind?.unifiedDiff)
+    ?? readFileChangeApprovalDiff(record)
+    ?? readFileChangeApprovalDiff(kind);
   const content =
     readOptionalString(kind?.content) ?? readOptionalString(record.content);
   const diff =
-    buildFileChangeApprovalContentDiff({ action, content, filePath }) ??
-    directDiff;
+    buildFileChangeApprovalContentDiff({ action, content, filePath })
+    ?? directDiff;
   return {
     ...(action ? { action } : {}),
     ...(diff ? { diff } : {}),
@@ -1798,10 +1846,10 @@ function readFileChangeApprovalDiff(
     return undefined;
   }
   const direct =
-    readNonEmptyString(record.diff) ??
-    readNonEmptyString(record.patch) ??
-    readNonEmptyString(record.unifiedDiff) ??
-    readNonEmptyString(record.unified_diff);
+    readNonEmptyString(record.diff)
+    ?? readNonEmptyString(record.patch)
+    ?? readNonEmptyString(record.unifiedDiff)
+    ?? readNonEmptyString(record.unified_diff);
   if (direct) {
     return direct;
   }
@@ -1814,8 +1862,8 @@ function buildFileChangeApprovalContentDiff(params: {
   filePath: string;
 }): string | undefined {
   if (
-    params.content === undefined ||
-    (params.action !== "add" && params.action !== "delete")
+    params.content === undefined
+    || (params.action !== "add" && params.action !== "delete")
   ) {
     return undefined;
   }
@@ -1828,8 +1876,16 @@ function buildFileChangeApprovalContentDiff(params: {
   const displayPath = params.filePath.replace(/^\/+/, "") || "file";
   const header =
     params.action === "add"
-      ? [`--- /dev/null`, `+++ b/${displayPath}`, `@@ -0,0 +1,${hunkLineCount} @@`]
-      : [`--- a/${displayPath}`, `+++ /dev/null`, `@@ -1,${hunkLineCount} +0,0 @@`];
+      ? [
+          `--- /dev/null`,
+          `+++ b/${displayPath}`,
+          `@@ -0,0 +1,${hunkLineCount} @@`,
+        ]
+      : [
+          `--- a/${displayPath}`,
+          `+++ /dev/null`,
+          `@@ -1,${hunkLineCount} +0,0 @@`,
+        ];
   const prefix = params.action === "add" ? "+" : "-";
   return [...header, ...lines.map((line) => `${prefix}${line}`)].join("\n");
 }
@@ -1852,8 +1908,8 @@ function isAcpPermissionRequest(
   request: AppServerPendingRequestNotification,
 ): boolean {
   return (
-    request.method === "item/commandExecution/requestApproval" &&
-    request.params.acpMethod === "session/request_permission"
+    request.method === "item/commandExecution/requestApproval"
+    && request.params.acpMethod === "session/request_permission"
   );
 }
 
@@ -1953,7 +2009,10 @@ function parseThreadTurnKeyBody(
   if (pendingSeparator > 0) {
     const beforePending = body.slice(0, pendingSeparator);
     const afterPending = body.slice(pendingSeparator + ":pending:".length);
-    if (beforePending === afterPending || afterPending.startsWith(`${beforePending}:`)) {
+    if (
+      beforePending === afterPending
+      || afterPending.startsWith(`${beforePending}:`)
+    ) {
       return { threadId: beforePending, turnId: `pending:${afterPending}` };
     }
   }
@@ -1967,15 +2026,15 @@ function parseThreadTurnKeyBody(
 
 function parseActiveTurnKey(
   key: string,
-): { backend: AppServerBackendKind; threadId: string; turnId: string } | undefined {
+):
+  | { backend: AppServerBackendKind; threadId: string; turnId: string }
+  | undefined {
   if (key.startsWith("acp:")) {
     const registrySeparator = key.indexOf(":", "acp:".length);
     if (registrySeparator <= "acp:".length) return undefined;
     const backend = key.slice(0, registrySeparator);
     if (!isAcpBackendId(backend)) return undefined;
-    const parsed = parseThreadTurnKeyBody(
-      key.slice(registrySeparator + 1),
-    );
+    const parsed = parseThreadTurnKeyBody(key.slice(registrySeparator + 1));
     return parsed ? { backend, ...parsed } : undefined;
   }
 
@@ -1983,9 +2042,7 @@ function parseActiveTurnKey(
   if (backendSeparator <= 0) return undefined;
   const backend = key.slice(0, backendSeparator);
   if (backend !== "codex" && backend !== "grok") return undefined;
-  const parsed = parseThreadTurnKeyBody(
-    key.slice(backendSeparator + 1),
-  );
+  const parsed = parseThreadTurnKeyBody(key.slice(backendSeparator + 1));
   return parsed ? { backend, ...parsed } : undefined;
 }
 
@@ -2081,10 +2138,12 @@ function readStatusType(value: unknown): string | undefined {
   return typeof type === "string" ? type : undefined;
 }
 
-function readNotificationItemType(notification: AppServerNotification): string | undefined {
+function readNotificationItemType(
+  notification: AppServerNotification,
+): string | undefined {
   if (
-    notification.method !== "item/started" &&
-    notification.method !== "item/completed"
+    notification.method !== "item/started"
+    && notification.method !== "item/completed"
   ) {
     return undefined;
   }
@@ -2177,7 +2236,9 @@ const CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_ATTEMPTS = 30;
 const CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_AGE_MS = 30 * 60 * 1000;
 const CODEX_NATIVE_SUBAGENT_FINAL_READ_LIMIT = 12;
 
-function isCodexNativeSubAgentTool(tool: string): tool is CodexNativeSubAgentTool {
+function isCodexNativeSubAgentTool(
+  tool: string,
+): tool is CodexNativeSubAgentTool {
   return CODEX_NATIVE_SUBAGENT_TOOLS.has(tool as CodexNativeSubAgentTool);
 }
 
@@ -2205,7 +2266,10 @@ function normalizeCodexItemType(value: unknown): string | undefined {
 
 function readStringArrayValue(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    ? value.filter(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.trim() !== "",
+      )
     : [];
 }
 
@@ -2253,18 +2317,22 @@ function codexNativeNotificationMessage(value: unknown): string | undefined {
   const record = readRecord(value);
   return record
     ? truncateSubAgentText(
-        readOptionalString(record, ["message", "summary", "output", "text"]) ?? "",
+        readOptionalString(record, ["message", "summary", "output", "text"])
+          ?? "",
         360,
       ) || undefined
     : undefined;
 }
 
-function codexNativeNotificationStatus(
-  value: unknown,
-): { message?: string; status?: ThreadSubAgentSummary["status"] } {
+function codexNativeNotificationStatus(value: unknown): {
+  message?: string;
+  status?: ThreadSubAgentSummary["status"];
+} {
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
-    if (["completed", "complete", "success", "succeeded"].includes(normalized)) {
+    if (
+      ["completed", "complete", "success", "succeeded"].includes(normalized)
+    ) {
       return { status: "success" };
     }
     if (["failed", "failure", "errored", "error"].includes(normalized)) {
@@ -2273,7 +2341,9 @@ function codexNativeNotificationStatus(
     if (["cancelled", "canceled", "interrupted"].includes(normalized)) {
       return { status: "cancelled" };
     }
-    if (["running", "active", "in_progress", "inprogress"].includes(normalized)) {
+    if (
+      ["running", "active", "in_progress", "inprogress"].includes(normalized)
+    ) {
       return { status: "running" };
     }
     return {};
@@ -2314,7 +2384,8 @@ function extractCodexNativeSubAgentNotifications(
   text: string,
 ): CodexNativeSubAgentNotification[] {
   const notifications: CodexNativeSubAgentNotification[] = [];
-  const pattern = /<subagent_notification>\s*([\s\S]*?)\s*<\/subagent_notification>/gi;
+  const pattern =
+    /<subagent_notification>\s*([\s\S]*?)\s*<\/subagent_notification>/gi;
   for (const match of text.matchAll(pattern)) {
     const rawJson = match[1]?.trim();
     if (!rawJson) {
@@ -2361,25 +2432,25 @@ function readCodexNativeAgentNameFromSource(
     return undefined;
   }
   const direct =
-    normalizeCodexNativeAgentName(source.agentNickname) ??
-    normalizeCodexNativeAgentName(source.agent_nickname) ??
-    normalizeCodexNativeAgentName(source.nickname) ??
-    normalizeCodexNativeAgentName(source.name);
+    normalizeCodexNativeAgentName(source.agentNickname)
+    ?? normalizeCodexNativeAgentName(source.agent_nickname)
+    ?? normalizeCodexNativeAgentName(source.nickname)
+    ?? normalizeCodexNativeAgentName(source.name);
   if (direct) {
     return direct;
   }
 
   const subAgent = readRecord(source.subAgent) ?? readRecord(source.sub_agent);
   const spawn =
-    readRecord(subAgent?.thread_spawn) ??
-    readRecord(subAgent?.threadSpawn) ??
-    readRecord(source.thread_spawn) ??
-    readRecord(source.threadSpawn);
+    readRecord(subAgent?.thread_spawn)
+    ?? readRecord(subAgent?.threadSpawn)
+    ?? readRecord(source.thread_spawn)
+    ?? readRecord(source.threadSpawn);
   return (
-    normalizeCodexNativeAgentName(spawn?.agent_nickname) ??
-    normalizeCodexNativeAgentName(spawn?.agentNickname) ??
-    normalizeCodexNativeAgentName(subAgent?.agentNickname) ??
-    normalizeCodexNativeAgentName(subAgent?.agent_nickname)
+    normalizeCodexNativeAgentName(spawn?.agent_nickname)
+    ?? normalizeCodexNativeAgentName(spawn?.agentNickname)
+    ?? normalizeCodexNativeAgentName(subAgent?.agentNickname)
+    ?? normalizeCodexNativeAgentName(subAgent?.agent_nickname)
   );
 }
 
@@ -2390,13 +2461,13 @@ function readCodexNativeAgentNameFromThread(
     return undefined;
   }
   return (
-    normalizeCodexNativeAgentName(thread.agentNickname) ??
-    normalizeCodexNativeAgentName(thread.agent_nickname) ??
-    normalizeCodexNativeAgentName(thread.nickname) ??
-    normalizeCodexNativeAgentName(thread.name) ??
-    readCodexNativeAgentNameFromSource(readRecord(thread.source)) ??
-    readCodexNativeAgentNameFromSource(readRecord(thread.thread_spawn)) ??
-    readCodexNativeAgentNameFromSource(readRecord(thread.threadSpawn))
+    normalizeCodexNativeAgentName(thread.agentNickname)
+    ?? normalizeCodexNativeAgentName(thread.agent_nickname)
+    ?? normalizeCodexNativeAgentName(thread.nickname)
+    ?? normalizeCodexNativeAgentName(thread.name)
+    ?? readCodexNativeAgentNameFromSource(readRecord(thread.source))
+    ?? readCodexNativeAgentNameFromSource(readRecord(thread.thread_spawn))
+    ?? readCodexNativeAgentNameFromSource(readRecord(thread.threadSpawn))
   );
 }
 
@@ -2405,7 +2476,10 @@ function readCodexNativeReceiverThreadNames(
 ): Map<string, string> {
   const names = new Map<string, string>();
 
-  const recordName = (threadId: string | undefined, name: string | undefined) => {
+  const recordName = (
+    threadId: string | undefined,
+    name: string | undefined,
+  ) => {
     if (threadId && name) {
       names.set(threadId, name);
     }
@@ -2429,18 +2503,19 @@ function readCodexNativeReceiverThreadNames(
     const thread = readRecord(receiver.thread) ?? receiver;
     recordName(
       threadId,
-      readCodexNativeAgentNameFromThread(thread) ??
-        readCodexNativeAgentNameFromSource(readRecord(receiver.source)),
+      readCodexNativeAgentNameFromThread(thread)
+        ?? readCodexNativeAgentNameFromSource(readRecord(receiver.source)),
     );
   }
 
-  const states = readRecord(item.agentsStates) ?? readRecord(item.agents_states);
+  const states =
+    readRecord(item.agentsStates) ?? readRecord(item.agents_states);
   for (const [threadId, state] of Object.entries(states ?? {})) {
     const stateRecord = readRecord(state);
     recordName(
       threadId,
-      readCodexNativeAgentNameFromThread(stateRecord) ??
-        readCodexNativeAgentNameFromSource(readRecord(stateRecord?.source)),
+      readCodexNativeAgentNameFromThread(stateRecord)
+        ?? readCodexNativeAgentNameFromSource(readRecord(stateRecord?.source)),
     );
   }
 
@@ -2458,8 +2533,8 @@ function readCodexNativeSubAgentCalls(
   }
   const turn = readRecord(params?.turn);
   const notificationTurnId =
-    readOptionalString(params, ["turnId", "turn_id"]) ??
-    readOptionalString(turn, ["id", "turnId", "turn_id"]);
+    readOptionalString(params, ["turnId", "turn_id"])
+    ?? readOptionalString(turn, ["id", "turnId", "turn_id"]);
   const turnItems = Array.isArray(turn?.items) ? turn.items : [];
   for (const turnItem of turnItems) {
     const record = readRecord(turnItem);
@@ -2485,8 +2560,8 @@ function readCodexNativeSubAgentCalls(
         item: candidate,
         itemId: readOptionalString(candidate, ["id", "itemId", "item_id"]),
         parentTurnId:
-          readOptionalString(candidate, ["turnId", "turn_id"]) ??
-          notificationTurnId,
+          readOptionalString(candidate, ["turnId", "turn_id"])
+          ?? notificationTurnId,
         receiverThreadIds: readStringArrayLike(candidate, [
           "receiverThreadIds",
           "receiver_thread_ids",
@@ -2503,7 +2578,8 @@ function readCodexNativeAgentState(
   item: Record<string, unknown>,
   threadId: string,
 ): { message?: string; status?: string } {
-  const states = readRecord(item.agentsStates) ?? readRecord(item.agents_states);
+  const states =
+    readRecord(item.agentsStates) ?? readRecord(item.agents_states);
   const state = states?.[threadId];
   if (typeof state === "string") {
     return { status: state };
@@ -2529,7 +2605,9 @@ function mapCodexNativeSubAgentStatus(params: {
     return "failure";
   }
   if (agentState) {
-    if (["completed", "complete", "success", "succeeded"].includes(agentState)) {
+    if (
+      ["completed", "complete", "success", "succeeded"].includes(agentState)
+    ) {
       return "success";
     }
     if (["failed", "failure", "errored", "error"].includes(agentState)) {
@@ -2538,10 +2616,18 @@ function mapCodexNativeSubAgentStatus(params: {
     if (["cancelled", "canceled", "interrupted"].includes(agentState)) {
       return "cancelled";
     }
-    if (["blocked", "pendingapproval", "pendingapprovalrequest"].includes(agentState)) {
+    if (
+      ["blocked", "pendingapproval", "pendingapprovalrequest"].includes(
+        agentState,
+      )
+    ) {
       return "blocked";
     }
-    if (["pendinginit", "pending", "running", "inprogress", "active"].includes(agentState)) {
+    if (
+      ["pendinginit", "pending", "running", "inprogress", "active"].includes(
+        agentState,
+      )
+    ) {
       return "running";
     }
     if (agentState === "shutdown") {
@@ -2581,11 +2667,15 @@ function codexNativeSubAgentOutcome(
   return undefined;
 }
 
-function codexNativeSubAgentIsTerminal(status: ThreadSubAgentSummary["status"]): boolean {
+function codexNativeSubAgentIsTerminal(
+  status: ThreadSubAgentSummary["status"],
+): boolean {
   return status === "success" || status === "failure" || status === "cancelled";
 }
 
-function codexNativeSubAgentNextReconciliationDelayMs(attempts: number): number {
+function codexNativeSubAgentNextReconciliationDelayMs(
+  attempts: number,
+): number {
   if (attempts <= 1) {
     return 15_000;
   }
@@ -2600,7 +2690,7 @@ function codexNativeSubAgentTask(params: {
   threadId: string;
 }): string {
   const promptTitle = params.prompt
-    ? shortenDerivedThreadTitle(params.prompt) ?? params.prompt
+    ? (shortenDerivedThreadTitle(params.prompt) ?? params.prompt)
     : undefined;
   return promptTitle
     ? truncateSubAgentText(promptTitle, 120)
@@ -2635,7 +2725,12 @@ function codexNativeSubAgentMessage(params: {
 
 function taskMonitorFailure<TOperation extends TaskMonitorRequest["operation"]>(
   operation: TOperation,
-  code: "forbidden" | "internal_error" | "invalid_arguments" | "not_found" | "unsupported_operation",
+  code:
+    | "forbidden"
+    | "internal_error"
+    | "invalid_arguments"
+    | "not_found"
+    | "unsupported_operation",
   message: string,
 ): TaskMonitorResponse<TOperation> {
   return {
@@ -2703,7 +2798,11 @@ function buildTaskMonitorFinalHandoffInput(params: {
     `Summary: ${params.summary}`,
     params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
     params.finalHandoffPrompt?.trim()
-      ? ["", "Requested parent-agent follow-up:", params.finalHandoffPrompt.trim()].join("\n")
+      ? [
+          "",
+          "Requested parent-agent follow-up:",
+          params.finalHandoffPrompt.trim(),
+        ].join("\n")
       : "",
     "",
     "Process this final monitor result. Do not resume polling unless the result explicitly says monitoring is still required.",
@@ -2727,7 +2826,7 @@ function buildTaskMonitorRecoveryPrompt(params: {
     `Task: ${params.task}`,
     "",
     "Call pwragent.complete_monitoring exactly once.",
-    "If you cannot determine a successful final outcome from the context you have, use outcome \"failure\" and explain that monitoring ended without a determinate result.",
+    'If you cannot determine a successful final outcome from the context you have, use outcome "failure" and explain that monitoring ended without a determinate result.',
     "Do not sleep, poll indefinitely, or do unrelated work in this recovery turn.",
   ].join("\n");
 }
@@ -2816,16 +2915,16 @@ function normalizeTaskMonitorTokenUsage(
   }
 
   const container =
-    readRecord(root.tokenUsage) ??
-    readRecord(root.token_usage) ??
-    readRecord(root.info) ??
-    root;
+    readRecord(root.tokenUsage)
+    ?? readRecord(root.token_usage)
+    ?? readRecord(root.info)
+    ?? root;
   const current =
-    readRecord(container.total) ??
-    readRecord(container.total_token_usage) ??
-    readRecord(container.last) ??
-    readRecord(container.last_token_usage) ??
-    container;
+    readRecord(container.total)
+    ?? readRecord(container.total_token_usage)
+    ?? readRecord(container.last)
+    ?? readRecord(container.last_token_usage)
+    ?? container;
   const direct = readTaskMonitorTokenBreakdown(current);
   if (direct) {
     return direct;
@@ -2849,16 +2948,16 @@ function readTaskMonitorTokenUsageRecords(
   }
 
   const container =
-    readRecord(root.tokenUsage) ??
-    readRecord(root.token_usage) ??
-    readRecord(root.info) ??
-    root;
+    readRecord(root.tokenUsage)
+    ?? readRecord(root.token_usage)
+    ?? readRecord(root.info)
+    ?? root;
   const latestUsage =
-    readTaskMonitorTokenBreakdownFromUnknown(container.last) ??
-    readTaskMonitorTokenBreakdownFromUnknown(container.last_token_usage);
+    readTaskMonitorTokenBreakdownFromUnknown(container.last)
+    ?? readTaskMonitorTokenBreakdownFromUnknown(container.last_token_usage);
   const totalUsage =
-    readTaskMonitorTokenBreakdownFromUnknown(container.total) ??
-    readTaskMonitorTokenBreakdownFromUnknown(container.total_token_usage);
+    readTaskMonitorTokenBreakdownFromUnknown(container.total)
+    ?? readTaskMonitorTokenBreakdownFromUnknown(container.total_token_usage);
   const currentUsage =
     latestUsage ?? totalUsage ?? readTaskMonitorTokenBreakdown(container);
   if (latestUsage || totalUsage || currentUsage) {
@@ -2888,14 +2987,26 @@ function readTaskMonitorTokenBreakdownFromUnknown(
 function readTaskMonitorTokenBreakdown(
   record: Record<string, unknown>,
 ): TaskMonitorTokenUsageBreakdown | undefined {
-  const explicitTotal = readTaskMonitorNumber(record, "totalTokens", "total_tokens");
-  const inputTokens = readTaskMonitorNumber(record, "inputTokens", "input_tokens");
+  const explicitTotal = readTaskMonitorNumber(
+    record,
+    "totalTokens",
+    "total_tokens",
+  );
+  const inputTokens = readTaskMonitorNumber(
+    record,
+    "inputTokens",
+    "input_tokens",
+  );
   const cachedInputTokens = readTaskMonitorNumber(
     record,
     "cachedInputTokens",
     "cached_input_tokens",
   );
-  const outputTokens = readTaskMonitorNumber(record, "outputTokens", "output_tokens");
+  const outputTokens = readTaskMonitorNumber(
+    record,
+    "outputTokens",
+    "output_tokens",
+  );
   const reasoningOutputTokens = readTaskMonitorNumber(
     record,
     "reasoningOutputTokens",
@@ -2903,13 +3014,14 @@ function readTaskMonitorTokenBreakdown(
   );
   const derivedTotal =
     (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningOutputTokens ?? 0);
-  const totalTokens = explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
+  const totalTokens =
+    explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
   if (
-    totalTokens === undefined &&
-    inputTokens === undefined &&
-    cachedInputTokens === undefined &&
-    outputTokens === undefined &&
-    reasoningOutputTokens === undefined
+    totalTokens === undefined
+    && inputTokens === undefined
+    && cachedInputTokens === undefined
+    && outputTokens === undefined
+    && reasoningOutputTokens === undefined
   ) {
     return undefined;
   }
@@ -3043,10 +3155,14 @@ function buildTaskMonitorUsageLine(params: {
     tokenUsage.uncachedInputTokens ?? inputTokens - cachedInputTokens,
   );
   const outputTokens = Math.max(0, tokenUsage.outputTokens ?? 0);
-  const reasoningOutputTokens = Math.max(0, tokenUsage.reasoningOutputTokens ?? 0);
+  const reasoningOutputTokens = Math.max(
+    0,
+    tokenUsage.reasoningOutputTokens ?? 0,
+  );
   const totalTokens = Math.max(
     0,
-    tokenUsage.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
+    tokenUsage.totalTokens
+      ?? inputTokens + outputTokens + reasoningOutputTokens,
   );
   const model = params.model ?? params.usage.model ?? params.usage.cost?.model;
   const cost = estimateOpenAiTokenUsageCost({
@@ -3062,14 +3178,15 @@ function buildTaskMonitorUsageLine(params: {
     fastMode: params.fastMode,
     serviceTier: params.serviceTier,
   });
-  const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
-    cost
-      ? undefined
-      : !model
-        ? "missing-model"
-        : pricingServiceTier === undefined
-          ? "unsupported-service-tier"
-          : "missing-rate";
+  const priceUnavailableReason:
+    | ThreadUsageLineRecord["priceUnavailableReason"]
+    | undefined = cost
+    ? undefined
+    : !model
+      ? "missing-model"
+      : pricingServiceTier === undefined
+        ? "unsupported-service-tier"
+        : "missing-rate";
 
   return {
     backend: params.backend,
@@ -3087,7 +3204,9 @@ function buildTaskMonitorUsageLine(params: {
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
     provider: cost?.provider ?? "openai",
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
-    ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
+    ...(cost?.catalogVersion
+      ? { pricingCatalogVersion: cost.catalogVersion }
+      : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
     reasoningOutputTokens,
     scope: "monitor",
@@ -3135,7 +3254,9 @@ function findNestedUsageValue(value: unknown, keys: string[]): unknown {
 
 function readUsageString(value: unknown, keys: string[]): string | undefined {
   const nested = findNestedUsageValue(value, keys);
-  return typeof nested === "string" && nested.trim() ? nested.trim() : undefined;
+  return typeof nested === "string" && nested.trim()
+    ? nested.trim()
+    : undefined;
 }
 
 function readUsageBoolean(value: unknown, keys: string[]): boolean | undefined {
@@ -3148,18 +3269,23 @@ function readTaskMonitorUsageModel(params: {
   tokenUsage: unknown;
 }): string | undefined {
   return (
-    (typeof params.notificationModel === "string" && params.notificationModel.trim()
+    (typeof params.notificationModel === "string"
+    && params.notificationModel.trim()
       ? params.notificationModel.trim()
-      : undefined) ??
-    readUsageString(params.tokenUsage, ["model", "modelId", "model_id"])
+      : undefined)
+    ?? readUsageString(params.tokenUsage, ["model", "modelId", "model_id"])
   );
 }
 
-function readTaskMonitorUsageServiceTier(tokenUsage: unknown): string | undefined {
+function readTaskMonitorUsageServiceTier(
+  tokenUsage: unknown,
+): string | undefined {
   return readUsageString(tokenUsage, ["serviceTier", "service_tier"]);
 }
 
-function readTaskMonitorUsageFastMode(tokenUsage: unknown): boolean | undefined {
+function readTaskMonitorUsageFastMode(
+  tokenUsage: unknown,
+): boolean | undefined {
   return readUsageBoolean(tokenUsage, ["fastMode", "fast_mode"]);
 }
 
@@ -3269,20 +3395,23 @@ function buildLiveThreadUsageLine(params: {
     fastMode: params.fastMode,
     serviceTier: params.serviceTier,
   });
-  const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
-    cost
-      ? undefined
-      : !params.model
-        ? "missing-model"
-        : pricingServiceTier === undefined
-          ? "unsupported-service-tier"
-          : "missing-rate";
+  const priceUnavailableReason:
+    | ThreadUsageLineRecord["priceUnavailableReason"]
+    | undefined = cost
+    ? undefined
+    : !params.model
+      ? "missing-model"
+      : pricingServiceTier === undefined
+        ? "unsupported-service-tier"
+        : "missing-rate";
 
   return {
     backend: params.backend,
     cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
     cachedInputTokens,
-    ...(typeof params.completedAt === "number" ? { completedAt: params.completedAt } : {}),
+    ...(typeof params.completedAt === "number"
+      ? { completedAt: params.completedAt }
+      : {}),
     createdAt: params.createdAt ?? params.completedAt ?? Date.now(),
     currency: cost?.currency ?? "USD",
     ...(cumulativeTokens
@@ -3290,7 +3419,8 @@ function buildLiveThreadUsageLine(params: {
           cumulativeCachedInputTokens: cumulativeTokens.cachedInputTokens,
           cumulativeInputTokens: cumulativeTokens.inputTokens,
           cumulativeOutputTokens: cumulativeTokens.outputTokens,
-          cumulativeReasoningOutputTokens: cumulativeTokens.reasoningOutputTokens,
+          cumulativeReasoningOutputTokens:
+            cumulativeTokens.reasoningOutputTokens,
           cumulativeTotalTokens: cumulativeTokens.totalTokens,
           cumulativeUncachedInputTokens: cumulativeTokens.uncachedInputTokens,
         }
@@ -3304,7 +3434,9 @@ function buildLiveThreadUsageLine(params: {
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
     provider: cost?.provider ?? "openai",
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
-    ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
+    ...(cost?.catalogVersion
+      ? { pricingCatalogVersion: cost.catalogVersion }
+      : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
     reasoningOutputTokens,
     scope: "turn",
@@ -3313,7 +3445,9 @@ function buildLiveThreadUsageLine(params: {
     settingsSource: "thread-overlay",
     source: "live",
     sourceItemId: "thread-token-usage",
-    ...(typeof params.startedAt === "number" ? { startedAt: params.startedAt } : {}),
+    ...(typeof params.startedAt === "number"
+      ? { startedAt: params.startedAt }
+      : {}),
     status: "pending",
     threadId: params.threadId,
     totalCostMicros: cost?.totalCostMicros ?? 0,
@@ -3339,30 +3473,28 @@ function readTurnStatus(value: unknown): string | undefined {
   return typeof status === "string" ? status : undefined;
 }
 
-function turnIdFromStartedNotification(
-  notification: {
-    params: {
-      turnId?: string;
-      turn: {
-        id: string;
-      };
+function turnIdFromStartedNotification(notification: {
+  params: {
+    turnId?: string;
+    turn: {
+      id: string;
     };
-  },
-): string {
+  };
+}): string {
   return notification.params.turnId ?? notification.params.turn.id;
 }
 
-function turnIdFromTerminalNotification(
-  notification: {
-    params: {
-      turnId?: string | null;
-      turn?: {
-        id?: string | null;
-      };
+function turnIdFromTerminalNotification(notification: {
+  params: {
+    turnId?: string | null;
+    turn?: {
+      id?: string | null;
     };
-  },
-): string | undefined {
-  return notification.params.turnId ?? notification.params.turn?.id ?? undefined;
+  };
+}): string | undefined {
+  return (
+    notification.params.turnId ?? notification.params.turn?.id ?? undefined
+  );
 }
 
 function normalizeNotificationTimestamp(value: unknown): number | undefined {
@@ -3377,16 +3509,16 @@ function completedAtFromTerminalNotification(
   notification: AppServerNotification,
 ): number | undefined {
   if (
-    notification.method !== "turn/completed" &&
-    notification.method !== "turn/failed" &&
-    notification.method !== "turn/cancelled"
+    notification.method !== "turn/completed"
+    && notification.method !== "turn/failed"
+    && notification.method !== "turn/cancelled"
   ) {
     return undefined;
   }
 
   return normalizeNotificationTimestamp(
-    readRecord(notification.params.turn)?.completedAt ??
-      readRecord(notification.params.turn)?.completed_at,
+    readRecord(notification.params.turn)?.completedAt
+      ?? readRecord(notification.params.turn)?.completed_at,
   );
 }
 
@@ -3422,21 +3554,23 @@ function textFragmentsFromCodexNotification(
   }
 
   if (notification.method === "item/agentMessage/delta") {
-    const delta = readOptionalString(readRecord(notification.params), ["delta"]);
+    const delta = readOptionalString(readRecord(notification.params), [
+      "delta",
+    ]);
     if (delta) {
       fragments.push(delta);
     }
   }
 
   if (
-    notification.method === "item/started" ||
-    notification.method === "item/completed"
+    notification.method === "item/started"
+    || notification.method === "item/completed"
   ) {
     const params = readRecord(notification.params);
     const item = readRecord(params?.item);
     const itemText =
-      readOptionalString(item, ["text", "content", "message", "summary"]) ??
-      readOptionalString(readRecord(item?.data), [
+      readOptionalString(item, ["text", "content", "message", "summary"])
+      ?? readOptionalString(readRecord(item?.data), [
         "text",
         "content",
         "message",
@@ -3468,10 +3602,10 @@ function logBackendLifecycleNotification(
   notification: AppServerNotification,
 ): void {
   if (
-    notification.method !== "turn/completed" &&
-    notification.method !== "turn/failed" &&
-    notification.method !== "turn/cancelled" &&
-    notification.method !== "thread/status/changed"
+    notification.method !== "turn/completed"
+    && notification.method !== "turn/failed"
+    && notification.method !== "turn/cancelled"
+    && notification.method !== "thread/status/changed"
   ) {
     return;
   }
@@ -3487,9 +3621,9 @@ function logBackendLifecycleNotification(
   }
 
   if (
-    notification.method === "turn/completed" ||
-    notification.method === "turn/failed" ||
-    notification.method === "turn/cancelled"
+    notification.method === "turn/completed"
+    || notification.method === "turn/failed"
+    || notification.method === "turn/cancelled"
   ) {
     backendRegistryLog.info("backend lifecycle notification", {
       backend,
@@ -3544,7 +3678,9 @@ function inferSupportsSteering(
   return backend === "codex";
 }
 
-function getBackendFallbackModels(backend: AppServerBackendKind): BackendModelOption[] {
+function getBackendFallbackModels(
+  backend: AppServerBackendKind,
+): BackendModelOption[] {
   return backend === "codex" ? OPENAI_FALLBACK_MODELS : GROK_FALLBACK_MODELS;
 }
 
@@ -3573,9 +3709,11 @@ function dedupeModelOptions(
       ...current,
       ...normalizedModel,
       current: current?.current || normalizedModel.current,
-      supportsReasoning: current?.supportsReasoning || normalizedModel.supportsReasoning,
+      supportsReasoning:
+        current?.supportsReasoning || normalizedModel.supportsReasoning,
       supportsFast: current?.supportsFast || normalizedModel.supportsFast,
-      supportsSteering: current?.supportsSteering || normalizedModel.supportsSteering,
+      supportsSteering:
+        current?.supportsSteering || normalizedModel.supportsSteering,
     });
   }
 
@@ -3609,7 +3747,9 @@ function buildLaunchpadOptions(
     return undefined;
   }
 
-  const supportsReasoning = normalizedModels.some((model) => model.supportsReasoning);
+  const supportsReasoning = normalizedModels.some(
+    (model) => model.supportsReasoning,
+  );
   const supportsFastMode =
     backend === "codex" && normalizedModels.some((model) => model.supportsFast);
 
@@ -3624,7 +3764,9 @@ function buildLaunchpadOptions(
   };
 }
 
-async function readClientModels(client: BackendClient): Promise<BackendModelOption[]> {
+async function readClientModels(
+  client: BackendClient,
+): Promise<BackendModelOption[]> {
   if (!client.listModels) {
     return [];
   }
@@ -3632,7 +3774,7 @@ async function readClientModels(client: BackendClient): Promise<BackendModelOpti
 }
 
 async function readClientAccount(
-  client: BackendClient
+  client: BackendClient,
 ): Promise<BackendAccountSummary | undefined> {
   if (!client.readAccount) {
     return undefined;
@@ -3641,17 +3783,19 @@ async function readClientAccount(
 }
 
 function isMeaningfulAccountSummary(
-  account: BackendAccountSummary | undefined
+  account: BackendAccountSummary | undefined,
 ): account is BackendAccountSummary {
   return Boolean(
-    account?.type ||
-      account?.email ||
-      account?.planType ||
-      typeof account?.requiresOpenaiAuth === "boolean"
+    account?.type
+    || account?.email
+    || account?.planType
+    || typeof account?.requiresOpenaiAuth === "boolean",
   );
 }
 
-async function readClientRateLimits(client: BackendClient): Promise<BackendRateLimitSummary[]> {
+async function readClientRateLimits(
+  client: BackendClient,
+): Promise<BackendRateLimitSummary[]> {
   if (!client.readRateLimits) {
     return [];
   }
@@ -3667,10 +3811,10 @@ type ModelSettings = {
 
 function hasExplicitModelSettings(settings: ModelSettings): boolean {
   return (
-    settings.model !== undefined ||
-    settings.reasoningEffort !== undefined ||
-    settings.serviceTier !== undefined ||
-    settings.fastMode !== undefined
+    settings.model !== undefined
+    || settings.reasoningEffort !== undefined
+    || settings.serviceTier !== undefined
+    || settings.fastMode !== undefined
   );
 }
 
@@ -3776,20 +3920,25 @@ type MessagingArchiveCleanupResult = {
   revokedCount: number;
 };
 
-function isEmptyDirectoryLaunchpadDraft(launchpad: NavigationLaunchpadDraft): boolean {
+function isEmptyDirectoryLaunchpadDraft(
+  launchpad: NavigationLaunchpadDraft,
+): boolean {
   return (
-    launchpad.prompt.trim().length === 0 &&
-    (launchpad.imageAttachments?.length ?? 0) === 0 &&
-    launchpad.settingsTouchedAt === undefined
+    launchpad.prompt.trim().length === 0
+    && (launchpad.imageAttachments?.length ?? 0) === 0
+    && launchpad.settingsTouchedAt === undefined
   );
 }
 
 function defaultLaunchpadWorkMode(
-  request: Pick<EnsureDirectoryLaunchpadRequest, "directoryKind" | "directoryPath">,
-  defaults: NavigationLaunchpadDefaults
+  request: Pick<
+    EnsureDirectoryLaunchpadRequest,
+    "directoryKind" | "directoryPath"
+  >,
+  defaults: NavigationLaunchpadDefaults,
 ): NavigationLaunchpadDraft["workMode"] {
   return request.directoryKind === "directory" && request.directoryPath
-    ? defaults.workMode ?? "local"
+    ? (defaults.workMode ?? "local")
     : "local";
 }
 
@@ -3937,8 +4086,8 @@ function cloneCodexEnvironmentRuntimeForFork(
     ...rest
   } = runtime;
   const inheritedSelectedActionIdByEnvironmentId =
-    selectedActionIdByEnvironmentId ??
-    (_actionId ? { [runtime.environmentId]: _actionId } : undefined);
+    selectedActionIdByEnvironmentId
+    ?? (_actionId ? { [runtime.environmentId]: _actionId } : undefined);
   const next: CodexThreadEnvironmentRuntime = {
     ...rest,
     ...(inheritedSelectedActionIdByEnvironmentId
@@ -3978,20 +4127,23 @@ function isUsageActivityEntry(
   entry: AppServerThreadEntry,
 ): entry is AppServerThreadActivityEntry {
   return (
-    entry.type === "activity" &&
-    (entry.id.startsWith("live-token-usage-") ||
-      entry.id.startsWith("live-turn-usage-") ||
-      entry.summary.startsWith("Latest request usage:") ||
-      entry.summary.startsWith("Turn usage:") ||
-      entry.summary.startsWith("Monitor usage:") ||
-      entry.summary.startsWith("Usage:"))
+    entry.type === "activity"
+    && (entry.id.startsWith("live-token-usage-")
+      || entry.id.startsWith("live-turn-usage-")
+      || entry.summary.startsWith("Latest request usage:")
+      || entry.summary.startsWith("Turn usage:")
+      || entry.summary.startsWith("Monitor usage:")
+      || entry.summary.startsWith("Usage:"))
   );
 }
 
 function usageActivityScope(
   entry: AppServerThreadActivityEntry,
 ): "latest-request" | "monitor" | "total" | "turn" | undefined {
-  if (entry.id.startsWith("live-turn-usage-") || entry.summary.startsWith("Turn usage:")) {
+  if (
+    entry.id.startsWith("live-turn-usage-")
+    || entry.summary.startsWith("Turn usage:")
+  ) {
     return "turn";
   }
   if (entry.summary.startsWith("Monitor usage:")) {
@@ -4016,7 +4168,9 @@ function insertTranscriptEntry(
   const nextEntries = [...entries];
   const turnId = activity.turn?.id;
   if (turnId) {
-    const sameTurnIndex = nextEntries.findLastIndex((entry) => entry.turn?.id === turnId);
+    const sameTurnIndex = nextEntries.findLastIndex(
+      (entry) => entry.turn?.id === turnId,
+    );
     if (sameTurnIndex !== -1) {
       nextEntries.splice(sameTurnIndex + 1, 0, activity);
       return nextEntries;
@@ -4026,8 +4180,8 @@ function insertTranscriptEntry(
   if (typeof activity.createdAt === "number") {
     const timedIndex = nextEntries.findIndex(
       (entry) =>
-        typeof entry.createdAt === "number" &&
-        entry.createdAt > (activity.createdAt as number),
+        typeof entry.createdAt === "number"
+        && entry.createdAt > (activity.createdAt as number),
     );
     if (timedIndex !== -1) {
       nextEntries.splice(timedIndex, 0, activity);
@@ -4043,12 +4197,10 @@ function mergeImmutableUsageActivities(params: {
   replay: AppServerThreadReplay;
   activities?: AppServerThreadActivityEntry[];
 }): AppServerThreadReplay {
-  const immutableUsageActivities = params.activities?.filter(
-    (activity) => {
-      const scope = usageActivityScope(activity);
-      return scope === "turn" || scope === "monitor";
-    },
-  );
+  const immutableUsageActivities = params.activities?.filter((activity) => {
+    const scope = usageActivityScope(activity);
+    return scope === "turn" || scope === "monitor";
+  });
   if (!immutableUsageActivities?.length) {
     return params.replay;
   }
@@ -4062,10 +4214,10 @@ function mergeImmutableUsageActivities(params: {
         return false;
       }
       if (
-        activityScope === "turn" &&
-        activityTurnId &&
-        isUsageActivityEntry(entry) &&
-        entry.turn?.id === activityTurnId
+        activityScope === "turn"
+        && activityTurnId
+        && isUsageActivityEntry(entry)
+        && entry.turn?.id === activityTurnId
       ) {
         const entryScope = usageActivityScope(entry);
         return entryScope !== "latest-request" && entryScope !== "total";
@@ -4081,9 +4233,14 @@ function mergeImmutableUsageActivities(params: {
   };
 }
 
-function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): string | undefined {
+function extractFirstMeaningfulTextInput(
+  input: AppServerTurnInputItem[],
+): string | undefined {
   const text = input
-    .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")
+    .filter(
+      (item): item is Extract<AppServerTurnInputItem, { type: "text" }> =>
+        item.type === "text",
+    )
     .map((item) => item.text.trim())
     .filter(Boolean)
     .join("\n");
@@ -4152,8 +4309,8 @@ function isEligibleForGeneratedTitle(
   }
   if (thread.titleSource === "fallback") {
     return (
-      !isAcpBackendId(thread.source) ||
-      isAcpFallbackPlaceholderTitle(thread.title)
+      !isAcpBackendId(thread.source)
+      || isAcpFallbackPlaceholderTitle(thread.title)
     );
   }
   if (isGenericPlaceholderTitle(thread.title)) {
@@ -4161,7 +4318,10 @@ function isEligibleForGeneratedTitle(
   }
 
   const derivedTitle = shortenDerivedThreadTitle(prompt) ?? prompt;
-  return normalizeTitleForComparison(thread.title) === normalizeTitleForComparison(derivedTitle);
+  return (
+    normalizeTitleForComparison(thread.title)
+    === normalizeTitleForComparison(derivedTitle)
+  );
 }
 
 function normalizeTitleForComparison(value: string): string {
@@ -4173,16 +4333,16 @@ function isPromptPlaceholderTitle(title: string, prompt: string): boolean {
   const normalizedPrompt = normalizeTitleForComparison(prompt);
   const derivedTitle = shortenDerivedThreadTitle(prompt) ?? prompt;
   return (
-    normalizedTitle === normalizedPrompt ||
-    normalizedTitle === normalizeTitleForComparison(derivedTitle)
+    normalizedTitle === normalizedPrompt
+    || normalizedTitle === normalizeTitleForComparison(derivedTitle)
   );
 }
 
 function isInjectedContextPlaceholderTitle(title: string): boolean {
   const normalizedTitle = normalizeTitleForComparison(title);
   return (
-    normalizedTitle.startsWith("# agents.md instructions") ||
-    normalizedTitle.startsWith("agents.md instructions for")
+    normalizedTitle.startsWith("# agents.md instructions")
+    || normalizedTitle.startsWith("agents.md instructions for")
   );
 }
 
@@ -4201,7 +4361,9 @@ function truncateLogValue(value: string | undefined): string | null {
   if (!normalized) {
     return null;
   }
-  return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+  return normalized.length > 160
+    ? `${normalized.slice(0, 157)}...`
+    : normalized;
 }
 
 function buildTitleEligibilityLogDetails(
@@ -4212,7 +4374,9 @@ function buildTitleEligibilityLogDetails(
     currentTitle: truncateLogValue(thread?.title),
     currentTitleSource: thread?.titleSource ?? null,
     promptTitle: truncateLogValue(shortenDerivedThreadTitle(prompt) ?? prompt),
-    promptMatchesCurrentTitle: thread ? isPromptPlaceholderTitle(thread.title, prompt) : null,
+    promptMatchesCurrentTitle: thread
+      ? isPromptPlaceholderTitle(thread.title, prompt)
+      : null,
     injectedContextPlaceholderTitle: thread
       ? isInjectedContextPlaceholderTitle(thread.title)
       : null,
@@ -4244,14 +4408,16 @@ function getDefaultModelOption(
 
   const preferredModelId = getPreferredModelId(backend);
   return (
-    models.find((model) => model.current) ??
-    models.find((model) => model.id === preferredModelId) ??
-    models.find((model) => model.supportsReasoning) ??
-    models[0]
+    models.find((model) => model.current)
+    ?? models.find((model) => model.id === preferredModelId)
+    ?? models.find((model) => model.supportsReasoning)
+    ?? models[0]
   );
 }
 
-function getDefaultReasoningEffort(options?: BackendLaunchpadOptions): string | undefined {
+function getDefaultReasoningEffort(
+  options?: BackendLaunchpadOptions,
+): string | undefined {
   const reasoningEfforts = options?.reasoningEfforts ?? [];
   return reasoningEfforts.includes(DEFAULT_REASONING_EFFORT)
     ? DEFAULT_REASONING_EFFORT
@@ -4273,8 +4439,8 @@ function resolveModelSettingsFromOptions(
     };
   }
   const selectedModel =
-    models.find((model) => model.id === settings.model) ??
-    getDefaultModelOption(backend, options);
+    models.find((model) => model.id === settings.model)
+    ?? getDefaultModelOption(backend, options);
   const supportsReasoning = Boolean(selectedModel?.supportsReasoning);
   const reasoningEfforts = options?.reasoningEfforts ?? [];
   const reasoningEffort = supportsReasoning
@@ -4282,13 +4448,14 @@ function resolveModelSettingsFromOptions(
       ? settings.reasoningEffort
       : getDefaultReasoningEffort(options)
     : undefined;
-  const supportsFast = backend === "codex" && Boolean(selectedModel?.supportsFast);
+  const supportsFast =
+    backend === "codex" && Boolean(selectedModel?.supportsFast);
   const shouldClearCodexFastTier =
-    backend === "codex" &&
-    !supportsFast &&
-    (settings.serviceTier === "fast" ||
-      settings.serviceTier === "priority" ||
-      settings.fastMode === false);
+    backend === "codex"
+    && !supportsFast
+    && (settings.serviceTier === "fast"
+      || settings.serviceTier === "priority"
+      || settings.fastMode === false);
 
   return {
     model: selectedModel?.id,
@@ -4320,15 +4487,15 @@ function resolveCodexFastModeServiceTier(params: {
     return "priority";
   }
   if (params.fastMode === false) {
-    return params.serviceTier &&
-      params.serviceTier !== "fast" &&
-      params.serviceTier !== "priority"
+    return params.serviceTier
+      && params.serviceTier !== "fast"
+      && params.serviceTier !== "priority"
       ? params.serviceTier
       : undefined;
   }
   if (
-    !params.supportsFast &&
-    (params.serviceTier === "fast" || params.serviceTier === "priority")
+    !params.supportsFast
+    && (params.serviceTier === "fast" || params.serviceTier === "priority")
   ) {
     return undefined;
   }
@@ -4390,9 +4557,10 @@ function firstDefinedStringLike(
   return undefined;
 }
 
-function readObservedCodexFastMode(
-  notificationParams: unknown,
-): { fastMode?: boolean; serviceTier?: string | null } {
+function readObservedCodexFastMode(notificationParams: unknown): {
+  fastMode?: boolean;
+  serviceTier?: string | null;
+} {
   const params = readRecord(notificationParams);
   const turn = readRecord(params?.turn);
   const config = readRecord(params?.config) ?? readRecord(turn?.config);
@@ -4405,15 +4573,17 @@ function readObservedCodexFastMode(
     const normalizedServiceTier =
       typeof serviceTier === "string" ? serviceTier.toLowerCase() : serviceTier;
     return {
-      fastMode: normalizedServiceTier === "fast" || normalizedServiceTier === "priority",
+      fastMode:
+        normalizedServiceTier === "fast"
+        || normalizedServiceTier === "priority",
       serviceTier,
     };
   }
 
   const fastMode =
-    readBooleanLike(params, ["fastMode", "fast_mode"]) ??
-    readBooleanLike(turn, ["fastMode", "fast_mode"]) ??
-    readBooleanLike(config, ["fastMode", "fast_mode"]);
+    readBooleanLike(params, ["fastMode", "fast_mode"])
+    ?? readBooleanLike(turn, ["fastMode", "fast_mode"])
+    ?? readBooleanLike(config, ["fastMode", "fast_mode"]);
   return { fastMode };
 }
 
@@ -4448,15 +4618,15 @@ export function buildCodexFastModeMismatchNotificationParams(
     return base;
   }
   const hasTerminalFastMode =
-    "fastMode" in base ||
-    "fast_mode" in base ||
-    readRecord(base.turn)?.fastMode !== undefined ||
-    readRecord(base.turn)?.fast_mode !== undefined;
+    "fastMode" in base
+    || "fast_mode" in base
+    || readRecord(base.turn)?.fastMode !== undefined
+    || readRecord(base.turn)?.fast_mode !== undefined;
   const hasTerminalServiceTier =
-    "serviceTier" in base ||
-    "service_tier" in base ||
-    readRecord(base.turn)?.serviceTier !== undefined ||
-    readRecord(base.turn)?.service_tier !== undefined;
+    "serviceTier" in base
+    || "service_tier" in base
+    || readRecord(base.turn)?.serviceTier !== undefined
+    || readRecord(base.turn)?.service_tier !== undefined;
 
   return {
     ...base,
@@ -4474,10 +4644,13 @@ function getAvailableExecutionMode(
   preferred: ThreadExecutionMode,
 ): ThreadExecutionMode {
   return (
-    backend.executionModes.find((mode) => mode.available && mode.mode === preferred)?.mode ??
-    backend.executionModes.find((mode) => mode.available && mode.isDefault)?.mode ??
-    backend.executionModes.find((mode) => mode.available)?.mode ??
-    preferred
+    backend.executionModes.find(
+      (mode) => mode.available && mode.mode === preferred,
+    )?.mode
+    ?? backend.executionModes.find((mode) => mode.available && mode.isDefault)
+      ?.mode
+    ?? backend.executionModes.find((mode) => mode.available)?.mode
+    ?? preferred
   );
 }
 
@@ -4486,14 +4659,15 @@ function launchpadDefaultsEqual(
   right: NavigationLaunchpadDefaults,
 ): boolean {
   return (
-    left.backend === right.backend &&
-    left.executionMode === right.executionMode &&
-    left.workMode === right.workMode &&
-    left.model === right.model &&
-    left.reasoningEffort === right.reasoningEffort &&
-    left.serviceTier === right.serviceTier &&
-    left.fastMode === right.fastMode &&
-    JSON.stringify(left.acpRuntime ?? {}) === JSON.stringify(right.acpRuntime ?? {})
+    left.backend === right.backend
+    && left.executionMode === right.executionMode
+    && left.workMode === right.workMode
+    && left.model === right.model
+    && left.reasoningEffort === right.reasoningEffort
+    && left.serviceTier === right.serviceTier
+    && left.fastMode === right.fastMode
+    && JSON.stringify(left.acpRuntime ?? {})
+      === JSON.stringify(right.acpRuntime ?? {})
   );
 }
 
@@ -4565,8 +4739,11 @@ function pageNormalizedReplay(
     : replay.entries.length;
   const boundedEndIndex = endIndex >= 0 ? endIndex : replay.entries.length;
   const limit =
-    options.limit === undefined ? undefined : Math.max(0, Math.floor(options.limit));
-  const startIndex = limit === undefined ? 0 : Math.max(0, boundedEndIndex - limit);
+    options.limit === undefined
+      ? undefined
+      : Math.max(0, Math.floor(options.limit));
+  const startIndex =
+    limit === undefined ? 0 : Math.max(0, boundedEndIndex - limit);
   const entries = replay.entries.slice(startIndex, boundedEndIndex);
   const messages = entries.flatMap((entry) =>
     entry.type === "message"
@@ -4591,7 +4768,9 @@ function pageNormalizedReplay(
     pagination: {
       supportsPagination: true,
       hasPreviousPage,
-      ...(hasPreviousPage && firstEntry ? { previousCursor: firstEntry.id } : {}),
+      ...(hasPreviousPage && firstEntry
+        ? { previousCursor: firstEntry.id }
+        : {}),
     },
   };
 }
@@ -4673,7 +4852,9 @@ function buildHandoffTaskPrompt(params: {
     ...(params.workspace.linkedDirectory?.worktreePath
       ? [`- Worktree path: ${params.workspace.linkedDirectory.worktreePath}`]
       : []),
-    ...(params.workspace.branch ? [`- Branch: ${params.workspace.branch}`] : []),
+    ...(params.workspace.branch
+      ? [`- Branch: ${params.workspace.branch}`]
+      : []),
     `- Git: ${params.workspace.git.kind}`,
     `- New worktree supported: ${
       params.workspace.git.worktreeCreationAvailable ? "yes" : "no"
@@ -4719,7 +4900,11 @@ function buildWorkspaceMoveSuccessPrompt(params: {
     `- Target path: ${params.result.targetPath}`,
     ...(params.result.branch ? [`- Branch: ${params.result.branch}`] : []),
     ...(params.result.warnings.length
-      ? ["", "Warnings:", ...params.result.warnings.map((warning) => `- ${warning}`)]
+      ? [
+          "",
+          "Warnings:",
+          ...params.result.warnings.map((warning) => `- ${warning}`),
+        ]
       : []),
     "",
     "Continue the user's task from the new runtime workspace. Do not repeat the workspace move.",
@@ -4730,7 +4915,8 @@ function buildWorkspaceMoveFailurePrompt(params: {
   error: unknown;
   move: PendingThreadWorkspaceMoveSummary;
 }): string {
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  const message =
+    params.error instanceof Error ? params.error.message : String(params.error);
   return [
     "PwrAgent workspace move failed for this thread.",
     "",
@@ -4772,7 +4958,10 @@ export class DesktopBackendRegistry {
     Promise<MessagingArchiveCleanupResult>
   >();
   private readonly archivedMessagingCleanupCompleted = new Set<string>();
-  private readonly archivedMessagingCleanupGeneration = new Map<string, number>();
+  private readonly archivedMessagingCleanupGeneration = new Map<
+    string,
+    number
+  >();
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
   private readonly modelCatalog: BackendModelCatalog;
@@ -4781,9 +4970,18 @@ export class DesktopBackendRegistry {
   private readonly codexEnvironmentHydrationStore?: CodexEnvironmentHydrationStoreLike;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
-  private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
-  private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
-  private readonly pendingThreadHandoffs = new Map<string, PendingThreadHandoffSummary>();
+  private readonly activeThreadIdsByBackend = new Map<
+    AppServerBackendKind,
+    Set<string>
+  >();
+  private readonly pendingStartedThreads = new Map<
+    string,
+    AppServerThreadSummary
+  >();
+  private readonly pendingThreadHandoffs = new Map<
+    string,
+    PendingThreadHandoffSummary
+  >();
   private readonly pendingThreadWorkspaceMoves = new Map<
     string,
     PendingThreadWorkspaceMoveSummary
@@ -4794,7 +4992,10 @@ export class DesktopBackendRegistry {
   >();
   private latestCodexConfigWarning?: AgentEvent;
   private readonly unsubscribers: Array<() => void> = [];
-  private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
+  private readonly pendingServerRequests = new Map<
+    string,
+    PendingServerRequest
+  >();
   private readonly fileChangeApprovalContexts = new Map<
     string,
     PendingRequestApprovalContext
@@ -4810,10 +5011,19 @@ export class DesktopBackendRegistry {
     string,
     AppServerTurnInputItem[]
   >();
-  private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
+  private readonly activeCodexTurnModes = new Map<
+    string,
+    ThreadExecutionMode
+  >();
   private readonly activeCodexReviewTurnKeys = new Set<string>();
-  private readonly activeCodexReviewInterruptTurnIds = new Map<string, string>();
-  private readonly activeReviewSubAgents = new Map<string, ReviewSubAgentRecord>();
+  private readonly activeCodexReviewInterruptTurnIds = new Map<
+    string,
+    string
+  >();
+  private readonly activeReviewSubAgents = new Map<
+    string,
+    ReviewSubAgentRecord
+  >();
   private readonly reviewSubAgentsByReviewTurn = new Map<
     string,
     ReviewSubAgentRecord
@@ -4823,7 +5033,10 @@ export class DesktopBackendRegistry {
     string,
     CodexNativeSubAgentReconciliation
   >();
-  private readonly observedCodexSettingsByThread = new Map<string, ObservedCodexSettings>();
+  private readonly observedCodexSettingsByThread = new Map<
+    string,
+    ObservedCodexSettings
+  >();
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
@@ -4851,21 +5064,22 @@ export class DesktopBackendRegistry {
   private automationInspectionHandler?: AutomationInspectionHandler;
   private appManagementHandler?: PwrAgentAppManagementHandler;
   private messagingAgentToolService?: MessagingAgentToolService;
-  private readonly messagingHandler: PwrAgentMessagingHandler =
-    async (request) => {
-      if (!this.messagingAgentToolService) {
-        return {
-          ok: false,
-          error: {
-            code: "unsupported_operation",
-            message: "PwrAgent messaging context tools are not available.",
-          },
-        };
-      }
-      return await this.messagingAgentToolService.handlePwrAgentMessagingRequest(
-        request,
-      );
-    };
+  private readonly messagingHandler: PwrAgentMessagingHandler = async (
+    request,
+  ) => {
+    if (!this.messagingAgentToolService) {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message: "PwrAgent messaging context tools are not available.",
+        },
+      };
+    }
+    return await this.messagingAgentToolService.handlePwrAgentMessagingRequest(
+      request,
+    );
+  };
   private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
     async (request) => await this.handleThreadInspectionRequest(request);
   private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
@@ -4903,7 +5117,10 @@ export class DesktopBackendRegistry {
       flushAttempts: number;
     }
   >();
-  private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
+  private readonly queuedExecutionModeFlushes = new Map<
+    string,
+    Promise<void>
+  >();
   private readonly acpSessionPromptLocks = new PerKeyAsyncLock();
   private readonly queuedAcpRuntimeOptions = new Map<
     string,
@@ -4919,7 +5136,10 @@ export class DesktopBackendRegistry {
       toLabel?: string;
     }
   >();
-  private readonly queuedAcpRuntimeOptionFlushes = new Map<string, Promise<void>>();
+  private readonly queuedAcpRuntimeOptionFlushes = new Map<
+    string,
+    Promise<void>
+  >();
   /**
    * Per-thread async chain serialising read-modify-write of
    * codexEnvironmentRuntime. Concurrent Run-button clicks and
@@ -4987,13 +5207,13 @@ export class DesktopBackendRegistry {
     ) => Promise<LinkedDirectorySummary | undefined>;
   }) {
     const replayClients = createReplayClientsFromEnv();
-    const codexCapture = options?.codexClient
-      || replayClients
-      ? undefined
-      : createProtocolCaptureFromEnv({
-          backend: "codex",
-          backendInstance: "default",
-        });
+    const codexCapture =
+      options?.codexClient || replayClients
+        ? undefined
+        : createProtocolCaptureFromEnv({
+            backend: "codex",
+            backendInstance: "default",
+          });
     if (codexCapture) {
       this.captureStores.push(codexCapture.store);
     }
@@ -5003,13 +5223,13 @@ export class DesktopBackendRegistry {
         backend: "codex",
       }),
     ]);
-    const grokCapture = options?.grokClient
-      || replayClients
-      ? undefined
-      : createProtocolCaptureFromEnv({
-          backend: "grok",
-          backendInstance: "default",
-        });
+    const grokCapture =
+      options?.grokClient || replayClients
+        ? undefined
+        : createProtocolCaptureFromEnv({
+            backend: "grok",
+            backendInstance: "default",
+          });
     if (grokCapture) {
       this.captureStores.push(grokCapture.store);
     }
@@ -5025,8 +5245,8 @@ export class DesktopBackendRegistry {
       ? getDesktopSettingsService()
       : undefined;
     this.resolveCodexDefaultModeRequestUserInputFn =
-      options?.resolveCodexDefaultModeRequestUserInput ??
-      (() => {
+      options?.resolveCodexDefaultModeRequestUserInput
+      ?? (() => {
         try {
           return (
             settingsService?.resolveCodexDefaultModeRequestUserInput() ?? false
@@ -5049,10 +5269,11 @@ export class DesktopBackendRegistry {
     this.codexEnvironmentCommandEnv = codexEnv;
     this.codexEnvironmentCommandRunner = options?.codexEnvironmentCommandRunner;
     this.codexEnvironmentHydrationStore =
-      options?.codexEnvironmentHydrationStore ??
-      createDefaultCodexEnvironmentHydrationStore();
+      options?.codexEnvironmentHydrationStore
+      ?? createDefaultCodexEnvironmentHydrationStore();
     const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
-    const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
+    const createsLiveGrokClient =
+      !options?.grokClient && !replayClients?.grokClient;
     const resolveLiveGrokApiKey = (): string | undefined => {
       if (!resolveAgentCoreGrokEnabled()) {
         return undefined;
@@ -5063,9 +5284,9 @@ export class DesktopBackendRegistry {
     const clientVersion =
       typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
     this.codexClient =
-      options?.codexClient ??
-      replayClients?.codexClient ??
-      new CodexAppServerClient({
+      options?.codexClient
+      ?? replayClients?.codexClient
+      ?? new CodexAppServerClient({
         args: settingsService ? undefined : buildCodexClientArgs(codexEnv),
         command: codexCommand,
         connectionObserver: codexObserver,
@@ -5089,30 +5310,30 @@ export class DesktopBackendRegistry {
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
     this.grokClient =
-      options?.grokClient ??
-      replayClients?.grokClient ??
-      new GrokAppServerClient({
+      options?.grokClient
+      ?? replayClients?.grokClient
+      ?? new GrokAppServerClient({
         resolveApiKey: resolveLiveGrokApiKey,
         connectionObserver: grokObserver,
       });
     this.acpWorktreeRepositoryResolver =
-      options?.acpWorktreeRepositoryResolver ??
-      resolveWorktreeRepositoryDirectory;
+      options?.acpWorktreeRepositoryResolver
+      ?? resolveWorktreeRepositoryDirectory;
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
     this.gitDirectoryService =
-      options?.gitDirectoryService ??
-      new GitDirectoryService({
+      options?.gitDirectoryService
+      ?? new GitDirectoryService({
         codexHome,
         gitEnv: codexEnv,
         resolveWorktreeStorage: () =>
           getDesktopSettingsService().resolveWorktreeStorage(),
       });
     this.gitWorkingStateService =
-      options?.gitWorkingStateService ??
-      new GitWorkingStateService({ gitEnv: codexEnv });
+      options?.gitWorkingStateService
+      ?? new GitWorkingStateService({ gitEnv: codexEnv });
     this.worktreeArchiveService =
-      options?.worktreeArchiveService ??
-      new WorktreeArchiveService({ gitEnv: codexEnv });
+      options?.worktreeArchiveService
+      ?? new WorktreeArchiveService({ gitEnv: codexEnv });
     this.acpBackend = new AcpBackendAdapter({
       acpAgentStore: options?.acpAgentStore,
       acpSessionStore: options?.acpSessionStore,
@@ -5123,15 +5344,15 @@ export class DesktopBackendRegistry {
       handleServerRequest: async (backend, request) =>
         await this.handleServerRequest(backend, request),
       automationInspectionMcpCommand:
-        options?.automationInspectionMcpCommand ??
-        resolveAutomationInspectionMcpCommand(),
+        options?.automationInspectionMcpCommand
+        ?? resolveAutomationInspectionMcpCommand(),
     });
     this.messagingStore = options?.messagingStore;
     this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
     this.appManagementHandler = options?.appManagementHandler ?? undefined;
     this.gitWorkspaceHandoffService =
-      options?.gitWorkspaceHandoffService ??
-      new GitWorkspaceHandoffService({
+      options?.gitWorkspaceHandoffService
+      ?? new GitWorkspaceHandoffService({
         gitEnv: codexEnv,
         worktreeArchiveService: this.worktreeArchiveService,
         resolveWorktreeStorage: () =>
@@ -5142,8 +5363,8 @@ export class DesktopBackendRegistry {
     this.threadTitleGenerationService =
       options?.threadTitleGenerationService === null
         ? undefined
-        : options?.threadTitleGenerationService ??
-          (replayClients
+        : (options?.threadTitleGenerationService
+          ?? (replayClients
             ? createReplayThreadTitleService()
             : new ThreadTitleGenerationService({
                 generators: {
@@ -5180,10 +5401,10 @@ export class DesktopBackendRegistry {
                           this.acpBackend.getSession(acpBackend, threadId),
                       })
                     : undefined,
-              }));
+              })));
     this.threadInspectionSearchService =
       options && "threadSearchService" in options
-        ? options.threadSearchService ?? null
+        ? (options.threadSearchService ?? null)
         : options?.codexClient || options?.grokClient || replayClients
           ? null
           : undefined;
@@ -5195,8 +5416,8 @@ export class DesktopBackendRegistry {
       startTurn: async (entry) => await this.startTurnNow(entry),
       isThreadActive: ({ backend, threadId }) =>
         backend === "codex"
-          ? this.threadHasActiveTurn(threadId) ||
-            this.threadHasBlockingWorkspaceMove({ backend, threadId })
+          ? this.threadHasActiveTurn(threadId)
+            || this.threadHasBlockingWorkspaceMove({ backend, threadId })
           : false,
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
@@ -5210,8 +5431,8 @@ export class DesktopBackendRegistry {
     this.taskMonitorWatchdogTimer.unref?.();
 
     this.isCodexBootstrapDeferredFn =
-      options?.isCodexBootstrapDeferred ??
-      (() => {
+      options?.isCodexBootstrapDeferred
+      ?? (() => {
         try {
           return getDesktopSettingsService().isCodexBootstrapDeferred();
         } catch (error) {
@@ -5261,7 +5482,8 @@ export class DesktopBackendRegistry {
   private readonly registrySessionStartedAt = Date.now();
 
   private async cleanupStaleCodexEnvironmentRuntimes(): Promise<void> {
-    const lister = this.overlayStore.listThreadOverlaysWithCodexEnvironmentRuntime;
+    const lister =
+      this.overlayStore.listThreadOverlaysWithCodexEnvironmentRuntime;
     if (!lister) {
       // Test overlay mocks or older overlay-store implementations may
       // not expose the bulk reader. Skip cleanup silently.
@@ -5292,48 +5514,51 @@ export class DesktopBackendRegistry {
           if (runs.length === 0) return;
           let changed = false;
           const nextRuns = runs.map((run) => {
-        // For "started" runs, decide ownership by timestamp: anything
-        // started before this registry session is a zombie (detached
-        // children with piped stdio died via SIGPIPE when the prior
-        // process exited). Anything started at or after sessionStartedAt
-        // was kicked off by this session and must be left alone — the
-        // cleanup is fire-and-forget so a fast user Run-click could
-        // land a fresh entry before this iteration commits.
-        //
-        // Legacy-synthesised runs (from overlays written before
-        // actionStartedAt existed) carry startedAt=0, which correctly
-        // falls into the "before this session" bucket and gets
-        // converted — fixing the regression where the renderer would
-        // show a stale, undismissable "running" anchor after a parent
-        // crash.
-        if (run.status === "started") {
-          const startedAt = run.startedAt ?? 0;
-          if (startedAt >= sessionStartedAt) {
+            // For "started" runs, decide ownership by timestamp: anything
+            // started before this registry session is a zombie (detached
+            // children with piped stdio died via SIGPIPE when the prior
+            // process exited). Anything started at or after sessionStartedAt
+            // was kicked off by this session and must be left alone — the
+            // cleanup is fire-and-forget so a fast user Run-click could
+            // land a fresh entry before this iteration commits.
+            //
+            // Legacy-synthesised runs (from overlays written before
+            // actionStartedAt existed) carry startedAt=0, which correctly
+            // falls into the "before this session" bucket and gets
+            // converted — fixing the regression where the renderer would
+            // show a stale, undismissable "running" anchor after a parent
+            // crash.
+            if (run.status === "started") {
+              const startedAt = run.startedAt ?? 0;
+              if (startedAt >= sessionStartedAt) {
+                return run;
+              }
+              changed = true;
+              bytesShed += run.output?.length ?? 0;
+              zombiesConverted += 1;
+              return {
+                ...run,
+                status: "failed" as const,
+                output: undefined,
+                exitedAt: run.exitedAt ?? run.startedAt ?? sessionStartedAt,
+                durationMs:
+                  run.durationMs
+                  ?? Math.max(
+                    0,
+                    (run.exitedAt ?? sessionStartedAt) - startedAt,
+                  ),
+              };
+            }
+            // Finished runs: shed bytes only if their latest activity
+            // predates this session.
+            const latestAt = Math.max(run.exitedAt ?? 0, run.startedAt ?? 0);
+            if (latestAt > 0 && latestAt < sessionStartedAt && run.output) {
+              changed = true;
+              bytesShed += run.output.length;
+              return { ...run, output: undefined };
+            }
             return run;
-          }
-          changed = true;
-          bytesShed += run.output?.length ?? 0;
-          zombiesConverted += 1;
-          return {
-            ...run,
-            status: "failed" as const,
-            output: undefined,
-            exitedAt: run.exitedAt ?? run.startedAt ?? sessionStartedAt,
-            durationMs:
-              run.durationMs ??
-              Math.max(0, (run.exitedAt ?? sessionStartedAt) - startedAt),
-          };
-        }
-        // Finished runs: shed bytes only if their latest activity
-        // predates this session.
-        const latestAt = Math.max(run.exitedAt ?? 0, run.startedAt ?? 0);
-        if (latestAt > 0 && latestAt < sessionStartedAt && run.output) {
-          changed = true;
-          bytesShed += run.output.length;
-          return { ...run, output: undefined };
-        }
-        return run;
-      });
+          });
           if (!changed) return;
           cleanedThreads += 1;
           const nextRuntime: CodexThreadEnvironmentRuntime = {
@@ -5424,7 +5649,8 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.agentThreadId,
     });
-    const executionMode = params.executionMode ?? overlay?.executionMode ?? "default";
+    const executionMode =
+      params.executionMode ?? overlay?.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const approvalPolicy = "never";
     const sandbox = modeSettings.sandbox;
@@ -5434,12 +5660,12 @@ export class DesktopBackendRegistry {
       reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
       fastMode:
         params.backend === "codex"
-          ? params.fastMode ?? overlay?.fastMode
+          ? (params.fastMode ?? overlay?.fastMode)
           : undefined,
     });
     const cwd =
-      params.cwd ??
-      (params.backend === "codex"
+      params.cwd
+      ?? (params.backend === "codex"
         ? await this.resolveThreadEnvironmentCwd(
             params.backend,
             params.agentThreadId,
@@ -5505,7 +5731,11 @@ export class DesktopBackendRegistry {
       turnId: turn.turnId,
     });
     this.headlessAutomationTurns.set(
-      buildHeadlessAutomationTurnKey(params.backend, turn.threadId, turn.turnId),
+      buildHeadlessAutomationTurnKey(
+        params.backend,
+        turn.threadId,
+        turn.turnId,
+      ),
       {
         agentThreadId: params.agentThreadId,
         automationName: params.automationName,
@@ -5608,12 +5838,12 @@ export class DesktopBackendRegistry {
       ...(request.configPath ? { configPath: request.configPath } : {}),
     });
     if (
-      this.latestCodexConfigWarning?.notification.method === "configWarning" &&
-      this.latestCodexConfigWarning.notification.params.trustedProjectPath ===
-        request.projectPath &&
-      (!request.configPath ||
-        this.latestCodexConfigWarning.notification.params.configPath ===
-          request.configPath)
+      this.latestCodexConfigWarning?.notification.method === "configWarning"
+      && this.latestCodexConfigWarning.notification.params.trustedProjectPath
+        === request.projectPath
+      && (!request.configPath
+        || this.latestCodexConfigWarning.notification.params.configPath
+          === request.configPath)
     ) {
       this.latestCodexConfigWarning = undefined;
     }
@@ -5625,7 +5855,7 @@ export class DesktopBackendRegistry {
   }
 
   async listBackends(
-    request: ListBackendsRequest = {}
+    request: ListBackendsRequest = {},
   ): Promise<ListBackendsResponse> {
     const agentCoreGrokEnabled = resolveAgentCoreGrokEnabled();
     // When the experimental agent-core Grok feature is off, omit the backend
@@ -5647,7 +5877,9 @@ export class DesktopBackendRegistry {
       fetchedAt: Date.now(),
       backends: request.includeUnavailable
         ? [...summaries, ...acpSummaries]
-        : [...summaries, ...acpSummaries].filter((backend) => backend.available),
+        : [...summaries, ...acpSummaries].filter(
+            (backend) => backend.available,
+          ),
     };
   }
 
@@ -5671,17 +5903,19 @@ export class DesktopBackendRegistry {
     }
   }
 
-  async listThreads(params: {
-    archived?: boolean;
-    backend?: AppServerBackendKind;
-    callerReason?: ThreadListCallerReason;
-    enrichDirectories?: boolean;
-    filter?: string;
-    forceRefresh?: boolean;
-    limit?: number;
-    maxPages?: number;
-    skipArchivedMetadataRefresh?: boolean;
-  } = {}): Promise<AppServerThreadSummary[]> {
+  async listThreads(
+    params: {
+      archived?: boolean;
+      backend?: AppServerBackendKind;
+      callerReason?: ThreadListCallerReason;
+      enrichDirectories?: boolean;
+      filter?: string;
+      forceRefresh?: boolean;
+      limit?: number;
+      maxPages?: number;
+      skipArchivedMetadataRefresh?: boolean;
+    } = {},
+  ): Promise<AppServerThreadSummary[]> {
     // Hard gate: the bootstrap profile MUST NEVER serve thread data,
     // regardless of what the bootstrap config.toml's onboarding
     // flags say. Concretely this guards the post-wizard dev window:
@@ -5705,8 +5939,8 @@ export class DesktopBackendRegistry {
     // "Finish setup to see your threads" empty state for Codex without
     // contaminating it with arbitrary-identity Codex data.
     if (
-      (params.backend === "codex" || params.backend === undefined) &&
-      this.isCodexBootstrapDeferredFn()
+      (params.backend === "codex" || params.backend === undefined)
+      && this.isCodexBootstrapDeferredFn()
     ) {
       if (params.backend === "codex") {
         return [];
@@ -5718,13 +5952,20 @@ export class DesktopBackendRegistry {
     const normalizedParams = {
       ...params,
       enrichDirectories:
-        params.enrichDirectories ?? shouldEnrichThreadDirectories(params.callerReason),
+        params.enrichDirectories
+        ?? shouldEnrichThreadDirectories(params.callerReason),
       agentCoreGrokEnabled:
-        params.backend === undefined ? resolveAgentCoreGrokEnabled() : undefined,
+        params.backend === undefined
+          ? resolveAgentCoreGrokEnabled()
+          : undefined,
     };
     const cacheKey = this.buildThreadListCacheKey(normalizedParams);
     const now = Date.now();
-    const cached = this.findReusableThreadListCache(normalizedParams, cacheKey, now);
+    const cached = this.findReusableThreadListCache(
+      normalizedParams,
+      cacheKey,
+      now,
+    );
     if (cached) {
       logDebug("threadListCache:hit", {
         archived: normalizedParams.archived === true,
@@ -5832,14 +6073,17 @@ export class DesktopBackendRegistry {
         backend: "codex",
         diagnostics,
         filter: params.filter,
-        threads: await this.listCodexThreads({
-          archived: params.archived,
-          enrichDirectories: params.enrichDirectories,
-          filter: params.filter,
-          limit: params.limit,
-          maxPages: params.maxPages,
-          skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
-        }, diagnostics),
+        threads: await this.listCodexThreads(
+          {
+            archived: params.archived,
+            enrichDirectories: params.enrichDirectories,
+            filter: params.filter,
+            limit: params.limit,
+            maxPages: params.maxPages,
+            skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
+          },
+          diagnostics,
+        ),
       });
       if (!params.skipArchivedMetadataRefresh) {
         this.scheduleThreadListArchiveStateCleanup({
@@ -5860,10 +6104,13 @@ export class DesktopBackendRegistry {
         filter: params.filter,
         threads: this.withPendingStartedThreads(
           "grok",
-          await this.grokClient.listThreads({
-            archived: params.archived,
-            filter: params.filter,
-          }, diagnostics),
+          await this.grokClient.listThreads(
+            {
+              archived: params.archived,
+              filter: params.filter,
+            },
+            diagnostics,
+          ),
           params,
         ),
       });
@@ -5929,23 +6176,29 @@ export class DesktopBackendRegistry {
     try {
       const activeThreads =
         params.backend === "codex"
-          ? await this.listCodexThreads({
-              archived: false,
-              enrichDirectories: false,
-              filter: params.filter,
-            }, {
-              ...params.diagnostics,
-              callerReason: `${params.diagnostics.callerReason}:active-archive-filter`,
-            })
-          : this.withPendingStartedThreads(
-              "grok",
-              await this.grokClient.listThreads({
+          ? await this.listCodexThreads(
+              {
                 archived: false,
+                enrichDirectories: false,
                 filter: params.filter,
-              }, {
+              },
+              {
                 ...params.diagnostics,
                 callerReason: `${params.diagnostics.callerReason}:active-archive-filter`,
-              }),
+              },
+            )
+          : this.withPendingStartedThreads(
+              "grok",
+              await this.grokClient.listThreads(
+                {
+                  archived: false,
+                  filter: params.filter,
+                },
+                {
+                  ...params.diagnostics,
+                  callerReason: `${params.diagnostics.callerReason}:active-archive-filter`,
+                },
+              ),
               { archived: false, filter: params.filter },
             );
       const activeThreadIds = new Set(activeThreads.map((thread) => thread.id));
@@ -5954,14 +6207,17 @@ export class DesktopBackendRegistry {
       );
       const filteredCount = params.threads.length - filteredThreads.length;
       if (filteredCount > 0) {
-        backendRegistryLog.info("archived thread list filtered active duplicates", {
-          backend: params.backend,
-          filteredCount,
-          threadIds: params.threads
-            .filter((thread) => activeThreadIds.has(thread.id))
-            .slice(0, 10)
-            .map((thread) => thread.id),
-        });
+        backendRegistryLog.info(
+          "archived thread list filtered active duplicates",
+          {
+            backend: params.backend,
+            filteredCount,
+            threadIds: params.threads
+              .filter((thread) => activeThreadIds.has(thread.id))
+              .slice(0, 10)
+              .map((thread) => thread.id),
+          },
+        );
       }
       return filteredThreads;
     } catch (error) {
@@ -5973,12 +6229,14 @@ export class DesktopBackendRegistry {
     }
   }
 
-  async listSkills(params: {
-    backend?: AppServerBackendKind;
-    cwd?: string;
-    cwds?: string[];
-    threadId?: string;
-  } = {}): Promise<Pick<AppServerListSkillsResponse, "data">> {
+  async listSkills(
+    params: {
+      backend?: AppServerBackendKind;
+      cwd?: string;
+      cwds?: string[];
+      threadId?: string;
+    } = {},
+  ): Promise<Pick<AppServerListSkillsResponse, "data">> {
     const backend = params.backend ?? "codex";
     if (isAcpBackendId(backend)) {
       if (!params.threadId) {
@@ -6063,8 +6321,8 @@ export class DesktopBackendRegistry {
           threadId: thread.id,
         });
         const executionMode =
-          this.latestAppliedExecutionModeFromOverlay(overlay) ??
-          thread.executionMode;
+          this.latestAppliedExecutionModeFromOverlay(overlay)
+          ?? thread.executionMode;
         const cwd = resolveThreadWorkspaceCwd(
           thread,
           overlay?.extraLinkedDirectories ?? [],
@@ -6081,16 +6339,17 @@ export class DesktopBackendRegistry {
         return {
           ...thread,
           executionMode,
-          linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(linkedDirectories),
+          linkedDirectories:
+            dedupeLinkedDirectoriesByNormalizedIdentity(linkedDirectories),
           codexEnvironmentOptions,
         };
       }),
     );
     return enrichedThreads.filter(
       (thread) =>
-        !normalizedFilter ||
-        thread.title.toLowerCase().includes(normalizedFilter) ||
-        thread.id.toLowerCase().includes(normalizedFilter),
+        !normalizedFilter
+        || thread.title.toLowerCase().includes(normalizedFilter)
+        || thread.id.toLowerCase().includes(normalizedFilter),
     );
   }
 
@@ -6195,8 +6454,8 @@ export class DesktopBackendRegistry {
       acpRuntime: params.acpRuntime,
     });
     if (
-      this.usesSlashControlledAcpExecutionModes(params.backend) &&
-      params.executionMode !== "default"
+      this.usesSlashControlledAcpExecutionModes(params.backend)
+      && params.executionMode !== "default"
     ) {
       await this.applySlashControlledAcpThreadExecutionMode({
         backend: params.backend,
@@ -6204,7 +6463,11 @@ export class DesktopBackendRegistry {
         executionMode: params.executionMode,
       });
     }
-    await this.applyAcpRuntimeSelection(client, session.sessionId, params.acpRuntime);
+    await this.applyAcpRuntimeSelection(
+      client,
+      session.sessionId,
+      params.acpRuntime,
+    );
     return { threadId: session.sessionId };
   }
 
@@ -6212,7 +6475,11 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
     input: AppServerTurnInputItem[];
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+  }): Promise<{
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }> {
     return await this.acpSessionPromptLocks.run(
       executionModeQueueKey(params.backend, params.threadId),
       async () => await this.startAcpTurnLocked(params),
@@ -6223,7 +6490,11 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
     input: AppServerTurnInputItem[];
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+  }): Promise<{
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }> {
     const promptPayload = inputToAcpPrompt(params.input);
     if (!promptPayload) {
       throw new Error("ACP turns require text or image input");
@@ -6234,13 +6505,22 @@ export class DesktopBackendRegistry {
     if (!session) {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
-    let sessionForTurn = await this.resolveAcpSessionForTurn(params.backend, session);
+    let sessionForTurn = await this.resolveAcpSessionForTurn(
+      params.backend,
+      session,
+    );
     if (
-      sessionForTurn.requiresAgentSessionRebind ||
-      (sessionForTurn.cwd && sessionForTurn.cwd !== session.cwd)
+      sessionForTurn.requiresAgentSessionRebind
+      || (sessionForTurn.cwd && sessionForTurn.cwd !== session.cwd)
     ) {
-      await this.assertAcpSessionCanRebindForWorkspace(params.backend, sessionForTurn);
-      sessionForTurn = await this.rebindAcpSessionForWorkspace(client, sessionForTurn);
+      await this.assertAcpSessionCanRebindForWorkspace(
+        params.backend,
+        sessionForTurn,
+      );
+      sessionForTurn = await this.rebindAcpSessionForWorkspace(
+        client,
+        sessionForTurn,
+      );
     } else {
       try {
         await client.ensureSession(sessionForTurn);
@@ -6248,8 +6528,14 @@ export class DesktopBackendRegistry {
         if (!isAcpSessionMissingForProjectError(error)) {
           throw error;
         }
-        await this.assertAcpSessionCanRebindForWorkspace(params.backend, sessionForTurn);
-        sessionForTurn = await this.rebindAcpSessionForWorkspace(client, sessionForTurn);
+        await this.assertAcpSessionCanRebindForWorkspace(
+          params.backend,
+          sessionForTurn,
+        );
+        sessionForTurn = await this.rebindAcpSessionForWorkspace(
+          client,
+          sessionForTurn,
+        );
       }
     }
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
@@ -6311,7 +6597,9 @@ export class DesktopBackendRegistry {
     sessionId: string,
     runtime: BackendAcpSessionRuntimeState | undefined,
   ): Promise<void> {
-    for (const [optionId, value] of Object.entries(runtime?.configValues ?? {})) {
+    for (const [optionId, value] of Object.entries(
+      runtime?.configValues ?? {},
+    )) {
       await client.setRuntimeOption?.({
         sessionId,
         source: "configOption",
@@ -6341,14 +6629,19 @@ export class DesktopBackendRegistry {
     params: SetAcpSessionRuntimeOptionRequest,
   ): Promise<SetAcpSessionRuntimeOptionResponse> {
     if (!isAcpBackendId(params.backend)) {
-      throw new Error("ACP runtime options are only available for ACP backends");
+      throw new Error(
+        "ACP runtime options are only available for ACP backends",
+      );
     }
     const session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session) {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
 
-    const currentValue = this.readAcpRuntimeOptionValue(session.acpRuntime, params);
+    const currentValue = this.readAcpRuntimeOptionValue(
+      session.acpRuntime,
+      params,
+    );
     if (currentValue === params.value) {
       return {
         backend: params.backend,
@@ -6378,9 +6671,20 @@ export class DesktopBackendRegistry {
     }
     const queuedAt = Date.now();
     const queueId = randomUUID();
-    const queueKey = this.buildAcpRuntimeQueueKey(params.backend, params.threadId);
-    const fromLabel = this.formatAcpRuntimeOptionLabel(params.backend, params, fromValue);
-    const toLabel = this.formatAcpRuntimeOptionLabel(params.backend, params, params.value);
+    const queueKey = this.buildAcpRuntimeQueueKey(
+      params.backend,
+      params.threadId,
+    );
+    const fromLabel = this.formatAcpRuntimeOptionLabel(
+      params.backend,
+      params,
+      fromValue,
+    );
+    const toLabel = this.formatAcpRuntimeOptionLabel(
+      params.backend,
+      params,
+      params.value,
+    );
     this.queuedAcpRuntimeOptions.set(queueKey, {
       source: params.source,
       optionId: params.optionId,
@@ -6434,7 +6738,9 @@ export class DesktopBackendRegistry {
     },
   ): Promise<SetAcpSessionRuntimeOptionResponse> {
     if (!isAcpBackendId(params.backend)) {
-      throw new Error("ACP runtime options are only available for ACP backends");
+      throw new Error(
+        "ACP runtime options are only available for ACP backends",
+      );
     }
     const session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session) {
@@ -6443,7 +6749,8 @@ export class DesktopBackendRegistry {
     const client = await this.acpBackend.getClient(params.backend);
     await client.ensureSession?.(session);
     const fromValue =
-      options?.fromValue ?? this.readAcpRuntimeOptionValue(session.acpRuntime, params);
+      options?.fromValue
+      ?? this.readAcpRuntimeOptionValue(session.acpRuntime, params);
     const runtimeState = this.normalizeAcpRuntimeSelectionState(
       params,
       await client.setRuntimeOption?.({
@@ -6453,7 +6760,10 @@ export class DesktopBackendRegistry {
         value: params.value,
       }),
     );
-    const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);
+    const mergedRuntime = mergeAcpRuntimeState(
+      session.acpRuntime,
+      runtimeState,
+    );
     const nextExecutionMode = this.isAcpRuntimeExecutionModeOption(params)
       ? acpRuntimeValueLooksPrivileged(params.value)
         ? "full-access"
@@ -6463,15 +6773,18 @@ export class DesktopBackendRegistry {
       ...session,
       acpRuntime: mergedRuntime,
       executionMode: nextExecutionMode,
-      updatedAt: Math.max(session.updatedAt, runtimeState?.updatedAt ?? Date.now()),
+      updatedAt: Math.max(
+        session.updatedAt,
+        runtimeState?.updatedAt ?? Date.now(),
+      ),
     });
 
     const fromLabel =
-      options?.fromLabel ??
-      this.formatAcpRuntimeOptionLabel(params.backend, params, fromValue);
+      options?.fromLabel
+      ?? this.formatAcpRuntimeOptionLabel(params.backend, params, fromValue);
     const toLabel =
-      options?.toLabel ??
-      this.formatAcpRuntimeOptionLabel(params.backend, params, params.value);
+      options?.toLabel
+      ?? this.formatAcpRuntimeOptionLabel(params.backend, params, params.value);
     await this.appendPermissionTransition({
       backend: params.backend,
       threadId: params.threadId,
@@ -6538,7 +6851,11 @@ export class DesktopBackendRegistry {
     if (!this.queuedAcpRuntimeOptions.delete(queueKey)) {
       return;
     }
-    const flush = this.applyClaimedQueuedAcpRuntimeOption(backend, threadId, queue);
+    const flush = this.applyClaimedQueuedAcpRuntimeOption(
+      backend,
+      threadId,
+      queue,
+    );
     this.queuedAcpRuntimeOptionFlushes.set(queueKey, flush);
     try {
       await flush;
@@ -6614,33 +6931,45 @@ export class DesktopBackendRegistry {
         );
         return;
       }
-      this.queuedAcpRuntimeOptions.set(this.buildAcpRuntimeQueueKey(backend, threadId), {
-        ...queue,
-        queuedAt: Date.now(),
-        flushAttempts: attempts,
-      });
-      backendRegistryLog.warn("queued ACP runtime option flush failed; will retry", {
-        backend,
-        threadId,
-        queueId: queue.queueId,
-        attempts,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      this.queuedAcpRuntimeOptions.set(
+        this.buildAcpRuntimeQueueKey(backend, threadId),
+        {
+          ...queue,
+          queuedAt: Date.now(),
+          flushAttempts: attempts,
+        },
+      );
+      backendRegistryLog.warn(
+        "queued ACP runtime option flush failed; will retry",
+        {
+          backend,
+          threadId,
+          queueId: queue.queueId,
+          attempts,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
     }
   }
 
-  private buildAcpRuntimeQueueKey(backend: AcpBackendId, threadId: string): string {
+  private buildAcpRuntimeQueueKey(
+    backend: AcpBackendId,
+    threadId: string,
+  ): string {
     return `${backend}:${threadId}`;
   }
 
   private readAcpRuntimeOptionValue(
     runtime: BackendAcpSessionRuntimeState | undefined,
-    params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
+    params: Pick<
+      SetAcpSessionRuntimeOptionRequest,
+      "backend" | "source" | "optionId"
+    >,
   ): string | undefined {
     if (
-      params.source === "configOption" &&
-      runtime?.currentModeId &&
-      this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
+      params.source === "configOption"
+      && runtime?.currentModeId
+      && this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
     ) {
       return runtime.currentModeId;
     }
@@ -6663,8 +6992,11 @@ export class DesktopBackendRegistry {
             currentModelId: params.value,
             updatedAt,
           }
-        : params.source === "mode" ||
-            this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
+        : params.source === "mode"
+            || this.isAcpRuntimeModeConfigOption(
+              params.backend,
+              params.optionId,
+            )
           ? {
               configValues:
                 params.source === "configOption"
@@ -6696,11 +7028,14 @@ export class DesktopBackendRegistry {
   }
 
   private isAcpRuntimeExecutionModeOption(
-    params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
+    params: Pick<
+      SetAcpSessionRuntimeOptionRequest,
+      "backend" | "source" | "optionId"
+    >,
   ): boolean {
     return (
-      params.source === "mode" ||
-      this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
+      params.source === "mode"
+      || this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
     );
   }
 
@@ -6712,17 +7047,24 @@ export class DesktopBackendRegistry {
     if (!value) {
       return undefined;
     }
-    const runtime = this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
+    const runtime =
+      this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
     if (params.source === "configOption") {
-      const option = runtime?.configOptions?.find((item) => item.id === params.optionId);
+      const option = runtime?.configOptions?.find(
+        (item) => item.id === params.optionId,
+      );
       const label = option?.values.find((item) => item.value === value)?.label;
       return formatAcpRuntimeLabel(label ?? value);
     }
     if (params.source === "model") {
-      const label = runtime?.models?.availableModels.find((model) => model.id === value)?.label;
+      const label = runtime?.models?.availableModels.find(
+        (model) => model.id === value,
+      )?.label;
       return formatAcpRuntimeLabel(label ?? value);
     }
-    const label = runtime?.modes?.availableModes.find((mode) => mode.id === value)?.label;
+    const label = runtime?.modes?.availableModes.find(
+      (mode) => mode.id === value,
+    )?.label;
     return formatAcpRuntimeLabel(label ?? value);
   }
 
@@ -6794,7 +7136,8 @@ export class DesktopBackendRegistry {
         threadId: request.threadId,
       });
     } catch (error) {
-      cleanupMetadataError = error instanceof Error ? error.message : String(error);
+      cleanupMetadataError =
+        error instanceof Error ? error.message : String(error);
       backendRegistryLog.warn("archive cleanup metadata lookup failed", {
         backend,
         threadId: request.threadId,
@@ -6804,8 +7147,10 @@ export class DesktopBackendRegistry {
 
     const result =
       backend === "codex"
-        ? await this.withCodexThreadClient(request.threadId, async (client) =>
-            await this.archiveWithClient(client, request.threadId),
+        ? await this.withCodexThreadClient(
+            request.threadId,
+            async (client) =>
+              await this.archiveWithClient(client, request.threadId),
           )
         : await this.archiveWithClient(this.grokClient, request.threadId);
     this.invalidateThreadListCache(backend);
@@ -6883,8 +7228,10 @@ export class DesktopBackendRegistry {
     });
     const result =
       backend === "codex"
-        ? await this.withCodexThreadClient(request.threadId, async (client) =>
-            await this.restoreWithClient(client, request.threadId),
+        ? await this.withCodexThreadClient(
+            request.threadId,
+            async (client) =>
+              await this.restoreWithClient(client, request.threadId),
           )
         : await this.restoreWithClient(this.grokClient, request.threadId);
     this.invalidateThreadListCache(backend);
@@ -7001,7 +7348,9 @@ export class DesktopBackendRegistry {
     });
 
     if (!snapshot) {
-      throw new Error("No archived worktree snapshot is available for this thread.");
+      throw new Error(
+        "No archived worktree snapshot is available for this thread.",
+      );
     }
 
     const restoredSnapshot = await this.worktreeArchiveService.restore({
@@ -7030,7 +7379,10 @@ export class DesktopBackendRegistry {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
-    if (request.backend === "codex" && this.threadHasActiveTurn(request.threadId)) {
+    if (
+      request.backend === "codex"
+      && this.threadHasActiveTurn(request.threadId)
+    ) {
       throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
     }
     if (isAcpBackendId(request.backend)) {
@@ -7053,9 +7405,11 @@ export class DesktopBackendRegistry {
     });
     const resultBranch =
       result.strategy === "detached-changes"
-        ? (result.workMode === "local"
-            ? await readCurrentGitBranch(result.targetPath).catch(() => undefined)
-            : undefined) ?? "HEAD"
+        ? ((result.workMode === "local"
+            ? await readCurrentGitBranch(result.targetPath).catch(
+                () => undefined,
+              )
+            : undefined) ?? "HEAD")
         : result.branch;
 
     await this.overlayStore.replaceWorkspaceLinkedDirectory({
@@ -7141,10 +7495,16 @@ export class DesktopBackendRegistry {
     const backend = request.backend ?? "codex";
     let result: { threadId: string };
     if (isAcpBackendId(backend)) {
-      result = await this.renameAcpSession(backend, request.threadId, request.name);
+      result = await this.renameAcpSession(
+        backend,
+        request.threadId,
+        request.name,
+      );
     } else if (backend === "codex") {
-      result = await this.withCodexThreadClient(request.threadId, async (client) =>
-        await this.renameWithClient(client, request.threadId, request.name),
+      result = await this.withCodexThreadClient(
+        request.threadId,
+        async (client) =>
+          await this.renameWithClient(client, request.threadId, request.name),
       );
     } else {
       result = await this.renameWithClient(
@@ -7196,9 +7556,9 @@ export class DesktopBackendRegistry {
     return { threadId };
   }
 
-  async readDirectoryStatuses(directories: NavigationDirectorySummary[]): Promise<
-    Record<string, NavigationDirectoryGitStatus | undefined>
-  > {
+  async readDirectoryStatuses(
+    directories: NavigationDirectorySummary[],
+  ): Promise<Record<string, NavigationDirectoryGitStatus | undefined>> {
     return await this.gitDirectoryService.readDirectoryStatuses(directories);
   }
 
@@ -7212,7 +7572,10 @@ export class DesktopBackendRegistry {
     worktreePaths: string[],
     options?: GitWorkingStateEntryOptions,
   ): AsyncIterable<WorktreeWorkingStateEntry> {
-    return this.gitWorkingStateService.readWorkingStateEntries(worktreePaths, options);
+    return this.gitWorkingStateService.readWorkingStateEntries(
+      worktreePaths,
+      options,
+    );
   }
 
   invalidateWorktreeWorkingState(worktreePath?: string): void {
@@ -7235,7 +7598,10 @@ export class DesktopBackendRegistry {
     worktreePath: string,
     options?: { excludePaths?: string[]; maxFiles?: number },
   ) {
-    return await this.gitWorkingStateService.listOtherChanges(worktreePath, options);
+    return await this.gitWorkingStateService.listOtherChanges(
+      worktreePath,
+      options,
+    );
   }
 
   async getWorktreeOtherChangeDiff(
@@ -7251,7 +7617,7 @@ export class DesktopBackendRegistry {
   }
 
   async readThread(
-    request: AppServerReadThreadRequest
+    request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse> {
     this.assertNotBootstrap("readThread");
     const backend = request.backend ?? "codex";
@@ -7282,7 +7648,11 @@ export class DesktopBackendRegistry {
             limit: request.limit,
           });
 
-    if (backend === "codex" && !request.before && request.includeTurns !== false) {
+    if (
+      backend === "codex"
+      && !request.before
+      && request.includeTurns !== false
+    ) {
       await this.repairCodexThreadDirectoryRelationship({
         reason: "selected-thread",
         threadId: request.threadId,
@@ -7436,14 +7806,18 @@ export class DesktopBackendRegistry {
       );
     }
     let codexEnvironmentRuntime = request.codexEnvironmentRuntime;
-    let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
+    let codexEnvironmentStartupFailure:
+      | CodexEnvironmentStartupFailure
+      | undefined;
     if (backend === "codex" && request.codexEnvironmentRuntime && workMode) {
       try {
-        codexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
+        codexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime(
+          {
             cwd,
             sourceRuntime: request.codexEnvironmentRuntime,
             workMode: effectiveWorkMode ?? "local",
-          });
+          },
+        );
       } catch (error) {
         if (error instanceof CodexEnvironmentStartupError) {
           codexEnvironmentRuntime = error.runtime;
@@ -7490,10 +7864,10 @@ export class DesktopBackendRegistry {
         })
       : acpRuntimeWithDefaults;
     const effectiveExecutionMode =
-      isAcpBackendId(backend) &&
-      acpAgent?.registryId === "qwen" &&
-      executionMode === "default" &&
-      acpRuntimeStateRequiresFullAccess({
+      isAcpBackendId(backend)
+      && acpAgent?.registryId === "qwen"
+      && executionMode === "default"
+      && acpRuntimeStateRequiresFullAccess({
         runtime: acpRuntimeWithModel,
         runtimeCapabilities: acpRuntimeCapabilities,
       })
@@ -7554,7 +7928,8 @@ export class DesktopBackendRegistry {
             ...request,
             ...modelSettings,
             cwd,
-            approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
+            approvalPolicy:
+              request.approvalPolicy ?? modeSettings.approvalPolicy,
             sandbox: request.sandbox ?? modeSettings.sandbox,
             codexEnvironmentRuntime,
             ...(backend === "codex"
@@ -7581,31 +7956,29 @@ export class DesktopBackendRegistry {
     const startedAt = Date.now();
     const pendingThreadKey = buildThreadIdentityKey(backend, result.threadId);
     const agentName = request.agent?.name?.trim();
-    const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
-    this.pendingStartedThreads.set(
-      pendingThreadKey,
-      {
-        id: result.threadId,
-        source: backend,
-        title: agentName || "Untitled thread",
-        titleSource: agentName ? "explicit" : "fallback",
-        projectKey: cwd,
-        createdAt: startedAt,
-        updatedAt: startedAt,
-        executionMode: effectiveExecutionMode,
-        ...modelSettings,
-        acpRuntime,
-        codexEnvironmentRuntime,
-        linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
-          (
-            resolvedLinkedDirectories?.length
-              ? resolvedLinkedDirectories
-              : buildLocalLinkedDirectory(cwd)
-          ).map(normalizeLinkedDirectoryKind),
-        ),
-        gitBranch,
-      },
-    );
+    const gitBranch = cwd
+      ? await readCurrentGitBranch(cwd).catch(() => undefined)
+      : undefined;
+    this.pendingStartedThreads.set(pendingThreadKey, {
+      id: result.threadId,
+      source: backend,
+      title: agentName || "Untitled thread",
+      titleSource: agentName ? "explicit" : "fallback",
+      projectKey: cwd,
+      createdAt: startedAt,
+      updatedAt: startedAt,
+      executionMode: effectiveExecutionMode,
+      ...modelSettings,
+      acpRuntime,
+      codexEnvironmentRuntime,
+      linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+        (resolvedLinkedDirectories?.length
+          ? resolvedLinkedDirectories
+          : buildLocalLinkedDirectory(cwd)
+        ).map(normalizeLinkedDirectoryKind),
+      ),
+      gitBranch,
+    });
     if (effectiveWorkMode === "worktree") {
       await this.recordCodexWorktreeOwnerThread({
         backend,
@@ -7643,10 +8016,10 @@ export class DesktopBackendRegistry {
       });
     }
     if (
-      modelSettings.model !== undefined ||
-      modelSettings.reasoningEffort !== undefined ||
-      modelSettings.serviceTier !== undefined ||
-      modelSettings.fastMode !== undefined
+      modelSettings.model !== undefined
+      || modelSettings.reasoningEffort !== undefined
+      || modelSettings.serviceTier !== undefined
+      || modelSettings.fastMode !== undefined
     ) {
       await this.overlayStore.setThreadModelSettings({
         backend,
@@ -7677,15 +8050,16 @@ export class DesktopBackendRegistry {
       return undefined;
     }
     if (
-      workMode !== "worktree" ||
-      sourceRuntime.executionTarget !== "local" ||
-      !cwd?.trim()
+      workMode !== "worktree"
+      || sourceRuntime.executionTarget !== "local"
+      || !cwd?.trim()
     ) {
       return cloneCodexEnvironmentRuntimeForFork(sourceRuntime, cwd);
     }
 
-    const environment = (await listCodexEnvironmentOptions(cwd))
-      .find((candidate) => candidate.id === sourceRuntime.environmentId);
+    const environment = (await listCodexEnvironmentOptions(cwd)).find(
+      (candidate) => candidate.id === sourceRuntime.environmentId,
+    );
     if (!environment) {
       const message = `Selected Codex environment '${sourceRuntime.environmentName}' is not available in the forked worktree.`;
       const runtime = {
@@ -7693,11 +8067,7 @@ export class DesktopBackendRegistry {
         setupStatus: "failed",
         setupOutput: message,
       } satisfies CodexThreadEnvironmentRuntime;
-      throw new CodexEnvironmentStartupError(
-        message,
-        "setup",
-        runtime,
-      );
+      throw new CodexEnvironmentStartupError(message, "setup", runtime);
     }
 
     const runtime = await applyLocalCodexEnvironmentSelection({
@@ -7733,35 +8103,44 @@ export class DesktopBackendRegistry {
     this.assertNotBootstrap("forkThread");
     const backend = request.backend ?? "codex";
     if (backend !== "codex") {
-      throw new Error("Thread forking is currently supported only by the Codex backend.");
+      throw new Error(
+        "Thread forking is currently supported only by the Codex backend.",
+      );
     }
 
     const executionMode = request.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const modelSettings = await this.resolveModelSettings(backend, request);
     const directoryKind =
-      request.directoryKind ?? (request.directoryPath?.trim() ? "directory" : "workspace");
+      request.directoryKind
+      ?? (request.directoryPath?.trim() ? "directory" : "workspace");
     const directoryLabel =
-      request.directoryLabel?.trim() ||
-      (request.directoryPath ? path.basename(request.directoryPath) : undefined) ||
-      "Forked thread";
+      request.directoryLabel?.trim()
+      || (request.directoryPath
+        ? path.basename(request.directoryPath)
+        : undefined)
+      || "Forked thread";
     const sourceOverlay = await this.overlayStore.getThreadOverlayState({
       backend,
       threadId: request.sourceThreadId,
     });
-    const preparedWorkspace = await this.gitDirectoryService.prepareLaunchpadWorkspace({
-      backend,
-      branchName: request.branchName,
-      directoryKind,
-      directoryLabel,
-      directoryPath: request.directoryPath,
-      ...(request.excludedWorktreePaths
-        ? { excludedWorktreePaths: request.excludedWorktreePaths }
-        : {}),
-      worktreeBranchMode: request.worktreeBranchMode,
-      workMode: request.workMode ?? "local",
-    });
-    if (request.workMode === "worktree" && preparedWorkspace.workMode !== "worktree") {
+    const preparedWorkspace =
+      await this.gitDirectoryService.prepareLaunchpadWorkspace({
+        backend,
+        branchName: request.branchName,
+        directoryKind,
+        directoryLabel,
+        directoryPath: request.directoryPath,
+        ...(request.excludedWorktreePaths
+          ? { excludedWorktreePaths: request.excludedWorktreePaths }
+          : {}),
+        worktreeBranchMode: request.worktreeBranchMode,
+        workMode: request.workMode ?? "local",
+      });
+    if (
+      request.workMode === "worktree"
+      && preparedWorkspace.workMode !== "worktree"
+    ) {
       throw new Error(
         `Requested worktree workspace, but workspace preparation resolved to ${preparedWorkspace.workMode}. Verify the source directory is a Git repository and branchName resolves to an existing branch or ref.`,
       );
@@ -7772,7 +8151,8 @@ export class DesktopBackendRegistry {
       preparedWorkspace.workMode === "worktree"
         ? buildWorktreeLinkedDirectory({
             label: directoryLabel,
-            repositoryPath: preparedWorkspace.repositoryPath ?? request.directoryPath,
+            repositoryPath:
+              preparedWorkspace.repositoryPath ?? request.directoryPath,
             worktreePath: cwd,
           })
         : buildLocalLinkedDirectory(cwd);
@@ -7784,28 +8164,33 @@ export class DesktopBackendRegistry {
     }
 
     let result: { threadId: string };
-    let forkedCodexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
-    let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
+    let forkedCodexEnvironmentRuntime:
+      | CodexThreadEnvironmentRuntime
+      | undefined;
+    let codexEnvironmentStartupFailure:
+      | CodexEnvironmentStartupFailure
+      | undefined;
     try {
       try {
         const sourceRuntime = Object.hasOwn(request, "codexEnvironmentRuntime")
           ? request.codexEnvironmentRuntime
           : sourceOverlay?.codexEnvironmentRuntime;
-        forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
-          cwd,
-          onSetupProgress: request.onCodexEnvironmentSetupProgress
-            ? (event) => {
-                request.onCodexEnvironmentSetupProgress?.({
-                  directoryKey:
-                    request.codexEnvironmentSetupProgressKey ??
-                    `fork:${backend}:${request.sourceThreadId}`,
-                  ...event,
-                });
-              }
-            : undefined,
-          sourceRuntime,
-          workMode: preparedWorkspace.workMode,
-        });
+        forkedCodexEnvironmentRuntime =
+          await this.buildForkedCodexEnvironmentRuntime({
+            cwd,
+            onSetupProgress: request.onCodexEnvironmentSetupProgress
+              ? (event) => {
+                  request.onCodexEnvironmentSetupProgress?.({
+                    directoryKey:
+                      request.codexEnvironmentSetupProgressKey
+                      ?? `fork:${backend}:${request.sourceThreadId}`,
+                    ...event,
+                  });
+                }
+              : undefined,
+            sourceRuntime,
+            workMode: preparedWorkspace.workMode,
+          });
       } catch (error) {
         if (!(error instanceof CodexEnvironmentStartupError)) {
           throw error;
@@ -7836,25 +8221,30 @@ export class DesktopBackendRegistry {
     let gitBranch: string | undefined;
     try {
       const forkedAt = Date.now();
-      gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
-      this.pendingStartedThreads.set(buildThreadIdentityKey(backend, result.threadId), {
-        id: result.threadId,
-        source: backend,
-        title: "Forked thread",
-        titleSource: "fallback",
-        projectKey: cwd,
-        createdAt: forkedAt,
-        updatedAt: forkedAt,
-        executionMode,
-        ...modelSettings,
-        ...(forkedCodexEnvironmentRuntime
-          ? { codexEnvironmentRuntime: forkedCodexEnvironmentRuntime }
-          : {}),
-        linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
-          linkedDirectories.map(normalizeLinkedDirectoryKind),
-        ),
-        gitBranch,
-      });
+      gitBranch = cwd
+        ? await readCurrentGitBranch(cwd).catch(() => undefined)
+        : undefined;
+      this.pendingStartedThreads.set(
+        buildThreadIdentityKey(backend, result.threadId),
+        {
+          id: result.threadId,
+          source: backend,
+          title: "Forked thread",
+          titleSource: "fallback",
+          projectKey: cwd,
+          createdAt: forkedAt,
+          updatedAt: forkedAt,
+          executionMode,
+          ...modelSettings,
+          ...(forkedCodexEnvironmentRuntime
+            ? { codexEnvironmentRuntime: forkedCodexEnvironmentRuntime }
+            : {}),
+          linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+            linkedDirectories.map(normalizeLinkedDirectoryKind),
+          ),
+          gitBranch,
+        },
+      );
 
       if (preparedWorkspace.workMode === "worktree") {
         await this.recordCodexWorktreeOwnerThread({
@@ -7870,10 +8260,10 @@ export class DesktopBackendRegistry {
         executionMode,
       });
       if (
-        modelSettings.model !== undefined ||
-        modelSettings.reasoningEffort !== undefined ||
-        modelSettings.serviceTier !== undefined ||
-        modelSettings.fastMode !== undefined
+        modelSettings.model !== undefined
+        || modelSettings.reasoningEffort !== undefined
+        || modelSettings.serviceTier !== undefined
+        || modelSettings.fastMode !== undefined
       ) {
         await this.overlayStore.setThreadModelSettings({
           backend,
@@ -7912,7 +8302,9 @@ export class DesktopBackendRegistry {
       });
       this.invalidateThreadListCache(backend);
     } catch (error) {
-      this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, result.threadId));
+      this.pendingStartedThreads.delete(
+        buildThreadIdentityKey(backend, result.threadId),
+      );
       await preparedWorkspace.rollback?.();
       request.onPreparedWorkspaceRollback?.(undefined);
       throw error;
@@ -8024,7 +8416,11 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+  }): Promise<{
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }> {
     return await this.startTurnNow(params);
   }
 
@@ -8041,7 +8437,11 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+  }): Promise<{
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }> {
     this.assertNotBootstrap("startTurn");
     if (isAcpBackendId(params.backend)) {
       const reservationKey = buildTurnStartReservationKey(
@@ -8113,7 +8513,10 @@ export class DesktopBackendRegistry {
         model: params.model ?? overlay?.model,
         serviceTier: params.serviceTier ?? overlay?.serviceTier,
         reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
-        fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
+        fastMode:
+          params.backend === "codex"
+            ? (params.fastMode ?? overlay?.fastMode)
+            : undefined,
       });
       cwd =
         params.backend === "codex"
@@ -8157,34 +8560,43 @@ export class DesktopBackendRegistry {
     try {
       result =
         params.backend === "codex"
-          ? await this.withCodexThreadClient(params.threadId, async (client, mode) => {
-              const effectiveMode = params.executionMode ?? mode;
-              const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
-              const agentToolCatalogs = resolveAgentToolCatalogs({
-                appManagementHandler: this.appManagementHandler,
-                automationInspectionHandler: this.automationInspectionHandler,
-                messagingHandler: this.messagingHandler,
-                threadInspectionHandler: this.threadInspectionHandler,
-                threadOrchestrationHandler: this.threadOrchestrationHandler,
-              });
-              const started = await client.startTurn({
-                threadId: params.threadId,
-                input,
-                ...(cwd ? { cwd } : {}),
-                collaborationMode: params.collaborationMode,
-                ...turnParams,
-                approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
-                sandbox: params.sandbox ?? modeSettings.sandbox,
-                ...(overlay?.codexEnvironmentRuntime
-                  ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
-                  : {}),
-                defaultModeRequestUserInput:
-                  this.resolveCodexDefaultModeRequestUserInputFn(),
-                dynamicTools: buildCodexParentDynamicToolSpecs(agentToolCatalogs),
-              });
-              activeTurnMode = effectiveMode;
-              return started;
-            }, params.executionMode)
+          ? await this.withCodexThreadClient(
+              params.threadId,
+              async (client, mode) => {
+                const effectiveMode = params.executionMode ?? mode;
+                const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
+                const agentToolCatalogs = resolveAgentToolCatalogs({
+                  appManagementHandler: this.appManagementHandler,
+                  automationInspectionHandler: this.automationInspectionHandler,
+                  messagingHandler: this.messagingHandler,
+                  threadInspectionHandler: this.threadInspectionHandler,
+                  threadOrchestrationHandler: this.threadOrchestrationHandler,
+                });
+                const started = await client.startTurn({
+                  threadId: params.threadId,
+                  input,
+                  ...(cwd ? { cwd } : {}),
+                  collaborationMode: params.collaborationMode,
+                  ...turnParams,
+                  approvalPolicy:
+                    params.approvalPolicy ?? modeSettings.approvalPolicy,
+                  sandbox: params.sandbox ?? modeSettings.sandbox,
+                  ...(overlay?.codexEnvironmentRuntime
+                    ? {
+                        codexEnvironmentRuntime:
+                          overlay.codexEnvironmentRuntime,
+                      }
+                    : {}),
+                  defaultModeRequestUserInput:
+                    this.resolveCodexDefaultModeRequestUserInputFn(),
+                  dynamicTools:
+                    buildCodexParentDynamicToolSpecs(agentToolCatalogs),
+                });
+                activeTurnMode = effectiveMode;
+                return started;
+              },
+              params.executionMode,
+            )
           : await this.grokClient.startTurn({
               threadId: params.threadId,
               input,
@@ -8235,10 +8647,10 @@ export class DesktopBackendRegistry {
     }
 
     if (
-      turnParams.model !== undefined ||
-      turnParams.reasoningEffort !== undefined ||
-      turnParams.serviceTier !== undefined ||
-      turnParams.fastMode !== undefined
+      turnParams.model !== undefined
+      || turnParams.reasoningEffort !== undefined
+      || turnParams.serviceTier !== undefined
+      || turnParams.fastMode !== undefined
     ) {
       await this.overlayStore.setThreadModelSettings({
         backend: params.backend,
@@ -8305,12 +8717,15 @@ export class DesktopBackendRegistry {
       });
       output = assistantOutputForTurn(replay.replay, params.turnId);
     } catch (error) {
-      backendRegistryLog.warn("failed to read completed turn replay for local event", {
-        backend: params.backend,
-        threadId: params.threadId,
-        turnId: params.turnId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      backendRegistryLog.warn(
+        "failed to read completed turn replay for local event",
+        {
+          backend: params.backend,
+          threadId: params.threadId,
+          turnId: params.turnId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
     }
     if (output.length === 0) {
       return;
@@ -8342,7 +8757,9 @@ export class DesktopBackendRegistry {
     const reserveCodexReviewStart = params.backend === "codex";
     if (reserveCodexReviewStart) {
       if (this.threadHasActiveTurn(params.threadId)) {
-        throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
+        throw new Error(
+          `Thread already has an active turn in progress: ${params.threadId}`,
+        );
       }
       this.reservedCodexStartThreadIds.add(params.threadId);
     }
@@ -8373,7 +8790,11 @@ export class DesktopBackendRegistry {
 
       const startWithClient = async (
         client: BackendClient,
-      ): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> => {
+      ): Promise<{
+        threadId: string;
+        reviewThreadId: string;
+        turnId: string;
+      }> => {
         if (!client.startReview) {
           throw new Error("Selected backend does not support review/start");
         }
@@ -8408,9 +8829,10 @@ export class DesktopBackendRegistry {
         // same thread. Treat the returned review turn as active so queued
         // turns cannot release in parallel and so the matching terminal
         // review notification clears the active state.
-        const activeTurnMode = await this.resolveCodexThreadExecutionModeForActiveTurn(
-          reviewThreadId,
-        );
+        const activeTurnMode =
+          await this.resolveCodexThreadExecutionModeForActiveTurn(
+            reviewThreadId,
+          );
         this.activeTurnKeys.add(
           buildActiveTurnKey(params.backend, reviewThreadId, result.turnId),
         );
@@ -8428,11 +8850,15 @@ export class DesktopBackendRegistry {
     const reviewSubAgentRecord: ReviewSubAgentRecord = {
       backend: params.backend as Exclude<AppServerBackendKind, AcpBackendId>,
       createdAt: Date.now(),
-      ...(modelSettings.fastMode !== undefined ? { fastMode: modelSettings.fastMode } : {}),
+      ...(modelSettings.fastMode !== undefined
+        ? { fastMode: modelSettings.fastMode }
+        : {}),
       ...(modelSettings.model ? { model: modelSettings.model } : {}),
       parentThreadId: result.threadId,
       reviewThreadId: result.reviewThreadId || result.threadId,
-      ...(modelSettings.serviceTier ? { serviceTier: modelSettings.serviceTier } : {}),
+      ...(modelSettings.serviceTier
+        ? { serviceTier: modelSettings.serviceTier }
+        : {}),
       task: reviewTaskLabel(params.target),
       turnId: result.turnId,
     };
@@ -8442,7 +8868,10 @@ export class DesktopBackendRegistry {
       reviewSubAgentRecord.turnId,
     );
     this.activeReviewSubAgents.set(reviewSubAgentKey, reviewSubAgentRecord);
-    this.reviewSubAgentsByReviewTurn.set(reviewSubAgentKey, reviewSubAgentRecord);
+    this.reviewSubAgentsByReviewTurn.set(
+      reviewSubAgentKey,
+      reviewSubAgentRecord,
+    );
     await this.persistReviewSubAgent(reviewSubAgentRecord);
     if (hasExplicitModelSettings(modelSettings)) {
       await this.overlayStore.setThreadModelSettings({
@@ -8464,7 +8893,11 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     turnId: string;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+  }): Promise<{
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }> {
     if (isAcpBackendId(params.backend)) {
       const client = await this.acpBackend.getClient(params.backend);
       await client.cancelSession(params.threadId);
@@ -8490,23 +8923,22 @@ export class DesktopBackendRegistry {
       params.backend === "codex"
         ? buildActiveTurnModeKey(params.threadId, params.turnId)
         : undefined;
-    const codexInterruptTurnId =
-      requestedCodexTurnModeKey
-        ? this.activeCodexReviewInterruptTurnIds.get(requestedCodexTurnModeKey) ??
-          params.turnId
-        : params.turnId;
+    const codexInterruptTurnId = requestedCodexTurnModeKey
+      ? (this.activeCodexReviewInterruptTurnIds.get(requestedCodexTurnModeKey)
+        ?? params.turnId)
+      : params.turnId;
     const interruptParams =
       params.backend === "codex" && codexInterruptTurnId !== params.turnId
         ? { ...params, turnId: codexInterruptTurnId }
         : params;
     const activeCodexTurnMode =
       params.backend === "codex"
-        ? this.activeCodexTurnModes.get(
+        ? (this.activeCodexTurnModes.get(
             buildActiveTurnModeKey(params.threadId, codexInterruptTurnId),
-          ) ??
-          (requestedCodexTurnModeKey
+          )
+          ?? (requestedCodexTurnModeKey
             ? this.activeCodexTurnModes.get(requestedCodexTurnModeKey)
-            : undefined)
+            : undefined))
         : undefined;
     const result =
       params.backend === "codex" && activeCodexTurnMode
@@ -8514,16 +8946,23 @@ export class DesktopBackendRegistry {
             interruptParams,
           )
         : params.backend === "codex"
-          ? await this.withCodexThreadClient(params.threadId, async (client) =>
-              await client.interruptTurn(interruptParams),
+          ? await this.withCodexThreadClient(
+              params.threadId,
+              async (client) => await client.interruptTurn(interruptParams),
             )
-        : await this.grokClient.interruptTurn(params);
+          : await this.grokClient.interruptTurn(params);
 
     if (params.backend === "codex") {
-      const activeTurnModeKey = buildActiveTurnModeKey(result.threadId, result.turnId);
+      const activeTurnModeKey = buildActiveTurnModeKey(
+        result.threadId,
+        result.turnId,
+      );
       this.activeCodexTurnModes.delete(activeTurnModeKey);
       this.activeCodexReviewTurnKeys.delete(activeTurnModeKey);
-      if (requestedCodexTurnModeKey && requestedCodexTurnModeKey !== activeTurnModeKey) {
+      if (
+        requestedCodexTurnModeKey
+        && requestedCodexTurnModeKey !== activeTurnModeKey
+      ) {
         this.activeCodexTurnModes.delete(requestedCodexTurnModeKey);
         this.activeCodexReviewTurnKeys.delete(requestedCodexTurnModeKey);
       }
@@ -8585,7 +9024,10 @@ export class DesktopBackendRegistry {
 
     const result =
       params.backend === "codex"
-        ? await this.withActiveCodexThreadClient(params.threadId, steerWithClient)
+        ? await this.withActiveCodexThreadClient(
+            params.threadId,
+            steerWithClient,
+          )
         : await steerWithClient(this.grokClient);
 
     return {
@@ -8610,12 +9052,12 @@ export class DesktopBackendRegistry {
    * full transition table.
    */
   async setThreadExecutionMode(
-    params: SetThreadExecutionModeRequest
+    params: SetThreadExecutionModeRequest,
   ): Promise<SetThreadExecutionModeResponse> {
     if (params.backend !== "codex") {
       if (
-        isAcpBackendId(params.backend) &&
-        this.usesSlashControlledAcpExecutionModes(params.backend)
+        isAcpBackendId(params.backend)
+        && this.usesSlashControlledAcpExecutionModes(params.backend)
       ) {
         return await this.setSlashControlledAcpExecutionMode({
           ...params,
@@ -8697,7 +9139,10 @@ export class DesktopBackendRegistry {
       params.backend,
       params.threadId,
     );
-    const hasActiveTurn = this.threadHasActiveTurn(params.threadId, params.backend);
+    const hasActiveTurn = this.threadHasActiveTurn(
+      params.threadId,
+      params.backend,
+    );
     const queueKey = executionModeQueueKey(params.backend, params.threadId);
     const hasQueue = this.queuedExecutionModes.has(queueKey);
 
@@ -8782,8 +9227,8 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
   ): backend is AcpBackendId {
     return (
-      isAcpBackendId(backend) &&
-      this.acpBackend.getInstalledAgent(backend)?.registryId === "grok"
+      isAcpBackendId(backend)
+      && this.acpBackend.getInstalledAgent(backend)?.registryId === "grok"
     );
   }
 
@@ -8801,8 +9246,8 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
   ): backend is AcpBackendId {
     return (
-      this.usesKimiSlashExecutionModes(backend) ||
-      this.usesGrokSlashExecutionModes(backend)
+      this.usesKimiSlashExecutionModes(backend)
+      || this.usesGrokSlashExecutionModes(backend)
     );
   }
 
@@ -8831,8 +9276,9 @@ export class DesktopBackendRegistry {
         threadId,
       });
       return (
-        this.latestAppliedExecutionModeFromOverlay(overlay) ??
-        this.acpBackend.getSession(backend, threadId)?.executionMode ?? "default"
+        this.latestAppliedExecutionModeFromOverlay(overlay)
+        ?? this.acpBackend.getSession(backend, threadId)?.executionMode
+        ?? "default"
       );
     }
     return "default";
@@ -8843,8 +9289,7 @@ export class DesktopBackendRegistry {
   ): ThreadExecutionMode | undefined {
     return [...(overlay?.permissionTransitionLog ?? [])]
       .reverse()
-      .find((transition) => transition.status === "applied")
-      ?.toExecutionMode;
+      .find((transition) => transition.status === "applied")?.toExecutionMode;
   }
 
   async queueThreadExecutionMode(
@@ -8927,12 +9372,11 @@ export class DesktopBackendRegistry {
       params.threadId,
     );
 
-    const queue =
-      this.backendUsesQueuedExecutionModes(params.backend)
-        ? this.queuedExecutionModes.get(
-            executionModeQueueKey(params.backend, params.threadId),
-          )
-        : undefined;
+    const queue = this.backendUsesQueuedExecutionModes(params.backend)
+      ? this.queuedExecutionModes.get(
+          executionModeQueueKey(params.backend, params.threadId),
+        )
+      : undefined;
     if (!queue) {
       // Idempotent: cancel of nothing is a no-op that returns the
       // current applied mode.
@@ -8998,8 +9442,8 @@ export class DesktopBackendRegistry {
   ): Promise<SetThreadExecutionModeResponse> {
     if (params.backend !== "codex") {
       if (
-        isAcpBackendId(params.backend) &&
-        this.usesSlashControlledAcpExecutionModes(params.backend)
+        isAcpBackendId(params.backend)
+        && this.usesSlashControlledAcpExecutionModes(params.backend)
       ) {
         return await this.applySlashControlledAcpThreadExecutionMode(
           {
@@ -9118,8 +9562,9 @@ export class DesktopBackendRegistry {
     const previousApplied = session.executionMode ?? "default";
     const client = await this.acpBackend.getClient(params.backend);
     await client.ensureSession?.(session);
-    const registryId = this.acpBackend.getInstalledAgent(params.backend)
-      ?.registryId;
+    const registryId = this.acpBackend.getInstalledAgent(
+      params.backend,
+    )?.registryId;
     if (registryId === "kimi") {
       await this.applyKimiAcpExecutionModeControlPrompt({
         backend: params.backend,
@@ -9208,7 +9653,9 @@ export class DesktopBackendRegistry {
     }
     const client = params.client;
     if (!client.sendControlPrompt) {
-      throw new Error("Kimi ACP execution mode updates require control prompts");
+      throw new Error(
+        "Kimi ACP execution mode updates require control prompts",
+      );
     }
     const result = await this.acpSessionPromptLocks.run(
       executionModeQueueKey(params.backend, params.sessionId),
@@ -9257,7 +9704,9 @@ export class DesktopBackendRegistry {
     }
     const client = params.client;
     if (!client.sendControlPrompt) {
-      throw new Error("Grok ACP execution mode updates require control prompts");
+      throw new Error(
+        "Grok ACP execution mode updates require control prompts",
+      );
     }
     const command =
       params.toExecutionMode === "full-access"
@@ -9295,9 +9744,11 @@ export class DesktopBackendRegistry {
       }
       return false;
     }
-    if (this.reservedAcpStartThreadKeys.has(
-      buildTurnStartReservationKey(backend, threadId),
-    )) {
+    if (
+      this.reservedAcpStartThreadKeys.has(
+        buildTurnStartReservationKey(backend, threadId),
+      )
+    ) {
       return true;
     }
     const prefix = `${backend}:${threadId}:`;
@@ -9330,11 +9781,11 @@ export class DesktopBackendRegistry {
     const activeTurnModeKey = buildActiveTurnModeKey(threadId, turnId);
     this.activeCodexReviewInterruptTurnIds.delete(activeTurnModeKey);
     for (const [reviewTurnKey, interruptTurnId] of Array.from(
-      this.activeCodexReviewInterruptTurnIds.entries()
+      this.activeCodexReviewInterruptTurnIds.entries(),
     )) {
       if (
-        reviewTurnKey.startsWith(`${threadId}:`) &&
-        interruptTurnId === turnId
+        reviewTurnKey.startsWith(`${threadId}:`)
+        && interruptTurnId === turnId
       ) {
         this.activeCodexReviewInterruptTurnIds.delete(reviewTurnKey);
       }
@@ -9445,7 +9896,11 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    const flush = this.applyClaimedQueuedExecutionMode(threadId, queueKey, queue);
+    const flush = this.applyClaimedQueuedExecutionMode(
+      threadId,
+      queueKey,
+      queue,
+    );
     this.queuedExecutionModeFlushes.set(queueKey, flush);
     try {
       await flush;
@@ -9500,7 +9955,7 @@ export class DesktopBackendRegistry {
           .catch(() => undefined);
         const currentApplied =
           queue.backend === "codex"
-            ? overlay?.executionMode ?? "default"
+            ? (overlay?.executionMode ?? "default")
             : await this.readAppliedExecutionMode(queue.backend, threadId);
         this.queuedExecutionModes.delete(queueKey);
         await this.appendPermissionTransition({
@@ -9532,17 +9987,20 @@ export class DesktopBackendRegistry {
         ...queue,
         flushAttempts: attempts,
       });
-      backendRegistryLog.warn("queued execution mode flush failed; will retry", {
-        threadId,
-        queueId: queue.queueId,
-        attempts,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      backendRegistryLog.warn(
+        "queued execution mode flush failed; will retry",
+        {
+          threadId,
+          queueId: queue.queueId,
+          attempts,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
     }
   }
 
   async setThreadModelSettings(
-    params: SetThreadModelSettingsRequest
+    params: SetThreadModelSettingsRequest,
   ): Promise<SetThreadModelSettingsResponse> {
     const modelSettings = await this.resolveModelSettings(
       params.backend,
@@ -9606,7 +10064,9 @@ export class DesktopBackendRegistry {
       overlay?.extraLinkedDirectories ?? [],
     );
     const observedBranch = workspaceCwd
-      ? await readCurrentGitBranch(workspaceCwd).catch(() => thread?.observedGitBranch)
+      ? await readCurrentGitBranch(workspaceCwd).catch(
+          () => thread?.observedGitBranch,
+        )
       : thread?.observedGitBranch;
     const normalizedObservedBranch = observedBranch?.trim() || undefined;
     const expectedBranchResolution = resolveBranchDriftExpectedBranch({
@@ -9640,7 +10100,10 @@ export class DesktopBackendRegistry {
           : undefined,
     });
 
-    if (expectedBranchResolution.repairedDetachedHandoffBranch && expectedBranch) {
+    if (
+      expectedBranchResolution.repairedDetachedHandoffBranch
+      && expectedBranch
+    ) {
       await this.updateThreadGitBranchMetadata({
         backend: params.backend,
         threadId: params.threadId,
@@ -9697,7 +10160,9 @@ export class DesktopBackendRegistry {
       overlay?.extraLinkedDirectories ?? [],
     );
     const observedBranch = workspaceCwd
-      ? await readCurrentGitBranch(workspaceCwd).catch(() => thread?.observedGitBranch)
+      ? await readCurrentGitBranch(workspaceCwd).catch(
+          () => thread?.observedGitBranch,
+        )
       : thread?.observedGitBranch;
     const normalizedObservedBranch = observedBranch?.trim() || undefined;
 
@@ -9819,13 +10284,15 @@ export class DesktopBackendRegistry {
   }
 
   async submitServerRequest(
-    params: SubmitServerRequestRequest
+    params: SubmitServerRequestRequest,
   ): Promise<SubmitServerRequestResponse> {
     this.assertNotBootstrap("submitServerRequest");
     const key = buildPendingRequestKey(params);
     const pending = this.pendingServerRequests.get(key);
     if (!pending) {
-      throw new Error(`No pending server request found for ${params.requestId}`);
+      throw new Error(
+        `No pending server request found for ${params.requestId}`,
+      );
     }
 
     this.pendingServerRequests.delete(key);
@@ -9897,8 +10364,8 @@ export class DesktopBackendRegistry {
                     {
                       label: params.cancelLabel ?? "Cancel handoff",
                       description:
-                        params.cancelDescription ??
-                        "Do not add this directory or start the handoff.",
+                        params.cancelDescription
+                        ?? "Do not add this directory or start the handoff.",
                     },
                   ],
                 },
@@ -9921,9 +10388,8 @@ export class DesktopBackendRegistry {
       },
     );
 
-    const answers = (response as AppServerToolRequestUserInputResponse)?.answers?.[
-      HANDOFF_CWD_TRUST_QUESTION_ID
-    ]?.answers;
+    const answers = (response as AppServerToolRequestUserInputResponse)
+      ?.answers?.[HANDOFF_CWD_TRUST_QUESTION_ID]?.answers;
     return Array.isArray(answers)
       ? answers.includes(HANDOFF_CWD_TRUST_APPROVE_LABEL)
       : false;
@@ -9960,7 +10426,9 @@ export class DesktopBackendRegistry {
       directoryKind: "directory",
       directoryLabel: path.basename(directoryPath) || directoryPath,
       directoryPath,
-      currentBranch: await readCurrentGitBranch(directoryPath).catch(() => undefined),
+      currentBranch: await readCurrentGitBranch(directoryPath).catch(
+        () => undefined,
+      ),
       parentThreadId: params.parentThreadId,
       parentThreadTitle: params.parentThreadTitle,
       preferredBackend: params.preferredBackend,
@@ -9979,13 +10447,13 @@ export class DesktopBackendRegistry {
     callId?: string;
   }): Promise<PwrAgentThreadOrchestrationResponse | undefined> {
     if (
-      params.executionMode === "full-access" ||
-      linkedDirectoriesActiveWorkspaceCoversCwd({
+      params.executionMode === "full-access"
+      || linkedDirectoriesActiveWorkspaceCoversCwd({
         cwd: params.cwd,
         overlay: params.sourceOverlay,
         thread: params.sourceThread,
-      }) ||
-      (await this.directoryLaunchpadCoversCwd(params.cwd))
+      })
+      || (await this.directoryLaunchpadCoversCwd(params.cwd))
     ) {
       return undefined;
     }
@@ -10039,8 +10507,11 @@ export class DesktopBackendRegistry {
     );
     if (existing) {
       const registeredAt = existing.registeredAt ?? request.registeredAt;
-      const existingLaunchpad = projectNavigationLaunchpadProviderSettings(existing);
-      const backend = await this.resolveLaunchpadBackend(existingLaunchpad.backend);
+      const existingLaunchpad =
+        projectNavigationLaunchpadProviderSettings(existing);
+      const backend = await this.resolveLaunchpadBackend(
+        existingLaunchpad.backend,
+      );
       const modelSettings = await this.resolveLaunchpadModelSettings(
         backend,
         existingLaunchpad,
@@ -10060,13 +10531,14 @@ export class DesktopBackendRegistry {
       const requestParentThreadTitle =
         request.parentThreadTitle ?? normalizedExisting.parentThreadTitle;
       const identityChanged =
-        normalizedExisting.directoryKind !== request.directoryKind ||
-        normalizedExisting.directoryLabel !== request.directoryLabel ||
-        normalizedExisting.directoryPath !== request.directoryPath;
+        normalizedExisting.directoryKind !== request.directoryKind
+        || normalizedExisting.directoryLabel !== request.directoryLabel
+        || normalizedExisting.directoryPath !== request.directoryPath;
       const parentChanged =
-        request.parentThreadId !== undefined &&
-        (normalizedExisting.parentThreadId !== request.parentThreadId ||
-          normalizedExisting.parentThreadTitle !== request.parentThreadTitle);
+        request.parentThreadId !== undefined
+        && (normalizedExisting.parentThreadId !== request.parentThreadId
+          || normalizedExisting.parentThreadTitle
+            !== request.parentThreadTitle);
 
       if (isEmptyDirectoryLaunchpadDraft(existing)) {
         const refreshed: NavigationLaunchpadDraft = {
@@ -10099,15 +10571,15 @@ export class DesktopBackendRegistry {
       }
 
       if (
-        identityChanged ||
-        normalizedExisting.backend !== existing.backend ||
-        normalizedExisting.executionMode !== existing.executionMode ||
-        normalizedExisting.model !== existing.model ||
-        normalizedExisting.reasoningEffort !== existing.reasoningEffort ||
-        normalizedExisting.serviceTier !== existing.serviceTier ||
-        normalizedExisting.fastMode !== existing.fastMode ||
-        registeredAt !== existing.registeredAt ||
-        parentChanged
+        identityChanged
+        || normalizedExisting.backend !== existing.backend
+        || normalizedExisting.executionMode !== existing.executionMode
+        || normalizedExisting.model !== existing.model
+        || normalizedExisting.reasoningEffort !== existing.reasoningEffort
+        || normalizedExisting.serviceTier !== existing.serviceTier
+        || normalizedExisting.fastMode !== existing.fastMode
+        || registeredAt !== existing.registeredAt
+        || parentChanged
       ) {
         return {
           launchpad: withCodexEnvironmentOptions(
@@ -10128,7 +10600,10 @@ export class DesktopBackendRegistry {
       }
 
       return {
-        launchpad: withCodexEnvironmentOptions(existing, codexEnvironmentOptions),
+        launchpad: withCodexEnvironmentOptions(
+          existing,
+          codexEnvironmentOptions,
+        ),
         defaults,
       };
     }
@@ -10170,12 +10645,14 @@ export class DesktopBackendRegistry {
     const current =
       (await this.overlayStore.getDirectoryLaunchpad({
         directoryKey: request.directoryKey,
-      })) ??
-      (await this.ensureDirectoryLaunchpad({
-        directoryKey: request.directoryKey,
-        directoryKind: "directory",
-        directoryLabel: request.directoryKey,
-      })).launchpad;
+      }))
+      ?? (
+        await this.ensureDirectoryLaunchpad({
+          directoryKey: request.directoryKey,
+          directoryKind: "directory",
+          directoryLabel: request.directoryKey,
+        })
+      ).launchpad;
 
     const patch = {
       ...request.patch,
@@ -10189,7 +10666,8 @@ export class DesktopBackendRegistry {
         : current.settingsTouchedAt,
       updatedAt: Date.now(),
     };
-    const persisted = await this.overlayStore.upsertDirectoryLaunchpad(nextLaunchpad);
+    const persisted =
+      await this.overlayStore.upsertDirectoryLaunchpad(nextLaunchpad);
 
     const stickyPatch: Partial<NavigationLaunchpadDefaults> = {};
     if (request.stickySettingsChanged && request.patch.backend) {
@@ -10264,20 +10742,24 @@ export class DesktopBackendRegistry {
         }
 
         const currentCwd =
-          request.cwd?.trim() ||
-          (await this.resolveThreadEnvironmentCwd(
+          request.cwd?.trim()
+          || (await this.resolveThreadEnvironmentCwd(
             request.backend,
             request.threadId,
             overlay,
           ));
-        const refreshedRuntimeForAction = await this.refreshCodexEnvironmentRuntimeActions(
-          currentCwd?.trim() ? { ...runtime, cwd: currentCwd.trim() } : runtime,
-          request.actionId,
-        );
+        const refreshedRuntimeForAction =
+          await this.refreshCodexEnvironmentRuntimeActions(
+            currentCwd?.trim()
+              ? { ...runtime, cwd: currentCwd.trim() }
+              : runtime,
+            request.actionId,
+          );
         const runtimeForAction: CodexThreadEnvironmentRuntime = {
           ...refreshedRuntimeForAction,
           selectedActionIdByEnvironmentId: {
-            ...(refreshedRuntimeForAction.selectedActionIdByEnvironmentId ?? {}),
+            ...(refreshedRuntimeForAction.selectedActionIdByEnvironmentId
+              ?? {}),
             [refreshedRuntimeForAction.environmentId]: request.actionId,
           },
         };
@@ -10309,8 +10791,8 @@ export class DesktopBackendRegistry {
           });
         } catch (error) {
           if (
-            error instanceof CodexEnvironmentStartupError &&
-            error.phase === "action"
+            error instanceof CodexEnvironmentStartupError
+            && error.phase === "action"
           ) {
             await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
               backend: request.backend,
@@ -10364,9 +10846,13 @@ export class DesktopBackendRegistry {
         }
 
         const currentRuns = readCodexEnvironmentActionRuns(runtime);
-        const matchingRun = currentRuns.find((run) => run.runId === request.runId);
+        const matchingRun = currentRuns.find(
+          (run) => run.runId === request.runId,
+        );
         if (!matchingRun) {
-          throw new Error("This environment action run is no longer available.");
+          throw new Error(
+            "This environment action run is no longer available.",
+          );
         }
         if (matchingRun.status !== "started") {
           return {
@@ -10406,12 +10892,15 @@ export class DesktopBackendRegistry {
           request.mode,
         );
         if (!result.found) {
-          backendRegistryLog.warn("codex-environment-action-stop-missing-process", {
-            backend: request.backend,
-            threadId: request.threadId,
-            runId: request.runId,
-            mode: request.mode,
-          });
+          backendRegistryLog.warn(
+            "codex-environment-action-stop-missing-process",
+            {
+              backend: request.backend,
+              threadId: request.threadId,
+              runId: request.runId,
+              mode: request.mode,
+            },
+          );
         }
 
         return {
@@ -10440,8 +10929,9 @@ export class DesktopBackendRegistry {
       return runtime;
     }
 
-    const environment = (await listCodexEnvironmentOptions(cwd).catch(() => []))
-      .find((candidate) => candidate.id === runtime.environmentId);
+    const environment = (
+      await listCodexEnvironmentOptions(cwd).catch(() => [])
+    ).find((candidate) => candidate.id === runtime.environmentId);
     if (!environment) {
       return runtime;
     }
@@ -10689,7 +11179,9 @@ export class DesktopBackendRegistry {
             return;
           }
           const currentRuns = readCodexEnvironmentActionRuns(current);
-          const matching = currentRuns.find((run) => run.runId === params.runId);
+          const matching = currentRuns.find(
+            (run) => run.runId === params.runId,
+          );
           if (!matching) {
             return;
           }
@@ -10702,9 +11194,9 @@ export class DesktopBackendRegistry {
           // descendant is still producing output. Fresh output proves the run
           // is not terminal, so keep the UI in a controllable running state.
           const ambiguousTerminalFailure =
-            matching.status === "failed" &&
-            matching.exitCode === undefined &&
-            matching.exitSignal === undefined;
+            matching.status === "failed"
+            && matching.exitCode === undefined
+            && matching.exitSignal === undefined;
           const patch: Partial<CodexEnvironmentActionRun> = {
             output: params.event.output,
           };
@@ -10753,8 +11245,8 @@ export class DesktopBackendRegistry {
     options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     const launchpad =
-      request.launchpad ??
-      (await this.overlayStore.getDirectoryLaunchpad({
+      request.launchpad
+      ?? (await this.overlayStore.getDirectoryLaunchpad({
         directoryKey: request.directoryKey,
       }));
     if (!launchpad) {
@@ -10921,7 +11413,9 @@ export class DesktopBackendRegistry {
       backend: startThreadResponse.backend,
       threadId: startThreadResponse.threadId,
       executionMode: startThreadResponse.executionMode,
-      ...(linkedDirectories?.[0] ? { linkedDirectory: linkedDirectories[0] } : {}),
+      ...(linkedDirectories?.[0]
+        ? { linkedDirectory: linkedDirectories[0] }
+        : {}),
       workMode: workspace.workMode,
       codexEnvironmentRuntime,
       codexEnvironmentStartupFailure,
@@ -10929,8 +11423,8 @@ export class DesktopBackendRegistry {
     await options?.onThreadMaterialized?.(materializedThread);
 
     const input =
-      request.input ??
-      (launchpad.prompt.trim()
+      request.input
+      ?? (launchpad.prompt.trim()
         ? [{ type: "text", text: launchpad.prompt } as const]
         : []);
     let turnId: string | undefined;
@@ -10949,7 +11443,8 @@ export class DesktopBackendRegistry {
           model: launchpad.model,
           reasoningEffort: launchpad.reasoningEffort,
           serviceTier: launchpad.serviceTier,
-          fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
+          fastMode:
+            launchpad.backend === "codex" ? launchpad.fastMode : undefined,
         });
         turnId = reviewResponse.turnId;
       } catch (error) {
@@ -10967,7 +11462,8 @@ export class DesktopBackendRegistry {
           model: launchpad.model,
           reasoningEffort: launchpad.reasoningEffort,
           serviceTier: launchpad.serviceTier,
-          fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
+          fastMode:
+            launchpad.backend === "codex" ? launchpad.fastMode : undefined,
           collaborationMode: request.collaborationMode,
         });
         turnId = turnResponse.turnId;
@@ -11011,14 +11507,18 @@ export class DesktopBackendRegistry {
     }
 
     for (const [key, pending] of this.pendingServerRequests) {
-      pending.reject(new Error(`Desktop backend registry closed before ${key} resolved`));
+      pending.reject(
+        new Error(`Desktop backend registry closed before ${key} resolved`),
+      );
       this.pendingServerRequests.delete(key);
     }
 
     await this.acpBackend.close();
     await this.codexClient.close();
     await this.grokClient.close();
-    await Promise.all(this.captureStores.splice(0).map(async (store) => await store.close()));
+    await Promise.all(
+      this.captureStores.splice(0).map(async (store) => await store.close()),
+    );
   }
 
   private async resolveModelSettings(
@@ -11050,8 +11550,8 @@ export class DesktopBackendRegistry {
     });
     const availableModels = launchpadOptions?.models ?? [];
     if (
-      settings.model !== undefined &&
-      !availableModels.some((model) => model.id === settings.model)
+      settings.model !== undefined
+      && !availableModels.some((model) => model.id === settings.model)
     ) {
       const available = availableModels.map((model) => model.id).join(", ");
       throw new Error(
@@ -11077,7 +11577,8 @@ export class DesktopBackendRegistry {
     schemaName?: string;
     timeoutMs?: number;
   }): Promise<
-    { status: "ok"; object: unknown } | { status: "unavailable" | "failed"; reason: string }
+    | { status: "ok"; object: unknown }
+    | { status: "unavailable" | "failed"; reason: string }
   > {
     const defaults = await this.overlayStore.getLaunchpadDefaults();
     const backend = await this.resolveLaunchpadBackend(defaults.backend);
@@ -11098,7 +11599,9 @@ export class DesktopBackendRegistry {
       if (!apiKey) {
         return { status: "unavailable", reason: "grok_api_key_unavailable" };
       }
-      const result = await new XaiEphemeralObjectCaller({ apiKey }).generateObject({
+      const result = await new XaiEphemeralObjectCaller({
+        apiKey,
+      }).generateObject({
         schema: params.schema,
         schemaName: params.schemaName,
         system: params.system,
@@ -11126,12 +11629,12 @@ export class DesktopBackendRegistry {
     );
 
     return (
-      availableBackends.find((backend) => backend.kind === preferred) ??
-      availableBackends.find((backend) => backend.kind === "codex") ??
-      availableBackends[0] ??
-      backends.find((backend) => backend.kind === preferred) ??
-      backends.find((backend) => backend.kind === "codex") ??
-      backends[0]!
+      availableBackends.find((backend) => backend.kind === preferred)
+      ?? availableBackends.find((backend) => backend.kind === "codex")
+      ?? availableBackends[0]
+      ?? backends.find((backend) => backend.kind === preferred)
+      ?? backends.find((backend) => backend.kind === "codex")
+      ?? backends[0]!
     );
   }
 
@@ -11140,8 +11643,11 @@ export class DesktopBackendRegistry {
     settings: ModelSettings,
   ): Promise<ModelSettings> {
     const launchpadOptions =
-      backend.launchpadOptions ??
-      (await this.getBackendLaunchpadOptions(backend.kind, "launchpad-defaults"));
+      backend.launchpadOptions
+      ?? (await this.getBackendLaunchpadOptions(
+        backend.kind,
+        "launchpad-defaults",
+      ));
 
     return resolveModelSettingsFromOptions(
       backend.kind,
@@ -11186,9 +11692,9 @@ export class DesktopBackendRegistry {
       ...modelSettings,
     };
     if (
-      resolvedDefaults.backend === "codex" &&
-      (resolvedDefaults.serviceTier === "fast" ||
-        resolvedDefaults.serviceTier === "priority")
+      resolvedDefaults.backend === "codex"
+      && (resolvedDefaults.serviceTier === "fast"
+        || resolvedDefaults.serviceTier === "priority")
     ) {
       delete resolvedDefaults.serviceTier;
     }
@@ -11221,25 +11727,36 @@ export class DesktopBackendRegistry {
     }
 
     if (backend === "codex") {
-      const models = await this.readCodexDefaultModelsOnce(callerReason).catch(() => []);
+      const models = await this.readCodexDefaultModelsOnce(callerReason).catch(
+        () => [],
+      );
       return buildLaunchpadOptions(backend, models);
     }
 
-    const models = await this.readGrokDefaultModelsOnce(callerReason).catch(() => []);
+    const models = await this.readGrokDefaultModelsOnce(callerReason).catch(
+      () => [],
+    );
     return buildLaunchpadOptions(backend, models);
   }
 
-  private subscribeClient(backend: AppServerBackendKind, client: BackendClient): void {
+  private subscribeClient(
+    backend: AppServerBackendKind,
+    client: BackendClient,
+  ): void {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
         if (
-          backend === "codex" &&
-          notification.method === "thread/codexSettings/observed"
+          backend === "codex"
+          && notification.method === "thread/codexSettings/observed"
         ) {
           await this.recordObservedCodexSettings(notification);
         }
-        if (this.shouldInvalidateThreadListCacheForNotification(notification.method)) {
+        if (
+          this.shouldInvalidateThreadListCacheForNotification(
+            notification.method,
+          )
+        ) {
           this.invalidateThreadListCache(backend);
         }
         if (notification.method === "thread/archived") {
@@ -11262,7 +11779,9 @@ export class DesktopBackendRegistry {
 
     if (client.onRequest) {
       this.unsubscribers.push(
-        client.onRequest(async (request) => await this.handleServerRequest(backend, request)),
+        client.onRequest(
+          async (request) => await this.handleServerRequest(backend, request),
+        ),
       );
     }
   }
@@ -11285,19 +11804,25 @@ export class DesktopBackendRegistry {
       return;
     }
     const observed = {
-      ...(typeof params.fastMode === "boolean" ? { fastMode: params.fastMode } : {}),
+      ...(typeof params.fastMode === "boolean"
+        ? { fastMode: params.fastMode }
+        : {}),
       ...(typeof params.serviceTier === "string" || params.serviceTier === null
         ? { serviceTier: params.serviceTier }
         : {}),
-      ...(typeof params.rawServiceTier === "string" || params.rawServiceTier === null
+      ...(typeof params.rawServiceTier === "string"
+      || params.rawServiceTier === null
         ? { rawServiceTier: params.rawServiceTier }
         : {}),
       observedAt: Date.now(),
     };
     this.observedCodexSettingsByThread.set(params.threadId, observed);
-    const observedModel = typeof params.model === "string" ? params.model : undefined;
+    const observedModel =
+      typeof params.model === "string" ? params.model : undefined;
     const observedReasoningEffort =
-      typeof params.reasoningEffort === "string" ? params.reasoningEffort : undefined;
+      typeof params.reasoningEffort === "string"
+        ? params.reasoningEffort
+        : undefined;
     if (observedModel || observedReasoningEffort) {
       const current = await this.overlayStore.getThreadOverlayState({
         backend: "codex",
@@ -11341,9 +11866,9 @@ export class DesktopBackendRegistry {
     notification: AppServerNotification,
   ): Promise<void> {
     if (
-      notification.method !== "turn/completed" &&
-      notification.method !== "turn/failed" &&
-      notification.method !== "turn/cancelled"
+      notification.method !== "turn/completed"
+      && notification.method !== "turn/failed"
+      && notification.method !== "turn/cancelled"
     ) {
       return;
     }
@@ -11360,12 +11885,15 @@ export class DesktopBackendRegistry {
       ),
     );
     if (!run) {
-      backendRegistryLog.debug("terminal turn did not match a headless automation", {
-        backend,
-        method: notification.method,
-        threadId: notification.params.threadId,
-        turnId,
-      });
+      backendRegistryLog.debug(
+        "terminal turn did not match a headless automation",
+        {
+          backend,
+          method: notification.method,
+          threadId: notification.params.threadId,
+          turnId,
+        },
+      );
       return;
     }
     this.headlessAutomationTurns.delete(
@@ -11375,17 +11903,21 @@ export class DesktopBackendRegistry {
         turnId,
       ),
     );
-    backendRegistryLog.info("automation headless turn reached terminal status", {
-      agentThreadId: run.agentThreadId,
-      automationName: run.automationName,
-      automationRunId: run.automationRunId,
-      backend,
-      finalTextLength: finalTextFromTerminalNotification(notification)?.length ?? 0,
-      method: notification.method,
-      queueEntryId: run.queueEntryId,
-      threadId: notification.params.threadId,
-      turnId,
-    });
+    backendRegistryLog.info(
+      "automation headless turn reached terminal status",
+      {
+        agentThreadId: run.agentThreadId,
+        automationName: run.automationName,
+        automationRunId: run.automationRunId,
+        backend,
+        finalTextLength:
+          finalTextFromTerminalNotification(notification)?.length ?? 0,
+        method: notification.method,
+        queueEntryId: run.queueEntryId,
+        threadId: notification.params.threadId,
+        turnId,
+      },
+    );
 
     await this.emit({
       backend,
@@ -11423,7 +11955,11 @@ export class DesktopBackendRegistry {
     const turnId = request.params.turnId?.trim();
     if (turnId) {
       return this.headlessAutomationTurns.get(
-        buildHeadlessAutomationTurnKey(backend, request.params.threadId, turnId),
+        buildHeadlessAutomationTurnKey(
+          backend,
+          request.params.threadId,
+          turnId,
+        ),
       );
     }
 
@@ -11461,7 +11997,9 @@ export class DesktopBackendRegistry {
       return this.grokClient;
     }
     if (isAcpBackendId(backend)) {
-      throw new Error(`ACP backend ${backend} is not available through the built-in client router`);
+      throw new Error(
+        `ACP backend ${backend} is not available through the built-in client router`,
+      );
     }
 
     return this.codexClient;
@@ -11480,20 +12018,24 @@ export class DesktopBackendRegistry {
     skipArchivedMetadataRefresh?: boolean;
   }): string {
     const codexDirectoryBackfill =
-      params.backend === "grok" ||
-      params.archived ||
-      params.enrichDirectories !== false
+      params.backend === "grok"
+      || params.archived
+      || params.enrichDirectories !== false
         ? undefined
         : shouldBackfillCodexDirectoryRelationships(params.callerReason);
 
     return JSON.stringify({
       agentCoreGrokEnabled:
-        params.backend === undefined ? params.agentCoreGrokEnabled === true : undefined,
+        params.backend === undefined
+          ? params.agentCoreGrokEnabled === true
+          : undefined,
       archived: params.archived === true,
       backend: params.backend ?? "all",
       codexDirectoryBackfill,
       enrichDirectories:
-        params.backend === "grok" ? undefined : params.enrichDirectories === true,
+        params.backend === "grok"
+          ? undefined
+          : params.enrichDirectories === true,
       filter: params.filter?.trim() ?? "",
       limit: params.limit,
       maxPages: params.maxPages,
@@ -11527,10 +12069,10 @@ export class DesktopBackendRegistry {
     }
 
     if (
-      params.backend !== "codex" ||
-      params.archived === true ||
-      params.enrichDirectories !== false ||
-      shouldBackfillCodexDirectoryRelationships(params.callerReason)
+      params.backend !== "codex"
+      || params.archived === true
+      || params.enrichDirectories !== false
+      || shouldBackfillCodexDirectoryRelationships(params.callerReason)
     ) {
       return undefined;
     }
@@ -11542,7 +12084,11 @@ export class DesktopBackendRegistry {
     if (backfillCapableKey === cacheKey) {
       return undefined;
     }
-    return this.readFreshThreadListCache(backfillCapableKey, now, "navigation-shared");
+    return this.readFreshThreadListCache(
+      backfillCapableKey,
+      now,
+      "navigation-shared",
+    );
   }
 
   private readFreshThreadListCache(
@@ -11595,16 +12141,22 @@ export class DesktopBackendRegistry {
     }
 
     for (const key of this.threadListCache.keys()) {
-      if (key.includes(`"backend":"${backend}"`) || key.includes('"backend":"all"')) {
+      if (
+        key.includes(`"backend":"${backend}"`)
+        || key.includes('"backend":"all"')
+      ) {
         this.threadListCache.delete(key);
       }
     }
   }
 
-  private findCachedCodexThread(threadId: string): AppServerThreadSummary | undefined {
+  private findCachedCodexThread(
+    threadId: string,
+  ): AppServerThreadSummary | undefined {
     for (const state of this.threadListCache.values()) {
       const thread = state.threads?.find(
-        (candidate) => candidate.source === "codex" && candidate.id === threadId,
+        (candidate) =>
+          candidate.source === "codex" && candidate.id === threadId,
       );
       if (thread) {
         return thread;
@@ -11644,7 +12196,9 @@ export class DesktopBackendRegistry {
     }
 
     try {
-      const cheapThread = await this.readCheapCodexThreadForRepair(params.threadId);
+      const cheapThread = await this.readCheapCodexThreadForRepair(
+        params.threadId,
+      );
       if (!cheapThread) {
         return;
       }
@@ -11691,17 +12245,20 @@ export class DesktopBackendRegistry {
   private recordCodexDirectoryRelationshipRepair(threadId: string): void {
     this.repairedDirectoryThreadKeys.add(`codex:${threadId}`);
     if (
-      this.repairedDirectoryThreadKeys.size < 3 ||
-      this.fullDirectoryReconcileDispatched
+      this.repairedDirectoryThreadKeys.size < 3
+      || this.fullDirectoryReconcileDispatched
     ) {
       return;
     }
 
     this.fullDirectoryReconcileDispatched = true;
     void this.reconcileAllCodexDirectoryRelationships().catch((error) => {
-      backendRegistryLog.warn("Codex full directory relationship reconcile failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      backendRegistryLog.warn(
+        "Codex full directory relationship reconcile failed",
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
     });
   }
 
@@ -11754,25 +12311,27 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private shouldInvalidateThreadListCacheForNotification(method: string): boolean {
+  private shouldInvalidateThreadListCacheForNotification(
+    method: string,
+  ): boolean {
     return (
-      method === "thread/archived" ||
-      method === "thread/acpRuntime/updated" ||
-      method === "thread/executionMode/queueCleared" ||
-      method === "thread/executionMode/queued" ||
-      method === "thread/executionMode/updated" ||
-      method === "thread/name/updated" ||
-      method === "thread/parent/cleared" ||
-      method === "thread/parent/set" ||
-      method === "thread/started" ||
-      method === "thread/status/changed" ||
-      method === "thread/subAgents/updated" ||
-      method === "thread/subthreadOrder/updated" ||
-      method === "thread/subthreadsCollapsed/updated" ||
-      method === "thread/unarchived" ||
-      method === "turn/cancelled" ||
-      method === "turn/completed" ||
-      method === "turn/failed"
+      method === "thread/archived"
+      || method === "thread/acpRuntime/updated"
+      || method === "thread/executionMode/queueCleared"
+      || method === "thread/executionMode/queued"
+      || method === "thread/executionMode/updated"
+      || method === "thread/name/updated"
+      || method === "thread/parent/cleared"
+      || method === "thread/parent/set"
+      || method === "thread/started"
+      || method === "thread/status/changed"
+      || method === "thread/subAgents/updated"
+      || method === "thread/subthreadOrder/updated"
+      || method === "thread/subthreadsCollapsed/updated"
+      || method === "thread/unarchived"
+      || method === "turn/cancelled"
+      || method === "turn/completed"
+      || method === "turn/failed"
     );
   }
 
@@ -11813,8 +12372,12 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    const nextActiveThreadIds = new Set(params.threads.map((thread) => thread.id));
-    const previousActiveThreadIds = this.activeThreadIdsByBackend.get(params.backend);
+    const nextActiveThreadIds = new Set(
+      params.threads.map((thread) => thread.id),
+    );
+    const previousActiveThreadIds = this.activeThreadIdsByBackend.get(
+      params.backend,
+    );
     this.activeThreadIdsByBackend.set(params.backend, nextActiveThreadIds);
     await this.cleanupArchivedBindingsMissingFromActiveList({
       backend: params.backend,
@@ -11832,13 +12395,18 @@ export class DesktopBackendRegistry {
     }
 
     try {
-      const archivedThreads = await this.getClient(params.backend).listThreads({
-        archived: true,
-      }, {
-        callerReason: "archive-transition-cleanup",
-        ownerId: this.threadListCacheOwnerId,
-      });
-      const archivedThreadIds = new Set(archivedThreads.map((thread) => thread.id));
+      const archivedThreads = await this.getClient(params.backend).listThreads(
+        {
+          archived: true,
+        },
+        {
+          callerReason: "archive-transition-cleanup",
+          ownerId: this.threadListCacheOwnerId,
+        },
+      );
+      const archivedThreadIds = new Set(
+        archivedThreads.map((thread) => thread.id),
+      );
       await Promise.all(
         missingThreadIds
           .filter((threadId) => archivedThreadIds.has(threadId))
@@ -11889,13 +12457,18 @@ export class DesktopBackendRegistry {
     if (missingBoundThreadIds.length === 0) return;
 
     try {
-      const archivedThreads = await this.getClient(params.backend).listThreads({
-        archived: true,
-      }, {
-        callerReason: "archive-bound-binding-cleanup",
-        ownerId: this.threadListCacheOwnerId,
-      });
-      const archivedThreadIds = new Set(archivedThreads.map((thread) => thread.id));
+      const archivedThreads = await this.getClient(params.backend).listThreads(
+        {
+          archived: true,
+        },
+        {
+          callerReason: "archive-bound-binding-cleanup",
+          ownerId: this.threadListCacheOwnerId,
+        },
+      );
+      const archivedThreadIds = new Set(
+        archivedThreads.map((thread) => thread.id),
+      );
       await Promise.all(
         missingBoundThreadIds
           .filter((threadId) => archivedThreadIds.has(threadId))
@@ -11916,7 +12489,9 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private resolveMessagingArchiveCleanupStore(): MessagingArchiveCleanupStore | undefined {
+  private resolveMessagingArchiveCleanupStore():
+    | MessagingArchiveCleanupStore
+    | undefined {
     if (this.messagingStore === null) {
       return undefined;
     }
@@ -11927,9 +12502,12 @@ export class DesktopBackendRegistry {
     try {
       return getDesktopMessagingStore();
     } catch (error) {
-      backendRegistryLog.debug("messaging store unavailable for archive cleanup", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      backendRegistryLog.debug(
+        "messaging store unavailable for archive cleanup",
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
       return undefined;
     }
   }
@@ -11952,8 +12530,8 @@ export class DesktopBackendRegistry {
     const cleanup = this.runMessagingCleanupForArchivedThread(params)
       .then((result) => {
         if (
-          (this.archivedMessagingCleanupGeneration.get(key) ?? 0) === generation &&
-          (result.pendingIntentCount > 0 || result.revokedCount > 0)
+          (this.archivedMessagingCleanupGeneration.get(key) ?? 0) === generation
+          && (result.pendingIntentCount > 0 || result.revokedCount > 0)
         ) {
           this.archivedMessagingCleanupCompleted.add(key);
         }
@@ -12008,14 +12586,17 @@ export class DesktopBackendRegistry {
           });
 
         if (revokeResult.revokedCount > 0 || pendingIntentIds.length > 0) {
-          backendRegistryLog.info("archived thread messaging cleanup completed", {
-            backend: params.backend,
-            notifiedCount: revokeResult.notifiedCount,
-            origin: params.origin,
-            pendingIntentCount: pendingIntentIds.length,
-            revokedCount: revokeResult.revokedCount,
-            threadId: params.threadId,
-          });
+          backendRegistryLog.info(
+            "archived thread messaging cleanup completed",
+            {
+              backend: params.backend,
+              notifiedCount: revokeResult.notifiedCount,
+              origin: params.origin,
+              pendingIntentCount: pendingIntentIds.length,
+              revokedCount: revokeResult.revokedCount,
+              threadId: params.threadId,
+            },
+          );
         }
 
         return {
@@ -12070,7 +12651,9 @@ export class DesktopBackendRegistry {
 
   private async recordMessagingBindingUnbound(params: {
     backend: AppServerBackendKind;
-    binding: Awaited<ReturnType<MessagingArchiveCleanupStore["findActiveBindingsForThread"]>>[number];
+    binding: Awaited<
+      ReturnType<MessagingArchiveCleanupStore["findActiveBindingsForThread"]>
+    >[number];
     threadId: string;
   }): Promise<void> {
     const conversation = params.binding.channel.conversation;
@@ -12100,17 +12683,20 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async listCodexThreads(params: {
-    archived?: boolean;
-    enrichDirectories?: boolean;
-    filter?: string;
-    limit?: number;
-    maxPages?: number;
-    skipArchivedMetadataRefresh?: boolean;
-  } = {}, diagnostics?: {
-    callerReason?: string;
-    ownerId?: string;
-  }): Promise<AppServerThreadSummary[]> {
+  private async listCodexThreads(
+    params: {
+      archived?: boolean;
+      enrichDirectories?: boolean;
+      filter?: string;
+      limit?: number;
+      maxPages?: number;
+      skipArchivedMetadataRefresh?: boolean;
+    } = {},
+    diagnostics?: {
+      callerReason?: string;
+      ownerId?: string;
+    },
+  ): Promise<AppServerThreadSummary[]> {
     const defaultThreads = await this.codexClient
       .listThreads(params, diagnostics)
       .catch((error) => {
@@ -12142,9 +12728,9 @@ export class DesktopBackendRegistry {
       });
     Object.assign(overlaysByThreadId, reconciledOverlaysByThreadId);
     if (
-      !params.archived &&
-      params.enrichDirectories === false &&
-      shouldBackfillCodexDirectoryRelationships(diagnostics?.callerReason)
+      !params.archived
+      && params.enrichDirectories === false
+      && shouldBackfillCodexDirectoryRelationships(diagnostics?.callerReason)
     ) {
       const updatedOverlaysByThreadId =
         await this.backfillMissingCodexDirectoryRelationships({
@@ -12261,7 +12847,8 @@ export class DesktopBackendRegistry {
     }
 
     try {
-      const enrichedThreads = await this.codexClient.enrichThreadDirectories(candidates);
+      const enrichedThreads =
+        await this.codexClient.enrichThreadDirectories(candidates);
       const updatedOverlaysByThreadId: Record<
         string,
         ThreadOverlayState | undefined
@@ -12285,7 +12872,8 @@ export class DesktopBackendRegistry {
                 projectKey: thread.projectKey,
                 linkedDirectories: thread.linkedDirectories,
                 overlayExtraLinkedDirectories:
-                  params.overlaysByThreadId[thread.id]?.extraLinkedDirectories ?? [],
+                  params.overlaysByThreadId[thread.id]?.extraLinkedDirectories
+                  ?? [],
               },
             );
           }
@@ -12326,7 +12914,9 @@ export class DesktopBackendRegistry {
   ): AppServerThreadSummary[] {
     const threadIds = new Set(threads.map((thread) => thread.id));
     for (const threadId of threadIds) {
-      this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, threadId));
+      this.pendingStartedThreads.delete(
+        buildThreadIdentityKey(backend, threadId),
+      );
     }
     if (params.archived === true) {
       return threads;
@@ -12334,9 +12924,9 @@ export class DesktopBackendRegistry {
 
     const pendingThreads = [...this.pendingStartedThreads.values()].filter(
       (thread) =>
-        thread.source === backend &&
-        !threadIds.has(thread.id) &&
-        pendingStartedThreadMatchesFilter(thread, params.filter),
+        thread.source === backend
+        && !threadIds.has(thread.id)
+        && pendingStartedThreadMatchesFilter(thread, params.filter),
     );
     if (pendingThreads.length === 0) {
       return threads;
@@ -12378,8 +12968,8 @@ export class DesktopBackendRegistry {
       label: BACKEND_LABELS.codex,
       available,
       account:
-        accountResult.status === "fulfilled" &&
-        isMeaningfulAccountSummary(accountResult.value)
+        accountResult.status === "fulfilled"
+        && isMeaningfulAccountSummary(accountResult.value)
           ? accountResult.value
           : undefined,
       rateLimits:
@@ -12419,7 +13009,9 @@ export class DesktopBackendRegistry {
               : undefined,
         },
       ],
-      unavailableReason: available ? undefined : unavailableReason || "Codex unavailable",
+      unavailableReason: available
+        ? undefined
+        : unavailableReason || "Codex unavailable",
     };
   }
 
@@ -12436,22 +13028,23 @@ export class DesktopBackendRegistry {
         notification.params.turnId,
       );
       const reviewRecord = this.activeReviewSubAgents.get(reviewKey);
-      const completedReviewRecord = this.reviewSubAgentsByReviewTurn.get(reviewKey);
+      const completedReviewRecord =
+        this.reviewSubAgentsByReviewTurn.get(reviewKey);
       const model =
         readTaskMonitorUsageModel({
           notificationModel: notification.params.model,
           tokenUsage: notification.params.tokenUsage,
-        }) ??
-        reviewRecord?.model ??
-        completedReviewRecord?.model;
+        })
+        ?? reviewRecord?.model
+        ?? completedReviewRecord?.model;
       const serviceTier =
-        readTaskMonitorUsageServiceTier(notification.params.tokenUsage) ??
-        reviewRecord?.serviceTier ??
-        completedReviewRecord?.serviceTier;
+        readTaskMonitorUsageServiceTier(notification.params.tokenUsage)
+        ?? reviewRecord?.serviceTier
+        ?? completedReviewRecord?.serviceTier;
       const fastMode =
-        readTaskMonitorUsageFastMode(notification.params.tokenUsage) ??
-        reviewRecord?.fastMode ??
-        completedReviewRecord?.fastMode;
+        readTaskMonitorUsageFastMode(notification.params.tokenUsage)
+        ?? reviewRecord?.fastMode
+        ?? completedReviewRecord?.fastMode;
       const usageSnapshot = buildTaskMonitorUsageSnapshot({
         fastMode,
         model,
@@ -12488,15 +13081,18 @@ export class DesktopBackendRegistry {
         }
         return;
       }
-      const reviewUsagePersisted = await this.persistExistingReviewSubAgentUsage({
-        backend: event.backend,
-        parentThreadId:
-          completedReviewRecord?.parentThreadId ?? notification.params.threadId,
-        reviewThreadId:
-          completedReviewRecord?.reviewThreadId ?? notification.params.threadId,
-        turnId: notification.params.turnId,
-        usage: usageSnapshot,
-      });
+      const reviewUsagePersisted =
+        await this.persistExistingReviewSubAgentUsage({
+          backend: event.backend,
+          parentThreadId:
+            completedReviewRecord?.parentThreadId
+            ?? notification.params.threadId,
+          reviewThreadId:
+            completedReviewRecord?.reviewThreadId
+            ?? notification.params.threadId,
+          turnId: notification.params.turnId,
+          usage: usageSnapshot,
+        });
       if (reviewUsagePersisted) {
         if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
           const line = buildTaskMonitorUsageLine({
@@ -12505,10 +13101,12 @@ export class DesktopBackendRegistry {
             model,
             monitorId: reviewSubAgentId(notification.params.turnId),
             monitorThreadId:
-              completedReviewRecord?.reviewThreadId ?? notification.params.threadId,
+              completedReviewRecord?.reviewThreadId
+              ?? notification.params.threadId,
             monitorTurnId: notification.params.turnId,
             parentThreadId:
-              completedReviewRecord?.parentThreadId ?? notification.params.threadId,
+              completedReviewRecord?.parentThreadId
+              ?? notification.params.threadId,
             serviceTier,
             source: "monitor",
             usage: usageSnapshot,
@@ -12551,7 +13149,8 @@ export class DesktopBackendRegistry {
           backend: event.backend,
           model: monitorRecord.preferredModel,
           monitorId: monitorRecord.monitorId,
-          monitorThreadId: monitorRecord.monitorThreadId ?? notification.params.threadId,
+          monitorThreadId:
+            monitorRecord.monitorThreadId ?? notification.params.threadId,
           monitorTurnId: monitorRecord.monitorTurnId,
           parentThreadId: monitorRecord.parentThreadId,
           source: "monitor",
@@ -12583,7 +13182,9 @@ export class DesktopBackendRegistry {
 
     if (!records.totalUsage || !params.turnId) {
       return {
-        ...(records.totalUsage ? { cumulativeTokenUsage: records.totalUsage } : {}),
+        ...(records.totalUsage
+          ? { cumulativeTokenUsage: records.totalUsage }
+          : {}),
         turnTokenUsage:
           records.latestUsage ?? records.currentUsage ?? params.tokenUsage,
       };
@@ -12612,10 +13213,10 @@ export class DesktopBackendRegistry {
     return {
       cumulativeTokenUsage: records.totalUsage,
       turnTokenUsage:
-        turnTokenUsage ??
-        records.latestUsage ??
-        records.currentUsage ??
-        records.totalUsage,
+        turnTokenUsage
+        ?? records.latestUsage
+        ?? records.currentUsage
+        ?? records.totalUsage,
     };
   }
 
@@ -12628,7 +13229,10 @@ export class DesktopBackendRegistry {
     if (!threadId) {
       return;
     }
-    if (event.backend === "codex" && this.codexNativeSubAgentParents.has(threadId)) {
+    if (
+      event.backend === "codex"
+      && this.codexNativeSubAgentParents.has(threadId)
+    ) {
       return;
     }
     if (
@@ -12645,8 +13249,8 @@ export class DesktopBackendRegistry {
         notification.params.turnId,
       );
       if (
-        this.activeReviewSubAgents.has(reviewKey) ||
-        this.reviewSubAgentsByReviewTurn.has(reviewKey)
+        this.activeReviewSubAgents.has(reviewKey)
+        || this.reviewSubAgentsByReviewTurn.has(reviewKey)
       ) {
         return;
       }
@@ -12658,18 +13262,19 @@ export class DesktopBackendRegistry {
     });
     const tokenUsage = notification.params.tokenUsage;
     const model =
-      (typeof notification.params.model === "string" && notification.params.model.trim()
+      (typeof notification.params.model === "string"
+      && notification.params.model.trim()
         ? notification.params.model.trim()
-        : undefined) ??
-      readUsageString(tokenUsage, ["model", "modelId", "model_id"]) ??
-      overlay?.model;
-    const serviceTier = (
-      readUsageString(tokenUsage, ["serviceTier", "service_tier"]) ??
-      overlay?.serviceTier
-    ) || undefined;
+        : undefined)
+      ?? readUsageString(tokenUsage, ["model", "modelId", "model_id"])
+      ?? overlay?.model;
+    const serviceTier =
+      (readUsageString(tokenUsage, ["serviceTier", "service_tier"])
+        ?? overlay?.serviceTier)
+      || undefined;
     const fastMode =
-      readUsageBoolean(tokenUsage, ["fastMode", "fast_mode"]) ??
-      overlay?.fastMode;
+      readUsageBoolean(tokenUsage, ["fastMode", "fast_mode"])
+      ?? overlay?.fastMode;
     const derivedUsage = this.deriveLiveThreadTokenUsage({
       backend: event.backend,
       threadId,
@@ -12704,10 +13309,12 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async recordCodexNativeSubAgentUsage(event: AgentEvent): Promise<void> {
+  private async recordCodexNativeSubAgentUsage(
+    event: AgentEvent,
+  ): Promise<void> {
     if (
-      event.backend !== "codex" ||
-      event.notification.method !== "thread/tokenUsage/updated"
+      event.backend !== "codex"
+      || event.notification.method !== "thread/tokenUsage/updated"
     ) {
       return;
     }
@@ -12726,11 +13333,14 @@ export class DesktopBackendRegistry {
       (subAgent) => subAgent.monitorId === monitorId,
     );
     if (!existing) {
-      backendRegistryLog.warn("codex native subagent usage had no matching card", {
-        monitorId,
-        parentThreadId,
-        threadId: event.notification.params.threadId,
-      });
+      backendRegistryLog.warn(
+        "codex native subagent usage had no matching card",
+        {
+          monitorId,
+          parentThreadId,
+          threadId: event.notification.params.threadId,
+        },
+      );
       return;
     }
     const notificationParams = readRecord(event.notification.params);
@@ -12782,8 +13392,8 @@ export class DesktopBackendRegistry {
         monitorId,
         monitorThreadId: event.notification.params.threadId,
         monitorTurnId:
-          readOptionalString(notificationParams, ["turnId", "turn_id"]) ??
-          existing.monitorTurnId,
+          readOptionalString(notificationParams, ["turnId", "turn_id"])
+          ?? existing.monitorTurnId,
         parentThreadId,
         serviceTier,
         source: "monitor",
@@ -12819,9 +13429,9 @@ export class DesktopBackendRegistry {
     const monitorId = reviewSubAgentId(params.turnId);
     const existing = overlay?.subAgents?.find(
       (subAgent) =>
-        subAgent.monitorId === monitorId ||
-        (subAgent.monitorThreadId === params.reviewThreadId &&
-          subAgent.monitorTurnId === params.turnId),
+        subAgent.monitorId === monitorId
+        || (subAgent.monitorThreadId === params.reviewThreadId
+          && subAgent.monitorTurnId === params.turnId),
     );
     if (!existing) {
       return false;
@@ -12849,7 +13459,9 @@ export class DesktopBackendRegistry {
     return true;
   }
 
-  private async recordCodexNativeSubAgentActivity(event: AgentEvent): Promise<void> {
+  private async recordCodexNativeSubAgentActivity(
+    event: AgentEvent,
+  ): Promise<void> {
     if (event.backend !== "codex") {
       return;
     }
@@ -12874,12 +13486,15 @@ export class DesktopBackendRegistry {
         continue;
       }
       if (call.receiverThreadIds.length === 0) {
-        backendRegistryLog.warn("codex native subagent call missing receiver thread ids", {
-          itemId: call.itemId,
-          method: event.notification.method,
-          threadId,
-          tool: call.tool,
-        });
+        backendRegistryLog.warn(
+          "codex native subagent call missing receiver thread ids",
+          {
+            itemId: call.itemId,
+            method: event.notification.method,
+            threadId,
+            tool: call.tool,
+          },
+        );
         continue;
       }
 
@@ -12893,7 +13508,9 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async recordCodexNativeSubAgentNames(event: AgentEvent): Promise<void> {
+  private async recordCodexNativeSubAgentNames(
+    event: AgentEvent,
+  ): Promise<void> {
     if (event.backend !== "codex") {
       return;
     }
@@ -12901,16 +13518,20 @@ export class DesktopBackendRegistry {
     if (!params) {
       return;
     }
-    const parentThreadId = readOptionalString(params, ["threadId", "thread_id"]);
+    const parentThreadId = readOptionalString(params, [
+      "threadId",
+      "thread_id",
+    ]);
     const turn = readRecord(params.turn);
     const turnId =
-      readOptionalString(params, ["turnId", "turn_id"]) ?? readOptionalString(turn, ["id"]);
+      readOptionalString(params, ["turnId", "turn_id"])
+      ?? readOptionalString(turn, ["id"]);
     if (!parentThreadId || !turnId) {
       return;
     }
-    const names = textFragmentsFromCodexNotification(event.notification).flatMap(
-      (text) => extractCodexNativeSpawnedAgentNames(text),
-    );
+    const names = textFragmentsFromCodexNotification(
+      event.notification,
+    ).flatMap((text) => extractCodexNativeSpawnedAgentNames(text));
     if (names.length === 0) {
       return;
     }
@@ -12922,9 +13543,9 @@ export class DesktopBackendRegistry {
     const candidates = (overlay?.subAgents ?? [])
       .filter(
         (subAgent) =>
-          subAgent.monitorId.startsWith("codex-native:") &&
-          subAgent.monitorTurnId === turnId &&
-          !subAgent.agentName,
+          subAgent.monitorId.startsWith("codex-native:")
+          && subAgent.monitorTurnId === turnId
+          && !subAgent.agentName,
       )
       .sort((left, right) => left.createdAt - right.createdAt);
     if (candidates.length === 0) {
@@ -12967,9 +13588,9 @@ export class DesktopBackendRegistry {
     if (event.backend !== "codex") {
       return;
     }
-    const notifications = textFragmentsFromCodexNotification(event.notification).flatMap(
-      (text) => extractCodexNativeSubAgentNotifications(text),
-    );
+    const notifications = textFragmentsFromCodexNotification(
+      event.notification,
+    ).flatMap((text) => extractCodexNativeSubAgentNotifications(text));
     if (notifications.length === 0) {
       return;
     }
@@ -12977,8 +13598,8 @@ export class DesktopBackendRegistry {
     const now = Date.now();
     for (const notification of notifications) {
       const parentThreadId =
-        this.codexNativeSubAgentParents.get(notification.receiverThreadId) ??
-        readOptionalString(readRecord(event.notification.params), [
+        this.codexNativeSubAgentParents.get(notification.receiverThreadId)
+        ?? readOptionalString(readRecord(event.notification.params), [
           "threadId",
           "thread_id",
         ]);
@@ -13016,7 +13637,9 @@ export class DesktopBackendRegistry {
         },
       });
       if (terminal) {
-        this.clearCodexNativeSubAgentReconciliation(notification.receiverThreadId);
+        this.clearCodexNativeSubAgentReconciliation(
+          notification.receiverThreadId,
+        );
       }
       this.invalidateThreadListCache("codex");
       await this.emit({
@@ -13037,7 +13660,10 @@ export class DesktopBackendRegistry {
     receiverThreadId: string;
   }): Promise<void> {
     const now = Date.now();
-    this.codexNativeSubAgentParents.set(params.receiverThreadId, params.parentThreadId);
+    this.codexNativeSubAgentParents.set(
+      params.receiverThreadId,
+      params.parentThreadId,
+    );
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: "codex",
       threadId: params.parentThreadId,
@@ -13071,8 +13697,8 @@ export class DesktopBackendRegistry {
       "reasoning_effort",
     ]);
     const agentName =
-      params.call.receiverThreadNames.get(params.receiverThreadId) ??
-      existing?.agentName;
+      params.call.receiverThreadNames.get(params.receiverThreadId)
+      ?? existing?.agentName;
     const outcome = codexNativeSubAgentOutcome(status);
     const nextLastMessage = codexNativeSubAgentMessage({
       agentMessage: agentState.message,
@@ -13080,17 +13706,17 @@ export class DesktopBackendRegistry {
       tool: params.call.tool,
     });
     const lastMessage =
-      existing &&
-      codexNativeSubAgentIsTerminal(existing.status) &&
-      !agentState.message &&
-      existing.lastMessage
+      existing
+      && codexNativeSubAgentIsTerminal(existing.status)
+      && !agentState.message
+      && existing.lastMessage
         ? existing.lastMessage
         : nextLastMessage;
     const subAgent: ThreadSubAgentSummary = {
       monitorId,
       task:
-        existing?.task ??
-        codexNativeSubAgentTask({
+        existing?.task
+        ?? codexNativeSubAgentTask({
           prompt,
           threadId: params.receiverThreadId,
         }),
@@ -13122,7 +13748,9 @@ export class DesktopBackendRegistry {
           ? { outcome: existing.outcome }
           : {}),
       ...(completedAt ? { completedAt } : {}),
-      ...(existing?.monitorUsage ? { monitorUsage: existing.monitorUsage } : {}),
+      ...(existing?.monitorUsage
+        ? { monitorUsage: existing.monitorUsage }
+        : {}),
     };
 
     await this.overlayStore.upsertThreadSubAgent({
@@ -13186,7 +13814,9 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private clearCodexNativeSubAgentReconciliation(receiverThreadId: string): void {
+  private clearCodexNativeSubAgentReconciliation(
+    receiverThreadId: string,
+  ): void {
     const reconciliation =
       this.codexNativeSubAgentReconciliations.get(receiverThreadId);
     if (reconciliation?.timer) {
@@ -13219,8 +13849,9 @@ export class DesktopBackendRegistry {
 
     const now = Date.now();
     if (
-      reconciliation.attempts >= CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_ATTEMPTS ||
-      now - reconciliation.startedAt > CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_AGE_MS
+      reconciliation.attempts >= CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_ATTEMPTS
+      || now - reconciliation.startedAt
+        > CODEX_NATIVE_SUBAGENT_MAX_RECONCILE_AGE_MS
     ) {
       this.clearCodexNativeSubAgentReconciliation(receiverThreadId);
       return;
@@ -13260,7 +13891,8 @@ export class DesktopBackendRegistry {
       });
     }
 
-    const latest = this.codexNativeSubAgentReconciliations.get(receiverThreadId);
+    const latest =
+      this.codexNativeSubAgentReconciliations.get(receiverThreadId);
     if (!latest) {
       return;
     }
@@ -13297,8 +13929,8 @@ export class DesktopBackendRegistry {
     });
     const monitorId = codexNativeSubAgentId(params.receiverThreadId);
     const existing =
-      overlay?.subAgents?.find((subAgent) => subAgent.monitorId === monitorId) ??
-      params.existing;
+      overlay?.subAgents?.find((subAgent) => subAgent.monitorId === monitorId)
+      ?? params.existing;
     if (codexNativeSubAgentIsTerminal(existing.status)) {
       return true;
     }
@@ -13358,32 +13990,39 @@ export class DesktopBackendRegistry {
       monitorId: record.monitorId,
       task: record.task,
       status:
-        patch.status ??
-        existing?.status ??
-        (record.monitorThreadId ? "running" : "pending"),
+        patch.status
+        ?? existing?.status
+        ?? (record.monitorThreadId ? "running" : "pending"),
       createdAt: record.createdAt,
       updatedAt: patch.updatedAt ?? Date.now(),
       backend: record.backend,
       preferredModel: record.preferredModel,
       preferredReasoningEffort: record.preferredReasoningEffort,
-      ...(record.monitorThreadId ? { monitorThreadId: record.monitorThreadId } : {}),
+      ...(record.monitorThreadId
+        ? { monitorThreadId: record.monitorThreadId }
+        : {}),
       ...(record.monitorTurnId ? { monitorTurnId: record.monitorTurnId } : {}),
-      ...(patch.lastMessage ?? existing?.lastMessage
+      ...((patch.lastMessage ?? existing?.lastMessage)
         ? { lastMessage: patch.lastMessage ?? existing?.lastMessage }
         : {}),
-      ...(patch.outcome ?? existing?.outcome
+      ...((patch.outcome ?? existing?.outcome)
         ? { outcome: patch.outcome ?? existing?.outcome }
         : {}),
-      ...(patch.completedAt ?? existing?.completedAt
+      ...((patch.completedAt ?? existing?.completedAt)
         ? { completedAt: patch.completedAt ?? existing?.completedAt }
         : {}),
-      ...(patch.completionSource ?? existing?.completionSource
-        ? { completionSource: patch.completionSource ?? existing?.completionSource }
+      ...((patch.completionSource ?? existing?.completionSource)
+        ? {
+            completionSource:
+              patch.completionSource ?? existing?.completionSource,
+          }
         : {}),
-      ...(patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage
+      ...((patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage)
         ? {
             monitorUsage:
-              patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage,
+              patch.monitorUsage
+              ?? record.latestUsage
+              ?? existing?.monitorUsage,
           }
         : {}),
       pollIntervalSeconds: record.pollIntervalSeconds,
@@ -13438,19 +14077,21 @@ export class DesktopBackendRegistry {
       backend: record.backend,
       monitorThreadId: record.reviewThreadId,
       monitorTurnId: record.turnId,
-      ...(patch.lastMessage ?? existing?.lastMessage
+      ...((patch.lastMessage ?? existing?.lastMessage)
         ? { lastMessage: patch.lastMessage ?? existing?.lastMessage }
         : {}),
-      ...(patch.outcome ?? existing?.outcome
+      ...((patch.outcome ?? existing?.outcome)
         ? { outcome: patch.outcome ?? existing?.outcome }
         : {}),
-      ...(patch.completedAt ?? existing?.completedAt
+      ...((patch.completedAt ?? existing?.completedAt)
         ? { completedAt: patch.completedAt ?? existing?.completedAt }
         : {}),
-      ...(patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage
+      ...((patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage)
         ? {
             monitorUsage:
-              patch.monitorUsage ?? record.latestUsage ?? existing?.monitorUsage,
+              patch.monitorUsage
+              ?? record.latestUsage
+              ?? existing?.monitorUsage,
           }
         : {}),
     };
@@ -13538,14 +14179,20 @@ export class DesktopBackendRegistry {
     }
 
     for (const [key, record] of this.activeReviewSubAgents.entries()) {
-      if (record.backend !== params.backend || record.reviewThreadId !== params.threadId) {
+      if (
+        record.backend !== params.backend
+        || record.reviewThreadId !== params.threadId
+      ) {
         continue;
       }
       const reviewTurnKey = buildActiveTurnModeKey(
         record.reviewThreadId,
         record.turnId,
       );
-      if (this.activeCodexReviewInterruptTurnIds.get(reviewTurnKey) === params.turnId) {
+      if (
+        this.activeCodexReviewInterruptTurnIds.get(reviewTurnKey)
+        === params.turnId
+      ) {
         return { key, record };
       }
     }
@@ -13555,7 +14202,8 @@ export class DesktopBackendRegistry {
 
   private recordTaskMonitorActivity(notification: AppServerNotification): void {
     const params = readRecord(notification.params);
-    const threadId = typeof params?.threadId === "string" ? params.threadId : undefined;
+    const threadId =
+      typeof params?.threadId === "string" ? params.threadId : undefined;
     if (!threadId) {
       return;
     }
@@ -13585,16 +14233,20 @@ export class DesktopBackendRegistry {
 
   private async describeSingleBackend(
     kind: AppServerBackendKind,
-    client: BackendClient
+    client: BackendClient,
   ): Promise<BackendSummary> {
     try {
       const initialize = await client.getInitializeResult();
       const models =
         kind === "grok"
-          ? await this.readGrokDefaultModelsOnce("backend-summary").catch(() => [])
+          ? await this.readGrokDefaultModelsOnce("backend-summary").catch(
+              () => [],
+            )
           : await readClientModels(client).catch(() => []);
       const methods = Array.isArray(initialize.methods)
-        ? initialize.methods.filter((method): method is string => typeof method === "string")
+        ? initialize.methods.filter(
+            (method): method is string => typeof method === "string",
+          )
         : [];
 
       return {
@@ -13628,10 +14280,12 @@ export class DesktopBackendRegistry {
             label: EXECUTION_MODE_SUMMARIES.default.label,
             available: false,
             isDefault: true,
-            unavailableReason: error instanceof Error ? error.message : String(error),
+            unavailableReason:
+              error instanceof Error ? error.message : String(error),
           },
         ],
-        unavailableReason: error instanceof Error ? error.message : String(error),
+        unavailableReason:
+          error instanceof Error ? error.message : String(error),
       };
     }
   }
@@ -13693,7 +14347,9 @@ export class DesktopBackendRegistry {
     return await this.withCodexThreadClient(threadId, operation);
   }
 
-  private findActiveCodexThreadMode(threadId: string): ThreadExecutionMode | undefined {
+  private findActiveCodexThreadMode(
+    threadId: string,
+  ): ThreadExecutionMode | undefined {
     const keyPrefix = `${threadId}:`;
     const modes = new Set<ThreadExecutionMode>();
     for (const [key, mode] of this.activeCodexTurnModes.entries()) {
@@ -13725,7 +14381,9 @@ export class DesktopBackendRegistry {
       archived: false,
       callerReason: "archive-cleanup",
     });
-    const activeThread = activeThreads.find((thread) => thread.id === params.threadId);
+    const activeThread = activeThreads.find(
+      (thread) => thread.id === params.threadId,
+    );
     let archivedThreads: AppServerThreadSummary[] = [];
     try {
       archivedThreads = await this.listThreads({
@@ -13751,7 +14409,9 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const archivedThread = archivedThreads.find((thread) => thread.id === params.threadId);
+    const archivedThread = archivedThreads.find(
+      (thread) => thread.id === params.threadId,
+    );
     if (archivedThread) {
       return {
         activeThreads,
@@ -13772,13 +14432,18 @@ export class DesktopBackendRegistry {
       archived: true,
       callerReason: "thread-restore-worktrees",
     })
-      .then((threads) => threads.find((thread) => thread.id === params.threadId))
+      .then((threads) =>
+        threads.find((thread) => thread.id === params.threadId),
+      )
       .catch((error) => {
-        backendRegistryLog.warn("restore thread worktree metadata lookup failed", {
-          backend: params.backend,
-          threadId: params.threadId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        backendRegistryLog.warn(
+          "restore thread worktree metadata lookup failed",
+          {
+            backend: params.backend,
+            threadId: params.threadId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
         return undefined;
       });
   }
@@ -13793,7 +14458,9 @@ export class DesktopBackendRegistry {
       archived: false,
       callerReason: params.callerReason ?? "workspace-handoff",
     })
-      .then((threads) => threads.find((thread) => thread.id === params.threadId))
+      .then((threads) =>
+        threads.find((thread) => thread.id === params.threadId),
+      )
       .catch(() => undefined);
   }
 
@@ -13828,8 +14495,11 @@ export class DesktopBackendRegistry {
       return threadCwd.trim();
     }
 
-    return resolveLinkedDirectoryWorkspaceCwd(overlay?.extraLinkedDirectories)?.trim() ||
-      undefined;
+    return (
+      resolveLinkedDirectoryWorkspaceCwd(
+        overlay?.extraLinkedDirectories,
+      )?.trim() || undefined
+    );
   }
 
   private async recordCodexWorktreeOwnerThread(params: {
@@ -13878,20 +14548,25 @@ export class DesktopBackendRegistry {
 
     const directory =
       request.direction === "worktree-to-local"
-        ? thread.linkedDirectories.find((candidate) => candidate.kind === "worktree")
-        : thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
-          thread.linkedDirectories[0];
+        ? thread.linkedDirectories.find(
+            (candidate) => candidate.kind === "worktree",
+          )
+        : (thread.linkedDirectories.find(
+            (candidate) => candidate.kind === "local",
+          ) ?? thread.linkedDirectories[0]);
     const sourcePath =
       request.direction === "worktree-to-local"
-        ? directory?.worktreePath ?? directory?.path
-        : directory?.path ?? thread.projectKey;
+        ? (directory?.worktreePath ?? directory?.path)
+        : (directory?.path ?? thread.projectKey);
     const repositoryPath =
       request.direction === "worktree-to-local"
-        ? directory?.path ?? request.repositoryPath
-        : directory?.path ?? thread.projectKey ?? request.repositoryPath;
+        ? (directory?.path ?? request.repositoryPath)
+        : (directory?.path ?? thread.projectKey ?? request.repositoryPath);
 
     if (!sourcePath || !repositoryPath) {
-      throw new Error("Thread does not have an eligible Git workspace for handoff.");
+      throw new Error(
+        "Thread does not have an eligible Git workspace for handoff.",
+      );
     }
 
     return {
@@ -13931,137 +14606,159 @@ export class DesktopBackendRegistry {
     ];
 
     if (uniqueCandidates.length === 0) {
-      backendRegistryLog.warn("archive thread worktree cleanup skipped: no worktree candidates", {
-        backend: params.backend,
-        threadId: params.thread.id,
-        linkedDirectoryCount: params.thread.linkedDirectories.length,
-        projectKey: params.thread.projectKey,
-        gitBranch: params.thread.observedGitBranch ?? params.thread.gitBranch,
-      });
+      backendRegistryLog.warn(
+        "archive thread worktree cleanup skipped: no worktree candidates",
+        {
+          backend: params.backend,
+          threadId: params.thread.id,
+          linkedDirectoryCount: params.thread.linkedDirectories.length,
+          projectKey: params.thread.projectKey,
+          gitBranch: params.thread.observedGitBranch ?? params.thread.gitBranch,
+        },
+      );
       return [];
     }
 
     return await Promise.all(
-      uniqueCandidates.map(async (candidate): Promise<ArchiveThreadCleanupResult> => {
-        try {
-          const activeUsers = this.findActiveThreadsUsingWorktree({
-            activeThreads: params.activeThreads,
-            archivedThreadId: params.thread.id,
-            worktreePath: candidate.worktreePath,
-          });
-          if (activeUsers.length > 0) {
-            const activeThreadIds = activeUsers.map((thread) => thread.id);
-            const skippedReason =
-              activeThreadIds.length === 1
-                ? `Worktree is still used by another active thread: ${activeThreadIds[0]}.`
-                : `Worktree is still used by other active threads: ${activeThreadIds.join(", ")}.`;
-            backendRegistryLog.info("archive thread worktree cleanup skipped: shared worktree", {
+      uniqueCandidates.map(
+        async (candidate): Promise<ArchiveThreadCleanupResult> => {
+          try {
+            const activeUsers = this.findActiveThreadsUsingWorktree({
+              activeThreads: params.activeThreads,
+              archivedThreadId: params.thread.id,
+              worktreePath: candidate.worktreePath,
+            });
+            if (activeUsers.length > 0) {
+              const activeThreadIds = activeUsers.map((thread) => thread.id);
+              const skippedReason =
+                activeThreadIds.length === 1
+                  ? `Worktree is still used by another active thread: ${activeThreadIds[0]}.`
+                  : `Worktree is still used by other active threads: ${activeThreadIds.join(", ")}.`;
+              backendRegistryLog.info(
+                "archive thread worktree cleanup skipped: shared worktree",
+                {
+                  backend: params.backend,
+                  threadId: params.thread.id,
+                  activeThreadIds,
+                  repositoryPath: candidate.repositoryPath,
+                  worktreePath: candidate.worktreePath,
+                },
+              );
+              return {
+                worktreePath: candidate.worktreePath,
+                branch:
+                  params.thread.observedGitBranch ?? params.thread.gitBranch,
+                removedWorktree: false,
+                deletedBranch: false,
+                skippedReason,
+              };
+            }
+
+            backendRegistryLog.info(
+              "archive thread worktree cleanup removing worktree",
+              {
+                backend: params.backend,
+                threadId: params.thread.id,
+                repositoryPath: candidate.repositoryPath,
+                worktreePath: candidate.worktreePath,
+              },
+            );
+            const snapshot = await this.worktreeArchiveService.archive({
               backend: params.backend,
               threadId: params.thread.id,
-              activeThreadIds,
+              worktreePath: candidate.worktreePath,
+              repositoryPath: candidate.repositoryPath,
+            });
+            await this.overlayStore.upsertWorktreeSnapshot({
+              backend: params.backend,
+              threadId: params.thread.id,
+              snapshot,
+            });
+            await this.retainSharedWorktreeSnapshotForArchivedThreads({
+              archivedThreadId: params.thread.id,
+              archivedThreads: params.archivedThreads,
+              backend: params.backend,
+              snapshot,
+              worktreePath: candidate.worktreePath,
+            });
+
+            let worktreeStillExists = false;
+            try {
+              worktreeStillExists = await pathExists(snapshot.worktreePath);
+            } catch (sentinelError) {
+              const error =
+                sentinelError instanceof Error
+                  ? sentinelError.message
+                  : String(sentinelError);
+              backendRegistryLog.error(
+                "archive thread worktree cleanup sentinel failed",
+                {
+                  backend: params.backend,
+                  threadId: params.thread.id,
+                  repositoryPath: snapshot.repositoryPath,
+                  worktreePath: snapshot.worktreePath,
+                  error,
+                },
+              );
+              return {
+                worktreePath: snapshot.worktreePath,
+                branch: snapshot.sourceBranch,
+                removedWorktree: false,
+                deletedBranch: false,
+                error: `Unable to verify worktree removal: ${error}`,
+              };
+            }
+
+            if (worktreeStillExists) {
+              const error =
+                "Worktree directory still exists after archive cleanup.";
+              backendRegistryLog.error(
+                "archive thread worktree cleanup left worktree directory",
+                {
+                  backend: params.backend,
+                  threadId: params.thread.id,
+                  repositoryPath: snapshot.repositoryPath,
+                  worktreePath: snapshot.worktreePath,
+                  branch: snapshot.sourceBranch,
+                  snapshotRef: snapshot.snapshotRef,
+                  snapshotCommit: snapshot.snapshotCommit,
+                  error,
+                },
+              );
+              return {
+                worktreePath: snapshot.worktreePath,
+                branch: snapshot.sourceBranch,
+                removedWorktree: false,
+                deletedBranch: false,
+                error,
+              };
+            }
+
+            return {
+              worktreePath: snapshot.worktreePath,
+              branch: snapshot.sourceBranch,
+              removedWorktree: true,
+              deletedBranch: false,
+            };
+          } catch (error) {
+            backendRegistryLog.warn("archive thread worktree cleanup failed", {
+              backend: params.backend,
+              threadId: params.thread.id,
               repositoryPath: candidate.repositoryPath,
               worktreePath: candidate.worktreePath,
+              error: error instanceof Error ? error.message : String(error),
             });
             return {
               worktreePath: candidate.worktreePath,
-              branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
+              branch:
+                params.thread.observedGitBranch ?? params.thread.gitBranch,
               removedWorktree: false,
               deletedBranch: false,
-              skippedReason,
+              error: error instanceof Error ? error.message : String(error),
             };
           }
-
-          backendRegistryLog.info("archive thread worktree cleanup removing worktree", {
-            backend: params.backend,
-            threadId: params.thread.id,
-            repositoryPath: candidate.repositoryPath,
-            worktreePath: candidate.worktreePath,
-          });
-          const snapshot = await this.worktreeArchiveService.archive({
-            backend: params.backend,
-            threadId: params.thread.id,
-            worktreePath: candidate.worktreePath,
-            repositoryPath: candidate.repositoryPath,
-          });
-          await this.overlayStore.upsertWorktreeSnapshot({
-            backend: params.backend,
-            threadId: params.thread.id,
-            snapshot,
-          });
-          await this.retainSharedWorktreeSnapshotForArchivedThreads({
-            archivedThreadId: params.thread.id,
-            archivedThreads: params.archivedThreads,
-            backend: params.backend,
-            snapshot,
-            worktreePath: candidate.worktreePath,
-          });
-
-          let worktreeStillExists = false;
-          try {
-            worktreeStillExists = await pathExists(snapshot.worktreePath);
-          } catch (sentinelError) {
-            const error =
-              sentinelError instanceof Error ? sentinelError.message : String(sentinelError);
-            backendRegistryLog.error("archive thread worktree cleanup sentinel failed", {
-              backend: params.backend,
-              threadId: params.thread.id,
-              repositoryPath: snapshot.repositoryPath,
-              worktreePath: snapshot.worktreePath,
-              error,
-            });
-            return {
-              worktreePath: snapshot.worktreePath,
-              branch: snapshot.sourceBranch,
-              removedWorktree: false,
-              deletedBranch: false,
-              error: `Unable to verify worktree removal: ${error}`,
-            };
-          }
-
-          if (worktreeStillExists) {
-            const error = "Worktree directory still exists after archive cleanup.";
-            backendRegistryLog.error("archive thread worktree cleanup left worktree directory", {
-              backend: params.backend,
-              threadId: params.thread.id,
-              repositoryPath: snapshot.repositoryPath,
-              worktreePath: snapshot.worktreePath,
-              branch: snapshot.sourceBranch,
-              snapshotRef: snapshot.snapshotRef,
-              snapshotCommit: snapshot.snapshotCommit,
-              error,
-            });
-            return {
-              worktreePath: snapshot.worktreePath,
-              branch: snapshot.sourceBranch,
-              removedWorktree: false,
-              deletedBranch: false,
-              error,
-            };
-          }
-
-          return {
-            worktreePath: snapshot.worktreePath,
-            branch: snapshot.sourceBranch,
-            removedWorktree: true,
-            deletedBranch: false,
-          };
-        } catch (error) {
-          backendRegistryLog.warn("archive thread worktree cleanup failed", {
-            backend: params.backend,
-            threadId: params.thread.id,
-            repositoryPath: candidate.repositoryPath,
-            worktreePath: candidate.worktreePath,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return {
-            worktreePath: candidate.worktreePath,
-            branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
-            removedWorktree: false,
-            deletedBranch: false,
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      }),
+        },
+      ),
     );
   }
 
@@ -14072,17 +14769,23 @@ export class DesktopBackendRegistry {
     snapshot: WorktreeSnapshotSummary;
     worktreePath: string;
   }): Promise<void> {
-    const archivedWorktreePath = normalizeWorktreePathForComparison(params.worktreePath);
+    const archivedWorktreePath = normalizeWorktreePathForComparison(
+      params.worktreePath,
+    );
     const siblingThreads = params.archivedThreads.filter((thread) => {
-      if (thread.source !== params.backend || thread.id === params.archivedThreadId) {
+      if (
+        thread.source !== params.backend
+        || thread.id === params.archivedThreadId
+      ) {
         return false;
       }
 
       return thread.linkedDirectories.some((directory) => {
         const candidatePath = linkedDirectoryWorktreePath(directory);
         return (
-          candidatePath !== undefined &&
-          normalizeWorktreePathForComparison(candidatePath) === archivedWorktreePath
+          candidatePath !== undefined
+          && normalizeWorktreePathForComparison(candidatePath)
+            === archivedWorktreePath
         );
       });
     });
@@ -14110,7 +14813,9 @@ export class DesktopBackendRegistry {
     archivedThreadId: string;
     worktreePath: string;
   }): AppServerThreadSummary[] {
-    const archivedWorktreePath = normalizeWorktreePathForComparison(params.worktreePath);
+    const archivedWorktreePath = normalizeWorktreePathForComparison(
+      params.worktreePath,
+    );
     return params.activeThreads.filter((thread) => {
       if (thread.id === params.archivedThreadId) {
         return false;
@@ -14119,8 +14824,9 @@ export class DesktopBackendRegistry {
       return thread.linkedDirectories.some((directory) => {
         const candidatePath = linkedDirectoryWorktreePath(directory);
         return (
-          candidatePath !== undefined &&
-          normalizeWorktreePathForComparison(candidatePath) === archivedWorktreePath
+          candidatePath !== undefined
+          && normalizeWorktreePathForComparison(candidatePath)
+            === archivedWorktreePath
         );
       });
     });
@@ -14263,8 +14969,8 @@ export class DesktopBackendRegistry {
       .filter((snapshot) => snapshot.state !== "present")
       .sort(
         (left, right) =>
-          (right.archivedAt ?? right.restoredAt ?? right.createdAt) -
-          (left.archivedAt ?? left.restoredAt ?? left.createdAt),
+          (right.archivedAt ?? right.restoredAt ?? right.createdAt)
+          - (left.archivedAt ?? left.restoredAt ?? left.createdAt),
       )
       .map((snapshot) => ({
         repositoryPath: snapshot.repositoryPath,
@@ -14276,14 +14982,16 @@ export class DesktopBackendRegistry {
       snapshotCandidates,
     );
     const seenWorktreePaths = new Set<string>();
-    return [...snapshotCandidates, ...metadataCandidates].filter((candidate) => {
-      const resolvedPath = path.resolve(candidate.worktreePath);
-      if (seenWorktreePaths.has(resolvedPath)) {
-        return false;
-      }
-      seenWorktreePaths.add(resolvedPath);
-      return true;
-    });
+    return [...snapshotCandidates, ...metadataCandidates].filter(
+      (candidate) => {
+        const resolvedPath = path.resolve(candidate.worktreePath);
+        if (seenWorktreePaths.has(resolvedPath)) {
+          return false;
+        }
+        seenWorktreePaths.add(resolvedPath);
+        return true;
+      },
+    );
   }
 
   private buildRestoreThreadMetadataCandidates(
@@ -14294,33 +15002,36 @@ export class DesktopBackendRegistry {
       return [];
     }
 
-    const fallbackRepositoryPath = snapshotCandidates.find(
-      (candidate) => candidate.repositoryPath?.trim(),
+    const fallbackRepositoryPath = snapshotCandidates.find((candidate) =>
+      candidate.repositoryPath?.trim(),
     )?.repositoryPath;
     const branch = thread.observedGitBranch ?? thread.gitBranch;
 
-    return thread.linkedDirectories.flatMap((directory): WorktreeRestoreCandidate[] => {
-      const worktreePath =
-        directory.worktreePath ?? (directory.kind === "worktree" ? directory.path : undefined);
-      if (!worktreePath?.trim()) {
-        return [];
-      }
+    return thread.linkedDirectories.flatMap(
+      (directory): WorktreeRestoreCandidate[] => {
+        const worktreePath =
+          directory.worktreePath
+          ?? (directory.kind === "worktree" ? directory.path : undefined);
+        if (!worktreePath?.trim()) {
+          return [];
+        }
 
-      const repositoryPath =
-        directory.path.trim() &&
-        !isToolManagedWorktreePath(directory.path) &&
-        path.resolve(directory.path) !== path.resolve(worktreePath)
-          ? directory.path
-          : fallbackRepositoryPath;
+        const repositoryPath =
+          directory.path.trim()
+          && !isToolManagedWorktreePath(directory.path)
+          && path.resolve(directory.path) !== path.resolve(worktreePath)
+            ? directory.path
+            : fallbackRepositoryPath;
 
-      return [
-        {
-          branch,
-          repositoryPath,
-          worktreePath,
-        },
-      ];
-    });
+        return [
+          {
+            branch,
+            repositoryPath,
+            worktreePath,
+          },
+        ];
+      },
+    );
   }
 
   private async restoreWithClient(
@@ -14378,11 +15089,14 @@ export class DesktopBackendRegistry {
         await updateWithClient(this.grokClient);
       }
     } catch (error) {
-      backendRegistryLog.warn("thread git metadata update failed after handoff", {
-        backend: params.backend,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: params.threadId,
-      });
+      backendRegistryLog.warn(
+        "thread git metadata update failed after handoff",
+        {
+          backend: params.backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: params.threadId,
+        },
+      );
     }
   }
 
@@ -14396,8 +15110,8 @@ export class DesktopBackendRegistry {
       return;
     }
     if (
-      this.threadTitleGenerationService.canGenerateTitle &&
-      !this.threadTitleGenerationService.canGenerateTitle(params.backend)
+      this.threadTitleGenerationService.canGenerateTitle
+      && !this.threadTitleGenerationService.canGenerateTitle(params.backend)
     ) {
       return;
     }
@@ -14457,7 +15171,9 @@ export class DesktopBackendRegistry {
     key: string;
     token: number;
   }): Promise<void> {
-    let generatedResult: Extract<ThreadTitleGenerationResult, { status: "generated" }> | undefined;
+    let generatedResult:
+      | Extract<ThreadTitleGenerationResult, { status: "generated" }>
+      | undefined;
     try {
       const currentThread = await this.findThreadForTitleGeneration({
         backend: params.backend,
@@ -14469,7 +15185,7 @@ export class DesktopBackendRegistry {
           "skipped",
           params,
           "current_title_not_eligible",
-          buildTitleEligibilityLogDetails(currentThread, params.prompt)
+          buildTitleEligibilityLogDetails(currentThread, params.prompt),
         );
         await this.safePersistExistingTitleHelperSubAgent({
           backend: params.backend,
@@ -14486,7 +15202,9 @@ export class DesktopBackendRegistry {
           backend: params.backend,
           threadId: params.threadId,
           status: "running",
-          ...(titleHelperRuntime.model ? { model: titleHelperRuntime.model } : {}),
+          ...(titleHelperRuntime.model
+            ? { model: titleHelperRuntime.model }
+            : {}),
           ...(titleHelperRuntime.reasoningEffort
             ? { reasoningEffort: titleHelperRuntime.reasoningEffort }
             : {}),
@@ -14494,7 +15212,9 @@ export class DesktopBackendRegistry {
         });
       }
       this.logThreadTitleGeneration("requesting", params, undefined, {
-        promptTitle: truncateLogValue(shortenDerivedThreadTitle(params.prompt) ?? params.prompt),
+        promptTitle: truncateLogValue(
+          shortenDerivedThreadTitle(params.prompt) ?? params.prompt,
+        ),
       });
       const result = await this.threadTitleGenerationService?.generateTitle({
         backend: params.backend,
@@ -14505,7 +15225,7 @@ export class DesktopBackendRegistry {
         this.logThreadTitleGeneration(
           result?.status ?? "unavailable",
           params,
-          result?.reason ?? "title_generation_unavailable"
+          result?.reason ?? "title_generation_unavailable",
         );
         await this.safePersistExistingTitleHelperSubAgent({
           backend: params.backend,
@@ -14547,12 +15267,15 @@ export class DesktopBackendRegistry {
         callerReason: "title-generation",
         threadId: params.threadId,
       });
-      if (latestThread && !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
+      if (
+        latestThread
+        && !isEligibleForGeneratedTitle(latestThread, params.prompt)
+      ) {
         this.logThreadTitleGeneration(
           "skipped",
           params,
           "latest_title_not_eligible",
-          buildTitleEligibilityLogDetails(latestThread, params.prompt)
+          buildTitleEligibilityLogDetails(latestThread, params.prompt),
         );
         await this.safePersistExistingTitleHelperSubAgent({
           backend: params.backend,
@@ -14595,11 +15318,7 @@ export class DesktopBackendRegistry {
           reason,
         });
       }
-      this.logThreadTitleGeneration(
-        "failed",
-        params,
-        reason
-      );
+      this.logThreadTitleGeneration("failed", params, reason);
     } finally {
       const pending = this.pendingTitleGenerations.get(params.key);
       if (pending?.token === params.token) {
@@ -14625,7 +15344,8 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
         status: params.status,
         reason: params.reason ?? null,
-        persistenceError: error instanceof Error ? error.message : String(error),
+        persistenceError:
+          error instanceof Error ? error.message : String(error),
       });
     }
   }
@@ -14645,7 +15365,11 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
       });
       const monitorId = titleHelperSubAgentId(params.backend, params.threadId);
-      if (!overlay?.subAgents?.some((subAgent) => subAgent.monitorId === monitorId)) {
+      if (
+        !overlay?.subAgents?.some(
+          (subAgent) => subAgent.monitorId === monitorId,
+        )
+      ) {
         return;
       }
     } catch (error) {
@@ -14675,15 +15399,23 @@ export class DesktopBackendRegistry {
       callerReason: "title-generation",
       threadId: params.threadId,
     });
-    if (latestThread && !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
+    if (
+      latestThread
+      && !isEligibleForGeneratedTitle(latestThread, params.prompt)
+    ) {
       return;
     }
     await this.renameAcpSession(params.backend, params.threadId, title, {
       titleSource: "fallback",
     });
-    this.logThreadTitleGeneration("applied", params, "prompt_derived_fallback", {
-      generatedTitle: truncateLogValue(title),
-    });
+    this.logThreadTitleGeneration(
+      "applied",
+      params,
+      "prompt_derived_fallback",
+      {
+        generatedTitle: truncateLogValue(title),
+      },
+    );
   }
 
   private async persistTitleHelperSubAgent(params: {
@@ -14714,13 +15446,13 @@ export class DesktopBackendRegistry {
     const preferredModel =
       params.result?.model ?? params.model ?? existing?.preferredModel;
     const preferredReasoningEffort =
-      params.result?.reasoningEffort ??
-      params.reasoningEffort ??
-      existing?.preferredReasoningEffort;
+      params.result?.reasoningEffort
+      ?? params.reasoningEffort
+      ?? existing?.preferredReasoningEffort;
     const terminal =
-      params.status === "success" ||
-      params.status === "failed" ||
-      params.status === "cancelled";
+      params.status === "success"
+      || params.status === "failed"
+      || params.status === "cancelled";
     const outcome =
       params.status === "success"
         ? "success"
@@ -14738,13 +15470,13 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       agentName: "PwrAgent",
       ...(preferredModel ? { preferredModel } : {}),
-      ...(preferredReasoningEffort
-        ? { preferredReasoningEffort }
-        : {}),
+      ...(preferredReasoningEffort ? { preferredReasoningEffort } : {}),
       ...(params.result?.helperThreadId
         ? { monitorThreadId: params.result.helperThreadId }
         : {}),
-      ...(params.result?.helperTurnId ? { monitorTurnId: params.result.helperTurnId } : {}),
+      ...(params.result?.helperTurnId
+        ? { monitorTurnId: params.result.helperTurnId }
+        : {}),
       lastMessage: titleHelperSubAgentMessage(params),
       ...(outcome ? { outcome } : {}),
       ...(terminal ? { completedAt: now } : {}),
@@ -14782,9 +15514,9 @@ export class DesktopBackendRegistry {
       },
     });
     if (
-      usageSnapshot &&
-      params.result?.helperThreadId &&
-      typeof this.overlayStore.upsertThreadUsageLine === "function"
+      usageSnapshot
+      && params.result?.helperThreadId
+      && typeof this.overlayStore.upsertThreadUsageLine === "function"
     ) {
       const line = buildTaskMonitorUsageLine({
         backend: params.backend,
@@ -14821,14 +15553,15 @@ export class DesktopBackendRegistry {
     }
     const session = this.acpBackend.getSession(params.backend, params.threadId);
     const model =
-      session?.acpRuntime?.currentModelId ??
-      (typeof session?.acpRuntime?.configValues?.model === "string"
+      session?.acpRuntime?.currentModelId
+      ?? (typeof session?.acpRuntime?.configValues?.model === "string"
         ? session.acpRuntime.configValues.model
         : undefined);
     const reasoningEffort =
       typeof session?.acpRuntime?.configValues?.reasoningEffort === "string"
         ? session.acpRuntime.configValues.reasoningEffort
-        : typeof session?.acpRuntime?.configValues?.reasoning_effort === "string"
+        : typeof session?.acpRuntime?.configValues?.reasoning_effort
+            === "string"
           ? session.acpRuntime.configValues.reasoning_effort
           : undefined;
     return {
@@ -14843,15 +15576,26 @@ export class DesktopBackendRegistry {
     title: string;
   }): Promise<void> {
     if (isAcpBackendId(params.backend)) {
-      await this.renameAcpSession(params.backend, params.threadId, params.title, {
-        titleSource: "derived",
-      });
+      await this.renameAcpSession(
+        params.backend,
+        params.threadId,
+        params.title,
+        {
+          titleSource: "derived",
+        },
+      );
     } else if (params.backend === "codex") {
-      await this.withCodexThreadClient(params.threadId, async (client) =>
-        await this.renameWithClient(client, params.threadId, params.title)
+      await this.withCodexThreadClient(
+        params.threadId,
+        async (client) =>
+          await this.renameWithClient(client, params.threadId, params.title),
       );
     } else {
-      await this.renameWithClient(this.grokClient, params.threadId, params.title);
+      await this.renameWithClient(
+        this.grokClient,
+        params.threadId,
+        params.title,
+      );
     }
   }
 
@@ -14884,7 +15628,11 @@ export class DesktopBackendRegistry {
       reason: reason ?? null,
       ...details,
     };
-    if (status === "failed" || status === "invalid" || status === "unavailable") {
+    if (
+      status === "failed"
+      || status === "invalid"
+      || status === "unavailable"
+    ) {
       backendRegistryLog.warn("threadTitleGeneration", payload);
       return;
     }
@@ -14896,7 +15644,10 @@ export class DesktopBackendRegistry {
     request: AppServerPendingRequestNotification,
   ): Promise<unknown> {
     if (isAcpBackendId(backend) && isAcpPermissionRequest(request)) {
-      const session = this.acpBackend.getSession(backend, request.params.threadId);
+      const session = this.acpBackend.getSession(
+        backend,
+        request.params.threadId,
+      );
       const runtimeCapabilities =
         this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
       const runtimeControlsExecutionMode = acpRuntimeHasExecutionModeSelection({
@@ -14930,32 +15681,38 @@ export class DesktopBackendRegistry {
       params: request.params,
     });
     if (
-      dynamicToolCall &&
-      isAutomationInspectionDynamicToolCall(dynamicToolCall)
+      dynamicToolCall
+      && isAutomationInspectionDynamicToolCall(dynamicToolCall)
     ) {
       if (!this.isLiveDynamicToolCall(backend, dynamicToolCall)) {
-        backendRegistryLog.warn("rejecting automation inspection dynamic tool call", {
-          backend,
-          callId: dynamicToolCall.callId,
-          namespace: dynamicToolCall.namespace,
-          threadId: dynamicToolCall.threadId,
-          tool: dynamicToolCall.tool,
-          turnId: dynamicToolCall.turnId,
-        });
+        backendRegistryLog.warn(
+          "rejecting automation inspection dynamic tool call",
+          {
+            backend,
+            callId: dynamicToolCall.callId,
+            namespace: dynamicToolCall.namespace,
+            threadId: dynamicToolCall.threadId,
+            tool: dynamicToolCall.tool,
+            turnId: dynamicToolCall.turnId,
+          },
+        );
         return buildAutomationInspectionDynamicToolErrorResponse({
           code: "forbidden",
           message:
             "Automation inspection tool calls must originate from an active turn on the same thread.",
         });
       }
-      backendRegistryLog.info("handling automation inspection dynamic tool call", {
-        backend,
-        callId: dynamicToolCall.callId,
-        namespace: dynamicToolCall.namespace,
-        threadId: dynamicToolCall.threadId,
-        tool: dynamicToolCall.tool,
-        turnId: dynamicToolCall.turnId,
-      });
+      backendRegistryLog.info(
+        "handling automation inspection dynamic tool call",
+        {
+          backend,
+          callId: dynamicToolCall.callId,
+          namespace: dynamicToolCall.namespace,
+          threadId: dynamicToolCall.threadId,
+          tool: dynamicToolCall.tool,
+          turnId: dynamicToolCall.turnId,
+        },
+      );
       return await handleAutomationInspectionDynamicToolCall({
         backend,
         call: dynamicToolCall,
@@ -14968,14 +15725,17 @@ export class DesktopBackendRegistry {
     });
     if (threadToolCall && isPwrAgentThreadDynamicToolCall(threadToolCall)) {
       if (!this.isLiveDynamicToolCall(backend, threadToolCall)) {
-        backendRegistryLog.warn("rejecting thread inspection dynamic tool call", {
-          backend,
-          callId: threadToolCall.callId,
-          namespace: threadToolCall.namespace,
-          threadId: threadToolCall.threadId,
-          tool: threadToolCall.tool,
-          turnId: threadToolCall.turnId,
-        });
+        backendRegistryLog.warn(
+          "rejecting thread inspection dynamic tool call",
+          {
+            backend,
+            callId: threadToolCall.callId,
+            namespace: threadToolCall.namespace,
+            threadId: threadToolCall.threadId,
+            tool: threadToolCall.tool,
+            turnId: threadToolCall.turnId,
+          },
+        );
         return buildPwrAgentThreadDynamicToolErrorResponse({
           code: "forbidden",
           message:
@@ -15037,32 +15797,40 @@ export class DesktopBackendRegistry {
         params: request.params,
       });
     if (
-      threadOrchestrationToolCall &&
-      isPwrAgentThreadOrchestrationDynamicToolCall(threadOrchestrationToolCall)
+      threadOrchestrationToolCall
+      && isPwrAgentThreadOrchestrationDynamicToolCall(
+        threadOrchestrationToolCall,
+      )
     ) {
       if (!this.isLiveDynamicToolCall(backend, threadOrchestrationToolCall)) {
-        backendRegistryLog.warn("rejecting thread orchestration dynamic tool call", {
-          backend,
-          callId: threadOrchestrationToolCall.callId,
-          namespace: threadOrchestrationToolCall.namespace,
-          threadId: threadOrchestrationToolCall.threadId,
-          tool: threadOrchestrationToolCall.tool,
-          turnId: threadOrchestrationToolCall.turnId,
-        });
+        backendRegistryLog.warn(
+          "rejecting thread orchestration dynamic tool call",
+          {
+            backend,
+            callId: threadOrchestrationToolCall.callId,
+            namespace: threadOrchestrationToolCall.namespace,
+            threadId: threadOrchestrationToolCall.threadId,
+            tool: threadOrchestrationToolCall.tool,
+            turnId: threadOrchestrationToolCall.turnId,
+          },
+        );
         return buildPwrAgentThreadOrchestrationDynamicToolErrorResponse({
           code: "forbidden",
           message:
             "Thread handoff tool calls must originate from an active turn on the same thread.",
         });
       }
-      backendRegistryLog.info("handling thread orchestration dynamic tool call", {
-        backend,
-        callId: threadOrchestrationToolCall.callId,
-        namespace: threadOrchestrationToolCall.namespace,
-        threadId: threadOrchestrationToolCall.threadId,
-        tool: threadOrchestrationToolCall.tool,
-        turnId: threadOrchestrationToolCall.turnId,
-      });
+      backendRegistryLog.info(
+        "handling thread orchestration dynamic tool call",
+        {
+          backend,
+          callId: threadOrchestrationToolCall.callId,
+          namespace: threadOrchestrationToolCall.namespace,
+          threadId: threadOrchestrationToolCall.threadId,
+          tool: threadOrchestrationToolCall.tool,
+          turnId: threadOrchestrationToolCall.turnId,
+        },
+      );
       return await handlePwrAgentThreadOrchestrationDynamicToolCall({
         backend,
         call: threadOrchestrationToolCall,
@@ -15075,18 +15843,21 @@ export class DesktopBackendRegistry {
       params: request.params,
     });
     if (
-      messagingToolCall &&
-      isPwrAgentMessagingDynamicToolCall(messagingToolCall)
+      messagingToolCall
+      && isPwrAgentMessagingDynamicToolCall(messagingToolCall)
     ) {
       if (!this.isLiveDynamicToolCall(backend, messagingToolCall)) {
-        backendRegistryLog.warn("rejecting messaging context dynamic tool call", {
-          backend,
-          callId: messagingToolCall.callId,
-          namespace: messagingToolCall.namespace,
-          threadId: messagingToolCall.threadId,
-          tool: messagingToolCall.tool,
-          turnId: messagingToolCall.turnId,
-        });
+        backendRegistryLog.warn(
+          "rejecting messaging context dynamic tool call",
+          {
+            backend,
+            callId: messagingToolCall.callId,
+            namespace: messagingToolCall.namespace,
+            threadId: messagingToolCall.threadId,
+            tool: messagingToolCall.tool,
+            turnId: messagingToolCall.turnId,
+          },
+        );
         return buildPwrAgentMessagingDynamicToolErrorResponse({
           code: "forbidden",
           message:
@@ -15112,18 +15883,22 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    if (taskMonitorToolCall && isTaskMonitorDynamicToolCall(taskMonitorToolCall)) {
+    if (
+      taskMonitorToolCall
+      && isTaskMonitorDynamicToolCall(taskMonitorToolCall)
+    ) {
       if (backend !== "codex") {
         return buildTaskMonitorDynamicToolErrorResponse({
           code: "forbidden",
-          message: "Task monitor dynamic tools are only available for Codex threads.",
+          message:
+            "Task monitor dynamic tools are only available for Codex threads.",
         });
       }
       const requiresActiveTurn =
         taskMonitorToolCall.tool === "create_monitor_delegation";
       if (
-        requiresActiveTurn &&
-        !this.isLiveDynamicToolCall(backend, taskMonitorToolCall)
+        requiresActiveTurn
+        && !this.isLiveDynamicToolCall(backend, taskMonitorToolCall)
       ) {
         backendRegistryLog.warn("rejecting task monitor dynamic tool call", {
           backend,
@@ -15160,18 +15935,21 @@ export class DesktopBackendRegistry {
       request,
     );
     if (headlessAutomation) {
-      backendRegistryLog.warn("auto-cancelling headless automation server request", {
-        agentThreadId: headlessAutomation.agentThreadId,
-        automationName: headlessAutomation.automationName,
-        automationRunId: headlessAutomation.automationRunId,
-        backend,
-        executionMode: headlessAutomation.executionMode,
-        method: request.method,
-        queueEntryId: headlessAutomation.queueEntryId,
-        requestId: request.params.requestId,
-        threadId: request.params.threadId,
-        turnId: request.params.turnId,
-      });
+      backendRegistryLog.warn(
+        "auto-cancelling headless automation server request",
+        {
+          agentThreadId: headlessAutomation.agentThreadId,
+          automationName: headlessAutomation.automationName,
+          automationRunId: headlessAutomation.automationRunId,
+          backend,
+          executionMode: headlessAutomation.executionMode,
+          method: request.method,
+          queueEntryId: headlessAutomation.queueEntryId,
+          requestId: request.params.requestId,
+          threadId: request.params.threadId,
+          turnId: request.params.turnId,
+        },
+      );
       return buildHeadlessAutomationRequestCancelResponse(request);
     }
 
@@ -15181,25 +15959,27 @@ export class DesktopBackendRegistry {
       requestId: request.params.requestId,
     });
 
-    return await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
-      this.pendingServerRequests.set(key, { resolve, reject });
+    return await new Promise<SubmitServerRequestRequest["response"]>(
+      (resolve, reject) => {
+        this.pendingServerRequests.set(key, { resolve, reject });
 
-      void this.emit({
-        backend,
-        notification: request as AppServerNotification,
-      }).catch((error) => {
-        backendRegistryLog.error(
-          "failed to publish pending server request; keeping request pending",
-          {
-            backend,
-            error: error instanceof Error ? error.message : String(error),
-            requestId: request.params.requestId,
-            threadId: request.params.threadId,
-            turnId: request.params.turnId,
-          },
-        );
-      });
-    });
+        void this.emit({
+          backend,
+          notification: request as AppServerNotification,
+        }).catch((error) => {
+          backendRegistryLog.error(
+            "failed to publish pending server request; keeping request pending",
+            {
+              backend,
+              error: error instanceof Error ? error.message : String(error),
+              requestId: request.params.requestId,
+              threadId: request.params.threadId,
+              turnId: request.params.turnId,
+            },
+          );
+        });
+      },
+    );
   }
 
   private isLiveDynamicToolCall(
@@ -15208,7 +15988,9 @@ export class DesktopBackendRegistry {
   ): boolean {
     const turnId = call.turnId?.trim();
     if (!turnId) return false;
-    return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
+    return this.activeTurnKeys.has(
+      buildActiveTurnKey(backend, call.threadId, turnId),
+    );
   }
 
   private async handleThreadOrchestrationRequest(
@@ -15274,30 +16056,36 @@ export class DesktopBackendRegistry {
       status: "failed",
       phase: "failed",
       error: error instanceof Error ? error.message : String(error),
-      message: "Handoff creation failed. Do not retry unless the failure is understood.",
+      message:
+        "Handoff creation failed. Do not retry unless the failure is understood.",
     });
   }
 
-  private getPendingThreadHandoffsForInspection(params: {
-    backend?: AppServerBackendKind | "all";
-    query?: string;
-    sourceThreadId?: string;
-    limit?: number;
-  } = {}): PendingThreadHandoffSummary[] {
+  private getPendingThreadHandoffsForInspection(
+    params: {
+      backend?: AppServerBackendKind | "all";
+      query?: string;
+      sourceThreadId?: string;
+      limit?: number;
+    } = {},
+  ): PendingThreadHandoffSummary[] {
     this.prunePendingThreadHandoffs();
     const clauses = parseThreadInspectionQuery(params.query);
     const backend = params.backend;
     return [...this.pendingThreadHandoffs.values()]
       .filter((handoff) => {
         if (
-          backend &&
-          backend !== "all" &&
-          handoff.backend !== backend &&
-          handoff.sourceBackend !== backend
+          backend
+          && backend !== "all"
+          && handoff.backend !== backend
+          && handoff.sourceBackend !== backend
         ) {
           return false;
         }
-        if (params.sourceThreadId && handoff.sourceThreadId !== params.sourceThreadId) {
+        if (
+          params.sourceThreadId
+          && handoff.sourceThreadId !== params.sourceThreadId
+        ) {
           return false;
         }
         return pendingThreadHandoffMatchesQuery(handoff, clauses);
@@ -15361,26 +16149,31 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private getPendingThreadWorkspaceMovesForInspection(params: {
-    backend?: AppServerBackendKind | "all";
-    query?: string;
-    sourceThreadId?: string;
-    limit?: number;
-  } = {}): PendingThreadWorkspaceMoveSummary[] {
+  private getPendingThreadWorkspaceMovesForInspection(
+    params: {
+      backend?: AppServerBackendKind | "all";
+      query?: string;
+      sourceThreadId?: string;
+      limit?: number;
+    } = {},
+  ): PendingThreadWorkspaceMoveSummary[] {
     this.prunePendingThreadWorkspaceMoves();
     const clauses = parseThreadInspectionQuery(params.query);
     const backend = params.backend;
     return [...this.pendingThreadWorkspaceMoves.values()]
       .filter((move) => {
         if (
-          backend &&
-          backend !== "all" &&
-          move.backend !== backend &&
-          move.sourceBackend !== backend
+          backend
+          && backend !== "all"
+          && move.backend !== backend
+          && move.sourceBackend !== backend
         ) {
           return false;
         }
-        if (params.sourceThreadId && move.sourceThreadId !== params.sourceThreadId) {
+        if (
+          params.sourceThreadId
+          && move.sourceThreadId !== params.sourceThreadId
+        ) {
           return false;
         }
         return pendingThreadWorkspaceMoveMatchesQuery(move, clauses);
@@ -15412,11 +16205,15 @@ export class DesktopBackendRegistry {
       ...(move.repositoryPath ? { repositoryPath: move.repositoryPath } : {}),
       ...(move.sourcePath ? { sourcePath: move.sourcePath } : {}),
       ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
-      ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
+      ...(move.leaveLocalBranch
+        ? { leaveLocalBranch: move.leaveLocalBranch }
+        : {}),
       ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
       ...(move.targetPath ? { targetPath: move.targetPath } : {}),
       ...(move.branch ? { branch: move.branch } : {}),
-      ...(move.linkedDirectory ? { linkedDirectory: move.linkedDirectory } : {}),
+      ...(move.linkedDirectory
+        ? { linkedDirectory: move.linkedDirectory }
+        : {}),
       ...(move.warnings ? { warnings: move.warnings } : {}),
       ...(move.continuationTurnId
         ? { continuationTurnId: move.continuationTurnId }
@@ -15435,8 +16232,8 @@ export class DesktopBackendRegistry {
     const sourceThreadId = request.context.threadId;
     const sourceTurnId = request.context.turnId?.trim();
     if (
-      !sourceTurnId ||
-      !this.isLiveDynamicToolCall(sourceBackend, {
+      !sourceTurnId
+      || !this.isLiveDynamicToolCall(sourceBackend, {
         threadId: sourceThreadId,
         turnId: sourceTurnId,
       })
@@ -15478,10 +16275,12 @@ export class DesktopBackendRegistry {
       const executionMode =
         this.activeCodexTurnModes.get(
           buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
-        ) ??
-        sourceOverlay?.executionMode ??
-        (backend === "codex"
-          ? await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId)
+        )
+        ?? sourceOverlay?.executionMode
+        ?? (backend === "codex"
+          ? await this.resolveCodexThreadExecutionModeForActiveTurn(
+              sourceThreadId,
+            )
           : "default");
       const primaryPath =
         await this.gitDirectoryService.resolvePrimaryWorkspacePath(sourcePath);
@@ -15542,9 +16341,10 @@ export class DesktopBackendRegistry {
         data: {
           backend,
           threadId: sourceThreadId,
-          directory: overlay.extraLinkedDirectories.find(
-            (current) => current.id === directory.id,
-          ) ?? directory,
+          directory:
+            overlay.extraLinkedDirectories.find(
+              (current) => current.id === directory.id,
+            ) ?? directory,
           workspaceMode,
           ...(branch ? { branch } : {}),
           message:
@@ -15573,9 +16373,8 @@ export class DesktopBackendRegistry {
   private async createAttachedLocalDirectory(
     directoryPath: string,
   ): Promise<LinkedDirectorySummary> {
-    const primaryPath = await this.gitDirectoryService.resolvePrimaryWorkspacePath(
-      directoryPath,
-    );
+    const primaryPath =
+      await this.gitDirectoryService.resolvePrimaryWorkspacePath(directoryPath);
     if (!primaryPath) {
       throw new Error("path must be inside a Git repository.");
     }
@@ -15597,9 +16396,11 @@ export class DesktopBackendRegistry {
   }> {
     const sourcePath = params.args.path.trim();
     const repositoryPath =
-      params.repositoryPath ??
-      (await this.gitDirectoryService.resolvePrimaryWorkspacePath(sourcePath)) ??
-      sourcePath;
+      params.repositoryPath
+      ?? (await this.gitDirectoryService.resolvePrimaryWorkspacePath(
+        sourcePath,
+      ))
+      ?? sourcePath;
     const prepared = await this.gitDirectoryService.prepareLaunchpadWorkspace({
       backend: params.backend,
       branchName: params.args.branchName,
@@ -15616,7 +16417,9 @@ export class DesktopBackendRegistry {
       const [directory] = buildWorktreeLinkedDirectory({
         repositoryPath: prepared.repositoryPath ?? repositoryPath,
         worktreePath: prepared.cwd,
-        label: path.basename(prepared.repositoryPath ?? repositoryPath) || repositoryPath,
+        label:
+          path.basename(prepared.repositoryPath ?? repositoryPath)
+          || repositoryPath,
       });
       if (!directory) {
         throw new Error("failed to build worktree linked directory metadata.");
@@ -15632,13 +16435,16 @@ export class DesktopBackendRegistry {
       };
     } catch (error) {
       await prepared.rollback?.().catch((rollbackError) => {
-        backendRegistryLog.warn("attach_thread_directory worktree rollback failed", {
-          error:
-            rollbackError instanceof Error
-              ? rollbackError.message
-              : String(rollbackError),
-          threadId: params.sourceThreadId,
-        });
+        backendRegistryLog.warn(
+          "attach_thread_directory worktree rollback failed",
+          {
+            error:
+              rollbackError instanceof Error
+                ? rollbackError.message
+                : String(rollbackError),
+            threadId: params.sourceThreadId,
+          },
+        );
       });
       throw error;
     }
@@ -15651,8 +16457,8 @@ export class DesktopBackendRegistry {
     const sourceThreadId = request.context.threadId;
     const sourceTurnId = request.context.turnId?.trim();
     if (
-      !sourceTurnId ||
-      !this.isLiveDynamicToolCall(sourceBackend, {
+      !sourceTurnId
+      || !this.isLiveDynamicToolCall(sourceBackend, {
         threadId: sourceThreadId,
         turnId: sourceTurnId,
       })
@@ -15740,8 +16546,8 @@ export class DesktopBackendRegistry {
     const sourceThreadId = request.context.threadId;
     const sourceTurnId = request.context.turnId?.trim();
     if (
-      !sourceTurnId ||
-      !this.isLiveDynamicToolCall(sourceBackend, {
+      !sourceTurnId
+      || !this.isLiveDynamicToolCall(sourceBackend, {
         threadId: sourceThreadId,
         turnId: sourceTurnId,
       })
@@ -15831,23 +16637,23 @@ export class DesktopBackendRegistry {
 
     const duplicateMove = [...this.pendingThreadWorkspaceMoves.values()].find(
       (move) =>
-        (move.status === "queued" || move.status === "running") &&
-        move.sourceBackend === sourceBackend &&
-        move.sourceThreadId === sourceThreadId &&
-        move.sourceTurnId === sourceTurnId,
+        (move.status === "queued" || move.status === "running")
+        && move.sourceBackend === sourceBackend
+        && move.sourceThreadId === sourceThreadId
+        && move.sourceTurnId === sourceTurnId,
     );
     if (duplicateMove) {
       const sameSource =
-        duplicateMove.direction === direction &&
-        duplicateMove.strategy === strategy &&
-        (duplicateMove.leaveLocalBranch ?? "") ===
-          (request.args.leaveLocalBranch ?? "") &&
-        (duplicateMove.newBranchName ?? "") ===
-          (request.args.newBranchName ?? "") &&
-        path.resolve(duplicateMove.sourcePath ?? "") ===
-          path.resolve(candidate.sourcePath ?? "") &&
-        path.resolve(duplicateMove.repositoryPath ?? "") ===
-          path.resolve(candidate.repositoryPath ?? "");
+        duplicateMove.direction === direction
+        && duplicateMove.strategy === strategy
+        && (duplicateMove.leaveLocalBranch ?? "")
+          === (request.args.leaveLocalBranch ?? "")
+        && (duplicateMove.newBranchName ?? "")
+          === (request.args.newBranchName ?? "")
+        && path.resolve(duplicateMove.sourcePath ?? "")
+          === path.resolve(candidate.sourcePath ?? "")
+        && path.resolve(duplicateMove.repositoryPath ?? "")
+          === path.resolve(candidate.repositoryPath ?? "");
       if (sameSource) {
         return {
           ok: true,
@@ -15872,9 +16678,13 @@ export class DesktopBackendRegistry {
       threadId: sourceThreadId,
       direction,
       strategy,
-      ...(candidate.repositoryPath ? { repositoryPath: candidate.repositoryPath } : {}),
+      ...(candidate.repositoryPath
+        ? { repositoryPath: candidate.repositoryPath }
+        : {}),
       ...(candidate.sourcePath ? { sourcePath: candidate.sourcePath } : {}),
-      ...(candidate.sourceBranch ? { sourceBranch: candidate.sourceBranch } : {}),
+      ...(candidate.sourceBranch
+        ? { sourceBranch: candidate.sourceBranch }
+        : {}),
       ...(request.args.leaveLocalBranch
         ? { leaveLocalBranch: request.args.leaveLocalBranch }
         : {}),
@@ -15925,10 +16735,9 @@ export class DesktopBackendRegistry {
     if (sourcePath) {
       const resolvedSourcePath = path.resolve(sourcePath);
       const directory = linkedDirectories.find((candidate) => {
-        const candidatePaths = [
-          candidate.path,
-          candidate.worktreePath,
-        ].filter((value): value is string => Boolean(value?.trim()));
+        const candidatePaths = [candidate.path, candidate.worktreePath].filter(
+          (value): value is string => Boolean(value?.trim()),
+        );
         return candidatePaths.some(
           (candidatePath) => path.resolve(candidatePath) === resolvedSourcePath,
         );
@@ -15938,11 +16747,12 @@ export class DesktopBackendRegistry {
           "Workspace move sourcePath must match a linked directory for this thread.",
         );
       }
-      const repositoryPath = args.repositoryPath?.trim() ?? directory.path ?? sourcePath;
+      const repositoryPath =
+        args.repositoryPath?.trim() ?? directory.path ?? sourcePath;
       if (
-        args.repositoryPath?.trim() &&
-        directory.path?.trim() &&
-        path.resolve(args.repositoryPath) !== path.resolve(directory.path)
+        args.repositoryPath?.trim()
+        && directory.path?.trim()
+        && path.resolve(args.repositoryPath) !== path.resolve(directory.path)
       ) {
         throw new Error(
           "Workspace move repositoryPath must match the linked directory repository path for this thread.",
@@ -15989,7 +16799,9 @@ export class DesktopBackendRegistry {
       ...(args.sourcePath ? { sourcePath: args.sourcePath } : {}),
     });
     if (!candidate.sourcePath) {
-      throw new Error("Thread does not have an eligible Git workspace for handoff.");
+      throw new Error(
+        "Thread does not have an eligible Git workspace for handoff.",
+      );
     }
     const sourceBranch = args.sourceBranch ?? candidate.sourceBranch;
     const repositoryPath = args.repositoryPath ?? candidate.repositoryPath;
@@ -16010,10 +16822,10 @@ export class DesktopBackendRegistry {
     }
     const moves = [...this.pendingThreadWorkspaceMoves.values()].filter(
       (move) =>
-        move.status === "queued" &&
-        move.sourceBackend === params.backend &&
-        move.sourceThreadId === params.threadId &&
-        move.sourceTurnId === params.turnId,
+        move.status === "queued"
+        && move.sourceBackend === params.backend
+        && move.sourceThreadId === params.threadId
+        && move.sourceTurnId === params.turnId,
     );
     for (const move of moves) {
       void this.runPendingThreadWorkspaceMove(move.workspaceMoveId);
@@ -16040,9 +16852,9 @@ export class DesktopBackendRegistry {
   }): boolean {
     return [...this.pendingThreadWorkspaceMoves.values()].some(
       (move) =>
-        move.backend === params.backend &&
-        move.threadId === params.threadId &&
-        (move.status === "queued" || move.status === "running"),
+        move.backend === params.backend
+        && move.threadId === params.threadId
+        && (move.status === "queued" || move.status === "running"),
     );
   }
 
@@ -16069,7 +16881,9 @@ export class DesktopBackendRegistry {
         ...(move.repositoryPath ? { repositoryPath: move.repositoryPath } : {}),
         ...(move.sourcePath ? { sourcePath: move.sourcePath } : {}),
         ...(move.sourceBranch ? { sourceBranch: move.sourceBranch } : {}),
-        ...(move.leaveLocalBranch ? { leaveLocalBranch: move.leaveLocalBranch } : {}),
+        ...(move.leaveLocalBranch
+          ? { leaveLocalBranch: move.leaveLocalBranch }
+          : {}),
         ...(move.newBranchName ? { newBranchName: move.newBranchName } : {}),
       });
       this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
@@ -16084,7 +16898,8 @@ export class DesktopBackendRegistry {
           "Workspace move updated runtime workspace metadata and is waking the same thread.",
       });
     } catch (error) {
-      const handoffError = error instanceof Error ? error.message : String(error);
+      const handoffError =
+        error instanceof Error ? error.message : String(error);
       this.failPendingThreadWorkspaceMove(workspaceMoveId, error);
       try {
         await this.startWorkspaceMoveContinuation({
@@ -16108,7 +16923,9 @@ export class DesktopBackendRegistry {
           error: message,
           workspaceMoveId,
         });
-        await this.releaseThreadQueueAfterWorkspaceMoveContinuationFailure(move);
+        await this.releaseThreadQueueAfterWorkspaceMoveContinuationFailure(
+          move,
+        );
       }
       return;
     }
@@ -16146,17 +16963,18 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private async startWorkspaceMoveContinuation(params:
-    | {
-        kind: "success";
-        moveId: string;
-        result: HandoffThreadWorkspaceResponse;
-      }
-    | {
-        kind: "failure";
-        moveId: string;
-        error: unknown;
-      },
+  private async startWorkspaceMoveContinuation(
+    params:
+      | {
+          kind: "success";
+          moveId: string;
+          result: HandoffThreadWorkspaceResponse;
+        }
+      | {
+          kind: "failure";
+          moveId: string;
+          error: unknown;
+        },
   ): Promise<void> {
     const move = this.pendingThreadWorkspaceMoves.get(params.moveId);
     if (!move) {
@@ -16201,8 +17019,8 @@ export class DesktopBackendRegistry {
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const sourceTurnId = request.context.turnId?.trim();
     if (
-      !sourceTurnId ||
-      !this.isLiveDynamicToolCall(request.context.backend, {
+      !sourceTurnId
+      || !this.isLiveDynamicToolCall(request.context.backend, {
         threadId: request.context.threadId,
         turnId: sourceTurnId,
       })
@@ -16228,8 +17046,8 @@ export class DesktopBackendRegistry {
       );
     }
     if (
-      backend === request.context.backend &&
-      threadId === request.context.threadId
+      backend === request.context.backend
+      && threadId === request.context.threadId
     ) {
       return threadOrchestrationFailure(
         "forbidden",
@@ -16295,8 +17113,8 @@ export class DesktopBackendRegistry {
     const sourceThreadId = request.context.threadId;
     const sourceTurnId = request.context.turnId?.trim();
     if (
-      !sourceTurnId ||
-      !this.isLiveDynamicToolCall(sourceBackend, {
+      !sourceTurnId
+      || !this.isLiveDynamicToolCall(sourceBackend, {
         threadId: sourceThreadId,
         turnId: sourceTurnId,
       })
@@ -16325,8 +17143,8 @@ export class DesktopBackendRegistry {
       (await this.overlayStore.getThreadOverlayState({
         backend: sourceBackend,
         threadId: sourceThreadId,
-      })) ??
-      ({
+      }))
+      ?? ({
         backend: sourceBackend,
         threadId: sourceThreadId,
         extraLinkedDirectories: [],
@@ -16354,9 +17172,9 @@ export class DesktopBackendRegistry {
       );
     }
     const title =
-      request.args.title?.trim() ||
-      shortenDerivedThreadTitle(task) ||
-      "Delegated task";
+      request.args.title?.trim()
+      || shortenDerivedThreadTitle(task)
+      || "Delegated task";
     const handoffStartedAt = request.context.now ?? Date.now();
     const handoffId = [
       "handoff",
@@ -16378,7 +17196,9 @@ export class DesktopBackendRegistry {
       seedMode,
       groupingMode,
       workspaceMode,
-      ...(request.args.branchName ? { branchName: request.args.branchName } : {}),
+      ...(request.args.branchName
+        ? { branchName: request.args.branchName }
+        : {}),
       createdAt: handoffStartedAt,
       updatedAt: handoffStartedAt,
       message:
@@ -16408,24 +17228,26 @@ export class DesktopBackendRegistry {
       mode: "same_workspace",
     });
     const executionMode =
-      request.args.executionMode ??
-      this.activeCodexTurnModes.get(
+      request.args.executionMode
+      ?? this.activeCodexTurnModes.get(
         buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
-      ) ??
-      sourceOverlay.executionMode ??
-      (await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId));
+      )
+      ?? sourceOverlay.executionMode
+      ?? (await this.resolveCodexThreadExecutionModeForActiveTurn(
+        sourceThreadId,
+      ));
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
 
     if (
-      workspaceMode !== "none" &&
-      requestedCwd &&
-      !linkedDirectoriesActiveWorkspaceCoversCwd({
+      workspaceMode !== "none"
+      && requestedCwd
+      && !linkedDirectoriesActiveWorkspaceCoversCwd({
         cwd: requestedCwd,
         overlay: sourceOverlay,
         thread: sourceThread,
-      }) &&
-      executionMode !== "full-access" &&
-      !(await this.directoryLaunchpadCoversCwd(requestedCwd))
+      })
+      && executionMode !== "full-access"
+      && !(await this.directoryLaunchpadCoversCwd(requestedCwd))
     ) {
       const normalizedCwd = toDirectoryId(path.resolve(requestedCwd));
       this.updatePendingThreadHandoff(handoffId, {
@@ -16469,20 +17291,20 @@ export class DesktopBackendRegistry {
       );
     }
     if (
-      workspaceMode === "new_worktree" &&
-      !sourceWorkspace.git.worktreeCreationAvailable
+      workspaceMode === "new_worktree"
+      && !sourceWorkspace.git.worktreeCreationAvailable
     ) {
       this.failPendingThreadHandoff(
         handoffId,
         new Error(
-          sourceWorkspace.git.unavailableReason ??
-            "The source workspace cannot create a new Git worktree.",
+          sourceWorkspace.git.unavailableReason
+            ?? "The source workspace cannot create a new Git worktree.",
         ),
       );
       return threadOrchestrationFailure(
         "unsupported_workspace",
-        sourceWorkspace.git.unavailableReason ??
-          "The source workspace cannot create a new Git worktree.",
+        sourceWorkspace.git.unavailableReason
+          ?? "The source workspace cannot create a new Git worktree.",
         { workspace: sourceWorkspace },
       );
     }
@@ -16495,7 +17317,8 @@ export class DesktopBackendRegistry {
         request.args.reasoningEffort ?? sourceOverlay.reasoningEffort,
       serviceTier: request.args.serviceTier ?? sourceOverlay.serviceTier,
       fastMode: request.args.fastMode ?? sourceOverlay.fastMode,
-      approvalPolicy: request.args.approvalPolicy ?? modeSettings.approvalPolicy,
+      approvalPolicy:
+        request.args.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.args.sandbox ?? modeSettings.sandbox,
       codexEnvironmentRuntime: shouldInheritHandoffCodexEnvironmentRuntime({
         callerCwd,
@@ -16563,9 +17386,9 @@ export class DesktopBackendRegistry {
             : {}),
           executionMode,
           directoryLabel:
-            sourceLinkedDirectory?.label ||
-            (sourceCwd ? path.basename(sourceCwd) : undefined) ||
-            title,
+            sourceLinkedDirectory?.label
+            || (sourceCwd ? path.basename(sourceCwd) : undefined)
+            || title,
           directoryPath: cwdForChild,
           workMode: workspaceMode === "new_worktree" ? "worktree" : "local",
           branchName: request.args.branchName,
@@ -16580,7 +17403,8 @@ export class DesktopBackendRegistry {
         threadId = forked.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });
         createdLinkedDirectory = forked.linkedDirectory;
-        inheritedSettings.codexEnvironmentRuntime = forked.codexEnvironmentRuntime;
+        inheritedSettings.codexEnvironmentRuntime =
+          forked.codexEnvironmentRuntime;
         codexEnvironmentStartupFailure = forked.codexEnvironmentStartupFailure;
         createdWorkspaceMode =
           forked.workMode === "worktree" ? "new_worktree" : workspaceMode;
@@ -16601,7 +17425,8 @@ export class DesktopBackendRegistry {
           cwd: cwdForChild,
           workMode: workspaceMode === "new_worktree" ? "worktree" : "local",
           branchName: request.args.branchName,
-          requiredWorkMode: workspaceMode === "new_worktree" ? "worktree" : undefined,
+          requiredWorkMode:
+            workspaceMode === "new_worktree" ? "worktree" : undefined,
           model: inheritedSettings.model,
           reasoningEffort: inheritedSettings.reasoningEffort,
           serviceTier: inheritedSettings.serviceTier,
@@ -16613,7 +17438,8 @@ export class DesktopBackendRegistry {
         });
         threadId = started.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });
-        inheritedSettings.codexEnvironmentRuntime = started.codexEnvironmentRuntime;
+        inheritedSettings.codexEnvironmentRuntime =
+          started.codexEnvironmentRuntime;
         codexEnvironmentStartupFailure = started.codexEnvironmentStartupFailure;
         if (groupingMode === "subthread") {
           await this.overlayStore.setThreadParent?.({
@@ -16635,22 +17461,29 @@ export class DesktopBackendRegistry {
     } catch (error) {
       this.failPendingThreadHandoff(handoffId, error);
       return threadOrchestrationFailure(
-        workspaceMode === "new_worktree" ? "unsupported_workspace" : "internal_error",
+        workspaceMode === "new_worktree"
+          ? "unsupported_workspace"
+          : "internal_error",
         error instanceof Error ? error.message : String(error),
       );
     }
 
-    const pendingThread = this.pendingStartedThreads.get(`${backend}:${threadId}`);
+    const pendingThread = this.pendingStartedThreads.get(
+      `${backend}:${threadId}`,
+    );
     const childCwd =
-      resolveThreadWorkspaceCwd(pendingThread) ||
-      createdLinkedDirectory?.worktreePath ||
-      createdLinkedDirectory?.path ||
-      cwdForChild;
+      resolveThreadWorkspaceCwd(pendingThread)
+      || createdLinkedDirectory?.worktreePath
+      || createdLinkedDirectory?.path
+      || cwdForChild;
     const childLinkedDirectory =
-      createdLinkedDirectory ??
-      this.resolveHandoffLinkedDirectory({
+      createdLinkedDirectory
+      ?? this.resolveHandoffLinkedDirectory({
         cwd: childCwd,
-        overlay: await this.overlayStore.getThreadOverlayState({ backend, threadId }),
+        overlay: await this.overlayStore.getThreadOverlayState({
+          backend,
+          threadId,
+        }),
         thread: pendingThread,
       });
     const workspace = await this.buildThreadHandoffWorkspaceSummary({
@@ -16858,15 +17691,17 @@ export class DesktopBackendRegistry {
     ];
     const cwd = params.cwd?.trim();
     const matchedDirectory = cwd
-      ? candidates.find((directory) => linkedDirectoryMatchesCwd(directory, cwd))
+      ? candidates.find((directory) =>
+          linkedDirectoryMatchesCwd(directory, cwd),
+        )
       : undefined;
     if (matchedDirectory || params.fallbackToAnyDirectory === false) {
       return matchedDirectory;
     }
     return (
-      candidates.find((directory) => directory.kind === "worktree") ??
-      candidates.find((directory) => directory.kind === "local") ??
-      candidates[0]
+      candidates.find((directory) => directory.kind === "worktree")
+      ?? candidates.find((directory) => directory.kind === "local")
+      ?? candidates[0]
     );
   }
 
@@ -16962,12 +17797,17 @@ export class DesktopBackendRegistry {
     const parentThreadId = context.threadId;
     const task = args.task?.trim();
     if (!task) {
-      return taskMonitorFailure("create_monitor_delegation", "invalid_arguments", "task is required.");
+      return taskMonitorFailure(
+        "create_monitor_delegation",
+        "invalid_arguments",
+        "task is required.",
+      );
     }
-    const unsupportedSessionReference = findUnsupportedCodexExecSessionReference({
-      task,
-      monitorContext: args.monitorContext,
-    });
+    const unsupportedSessionReference =
+      findUnsupportedCodexExecSessionReference({
+        task,
+        monitorContext: args.monitorContext,
+      });
     if (unsupportedSessionReference) {
       return taskMonitorFailure(
         "create_monitor_delegation",
@@ -16981,8 +17821,8 @@ export class DesktopBackendRegistry {
 
     const monitorId = `monitor-${randomUUID()}`;
     const pollIntervalSeconds =
-      normalizePollIntervalSeconds(args.pollIntervalSeconds) ??
-      DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
+      normalizePollIntervalSeconds(args.pollIntervalSeconds)
+      ?? DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
     const heartbeatIntervalSeconds = pollIntervalSeconds;
     const requestedModel = normalizePreferredMonitorModel(args.preferredModel);
     const requestedReasoningEffort = normalizePreferredMonitorReasoningEffort(
@@ -17011,8 +17851,8 @@ export class DesktopBackendRegistry {
       task,
     });
     if (
-      preferredModel !== requestedModel ||
-      preferredReasoningEffort !== requestedReasoningEffort
+      preferredModel !== requestedModel
+      || preferredReasoningEffort !== requestedReasoningEffort
     ) {
       backendRegistryLog.info("adjusted task monitor model settings", {
         monitorId,
@@ -17106,22 +17946,25 @@ export class DesktopBackendRegistry {
     preferredModel?: string;
     preferredReasoningEffort?: string;
   }): Promise<{ preferredModel: string; preferredReasoningEffort: string }> {
-    const requestedModel = normalizePreferredMonitorModel(params.preferredModel);
+    const requestedModel = normalizePreferredMonitorModel(
+      params.preferredModel,
+    );
     const requestedReasoningEffort = normalizePreferredMonitorReasoningEffort(
       params.preferredReasoningEffort,
     );
-    const discoveredModels = await this.readCodexDefaultModelsOnce("task-monitor");
+    const discoveredModels =
+      await this.readCodexDefaultModelsOnce("task-monitor");
     const options = buildLaunchpadOptions("codex", discoveredModels, {
       allowFallbackModels: false,
     });
     const models = options?.models ?? [];
     const selectedModel =
-      models.find((model) => model.id === requestedModel) ??
-      models.find((model) => model.id === DEFAULT_TASK_MONITOR_MODEL) ??
-      models.find((model) => model.id.toLowerCase().includes("mini")) ??
-      models.find((model) => model.current) ??
-      models.find((model) => model.supportsReasoning) ??
-      models[0];
+      models.find((model) => model.id === requestedModel)
+      ?? models.find((model) => model.id === DEFAULT_TASK_MONITOR_MODEL)
+      ?? models.find((model) => model.id.toLowerCase().includes("mini"))
+      ?? models.find((model) => model.current)
+      ?? models.find((model) => model.supportsReasoning)
+      ?? models[0];
     if (!selectedModel) {
       throw new Error(
         "No available Codex models were discovered for task monitor delegation.",
@@ -17129,7 +17972,8 @@ export class DesktopBackendRegistry {
     }
 
     const preferredModel = selectedModel.id;
-    const reasoningEfforts = options?.reasoningEfforts ?? OPENAI_REASONING_EFFORTS;
+    const reasoningEfforts =
+      options?.reasoningEfforts ?? OPENAI_REASONING_EFFORTS;
     const preferredReasoningEffort = reasoningEfforts.includes(
       requestedReasoningEffort,
     )
@@ -17160,8 +18004,8 @@ export class DesktopBackendRegistry {
     const executionMode =
       this.activeCodexTurnModes.get(
         buildActiveTurnModeKey(params.context.threadId, params.context.turnId),
-      ) ??
-      (await this.resolveCodexThreadExecutionModeForActiveTurn(
+      )
+      ?? (await this.resolveCodexThreadExecutionModeForActiveTurn(
         params.context.threadId,
       ));
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
@@ -17170,8 +18014,8 @@ export class DesktopBackendRegistry {
       threadId: params.context.threadId,
     });
     const cwd =
-      params.cwd?.trim() ||
-      (await this.resolveThreadEnvironmentCwd(
+      params.cwd?.trim()
+      || (await this.resolveThreadEnvironmentCwd(
         "codex",
         params.context.threadId,
         overlay,
@@ -17183,7 +18027,8 @@ export class DesktopBackendRegistry {
       cwd: cwd ?? null,
       executionMode,
       hasCodexEnvironmentRuntime: Boolean(overlay?.codexEnvironmentRuntime),
-      shellEnvironmentKeyCount: overlay?.codexEnvironmentRuntime?.shellEnvironment
+      shellEnvironmentKeyCount: overlay?.codexEnvironmentRuntime
+        ?.shellEnvironment
         ? Object.keys(overlay.codexEnvironmentRuntime.shellEnvironment).length
         : 0,
       monitorId: params.monitorId,
@@ -17258,7 +18103,11 @@ export class DesktopBackendRegistry {
     }
     const message = args.message?.trim();
     if (!message) {
-      return taskMonitorFailure("inject_progress", "invalid_arguments", "message is required.");
+      return taskMonitorFailure(
+        "inject_progress",
+        "invalid_arguments",
+        "message is required.",
+      );
     }
 
     bound.record.lastActivityAt = Date.now();
@@ -17297,11 +18146,19 @@ export class DesktopBackendRegistry {
   ): Promise<TaskMonitorResponse<"complete_monitoring">> {
     const bound = this.bindTaskMonitorCaller(args.monitorId, callerThreadId);
     if (!bound.ok) {
-      return taskMonitorFailure("complete_monitoring", bound.code, bound.message);
+      return taskMonitorFailure(
+        "complete_monitoring",
+        bound.code,
+        bound.message,
+      );
     }
     const summary = args.summary?.trim();
     if (!summary) {
-      return taskMonitorFailure("complete_monitoring", "invalid_arguments", "summary is required.");
+      return taskMonitorFailure(
+        "complete_monitoring",
+        "invalid_arguments",
+        "summary is required.",
+      );
     }
 
     bound.record.lastActivityAt = Date.now();
@@ -17442,8 +18299,10 @@ export class DesktopBackendRegistry {
           : "cancelled";
     const record = Array.from(this.taskMonitorDelegations.values()).find(
       (candidate) =>
-        candidate.monitorThreadId === threadId &&
-        (!candidate.monitorTurnId || !turnId || candidate.monitorTurnId === turnId),
+        candidate.monitorThreadId === threadId
+        && (!candidate.monitorTurnId
+          || !turnId
+          || candidate.monitorTurnId === turnId),
     );
     if (!record) {
       return;
@@ -17478,9 +18337,9 @@ export class DesktopBackendRegistry {
           record.heartbeatIntervalSeconds * 2,
           record.pollIntervalSeconds * 2,
           record.startupTimeoutSeconds,
-        ) *
-          1000 +
-        TASK_MONITOR_STALE_GRACE_MS;
+        )
+          * 1000
+        + TASK_MONITOR_STALE_GRACE_MS;
       const idleMs = now - record.lastActivityAt;
       if (idleMs < staleAfterMs) {
         continue;
@@ -17630,7 +18489,9 @@ export class DesktopBackendRegistry {
       type: "pwragent_fallback",
       reason: params.reason,
       recoveryAttempted: Boolean(params.record.recoveryAttempted),
-      ...(params.terminalStatus ? { terminalStatus: params.terminalStatus } : {}),
+      ...(params.terminalStatus
+        ? { terminalStatus: params.terminalStatus }
+        : {}),
     };
     const outcome =
       params.terminalStatus === "cancelled" ? "cancelled" : "failure";
@@ -17656,14 +18517,26 @@ export class DesktopBackendRegistry {
     callerThreadId: string,
   ):
     | { ok: true; record: TaskMonitorDelegationRecord }
-    | { ok: false; code: "forbidden" | "invalid_arguments" | "not_found"; message: string } {
+    | {
+        ok: false;
+        code: "forbidden" | "invalid_arguments" | "not_found";
+        message: string;
+      } {
     const normalizedMonitorId = monitorId?.trim();
     if (!normalizedMonitorId) {
-      return { ok: false, code: "invalid_arguments", message: "monitorId is required." };
+      return {
+        ok: false,
+        code: "invalid_arguments",
+        message: "monitorId is required.",
+      };
     }
     const record = this.taskMonitorDelegations.get(normalizedMonitorId);
     if (!record) {
-      return { ok: false, code: "not_found", message: "Unknown or completed monitorId." };
+      return {
+        ok: false,
+        code: "not_found",
+        message: "Unknown or completed monitorId.",
+      };
     }
     if (record.monitorThreadId && record.monitorThreadId !== callerThreadId) {
       return {
@@ -17816,8 +18689,8 @@ export class DesktopBackendRegistry {
       }
       const hasQuery = Boolean(request.args.query?.trim());
       if (
-        request.args.contentMode !== undefined &&
-        !isThreadSearchContentMode(request.args.contentMode)
+        request.args.contentMode !== undefined
+        && !isThreadSearchContentMode(request.args.contentMode)
       ) {
         return {
           ok: false,
@@ -17828,8 +18701,8 @@ export class DesktopBackendRegistry {
         };
       }
       if (
-        request.args.semanticMode !== undefined &&
-        !isThreadSearchSemanticMode(request.args.semanticMode)
+        request.args.semanticMode !== undefined
+        && !isThreadSearchSemanticMode(request.args.semanticMode)
       ) {
         return {
           ok: false,
@@ -17880,7 +18753,9 @@ export class DesktopBackendRegistry {
             ? MAX_THREAD_INSPECTION_SEARCH_LIMIT
             : limit;
         const response = await searchService.search({
-          ...(request.args.query !== undefined ? { query: request.args.query } : {}),
+          ...(request.args.query !== undefined
+            ? { query: request.args.query }
+            : {}),
           filters,
           limit: searchLimit,
           ...(request.args.contentMode
@@ -17940,7 +18815,9 @@ export class DesktopBackendRegistry {
       return {
         ok: true,
         data: {
-          threads: filtered.slice(0, limit).map(toThreadInspectionSearchSummary),
+          threads: filtered
+            .slice(0, limit)
+            .map(toThreadInspectionSearchSummary),
           totalCount: filtered.length,
           limit,
           truncated: filtered.length > limit,
@@ -17961,7 +18838,8 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      const threadId = request.args.threadId?.trim() || request.context.threadId;
+      const threadId =
+        request.args.threadId?.trim() || request.context.threadId;
       if (!threadId) {
         return {
           ok: false,
@@ -17976,7 +18854,9 @@ export class DesktopBackendRegistry {
         archived: false,
         callerReason: "agent-thread-inspection",
       });
-      let candidateThreads = activeThreads.filter((thread) => thread.id === threadId);
+      let candidateThreads = activeThreads.filter(
+        (thread) => thread.id === threadId,
+      );
       if (candidateThreads.length === 0) {
         candidateThreads = (
           await this.listThreads({
@@ -17986,7 +18866,8 @@ export class DesktopBackendRegistry {
           })
         ).filter((thread) => thread.id === threadId);
       }
-      const [summary] = await this.enrichThreadInspectionSummaries(candidateThreads);
+      const [summary] =
+        await this.enrichThreadInspectionSummaries(candidateThreads);
       if (!summary) {
         return {
           ok: false,
@@ -18002,7 +18883,9 @@ export class DesktopBackendRegistry {
         limit: 0,
         threadId,
       })
-        .then((response) => response.threadStatus ?? response.replay.threadStatus)
+        .then(
+          (response) => response.threadStatus ?? response.replay.threadStatus,
+        )
         .catch((): AppServerThreadStatus | undefined => undefined);
       const queueKey = buildThreadIdentityKey(backend, threadId);
       const queued = this.getQueuedExecutionModesSnapshot()[queueKey];
@@ -18109,7 +18992,10 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const resolved = await this.resolvePullRequestReferenceForThread(args, summary);
+    const resolved = await this.resolvePullRequestReferenceForThread(
+      args,
+      summary,
+    );
     if (!resolved.ok) {
       return {
         ok: false,
@@ -18185,7 +19071,8 @@ export class DesktopBackendRegistry {
         })
       ).filter((thread) => thread.id === params.threadId);
     }
-    const [summary] = await this.enrichThreadInspectionSummaries(candidateThreads);
+    const [summary] =
+      await this.enrichThreadInspectionSummaries(candidateThreads);
     return summary;
   }
 
@@ -18250,19 +19137,22 @@ export class DesktopBackendRegistry {
           org,
           repo,
           number,
-          url: args.url?.trim() || buildPullRequestReferenceUrl({
-            provider,
-            org,
-            repo,
-            number,
-            urlBase: parsedUrl?.urlBase,
-          }),
+          url:
+            args.url?.trim()
+            || buildPullRequestReferenceUrl({
+              provider,
+              org,
+              repo,
+              number,
+              urlBase: parsedUrl?.urlBase,
+            }),
           urlBase: parsedUrl?.urlBase,
         },
       };
     }
 
-    const inferredRepositories = await this.inferPullRequestRepositories(summary);
+    const inferredRepositories =
+      await this.inferPullRequestRepositories(summary);
     if (inferredRepositories.length !== 1) {
       return {
         ok: false,
@@ -18309,7 +19199,9 @@ export class DesktopBackendRegistry {
       }),
     );
     return [...byKey.values()].sort((left, right) =>
-      pullRequestRepositoryKey(left).localeCompare(pullRequestRepositoryKey(right)),
+      pullRequestRepositoryKey(left).localeCompare(
+        pullRequestRepositoryKey(right),
+      ),
     );
   }
 
@@ -18385,7 +19277,8 @@ export class DesktopBackendRegistry {
           ok: false,
           error: {
             code: "invalid_arguments",
-            message: "executionMode must be default or full-access when provided.",
+            message:
+              "executionMode must be default or full-access when provided.",
           },
         };
       }
@@ -18551,11 +19444,7 @@ export class DesktopBackendRegistry {
                 }
               : {}),
             pagination: replay.pagination,
-            ...(args.includeStatus === false
-              ? {}
-              : status
-                ? { status }
-                : {}),
+            ...(args.includeStatus === false ? {} : status ? { status } : {}),
           },
         },
       };
@@ -18605,10 +19494,11 @@ export class DesktopBackendRegistry {
           backend: result.backend,
           threadId: result.threadId,
         });
-        const messagingBindings = await this.getThreadInspectionMessagingBindings({
-          backend: result.backend,
-          threadId: result.threadId,
-        });
+        const messagingBindings =
+          await this.getThreadInspectionMessagingBindings({
+            backend: result.backend,
+            threadId: result.threadId,
+          });
         return toThreadInspectionSummaryFromSearchResult(
           result,
           overlay,
@@ -18627,17 +19517,18 @@ export class DesktopBackendRegistry {
           backend: thread.source,
           threadId: thread.id,
         });
-        const messagingBindings = await this.getThreadInspectionMessagingBindings({
-          backend: thread.source,
-          threadId: thread.id,
-        });
+        const messagingBindings =
+          await this.getThreadInspectionMessagingBindings({
+            backend: thread.source,
+            threadId: thread.id,
+          });
         const worktreePath = thread.projectKey?.trim();
         const gitWorkingState =
-          thread.gitWorkingState ??
-          (worktreePath
-            ? await this.gitWorkingStateService.readWorkingState(worktreePath).catch(
-                () => undefined,
-              )
+          thread.gitWorkingState
+          ?? (worktreePath
+            ? await this.gitWorkingStateService
+                .readWorkingState(worktreePath)
+                .catch(() => undefined)
             : undefined);
         return toThreadInspectionSummary(
           gitWorkingState ? { ...thread, gitWorkingState } : thread,
@@ -18663,19 +19554,21 @@ export class DesktopBackendRegistry {
       }
       return bindings.map(toMessagingThreadBindingSummary);
     } catch (error) {
-      backendRegistryLog.warn("failed to resolve thread inspection messaging bindings", {
-        backend: params.backend,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: params.threadId,
-      });
+      backendRegistryLog.warn(
+        "failed to resolve thread inspection messaging bindings",
+        {
+          backend: params.backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: params.threadId,
+        },
+      );
       return undefined;
     }
   }
 
-  private resolveMessagingInspectionStore(): Pick<
-    MessagingStoreLike,
-    "findActiveBindingsForThread"
-  > | undefined {
+  private resolveMessagingInspectionStore():
+    | Pick<MessagingStoreLike, "findActiveBindingsForThread">
+    | undefined {
     if (this.messagingStore === null) {
       return undefined;
     }
@@ -18686,9 +19579,12 @@ export class DesktopBackendRegistry {
     try {
       return getDesktopMessagingStore();
     } catch (error) {
-      backendRegistryLog.debug("messaging store unavailable for thread inspection", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      backendRegistryLog.debug(
+        "messaging store unavailable for thread inspection",
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
       return undefined;
     }
   }
@@ -18739,7 +19635,11 @@ export class DesktopBackendRegistry {
       if (typeof threadId !== "string") {
         return;
       }
-      this.rememberThreadNotificationContext(event.backend, threadId, params.thread);
+      this.rememberThreadNotificationContext(
+        event.backend,
+        threadId,
+        params.thread,
+      );
     }
   }
 
@@ -18753,8 +19653,8 @@ export class DesktopBackendRegistry {
     }
     const record = thread as Record<string, unknown>;
     const candidate =
-      (typeof record.title === "string" ? record.title : undefined) ??
-      (typeof record.name === "string" ? record.name : undefined);
+      (typeof record.title === "string" ? record.title : undefined)
+      ?? (typeof record.name === "string" ? record.name : undefined);
     const trimmed = candidate?.trim();
     const key = `${backend}:${threadId}`;
     if (trimmed) {
@@ -18799,11 +19699,14 @@ export class DesktopBackendRegistry {
         return this.notificationThreadContextLabel(backend, threadId);
       }
     } catch (error) {
-      backendRegistryLog.debug("native terminal notification context lookup failed", {
-        backend,
-        error: error instanceof Error ? error.message : String(error),
-        threadId,
-      });
+      backendRegistryLog.debug(
+        "native terminal notification context lookup failed",
+        {
+          backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId,
+        },
+      );
     }
     return undefined;
   }
@@ -18826,7 +19729,9 @@ export class DesktopBackendRegistry {
     const threadTitle = this.notificationThreadTitles.get(
       `${event.backend}:${threadId}`,
     );
-    const approvalRequest = this.isApprovalAttentionNotification(event.notification)
+    const approvalRequest = this.isApprovalAttentionNotification(
+      event.notification,
+    )
       ? event.notification
       : undefined;
     const key = `${event.backend}:${threadId}:${requestId}`;
@@ -18871,12 +19776,15 @@ export class DesktopBackendRegistry {
                 pendingRequestDecisionFromMessagingApproval(decision),
               ),
             }).catch((error) => {
-              backendRegistryLog.warn("native approval notification decision failed", {
-                backend: event.backend,
-                error: error instanceof Error ? error.message : String(error),
-                requestId,
-                threadId,
-              });
+              backendRegistryLog.warn(
+                "native approval notification decision failed",
+                {
+                  backend: event.backend,
+                  error: error instanceof Error ? error.message : String(error),
+                  requestId,
+                  threadId,
+                },
+              );
             });
           },
         });
@@ -18893,7 +19801,9 @@ export class DesktopBackendRegistry {
     const baseBody = isQuestion
       ? "needs your input"
       : "waiting for your approval";
-    const body = threadTitle ? `${threadTitle} · ${baseBody}.` : `A turn ${baseBody}.`;
+    const body = threadTitle
+      ? `${threadTitle} · ${baseBody}.`
+      : `A turn ${baseBody}.`;
     try {
       getDesktopNotificationService().notifyAttention({
         enabled: this.notificationsEnabled(),
@@ -18921,13 +19831,13 @@ export class DesktopBackendRegistry {
     notification: AgentEvent["notification"],
   ): notification is AppServerPendingRequestNotification {
     return (
-      notification.method === "turn/requestApproval" ||
-      notification.method === "review/requestApproval" ||
-      notification.method === "item/commandExecution/requestApproval" ||
-      notification.method === "item/fileChange/requestApproval" ||
-      notification.method === "item/permissions/requestApproval" ||
-      notification.method === "applyPatchApproval" ||
-      notification.method === "execCommandApproval"
+      notification.method === "turn/requestApproval"
+      || notification.method === "review/requestApproval"
+      || notification.method === "item/commandExecution/requestApproval"
+      || notification.method === "item/fileChange/requestApproval"
+      || notification.method === "item/permissions/requestApproval"
+      || notification.method === "applyPatchApproval"
+      || notification.method === "execCommandApproval"
     );
   }
 
@@ -18955,9 +19865,9 @@ export class DesktopBackendRegistry {
       return;
     }
     if (
-      event.notification.method !== "turn/completed" &&
-      event.notification.method !== "turn/failed" &&
-      event.notification.method !== "turn/cancelled"
+      event.notification.method !== "turn/completed"
+      && event.notification.method !== "turn/failed"
+      && event.notification.method !== "turn/cancelled"
     ) {
       return;
     }
@@ -18971,7 +19881,10 @@ export class DesktopBackendRegistry {
       .threadId;
     const contextLabel =
       typeof threadId === "string"
-        ? await this.notificationThreadContextLabelForTerminal(event.backend, threadId)
+        ? await this.notificationThreadContextLabelForTerminal(
+            event.backend,
+            threadId,
+          )
         : undefined;
     const body = contextLabel
       ? `${contextLabel} · turn ${status}.`
@@ -19009,8 +19922,8 @@ export class DesktopBackendRegistry {
 
   private rememberFileChangeApprovalContext(event: AgentEvent): void {
     if (
-      event.notification.method !== "item/started" &&
-      event.notification.method !== "item/completed"
+      event.notification.method !== "item/started"
+      && event.notification.method !== "item/completed"
     ) {
       return;
     }
@@ -19033,8 +19946,9 @@ export class DesktopBackendRegistry {
           .filter(
             (
               file,
-            ): file is NonNullable<PendingRequestApprovalContext["files"]>[number] =>
-              Boolean(file),
+            ): file is NonNullable<
+              PendingRequestApprovalContext["files"]
+            >[number] => Boolean(file),
           )
       : [];
     if (!files.length) {
@@ -19085,10 +19999,10 @@ export class DesktopBackendRegistry {
     const threadId = readNonEmptyString(request.params.threadId);
     const turnId = readNonEmptyString(request.params.turnId);
     const itemId =
-      readNonEmptyString(request.params.itemId) ??
-      readNonEmptyString(request.params.item_id) ??
-      readNonEmptyString(request.params.callId) ??
-      readNonEmptyString(request.params.call_id);
+      readNonEmptyString(request.params.itemId)
+      ?? readNonEmptyString(request.params.item_id)
+      ?? readNonEmptyString(request.params.callId)
+      ?? readNonEmptyString(request.params.call_id);
     if (!threadId) {
       return event;
     }
@@ -19102,8 +20016,8 @@ export class DesktopBackendRegistry {
               itemId,
             }),
           )
-        : undefined) ??
-      this.fileChangeApprovalContexts.get(
+        : undefined)
+      ?? this.fileChangeApprovalContexts.get(
         fileChangeApprovalContextKey({
           backend: event.backend,
           threadId,
@@ -19134,14 +20048,18 @@ export class DesktopBackendRegistry {
       this.recordTaskMonitorActivity(event.notification);
     }
 
-    if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
+    if (
+      this.shouldInvalidateThreadListCacheForNotification(
+        event.notification.method,
+      )
+    ) {
       this.invalidateThreadListCache(event.backend);
     }
 
     if (
-      event.backend === "codex" &&
-      event.notification.method === "thread/status/changed" &&
-      readStatusType(event.notification.params.status) === "active"
+      event.backend === "codex"
+      && event.notification.method === "thread/status/changed"
+      && readStatusType(event.notification.params.status) === "active"
     ) {
       this.schedulePendingThreadTitleGenerationFromLifecycle({
         backend: event.backend,
@@ -19150,8 +20068,8 @@ export class DesktopBackendRegistry {
     }
 
     if (
-      event.backend === "codex" &&
-      event.notification.method === "configWarning"
+      event.backend === "codex"
+      && event.notification.method === "configWarning"
     ) {
       this.latestCodexConfigWarning = event;
     }
@@ -19185,7 +20103,10 @@ export class DesktopBackendRegistry {
           notification.params.threadId,
         );
         if (activeReviewTurnKey && activeReviewTurnKey !== key) {
-          this.activeCodexReviewInterruptTurnIds.set(activeReviewTurnKey, turnId);
+          this.activeCodexReviewInterruptTurnIds.set(
+            activeReviewTurnKey,
+            turnId,
+          );
         }
         if (!this.activeCodexTurnModes.has(key)) {
           this.activeCodexTurnModes.set(
@@ -19199,9 +20120,9 @@ export class DesktopBackendRegistry {
     }
 
     if (
-      event.notification.method === "turn/completed" ||
-      event.notification.method === "turn/failed" ||
-      event.notification.method === "turn/cancelled"
+      event.notification.method === "turn/completed"
+      || event.notification.method === "turn/failed"
+      || event.notification.method === "turn/cancelled"
     ) {
       const notification = event.notification as {
         params: {
@@ -19224,7 +20145,11 @@ export class DesktopBackendRegistry {
       }
       if (turnId) {
         this.activeTurnKeys.delete(
-          buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
+          buildActiveTurnKey(
+            event.backend,
+            notification.params.threadId,
+            turnId,
+          ),
         );
       }
       if (event.backend === "codex" && turnId) {
@@ -19233,8 +20158,8 @@ export class DesktopBackendRegistry {
           turnId,
         );
         const wasKnownActiveTurn =
-          !turnId.startsWith("pending:") &&
-          this.activeCodexTurnModes.has(activeTurnModeKey);
+          !turnId.startsWith("pending:")
+          && this.activeCodexTurnModes.has(activeTurnModeKey);
         this.clearCodexReviewInterruptMappingForTurn(
           notification.params.threadId,
           turnId,
@@ -19268,11 +20193,14 @@ export class DesktopBackendRegistry {
             backendRegistryLog.warn("codex fast mode state mismatch", warning);
           }
         } catch (error) {
-          backendRegistryLog.warn("codex fast mode state mismatch check failed", {
-            error: error instanceof Error ? error.message : String(error),
-            threadId: notification.params.threadId,
-            turnId,
-          });
+          backendRegistryLog.warn(
+            "codex fast mode state mismatch check failed",
+            {
+              error: error instanceof Error ? error.message : String(error),
+              threadId: notification.params.threadId,
+              turnId,
+            },
+          );
         }
       }
       this.drainPendingThreadWorkspaceMovesForTerminalTurn({
@@ -19303,7 +20231,10 @@ export class DesktopBackendRegistry {
         );
         if (event.notification.method !== "turn/completed") {
           this.pendingTitleGenerationInputs.delete(
-            buildTitleGenerationKey(event.backend, notification.params.threadId),
+            buildTitleGenerationKey(
+              event.backend,
+              notification.params.threadId,
+            ),
           );
         }
       }
@@ -19315,8 +20246,8 @@ export class DesktopBackendRegistry {
       });
     }
     if (
-      event.notification.method === "turn/failed" &&
-      !isAcpBackendId(event.backend)
+      event.notification.method === "turn/failed"
+      && !isAcpBackendId(event.backend)
     ) {
       // Persist a durable failure marker BEFORE the renderer fan-out below
       // so the next navigation-snapshot refresh carries it. Dedupe lives in
@@ -19345,17 +20276,17 @@ export class DesktopBackendRegistry {
           turnId: failureParams.turnId,
           error: errorMessage,
           occurredAt:
-            completedAtFromTerminalNotification(event.notification) ??
-            Date.now(),
+            completedAtFromTerminalNotification(event.notification)
+            ?? Date.now(),
         },
       });
     }
 
     if (
-      event.backend === "codex" &&
-      (event.notification.method === "turn/completed" ||
-        event.notification.method === "turn/failed" ||
-        event.notification.method === "turn/cancelled")
+      event.backend === "codex"
+      && (event.notification.method === "turn/completed"
+        || event.notification.method === "turn/failed"
+        || event.notification.method === "turn/cancelled")
     ) {
       await this.handleTaskMonitorTerminalNotification(
         event.notification as Extract<
@@ -19366,22 +20297,22 @@ export class DesktopBackendRegistry {
     }
 
     if (
-      event.notification.method === "thread/status/changed" &&
-      readStatusType(event.notification.params.status) !== "active"
+      event.notification.method === "thread/status/changed"
+      && readStatusType(event.notification.params.status) !== "active"
     ) {
       const threadId = event.notification.params.threadId;
       const hasActiveCodexReviewTurn =
-        event.backend === "codex" &&
-        this.threadHasActiveCodexReviewTurn(threadId);
+        event.backend === "codex"
+        && this.threadHasActiveCodexReviewTurn(threadId);
       const endedTurnIds = new Set<string>();
       const genericKeyPrefix = `${event.backend}:${event.notification.params.threadId}:`;
       for (const key of Array.from(this.activeTurnKeys)) {
         if (key.startsWith(genericKeyPrefix)) {
           const parsed = parseActiveTurnKey(key);
           if (
-            hasActiveCodexReviewTurn &&
-            parsed?.backend === "codex" &&
-            this.activeCodexReviewTurnKeys.has(
+            hasActiveCodexReviewTurn
+            && parsed?.backend === "codex"
+            && this.activeCodexReviewTurnKeys.has(
               buildActiveTurnModeKey(parsed.threadId, parsed.turnId),
             )
           ) {
@@ -19552,7 +20483,9 @@ function toThreadReadMessageSummary(
   return {
     id: message.id,
     role: message.role,
-    ...(message.createdAt !== undefined ? { createdAt: message.createdAt } : {}),
+    ...(message.createdAt !== undefined
+      ? { createdAt: message.createdAt }
+      : {}),
     text: text.value,
     ...(text.truncated ? { truncated: true } : {}),
   };
@@ -19573,7 +20506,9 @@ function toThreadReadEntrySummary(
         id: entry.id,
         role: entry.role,
         text: text.value,
-        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(entry.createdAt !== undefined
+          ? { createdAt: entry.createdAt }
+          : {}),
         ...(entry.phase ? { phase: entry.phase } : {}),
         ...(entry.turn ? { turn: entry.turn } : {}),
         ...(text.truncated ? { truncated: true } : {}),
@@ -19586,7 +20521,10 @@ function toThreadReadEntrySummary(
       );
       const details = entry.details.slice(0, 10).map((detail) => {
         const markdown = detail.markdown
-          ? truncateThreadInspectionTextWithFlag(detail.markdown, maxCharsPerEntry)
+          ? truncateThreadInspectionTextWithFlag(
+              detail.markdown,
+              maxCharsPerEntry,
+            )
           : undefined;
         const output = detail.command?.output
           ? truncateThreadInspectionTextWithFlag(
@@ -19629,7 +20567,9 @@ function toThreadReadEntrySummary(
         type: "activity",
         id: entry.id,
         summary: summary.value,
-        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(entry.createdAt !== undefined
+          ? { createdAt: entry.createdAt }
+          : {}),
         ...(entry.status ? { status: entry.status } : {}),
         ...(entry.turn ? { turn: entry.turn } : {}),
         details,
@@ -19655,14 +20595,16 @@ function toThreadReadEntrySummary(
       return {
         type: "plan",
         id: entry.id,
-        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(entry.createdAt !== undefined
+          ? { createdAt: entry.createdAt }
+          : {}),
         ...(explanation ? { explanation: explanation.value } : {}),
         ...(markdown ? { markdown: markdown.value } : {}),
         ...(entry.turn ? { turn: entry.turn } : {}),
         steps,
-        ...(explanation?.truncated ||
-        markdown?.truncated ||
-        entry.steps.length > steps.length
+        ...(explanation?.truncated
+        || markdown?.truncated
+        || entry.steps.length > steps.length
           ? { truncated: true }
           : {}),
       };
@@ -19681,7 +20623,9 @@ function toThreadReadEntrySummary(
       return {
         type: "review",
         id: entry.id,
-        ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
+        ...(entry.createdAt !== undefined
+          ? { createdAt: entry.createdAt }
+          : {}),
         ...(entry.status ? { status: entry.status } : {}),
         review: review.value,
         ...(displayText ? { displayText: displayText.value } : {}),
@@ -19700,16 +20644,15 @@ function isThreadMutationExecutionMode(
   return value === "default" || value === "full-access";
 }
 
-function readThreadMutationModelSettings(
-  args: MutateThreadToolArgs,
-):
+function readThreadMutationModelSettings(args: MutateThreadToolArgs):
   | {
       value: Omit<SetThreadModelSettingsRequest, "backend" | "threadId">;
       error?: never;
     }
   | { value?: never; error: string }
   | { value?: undefined; error?: undefined } {
-  const settings: Omit<SetThreadModelSettingsRequest, "backend" | "threadId"> = {};
+  const settings: Omit<SetThreadModelSettingsRequest, "backend" | "threadId"> =
+    {};
   const stringFields = [
     ["model", "model"],
     ["serviceTier", "serviceTier"],
@@ -19766,9 +20709,9 @@ function filterThreadInspectionSummaries(
     .filter((entry) => clauses.length === 0 || entry.score > 0)
     .sort(
       (left, right) =>
-        right.score - left.score ||
-        (right.thread.updatedAt ?? right.thread.createdAt ?? 0) -
-          (left.thread.updatedAt ?? left.thread.createdAt ?? 0),
+        right.score - left.score
+        || (right.thread.updatedAt ?? right.thread.createdAt ?? 0)
+          - (left.thread.updatedAt ?? left.thread.createdAt ?? 0),
     )
     .map((entry) => entry.thread);
 }
@@ -19778,12 +20721,10 @@ function toThreadInspectionSummary(
   overlay: ThreadOverlayState | undefined,
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
-  const linkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity(
-    [
-      ...(overlay?.extraLinkedDirectories ?? []),
-      ...thread.linkedDirectories,
-    ],
-  );
+  const linkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity([
+    ...(overlay?.extraLinkedDirectories ?? []),
+    ...thread.linkedDirectories,
+  ]);
   return {
     backend: thread.source,
     threadId: thread.id,
@@ -19813,12 +20754,10 @@ function toThreadInspectionSummaryFromSearchResult(
   overlay: ThreadOverlayState | undefined,
   messagingBindings: MessagingThreadBindingSummary[] | undefined,
 ): ThreadInspectionSummary {
-  const linkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity(
-    [
-      ...(overlay?.extraLinkedDirectories ?? []),
-      ...result.linkedDirectories,
-    ],
-  );
+  const linkedDirectories = dedupeLinkedDirectoriesByNormalizedIdentity([
+    ...(overlay?.extraLinkedDirectories ?? []),
+    ...result.linkedDirectories,
+  ]);
   return {
     backend: result.backend,
     threadId: result.threadId,
@@ -19906,7 +20845,9 @@ function pendingThreadHandoffMatchesQuery(
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLowerCase();
-  return clauses.some((tokens) => tokens.every((token) => haystack.includes(token)));
+  return clauses.some((tokens) =>
+    tokens.every((token) => haystack.includes(token)),
+  );
 }
 
 function pendingThreadWorkspaceMoveMatchesQuery(
@@ -19943,7 +20884,9 @@ function pendingThreadWorkspaceMoveMatchesQuery(
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .toLowerCase();
-  return clauses.some((tokens) => tokens.every((token) => haystack.includes(token)));
+  return clauses.some((tokens) =>
+    tokens.every((token) => haystack.includes(token)),
+  );
 }
 
 function scoreThreadInspectionSummary(
@@ -19998,12 +20941,12 @@ function scoreThreadInspectionSummary(
     const tokenScore = Math.min(tokens.length, 5) * 5;
     bestScore = Math.max(
       bestScore,
-      exactTitle ||
-        allTitleTokens ||
-        exactProject ||
-        allProjectTokens ||
-        exactHaystack ||
-        tokenScore,
+      exactTitle
+        || allTitleTokens
+        || exactProject
+        || allProjectTokens
+        || exactHaystack
+        || tokenScore,
     );
   }
   return bestScore;
@@ -20022,7 +20965,9 @@ function toThreadInspectionSearchSummary(
     ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
     ...(thread.createdAt !== undefined ? { createdAt: thread.createdAt } : {}),
     ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
-    ...(thread.archivedAt !== undefined ? { archivedAt: thread.archivedAt } : {}),
+    ...(thread.archivedAt !== undefined
+      ? { archivedAt: thread.archivedAt }
+      : {}),
     ...(thread.agent ? { agent: thread.agent } : {}),
     ...(thread.score !== undefined ? { score: thread.score } : {}),
     ...(thread.confidence ? { confidence: thread.confidence } : {}),
@@ -20031,21 +20976,27 @@ function toThreadInspectionSearchSummary(
       : {}),
     ...(thread.messagingBindings?.length
       ? {
-          messagingBindings: thread.messagingBindings.slice(0, 5).map((binding) => ({
-            bindingId: binding.bindingId,
-            platform: binding.platform,
-            ...(binding.conversationKind
-              ? { conversationKind: binding.conversationKind }
-              : {}),
-            ...(binding.conversationTitle
-              ? { conversationTitle: binding.conversationTitle }
-              : {}),
-            ...(binding.parentTitle ? { parentTitle: binding.parentTitle } : {}),
-            ...(binding.ancestorTitle
-              ? { ancestorTitle: binding.ancestorTitle }
-              : {}),
-            ...(binding.activeAt !== undefined ? { activeAt: binding.activeAt } : {}),
-          })),
+          messagingBindings: thread.messagingBindings
+            .slice(0, 5)
+            .map((binding) => ({
+              bindingId: binding.bindingId,
+              platform: binding.platform,
+              ...(binding.conversationKind
+                ? { conversationKind: binding.conversationKind }
+                : {}),
+              ...(binding.conversationTitle
+                ? { conversationTitle: binding.conversationTitle }
+                : {}),
+              ...(binding.parentTitle
+                ? { parentTitle: binding.parentTitle }
+                : {}),
+              ...(binding.ancestorTitle
+                ? { ancestorTitle: binding.ancestorTitle }
+                : {}),
+              ...(binding.activeAt !== undefined
+                ? { activeAt: binding.activeAt }
+                : {}),
+            })),
         }
       : {}),
     ...(thread.snippets?.length
@@ -20058,21 +21009,27 @@ function toThreadInspectionSearchSummary(
           })),
         }
       : {}),
-    linkedDirectories: thread.linkedDirectories.slice(0, 3).map((directory) => ({
-      id: directory.id,
-      kind: directory.kind,
-      label: directory.label,
-      path: directory.path,
-      ...(directory.worktreePath ? { worktreePath: directory.worktreePath } : {}),
-    })),
+    linkedDirectories: thread.linkedDirectories
+      .slice(0, 3)
+      .map((directory) => ({
+        id: directory.id,
+        kind: directory.kind,
+        label: directory.label,
+        path: directory.path,
+        ...(directory.worktreePath
+          ? { worktreePath: directory.worktreePath }
+          : {}),
+      })),
     ...(thread.linkedRepositories?.length
       ? {
-          linkedRepositories: thread.linkedRepositories.slice(0, 5).map((repo) => ({
-            repositoryPath: repo.repositoryPath,
-            directoryIds: repo.directoryIds.slice(0, 8),
-            labels: repo.labels.slice(0, 8),
-            worktreePaths: repo.worktreePaths.slice(0, 8),
-          })),
+          linkedRepositories: thread.linkedRepositories
+            .slice(0, 5)
+            .map((repo) => ({
+              repositoryPath: repo.repositoryPath,
+              directoryIds: repo.directoryIds.slice(0, 8),
+              labels: repo.labels.slice(0, 8),
+              worktreePaths: repo.worktreePaths.slice(0, 8),
+            })),
         }
       : {}),
     ...(thread.pullRequests?.length
@@ -20117,7 +21074,10 @@ function summarizeLinkedRepositories(
     if (!current.labels.includes(directory.label)) {
       current.labels.push(directory.label);
     }
-    if (directory.worktreePath && !current.worktreePaths.includes(directory.worktreePath)) {
+    if (
+      directory.worktreePath
+      && !current.worktreePaths.includes(directory.worktreePath)
+    ) {
       current.worktreePaths.push(directory.worktreePath);
     }
     byRepositoryPath.set(repositoryPath, current);
@@ -20155,11 +21115,13 @@ function buildThreadInspectionDateRange(params: {
   updatedBefore?: number;
 }): Pick<ThreadSearchFilters, "dateRange"> {
   const from =
-    typeof params.updatedAfter === "number" && Number.isFinite(params.updatedAfter)
+    typeof params.updatedAfter === "number"
+    && Number.isFinite(params.updatedAfter)
       ? Math.floor(params.updatedAfter)
       : undefined;
   const to =
-    typeof params.updatedBefore === "number" && Number.isFinite(params.updatedBefore)
+    typeof params.updatedBefore === "number"
+    && Number.isFinite(params.updatedBefore)
       ? Math.floor(params.updatedBefore)
       : undefined;
   return from !== undefined || to !== undefined
@@ -20172,7 +21134,10 @@ function buildThreadInspectionDateRange(params: {
     : {};
 }
 
-function truncateThreadInspectionText(value: string, maxLength: number): string {
+function truncateThreadInspectionText(
+  value: string,
+  maxLength: number,
+): string {
   return truncateThreadInspectionTextWithFlag(value, maxLength).value;
 }
 

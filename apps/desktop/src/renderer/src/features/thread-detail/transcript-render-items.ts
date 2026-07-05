@@ -30,8 +30,9 @@ export function buildTranscriptRenderItems(params: {
   now?: number;
 }): TranscriptRenderItem[] {
   const activeTurnId =
-    params.activeTurnId ??
-    params.entries.find((entry) => entry.id === params.activeMessageId)?.turn?.id;
+    params.activeTurnId
+    ?? params.entries.find((entry) => entry.id === params.activeMessageId)?.turn
+      ?.id;
 
   if (params.activeMessageId && !activeTurnId) {
     return params.entries.map((entry) => ({ type: "entry", entry }));
@@ -43,7 +44,7 @@ export function buildTranscriptRenderItems(params: {
       params.entries,
       activeTurnId,
       params.now,
-      params.activeTurnStartedAt
+      params.activeTurnStartedAt,
     );
     groups.push(...activeGroups);
     if (groups.length > 0) {
@@ -78,19 +79,21 @@ function buildActiveWorkGroups(
   entries: AppServerThreadEntry[],
   activeTurnId: string,
   now = Date.now(),
-  activeTurnStartedAt?: number
+  activeTurnStartedAt?: number,
 ): RenderGroup[] {
   const turn = entries.find((entry) => entry.turn?.id === activeTurnId)?.turn;
   const startedAtCandidates = [activeTurnStartedAt, turn?.startedAt].filter(
-    (value): value is number => typeof value === "number"
+    (value): value is number => typeof value === "number",
   );
   const startedAt =
-    startedAtCandidates.length > 0 ? Math.min(...startedAtCandidates) : undefined;
+    startedAtCandidates.length > 0
+      ? Math.min(...startedAtCandidates)
+      : undefined;
   const elapsedMs =
     typeof startedAt === "number" ? Math.max(now - startedAt, 0) : undefined;
   if (
-    typeof elapsedMs !== "number" ||
-    elapsedMs <= ACTIVE_WORK_GROUP_THRESHOLD_MS
+    typeof elapsedMs !== "number"
+    || elapsedMs <= ACTIVE_WORK_GROUP_THRESHOLD_MS
   ) {
     return [];
   }
@@ -121,7 +124,7 @@ function buildActiveWorkGroups(
 
 function buildCompletedGroups(
   entries: AppServerThreadEntry[],
-  excludeTurnId?: string
+  excludeTurnId?: string,
 ): RenderGroup[] {
   const groups: RenderGroup[] = [];
   const groupIds = new Set<string>();
@@ -157,7 +160,9 @@ function buildCompletedGroups(
         ? repeatedWorkTurn
           ? "More work"
           : workGroupLabel(turn)
-        : previousMessagesLabel(currentEntries.filter(isAssistantCommentaryMessage).length),
+        : previousMessagesLabel(
+            currentEntries.filter(isAssistantCommentaryMessage).length,
+          ),
     });
     if (hasWork) {
       completedWorkTurnIds.add(currentTurnId);
@@ -169,9 +174,7 @@ function buildCompletedGroups(
   for (const entry of entries) {
     const turnId = entry.turn?.id;
     const canJoinGroup =
-      Boolean(turnId) &&
-      turnId !== excludeTurnId &&
-      isWorkPhaseEntry(entry);
+      Boolean(turnId) && turnId !== excludeTurnId && isWorkPhaseEntry(entry);
 
     if (!canJoinGroup) {
       flushCurrent();
@@ -191,7 +194,7 @@ function buildCompletedGroups(
 }
 
 function buildCommentaryOnlyGroup(
-  messages: AppServerThreadMessageEntry[]
+  messages: AppServerThreadMessageEntry[],
 ): RenderGroup {
   return {
     collapsible: true,
@@ -201,7 +204,9 @@ function buildCommentaryOnlyGroup(
   };
 }
 
-function buildCommentaryOnlyGroups(entries: AppServerThreadEntry[]): RenderGroup[] {
+function buildCommentaryOnlyGroups(
+  entries: AppServerThreadEntry[],
+): RenderGroup[] {
   const groups: RenderGroup[] = [];
   let currentMessages: AppServerThreadMessageEntry[] = [];
 
@@ -227,7 +232,7 @@ function buildCommentaryOnlyGroups(entries: AppServerThreadEntry[]): RenderGroup
 
 function renderWithGroups(
   entries: AppServerThreadEntry[],
-  groups: RenderGroup[]
+  groups: RenderGroup[],
 ): TranscriptRenderItem[] {
   const entryToGroup = new Map<AppServerThreadEntry, RenderGroup>();
   const groupedEntries = new Set<AppServerThreadEntry>();
@@ -259,26 +264,26 @@ function renderWithGroups(
 }
 
 function isAssistantCommentaryMessage(
-  entry: AppServerThreadEntry | undefined
+  entry: AppServerThreadEntry | undefined,
 ): entry is AppServerThreadMessageEntry {
   return (
-    entry?.type === "message" &&
-    entry.role === "assistant" &&
-    entry.phase === "commentary"
+    entry?.type === "message"
+    && entry.role === "assistant"
+    && entry.phase === "commentary"
   );
 }
 
 function isWorkPhaseEntry(
-  entry: AppServerThreadEntry
+  entry: AppServerThreadEntry,
 ): entry is
   | AppServerThreadMessageEntry
   | AppServerThreadActivityEntry
   | AppServerThreadPlanEntry {
   if (entry.type === "activity") {
     return (
-      !isTerminalTurnFailureActivity(entry) &&
-      !isFileDiffActivity(entry) &&
-      !isTokenUsageActivity(entry)
+      !isTerminalTurnFailureActivity(entry)
+      && !isFileDiffActivity(entry)
+      && !isTokenUsageActivity(entry)
     );
   }
 
@@ -294,59 +299,59 @@ function hasConcreteWork(entries: AppServerThreadEntry[]): boolean {
 }
 
 function isConcreteWorkEntry(
-  entry: AppServerThreadEntry
+  entry: AppServerThreadEntry,
 ): entry is AppServerThreadActivityEntry | AppServerThreadPlanEntry {
   return (
-    entry.type === "plan" ||
-    (entry.type === "activity" &&
-      !isTerminalTurnFailureActivity(entry) &&
-      !isFileDiffActivity(entry) &&
-      !isTokenUsageActivity(entry))
+    entry.type === "plan"
+    || (entry.type === "activity"
+      && !isTerminalTurnFailureActivity(entry)
+      && !isFileDiffActivity(entry)
+      && !isTokenUsageActivity(entry))
   );
 }
 
 function isTerminalTurnFailureActivity(
-  entry: AppServerThreadActivityEntry
+  entry: AppServerThreadActivityEntry,
 ): boolean {
   return (
-    entry.id.startsWith("turn-failed:") &&
-    entry.status === "failed" &&
-    entry.turn?.status === "failed"
+    entry.id.startsWith("turn-failed:")
+    && entry.status === "failed"
+    && entry.turn?.status === "failed"
   );
 }
 
 function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
   return entry.details.some((detail) =>
-    Boolean(detail.fileDiff?.diff || detail.fileDiff?.omittedReason)
+    Boolean(detail.fileDiff?.diff || detail.fileDiff?.omittedReason),
   );
 }
 
 function isTokenUsageActivity(entry: AppServerThreadActivityEntry): boolean {
   return (
-    entry.id.startsWith("live-token-usage-") ||
-    entry.id.startsWith("live-turn-usage-") ||
-    entry.summary.startsWith("Turn usage:") ||
-    entry.summary.startsWith("Monitor usage:") ||
-    entry.summary.startsWith("Usage:") ||
-    entry.summary.startsWith("Latest request usage:")
+    entry.id.startsWith("live-token-usage-")
+    || entry.id.startsWith("live-turn-usage-")
+    || entry.summary.startsWith("Turn usage:")
+    || entry.summary.startsWith("Monitor usage:")
+    || entry.summary.startsWith("Usage:")
+    || entry.summary.startsWith("Latest request usage:")
   );
 }
 
 function readCompletedTurn(
-  entries: AppServerThreadEntry[]
+  entries: AppServerThreadEntry[],
 ): AppServerThreadTurnMetadata | undefined {
   return entries
     .map((entry) => entry.turn)
     .find((turn): turn is AppServerThreadTurnMetadata =>
       Boolean(
-        turn &&
-          (turn.status === "completed" ||
-            turn.status === "failed" ||
-            turn.status === "cancelled" ||
-            turn.status === "interrupted" ||
-            typeof turn.durationMs === "number" ||
-            typeof turn.completedAt === "number")
-      )
+        turn
+        && (turn.status === "completed"
+          || turn.status === "failed"
+          || turn.status === "cancelled"
+          || turn.status === "interrupted"
+          || typeof turn.durationMs === "number"
+          || typeof turn.completedAt === "number"),
+      ),
     );
 }
 
@@ -356,9 +361,9 @@ function workGroupLabel(turn: AppServerThreadTurnMetadata): string {
   }
 
   if (
-    typeof turn.startedAt === "number" &&
-    typeof turn.completedAt === "number" &&
-    turn.completedAt > turn.startedAt + 60_000
+    typeof turn.startedAt === "number"
+    && typeof turn.completedAt === "number"
+    && turn.completedAt > turn.startedAt + 60_000
   ) {
     return `Worked for ${formatElapsedMs(turn.completedAt - turn.startedAt)}`;
   }

@@ -1,5 +1,13 @@
-import type { ToolExecutionContext, ToolExecutor, ToolInvocation } from "./tool-contract.js";
-import { InvalidToolArgumentsError, ToolError, UnknownToolError } from "./tool-errors.js";
+import type {
+  ToolExecutionContext,
+  ToolExecutor,
+  ToolInvocation,
+} from "./tool-contract.js";
+import {
+  InvalidToolArgumentsError,
+  ToolError,
+  UnknownToolError,
+} from "./tool-errors.js";
 import { ToolRegistry } from "./tool-registry.js";
 
 export class LocalToolExecutor implements ToolExecutor {
@@ -57,7 +65,9 @@ export class LocalToolExecutor implements ToolExecutor {
   }
 }
 
-function stripUndefined<T extends Record<string, unknown>>(value: T): Record<string, unknown> {
+function stripUndefined<T extends Record<string, unknown>>(
+  value: T,
+): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined),
   );
@@ -76,7 +86,8 @@ function failureResult(
           `${toolName} failed: ${error instanceof Error ? error.message : String(error)}`,
         );
   const output =
-    error instanceof InvalidToolArgumentsError || error instanceof UnknownToolError
+    error instanceof InvalidToolArgumentsError
+    || error instanceof UnknownToolError
       ? normalized.message
       : normalized.message;
   return {

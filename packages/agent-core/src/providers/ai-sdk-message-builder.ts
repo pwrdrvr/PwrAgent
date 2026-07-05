@@ -33,7 +33,10 @@ export async function buildAiSdkMessages(params: {
     if (item.type === "image") {
       const name = item.name?.trim();
       if (name) {
-        content.push({ type: "text", text: `Attached image filename: ${name}` });
+        content.push({
+          type: "text",
+          text: `Attached image filename: ${name}`,
+        });
       }
       content.push(parseImageUrl(item.url));
       continue;
@@ -63,7 +66,9 @@ function parseImageUrl(url: string): ImagePart {
     throw new Error("image input requires an absolute URL or data URL");
   }
   if (parsed.protocol === "file:") {
-    throw new Error("file:// image URLs are not accessible to xAI; use localImage instead");
+    throw new Error(
+      "file:// image URLs are not accessible to xAI; use localImage instead",
+    );
   }
   if (!["http:", "https:", "data:"].includes(parsed.protocol)) {
     throw new Error(`Unsupported image URL protocol: ${parsed.protocol}`);
@@ -79,7 +84,8 @@ function parseImageUrl(url: string): ImagePart {
   return {
     type: "image",
     image: parsed,
-    mediaType: parsed.protocol === "data:" ? mediaTypeFromDataUrl(url) : undefined,
+    mediaType:
+      parsed.protocol === "data:" ? mediaTypeFromDataUrl(url) : undefined,
   };
 }
 
@@ -120,5 +126,9 @@ function mediaTypeForImagePath(filePath: string): string {
 }
 
 function isSupportedImageMediaType(mediaType: string): boolean {
-  return mediaType === "image/jpeg" || mediaType === "image/jpg" || mediaType === "image/png";
+  return (
+    mediaType === "image/jpeg"
+    || mediaType === "image/jpg"
+    || mediaType === "image/png"
+  );
 }

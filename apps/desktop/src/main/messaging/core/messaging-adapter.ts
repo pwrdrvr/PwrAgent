@@ -89,8 +89,12 @@ export type MessagingAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
-  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
-  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  resolveDeliveryScope?(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined;
+  updateAuthorization?(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void>;
   updateRenderingPreferences?(
     update: MessagingAdapterRenderingPreferencesUpdate,
   ): Promise<void>;

@@ -26,11 +26,13 @@ function createStreamTextWithToolCall(call: {
   });
 }
 
-function createStreamTextWithParallelToolCalls(calls: Array<{
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}>) {
+function createStreamTextWithParallelToolCalls(
+  calls: Array<{
+    id: string;
+    name: string;
+    input: Record<string, unknown>;
+  }>,
+) {
   return vi.fn((options: any) => {
     const text = (async () => {
       await Promise.all(
@@ -65,16 +67,18 @@ function collectSubscribedEvents(
 
 describe("xAI search tool wrappers", () => {
   it("maps search_x arguments to xai.tools.xSearch options", async () => {
-    const generateTextImpl = vi.fn(async (_params: Record<string, unknown>) => ({
-      text: "Search result.",
-      sources: [
-        {
-          sourceType: "url",
-          url: "https://x.com/xai/status/1",
-          title: "xAI on X",
-        },
-      ],
-    }));
+    const generateTextImpl = vi.fn(
+      async (_params: Record<string, unknown>) => ({
+        text: "Search result.",
+        sources: [
+          {
+            sourceType: "url",
+            url: "https://x.com/xai/status/1",
+            title: "xAI on X",
+          },
+        ],
+      }),
+    );
     const provider = new GrokProvider({
       apiKey: "test-key",
       streamTextImpl: createStreamTextWithToolCall({
@@ -108,7 +112,8 @@ describe("xAI search tool wrappers", () => {
         toolChoice: "required",
       }),
     );
-    const searchTool = (generateTextImpl.mock.calls[0]?.[0] as any).tools.x_search;
+    const searchTool = (generateTextImpl.mock.calls[0]?.[0] as any).tools
+      .x_search;
     expect(searchTool.args).toEqual({
       allowedXHandles: ["xai"],
       fromDate: "2026-04-01",
@@ -176,10 +181,12 @@ describe("xAI search tool wrappers", () => {
   });
 
   it("maps search_web arguments to xai.tools.webSearch options", async () => {
-    const generateTextImpl = vi.fn(async (_params: Record<string, unknown>) => ({
-      text: "Web result.",
-      sources: [],
-    }));
+    const generateTextImpl = vi.fn(
+      async (_params: Record<string, unknown>) => ({
+        text: "Web result.",
+        sources: [],
+      }),
+    );
     const provider = new GrokProvider({
       apiKey: "test-key",
       streamTextImpl: createStreamTextWithToolCall({
@@ -209,14 +216,16 @@ describe("xAI search tool wrappers", () => {
         toolChoice: "required",
       }),
     );
-    const searchTool = (generateTextImpl.mock.calls[0]?.[0] as any).tools.web_search;
+    const searchTool = (generateTextImpl.mock.calls[0]?.[0] as any).tools
+      .web_search;
     expect(searchTool.args).toEqual({
       allowedDomains: ["ai-sdk.dev"],
       enableImageUnderstanding: true,
     });
-    expect((generateTextImpl.mock.calls[0]?.[0].model as { modelId?: string }).modelId).toBe(
-      "grok-4-1-fast-non-reasoning",
-    );
+    expect(
+      (generateTextImpl.mock.calls[0]?.[0].model as { modelId?: string })
+        .modelId,
+    ).toBe("grok-4-1-fast-non-reasoning");
   });
 
   it("uses a 90 second default timeout for nested search tools", async () => {
@@ -264,10 +273,12 @@ describe("xAI search tool wrappers", () => {
   });
 
   it("uses the configured fast non-reasoning model for nested web and X search", async () => {
-    const generateTextImpl = vi.fn(async (_params: Record<string, unknown>) => ({
-      text: "Search result.",
-      sources: [],
-    }));
+    const generateTextImpl = vi.fn(
+      async (_params: Record<string, unknown>) => ({
+        text: "Search result.",
+        sources: [],
+      }),
+    );
     const provider = new GrokProvider({
       apiKey: "test-key",
       searchModel: "grok-4-1-fast-non-reasoning",
@@ -303,17 +314,20 @@ describe("xAI search tool wrappers", () => {
       "grok-4-1-fast-non-reasoning",
       "grok-4-1-fast-non-reasoning",
     ]);
-    expect(generateTextImpl.mock.calls.map(([params]) => Object.keys(params.tools ?? {}))).toEqual([
-      ["web_search"],
-      ["x_search"],
-    ]);
+    expect(
+      generateTextImpl.mock.calls.map(([params]) =>
+        Object.keys(params.tools ?? {}),
+      ),
+    ).toEqual([["web_search"], ["x_search"]]);
   });
 
   it("returns a failed tool result for mutually exclusive X handle filters", async () => {
-    const generateTextImpl = vi.fn(async (_params: Record<string, unknown>) => ({
-      text: "unused",
-      sources: [],
-    }));
+    const generateTextImpl = vi.fn(
+      async (_params: Record<string, unknown>) => ({
+        text: "unused",
+        sources: [],
+      }),
+    );
     const provider = new GrokProvider({
       apiKey: "test-key",
       streamTextImpl: createStreamTextWithToolCall({
@@ -356,7 +370,8 @@ describe("xAI search tool wrappers", () => {
           completedAt: expect.any(Number),
           elapsedMs: expect.any(Number),
           success: false,
-          output: "search_x cannot set both allowedXHandles and excludedXHandles",
+          output:
+            "search_x cannot set both allowedXHandles and excludedXHandles",
           sources: [],
           errorCode: "invalid_tool_arguments",
         },
@@ -385,7 +400,7 @@ describe("xAI search tool wrappers", () => {
           id: "call_x",
           name: "search_x",
           input: {
-            query: "\"Matt Van Horn\" OR @mattvanhorn OR from:mattvanhorn",
+            query: '"Matt Van Horn" OR @mattvanhorn OR from:mattvanhorn',
           },
         }),
         generateTextImpl,
@@ -412,7 +427,7 @@ describe("xAI search tool wrappers", () => {
           toolName: "search_x",
           success: false,
           arguments: {
-            query: "\"Matt Van Horn\" OR @mattvanhorn OR from:mattvanhorn",
+            query: '"Matt Van Horn" OR @mattvanhorn OR from:mattvanhorn',
           },
           data: {
             startedAt: expect.any(Number),
@@ -455,7 +470,9 @@ describe("xAI search tool wrappers", () => {
         {
           id: "call_x_secondary",
           name: "search_x",
-          input: { query: "\"Matt Van Horn\" OR @mattvanhorn OR from:mattvanhorn" },
+          input: {
+            query: '"Matt Van Horn" OR @mattvanhorn OR from:mattvanhorn',
+          },
         },
       ]),
       generateTextImpl,
@@ -484,7 +501,15 @@ describe("xAI search tool wrappers", () => {
       .flatMap((event) => ("item" in event ? [event.item.id] : []))
       .sort();
 
-    expect(startedIds).toEqual(["call_web", "call_x_primary", "call_x_secondary"]);
-    expect(completedIds).toEqual(["call_web", "call_x_primary", "call_x_secondary"]);
+    expect(startedIds).toEqual([
+      "call_web",
+      "call_x_primary",
+      "call_x_secondary",
+    ]);
+    expect(completedIds).toEqual([
+      "call_web",
+      "call_x_primary",
+      "call_x_secondary",
+    ]);
   });
 });

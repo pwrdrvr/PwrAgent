@@ -23,7 +23,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { AcpSessionNormalizer, defaultQuirks, type AcpAgentQuirks } from "@pwrdrvr/agent-acp";
+import {
+  AcpSessionNormalizer,
+  defaultQuirks,
+  type AcpAgentQuirks,
+} from "@pwrdrvr/agent-acp";
 import type { NormalizedThreadEvent } from "@pwrdrvr/agent-core";
 import type { AppServerThreadReplay } from "@pwragent/shared";
 import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
@@ -37,13 +41,20 @@ function runInTree(updates: Update[]): AppServerThreadReplay {
   const normalizer = new AcpSessionReplayNormalizer();
   let replay = normalizer.replay();
   updates.forEach((update, index) => {
-    replay = normalizer.apply({ sessionId: "s1", update, receivedAt: 1000 + index });
+    replay = normalizer.apply({
+      sessionId: "s1",
+      update,
+      receivedAt: 1000 + index,
+    });
   });
   return replay;
 }
 
 /** Feed the transcript through the kit normalizer + reducer + adapter. */
-function runKit(updates: Update[], quirks: AcpAgentQuirks = defaultQuirks()): AppServerThreadReplay {
+function runKit(
+  updates: Update[],
+  quirks: AcpAgentQuirks = defaultQuirks(),
+): AppServerThreadReplay {
   const normalizer = new AcpSessionNormalizer({ quirks });
   const ctx = { threadId: "s1", turnId: "turn-1" };
   const events: NormalizedThreadEvent[] = [];
@@ -102,8 +113,14 @@ describe("KTD-P3 normalizer parity", () => {
 
   it("ACP content-block chunks (sessionUpdate + {type,text})", () => {
     const updates: Update[] = [
-      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "It is " } },
-      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "PwrAgent." } },
+      {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "It is " },
+      },
+      {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "PwrAgent." },
+      },
     ];
     expect(canon(runKit(updates))).toEqual(canon(runInTree(updates)));
   });
@@ -124,8 +141,17 @@ describe("KTD-P3 normalizer parity", () => {
 
   it("plan then tool call", () => {
     const updates: Update[] = [
-      { kind: "plan", steps: [{ step: "Inspect files", status: "in_progress" }] },
-      { kind: "tool_call", id: "tool-1", title: "Read package.json", status: "completed", locations: [{ path: "package.json" }] },
+      {
+        kind: "plan",
+        steps: [{ step: "Inspect files", status: "in_progress" }],
+      },
+      {
+        kind: "tool_call",
+        id: "tool-1",
+        title: "Read package.json",
+        status: "completed",
+        locations: [{ path: "package.json" }],
+      },
     ];
     expect(canon(runKit(updates))).toEqual(canon(runInTree(updates)));
   });

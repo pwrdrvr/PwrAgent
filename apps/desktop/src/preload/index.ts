@@ -461,8 +461,8 @@ function isEnvEnabled(value: string | undefined): boolean {
 }
 
 const startupProfileEnabled =
-  isEnvEnabled(process.env.PWRAGENT_STARTUP_PROFILE) ||
-  isEnvEnabled(process.env.PWRAGENT_STARTUP_CPU_PROFILING);
+  isEnvEnabled(process.env.PWRAGENT_STARTUP_PROFILE)
+  || isEnvEnabled(process.env.PWRAGENT_STARTUP_CPU_PROFILING);
 const preloadStartedAt = performance.now();
 
 function recordStartupProfileRendererEvent(
@@ -477,7 +477,9 @@ function recordStartupProfileRendererEvent(
     source: "renderer",
     type,
     detail: {
-      preloadElapsedMs: Number((performance.now() - preloadStartedAt).toFixed(3)),
+      preloadElapsedMs: Number(
+        (performance.now() - preloadStartedAt).toFixed(3),
+      ),
       ...(detail ?? {}),
     },
   });
@@ -522,7 +524,7 @@ async function invokeWithStartupProfileTiming<T>(
 recordPreloadLog("info", "start", {
   contextIsolated: process.contextIsolated,
   platform: process.platform,
-  electron: process.versions.electron
+  electron: process.versions.electron,
 });
 recordStartupProfileRendererEvent("preload-start", {
   contextIsolated: process.contextIsolated,
@@ -560,8 +562,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_LOG_WINDOW_OPEN_CHANNEL);
   },
   onAppLogEntry: (callback: (entry: AppLogEntry) => void): (() => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: AppLogEntry) =>
-      callback(payload);
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: AppLogEntry,
+    ) => callback(payload);
     ipcRenderer.on(APP_LOG_ENTRY_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(APP_LOG_ENTRY_EVENT_CHANNEL, listener);
@@ -639,14 +643,16 @@ const desktopApi = Object.freeze({
     request: GetAutomationRunArtifactRequest,
   ): Promise<GetAutomationRunArtifactResponse> =>
     await ipcRenderer.invoke(AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL, request),
-  listAutomationLoadIssues: async (): Promise<ListAutomationLoadIssuesResponse> =>
-    await ipcRenderer.invoke(AUTOMATIONS_LOAD_ISSUES_CHANNEL),
+  listAutomationLoadIssues:
+    async (): Promise<ListAutomationLoadIssuesResponse> =>
+      await ipcRenderer.invoke(AUTOMATIONS_LOAD_ISSUES_CHANNEL),
   draftAutomationPrompt: async (
     request: DraftAutomationPromptRequest,
   ): Promise<DraftAutomationPromptResponse> =>
     await ipcRenderer.invoke(AUTOMATIONS_DRAFT_PROMPT_CHANNEL, request),
-  listPwrAgentProfiles: async (): Promise<ListDesktopPwrAgentProfilesResponse> =>
-    await ipcRenderer.invoke(PROFILES_LIST_CHANNEL),
+  listPwrAgentProfiles:
+    async (): Promise<ListDesktopPwrAgentProfilesResponse> =>
+      await ipcRenderer.invoke(PROFILES_LIST_CHANNEL),
   openPwrAgentProfile: async (
     request: OpenDesktopPwrAgentProfileRequest,
   ): Promise<OpenDesktopPwrAgentProfileResponse> =>
@@ -670,7 +676,10 @@ const desktopApi = Object.freeze({
   graduateBootstrapConfigToProfile: async (
     request: GraduateDesktopBootstrapConfigToProfileRequest,
   ): Promise<GraduateDesktopBootstrapConfigToProfileResponse> =>
-    await ipcRenderer.invoke(PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL, request),
+    await ipcRenderer.invoke(
+      PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL,
+      request,
+    ),
   writeSecretsToProfile: async (
     request: WriteDesktopSecretsToProfileRequest,
   ): Promise<WriteDesktopSecretsToProfileResponse> =>
@@ -680,7 +689,8 @@ const desktopApi = Object.freeze({
       "getBootInfo",
       APP_GET_BOOT_INFO_CHANNEL,
     ),
-  quitApp: async (): Promise<void> => await ipcRenderer.invoke(APP_QUIT_CHANNEL),
+  quitApp: async (): Promise<void> =>
+    await ipcRenderer.invoke(APP_QUIT_CHANNEL),
   waitForProfileAlive: async (
     request: WaitForDesktopProfileAliveRequest,
   ): Promise<WaitForDesktopProfileAliveResponse> =>
@@ -692,7 +702,7 @@ const desktopApi = Object.freeze({
       }
     : {}),
   listThreads: async (
-    request?: AppServerListThreadsRequest
+    request?: AppServerListThreadsRequest,
   ): Promise<AppServerListThreadsResponse> =>
     await invokeWithStartupProfileTiming(
       "listThreads",
@@ -704,11 +714,11 @@ const desktopApi = Object.freeze({
   ): Promise<ThreadSearchResponse> =>
     await ipcRenderer.invoke(THREAD_SEARCH_CHANNEL, request),
   listSkills: async (
-    request?: AppServerListSkillsRequest
+    request?: AppServerListSkillsRequest,
   ): Promise<AppServerListSkillsResponse> =>
     await ipcRenderer.invoke(APP_SERVER_LIST_SKILLS_CHANNEL, request),
   listBackends: async (
-    request?: ListBackendsRequest
+    request?: ListBackendsRequest,
   ): Promise<ListBackendsResponse> =>
     await invokeWithStartupProfileTiming(
       "listBackends",
@@ -746,7 +756,10 @@ const desktopApi = Object.freeze({
   createCodexAuthProfile: async (
     request: CreateDesktopCodexAuthProfileRequest,
   ): Promise<CreateDesktopCodexAuthProfileResponse> =>
-    await ipcRenderer.invoke(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL, request),
+    await ipcRenderer.invoke(
+      SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
+      request,
+    ),
   startCodexAuthProfileLogin: async (
     request: StartDesktopCodexAuthProfileLoginRequest,
   ): Promise<StartDesktopCodexAuthProfileLoginResponse> =>
@@ -774,9 +787,9 @@ const desktopApi = Object.freeze({
     request: SettingsCredentialTestRequest,
   ): Promise<SettingsCredentialTestResult> =>
     await ipcRenderer.invoke(SETTINGS_TEST_CREDENTIALS_CHANNEL, request),
-  readLastSettingsCredentialTest: async (
-    request: { kind: SettingsCredentialTestKind },
-  ): Promise<SettingsCredentialTestResult | undefined> =>
+  readLastSettingsCredentialTest: async (request: {
+    kind: SettingsCredentialTestKind;
+  }): Promise<SettingsCredentialTestResult | undefined> =>
     await ipcRenderer.invoke(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL, request),
   resolveMessagingContact: async (
     request: DesktopMessagingContactLookupRequest,
@@ -804,9 +817,14 @@ const desktopApi = Object.freeze({
   readMarkdownFileViewerSnapshot: async (
     request: ReadMarkdownFileViewerSnapshotRequest,
   ): Promise<ReadMarkdownFileViewerSnapshotResponse> =>
-    await ipcRenderer.invoke(MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL, request),
+    await ipcRenderer.invoke(
+      MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
+      request,
+    ),
   onMarkdownFileViewerSnapshotChanged: (
-    callback: (snapshot: Readonly<ReadMarkdownFileViewerSnapshotResponse>) => void,
+    callback: (
+      snapshot: Readonly<ReadMarkdownFileViewerSnapshotResponse>,
+    ) => void,
   ): (() => void) => {
     const listener = (
       _event: Electron.IpcRendererEvent,
@@ -873,7 +891,7 @@ const desktopApi = Object.freeze({
     };
   },
   readThread: async (
-    request: AppServerReadThreadRequest
+    request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse> =>
     await invokeWithStartupProfileTiming(
       "readThread",
@@ -899,12 +917,16 @@ const desktopApi = Object.freeze({
     request: RestoreThreadRequest,
   ): Promise<RestoreThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_RESTORE_THREAD_CHANNEL, request),
-  listThreadMigrationSources: async (): Promise<ListThreadMigrationSourcesResponse> =>
-    await ipcRenderer.invoke(THREAD_MIGRATION_LIST_SOURCES_CHANNEL),
+  listThreadMigrationSources:
+    async (): Promise<ListThreadMigrationSourcesResponse> =>
+      await ipcRenderer.invoke(THREAD_MIGRATION_LIST_SOURCES_CHANNEL),
   listThreadMigrationSourceThreads: async (
     request: ListThreadMigrationSourceThreadsRequest,
   ): Promise<ListThreadMigrationSourceThreadsResponse> =>
-    await ipcRenderer.invoke(THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL, request),
+    await ipcRenderer.invoke(
+      THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
+      request,
+    ),
   startThreadMigration: async (
     request: StartThreadMigrationRequest,
   ): Promise<StartThreadMigrationResponse> =>
@@ -924,45 +946,42 @@ const desktopApi = Object.freeze({
   handoffThreadWorkspace: async (
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> =>
-    await ipcRenderer.invoke(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL, request),
+    await ipcRenderer.invoke(
+      APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
+      request,
+    ),
   renameThread: async (
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_RENAME_THREAD_CHANNEL, request),
   analyzeFocusedDiff: async (
-    request: FocusedDiffAnalysisRequest
+    request: FocusedDiffAnalysisRequest,
   ): Promise<FocusedDiffAnalysisResponse> =>
     await ipcRenderer.invoke(FOCUSED_DIFF_ANALYZE_CHANNEL, request),
   startThread: async (
-    request: StartThreadRequest
+    request: StartThreadRequest,
   ): Promise<StartThreadResponse> =>
     await ipcRenderer.invoke(AGENT_START_THREAD_CHANNEL, request),
-  forkThread: async (
-    request: ForkThreadRequest,
-  ): Promise<ForkThreadResponse> =>
+  forkThread: async (request: ForkThreadRequest): Promise<ForkThreadResponse> =>
     await ipcRenderer.invoke(AGENT_FORK_THREAD_CHANNEL, request),
   startReview: async (
-    request: StartReviewRequest
+    request: StartReviewRequest,
   ): Promise<StartReviewResponse> =>
     await ipcRenderer.invoke(AGENT_START_REVIEW_CHANNEL, request),
   compactThread: async (
-    request: CompactThreadRequest
+    request: CompactThreadRequest,
   ): Promise<CompactThreadResponse> =>
     await ipcRenderer.invoke(AGENT_COMPACT_THREAD_CHANNEL, request),
-  startTurn: async (
-    request: StartTurnRequest
-  ): Promise<StartTurnResponse> =>
+  startTurn: async (request: StartTurnRequest): Promise<StartTurnResponse> =>
     await ipcRenderer.invoke(AGENT_START_TURN_CHANNEL, request),
   interruptTurn: async (
-    request: InterruptTurnRequest
+    request: InterruptTurnRequest,
   ): Promise<InterruptTurnResponse> =>
     await ipcRenderer.invoke(AGENT_INTERRUPT_TURN_CHANNEL, request),
-  steerTurn: async (
-    request: SteerTurnRequest
-  ): Promise<SteerTurnResponse> =>
+  steerTurn: async (request: SteerTurnRequest): Promise<SteerTurnResponse> =>
     await ipcRenderer.invoke(AGENT_STEER_TURN_CHANNEL, request),
   setThreadExecutionMode: async (
-    request: SetThreadExecutionModeRequest
+    request: SetThreadExecutionModeRequest,
   ): Promise<SetThreadExecutionModeResponse> =>
     await ipcRenderer.invoke(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL, request),
   queueThreadExecutionMode: async (
@@ -987,25 +1006,31 @@ const desktopApi = Object.freeze({
       request,
     ),
   setThreadModelSettings: async (
-    request: SetThreadModelSettingsRequest
+    request: SetThreadModelSettingsRequest,
   ): Promise<SetThreadModelSettingsResponse> =>
     await ipcRenderer.invoke(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL, request),
   checkThreadBranchDrift: async (
-    request: CheckThreadBranchDriftRequest
+    request: CheckThreadBranchDriftRequest,
   ): Promise<CheckThreadBranchDriftResponse> =>
     await ipcRenderer.invoke(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL, request),
   updateThreadExpectedBranch: async (
-    request: UpdateThreadExpectedBranchRequest
+    request: UpdateThreadExpectedBranchRequest,
   ): Promise<UpdateThreadExpectedBranchResponse> =>
-    await ipcRenderer.invoke(AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL, request),
+    await ipcRenderer.invoke(
+      AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
+      request,
+    ),
   retainThreadBranchDrift: async (
-    request: RetainThreadBranchDriftRequest
+    request: RetainThreadBranchDriftRequest,
   ): Promise<RetainThreadBranchDriftResponse> =>
     await ipcRenderer.invoke(AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL, request),
   materializeDirectoryLaunchpad: async (
-    request: MaterializeDirectoryLaunchpadRequest
+    request: MaterializeDirectoryLaunchpadRequest,
   ): Promise<MaterializeDirectoryLaunchpadResponse> =>
-    await ipcRenderer.invoke(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+    await ipcRenderer.invoke(
+      AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
+      request,
+    ),
   runCodexEnvironmentAction: async (
     request: RunCodexEnvironmentActionRequest,
   ): Promise<RunCodexEnvironmentActionResponse> =>
@@ -1028,15 +1053,16 @@ const desktopApi = Object.freeze({
       request,
     ),
   submitServerRequest: async (
-    request: SubmitServerRequestRequest
+    request: SubmitServerRequestRequest,
   ): Promise<SubmitServerRequestResponse> =>
     await ipcRenderer.invoke(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL, request),
   trustCodexProject: async (
     request: TrustCodexProjectRequest,
   ): Promise<TrustCodexProjectResponse> =>
     await ipcRenderer.invoke(AGENT_TRUST_CODEX_PROJECT_CHANNEL, request),
-  getLatestCodexConfigWarning: async (): Promise<LatestCodexConfigWarningResponse> =>
-    await ipcRenderer.invoke(AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL),
+  getLatestCodexConfigWarning:
+    async (): Promise<LatestCodexConfigWarningResponse> =>
+      await ipcRenderer.invoke(AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL),
   getNavigationSnapshot: async (
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> =>
@@ -1076,11 +1102,17 @@ const desktopApi = Object.freeze({
   updateSubthreadOrder: async (
     request: UpdateSubthreadOrderRequest,
   ): Promise<UpdateSubthreadOrderResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL, request),
+    await ipcRenderer.invoke(
+      NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
+      request,
+    ),
   setSubthreadsCollapsed: async (
     request: SetSubthreadsCollapsedRequest,
   ): Promise<SetSubthreadsCollapsedResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL, request),
+    await ipcRenderer.invoke(
+      NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
+      request,
+    ),
   setDirectoryPin: async (
     request: SetDirectoryPinRequest,
   ): Promise<SetDirectoryPinResponse> =>
@@ -1142,15 +1174,24 @@ const desktopApi = Object.freeze({
   ensureDirectoryLaunchpad: async (
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+    await ipcRenderer.invoke(
+      NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+      request,
+    ),
   updateDirectoryLaunchpad: async (
     request: UpdateDirectoryLaunchpadRequest,
   ): Promise<UpdateDirectoryLaunchpadResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+    await ipcRenderer.invoke(
+      NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
+      request,
+    ),
   resetDirectoryLaunchpad: async (
     request: ResetDirectoryLaunchpadRequest,
   ): Promise<ResetDirectoryLaunchpadResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+    await ipcRenderer.invoke(
+      NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
+      request,
+    ),
   saveComposerDraft: async (
     request: SaveComposerDraftRequest,
   ): Promise<SaveComposerDraftResponse> =>
@@ -1396,7 +1437,9 @@ const desktopApi = Object.freeze({
     request: StartInboundPreviewRequest,
   ): Promise<StartInboundPreviewResponse> =>
     await ipcRenderer.invoke(MESSAGING_START_INBOUND_PREVIEW_CHANNEL, request),
-  stopInboundPreview: async (request: StopInboundPreviewRequest): Promise<void> => {
+  stopInboundPreview: async (
+    request: StopInboundPreviewRequest,
+  ): Promise<void> => {
     await ipcRenderer.invoke(MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL, request);
   },
   listInboundTopics: async (
@@ -1430,8 +1473,8 @@ const desktopApi = Object.freeze({
   versions: {
     chrome: process.versions.chrome,
     electron: process.versions.electron,
-    node: process.versions.node
-  }
+    node: process.versions.node,
+  },
 });
 
 // Decode the appearance hint passed from main via
@@ -1451,7 +1494,10 @@ function readBootstrapAppearance(): {
     try {
       const raw = JSON.parse(arg.slice(APPEARANCE_ARG_PREFIX.length));
       const theme =
-        raw && (raw.theme === "system" || raw.theme === "dark" || raw.theme === "light")
+        raw
+        && (raw.theme === "system"
+          || raw.theme === "dark"
+          || raw.theme === "light")
           ? raw.theme
           : "system";
       const density =
@@ -1479,10 +1525,10 @@ function readBootstrapNavigationPreferences(): {
     try {
       const raw = JSON.parse(arg.slice(NAVIGATION_ARG_PREFIX.length));
       const browseMode =
-        raw &&
-        (raw.browseMode === "inbox" ||
-          raw.browseMode === "recents" ||
-          raw.browseMode === "directories")
+        raw
+        && (raw.browseMode === "inbox"
+          || raw.browseMode === "recents"
+          || raw.browseMode === "directories")
           ? raw.browseMode
           : "inbox";
       return { browseMode };
@@ -1551,7 +1597,7 @@ if (process.contextIsolated) {
     bootstrapLogFilePath,
   );
   recordPreloadLog("info", "exposed context bridge", {
-    keyCount: Object.keys(desktopApi).length
+    keyCount: Object.keys(desktopApi).length,
   });
 } else {
   recordPreloadLog("warn", "context isolation disabled; bridge not exposed");

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { AcpAgentAllowlist } from "../acp/acp-agent-allowlist";
-import { AcpRegistryService, normalizeRegistry } from "../acp/acp-registry-service";
+import {
+  AcpRegistryService,
+  normalizeRegistry,
+} from "../acp/acp-registry-service";
 
 const registryPayload = {
   agents: [
@@ -131,7 +134,8 @@ describe("AcpRegistryService", () => {
       (distribution) => distribution.kind === "binary",
     );
     expect(
-      binaryDistribution && service.evaluateDistribution(exampleEntry!, binaryDistribution),
+      binaryDistribution
+        && service.evaluateDistribution(exampleEntry!, binaryDistribution),
     ).toMatchObject({
       installable: true,
       verificationStatus: "unverified-allowed",
@@ -217,13 +221,16 @@ describe("AcpRegistryService", () => {
       installable: true,
       verificationStatus: "not-applicable",
     });
-    expect(npxDistribution && service.evaluateDistribution(entry!, npxDistribution)).toMatchObject({
+    expect(
+      npxDistribution && service.evaluateDistribution(entry!, npxDistribution),
+    ).toMatchObject({
       installable: true,
       verificationStatus: "not-applicable",
       allowlist: { allowed: true, ruleId: "example-npx-only" },
     });
     expect(
-      binaryDistribution && service.evaluateDistribution(entry!, binaryDistribution),
+      binaryDistribution
+        && service.evaluateDistribution(entry!, binaryDistribution),
     ).toMatchObject({
       installable: false,
       allowlist: { allowed: false },

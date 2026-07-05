@@ -23,7 +23,9 @@ export function summarizeToolActivityItems(
   const namedToolSummaries: string[] = [];
 
   for (const item of items) {
-    const itemId = pickString(item, ["id", "itemId", "item_id"]) ?? `activity-${details.length + 1}`;
+    const itemId =
+      pickString(item, ["id", "itemId", "item_id"])
+      ?? `activity-${details.length + 1}`;
     const itemStatus = normalizeActivityStatus(item);
     if (itemStatus === "failed") {
       status = "failed";
@@ -57,7 +59,9 @@ export function summarizeToolActivityItems(
         status: itemStatus,
       });
 
-      for (const [index, source] of extractSources(item).slice(0, 5).entries()) {
+      for (const [index, source] of extractSources(item)
+        .slice(0, 5)
+        .entries()) {
         const label = source.title?.trim() || source.url?.trim();
         if (!label) {
           continue;
@@ -105,7 +109,9 @@ export function summarizeToolActivityItems(
       details.push({
         id: itemId,
         kind: "read",
-        label: filePath ? `Searched ${formatPathName(filePath)}` : "Searched code",
+        label: filePath
+          ? `Searched ${formatPathName(filePath)}`
+          : "Searched code",
         path: filePath,
         status: itemStatus,
       });
@@ -145,12 +151,19 @@ export function summarizeToolActivityItems(
 
   const uniqueToolSummaries = [...new Set(namedToolSummaries)];
   const summaryParts: string[] = [];
-  if (uniqueToolSummaries.length === 1 && inspected === 1 && commands === 0 && writes === 0) {
+  if (
+    uniqueToolSummaries.length === 1
+    && inspected === 1
+    && commands === 0
+    && writes === 0
+  ) {
     summaryParts.push(uniqueToolSummaries[0] ?? "Used tool");
   } else if (uniqueToolSummaries.length > 1) {
     summaryParts.push(`Used ${uniqueToolSummaries.length} tools`);
   } else if (inspected > 0) {
-    summaryParts.push(`Explored ${inspected} item${inspected === 1 ? "" : "s"}`);
+    summaryParts.push(
+      `Explored ${inspected} item${inspected === 1 ? "" : "s"}`,
+    );
   }
   if (commands > 0) {
     summaryParts.push(`Ran ${commands} command${commands === 1 ? "" : "s"}`);
@@ -162,9 +175,10 @@ export function summarizeToolActivityItems(
   return {
     type: "activity",
     id: `activity-${pickString(items[0] ?? {}, ["id", "itemId", "item_id"]) ?? "1"}`,
-    summary: summaryParts.length > 0
-      ? summaryParts.join(", ")
-      : `Recorded ${details.length} activity item${details.length === 1 ? "" : "s"}`,
+    summary:
+      summaryParts.length > 0
+        ? summaryParts.join(", ")
+        : `Recorded ${details.length} activity item${details.length === 1 ? "" : "s"}`,
     createdAt,
     status,
     details,
@@ -188,7 +202,9 @@ function formatSearchToolLabel(params: {
   elapsedMs?: number;
   status?: AppServerThreadActivityStatus;
 }): string {
-  const durationSuffix = params.elapsedMs ? ` (${formatElapsedMs(params.elapsedMs)})` : "";
+  const durationSuffix = params.elapsedMs
+    ? ` (${formatElapsedMs(params.elapsedMs)})`
+    : "";
   const querySuffix = params.query ? `: ${params.query}` : "";
   if (params.status === "in_progress") {
     return `${params.displayName}${durationSuffix}${querySuffix}`;
@@ -216,14 +232,21 @@ function summarizeToolOutput(text: string | undefined): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
+  return normalized.length > 220
+    ? `${normalized.slice(0, 217)}...`
+    : normalized;
 }
 
 function readElapsedMs(item: Record<string, unknown>): number | undefined {
   const data = asRecord(item.data);
   const elapsedMs =
-    pickNumber(item, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"]) ??
-    pickNumber(data ?? {}, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"]);
+    pickNumber(item, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"])
+    ?? pickNumber(data ?? {}, [
+      "durationMs",
+      "duration_ms",
+      "elapsedMs",
+      "elapsed_ms",
+    ]);
   return typeof elapsedMs === "number" && Number.isFinite(elapsedMs)
     ? elapsedMs
     : undefined;
@@ -237,8 +260,13 @@ function formatElapsedMs(elapsedMs: number): string {
   return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
 }
 
-function appendElapsedLabel(label: string, elapsedMs: number | undefined): string {
-  return typeof elapsedMs === "number" ? `${label} (${formatElapsedMs(elapsedMs)})` : label;
+function appendElapsedLabel(
+  label: string,
+  elapsedMs: number | undefined,
+): string {
+  return typeof elapsedMs === "number"
+    ? `${label} (${formatElapsedMs(elapsedMs)})`
+    : label;
 }
 
 function buildCommandDetail(
@@ -253,12 +281,20 @@ function buildCommandDetail(
 
   const data = asRecord(item.data);
   const output =
-    pickString(item, ["aggregatedOutput", "aggregated_output", "output"]) ??
-    pickString(data ?? {}, ["aggregatedOutput", "aggregated_output", "output"]);
+    pickString(item, ["aggregatedOutput", "aggregated_output", "output"])
+    ?? pickString(data ?? {}, [
+      "aggregatedOutput",
+      "aggregated_output",
+      "output",
+    ]);
   const exitCode =
-    pickNumber(item, ["exitCode", "exit_code"]) ??
-    pickNumber(data ?? {}, ["exitCode", "exit_code"]);
-  const cwd = pickString(item, ["cwd", "workingDirectory", "working_directory"]);
+    pickNumber(item, ["exitCode", "exit_code"])
+    ?? pickNumber(data ?? {}, ["exitCode", "exit_code"]);
+  const cwd = pickString(item, [
+    "cwd",
+    "workingDirectory",
+    "working_directory",
+  ]);
 
   return {
     displayCommand,
@@ -274,25 +310,27 @@ function extractSources(item: Record<string, unknown>): AppServerSource[] {
   const directSources = Array.isArray(item.sources) ? item.sources : undefined;
   const data = asRecord(item.data);
   const dataSources = Array.isArray(data?.sources) ? data.sources : undefined;
-  return (directSources ?? dataSources ?? []).flatMap((source): AppServerSource[] => {
-    const record = asRecord(source);
-    if (!record) {
-      return [];
-    }
-    const url = pickString(record, ["url"]);
-    const title = pickString(record, ["title"]);
-    if (!url && !title) {
-      return [];
-    }
-    return [
-      {
-        id: pickString(record, ["id"]),
-        sourceType: pickString(record, ["sourceType", "source_type", "type"]),
-        url,
-        title,
-      },
-    ];
-  });
+  return (directSources ?? dataSources ?? []).flatMap(
+    (source): AppServerSource[] => {
+      const record = asRecord(source);
+      if (!record) {
+        return [];
+      }
+      const url = pickString(record, ["url"]);
+      const title = pickString(record, ["title"]);
+      if (!url && !title) {
+        return [];
+      }
+      return [
+        {
+          id: pickString(record, ["id"]),
+          sourceType: pickString(record, ["sourceType", "source_type", "type"]),
+          url,
+          title,
+        },
+      ];
+    },
+  );
 }
 
 function normalizeActivityStatus(

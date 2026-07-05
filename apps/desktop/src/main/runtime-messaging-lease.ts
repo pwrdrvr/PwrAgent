@@ -1,16 +1,12 @@
 import { randomUUID } from "node:crypto";
-import {
-  resolveActiveProfileName,
-} from "./profile";
+import { resolveActiveProfileName } from "./profile";
 import { getAppRuntimeInstanceStore } from "./state/app-state";
 import type {
   AppRuntimeMessagingDisabledReason,
   AppRuntimeInstanceStore,
   MessagingRuntimeLeaseRecord,
 } from "./state/app-runtime-instance-store";
-import type {
-  DesktopMessagingConfig,
-} from "./messaging/messaging-config";
+import type { DesktopMessagingConfig } from "./messaging/messaging-config";
 import {
   desktopMessagingConfigHasRunnableAdapters,
   type DesktopMessagingConfigLoadOptions,
@@ -166,11 +162,16 @@ export class RuntimeMessagingLeaseCoordinator {
       return {
         enabled: false,
         disabledReasonKind: "no_runnable_adapters",
-        disabledReason: "No messaging platforms are configured for this profile.",
+        disabledReason:
+          "No messaging platforms are configured for this profile.",
       };
     }
 
-    if (options.allowStart === false && !this.leaseHeld && !runtime.isEnabled()) {
+    if (
+      options.allowStart === false
+      && !this.leaseHeld
+      && !runtime.isEnabled()
+    ) {
       this.store.markDesiredMessaging({
         instanceId: this.instanceId,
         desiredMessagingEnabled: true,
@@ -198,7 +199,8 @@ export class RuntimeMessagingLeaseCoordinator {
       return {
         enabled: false,
         disabledReasonKind: "lease_held",
-        disabledReason: "Messaging is already active in another PwrAgent instance for this profile.",
+        disabledReason:
+          "Messaging is already active in another PwrAgent instance for this profile.",
         ...(leaseHolder ? { leaseHolder } : {}),
       };
     }
@@ -257,7 +259,11 @@ export class RuntimeMessagingLeaseCoordinator {
       effectiveMessagingEnabled: instance?.effectiveMessagingEnabled ?? false,
       disabledReasonKind: instance?.disabledReason,
       ...(instance?.disabledReason
-        ? { disabledReason: runtimeDisabledReasonMessage(instance.disabledReason) }
+        ? {
+            disabledReason: runtimeDisabledReasonMessage(
+              instance.disabledReason,
+            ),
+          }
         : {}),
       leaseHeld: this.leaseHeld,
       ...(leaseHolder ? { leaseHolder } : {}),
@@ -377,7 +383,9 @@ export class RuntimeMessagingLeaseCoordinator {
         instanceId: this.instanceId,
         desiredMessagingEnabled: true,
         effectiveMessagingEnabled: false,
-        disabledReason: heldByAnotherInstance ? "lease_held" : "runtime_stopped",
+        disabledReason: heldByAnotherInstance
+          ? "lease_held"
+          : "runtime_stopped",
         now,
       });
     }
@@ -412,9 +420,7 @@ export function getRuntimeMessagingLeaseCoordinator(): RuntimeMessagingLeaseCoor
   return coordinator;
 }
 
-export function getExistingRuntimeMessagingLeaseCoordinator():
-  | RuntimeMessagingLeaseCoordinator
-  | null {
+export function getExistingRuntimeMessagingLeaseCoordinator(): RuntimeMessagingLeaseCoordinator | null {
   return coordinator;
 }
 

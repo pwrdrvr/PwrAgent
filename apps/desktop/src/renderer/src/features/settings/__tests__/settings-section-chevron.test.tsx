@@ -10,7 +10,7 @@ describe("settings section disclosure chevron placement", () => {
     const { container } = render(
       <SettingsSection title="Telegram">
         <div>body</div>
-      </SettingsSection>
+      </SettingsSection>,
     );
 
     const header = container.querySelector(".settings-section__header-button");
@@ -25,10 +25,12 @@ describe("settings section disclosure chevron placement", () => {
     const { container } = render(
       <SettingsSection title="Telegram">
         <div>body</div>
-      </SettingsSection>
+      </SettingsSection>,
     );
 
-    const actions = container.querySelector(".settings-section__header-actions");
+    const actions = container.querySelector(
+      ".settings-section__header-actions",
+    );
     expect(actions?.querySelector(".settings-section__chevron")).toBeNull();
   });
 });

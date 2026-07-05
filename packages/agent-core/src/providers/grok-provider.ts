@@ -1,9 +1,22 @@
 import { stepCountIs } from "ai";
-import type { AppServerProvider, ProviderActiveTurn, ProviderTurnEventListener, ProviderTurnParams, ProviderTurnResult } from "./provider-contract.js";
+import type {
+  AppServerProvider,
+  ProviderActiveTurn,
+  ProviderTurnEventListener,
+  ProviderTurnParams,
+  ProviderTurnResult,
+} from "./provider-contract.js";
 import { buildAiSdkMessages } from "./ai-sdk-message-builder.js";
 import { createAiSdkTools } from "./ai-sdk-tool-adapter.js";
-import { normalizeAiSdkSources, normalizeProviderMetadata } from "./ai-sdk-sources.js";
-import { buildXaiProviderOptions, XaiAiSdkRuntime, type XaiAiSdkRuntimeOptions } from "./xai-ai-sdk-runtime.js";
+import {
+  normalizeAiSdkSources,
+  normalizeProviderMetadata,
+} from "./ai-sdk-sources.js";
+import {
+  buildXaiProviderOptions,
+  XaiAiSdkRuntime,
+  type XaiAiSdkRuntimeOptions,
+} from "./xai-ai-sdk-runtime.js";
 
 export type GrokProviderOptions = XaiAiSdkRuntimeOptions & {
   maxToolRounds?: number;
@@ -52,7 +65,9 @@ function startAiSdkTurn(options: {
   const listeners = new Set<ProviderTurnEventListener>();
   const abortController = new AbortController();
 
-  const emit = async (event: Parameters<ProviderTurnEventListener>[0]): Promise<void> => {
+  const emit = async (
+    event: Parameters<ProviderTurnEventListener>[0],
+  ): Promise<void> => {
     for (const listener of [...listeners]) {
       await listener(event);
     }
@@ -74,7 +89,9 @@ function startAiSdkTurn(options: {
       };
     },
     steer: async () => {
-      throw new Error("GrokProvider does not support steering active turns yet");
+      throw new Error(
+        "GrokProvider does not support steering active turns yet",
+      );
     },
     interrupt: async () => {
       abortController.abort();
@@ -91,7 +108,9 @@ async function runAiSdkTurn(params: {
   hasListeners: () => boolean;
 }): Promise<ProviderTurnResult> {
   const messages = await buildAiSdkMessages({
-    history: params.params.previousResponseId ? undefined : params.params.history,
+    history: params.params.previousResponseId
+      ? undefined
+      : params.params.history,
     input: params.params.input,
   });
   const result = params.runtime.streamText({
@@ -114,13 +133,14 @@ async function runAiSdkTurn(params: {
     }),
   }) as AiSdkStreamTextResult;
 
-  const [assistantText, response, sources, providerMetadata, steps] = await Promise.all([
-    result.text,
-    result.response,
-    result.sources ?? Promise.resolve([]),
-    result.providerMetadata ?? Promise.resolve(undefined),
-    result.steps ?? Promise.resolve([]),
-  ]);
+  const [assistantText, response, sources, providerMetadata, steps] =
+    await Promise.all([
+      result.text,
+      result.response,
+      result.sources ?? Promise.resolve([]),
+      result.providerMetadata ?? Promise.resolve(undefined),
+      result.steps ?? Promise.resolve([]),
+    ]);
   const finalResult = assistantText.trim()
     ? { assistantText, response, sources, providerMetadata }
     : await retryFinalText({
@@ -191,7 +211,9 @@ function buildRetryPrompt(toolOutputs: string[]): string {
     "Do not include reasoning or hidden deliberation.",
     "",
     "Tool results:",
-    toolOutputs.map((output, index) => `Result ${index + 1}:\n${output}`).join("\n\n"),
+    toolOutputs
+      .map((output, index) => `Result ${index + 1}:\n${output}`)
+      .join("\n\n"),
   ].join("\n");
 }
 
@@ -224,7 +246,9 @@ function formatToolOutput(output: unknown): string | undefined {
 }
 
 function truncate(value: string, maxChars: number): string {
-  return value.length <= maxChars ? value : `${value.slice(0, maxChars)}\n[truncated]`;
+  return value.length <= maxChars
+    ? value
+    : `${value.slice(0, maxChars)}\n[truncated]`;
 }
 
 function readTextResult(value: unknown): string {
@@ -238,7 +262,9 @@ function readResponseResult(value: unknown): { id?: string } {
     return {};
   }
   const response = (value as { response?: unknown }).response;
-  return response && typeof response === "object" ? (response as { id?: string }) : {};
+  return response && typeof response === "object"
+    ? (response as { id?: string })
+    : {};
 }
 
 function readArrayResult(value: unknown, key: string): unknown[] {

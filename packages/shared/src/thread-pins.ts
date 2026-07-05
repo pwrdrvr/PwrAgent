@@ -46,7 +46,9 @@ export function compareThreadsByCreatedAtDesc<T extends CreationSortableThread>(
   return right.id.localeCompare(left.id);
 }
 
-export function buildAppendPinRank(existingRanks: Array<string | undefined>): string {
+export function buildAppendPinRank(
+  existingRanks: Array<string | undefined>,
+): string {
   const maxRank = existingRanks.reduce((max, rank) => {
     const parsed = parsePinRank(rank);
     return Number.isFinite(parsed) ? Math.max(max, parsed) : max;
@@ -71,7 +73,9 @@ export function moveThreadKey(
 ): string[] {
   if (draggedKey === targetKey) return threadKeys;
 
-  const withoutDragged = threadKeys.filter((threadKey) => threadKey !== draggedKey);
+  const withoutDragged = threadKeys.filter(
+    (threadKey) => threadKey !== draggedKey,
+  );
   const targetIndex = withoutDragged.indexOf(targetKey);
   if (targetIndex === -1) {
     return [...withoutDragged, draggedKey];

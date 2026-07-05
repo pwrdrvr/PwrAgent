@@ -83,7 +83,9 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const tone = subAgentTone(subAgent.status);
   const usage = subAgent.monitorUsage;
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
-  const backendLabel = subAgent.backend ? formatBackendLabel(subAgent.backend) : undefined;
+  const backendLabel = subAgent.backend
+    ? formatBackendLabel(subAgent.backend)
+    : undefined;
   const usageEstimates = usage
     ? formatSubAgentUsageEstimates({
         displayOptions: props.pricingDisplayOptions,
@@ -197,7 +199,9 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
               {usage.tokenUsage.reasoningOutputTokens !== undefined ? (
                 <div>
                   <dt>Reasoning</dt>
-                  <dd>{formatTokenCount(usage.tokenUsage.reasoningOutputTokens)}</dd>
+                  <dd>
+                    {formatTokenCount(usage.tokenUsage.reasoningOutputTokens)}
+                  </dd>
                 </div>
               ) : null}
               {usage.tokenUsage.totalTokens !== undefined ? (

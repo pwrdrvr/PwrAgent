@@ -58,7 +58,9 @@ describe("startup CPU profiling session", () => {
     );
 
     expect(result.session.directoryPath).toBe(expectedDirectory);
-    expect(result.session.mainProfilePath).toBe(path.join(expectedDirectory, "main.cpuprofile"));
+    expect(result.session.mainProfilePath).toBe(
+      path.join(expectedDirectory, "main.cpuprofile"),
+    );
     expect(result.session.rendererProfilePath).toBe(
       path.join(expectedDirectory, "renderer.cpuprofile"),
     );
@@ -68,8 +70,12 @@ describe("startup CPU profiling session", () => {
     expect(result.session.rendererHeapSnapshotPath).toBe(
       path.join(expectedDirectory, "renderer.heapsnapshot"),
     );
-    expect(result.session.analysisPath).toBe(path.join(expectedDirectory, "analysis.json"));
-    expect(result.session.summaryPath).toBe(path.join(expectedDirectory, "summary.md"));
+    expect(result.session.analysisPath).toBe(
+      path.join(expectedDirectory, "analysis.json"),
+    );
+    expect(result.session.summaryPath).toBe(
+      path.join(expectedDirectory, "summary.md"),
+    );
 
     const manifest = JSON.parse(
       await fs.readFile(path.join(expectedDirectory, "session.json"), "utf8"),
@@ -151,7 +157,10 @@ describe("startup CPU profiling session", () => {
       },
     });
 
-    await result.session.markProfileCaptured("main", "2026-04-19T13:30:09.000Z");
+    await result.session.markProfileCaptured(
+      "main",
+      "2026-04-19T13:30:09.000Z",
+    );
     await result.session.registerHeapSnapshot("main.heapsnapshot");
     await result.session.markAnalysisGenerated("2026-04-19T13:30:10.000Z");
     await result.session.complete({
@@ -160,7 +169,10 @@ describe("startup CPU profiling session", () => {
     });
 
     const eventLines = (
-      await fs.readFile(path.join(result.session.directoryPath, "events.ndjson"), "utf8")
+      await fs.readFile(
+        path.join(result.session.directoryPath, "events.ndjson"),
+        "utf8",
+      )
     )
       .trim()
       .split("\n")
@@ -185,7 +197,10 @@ describe("startup CPU profiling session", () => {
     ]);
 
     const manifest = JSON.parse(
-      await fs.readFile(path.join(result.session.directoryPath, "session.json"), "utf8"),
+      await fs.readFile(
+        path.join(result.session.directoryPath, "session.json"),
+        "utf8",
+      ),
     );
     expect(manifest).toMatchObject({
       status: "partial",
@@ -219,7 +234,9 @@ describe("startup CPU profiling session", () => {
     });
 
     expect(config).toEqual({ enabled: false });
-    await expect(fs.stat(path.join(workspace.path, ".local"))).rejects.toMatchObject({
+    await expect(
+      fs.stat(path.join(workspace.path, ".local")),
+    ).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
@@ -252,7 +269,11 @@ describe("startup CPU profiling session", () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
 
-    await fs.writeFile(path.join(workspace.path, ".local"), "not-a-directory", "utf8");
+    await fs.writeFile(
+      path.join(workspace.path, ".local"),
+      "not-a-directory",
+      "utf8",
+    );
     const config = createEnabledConfig(workspace.path);
 
     const result = await createStartupCpuProfileSession({

@@ -51,10 +51,15 @@ async function requestWithFallbacks(params: {
 
 function isMethodUnavailableError(error: unknown, method: string): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return message.toLowerCase() === `unsupported method: ${method.toLowerCase()}`;
+  return (
+    message.toLowerCase() === `unsupported method: ${method.toLowerCase()}`
+  );
 }
 
-function buildThreadDiscoveryPayloads(filter?: string, workspaceDir?: string): unknown[] {
+function buildThreadDiscoveryPayloads(
+  filter?: string,
+  workspaceDir?: string,
+): unknown[] {
   return [
     {
       query: filter?.trim() || undefined,
@@ -70,12 +75,11 @@ function buildThreadDiscoveryPayloads(filter?: string, workspaceDir?: string): u
   ];
 }
 
-function buildThreadStartPayloads(workspaceDir: string, model?: string): unknown[] {
-  return [
-    { cwd: workspaceDir, model },
-    { cwd: workspaceDir },
-    {},
-  ];
+function buildThreadStartPayloads(
+  workspaceDir: string,
+  model?: string,
+): unknown[] {
+  return [{ cwd: workspaceDir, model }, { cwd: workspaceDir }, {}];
 }
 
 describe("OpenClaw compatibility sequences", () => {
@@ -258,7 +262,10 @@ describe("OpenClaw compatibility sequences", () => {
     const startedThread = await requestWithFallbacks({
       client,
       methods: ["thread/start", "thread/new"],
-      payloads: buildThreadStartPayloads("/repo/workspace", "grok-4.20-reasoning"),
+      payloads: buildThreadStartPayloads(
+        "/repo/workspace",
+        "grok-4.20-reasoning",
+      ),
     });
     const startedTurn = await requestWithFallbacks({
       client,
@@ -528,7 +535,10 @@ describe("OpenClaw compatibility sequences", () => {
     const created = await requestWithFallbacks({
       client,
       methods: ["thread/start", "thread/new"],
-      payloads: buildThreadStartPayloads("/repo/workspace", "grok-4.20-reasoning"),
+      payloads: buildThreadStartPayloads(
+        "/repo/workspace",
+        "grok-4.20-reasoning",
+      ),
     });
     const resumed = await requestWithFallbacks({
       client,
@@ -593,8 +603,8 @@ describe("OpenClaw compatibility sequences", () => {
   it("fails clearly for unsupported methods outside the consumed surface", async () => {
     const { server } = createTestHarness();
 
-    await expect(server.request("thread/delete", { threadId: "thread-1" })).rejects.toThrow(
-      "Unsupported method: thread/delete",
-    );
+    await expect(
+      server.request("thread/delete", { threadId: "thread-1" }),
+    ).rejects.toThrow("Unsupported method: thread/delete");
   });
 });

@@ -29,10 +29,7 @@ export function MessagingActivityWindow() {
 
   return (
     <div className="messaging-activity-window">
-      <section
-        aria-label="Messaging activity"
-        className="activity-screen"
-      >
+      <section aria-label="Messaging activity" className="activity-screen">
         <header className="activity-titlebar">
           <p className="activity-titlebar__brand">
             Pwr<span className="activity-titlebar__brand-accent">Agent</span>

@@ -23,7 +23,10 @@ function isEnabled(value: string | undefined): boolean {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
-function parsePositiveInteger(value: string | undefined, fallback: number): number {
+function parsePositiveInteger(
+  value: string | undefined,
+  fallback: number,
+): number {
   if (!value) {
     return fallback;
   }
@@ -42,8 +45,8 @@ export function resolveStartupCpuProfileConfig(options?: {
 }): StartupCpuProfileConfig {
   const env = options?.env ?? process.env;
   if (
-    !isEnabled(env.PWRAGENT_STARTUP_PROFILE) &&
-    !isEnabled(env.PWRAGENT_STARTUP_CPU_PROFILING)
+    !isEnabled(env.PWRAGENT_STARTUP_PROFILE)
+    && !isEnabled(env.PWRAGENT_STARTUP_CPU_PROFILING)
   ) {
     return { enabled: false };
   }
@@ -57,8 +60,8 @@ export function resolveStartupCpuProfileConfig(options?: {
     repoRoot,
     outputRoot: path.resolve(
       env.PWRAGENT_STARTUP_PROFILE_DIR
-      ?? env.PWRAGENT_STARTUP_CPU_PROFILE_DIR
-      ?? path.join(repoRoot, ".local"),
+        ?? env.PWRAGENT_STARTUP_CPU_PROFILE_DIR
+        ?? path.join(repoRoot, ".local"),
     ),
     postLoadDurationMs: parsePositiveInteger(
       env.PWRAGENT_STARTUP_CPU_PROFILE_POST_LOAD_MS,
@@ -68,7 +71,11 @@ export function resolveStartupCpuProfileConfig(options?: {
       env.PWRAGENT_STARTUP_CPU_PROFILE_HARD_TIMEOUT_MS,
       DEFAULT_HARD_TIMEOUT_MS,
     ),
-    quitOnComplete: isEnabled(env.PWRAGENT_STARTUP_CPU_PROFILE_QUIT_ON_COMPLETE),
-    captureHeapSnapshots: isEnabled(env.PWRAGENT_STARTUP_PROFILE_HEAP_SNAPSHOTS),
+    quitOnComplete: isEnabled(
+      env.PWRAGENT_STARTUP_CPU_PROFILE_QUIT_ON_COMPLETE,
+    ),
+    captureHeapSnapshots: isEnabled(
+      env.PWRAGENT_STARTUP_PROFILE_HEAP_SNAPSHOTS,
+    ),
   };
 }

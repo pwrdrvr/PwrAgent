@@ -108,18 +108,18 @@ export function parseUnifiedDiff(patch: string): ParsedUnifiedDiff {
         addedLineCount: 0,
         removedLineCount: 0,
         changedLineCount: 0,
-        contextLineCount: 0
+        contextLineCount: 0,
       };
       continue;
     }
 
     if (
-      !currentHunk ||
-      line.startsWith("---") ||
-      line.startsWith("+++") ||
-      line.startsWith("Index:") ||
-      line.startsWith("====") ||
-      line.startsWith("\\")
+      !currentHunk
+      || line.startsWith("---")
+      || line.startsWith("+++")
+      || line.startsWith("Index:")
+      || line.startsWith("====")
+      || line.startsWith("\\")
     ) {
       continue;
     }
@@ -129,7 +129,7 @@ export function parseUnifiedDiff(patch: string): ParsedUnifiedDiff {
         kind: "removed",
         hunkIndex: currentHunk.index,
         oldNumber: oldLine,
-        text: line.slice(1)
+        text: line.slice(1),
       });
       currentHunk.removedLineCount += 1;
       currentHunk.changedLineCount += 1;
@@ -142,7 +142,7 @@ export function parseUnifiedDiff(patch: string): ParsedUnifiedDiff {
         kind: "added",
         hunkIndex: currentHunk.index,
         newNumber: newLine,
-        text: line.slice(1)
+        text: line.slice(1),
       });
       currentHunk.addedLineCount += 1;
       currentHunk.changedLineCount += 1;
@@ -156,7 +156,7 @@ export function parseUnifiedDiff(patch: string): ParsedUnifiedDiff {
         hunkIndex: currentHunk.index,
         oldNumber: oldLine,
         newNumber: newLine,
-        text: line.startsWith(" ") ? line.slice(1) : line
+        text: line.startsWith(" ") ? line.slice(1) : line,
       });
       currentHunk.contextLineCount += 1;
       oldLine += 1;
@@ -170,12 +170,18 @@ export function parseUnifiedDiff(patch: string): ParsedUnifiedDiff {
     hunks,
     stats: {
       hunkCount: hunks.length,
-      changedLineCount: hunks.reduce((sum, hunk) => sum + hunk.changedLineCount, 0),
-      contextLineCount: hunks.reduce((sum, hunk) => sum + hunk.contextLineCount, 0),
+      changedLineCount: hunks.reduce(
+        (sum, hunk) => sum + hunk.changedLineCount,
+        0,
+      ),
+      contextLineCount: hunks.reduce(
+        (sum, hunk) => sum + hunk.contextLineCount,
+        0,
+      ),
       smallHunkCount: hunks.filter(
-        (hunk) => hunk.changedLineCount <= MAX_FOCUSED_DIFF_SMALL_HUNK_LINES
-      ).length
-    }
+        (hunk) => hunk.changedLineCount <= MAX_FOCUSED_DIFF_SMALL_HUNK_LINES,
+      ).length,
+    },
   };
 }
 
@@ -185,7 +191,7 @@ export function buildDiffView(
     hiddenHunkIndices?: Iterable<number>;
     mode?: "condensed" | "full";
     contextRadius?: number;
-  }
+  },
 ): DiffView {
   const hiddenHunkIndices = new Set(options?.hiddenHunkIndices ?? []);
   const mode = options?.mode ?? "full";
@@ -201,7 +207,7 @@ export function buildDiffView(
     rows.push({
       kind: "hunk",
       hunkIndex: hunk.index,
-      text: hunk.header
+      text: hunk.header,
     });
 
     if (mode === "full") {
@@ -218,12 +224,12 @@ export function buildDiffView(
     rows,
     hiddenContextLineCount,
     hiddenHunkCount: hiddenHunkIndices.size,
-    hasHiddenContent: hiddenContextLineCount > 0 || hiddenHunkIndices.size > 0
+    hasHiddenContent: hiddenContextLineCount > 0 || hiddenHunkIndices.size > 0,
   };
 }
 
 export function getFocusedDiffEligibility(
-  parsed: ParsedUnifiedDiff
+  parsed: ParsedUnifiedDiff,
 ): FocusedDiffEligibility {
   const condensedView = buildDiffView(parsed, { mode: "condensed" });
 
@@ -231,7 +237,7 @@ export function getFocusedDiffEligibility(
     return {
       eligible: false,
       hiddenContextLineCount: condensedView.hiddenContextLineCount,
-      reason: "too_few_hunks"
+      reason: "too_few_hunks",
     };
   }
 
@@ -239,7 +245,7 @@ export function getFocusedDiffEligibility(
     return {
       eligible: false,
       hiddenContextLineCount: condensedView.hiddenContextLineCount,
-      reason: "insufficient_small_hunks"
+      reason: "insufficient_small_hunks",
     };
   }
 
@@ -247,7 +253,7 @@ export function getFocusedDiffEligibility(
     return {
       eligible: false,
       hiddenContextLineCount: 0,
-      reason: "insufficient_condensation"
+      reason: "insufficient_condensation",
     };
   }
 
@@ -260,31 +266,42 @@ export function getFocusedDiffEligibility(
     return {
       eligible: false,
       hiddenContextLineCount: condensedView.hiddenContextLineCount,
-      reason: "insufficient_context_ratio"
+      reason: "insufficient_context_ratio",
     };
   }
 
   return {
     eligible: true,
     hiddenContextLineCount: condensedView.hiddenContextLineCount,
-    reason: "eligible"
+    reason: "eligible",
   };
 }
 
 export function summarizeHunksForFocus(
   parsed: ParsedUnifiedDiff,
-  contextPreviewLimit = 2
+  contextPreviewLimit = 2,
 ): FocusedDiffHunkSummary[] {
   return parsed.hunks.map((hunk) => {
     const addedLines = hunk.rows
-      .filter((row): row is Extract<DiffLineRow, { kind: "added" }> => row.kind === "added")
+      .filter(
+        (row): row is Extract<DiffLineRow, { kind: "added" }> =>
+          row.kind === "added",
+      )
       .map((row) => row.text);
     const removedLines = hunk.rows
-      .filter((row): row is Extract<DiffLineRow, { kind: "removed" }> => row.kind === "removed")
+      .filter(
+        (row): row is Extract<DiffLineRow, { kind: "removed" }> =>
+          row.kind === "removed",
+      )
       .map((row) => row.text);
 
-    const leadingContext = collectLeadingContext(hunk.rows).slice(-contextPreviewLimit);
-    const trailingContext = collectTrailingContext(hunk.rows).slice(0, contextPreviewLimit);
+    const leadingContext = collectLeadingContext(hunk.rows).slice(
+      -contextPreviewLimit,
+    );
+    const trailingContext = collectTrailingContext(hunk.rows).slice(
+      0,
+      contextPreviewLimit,
+    );
 
     return {
       index: hunk.index,
@@ -294,15 +311,18 @@ export function summarizeHunksForFocus(
       contextBefore: leadingContext,
       contextAfter: trailingContext,
       changedLineCount: hunk.changedLineCount,
-      contextLineCount: hunk.contextLineCount
+      contextLineCount: hunk.contextLineCount,
     };
   });
 }
 
 function condenseHunkRows(
   rows: DiffLineRow[],
-  contextRadius: number
-): { rows: Array<DiffLineRow | DiffSeparatorRow>; hiddenContextLineCount: number } {
+  contextRadius: number,
+): {
+  rows: Array<DiffLineRow | DiffSeparatorRow>;
+  hiddenContextLineCount: number;
+} {
   const condensed: Array<DiffLineRow | DiffSeparatorRow> = [];
   let contextBuffer: Extract<DiffLineRow, { kind: "context" }>[] = [];
   let hiddenContextLineCount = 0;
@@ -324,7 +344,7 @@ function condenseHunkRows(
     condensed.push({
       kind: "separator",
       hunkIndex: contextBuffer[0]?.hunkIndex ?? 0,
-      count: hiddenCount
+      count: hiddenCount,
     });
     condensed.push(...contextBuffer.slice(-contextRadius));
     contextBuffer = [];
@@ -344,7 +364,7 @@ function condenseHunkRows(
 
   return {
     rows: condensed,
-    hiddenContextLineCount
+    hiddenContextLineCount,
   };
 }
 

@@ -35,18 +35,18 @@ type StartupCpuProfileManifest = {
   analysis: {
     jsonFilename: string;
     summaryFilename: string;
-      generatedAt: string | null;
-    };
-    heapSnapshots: {
-      enabled: boolean;
-      files: string[];
-    };
-    config: {
-      postLoadDurationMs: number;
-      hardTimeoutMs: number;
-      quitOnComplete: boolean;
-      captureHeapSnapshots: boolean;
-    };
+    generatedAt: string | null;
+  };
+  heapSnapshots: {
+    enabled: boolean;
+    files: string[];
+  };
+  config: {
+    postLoadDurationMs: number;
+    hardTimeoutMs: number;
+    quitOnComplete: boolean;
+    captureHeapSnapshots: boolean;
+  };
   versions: StartupCpuProfileVersions;
 };
 
@@ -77,7 +77,12 @@ export type StartupCpuProfileSession = {
 
 export type StartupCpuProfileSessionCreateResult =
   | { ok: true; session: StartupCpuProfileSession }
-  | { ok: false; code: "SESSION_CREATE_FAILED"; message: string; cause: unknown };
+  | {
+      ok: false;
+      code: "SESSION_CREATE_FAILED";
+      message: string;
+      cause: unknown;
+    };
 
 function formatSessionPrefix(date: Date): string {
   const year = String(date.getFullYear());
@@ -88,7 +93,10 @@ function formatSessionPrefix(date: Date): string {
   return `${year}-${month}-${day}-${hours}${minutes}`;
 }
 
-function createSessionDirectoryName(createdAt: Date, sessionId: string): string {
+function createSessionDirectoryName(
+  createdAt: Date,
+  sessionId: string,
+): string {
   return `startup-cpu-${formatSessionPrefix(createdAt)}-${sessionId}`;
 }
 
@@ -100,7 +108,11 @@ async function writeManifest(
   manifestPath: string,
   manifest: StartupCpuProfileManifest,
 ): Promise<void> {
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await fs.writeFile(
+    manifestPath,
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 export async function createStartupCpuProfileSession(options: {
@@ -118,7 +130,10 @@ export async function createStartupCpuProfileSession(options: {
   const mainProfilePath = path.join(directoryPath, "main.cpuprofile");
   const rendererProfilePath = path.join(directoryPath, "renderer.cpuprofile");
   const mainHeapSnapshotPath = path.join(directoryPath, "main.heapsnapshot");
-  const rendererHeapSnapshotPath = path.join(directoryPath, "renderer.heapsnapshot");
+  const rendererHeapSnapshotPath = path.join(
+    directoryPath,
+    "renderer.heapsnapshot",
+  );
   const analysisPath = path.join(directoryPath, "analysis.json");
   const summaryPath = path.join(directoryPath, "summary.md");
 

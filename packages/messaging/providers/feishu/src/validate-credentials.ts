@@ -35,17 +35,14 @@ export async function validateCredentials(
   try {
     const baseUrl = normalizeTenantUrl(tenantUrl);
     const tokenUrl = `${baseUrl}/open-apis/auth/v3/tenant_access_token/internal`;
-    const tokenResponse = await fetchImpl(
-      tokenUrl,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json; charset=utf-8" },
-        body: JSON.stringify({
-          app_id: appId,
-          app_secret: appSecret,
-        }),
-      },
-    );
+    const tokenResponse = await fetchImpl(tokenUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        app_id: appId,
+        app_secret: appSecret,
+      }),
+    });
     const tokenBody = await readResponseJson<{
       code?: number;
       error?: FeishuOpenApiError;
@@ -57,33 +54,35 @@ export async function validateCredentials(
       || tokenBody.payload?.code !== 0
       || !tokenBody.payload.tenant_access_token
     ) {
-      throw new Error(formatFeishuApiError({
-        body: tokenBody.text,
-        endpoint: tokenUrl,
-        payload: tokenBody.payload,
-        response: tokenResponse,
-        stage: "tenant token",
-      }));
+      throw new Error(
+        formatFeishuApiError({
+          body: tokenBody.text,
+          endpoint: tokenUrl,
+          payload: tokenBody.payload,
+          response: tokenResponse,
+          stage: "tenant token",
+        }),
+      );
     }
 
     const botInfoUrl = `${baseUrl}/open-apis/bot/v3/info`;
-    const botInfoResponse = await fetchImpl(
-      botInfoUrl,
-      {
-        headers: {
-          authorization: `Bearer ${tokenBody.payload.tenant_access_token}`,
-        },
+    const botInfoResponse = await fetchImpl(botInfoUrl, {
+      headers: {
+        authorization: `Bearer ${tokenBody.payload.tenant_access_token}`,
       },
-    );
-    const botInfoBody = await readResponseJson<FeishuBotInfoPayload>(botInfoResponse);
+    });
+    const botInfoBody =
+      await readResponseJson<FeishuBotInfoPayload>(botInfoResponse);
     if (!botInfoResponse.ok || botInfoBody.payload?.code !== 0) {
-      throw new Error(formatFeishuApiError({
-        body: botInfoBody.text,
-        endpoint: botInfoUrl,
-        payload: botInfoBody.payload,
-        response: botInfoResponse,
-        stage: "bot info",
-      }));
+      throw new Error(
+        formatFeishuApiError({
+          body: botInfoBody.text,
+          endpoint: botInfoUrl,
+          payload: botInfoBody.payload,
+          response: botInfoResponse,
+          stage: "bot info",
+        }),
+      );
     }
     const botInfo = extractFeishuBotInfo(botInfoBody.payload);
 
@@ -181,8 +180,12 @@ function formatFeishuApiError(params: {
     ?? `HTTP ${params.response.status}`;
   const details = [
     `HTTP ${params.response.status}`,
-    typeof params.payload?.code === "number" ? `code ${params.payload.code}` : undefined,
-    params.payload?.error?.log_id ? `log ${params.payload.error.log_id}` : undefined,
+    typeof params.payload?.code === "number"
+      ? `code ${params.payload.code}`
+      : undefined,
+    params.payload?.error?.log_id
+      ? `log ${params.payload.error.log_id}`
+      : undefined,
     host,
     formatFieldViolations(params.payload?.error?.field_violations),
   ].filter((detail): detail is string => Boolean(detail));
@@ -195,12 +198,10 @@ function formatFieldViolations(
   violations: FeishuOpenApiError["field_violations"] | undefined,
 ): string | undefined {
   if (!violations?.length) return undefined;
-  const fields = violations
-    .slice(0, 3)
-    .map((violation) => {
-      const field = violation.field ?? "field";
-      return violation.description ? `${field}: ${violation.description}` : field;
-    });
+  const fields = violations.slice(0, 3).map((violation) => {
+    const field = violation.field ?? "field";
+    return violation.description ? `${field}: ${violation.description}` : field;
+  });
   return `fields ${fields.join(", ")}`;
 }
 

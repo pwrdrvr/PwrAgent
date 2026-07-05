@@ -21,14 +21,17 @@ vi.mock("../log", () => ({
 
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];
-  static readThreadErrorByThreadId = new Map<string, { code: number; message: string }>();
+  static readThreadErrorByThreadId = new Map<
+    string,
+    { code: number; message: string }
+  >();
   static readThreadResultByThreadId = new Map<string, unknown>();
   static threadStartResult: unknown = {
     thread: {
       id: "thread-3",
-      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd"
+      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
     },
-    model: "gpt-5.4"
+    model: "gpt-5.4",
   };
   static threadForkResult: unknown = {
     thread: {
@@ -42,63 +45,62 @@ class MockTransport implements JsonRpcTransport {
   static threadResumeResult: unknown = {
     threadId: "thread-2",
     threadName: "Ship desktop shell",
-    cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
+    cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
   };
   static turnStartResult: unknown = {
     thread: {
-      id: "thread-2"
+      id: "thread-2",
     },
     turn: {
-      id: "turn-1"
-    }
+      id: "turn-1",
+    },
   };
   static turnStartPreResponseNotification: unknown | null = null;
   static turnInterruptResult: unknown = {
     thread: {
-      id: "thread-2"
+      id: "thread-2",
     },
     turn: {
-      id: "turn-1"
-    }
+      id: "turn-1",
+    },
   };
   static reviewStartResult: unknown = {
     reviewThreadId: "thread-2",
     turn: {
       id: "turn-review-1",
-      status: "inProgress"
-    }
+      status: "inProgress",
+    },
   };
   static threadArchiveResult: unknown = {
     thread: {
-      id: "thread-2"
-    }
+      id: "thread-2",
+    },
   };
   static threadUnarchiveResult: unknown = {
     thread: {
-      id: "thread-2"
-    }
+      id: "thread-2",
+    },
   };
   static threadNameSetResult: unknown = {
     thread: {
-      id: "thread-2"
-    }
+      id: "thread-2",
+    },
   };
   static modelListResult: unknown = {
-    data: []
+    data: [],
   };
   static configValueWriteResult: unknown = {
     status: "ok",
-    filePath: "/Users/huntharo/.codex/config.toml"
+    filePath: "/Users/huntharo/.codex/config.toml",
   };
   static lastConfigValueWritePayload: unknown;
   static rateLimitsResult: unknown = {
-    rateLimitsByLimitId: {}
+    rateLimitsByLimitId: {},
   };
   static threadListResultBySearchTerm = new Map<string, unknown[]>();
   static turnInterruptResponseMode: "success" | "timeout" = "success";
-  static threadResumeError:
-    | { code?: number; message: string }
-    | undefined = undefined;
+  static threadResumeError: { code?: number; message: string } | undefined =
+    undefined;
 
   readonly sentMessages: string[] = [];
   readonly options?: unknown;
@@ -134,10 +136,10 @@ class MockTransport implements JsonRpcTransport {
           result: {
             serverInfo: {
               name: "Codex App Server",
-              version: "1.0.0"
-            }
-          }
-        })
+              version: "1.0.0",
+            },
+          },
+        }),
       );
       return;
     }
@@ -157,7 +159,9 @@ class MockTransport implements JsonRpcTransport {
         };
       };
       const searchTerm =
-        params.params?.searchTerm ?? params.params?.query ?? params.params?.filter;
+        params.params?.searchTerm
+        ?? params.params?.query
+        ?? params.params?.filter;
       const threadListOverride = searchTerm
         ? MockTransport.threadListResultBySearchTerm.get(searchTerm)
         : undefined;
@@ -188,10 +192,10 @@ class MockTransport implements JsonRpcTransport {
                       name: "Investigate chunk file errors",
                       updatedAt: 1_776_000_000,
                       cwd: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
-                    }
-                  ]
-            }
-          })
+                    },
+                  ],
+            },
+          }),
         );
         return;
       }
@@ -211,10 +215,10 @@ class MockTransport implements JsonRpcTransport {
                       updatedAt: 1_776_100_000,
                       cwd: "/Users/huntharo/.codex/worktrees/be87/search-product",
                       path: "/tmp/forked-worktree-rollout.jsonl",
-                    }
-                  ]
-            }
-          })
+                    },
+                  ],
+            },
+          }),
         );
         return;
       }
@@ -255,9 +259,9 @@ class MockTransport implements JsonRpcTransport {
                         updatedAt: 1_772_251_018,
                         cwd: "/Users/huntharo/GIPHY/search-product",
                       },
-                    ]
-            }
-          })
+                    ],
+            },
+          }),
         );
         return;
       }
@@ -298,7 +302,8 @@ class MockTransport implements JsonRpcTransport {
                     {
                       id: "thread-placeholder-title",
                       name: "Untitled thread",
-                      preview: "Why do all the worktree-hashes start with `moi`?",
+                      preview:
+                        "Why do all the worktree-hashes start with `moi`?",
                       updatedAt: 1_777_401_255,
                       cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
                     },
@@ -340,7 +345,8 @@ class MockTransport implements JsonRpcTransport {
             id: payload.id,
             result: {
               data:
-                params.params?.archived && params.params?.cursor === "archive-page-2"
+                params.params?.archived
+                && params.params?.cursor === "archive-page-2"
                   ? [
                       {
                         id: "thread-archived-page-2",
@@ -360,7 +366,8 @@ class MockTransport implements JsonRpcTransport {
                       ]
                     : [],
               nextCursor:
-                params.params?.archived && params.params?.cursor !== "archive-page-2"
+                params.params?.archived
+                && params.params?.cursor !== "archive-page-2"
                   ? "archive-page-2"
                   : null,
             },
@@ -371,9 +378,10 @@ class MockTransport implements JsonRpcTransport {
 
       if (searchTerm === "search-product-parity") {
         const matchesCodexWindow =
-          params.params?.limit === 50 &&
-          params.params?.sortKey === "updated_at" &&
-          JSON.stringify(params.params?.sourceKinds) === JSON.stringify(["cli", "vscode"]);
+          params.params?.limit === 50
+          && params.params?.sortKey === "updated_at"
+          && JSON.stringify(params.params?.sourceKinds)
+            === JSON.stringify(["cli", "vscode"]);
 
         this.messageHandler(
           JSON.stringify({
@@ -468,9 +476,9 @@ class MockTransport implements JsonRpcTransport {
                           originUrl: "git@github.com:Giphy/search-product.git",
                         },
                       },
-                    ]
-            }
-          })
+                    ],
+            },
+          }),
         );
         return;
       }
@@ -493,13 +501,14 @@ class MockTransport implements JsonRpcTransport {
                 {
                   id: "thread-archive",
                   name: "Retired archived thread",
-                  preview: "This one should not appear in the active navigation list.",
+                  preview:
+                    "This one should not appear in the active navigation list.",
                   updatedAt: 1_763_500_250,
                   cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
-                }
-              ]
-            }
-          })
+                },
+              ],
+            },
+          }),
         );
         return;
       }
@@ -516,8 +525,8 @@ class MockTransport implements JsonRpcTransport {
                 summary: "Hook up Electron and the sidebar",
                 updatedAt: 1_763_500_000,
                 session: {
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
-                }
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                },
               },
               {
                 id: "thread-1",
@@ -526,8 +535,8 @@ class MockTransport implements JsonRpcTransport {
                 text: "Do not leak this planning prompt into the thread browser",
                 updatedAt: 1_763_400_000,
                 session: {
-                  cwd: "/Users/huntharo/pwrdrvr/openclaw-codex-app-server"
-                }
+                  cwd: "/Users/huntharo/pwrdrvr/openclaw-codex-app-server",
+                },
               },
               {
                 id: "thread-renamed",
@@ -535,21 +544,22 @@ class MockTransport implements JsonRpcTransport {
                   "Name this thread something funny and spunky. Something about potatoes.",
                 updatedAt: 1_763_500_100,
                 session: {
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
-                }
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                },
               },
               {
                 id: "thread-placeholder",
                 name: "Untitled thread",
-                preview: "Investigate why new Codex threads keep showing as untitled",
+                preview:
+                  "Investigate why new Codex threads keep showing as untitled",
                 updatedAt: 1_763_500_050,
                 session: {
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
-                }
-              }
-            ]
-          }
-        })
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                },
+              },
+            ],
+          },
+        }),
       );
       return;
     }
@@ -560,7 +570,7 @@ class MockTransport implements JsonRpcTransport {
           jsonrpc: "2.0",
           id: payload.id,
           result: MockTransport.modelListResult,
-        })
+        }),
       );
       return;
     }
@@ -572,7 +582,7 @@ class MockTransport implements JsonRpcTransport {
           jsonrpc: "2.0",
           id: payload.id,
           result: MockTransport.configValueWriteResult,
-        })
+        }),
       );
       return;
     }
@@ -583,13 +593,15 @@ class MockTransport implements JsonRpcTransport {
           jsonrpc: "2.0",
           id: payload.id,
           result: MockTransport.rateLimitsResult,
-        })
+        }),
       );
       return;
     }
 
     if (payload.method === "thread/read") {
-      const threadId = (JSON.parse(message) as { params?: { threadId?: string } }).params?.threadId;
+      const threadId = (
+        JSON.parse(message) as { params?: { threadId?: string } }
+      ).params?.threadId;
       const readThreadError = threadId
         ? MockTransport.readThreadErrorByThreadId.get(threadId)
         : undefined;
@@ -601,8 +613,8 @@ class MockTransport implements JsonRpcTransport {
           JSON.stringify({
             jsonrpc: "2.0",
             id: payload.id,
-            error: readThreadError
-          })
+            error: readThreadError,
+          }),
         );
         return;
       }
@@ -612,8 +624,8 @@ class MockTransport implements JsonRpcTransport {
           JSON.stringify({
             jsonrpc: "2.0",
             id: payload.id,
-            result: readThreadResult
-          })
+            result: readThreadResult,
+          }),
         );
         return;
       }
@@ -636,13 +648,13 @@ class MockTransport implements JsonRpcTransport {
                         content: [
                           {
                             type: "input_text",
-                            text: "Describe this image"
+                            text: "Describe this image",
                           },
                           {
                             type: "input_image",
-                            image_url: "data:image/png;base64,aGVsbG8="
-                          }
-                        ]
+                            image_url: "data:image/png;base64,aGVsbG8=",
+                          },
+                        ],
                       },
                       {
                         type: "userMessage",
@@ -651,16 +663,16 @@ class MockTransport implements JsonRpcTransport {
                           {
                             type: "input_image",
                             image_url: "https://example.com/thread-image.png",
-                            alt: "Thread image"
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            }
-          })
+                            alt: "Thread image",
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
         );
         return;
       }
@@ -682,27 +694,28 @@ class MockTransport implements JsonRpcTransport {
                       content: [
                         {
                           type: "text",
-                          text: "Show me the current desktop thread shell"
-                        }
-                      ]
+                          text: "Show me the current desktop thread shell",
+                        },
+                      ],
                     },
                     {
                       type: "agentMessage",
                       id: "item-2",
                       phase: "commentary",
-                      text: "I’m tracing the transcript scroll container."
+                      text: "I’m tracing the transcript scroll container.",
                     },
                     {
                       type: "commandExecution",
                       id: "item-3",
                       status: "completed",
-                      command: "/bin/zsh -lc 'sed -n 1,220p TranscriptList.tsx'",
+                      command:
+                        "/bin/zsh -lc 'sed -n 1,220p TranscriptList.tsx'",
                       commandActions: [
                         {
                           type: "read",
-                          path: "/repo/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx"
-                        }
-                      ]
+                          path: "/repo/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+                        },
+                      ],
                     },
                     {
                       type: "commandExecution",
@@ -711,9 +724,9 @@ class MockTransport implements JsonRpcTransport {
                       command: "/bin/zsh -lc 'pwd && rg --files'",
                       commandActions: [
                         {
-                          type: "unknown"
-                        }
-                      ]
+                          type: "unknown",
+                        },
+                      ],
                     },
                     {
                       type: "fileChange",
@@ -723,32 +736,32 @@ class MockTransport implements JsonRpcTransport {
                         {
                           path: "/repo/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
                           kind: {
-                            type: "update"
+                            type: "update",
                           },
                           diff: [
                             "--- a/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
                             "+++ b/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
                             "@@ -1,3 +1,4 @@",
-                            " import { useCallback } from \"react\";",
-                            "-import { TranscriptMessage } from \"./TranscriptMessage\";",
-                            "+import { TranscriptActivity } from \"./TranscriptActivity\";",
-                            "+import { TranscriptMessage } from \"./TranscriptMessage\";"
-                          ].join("\n")
-                        }
-                      ]
+                            ' import { useCallback } from "react";',
+                            '-import { TranscriptMessage } from "./TranscriptMessage";',
+                            '+import { TranscriptActivity } from "./TranscriptActivity";',
+                            '+import { TranscriptMessage } from "./TranscriptMessage";',
+                          ].join("\n"),
+                        },
+                      ],
                     },
                     {
                       type: "agentMessage",
                       id: "item-6",
                       phase: "final_answer",
-                      text: "The desktop shell is live and listing Codex threads."
-                    }
-                  ]
-                }
-              ]
-            }
-          }
-        })
+                      text: "The desktop shell is live and listing Codex threads.",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        }),
       );
       return;
     }
@@ -758,8 +771,8 @@ class MockTransport implements JsonRpcTransport {
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: MockTransport.threadStartResult
-        })
+          result: MockTransport.threadStartResult,
+        }),
       );
       return;
     }
@@ -769,8 +782,8 @@ class MockTransport implements JsonRpcTransport {
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: MockTransport.threadForkResult
-        })
+          result: MockTransport.threadForkResult,
+        }),
       );
       return;
     }
@@ -785,7 +798,7 @@ class MockTransport implements JsonRpcTransport {
               code: MockTransport.threadResumeError.code ?? -32000,
               message: MockTransport.threadResumeError.message,
             },
-          })
+          }),
         );
         return;
       }
@@ -793,8 +806,8 @@ class MockTransport implements JsonRpcTransport {
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: MockTransport.threadResumeResult
-        })
+          result: MockTransport.threadResumeResult,
+        }),
       );
       return;
     }
@@ -804,8 +817,8 @@ class MockTransport implements JsonRpcTransport {
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: MockTransport.threadArchiveResult
-        })
+          result: MockTransport.threadArchiveResult,
+        }),
       );
       return;
     }
@@ -815,8 +828,8 @@ class MockTransport implements JsonRpcTransport {
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: MockTransport.threadUnarchiveResult
-        })
+          result: MockTransport.threadUnarchiveResult,
+        }),
       );
       return;
     }
@@ -826,8 +839,8 @@ class MockTransport implements JsonRpcTransport {
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: MockTransport.threadNameSetResult
-        })
+          result: MockTransport.threadNameSetResult,
+        }),
       );
       return;
     }
@@ -838,21 +851,23 @@ class MockTransport implements JsonRpcTransport {
           jsonrpc: "2.0",
           id: payload.id,
           result: {},
-        })
+        }),
       );
       return;
     }
 
     if (payload.method === "turn/start") {
       if (MockTransport.turnStartPreResponseNotification) {
-        this.messageHandler(JSON.stringify(MockTransport.turnStartPreResponseNotification));
+        this.messageHandler(
+          JSON.stringify(MockTransport.turnStartPreResponseNotification),
+        );
       }
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: MockTransport.turnStartResult
-        })
+          result: MockTransport.turnStartResult,
+        }),
       );
       return;
     }
@@ -862,8 +877,8 @@ class MockTransport implements JsonRpcTransport {
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: MockTransport.reviewStartResult
-        })
+          result: MockTransport.reviewStartResult,
+        }),
       );
       return;
     }
@@ -877,8 +892,8 @@ class MockTransport implements JsonRpcTransport {
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: MockTransport.turnInterruptResult
-        })
+          result: MockTransport.turnInterruptResult,
+        }),
       );
       return;
     }
@@ -913,7 +928,7 @@ class MockTransport implements JsonRpcTransport {
               },
             ],
           },
-        })
+        }),
       );
     }
   }
@@ -939,13 +954,13 @@ vi.mock("../codex-app-server/stdio-transport", () => {
   }
 
   return {
-    StdioJsonRpcTransport: MockStdioJsonRpcTransport
+    StdioJsonRpcTransport: MockStdioJsonRpcTransport,
   };
 });
 
 async function waitForLatestTransportRequest(
   method: string,
-  timeoutMs = 1_000
+  timeoutMs = 1_000,
 ): Promise<MockTransport> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -974,9 +989,9 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-3",
-        cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd"
+        cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
       },
-      model: "gpt-5.4"
+      model: "gpt-5.4",
     };
     MockTransport.threadForkResult = {
       thread: {
@@ -990,52 +1005,52 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadResumeResult = {
       threadId: "thread-2",
       threadName: "Ship desktop shell",
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
     };
     MockTransport.turnStartResult = {
       thread: {
-        id: "thread-2"
+        id: "thread-2",
       },
       turn: {
-        id: "turn-1"
-      }
+        id: "turn-1",
+      },
     };
     MockTransport.turnStartPreResponseNotification = null;
     MockTransport.reviewStartResult = {
       reviewThreadId: "thread-2",
       turn: {
         id: "turn-review-1",
-        status: "inProgress"
-      }
+        status: "inProgress",
+      },
     };
     MockTransport.turnInterruptResult = {
       thread: {
-        id: "thread-2"
+        id: "thread-2",
       },
       turn: {
-        id: "turn-1"
-      }
+        id: "turn-1",
+      },
     };
     MockTransport.threadArchiveResult = {
       thread: {
-        id: "thread-2"
-      }
+        id: "thread-2",
+      },
     };
     MockTransport.threadNameSetResult = {
       thread: {
-        id: "thread-2"
-      }
+        id: "thread-2",
+      },
     };
     MockTransport.modelListResult = {
-      data: []
+      data: [],
     };
     MockTransport.configValueWriteResult = {
       status: "ok",
-      filePath: "/Users/huntharo/.codex/config.toml"
+      filePath: "/Users/huntharo/.codex/config.toml",
     };
     MockTransport.lastConfigValueWritePayload = undefined;
     MockTransport.rateLimitsResult = {
-      rateLimitsByLimitId: {}
+      rateLimitsByLimitId: {},
     };
     MockTransport.threadListResultBySearchTerm.clear();
     MockTransport.turnInterruptResponseMode = "success";
@@ -1053,10 +1068,7 @@ describe("CodexAppServerClient", () => {
 
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     new CodexAppServerClient({
-      args: [
-        "-c",
-        'shell_environment_policy.set.PATH="/usr/bin"',
-      ],
+      args: ["-c", 'shell_environment_policy.set.PATH="/usr/bin"'],
       resolveArgs,
       resolveEnv,
     });
@@ -1064,7 +1076,9 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     const options = transport?.options as
       | {
-          resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
+          resolveArgs?: (
+            env: NodeJS.ProcessEnv,
+          ) => Promise<string[]> | string[];
           resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
         }
       | undefined;
@@ -1093,18 +1107,24 @@ describe("CodexAppServerClient", () => {
                 label: "PwrAgent",
                 path: "/Users/huntharo/pwrdrvr/PwrAgent",
                 worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
-                kind: "worktree"
-              }
+                kind: "worktree",
+              },
             ]
-          : []
+          : [],
     });
 
     const threads = await client.listThreads();
     const primaryThread = threads.find((thread) => thread.id === "thread-2");
     const derivedThread = threads.find((thread) => thread.id === "thread-1");
-    const placeholderThread = threads.find((thread) => thread.id === "thread-placeholder");
-    const renamedThread = threads.find((thread) => thread.id === "thread-renamed");
-    const archivedThread = threads.find((thread) => thread.id === "thread-archive");
+    const placeholderThread = threads.find(
+      (thread) => thread.id === "thread-placeholder",
+    );
+    const renamedThread = threads.find(
+      (thread) => thread.id === "thread-renamed",
+    );
+    const archivedThread = threads.find(
+      (thread) => thread.id === "thread-archive",
+    );
 
     expect(threads).toHaveLength(4);
     expect(primaryThread).toMatchObject({
@@ -1118,9 +1138,9 @@ describe("CodexAppServerClient", () => {
           label: "PwrAgent",
           path: "/Users/huntharo/pwrdrvr/PwrAgent",
           worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
-          kind: "worktree"
-        }
-      ]
+          kind: "worktree",
+        },
+      ],
     });
     expect(derivedThread?.title).toBe(
       "A bedtime story about Nvidia and building AI through programmable...",
@@ -1134,7 +1154,8 @@ describe("CodexAppServerClient", () => {
     });
     expect(renamedThread).toMatchObject({
       id: "thread-renamed",
-      title: "Name this thread something funny and spunky. Something about potatoes",
+      title:
+        "Name this thread something funny and spunky. Something about potatoes",
       titleSource: "derived",
     });
     expect(archivedThread).toBeUndefined();
@@ -1143,7 +1164,10 @@ describe("CodexAppServerClient", () => {
     expect(transport).toBeDefined();
 
     const threadListRequests = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .filter((payload) => payload.method === "thread/list");
 
     expect(threadListRequests).toEqual(
@@ -1155,9 +1179,9 @@ describe("CodexAppServerClient", () => {
             sortKey: "updated_at",
             sourceKinds: ["cli", "vscode"],
             useStateDbOnly: true,
-          }
+          },
         }),
-      ])
+      ]),
     );
 
     await client.close();
@@ -1252,22 +1276,25 @@ describe("CodexAppServerClient", () => {
   });
 
   it("uses protocol originator when Codex exposes it directly", async () => {
-    MockTransport.threadListResultBySearchTerm.set("protocol-originator-filter", [
-      {
-        id: "thread-external-app",
-        name: "External app chat",
-        originator: "another-app",
-        updatedAt: 1_777_500_000,
-        cwd: "/Users/huntharo/Documents/OtherApp/Chats/one",
-      },
-      {
-        id: "thread-codex-desktop",
-        name: "Codex Desktop thread",
-        originator: "Codex Desktop",
-        updatedAt: 1_777_400_000,
-        cwd: "/Users/huntharo/github/PwrAgent",
-      },
-    ]);
+    MockTransport.threadListResultBySearchTerm.set(
+      "protocol-originator-filter",
+      [
+        {
+          id: "thread-external-app",
+          name: "External app chat",
+          originator: "another-app",
+          updatedAt: 1_777_500_000,
+          cwd: "/Users/huntharo/Documents/OtherApp/Chats/one",
+        },
+        {
+          id: "thread-codex-desktop",
+          name: "Codex Desktop thread",
+          originator: "Codex Desktop",
+          updatedAt: 1_777_400_000,
+          cwd: "/Users/huntharo/github/PwrAgent",
+        },
+      ],
+    );
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -1285,9 +1312,13 @@ describe("CodexAppServerClient", () => {
           : [],
     });
 
-    const threads = await client.listThreads({ filter: "protocol-originator-filter" });
+    const threads = await client.listThreads({
+      filter: "protocol-originator-filter",
+    });
 
-    expect(threads.map((thread) => thread.id)).toEqual(["thread-codex-desktop"]);
+    expect(threads.map((thread) => thread.id)).toEqual([
+      "thread-codex-desktop",
+    ]);
 
     await client.close();
   });
@@ -1346,15 +1377,21 @@ describe("CodexAppServerClient", () => {
       threadDirectoryEnricher,
     });
 
-    const threads = await client.listThreads({ filter: "pwrsnap-workspace-filter" });
+    const threads = await client.listThreads({
+      filter: "pwrsnap-workspace-filter",
+    });
 
     expect(threads.map((thread) => thread.id)).toEqual([
       "thread-pwrsnap-repo-work",
       "thread-pwragent",
     ]);
     expect(threadDirectoryEnricher).toHaveBeenCalledTimes(2);
-    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/huntharo/github/PwrSnap");
-    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/huntharo/github/PwrAgnt");
+    expect(threadDirectoryEnricher).toHaveBeenCalledWith(
+      "/Users/huntharo/github/PwrSnap",
+    );
+    expect(threadDirectoryEnricher).toHaveBeenCalledWith(
+      "/Users/huntharo/github/PwrAgnt",
+    );
 
     await client.close();
   });
@@ -1476,12 +1513,15 @@ describe("CodexAppServerClient", () => {
       directoryResolver: async () => [],
     });
 
-    const threads = await client.listThreads({ filter: "prompt-placeholder-title" });
+    const threads = await client.listThreads({
+      filter: "prompt-placeholder-title",
+    });
 
     expect(threads).toEqual([
       expect.objectContaining({
         id: "thread-prompt-placeholder-title",
-        title: "Make a button with an animated jaguar sipping tea. Just for grins",
+        title:
+          "Make a button with an animated jaguar sipping tea. Just for grins",
         titleSource: "derived",
       }),
     ]);
@@ -1655,7 +1695,10 @@ describe("CodexAppServerClient", () => {
     expect(transport).toBeDefined();
 
     const threadListRequests = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .filter((payload) => payload.method === "thread/list");
 
     expect(threadListRequests).toEqual(
@@ -1668,9 +1711,9 @@ describe("CodexAppServerClient", () => {
             sortKey: "updated_at",
             sourceKinds: ["cli", "vscode"],
             useStateDbOnly: true,
-          })
+          }),
         }),
-      ])
+      ]),
     );
 
     await client.close();
@@ -1681,7 +1724,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const threads = await client.listThreads({
@@ -1697,7 +1740,13 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
     const threadListRequests = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: { cursor?: string } })
+      .map(
+        (message) =>
+          JSON.parse(message) as {
+            method?: string;
+            params?: { cursor?: string };
+          },
+      )
       .filter((payload) => payload.method === "thread/list");
 
     expect(threadListRequests).toEqual([
@@ -1729,10 +1778,13 @@ describe("CodexAppServerClient", () => {
         // Windows that turns the Unix literal into a drive-prefixed path.
         // Compare against the resolved form so the mock matches on both
         // platforms (path.resolve is a no-op for absolute POSIX paths).
-        if (targetPath === path.resolve("/Users/huntharo/.codex/worktrees/0cb4/web-app")) {
+        if (
+          targetPath
+          === path.resolve("/Users/huntharo/.codex/worktrees/0cb4/web-app")
+        ) {
           throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         }
-      })
+      }),
     }));
     vi.doMock("node:child_process", () => ({
       execFile: vi.fn(
@@ -1740,18 +1792,22 @@ describe("CodexAppServerClient", () => {
           _file: string,
           _args: string[],
           _options: unknown,
-          callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void
+          callback: (
+            error: Error | null,
+            result?: { stdout: string; stderr: string },
+          ) => void,
         ) => {
           callback(null, { stdout: "", stderr: "" });
-        }
-      )
+        },
+      ),
     }));
 
     try {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } =
+        await import("../codex-app-server/client");
 
       const client = new CodexAppServerClient({
-        command: "codex"
+        command: "codex",
       });
 
       const threads = await client.listThreads({ filter: "missing-worktree" });
@@ -1760,8 +1816,8 @@ describe("CodexAppServerClient", () => {
         expect.objectContaining({
           id: "thread-missing-worktree",
           projectKey: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
-          linkedDirectories: []
-        })
+          linkedDirectories: [],
+        }),
       ]);
 
       await client.close();
@@ -1781,7 +1837,12 @@ describe("CodexAppServerClient", () => {
       access: vi.fn(async (targetPath: string) => {
         // Compare against the resolved form so the mock matches the path the
         // enricher actually passes to access on both POSIX and Windows.
-        if (targetPath === path.resolve("/Users/huntharo/.codex/worktrees/be87/search-product")) {
+        if (
+          targetPath
+          === path.resolve(
+            "/Users/huntharo/.codex/worktrees/be87/search-product",
+          )
+        ) {
           throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         }
       }),
@@ -1793,7 +1854,10 @@ describe("CodexAppServerClient", () => {
           _file: string,
           args: string[],
           _options: unknown,
-          callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void
+          callback: (
+            error: Error | null,
+            result?: { stdout: string; stderr: string },
+          ) => void,
         ) => {
           if (args.includes("rev-parse")) {
             callback(null, {
@@ -1812,15 +1876,16 @@ describe("CodexAppServerClient", () => {
           }
 
           callback(new Error(`Unexpected git invocation: ${args.join(" ")}`));
-        }
-      )
+        },
+      ),
     }));
 
     try {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } =
+        await import("../codex-app-server/client");
 
       const client = new CodexAppServerClient({
-        command: "codex"
+        command: "codex",
       });
 
       const threads = await client.listThreads({ filter: "forked-worktree" });
@@ -1829,8 +1894,8 @@ describe("CodexAppServerClient", () => {
         expect.objectContaining({
           id: "thread-forked-worktree",
           projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
-          linkedDirectories: []
-        })
+          linkedDirectories: [],
+        }),
       ]);
       expect(readFileMock).not.toHaveBeenCalled();
 
@@ -1847,7 +1912,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const threads = await client.listThreads();
@@ -1872,11 +1937,19 @@ describe("CodexAppServerClient", () => {
       "thread-recent",
       "thread-borderline",
     ]);
-    expect(threads.find((thread) => thread.id === "thread-stale-created-order")).toBeUndefined();
+    expect(
+      threads.find((thread) => thread.id === "thread-stale-created-order"),
+    ).toBeUndefined();
 
     const transport = MockTransport.instances.at(-1);
     const threadListRequests = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> })
+      .map(
+        (message) =>
+          JSON.parse(message) as {
+            method?: string;
+            params?: Record<string, unknown>;
+          },
+      )
       .filter((payload) => payload.method === "thread/list");
     expect(threadListRequests).toEqual(
       expect.arrayContaining([
@@ -1914,7 +1987,13 @@ describe("CodexAppServerClient", () => {
 
     const transport = MockTransport.instances.at(-1);
     const threadListRequests = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> })
+      .map(
+        (message) =>
+          JSON.parse(message) as {
+            method?: string;
+            params?: Record<string, unknown>;
+          },
+      )
       .filter((payload) => payload.method === "thread/list");
     expect(threadListRequests).toEqual(
       expect.arrayContaining([
@@ -1958,17 +2037,29 @@ describe("CodexAppServerClient", () => {
       },
     });
 
-    const threads = await client.listThreads({ filter: "search-product-parity" });
+    const threads = await client.listThreads({
+      filter: "search-product-parity",
+    });
 
     expect(threads.map((thread) => thread.id)).toEqual([
       "thread-projmgr",
       "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
       "thread-deck",
     ]);
-    expect(threads.find((thread) => thread.id === "019cb1de-230c-71f1-a833-8880f2ea1a4a")).toBeUndefined();
-    expect(threads.find((thread) => thread.id === "019c9cc2-6ea3-7d40-817d-9590d9118bbd")).toBeUndefined();
     expect(
-      threads.find((thread) => thread.id === "019d88a2-0e0b-77f0-bfce-130ae8e37d8f")
+      threads.find(
+        (thread) => thread.id === "019cb1de-230c-71f1-a833-8880f2ea1a4a",
+      ),
+    ).toBeUndefined();
+    expect(
+      threads.find(
+        (thread) => thread.id === "019c9cc2-6ea3-7d40-817d-9590d9118bbd",
+      ),
+    ).toBeUndefined();
+    expect(
+      threads.find(
+        (thread) => thread.id === "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
+      ),
     ).toMatchObject({
       projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
       linkedDirectories: [
@@ -1984,7 +2075,13 @@ describe("CodexAppServerClient", () => {
 
     const transport = MockTransport.instances.at(-1);
     const threadListRequests = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> })
+      .map(
+        (message) =>
+          JSON.parse(message) as {
+            method?: string;
+            params?: Record<string, unknown>;
+          },
+      )
       .filter((payload) => payload.method === "thread/list");
     expect(threadListRequests).toEqual(
       expect.arrayContaining([
@@ -2014,40 +2111,59 @@ describe("CodexAppServerClient", () => {
                 id: "/Users/huntharo/pwrdrvr/PwrAgent",
                 label: "PwrAgent",
                 path: "/Users/huntharo/pwrdrvr/PwrAgent",
-                kind: "local"
-              }
+                kind: "local",
+              },
             ]
-          : []
+          : [],
     });
 
     const initialThreads = await client.listThreads();
 
-    expect(initialThreads.find((thread) => thread.id === "thread-renamed")).toMatchObject({
+    expect(
+      initialThreads.find((thread) => thread.id === "thread-renamed"),
+    ).toMatchObject({
       id: "thread-renamed",
       source: "codex",
     });
     expect(
-      initialThreads.find((thread) => thread.id === "thread-renamed")?.titleSource
+      initialThreads.find((thread) => thread.id === "thread-renamed")
+        ?.titleSource,
     ).not.toBe("explicit");
-    expect(initialThreads.find((thread) => thread.id === "thread-archive")).toBeUndefined();
+    expect(
+      initialThreads.find((thread) => thread.id === "thread-archive"),
+    ).toBeUndefined();
 
     const threadListRequests = MockTransport.instances[0]?.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: { archived?: boolean } })
+      .map(
+        (message) =>
+          JSON.parse(message) as {
+            method?: string;
+            params?: { archived?: boolean };
+          },
+      )
       .filter((message) => message.method === "thread/list");
-    expect(threadListRequests?.some((message) => message.params?.archived === false)).toBe(true);
-    expect(threadListRequests?.some((message) => message.params?.archived === true)).toBe(false);
+    expect(
+      threadListRequests?.some((message) => message.params?.archived === false),
+    ).toBe(true);
+    expect(
+      threadListRequests?.some((message) => message.params?.archived === true),
+    ).toBe(false);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const hydratedThreads = await client.listThreads();
 
-    expect(hydratedThreads.find((thread) => thread.id === "thread-renamed")).toMatchObject({
+    expect(
+      hydratedThreads.find((thread) => thread.id === "thread-renamed"),
+    ).toMatchObject({
       id: "thread-renamed",
       title: "Spud up the thread",
       titleSource: "explicit",
       source: "codex",
     });
-    expect(hydratedThreads.find((thread) => thread.id === "thread-archive")).toBeUndefined();
+    expect(
+      hydratedThreads.find((thread) => thread.id === "thread-archive"),
+    ).toBeUndefined();
 
     await client.close();
   });
@@ -2106,7 +2222,9 @@ describe("CodexAppServerClient", () => {
       }),
     });
 
-    const threads = await client.listThreads({ filter: "search-product-parity" });
+    const threads = await client.listThreads({
+      filter: "search-product-parity",
+    });
     const thread = threads.find((entry) => entry.id === "thread-projmgr");
 
     expect(thread).toMatchObject({
@@ -2139,9 +2257,11 @@ describe("CodexAppServerClient", () => {
       }),
     });
 
-    const threads = await client.listThreads({ filter: "search-product-parity" });
+    const threads = await client.listThreads({
+      filter: "search-product-parity",
+    });
     const thread = threads.find(
-      (entry) => entry.id === "019d88a2-0e0b-77f0-bfce-130ae8e37d8f"
+      (entry) => entry.id === "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
     );
 
     expect(thread).toMatchObject({
@@ -2158,15 +2278,15 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-2"
+      threadId: "thread-2",
     });
     const turn = {
       id: "turn-1",
-      startedAt: 1_763_500_100_000
+      startedAt: 1_763_500_100_000,
     };
 
     expect(replay).toEqual({
@@ -2180,10 +2300,10 @@ describe("CodexAppServerClient", () => {
           parts: [
             {
               type: "text",
-              text: "Show me the current desktop thread shell"
-            }
+              text: "Show me the current desktop thread shell",
+            },
           ],
-          turn
+          turn,
         },
         {
           type: "message",
@@ -2192,7 +2312,7 @@ describe("CodexAppServerClient", () => {
           text: "I’m tracing the transcript scroll container.",
           createdAt: 1_763_500_100_000,
           phase: "commentary",
-          turn
+          turn,
         },
         {
           type: "activity",
@@ -2207,7 +2327,7 @@ describe("CodexAppServerClient", () => {
               kind: "read",
               label: "Read TranscriptList.tsx",
               path: "/repo/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
-              status: "completed"
+              status: "completed",
             },
             {
               id: "item-4-1",
@@ -2215,9 +2335,9 @@ describe("CodexAppServerClient", () => {
               label: "pwd && rg --files",
               command: {
                 displayCommand: "pwd && rg --files",
-                rawCommand: "/bin/zsh -lc 'pwd && rg --files'"
+                rawCommand: "/bin/zsh -lc 'pwd && rg --files'",
               },
-              status: "completed"
+              status: "completed",
             },
             {
               id: "item-5-1",
@@ -2231,16 +2351,16 @@ describe("CodexAppServerClient", () => {
                   "--- a/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
                   "+++ b/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
                   "@@ -1,3 +1,4 @@",
-                  " import { useCallback } from \"react\";",
-                  "-import { TranscriptMessage } from \"./TranscriptMessage\";",
-                  "+import { TranscriptActivity } from \"./TranscriptActivity\";",
-                  "+import { TranscriptMessage } from \"./TranscriptMessage\";"
+                  ' import { useCallback } from "react";',
+                  '-import { TranscriptMessage } from "./TranscriptMessage";',
+                  '+import { TranscriptActivity } from "./TranscriptActivity";',
+                  '+import { TranscriptMessage } from "./TranscriptMessage";',
                 ].join("\n"),
                 additions: 2,
-                removals: 1
-              }
-            }
-          ]
+                removals: 1,
+              },
+            },
+          ],
         },
         {
           type: "message",
@@ -2249,8 +2369,8 @@ describe("CodexAppServerClient", () => {
           text: "The desktop shell is live and listing Codex threads.",
           createdAt: 1_763_500_100_000,
           phase: "final",
-          turn
-        }
+          turn,
+        },
       ],
       messages: [
         {
@@ -2261,30 +2381,31 @@ describe("CodexAppServerClient", () => {
           parts: [
             {
               type: "text",
-              text: "Show me the current desktop thread shell"
-            }
-          ]
+              text: "Show me the current desktop thread shell",
+            },
+          ],
         },
         {
           id: "item-2",
           role: "assistant",
           text: "I’m tracing the transcript scroll container.",
-          createdAt: 1_763_500_100_000
+          createdAt: 1_763_500_100_000,
         },
         {
           id: "item-6",
           role: "assistant",
           text: "The desktop shell is live and listing Codex threads.",
-          createdAt: 1_763_500_100_000
-        }
+          createdAt: 1_763_500_100_000,
+        },
       ],
       lastUserMessage: "Show me the current desktop thread shell",
-      lastAssistantMessage: "The desktop shell is live and listing Codex threads.",
+      lastAssistantMessage:
+        "The desktop shell is live and listing Codex threads.",
       pagination: {
         supportsPagination: false,
         hasPreviousPage: false,
-        previousCursor: undefined
-      }
+        previousCursor: undefined,
+      },
     });
 
     await client.close();
@@ -2350,7 +2471,7 @@ describe("CodexAppServerClient", () => {
       },
     ]);
     expect(replay.lastAssistantMessage).toBe(
-      "Final answer from the raw session envelope."
+      "Final answer from the raw session envelope.",
     );
 
     await client.close();
@@ -2410,41 +2531,44 @@ describe("CodexAppServerClient", () => {
 
   it("does not let an older same-text assistant message hide a newer turn reply", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
-    MockTransport.readThreadResultByThreadId.set("thread-repeated-assistant-text", {
-      events: [
-        {
-          type: "response_item",
-          timestamp: "2026-06-09T15:01:00.000Z",
-          payload: {
-            id: "old-response-item",
-            role: "assistant",
-            content: [
-              {
-                type: "output_text",
-                text: "Same final answer.",
-              },
-            ],
-          },
-        },
-      ],
-      thread: {
-        turns: [
+    MockTransport.readThreadResultByThreadId.set(
+      "thread-repeated-assistant-text",
+      {
+        events: [
           {
-            id: "newer-turn",
-            status: "completed",
-            startedAt: 1_781_112_452,
-            items: [
-              {
-                type: "agentMessage",
-                id: "new-final-answer",
-                phase: "final_answer",
-                text: "Same final answer.",
-              },
-            ],
+            type: "response_item",
+            timestamp: "2026-06-09T15:01:00.000Z",
+            payload: {
+              id: "old-response-item",
+              role: "assistant",
+              content: [
+                {
+                  type: "output_text",
+                  text: "Same final answer.",
+                },
+              ],
+            },
           },
         ],
+        thread: {
+          turns: [
+            {
+              id: "newer-turn",
+              status: "completed",
+              startedAt: 1_781_112_452,
+              items: [
+                {
+                  type: "agentMessage",
+                  id: "new-final-answer",
+                  phase: "final_answer",
+                  text: "Same final answer.",
+                },
+              ],
+            },
+          ],
+        },
       },
-    });
+    );
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -2496,15 +2620,15 @@ describe("CodexAppServerClient", () => {
                     path: "/repo/new-file.ts",
                     kind: {
                       type: "add",
-                      content: "first\nsecond\nthird\n"
-                    }
+                      content: "first\nsecond\nthird\n",
+                    },
                   },
                   {
                     path: "/repo/removed-file.ts",
                     kind: {
                       type: "delete",
-                      content: "old first\nold second"
-                    }
+                      content: "old first\nold second",
+                    },
                   },
                   {
                     path: "/repo/updated-file.ts",
@@ -2520,58 +2644,58 @@ describe("CodexAppServerClient", () => {
                         "+added one",
                         "+added two",
                         "+added three",
-                        "+added four"
+                        "+added four",
                       ].join("\n"),
-                      move_path: null
-                    }
+                      move_path: null,
+                    },
                   },
                   {
                     path: "/repo/patch-added-file.ts",
                     kind: {
-                      type: "add"
+                      type: "add",
                     },
                     diff: [
                       "--- /dev/null",
                       "+++ b/patch-added-file.ts",
                       "@@ -0,0 +1,2 @@",
                       "+patch added one",
-                      "+patch added two"
-                    ].join("\n")
+                      "+patch added two",
+                    ].join("\n"),
                   },
                   {
                     path: "/repo/patch-deleted-file.ts",
                     kind: {
-                      type: "delete"
+                      type: "delete",
                     },
                     diff: [
                       "--- a/patch-deleted-file.ts",
                       "+++ /dev/null",
                       "@@ -1,1 +0,0 @@",
-                      "-patch deleted one"
-                    ].join("\n")
+                      "-patch deleted one",
+                    ].join("\n"),
                   },
                   {
                     path: "/repo/empty-file.ts",
                     kind: {
                       type: "add",
-                      content: ""
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      }
+                      content: "",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
     });
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-file-change-counts"
+      threadId: "thread-file-change-counts",
     });
 
     expect(replay.entries).toEqual([
@@ -2584,7 +2708,7 @@ describe("CodexAppServerClient", () => {
         turn: {
           id: "turn-file-change-counts",
           startedAt: 1_763_500_100_000,
-          status: "completed"
+          status: "completed",
         },
         details: [
           expect.objectContaining({
@@ -2597,11 +2721,11 @@ describe("CodexAppServerClient", () => {
                 "@@ -0,0 +1,3 @@",
                 "+first",
                 "+second",
-                "+third"
+                "+third",
               ].join("\n"),
               additions: 3,
-              removals: 0
-            }
+              removals: 0,
+            },
           }),
           expect.objectContaining({
             label: "Delete removed-file.ts",
@@ -2612,11 +2736,11 @@ describe("CodexAppServerClient", () => {
                 "+++ /dev/null",
                 "@@ -1,2 +0,0 @@",
                 "-old first",
-                "-old second"
+                "-old second",
               ].join("\n"),
               additions: 0,
-              removals: 2
-            }
+              removals: 2,
+            },
           }),
           expect.objectContaining({
             label: "Update updated-file.ts",
@@ -2632,11 +2756,11 @@ describe("CodexAppServerClient", () => {
                 "+added one",
                 "+added two",
                 "+added three",
-                "+added four"
+                "+added four",
               ].join("\n"),
               additions: 4,
-              removals: 2
-            }
+              removals: 2,
+            },
           }),
           expect.objectContaining({
             label: "Add patch-added-file.ts",
@@ -2647,11 +2771,11 @@ describe("CodexAppServerClient", () => {
                 "+++ b/patch-added-file.ts",
                 "@@ -0,0 +1,2 @@",
                 "+patch added one",
-                "+patch added two"
+                "+patch added two",
               ].join("\n"),
               additions: 2,
-              removals: 0
-            }
+              removals: 0,
+            },
           }),
           expect.objectContaining({
             label: "Delete patch-deleted-file.ts",
@@ -2661,11 +2785,11 @@ describe("CodexAppServerClient", () => {
                 "--- a/patch-deleted-file.ts",
                 "+++ /dev/null",
                 "@@ -1,1 +0,0 @@",
-                "-patch deleted one"
+                "-patch deleted one",
               ].join("\n"),
               additions: 0,
-              removals: 1
-            }
+              removals: 1,
+            },
           }),
           expect.objectContaining({
             label: "Add empty-file.ts",
@@ -2674,14 +2798,14 @@ describe("CodexAppServerClient", () => {
               diff: [
                 "--- /dev/null",
                 "+++ b/repo/empty-file.ts",
-                "@@ -0,0 +1,0 @@"
+                "@@ -0,0 +1,0 @@",
               ].join("\n"),
               additions: 0,
-              removals: 0
-            }
-          })
-        ]
-      }
+              removals: 0,
+            },
+          }),
+        ],
+      },
     ]);
 
     await client.close();
@@ -2706,7 +2830,7 @@ describe("CodexAppServerClient", () => {
                   {
                     path: "/repo/metadata-added-file.ts",
                     kind: {
-                      type: "add"
+                      type: "add",
                     },
                     diff: [
                       "Index: metadata-added-file.ts",
@@ -2716,13 +2840,13 @@ describe("CodexAppServerClient", () => {
                       "+++ b/metadata-added-file.ts",
                       "@@ -0,0 +1,2 @@",
                       "+metadata added one",
-                      "+metadata added two"
-                    ].join("\n")
+                      "+metadata added two",
+                    ].join("\n"),
                   },
                   {
                     path: "/repo/metadata-deleted-file.ts",
                     kind: {
-                      type: "delete"
+                      type: "delete",
                     },
                     diff: [
                       "Index: metadata-deleted-file.ts",
@@ -2732,24 +2856,24 @@ describe("CodexAppServerClient", () => {
                       "+++ /dev/null",
                       "@@ -1,2 +0,0 @@",
                       "-metadata deleted one",
-                      "-metadata deleted two"
-                    ].join("\n")
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      }
+                      "-metadata deleted two",
+                    ].join("\n"),
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
     });
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-metadata-patches"
+      threadId: "thread-metadata-patches",
     });
 
     expect(replay.entries).toEqual([
@@ -2762,7 +2886,7 @@ describe("CodexAppServerClient", () => {
         turn: {
           id: "turn-metadata-patches",
           startedAt: 1_763_500_150_000,
-          status: "completed"
+          status: "completed",
         },
         details: [
           expect.objectContaining({
@@ -2777,11 +2901,11 @@ describe("CodexAppServerClient", () => {
                 "+++ b/metadata-added-file.ts",
                 "@@ -0,0 +1,2 @@",
                 "+metadata added one",
-                "+metadata added two"
+                "+metadata added two",
               ].join("\n"),
               additions: 2,
-              removals: 0
-            }
+              removals: 0,
+            },
           }),
           expect.objectContaining({
             label: "Delete metadata-deleted-file.ts",
@@ -2795,14 +2919,14 @@ describe("CodexAppServerClient", () => {
                 "+++ /dev/null",
                 "@@ -1,2 +0,0 @@",
                 "-metadata deleted one",
-                "-metadata deleted two"
+                "-metadata deleted two",
               ].join("\n"),
               additions: 0,
-              removals: 2
-            }
-          })
-        ]
-      }
+              removals: 2,
+            },
+          }),
+        ],
+      },
     ]);
 
     await client.close();
@@ -2813,7 +2937,7 @@ describe("CodexAppServerClient", () => {
     const rawJsonl = [
       '{"backend":"codex","captureId":"large","method":"initialize"}',
       '{"backend":"codex","captureId":"large","method":"thread/read"}',
-      `{"backend":"codex","captureId":"large","raw":"${"x".repeat(530_000)}"}`
+      `{"backend":"codex","captureId":"large","raw":"${"x".repeat(530_000)}"}`,
     ].join("\n");
 
     MockTransport.readThreadResultByThreadId.set("thread-large-raw-delete", {
@@ -2833,36 +2957,37 @@ describe("CodexAppServerClient", () => {
                   {
                     path: "/repo/apps/desktop/e2e/fixtures/codex-todo-list/raw.capture.jsonl",
                     kind: {
-                      type: "delete"
+                      type: "delete",
                     },
-                    diff: rawJsonl
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      }
+                    diff: rawJsonl,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
     });
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-large-raw-delete"
+      threadId: "thread-large-raw-delete",
     });
 
-    const fileDiff = replay.entries[0]?.type === "activity"
-      ? replay.entries[0].details[0]?.fileDiff
-      : undefined;
+    const fileDiff =
+      replay.entries[0]?.type === "activity"
+        ? replay.entries[0].details[0]?.fileDiff
+        : undefined;
 
     expect(replay.entries[0]).toEqual(
       expect.objectContaining({
         type: "activity",
-        summary: "Edited 1 file, +0, -3"
-      })
+        summary: "Edited 1 file, +0, -3",
+      }),
     );
     expect(fileDiff).toEqual(
       expect.objectContaining({
@@ -2871,8 +2996,8 @@ describe("CodexAppServerClient", () => {
         additions: 0,
         removals: 3,
         omittedReason: expect.stringContaining("Large file diff omitted"),
-        originalLength: rawJsonl.length
-      })
+        originalLength: rawJsonl.length,
+      }),
     );
     expect(fileDiff?.omittedReason).toContain("518 KB");
 
@@ -2897,7 +3022,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(
-      client.readThread({ threadId: "thread-idle-status" })
+      client.readThread({ threadId: "thread-idle-status" }),
     ).resolves.toMatchObject({
       threadStatus: "idle",
     });
@@ -2919,13 +3044,13 @@ describe("CodexAppServerClient", () => {
               {
                 type: "userMessage",
                 id: "user-1",
-                content: [{ type: "text", text: "Replay the captured order." }]
+                content: [{ type: "text", text: "Replay the captured order." }],
               },
               {
                 type: "agentMessage",
                 id: "commentary-1",
                 phase: "commentary",
-                text: "I am checking the first file."
+                text: "I am checking the first file.",
               },
               {
                 type: "commandExecution",
@@ -2935,16 +3060,16 @@ describe("CodexAppServerClient", () => {
                 commandActions: [
                   {
                     type: "read",
-                    path: "/repo/src/a.ts"
-                  }
+                    path: "/repo/src/a.ts",
+                  },
                 ],
-                durationMs: 1_200
+                durationMs: 1_200,
               },
               {
                 type: "agentMessage",
                 id: "commentary-2",
                 phase: "commentary",
-                text: "Now I am checking the second file."
+                text: "Now I am checking the second file.",
               },
               {
                 type: "commandExecution",
@@ -2954,30 +3079,30 @@ describe("CodexAppServerClient", () => {
                 commandActions: [
                   {
                     type: "read",
-                    path: "/repo/src/b.ts"
-                  }
+                    path: "/repo/src/b.ts",
+                  },
                 ],
-                durationMs: 2_500
+                durationMs: 2_500,
               },
               {
                 type: "agentMessage",
                 id: "final-1",
                 phase: "final",
-                text: "Done."
-              }
-            ]
-          }
-        ]
-      }
+                text: "Done.",
+              },
+            ],
+          },
+        ],
+      },
     });
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-captured-order"
+      threadId: "thread-captured-order",
     });
 
     expect(replay.entries.map((entry) => `${entry.type}:${entry.id}`)).toEqual([
@@ -3013,27 +3138,30 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.readThread({
       threadId: "thread-2",
       before: "cursor-before-1",
-      limit: 25
+      limit: 25,
     });
 
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
 
     const readRequest = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((message) => message.method === "thread/read");
 
     expect(readRequest?.params).toMatchObject({
       threadId: "thread-2",
       includeTurns: true,
       before: "cursor-before-1",
-      limit: 25
+      limit: 25,
     });
 
     await client.close();
@@ -3044,24 +3172,27 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.readThread({
       threadId: "thread-2",
-      includeTurns: false
+      includeTurns: false,
     });
 
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
 
     const readRequest = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((message) => message.method === "thread/read");
 
     expect(readRequest?.params).toMatchObject({
       threadId: "thread-2",
-      includeTurns: false
+      includeTurns: false,
     });
 
     await client.close();
@@ -3072,15 +3203,15 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-images"
+      threadId: "thread-images",
     });
     const turn = {
       id: "turn-images",
-      startedAt: 1_763_500_150_000
+      startedAt: 1_763_500_150_000,
     };
 
     expect(replay.entries).toEqual([
@@ -3093,14 +3224,14 @@ describe("CodexAppServerClient", () => {
         parts: [
           {
             type: "text",
-            text: "Describe this image"
+            text: "Describe this image",
           },
           {
             type: "image",
-            url: "data:image/png;base64,aGVsbG8="
-          }
+            url: "data:image/png;base64,aGVsbG8=",
+          },
         ],
-        turn
+        turn,
       },
       {
         type: "message",
@@ -3112,11 +3243,11 @@ describe("CodexAppServerClient", () => {
           {
             type: "image",
             url: "https://example.com/thread-image.png",
-            alt: "Thread image"
-          }
+            alt: "Thread image",
+          },
         ],
-        turn
-      }
+        turn,
+      },
     ]);
     expect(replay.messages).toEqual([
       {
@@ -3127,13 +3258,13 @@ describe("CodexAppServerClient", () => {
         parts: [
           {
             type: "text",
-            text: "Describe this image"
+            text: "Describe this image",
           },
           {
             type: "image",
-            url: "data:image/png;base64,aGVsbG8="
-          }
-        ]
+            url: "data:image/png;base64,aGVsbG8=",
+          },
+        ],
       },
       {
         id: "item-image-2",
@@ -3144,10 +3275,10 @@ describe("CodexAppServerClient", () => {
           {
             type: "image",
             url: "https://example.com/thread-image.png",
-            alt: "Thread image"
-          }
-        ]
-      }
+            alt: "Thread image",
+          },
+        ],
+      },
     ]);
     expect(replay.lastUserMessage).toBe("Describe this image");
 
@@ -3235,7 +3366,9 @@ describe("CodexAppServerClient", () => {
       "message:message-1",
       "message:message-2",
     ]);
-    expect(replay.messages.map((message) => `${message.role}:${message.text}`)).toEqual([
+    expect(
+      replay.messages.map((message) => `${message.role}:${message.text}`),
+    ).toEqual([
       "user:What's in this image?",
       "assistant:The image shows the PwrAgent desktop app.",
     ]);
@@ -3261,34 +3394,43 @@ describe("CodexAppServerClient", () => {
 
   it("keeps distinct same-text image prompts with different image sources", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
-    MockTransport.readThreadResultByThreadId.set("thread-distinct-image-prompts", {
-      events: [
-        {
-          type: "response_item",
-          timestamp: "2026-05-30T23:37:32.719Z",
-          payload: {
-            type: "message",
-            role: "user",
-            content: [
-              { type: "input_text", text: "What's in this image?" },
-              { type: "input_image", image_url: "data:image/png;base64,AQID" },
-            ],
+    MockTransport.readThreadResultByThreadId.set(
+      "thread-distinct-image-prompts",
+      {
+        events: [
+          {
+            type: "response_item",
+            timestamp: "2026-05-30T23:37:32.719Z",
+            payload: {
+              type: "message",
+              role: "user",
+              content: [
+                { type: "input_text", text: "What's in this image?" },
+                {
+                  type: "input_image",
+                  image_url: "data:image/png;base64,AQID",
+                },
+              ],
+            },
           },
-        },
-        {
-          type: "response_item",
-          timestamp: "2026-05-30T23:37:32.720Z",
-          payload: {
-            type: "message",
-            role: "user",
-            content: [
-              { type: "input_text", text: "What's in this image?" },
-              { type: "input_image", image_url: "data:image/png;base64,BAUG" },
-            ],
+          {
+            type: "response_item",
+            timestamp: "2026-05-30T23:37:32.720Z",
+            payload: {
+              type: "message",
+              role: "user",
+              content: [
+                { type: "input_text", text: "What's in this image?" },
+                {
+                  type: "input_image",
+                  image_url: "data:image/png;base64,BAUG",
+                },
+              ],
+            },
           },
-        },
-      ],
-    });
+        ],
+      },
+    );
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -3372,12 +3514,15 @@ describe("CodexAppServerClient", () => {
       {
         type: "activity",
         id: "live-token-usage-1780246301079",
-        summary: "Latest request usage: 17,263 uncached in · 4,480 cached · 148 out",
+        summary:
+          "Latest request usage: 17,263 uncached in · 4,480 cached · 148 out",
         status: "completed",
       },
     ]);
     const usage = replay.entries[1];
-    expect(usage?.type === "activity" ? usage.usageLine : undefined).toMatchObject({
+    expect(
+      usage?.type === "activity" ? usage.usageLine : undefined,
+    ).toMatchObject({
       threadId: "thread-token-count-events",
       priceStatus: "unpriced",
       priceUnavailableReason: "missing-model",
@@ -3453,13 +3598,16 @@ describe("CodexAppServerClient", () => {
     const usage = replay.entries[0];
     expect(
       usage?.type === "activity"
-        ? usage.details.find((detail) => detail.id.endsWith("-output-cost"))?.label
+        ? usage.details.find((detail) => detail.id.endsWith("-output-cost"))
+            ?.label
         : undefined,
     ).toBe("Output cost: 37 tokens at $30.00/M = $0.002");
-    expect(usage?.type === "activity" ? usage.details.at(-1)?.label : undefined).toBe(
-      "Cost: $0.026 list price for GPT-5.5 Standard",
-    );
-    expect(usage?.type === "activity" ? usage.usageLine : undefined).toMatchObject({
+    expect(
+      usage?.type === "activity" ? usage.details.at(-1)?.label : undefined,
+    ).toBe("Cost: $0.026 list price for GPT-5.5 Standard");
+    expect(
+      usage?.type === "activity" ? usage.usageLine : undefined,
+    ).toMatchObject({
       threadId: "thread-token-count-priced",
       model: "gpt-5.5",
       priceStatus: "priced",
@@ -3470,61 +3618,64 @@ describe("CodexAppServerClient", () => {
 
   it("prices token_count entries with each turn's own model metadata", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
-    MockTransport.readThreadResultByThreadId.set("thread-token-count-model-switch", {
-      thread: {
-        id: "thread-token-count-model-switch",
-        turns: [
-          {
-            id: "turn-gpt-55",
-            status: "completed",
-            startedAt: 1_781_616_000,
-            items: [
-              {
-                type: "turn_context",
-                id: "context-gpt-55",
-                model: "gpt-5.5",
-              },
-              {
-                type: "token_count",
-                id: "usage-gpt-55",
-                info: {
-                  last_token_usage: {
-                    input_tokens: 1_000_000,
-                    cached_input_tokens: 0,
-                    output_tokens: 0,
-                    total_tokens: 1_000_000,
+    MockTransport.readThreadResultByThreadId.set(
+      "thread-token-count-model-switch",
+      {
+        thread: {
+          id: "thread-token-count-model-switch",
+          turns: [
+            {
+              id: "turn-gpt-55",
+              status: "completed",
+              startedAt: 1_781_616_000,
+              items: [
+                {
+                  type: "turn_context",
+                  id: "context-gpt-55",
+                  model: "gpt-5.5",
+                },
+                {
+                  type: "token_count",
+                  id: "usage-gpt-55",
+                  info: {
+                    last_token_usage: {
+                      input_tokens: 1_000_000,
+                      cached_input_tokens: 0,
+                      output_tokens: 0,
+                      total_tokens: 1_000_000,
+                    },
                   },
                 },
-              },
-            ],
-          },
-          {
-            id: "turn-gpt-54",
-            status: "completed",
-            startedAt: 1_781_616_060,
-            items: [
-              {
-                type: "turn_context",
-                id: "context-gpt-54",
-                model: "gpt-5.4",
-              },
-              {
-                type: "token_count",
-                id: "usage-gpt-54",
-                info: {
-                  last_token_usage: {
-                    input_tokens: 1_000_000,
-                    cached_input_tokens: 0,
-                    output_tokens: 0,
-                    total_tokens: 1_000_000,
+              ],
+            },
+            {
+              id: "turn-gpt-54",
+              status: "completed",
+              startedAt: 1_781_616_060,
+              items: [
+                {
+                  type: "turn_context",
+                  id: "context-gpt-54",
+                  model: "gpt-5.4",
+                },
+                {
+                  type: "token_count",
+                  id: "usage-gpt-54",
+                  info: {
+                    last_token_usage: {
+                      input_tokens: 1_000_000,
+                      cached_input_tokens: 0,
+                      output_tokens: 0,
+                      total_tokens: 1_000_000,
+                    },
                   },
                 },
-              },
-            ],
-          },
-        ],
+              ],
+            },
+          ],
+        },
       },
-    });
+    );
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -3543,10 +3694,9 @@ describe("CodexAppServerClient", () => {
       "gpt-5.5",
       "gpt-5.4",
     ]);
-    expect(usageEntries.map((entry) => entry.usageLine?.totalCostMicros)).toEqual([
-      5_000_000,
-      2_500_000,
-    ]);
+    expect(
+      usageEntries.map((entry) => entry.usageLine?.totalCostMicros),
+    ).toEqual([5_000_000, 2_500_000]);
     expect(usageEntries.map((entry) => entry.details.at(-1)?.label)).toEqual([
       "Cost: $5.00 list price for GPT-5.5 Standard",
       "Cost: $2.50 list price for GPT-5.4 Standard",
@@ -3557,66 +3707,69 @@ describe("CodexAppServerClient", () => {
 
   it("does not price a turn by borrowing another turn's model metadata", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
-    MockTransport.readThreadResultByThreadId.set("thread-token-count-missing-turn-context", {
-      events: [
-        {
-          type: "turn_context",
-          timestamp: "2026-06-16T13:26:02.690Z",
-          payload: {
-            turn_id: "unrelated-top-level-turn",
-            model: "gpt-5.5",
-          },
-        },
-      ],
-      thread: {
-        id: "thread-token-count-missing-turn-context",
-        turns: [
+    MockTransport.readThreadResultByThreadId.set(
+      "thread-token-count-missing-turn-context",
+      {
+        events: [
           {
-            id: "turn-with-context",
-            status: "completed",
-            startedAt: 1_781_616_000,
-            items: [
-              {
-                type: "turn_context",
-                id: "context-gpt-55",
-                model: "gpt-5.5",
-              },
-              {
-                type: "token_count",
-                id: "usage-gpt-55",
-                info: {
-                  last_token_usage: {
-                    input_tokens: 1_000,
-                    cached_input_tokens: 0,
-                    output_tokens: 0,
-                    total_tokens: 1_000,
-                  },
-                },
-              },
-            ],
-          },
-          {
-            id: "turn-without-context",
-            status: "completed",
-            startedAt: 1_781_616_060,
-            items: [
-              {
-                type: "token_count",
-                id: "usage-missing-model",
-                info: {
-                  last_token_usage: {
-                    input_tokens: 1_000_000,
-                    cached_input_tokens: 0,
-                    output_tokens: 0,
-                    total_tokens: 1_000_000,
-                  },
-                },
-              },
-            ],
+            type: "turn_context",
+            timestamp: "2026-06-16T13:26:02.690Z",
+            payload: {
+              turn_id: "unrelated-top-level-turn",
+              model: "gpt-5.5",
+            },
           },
         ],
+        thread: {
+          id: "thread-token-count-missing-turn-context",
+          turns: [
+            {
+              id: "turn-with-context",
+              status: "completed",
+              startedAt: 1_781_616_000,
+              items: [
+                {
+                  type: "turn_context",
+                  id: "context-gpt-55",
+                  model: "gpt-5.5",
+                },
+                {
+                  type: "token_count",
+                  id: "usage-gpt-55",
+                  info: {
+                    last_token_usage: {
+                      input_tokens: 1_000,
+                      cached_input_tokens: 0,
+                      output_tokens: 0,
+                      total_tokens: 1_000,
+                    },
+                  },
+                },
+              ],
+            },
+            {
+              id: "turn-without-context",
+              status: "completed",
+              startedAt: 1_781_616_060,
+              items: [
+                {
+                  type: "token_count",
+                  id: "usage-missing-model",
+                  info: {
+                    last_token_usage: {
+                      input_tokens: 1_000_000,
+                      cached_input_tokens: 0,
+                      output_tokens: 0,
+                      total_tokens: 1_000_000,
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
       },
-    });
+    );
 
     const client = new CodexAppServerClient({
       command: "codex",
@@ -3780,35 +3933,38 @@ describe("CodexAppServerClient", () => {
               {
                 type: "userMessage",
                 id: "item-1",
-                content: [{ type: "text", text: "Plan the desktop transcript work." }]
+                content: [
+                  { type: "text", text: "Plan the desktop transcript work." },
+                ],
               },
               {
                 type: "plan",
                 id: "plan-1",
                 explanation: "Keep the transcript contract stable.",
-                markdown: "## Final plan\n\nShip the transcript renderer in small steps.",
+                markdown:
+                  "## Final plan\n\nShip the transcript renderer in small steps.",
                 steps: [
                   { step: "Normalize replay", status: "completed" },
-                  { step: "Render live plan progress", status: "inProgress" }
-                ]
-              }
-            ]
-          }
-        ]
-      }
+                  { step: "Render live plan progress", status: "inProgress" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
     });
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-plan-item"
+      threadId: "thread-plan-item",
     });
     const turn = {
       id: "turn-1",
-      startedAt: 1_763_500_200_000
+      startedAt: 1_763_500_200_000,
     };
 
     expect(replay.entries).toEqual([
@@ -3818,26 +3974,27 @@ describe("CodexAppServerClient", () => {
         role: "user",
         text: "Plan the desktop transcript work.",
         createdAt: 1_763_500_200_000,
-          parts: [
-            {
-              type: "text",
-              text: "Plan the desktop transcript work."
-            }
-          ],
-          turn
-        },
+        parts: [
+          {
+            type: "text",
+            text: "Plan the desktop transcript work.",
+          },
+        ],
+        turn,
+      },
       {
         type: "plan",
         id: "plan-1",
         createdAt: 1_763_500_200_000,
         explanation: "Keep the transcript contract stable.",
-        markdown: "## Final plan\n\nShip the transcript renderer in small steps.",
+        markdown:
+          "## Final plan\n\nShip the transcript renderer in small steps.",
         steps: [
           { step: "Normalize replay", status: "completed" },
-          { step: "Render live plan progress", status: "in_progress" }
+          { step: "Render live plan progress", status: "in_progress" },
         ],
-        turn
-      }
+        turn,
+      },
     ]);
 
     await client.close();
@@ -3985,7 +4142,8 @@ describe("CodexAppServerClient", () => {
                 id: "exited-review",
                 payload: {
                   type: "exited_review_mode",
-                  review: "No findings. The branch comparison is ready to merge.",
+                  review:
+                    "No findings. The branch comparison is ready to merge.",
                 },
               },
               {
@@ -4244,7 +4402,7 @@ describe("CodexAppServerClient", () => {
                 status: "inProgress",
                 contentItems: null,
                 success: null,
-                durationMs: null
+                durationMs: null,
               },
               {
                 type: "mcpToolCall",
@@ -4255,21 +4413,21 @@ describe("CodexAppServerClient", () => {
                 status: "inProgress",
                 result: null,
                 error: null,
-                durationMs: null
-              }
-            ]
-          }
-        ]
-      }
+                durationMs: null,
+              },
+            ],
+          },
+        ],
+      },
     });
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-in-progress-tools"
+      threadId: "thread-in-progress-tools",
     });
 
     expect(replay.entries).toEqual([
@@ -4282,23 +4440,23 @@ describe("CodexAppServerClient", () => {
         turn: {
           id: "turn-tools",
           status: "in_progress",
-          startedAt: 1_763_500_210_000
+          startedAt: 1_763_500_210_000,
         },
         details: [
           {
             id: "tool-1",
             kind: "command",
             label: "search_web",
-            status: "in_progress"
+            status: "in_progress",
           },
           {
             id: "tool-2",
             kind: "command",
             label: "search_issues",
-            status: "in_progress"
-          }
-        ]
-      }
+            status: "in_progress",
+          },
+        ],
+      },
     ]);
 
     await client.close();
@@ -4306,72 +4464,75 @@ describe("CodexAppServerClient", () => {
 
   it("hydrates persisted OpenAI function calls as transcript activity", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
-    MockTransport.readThreadResultByThreadId.set("thread-openai-function-calls", {
-      thread: {
-        turns: [
-          {
-            id: "turn-tools",
-            status: "completed",
-            startedAt: 1_763_500_220,
-            completedAt: 1_763_500_250,
-            items: [
-              {
-                type: "assistantMessage",
-                id: "message-1",
-                phase: "commentary",
-                content: [{ type: "text", text: "I am checking CI." }]
-              },
-              {
-                type: "response_item",
-                id: "response-call-1",
-                payload: {
-                  type: "function_call",
-                  call_id: "call-1",
-                  name: "exec_command",
-                  durationMs: 5_200,
-                  arguments: JSON.stringify({
-                    cmd: "gh pr checks 62 --watch --interval 10"
-                  })
-                }
-              },
-              {
-                type: "response_item",
-                id: "call-1-output",
-                payload: {
-                  type: "function_call_output",
-                  call_id: "call-1",
-                  output: "Build pass\nLint pass"
-                }
-              },
-              {
-                type: "response_item",
-                id: "call-2",
-                payload: {
-                  type: "function_call",
-                  name: "exec_command",
-                  arguments: JSON.stringify({
-                    cmd: "git status --short --branch"
-                  })
-                }
-              },
-              {
-                type: "assistantMessage",
-                id: "message-2",
-                content: [{ type: "text", text: "CI is green." }]
-              }
-            ]
-          }
-        ]
-      }
-    });
+    MockTransport.readThreadResultByThreadId.set(
+      "thread-openai-function-calls",
+      {
+        thread: {
+          turns: [
+            {
+              id: "turn-tools",
+              status: "completed",
+              startedAt: 1_763_500_220,
+              completedAt: 1_763_500_250,
+              items: [
+                {
+                  type: "assistantMessage",
+                  id: "message-1",
+                  phase: "commentary",
+                  content: [{ type: "text", text: "I am checking CI." }],
+                },
+                {
+                  type: "response_item",
+                  id: "response-call-1",
+                  payload: {
+                    type: "function_call",
+                    call_id: "call-1",
+                    name: "exec_command",
+                    durationMs: 5_200,
+                    arguments: JSON.stringify({
+                      cmd: "gh pr checks 62 --watch --interval 10",
+                    }),
+                  },
+                },
+                {
+                  type: "response_item",
+                  id: "call-1-output",
+                  payload: {
+                    type: "function_call_output",
+                    call_id: "call-1",
+                    output: "Build pass\nLint pass",
+                  },
+                },
+                {
+                  type: "response_item",
+                  id: "call-2",
+                  payload: {
+                    type: "function_call",
+                    name: "exec_command",
+                    arguments: JSON.stringify({
+                      cmd: "git status --short --branch",
+                    }),
+                  },
+                },
+                {
+                  type: "assistantMessage",
+                  id: "message-2",
+                  content: [{ type: "text", text: "CI is green." }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    );
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-openai-function-calls"
+      threadId: "thread-openai-function-calls",
     });
 
     expect(replay.entries).toEqual([
@@ -4387,8 +4548,8 @@ describe("CodexAppServerClient", () => {
           id: "turn-tools",
           status: "completed",
           startedAt: 1_763_500_220_000,
-          completedAt: 1_763_500_250_000
-        }
+          completedAt: 1_763_500_250_000,
+        },
       },
       {
         type: "activity",
@@ -4404,8 +4565,8 @@ describe("CodexAppServerClient", () => {
               displayCommand: "gh pr checks 62 --watch --interval 10",
               rawCommand: "gh pr checks 62 --watch --interval 10",
               output: "Build pass\nLint pass",
-              durationMs: 5_200
-            }
+              durationMs: 5_200,
+            },
           },
           {
             id: "call-2",
@@ -4413,16 +4574,16 @@ describe("CodexAppServerClient", () => {
             label: "git status --short --branch",
             command: {
               displayCommand: "git status --short --branch",
-              rawCommand: "git status --short --branch"
-            }
-          }
+              rawCommand: "git status --short --branch",
+            },
+          },
         ],
         turn: {
           id: "turn-tools",
           status: "completed",
           startedAt: 1_763_500_220_000,
-          completedAt: 1_763_500_250_000
-        }
+          completedAt: 1_763_500_250_000,
+        },
       },
       {
         type: "message",
@@ -4435,9 +4596,9 @@ describe("CodexAppServerClient", () => {
           id: "turn-tools",
           status: "completed",
           startedAt: 1_763_500_220_000,
-          completedAt: 1_763_500_250_000
-        }
-      }
+          completedAt: 1_763_500_250_000,
+        },
+      },
     ]);
 
     await client.close();
@@ -4498,9 +4659,9 @@ describe("CodexAppServerClient", () => {
                   "019e5630-b147-7980-9f33-3cd7997c235a": {
                     status: "completed",
                     message: [
-                      "{\"reviewer\":\"correctness\",",
-                      "\"summary\":\"This is the returned review transcript that should not be collapsed before rendering.\",",
-                      "\"finding\":\"full transcript tail\"}",
+                      '{"reviewer":"correctness",',
+                      '"summary":"This is the returned review transcript that should not be collapsed before rendering.",',
+                      '"finding":"full transcript tail"}',
                     ].join("\n"),
                   },
                 },
@@ -4538,7 +4699,8 @@ describe("CodexAppServerClient", () => {
       {
         type: "activity",
         id: "activity-collab-spawn-1",
-        summary: "Spawned 1 agent, Waited on 1 agent, 1 collaboration tool failed",
+        summary:
+          "Spawned 1 agent, Waited on 1 agent, 1 collaboration tool failed",
         createdAt: 1_763_500_260_000,
         status: "failed",
         details: [
@@ -4549,7 +4711,9 @@ describe("CodexAppServerClient", () => {
             status: "completed",
             command: expect.objectContaining({
               displayCommand: "spawnAgent 019e5630",
-              output: expect.stringContaining("Prompt: You are the correctness reviewer."),
+              output: expect.stringContaining(
+                "Prompt: You are the correctness reviewer.",
+              ),
             }),
           }),
           expect.objectContaining({
@@ -4559,7 +4723,9 @@ describe("CodexAppServerClient", () => {
             status: "failed",
             command: expect.objectContaining({
               displayCommand: "spawnAgent",
-              output: expect.stringContaining("Prompt: You are the API contract reviewer."),
+              output: expect.stringContaining(
+                "Prompt: You are the API contract reviewer.",
+              ),
             }),
           }),
           expect.objectContaining({
@@ -4584,9 +4750,11 @@ describe("CodexAppServerClient", () => {
     const activity = replay.entries[1];
     expect(activity.type).toBe("activity");
     if (activity.type === "activity") {
-      expect(activity.details[2]?.command?.output).toContain("full transcript tail");
       expect(activity.details[2]?.command?.output).toContain(
-        "019e5630-b147-7980-9f33-3cd7997c235a"
+        "full transcript tail",
+      );
+      expect(activity.details[2]?.command?.output).toContain(
+        "019e5630-b147-7980-9f33-3cd7997c235a",
       );
     }
 
@@ -4598,20 +4766,23 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const requests: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
     client.onRequest((request) => {
-      requests.push(request as { method: string; params: Record<string, unknown> });
+      requests.push(
+        request as { method: string; params: Record<string, unknown> },
+      );
       return {
         answers: {
           breakfast: {
-            answers: ["Bagels"]
-          }
-        }
+            answers: ["Bagels"],
+          },
+        },
       };
     });
 
@@ -4636,12 +4807,12 @@ describe("CodexAppServerClient", () => {
             options: [
               {
                 label: "Bagels",
-                description: "Good with cream cheese."
-              }
-            ]
-          }
-        ]
-      }
+                description: "Good with cream cheese.",
+              },
+            ],
+          },
+        ],
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -4654,24 +4825,26 @@ describe("CodexAppServerClient", () => {
           turnId: "turn-7",
           itemId: "call-1",
           requestId: "rpc-input-1",
-          questions: expect.any(Array)
-        })
-      }
+          questions: expect.any(Array),
+        }),
+      },
     ]);
     expect(
       transport!.sentMessages
-        .map((message) => JSON.parse(message) as { id?: string; result?: unknown })
-        .find((message) => message.id === "rpc-input-1")
+        .map(
+          (message) => JSON.parse(message) as { id?: string; result?: unknown },
+        )
+        .find((message) => message.id === "rpc-input-1"),
     ).toEqual({
       jsonrpc: "2.0",
       id: "rpc-input-1",
       result: {
         answers: {
           breakfast: {
-            answers: ["Bagels"]
-          }
-        }
-      }
+            answers: ["Bagels"],
+          },
+        },
+      },
     });
 
     await client.close();
@@ -4682,15 +4855,18 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notifications: Array<{
+      method: string;
+      params: Record<string, unknown>;
+    }> = [];
     client.onNotification((notification) => {
       notifications.push(
-        notification as { method: string; params: Record<string, unknown> }
+        notification as { method: string; params: Record<string, unknown> },
       );
     });
 
@@ -4709,9 +4885,9 @@ describe("CodexAppServerClient", () => {
           error: null,
           startedAt: 1_763_500_300,
           completedAt: 1_763_500_360,
-          durationMs: 60_000
-        }
-      }
+          durationMs: 60_000,
+        },
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -4724,10 +4900,10 @@ describe("CodexAppServerClient", () => {
           turnId: "turn-from-generated",
           turn: expect.objectContaining({
             id: "turn-from-generated",
-            status: "completed"
-          })
-        })
-      }
+            status: "completed",
+          }),
+        }),
+      },
     ]);
 
     await client.close();
@@ -4738,15 +4914,18 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notifications: Array<{
+      method: string;
+      params: Record<string, unknown>;
+    }> = [];
     client.onNotification((notification) => {
       notifications.push(
-        notification as { method: string; params: Record<string, unknown> }
+        notification as { method: string; params: Record<string, unknown> },
       );
     });
 
@@ -4766,13 +4945,13 @@ describe("CodexAppServerClient", () => {
             message:
               '{ "type": "error", "error": { "type": "image_generation_user_error", "code": "invalid_value", "message": "The model \'gpt-image-2\' does not exist.", "param": "tools" }, "status": 400 }',
             codexErrorInfo: "other",
-            additionalDetails: null
+            additionalDetails: null,
           },
           startedAt: 1_763_500_300,
           completedAt: 1_763_500_360,
-          durationMs: 60_000
-        }
-      }
+          durationMs: 60_000,
+        },
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -4786,10 +4965,10 @@ describe("CodexAppServerClient", () => {
           turn: expect.objectContaining({
             id: "turn-failed-1",
             status: "failed",
-            error: { message: "The model 'gpt-image-2' does not exist." }
-          })
-        })
-      }
+            error: { message: "The model 'gpt-image-2' does not exist." },
+          }),
+        }),
+      },
     ]);
 
     await client.close();
@@ -4800,7 +4979,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
@@ -4814,18 +4993,22 @@ describe("CodexAppServerClient", () => {
       jsonrpc: "2.0",
       method: "error",
       params: {
-        error: { message: "boom", codexErrorInfo: "other", additionalDetails: null },
+        error: {
+          message: "boom",
+          codexErrorInfo: "other",
+          additionalDetails: null,
+        },
         threadId: "thread-2",
         turnId: "turn-1",
-        willRetry: false
-      }
+        willRetry: false,
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(codexClientLogWarn).not.toHaveBeenCalledWith(
       "unknown codex notification",
-      expect.anything()
+      expect.anything(),
     );
 
     await client.close();
@@ -4836,15 +5019,18 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notifications: Array<{
+      method: string;
+      params: Record<string, unknown>;
+    }> = [];
     client.onNotification((notification) => {
       notifications.push(
-        notification as { method: string; params: Record<string, unknown> }
+        notification as { method: string; params: Record<string, unknown> },
       );
     });
 
@@ -4859,9 +5045,9 @@ describe("CodexAppServerClient", () => {
         threadSettings: {
           model: "gpt-5.5",
           serviceTier: "priority",
-          effort: "medium"
-        }
-      }
+          effort: "medium",
+        },
+      },
     });
     transport!.emitInbound({
       jsonrpc: "2.0",
@@ -4871,16 +5057,16 @@ describe("CodexAppServerClient", () => {
         threadSettings: {
           model: "gpt-5.5",
           serviceTier: "default",
-          effort: "medium"
-        }
-      }
+          effort: "medium",
+        },
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(codexClientLogWarn).not.toHaveBeenCalledWith(
       "unknown codex notification",
-      expect.anything()
+      expect.anything(),
     );
     expect(notifications).toEqual([
       {
@@ -4891,8 +5077,8 @@ describe("CodexAppServerClient", () => {
           reasoningEffort: "medium",
           rawServiceTier: "priority",
           serviceTier: "fast",
-          fastMode: true
-        }
+          fastMode: true,
+        },
       },
       {
         method: "thread/codexSettings/observed",
@@ -4902,9 +5088,9 @@ describe("CodexAppServerClient", () => {
           reasoningEffort: "medium",
           rawServiceTier: "default",
           serviceTier: null,
-          fastMode: false
-        }
-      }
+          fastMode: false,
+        },
+      },
     ]);
 
     await client.close();
@@ -4915,15 +5101,18 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notifications: Array<{
+      method: string;
+      params: Record<string, unknown>;
+    }> = [];
     client.onNotification((notification) => {
       notifications.push(
-        notification as { method: string; params: Record<string, unknown> }
+        notification as { method: string; params: Record<string, unknown> },
       );
     });
 
@@ -4935,8 +5124,8 @@ describe("CodexAppServerClient", () => {
       method: "skills/changed",
       params: {
         cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
-        reason: "fileChanged"
-      }
+        reason: "fileChanged",
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -4950,25 +5139,26 @@ describe("CodexAppServerClient", () => {
         listenerCount: 1,
         initialized: true,
         serverAdvertisesSkillsList: false,
-        expectedFollowup: "call skills/list when refreshed skill metadata is needed",
+        expectedFollowup:
+          "call skills/list when refreshed skill metadata is needed",
         payload: {
           cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
-          reason: "fileChanged"
-        }
-      })
+          reason: "fileChanged",
+        },
+      }),
     );
     expect(codexClientLogWarn).not.toHaveBeenCalledWith(
       "unknown codex notification",
-      expect.anything()
+      expect.anything(),
     );
     expect(notifications).toEqual([
       {
         method: "skills/changed",
         params: {
           cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
-          reason: "fileChanged"
-        }
-      }
+          reason: "fileChanged",
+        },
+      },
     ]);
 
     await client.close();
@@ -4979,15 +5169,18 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notifications: Array<{
+      method: string;
+      params: Record<string, unknown>;
+    }> = [];
     client.onNotification((notification) => {
       notifications.push(
-        notification as { method: string; params: Record<string, unknown> }
+        notification as { method: string; params: Record<string, unknown> },
       );
     });
 
@@ -4999,18 +5192,18 @@ describe("CodexAppServerClient", () => {
       method: "configWarning",
       params: {
         summary:
-          "Project-local config, hooks, and exec policies are disabled in the following folders until the project is trusted, but skills still load.\n" +
-          "    1. /Users/huntharo/.codex/worktrees/mp9wyft8/PwrAgnt/.codex\n" +
-          "       To load project-local config, hooks, and exec policies, add /Users/huntharo/github/PwrAgnt as a trusted project in /Users/huntharo/.codex/profiles/acp-smoke/config.toml.\n",
-        details: null
-      }
+          "Project-local config, hooks, and exec policies are disabled in the following folders until the project is trusted, but skills still load.\n"
+          + "    1. /Users/huntharo/.codex/worktrees/mp9wyft8/PwrAgnt/.codex\n"
+          + "       To load project-local config, hooks, and exec policies, add /Users/huntharo/github/PwrAgnt as a trusted project in /Users/huntharo/.codex/profiles/acp-smoke/config.toml.\n",
+        details: null,
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(codexClientLogWarn).not.toHaveBeenCalledWith(
       "unknown codex notification",
-      expect.anything()
+      expect.anything(),
     );
     expect(notifications).toEqual([
       {
@@ -5018,9 +5211,9 @@ describe("CodexAppServerClient", () => {
         params: expect.objectContaining({
           trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
           configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
-          details: null
-        })
-      }
+          details: null,
+        }),
+      },
     ]);
 
     await client.close();
@@ -5031,27 +5224,27 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const response = await client.trustProject({
       projectPath: "/Users/huntharo/github/PwrAgnt",
-      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml"
+      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
     });
 
     expect(response).toEqual({
       projectPath: "/Users/huntharo/github/PwrAgnt",
-      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml"
+      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
     });
     expect(MockTransport.lastConfigValueWritePayload).toEqual({
       keyPath: "projects",
       value: {
         "/Users/huntharo/github/PwrAgnt": {
-          trust_level: "trusted"
-        }
+          trust_level: "trusted",
+        },
       },
       mergeStrategy: "upsert",
-      filePath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml"
+      filePath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
     });
 
     await client.close();
@@ -5062,15 +5255,18 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notifications: Array<{
+      method: string;
+      params: Record<string, unknown>;
+    }> = [];
     client.onNotification((notification) => {
       notifications.push(
-        notification as { method: string; params: Record<string, unknown> }
+        notification as { method: string; params: Record<string, unknown> },
       );
     });
 
@@ -5088,9 +5284,9 @@ describe("CodexAppServerClient", () => {
           type: "commandExecution",
           status: "inProgress",
           name: "write_stdin",
-          arguments: "{\"session_id\":40500,\"chars\":\"\",\"yield_time_ms\":1000}",
-        }
-      }
+          arguments: '{"session_id":40500,"chars":"","yield_time_ms":1000}',
+        },
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -5108,11 +5304,11 @@ describe("CodexAppServerClient", () => {
             arguments: {
               session_id: 40500,
               chars: "",
-              yield_time_ms: 1000
-            }
-          })
-        })
-      }
+              yield_time_ms: 1000,
+            },
+          }),
+        }),
+      },
     ]);
 
     await client.close();
@@ -5130,7 +5326,9 @@ describe("CodexAppServerClient", () => {
               {
                 type: "userMessage",
                 id: "item-1",
-                content: [{ type: "text", text: "Build the task list rendering." }]
+                content: [
+                  { type: "text", text: "Build the task list rendering." },
+                ],
               },
               {
                 type: "function_call",
@@ -5141,27 +5339,27 @@ describe("CodexAppServerClient", () => {
                   plan: [
                     { step: "Normalize replay", status: "pending" },
                     { step: "Render plan cards", status: "pending" },
-                    { step: "Verify with tests", status: "pending" }
-                  ]
-                })
-              }
-            ]
-          }
-        ]
-      }
+                    { step: "Verify with tests", status: "pending" },
+                  ],
+                }),
+              },
+            ],
+          },
+        ],
+      },
     });
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-plan-call"
+      threadId: "thread-plan-call",
     });
     const turn = {
       id: "turn-1",
-      startedAt: 1_763_500_300_000
+      startedAt: 1_763_500_300_000,
     };
 
     expect(replay.entries).toEqual([
@@ -5171,14 +5369,14 @@ describe("CodexAppServerClient", () => {
         role: "user",
         text: "Build the task list rendering.",
         createdAt: 1_763_500_300_000,
-          parts: [
-            {
-              type: "text",
-              text: "Build the task list rendering."
-            }
-          ],
-          turn
-        },
+        parts: [
+          {
+            type: "text",
+            text: "Build the task list rendering.",
+          },
+        ],
+        turn,
+      },
       {
         type: "plan",
         id: "item-2",
@@ -5187,10 +5385,10 @@ describe("CodexAppServerClient", () => {
         steps: [
           { step: "Normalize replay", status: "pending" },
           { step: "Render plan cards", status: "pending" },
-          { step: "Verify with tests", status: "pending" }
+          { step: "Verify with tests", status: "pending" },
         ],
-        turn
-      }
+        turn,
+      },
     ]);
 
     await client.close();
@@ -5208,7 +5406,9 @@ describe("CodexAppServerClient", () => {
               {
                 type: "userMessage",
                 id: "item-1",
-                content: [{ type: "text", text: "Trace the image preview bug." }]
+                content: [
+                  { type: "text", text: "Trace the image preview bug." },
+                ],
               },
               {
                 type: "response_item",
@@ -5219,30 +5419,33 @@ describe("CodexAppServerClient", () => {
                   arguments: JSON.stringify({
                     explanation: "Verify the renderer path before changing it.",
                     plan: [
-                      { step: "Read the replay normalizer", status: "completed" },
+                      {
+                        step: "Read the replay normalizer",
+                        status: "completed",
+                      },
                       { step: "Inspect the renderer", status: "in_progress" },
-                      { step: "Summarize the findings", status: "pending" }
-                    ]
-                  })
-                }
-              }
-            ]
-          }
-        ]
-      }
+                      { step: "Summarize the findings", status: "pending" },
+                    ],
+                  }),
+                },
+              },
+            ],
+          },
+        ],
+      },
     });
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-wrapped-plan-call"
+      threadId: "thread-wrapped-plan-call",
     });
     const turn = {
       id: "turn-1",
-      startedAt: 1_763_500_350_000
+      startedAt: 1_763_500_350_000,
     };
 
     expect(replay.entries).toEqual([
@@ -5252,14 +5455,14 @@ describe("CodexAppServerClient", () => {
         role: "user",
         text: "Trace the image preview bug.",
         createdAt: 1_763_500_350_000,
-          parts: [
-            {
-              type: "text",
-              text: "Trace the image preview bug."
-            }
-          ],
-          turn
-        },
+        parts: [
+          {
+            type: "text",
+            text: "Trace the image preview bug.",
+          },
+        ],
+        turn,
+      },
       {
         type: "plan",
         id: "item-2",
@@ -5268,10 +5471,10 @@ describe("CodexAppServerClient", () => {
         steps: [
           { step: "Read the replay normalizer", status: "completed" },
           { step: "Inspect the renderer", status: "in_progress" },
-          { step: "Summarize the findings", status: "pending" }
+          { step: "Summarize the findings", status: "pending" },
         ],
-        turn
-      }
+        turn,
+      },
     ]);
 
     await client.close();
@@ -5282,7 +5485,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const skills = await client.listSkills({
@@ -5322,15 +5525,15 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const created = await client.startThread({
-      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd"
+      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
     });
 
     expect(created).toEqual({
-      threadId: "thread-3"
+      threadId: "thread-3",
     });
 
     await client.close();
@@ -5350,7 +5553,10 @@ describe("CodexAppServerClient", () => {
     });
 
     const request = MockTransport.instances[0]?.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "thread/start");
     expect(request?.params).toMatchObject({
       cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
@@ -5391,7 +5597,10 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-fork",
     });
     const request = MockTransport.instances[0]?.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "thread/fork");
     expect(request?.params).toMatchObject({
       threadId: "thread-2",
@@ -5433,7 +5642,10 @@ describe("CodexAppServerClient", () => {
     });
 
     const request = MockTransport.instances[0]?.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "thread/fork");
     expect(request?.params).toMatchObject({
       threadId: "source-thread",
@@ -5474,7 +5686,10 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
     const startPayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "thread/start");
 
     expect(startPayload?.params).toMatchObject({
@@ -5521,7 +5736,10 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
     const startPayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "thread/start");
 
     expect(startPayload?.params).toMatchObject({
@@ -5552,7 +5770,10 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
     const startPayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "thread/start");
 
     expect(startPayload?.params).toMatchObject({
@@ -5696,23 +5917,29 @@ describe("CodexAppServerClient", () => {
       return payload.method;
     });
 
-    expect(rpcMethods.filter((method) => method === "turn/start")).toHaveLength(2);
-    expect(rpcMethods.filter((method) => method === "thread/resume")).toHaveLength(1);
+    expect(rpcMethods.filter((method) => method === "turn/start")).toHaveLength(
+      2,
+    );
+    expect(
+      rpcMethods.filter((method) => method === "thread/resume"),
+    ).toHaveLength(1);
     expect(rpcMethods.lastIndexOf("thread/resume")).toBeLessThan(
-      rpcMethods.lastIndexOf("turn/start")
+      rpcMethods.lastIndexOf("turn/start"),
     );
 
     await client.close();
   });
 
   it("sets placeholder Codex thread names through the app server before the first turn", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-session-index-"),
+    );
     MockTransport.threadStartResult = {
       thread: {
         id: "019dd225-74fb-7a83-b4e4-5970680d9382",
         path: path.join(
           tempDir,
-          "sessions/2026/04/27/rollout-2026-04-27T23-32-43-019dd225-74fb-7a83-b4e4-5970680d9382.jsonl"
+          "sessions/2026/04/27/rollout-2026-04-27T23-32-43-019dd225-74fb-7a83-b4e4-5970680d9382.jsonl",
         ),
         cwd: "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-moi2lzw4",
         preview: "",
@@ -5723,7 +5950,8 @@ describe("CodexAppServerClient", () => {
     };
 
     try {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } =
+        await import("../codex-app-server/client");
 
       const client = new CodexAppServerClient({
         command: "codex",
@@ -5746,7 +5974,10 @@ describe("CodexAppServerClient", () => {
 
       const transport = MockTransport.instances.at(-1);
       const nameRequests = transport?.sentMessages
-        .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+        .map(
+          (message) =>
+            JSON.parse(message) as { method?: string; params?: unknown },
+        )
         .filter((message) => message.method === "thread/name/set");
 
       expect(nameRequests).toEqual([
@@ -5789,14 +6020,19 @@ describe("CodexAppServerClient", () => {
 
     const transport = MockTransport.instances.at(-1);
     const nameRequests = transport?.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .filter((message) => message.method === "thread/name/set");
 
     expect(nameRequests).toEqual([]);
   });
 
   it("does not write the session index under CODEX_HOME from the client environment", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-session-index-"),
+    );
     const codexHome = path.join(tempDir, "codex-profile-home");
     const sessionIndexPath = path.join(codexHome, "session_index.jsonl");
     MockTransport.threadStartResult = {
@@ -5812,7 +6048,8 @@ describe("CodexAppServerClient", () => {
     };
 
     try {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } =
+        await import("../codex-app-server/client");
 
       const client = new CodexAppServerClient({
         command: "codex",
@@ -5829,7 +6066,10 @@ describe("CodexAppServerClient", () => {
 
       const transport = MockTransport.instances.at(-1);
       const nameRequest = transport?.sentMessages
-        .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+        .map(
+          (message) =>
+            JSON.parse(message) as { method?: string; params?: unknown },
+        )
         .find((message) => message.method === "thread/name/set");
 
       expect(nameRequest).toMatchObject({
@@ -5845,7 +6085,9 @@ describe("CodexAppServerClient", () => {
   });
 
   it("sets a derived Codex thread name when Codex returns the placeholder name", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-session-index-"),
+    );
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-placeholder-title",
@@ -5859,7 +6101,8 @@ describe("CodexAppServerClient", () => {
     };
 
     try {
-      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const { CodexAppServerClient } =
+        await import("../codex-app-server/client");
 
       const client = new CodexAppServerClient({
         command: "codex",
@@ -5873,7 +6116,10 @@ describe("CodexAppServerClient", () => {
 
       const transport = MockTransport.instances.at(-1);
       const nameRequest = transport?.sentMessages
-        .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+        .map(
+          (message) =>
+            JSON.parse(message) as { method?: string; params?: unknown },
+        )
         .find((message) => message.method === "thread/name/set");
 
       expect(nameRequest).toMatchObject({
@@ -5896,13 +6142,18 @@ describe("CodexAppServerClient", () => {
       directoryResolver: async () => [],
     });
 
-    await expect(client.archiveThread({ threadId: "thread-2" })).resolves.toEqual({
+    await expect(
+      client.archiveThread({ threadId: "thread-2" }),
+    ).resolves.toEqual({
       threadId: "thread-2",
     });
 
     const transport = MockTransport.instances.at(-1);
     const archiveRequest = transport?.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((message) => message.method === "thread/archive");
 
     expect(archiveRequest).toMatchObject({
@@ -5920,15 +6171,18 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notifications: Array<{
+      method: string;
+      params: Record<string, unknown>;
+    }> = [];
     client.onNotification((notification) => {
       notifications.push(
-        notification as { method: string; params: Record<string, unknown> }
+        notification as { method: string; params: Record<string, unknown> },
       );
     });
 
@@ -5975,16 +6229,21 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
-    await expect(client.restoreThread({ threadId: "thread-2" })).resolves.toEqual({
+    await expect(
+      client.restoreThread({ threadId: "thread-2" }),
+    ).resolves.toEqual({
       threadId: "thread-2",
     });
 
     const transport = MockTransport.instances.at(-1);
     const restoreRequest = transport?.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((message) => message.method === "thread/unarchive");
 
     expect(restoreRequest).toMatchObject({
@@ -6002,21 +6261,24 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await expect(
       client.renameThread({
         threadId: "thread-2",
         name: "Renamed desktop shell",
-      })
+      }),
     ).resolves.toEqual({
       threadId: "thread-2",
     });
 
     const transport = MockTransport.instances.at(-1);
     const renameRequest = transport?.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((message) => message.method === "thread/name/set");
 
     expect(renameRequest).toMatchObject({
@@ -6048,7 +6310,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
     const forwardedNotifications: string[] = [];
     client.onNotification((notification) => {
@@ -6138,9 +6400,17 @@ describe("CodexAppServerClient", () => {
     expect(forwardedNotifications).toEqual([]);
 
     const requests = transport!.sentMessages.map(
-      (message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> }
+      (message) =>
+        JSON.parse(message) as {
+          method?: string;
+          params?: Record<string, unknown>;
+        },
     );
-    const titleHelperWorkspace = path.join(os.tmpdir(), "pwragent", "codex-title-helper");
+    const titleHelperWorkspace = path.join(
+      os.tmpdir(),
+      "pwragent",
+      "codex-title-helper",
+    );
     expect(requests).toContainEqual(
       expect.objectContaining({
         method: "thread/start",
@@ -6162,7 +6432,7 @@ describe("CodexAppServerClient", () => {
             },
           },
         }),
-      })
+      }),
     );
     const threadStartRequests = requests.filter(
       (request) => request.method === "thread/start",
@@ -6188,7 +6458,7 @@ describe("CodexAppServerClient", () => {
             type: "object",
           }),
         }),
-      })
+      }),
     );
     expect(requests).not.toContainEqual(
       expect.objectContaining({
@@ -6196,7 +6466,7 @@ describe("CodexAppServerClient", () => {
         params: expect.objectContaining({
           threadId: "thread-title-helper",
         }),
-      })
+      }),
     );
 
     await client.close();
@@ -6220,7 +6490,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const titlePromise = client.generateTitle({
@@ -6317,7 +6587,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await expect(
@@ -6333,7 +6603,7 @@ describe("CodexAppServerClient", () => {
         },
         schemaName: "thread_title",
         timeoutMs: 5_000,
-      })
+      }),
     ).resolves.toEqual({
       status: "ok",
       object: {
@@ -6354,16 +6624,16 @@ describe("CodexAppServerClient", () => {
     MockTransport.readThreadErrorByThreadId.set("thread-empty", {
       code: -32600,
       message:
-        "thread 019d9901-ad06-7173-8df9-cd35c38d42ff is not materialized yet; includeTurns is unavailable before first user message"
+        "thread 019d9901-ad06-7173-8df9-cd35c38d42ff is not materialized yet; includeTurns is unavailable before first user message",
     });
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const replay = await client.readThread({
-      threadId: "thread-empty"
+      threadId: "thread-empty",
     });
 
     expect(replay).toEqual({
@@ -6371,8 +6641,8 @@ describe("CodexAppServerClient", () => {
       messages: [],
       pagination: {
         supportsPagination: false,
-        hasPreviousPage: false
-      }
+        hasPreviousPage: false,
+      },
     });
 
     await client.close();
@@ -6383,7 +6653,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const result = await client.startTurn({
@@ -6405,7 +6675,7 @@ describe("CodexAppServerClient", () => {
 
     expect(result).toEqual({
       threadId: "thread-2",
-      turnId: "turn-1"
+      turnId: "turn-1",
     });
 
     const transport = MockTransport.instances.at(-1);
@@ -6424,10 +6694,16 @@ describe("CodexAppServerClient", () => {
     expect(resumeIndex).toBeGreaterThan(-1);
     expect(startIndex).toBeGreaterThan(resumeIndex);
     const resumePayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "thread/resume");
     const turnStartPayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "turn/start");
     expect(resumePayload?.params).toMatchObject({
       threadId: "thread-2",
@@ -6474,10 +6750,16 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
     const resumePayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "thread/resume");
     const turnStartPayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "turn/start");
 
     expect(resumePayload?.params).toMatchObject({
@@ -6531,10 +6813,16 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
     const resumePayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "thread/resume");
     const turnPayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "turn/start");
 
     expect(resumePayload?.params).toMatchObject({
@@ -6553,7 +6841,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.startTurn({
@@ -6676,7 +6964,13 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
     const turnStartPayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: { input?: unknown } })
+      .map(
+        (message) =>
+          JSON.parse(message) as {
+            method?: string;
+            params?: { input?: unknown };
+          },
+      )
       .find((payload) => payload.method === "turn/start");
     expect(turnStartPayload?.params?.input).toEqual([
       {
@@ -6707,7 +7001,10 @@ describe("CodexAppServerClient", () => {
     expect(transport).toBeDefined();
 
     const turnStartPayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "turn/start");
     expect(turnStartPayload?.params).toMatchObject({
       threadId: "thread-mode-toggle",
@@ -6743,7 +7040,10 @@ describe("CodexAppServerClient", () => {
     expect(transport).toBeDefined();
 
     const turnStartPayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "turn/start");
     expect(turnStartPayload?.params).toMatchObject({
       threadId: "thread-full-access",
@@ -6783,7 +7083,10 @@ describe("CodexAppServerClient", () => {
 
     const transport = MockTransport.instances.at(-1);
     const turnStartPayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "turn/start");
     expect(turnStartPayload?.params).toMatchObject({
       threadId: "thread-resume-fails",
@@ -6799,7 +7102,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const result = await client.startReview({
@@ -6830,9 +7133,11 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
     const requests = transport!.sentMessages.map(
-      (message) => JSON.parse(message) as { method?: string; params?: unknown }
+      (message) => JSON.parse(message) as { method?: string; params?: unknown },
     );
-    expect(requests.map((request) => request.method)).toContain("thread/resume");
+    expect(requests.map((request) => request.method)).toContain(
+      "thread/resume",
+    );
     expect(requests).toContainEqual(
       expect.objectContaining({
         method: "thread/resume",
@@ -6841,7 +7146,7 @@ describe("CodexAppServerClient", () => {
           model: "gpt-5.5",
           serviceTier: "priority",
           cwd: "/Users/example/project",
-          "config": {
+          config: {
             fast_mode: true,
             "shell_environment_policy.set.PATH":
               "/Users/example/project/.venv/bin:/usr/bin",
@@ -6870,7 +7175,7 @@ describe("CodexAppServerClient", () => {
           target: { type: "baseBranch", branch: "main" },
           delivery: "inline",
         },
-      })
+      }),
     );
 
     await client.close();
@@ -6884,7 +7189,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await expect(
@@ -6892,7 +7197,7 @@ describe("CodexAppServerClient", () => {
         threadId: "thread-2",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
-      })
+      }),
     ).rejects.toThrow("codex app server review/start did not return turnId");
 
     await client.close();
@@ -6902,15 +7207,15 @@ describe("CodexAppServerClient", () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadResumeResult = {
       thread: {
-        id: "thread-2"
+        id: "thread-2",
       },
       model: "gpt-5.4",
-      reasoningEffort: "high"
+      reasoningEffort: "high",
     };
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const result = await client.startTurn({
@@ -6919,27 +7224,30 @@ describe("CodexAppServerClient", () => {
       collaborationMode: {
         mode: "plan",
         settings: {
-          developerInstructions: null
-        }
-      }
+          developerInstructions: null,
+        },
+      },
     });
 
     expect(result).toEqual({
       threadId: "thread-2",
-      turnId: "turn-1"
+      turnId: "turn-1",
     });
 
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
     const startPayload = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .map(
+        (message) =>
+          JSON.parse(message) as { method?: string; params?: unknown },
+      )
       .find((payload) => payload.method === "turn/start");
 
     expect(startPayload?.params).toMatchObject({
       threadId: "thread-2",
       input: [{ type: "text", text: "Plan the fix" }],
       model: "gpt-5.4",
-      effort: "high"
+      effort: "high",
     });
 
     await client.close();
@@ -6951,18 +7259,18 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const result = await client.startTurn({
       threadId: "thread-2",
       input: [{ type: "text", text: "Reply even if turn/start omits ids" }],
-      model: "gpt-5.4"
+      model: "gpt-5.4",
     });
 
     expect(result).toEqual({
       threadId: "thread-2",
-      turnId: "pending:thread-2"
+      turnId: "pending:thread-2",
     });
 
     await client.close();
@@ -6972,23 +7280,23 @@ describe("CodexAppServerClient", () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.turnStartResult = {
       threadId: "thread-2",
-      runId: "turn-legacy"
+      runId: "turn-legacy",
     };
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const result = await client.startTurn({
       threadId: "thread-2",
       input: [{ type: "text", text: "Reply with the legacy id" }],
-      model: "gpt-5.4"
+      model: "gpt-5.4",
     });
 
     expect(result).toEqual({
       threadId: "thread-2",
-      turnId: "turn-legacy"
+      turnId: "turn-legacy",
     });
 
     await client.close();
@@ -6999,17 +7307,17 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     const result = await client.interruptTurn({
       threadId: "thread-2",
-      turnId: "turn-1"
+      turnId: "turn-1",
     });
 
     expect(result).toEqual({
       threadId: "thread-2",
-      turnId: "turn-1"
+      turnId: "turn-1",
     });
 
     const transport = MockTransport.instances.at(-1);
@@ -7038,17 +7346,17 @@ describe("CodexAppServerClient", () => {
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
-      requestTimeoutMs: 10
+      requestTimeoutMs: 10,
     });
 
     await expect(
       client.interruptTurn({
         threadId: "thread-2",
-        turnId: "turn-1"
-      })
+        turnId: "turn-1",
+      }),
     ).resolves.toEqual({
       threadId: "thread-2",
-      turnId: "turn-1"
+      turnId: "turn-1",
     });
 
     await client.close();
@@ -7059,18 +7367,21 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const requests: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
     client.onRequest((request) => {
-      requests.push(request as { method: string; params: Record<string, unknown> });
+      requests.push(
+        request as { method: string; params: Record<string, unknown> },
+      );
       return {
         action: "accept",
         content: {},
-        _meta: null
+        _meta: null,
       };
     });
 
@@ -7090,21 +7401,21 @@ describe("CodexAppServerClient", () => {
           codex_approval_kind: "mcp_tool_call",
           tool_description: "List, create, close, or select a browser tab.",
           tool_params: {
-            action: "list"
+            action: "list",
           },
           tool_params_display: [
             {
               label: "action",
-              value: "list"
-            }
-          ]
+              value: "list",
+            },
+          ],
         },
-        message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+        message: 'Allow the playwright MCP server to run tool "browser_tabs"?',
         requestedSchema: {
           type: "object",
-          properties: {}
-        }
-      }
+          properties: {},
+        },
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -7118,29 +7429,32 @@ describe("CodexAppServerClient", () => {
           requestId: "0",
           serverName: "playwright",
           mode: "form",
-          message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+          message:
+            'Allow the playwright MCP server to run tool "browser_tabs"?',
           requestedSchema: {
             type: "object",
-            properties: {}
+            properties: {},
           },
           _meta: expect.objectContaining({
-            tool_description: "List, create, close, or select a browser tab."
-          })
-        })
-      }
+            tool_description: "List, create, close, or select a browser tab.",
+          }),
+        }),
+      },
     ]);
     expect(
       transport!.sentMessages
-        .map((message) => JSON.parse(message) as { id?: string; result?: unknown })
-        .find((message) => message.id === "0")
+        .map(
+          (message) => JSON.parse(message) as { id?: string; result?: unknown },
+        )
+        .find((message) => message.id === "0"),
     ).toEqual({
       jsonrpc: "2.0",
       id: "0",
       result: {
         action: "accept",
         content: {},
-        _meta: null
-      }
+        _meta: null,
+      },
     });
 
     await client.close();
@@ -7151,18 +7465,21 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const requests: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
     client.onRequest((request) => {
-      requests.push(request as { method: string; params: Record<string, unknown> });
+      requests.push(
+        request as { method: string; params: Record<string, unknown> },
+      );
       return {
         action: "cancel",
         content: null,
-        _meta: null
+        _meta: null,
       };
     });
 
@@ -7181,8 +7498,8 @@ describe("CodexAppServerClient", () => {
         _meta: null,
         message: "Authorize GitHub access in the browser.",
         url: "https://example.test/oauth/start?state=secret-state",
-        elicitationId: "elicitation-1"
-      }
+        elicitationId: "elicitation-1",
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -7199,9 +7516,9 @@ describe("CodexAppServerClient", () => {
           message: "Authorize GitHub access in the browser.",
           url: "https://example.test/oauth/start?state=secret-state",
           elicitationId: "elicitation-1",
-          _meta: null
-        })
-      }
+          _meta: null,
+        }),
+      },
     ]);
 
     await client.close();
@@ -7212,14 +7529,17 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const requests: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
     client.onRequest((request) => {
-      requests.push(request as { method: string; params: Record<string, unknown> });
+      requests.push(
+        request as { method: string; params: Record<string, unknown> },
+      );
       return { decision: "decline" };
     });
 
@@ -7232,14 +7552,14 @@ describe("CodexAppServerClient", () => {
       method: "turn/requestApproval",
       params: {
         thread: {
-          id: "thread-2"
+          id: "thread-2",
         },
         turn: {
-          id: "turn-7"
+          id: "turn-7",
         },
         reason: "command requires approval: npm view dive",
-        command: "npm view dive"
-      }
+        command: "npm view dive",
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -7252,9 +7572,9 @@ describe("CodexAppServerClient", () => {
           turnId: "turn-7",
           requestId: "rpc-approval-1",
           reason: "command requires approval: npm view dive",
-          command: "npm view dive"
-        })
-      }
+          command: "npm view dive",
+        }),
+      },
     ]);
 
     await client.close();
@@ -7265,14 +7585,17 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
     });
 
     await client.getInitializeResult();
 
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const requests: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
     client.onRequest((request) => {
-      requests.push(request as { method: string; params: Record<string, unknown> });
+      requests.push(
+        request as { method: string; params: Record<string, unknown> },
+      );
       return { decision: "decline" };
     });
 
@@ -7290,8 +7613,8 @@ describe("CodexAppServerClient", () => {
         command: ["date"],
         cwd: "/tmp",
         reason: "requires approval",
-        parsedCmd: []
-      }
+        parsedCmd: [],
+      },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -7307,12 +7630,11 @@ describe("CodexAppServerClient", () => {
           command: ["date"],
           cwd: "/tmp",
           reason: "requires approval",
-          parsedCmd: []
-        })
-      }
+          parsedCmd: [],
+        }),
+      },
     ]);
 
     await client.close();
   });
-
 });

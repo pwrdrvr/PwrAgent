@@ -57,7 +57,11 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
         >
           <CloseIcon size={18} aria-hidden="true" />
         </button>
-        <TranscriptImage className="image-lightbox__image" src={src} alt={alt} />
+        <TranscriptImage
+          className="image-lightbox__image"
+          src={src}
+          alt={alt}
+        />
       </div>
     </div>,
     document.body,

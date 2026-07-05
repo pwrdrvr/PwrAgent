@@ -53,14 +53,22 @@ describe("SqliteOverlayStore — turn failure log", () => {
     await store.appendTurnFailure({
       backend: "codex",
       threadId: "thread-1",
-      failure: buildFailure({ id: "entry-1", turnId: "turn-1", occurredAt: 1000 }),
+      failure: buildFailure({
+        id: "entry-1",
+        turnId: "turn-1",
+        occurredAt: 1000,
+      }),
     });
     // Re-observe the same turn failure (reconnect / replay) — must NOT add
     // a second entry and must keep the first-seen timestamp.
     await store.appendTurnFailure({
       backend: "codex",
       threadId: "thread-1",
-      failure: buildFailure({ id: "entry-2", turnId: "turn-1", occurredAt: 9999 }),
+      failure: buildFailure({
+        id: "entry-2",
+        turnId: "turn-1",
+        occurredAt: 9999,
+      }),
     });
 
     const overlay = await store.getThreadOverlayState({
@@ -152,7 +160,9 @@ describe("SqliteOverlayStore — turn failure log", () => {
       threadId: "thread-1",
     });
 
-    expect(codex?.turnFailureLog?.map((entry) => entry.id)).toEqual(["codex-1"]);
+    expect(codex?.turnFailureLog?.map((entry) => entry.id)).toEqual([
+      "codex-1",
+    ]);
     expect(grok?.turnFailureLog?.map((entry) => entry.id)).toEqual(["grok-1"]);
   });
 });

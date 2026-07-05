@@ -1,9 +1,16 @@
-import type { AppServerBackendKind, ThreadIdentifier } from "./normalized-app-server";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "./normalized-app-server";
 import type { NavigationLaunchpadImageAttachment } from "./navigation";
 
 export type ComposerDraftScopeKind = "thread" | "launchpad" | "empty";
 
-export type ComposerDraftLifecycle = "unsent" | "sent" | "abandoned" | "cleared";
+export type ComposerDraftLifecycle =
+  | "unsent"
+  | "sent"
+  | "abandoned"
+  | "cleared";
 
 export type ComposerDraftJsonValue =
   | null

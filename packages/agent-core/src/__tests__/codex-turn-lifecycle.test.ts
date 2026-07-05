@@ -4,13 +4,20 @@ import type {
   ProviderActiveTurn,
   ProviderTurnParams,
 } from "../providers/provider-contract.js";
-import { createTestHarness, Deferred, FakeProvider } from "../testing/test-harness.js";
+import {
+  createTestHarness,
+  Deferred,
+  FakeProvider,
+} from "../testing/test-harness.js";
 
 describe("Codex turn lifecycle", () => {
   it("starts a turn, preserves mixed input, and emits a completion notification", async () => {
     const provider = new FakeProvider();
     const { server, notifications } = createTestHarness({ provider });
-    await server.request("thread/start", { cwd: "/repo/workspace", model: "grok-4.20-reasoning" });
+    await server.request("thread/start", {
+      cwd: "/repo/workspace",
+      model: "grok-4.20-reasoning",
+    });
 
     const started = await server.request("turn/start", {
       threadId: "thread-1",
@@ -96,7 +103,9 @@ describe("Codex turn lifecycle", () => {
         threadId: "thread-1",
         input: [{ type: "text", text: "Overlapping turn" }],
       }),
-    ).rejects.toThrow("Thread already has an active turn in progress: thread-1");
+    ).rejects.toThrow(
+      "Thread already has an active turn in progress: thread-1",
+    );
     expect(provider.runs).toHaveLength(1);
 
     provider.runs[0]?.deferred.resolve({

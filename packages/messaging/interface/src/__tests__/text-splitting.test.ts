@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  measureMessageText,
-  splitTextForDelivery,
-} from "../text-splitting";
+import { measureMessageText, splitTextForDelivery } from "../text-splitting";
 
 const size = (s: string) => s.length;
 const bytes = (s: string) => Buffer.byteLength(s, "utf8");
@@ -14,7 +11,9 @@ describe("splitTextForDelivery", () => {
 
   it("returns the text unchanged when it fits", () => {
     expect(splitTextForDelivery("short", { limit: 10 })).toEqual(["short"]);
-    expect(splitTextForDelivery("exactly-10", { limit: 10 })).toEqual(["exactly-10"]);
+    expect(splitTextForDelivery("exactly-10", { limit: 10 })).toEqual([
+      "exactly-10",
+    ]);
   });
 
   it("keeps every chunk within the limit", () => {
@@ -49,7 +48,9 @@ describe("splitTextForDelivery", () => {
       expect(chunk).not.toMatch(/\s$/);
     }
     // Reassembling with single spaces recovers the words in order.
-    expect(chunks.join(" ").replace(/\s+/g, " ")).toBe(text.replace(/\s+/g, " "));
+    expect(chunks.join(" ").replace(/\s+/g, " ")).toBe(
+      text.replace(/\s+/g, " "),
+    );
   });
 
   it("hard-splits an unbroken run with no boundary", () => {

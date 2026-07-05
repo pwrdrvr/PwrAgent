@@ -11,7 +11,9 @@ let oldestEntryIndex = 0;
 let bufferedEntryCount = 0;
 let droppedEntries = 0;
 
-export function appendAppLogEntry(entry: Omit<AppLogEntry, "sequence">): AppLogEntry {
+export function appendAppLogEntry(
+  entry: Omit<AppLogEntry, "sequence">,
+): AppLogEntry {
   const stored: AppLogEntry = {
     ...entry,
     sequence: nextSequence,
@@ -48,7 +50,9 @@ export function readAppLogSnapshot(options?: {
   };
 }
 
-export function subscribeAppLogEntries(listener: AppLogEntryListener): () => void {
+export function subscribeAppLogEntries(
+  listener: AppLogEntryListener,
+): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);

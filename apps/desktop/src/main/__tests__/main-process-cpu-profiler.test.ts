@@ -56,7 +56,9 @@ describe("MainProcessCpuProfiler", () => {
         if (method === "Profiler.stop") {
           return {
             profile: {
-              nodes: [{ id: 1, callFrame: { functionName: "(root)", url: "" } }],
+              nodes: [
+                { id: 1, callFrame: { functionName: "(root)", url: "" } },
+              ],
               samples: [],
               timeDeltas: [],
             },
@@ -149,9 +151,7 @@ describe("MainProcessCpuProfiler", () => {
     await profiler.start();
     await expect(profiler.stop("startup-window-complete")).resolves.toBe(false);
 
-    const events = (
-      await fs.readFile(sessionResult.session.eventsPath, "utf8")
-    )
+    const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));

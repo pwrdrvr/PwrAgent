@@ -5,12 +5,12 @@ import type {
   FocusedDiffAnalysisResponse,
   FocusedDiffHunkDecision,
   FocusedDiffHunkSummary,
-  FocusedDiffReasonCode
+  FocusedDiffReasonCode,
 } from "@pwragent/shared";
 import {
   getFocusedDiffEligibility,
   parseUnifiedDiff,
-  summarizeHunksForFocus
+  summarizeHunksForFocus,
 } from "../../shared/diff-focus";
 import {
   XaiEphemeralObjectCaller,
@@ -30,7 +30,7 @@ const FOCUSED_DIFF_REASON_CODES = [
   "keep",
   "mechanical_small_change",
   "repetitive_small_change",
-  "uncertain"
+  "uncertain",
 ] as const satisfies readonly FocusedDiffReasonCode[];
 
 const HIDEABLE_REASON_CODES = new Set<FocusedDiffReasonCode>([
@@ -38,7 +38,7 @@ const HIDEABLE_REASON_CODES = new Set<FocusedDiffReasonCode>([
   "formatting_only",
   "import_reorder",
   "mechanical_small_change",
-  "repetitive_small_change"
+  "repetitive_small_change",
 ]);
 
 const FOCUSED_DIFF_RESPONSE_SCHEMA = {
@@ -51,24 +51,30 @@ const FOCUSED_DIFF_RESPONSE_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["index", "disposition", "reasonCode", "reason", "confidence"],
+        required: [
+          "index",
+          "disposition",
+          "reasonCode",
+          "reason",
+          "confidence",
+        ],
         properties: {
           index: { type: "integer", minimum: 0 },
           disposition: { type: "string", enum: ["show", "hide"] },
           reasonCode: { type: "string", enum: FOCUSED_DIFF_REASON_CODES },
           reason: { type: "string", minLength: 1 },
-          confidence: { type: "number", minimum: 0, maximum: 1 }
-        }
-      }
-    }
-  }
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+        },
+      },
+    },
+  },
 } as const;
 
 const FOCUSED_DIFF_SYSTEM_PROMPT = [
   "You classify unified diff hunks for a zoomed-out code review view.",
   "Hide only clearly low-signal hunks such as comment-only edits, formatting-only edits, import reorders, or repetitive tiny mechanical changes.",
   "Show hunks when they alter logic, data flow, behavior, interfaces, tests, or anything uncertain.",
-  "Return JSON that matches the schema exactly."
+  "Return JSON that matches the schema exactly.",
 ].join("\n");
 
 type FocusedDiffServiceOptions = {
@@ -89,7 +95,8 @@ export class FocusedDiffService {
 
   constructor(options: FocusedDiffServiceOptions = {}) {
     this.configuredModel = options.model?.trim() || undefined;
-    this.promptVersion = options.promptVersion?.trim() || FOCUSED_DIFF_PROMPT_VERSION;
+    this.promptVersion =
+      options.promptVersion?.trim() || FOCUSED_DIFF_PROMPT_VERSION;
     this.timeoutMs = options.timeoutMs ?? FOCUSED_DIFF_TIMEOUT_MS;
     this.objectCaller = new XaiEphemeralObjectCaller({
       apiKey: options.apiKey,
@@ -100,7 +107,7 @@ export class FocusedDiffService {
   }
 
   async analyze(
-    request: FocusedDiffAnalysisRequest
+    request: FocusedDiffAnalysisRequest,
   ): Promise<FocusedDiffAnalysisResponse> {
     const parsed = parseUnifiedDiff(request.diff);
     const decisions = createDefaultDecisions(parsed.hunks.length);
@@ -113,7 +120,7 @@ export class FocusedDiffService {
         hiddenHunkIndices: [],
         hiddenHunkCount: 0,
         decisions,
-        reason: eligibility.reason
+        reason: eligibility.reason,
       };
     }
 
@@ -124,14 +131,14 @@ export class FocusedDiffService {
     const cacheKey = buildFocusedDiffCacheKey(
       this.promptVersion,
       request.filePath,
-      request.diff
+      request.diff,
     );
     const cached = this.cache.get(cacheKey);
 
     if (cached) {
       return {
         ...cached,
-        source: "cache"
+        source: "cache",
       };
     }
 
@@ -142,7 +149,10 @@ export class FocusedDiffService {
     }
 
     try {
-      const response = await this.requestFocusedDiffDecision(request.filePath, hunks);
+      const response = await this.requestFocusedDiffDecision(
+        request.filePath,
+        hunks,
+      );
       const result = normalizeFocusedDiffResult(response, parsed.hunks.length);
       const analysis: FocusedDiffAnalysisResponse = {
         mode: result.hiddenHunkIndices.length > 0 ? "focused" : "fallback",
@@ -151,21 +161,23 @@ export class FocusedDiffService {
         hiddenHunkCount: result.hiddenHunkIndices.length,
         decisions: result.decisions,
         cachedTokens: response.cachedTokens,
-        ...(result.hiddenHunkIndices.length === 0 ? { reason: "no_hideable_hunks" } : {})
+        ...(result.hiddenHunkIndices.length === 0
+          ? { reason: "no_hideable_hunks" }
+          : {}),
       };
       this.cache.set(cacheKey, analysis);
       return analysis;
     } catch (error) {
       return this.buildFallbackResponse(
         decisions,
-        error instanceof Error ? error.message : "grok_request_failed"
+        error instanceof Error ? error.message : "grok_request_failed",
       );
     }
   }
 
   private buildFallbackResponse(
     decisions: FocusedDiffHunkDecision[],
-    reason: string
+    reason: string,
   ): FocusedDiffAnalysisResponse {
     return {
       mode: "fallback",
@@ -173,7 +185,7 @@ export class FocusedDiffService {
       hiddenHunkIndices: [],
       hiddenHunkCount: 0,
       decisions,
-      reason
+      reason,
     };
   }
 
@@ -183,13 +195,13 @@ export class FocusedDiffService {
 
   private async requestFocusedDiffDecision(
     filePath: string | undefined,
-    hunks: FocusedDiffHunkSummary[]
+    hunks: FocusedDiffHunkSummary[],
   ): Promise<XaiAiSdkObjectResult> {
     const result = await this.objectCaller.generateObject({
       model: this.getModel(),
       promptCacheKey: this.promptVersion,
       headers: {
-        "x-grok-conv-id": this.promptVersion
+        "x-grok-conv-id": this.promptVersion,
       },
       timeoutMs: this.timeoutMs,
       schema: FOCUSED_DIFF_RESPONSE_SCHEMA,
@@ -197,31 +209,37 @@ export class FocusedDiffService {
       system: FOCUSED_DIFF_SYSTEM_PROMPT,
       prompt: JSON.stringify({
         filePath,
-        hunks
-      })
+        hunks,
+      }),
     });
 
     if (result.status === "ok") {
       return result.response;
     }
 
-    throw new Error(result.status === "unavailable" ? "grok_unavailable" : result.reason);
+    throw new Error(
+      result.status === "unavailable" ? "grok_unavailable" : result.reason,
+    );
   }
 }
 
 function normalizeFocusedDiffResult(
   response: XaiAiSdkObjectResult,
-  hunkCount: number
+  hunkCount: number,
 ): { decisions: FocusedDiffHunkDecision[]; hiddenHunkIndices: number[] } {
   const parsed = response.object;
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("invalid structured diff response: decisions payload must be an object");
+    throw new Error(
+      "invalid structured diff response: decisions payload must be an object",
+    );
   }
 
   const record = parsed as { decisions?: unknown };
   if (!Array.isArray(record.decisions)) {
-    throw new Error("invalid structured diff response: decisions must be an array");
+    throw new Error(
+      "invalid structured diff response: decisions must be an array",
+    );
   }
 
   const decisions = createDefaultDecisions(hunkCount);
@@ -239,13 +257,13 @@ function normalizeFocusedDiffResult(
 
   return {
     decisions,
-    hiddenHunkIndices
+    hiddenHunkIndices,
   };
 }
 
 function normalizeModelDecision(
   value: unknown,
-  hunkCount: number
+  hunkCount: number,
 ): FocusedDiffHunkDecision | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -262,16 +280,16 @@ function normalizeModelDecision(
   const confidence = clampConfidence(record.confidence);
   const requestedDisposition = record.disposition === "hide" ? "hide" : "show";
   const canHide =
-    requestedDisposition === "hide" &&
-    confidence >= MIN_HIDE_CONFIDENCE &&
-    HIDEABLE_REASON_CODES.has(reasonCode);
+    requestedDisposition === "hide"
+    && confidence >= MIN_HIDE_CONFIDENCE
+    && HIDEABLE_REASON_CODES.has(reasonCode);
 
   return {
     index,
     disposition: canHide ? "hide" : "show",
     reasonCode: canHide ? reasonCode : "keep",
     reason: reason || "Keep visible",
-    confidence
+    confidence,
   };
 }
 
@@ -281,12 +299,12 @@ function createDefaultDecisions(hunkCount: number): FocusedDiffHunkDecision[] {
     disposition: "show",
     reasonCode: "keep",
     reason: "Keep visible",
-    confidence: 1
+    confidence: 1,
   }));
 }
 
 function readFocusedDiffTestOverride(
-  hunkCount: number
+  hunkCount: number,
 ): FocusedDiffAnalysisResponse | null {
   const rawValue = process.env[FOCUSED_DIFF_TEST_RESPONSE_ENV]?.trim();
   if (!rawValue) {
@@ -300,12 +318,14 @@ function readFocusedDiffTestOverride(
     throw new Error(
       `${FOCUSED_DIFF_TEST_RESPONSE_ENV} must be valid JSON: ${
         error instanceof Error ? error.message : String(error)
-      }`
+      }`,
     );
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${FOCUSED_DIFF_TEST_RESPONSE_ENV} must decode to an object`);
+    throw new Error(
+      `${FOCUSED_DIFF_TEST_RESPONSE_ENV} must decode to an object`,
+    );
   }
 
   const record = parsed as {
@@ -315,14 +335,16 @@ function readFocusedDiffTestOverride(
   const hiddenHunkIndices = Array.isArray(record.hiddenHunkIndices)
     ? record.hiddenHunkIndices.filter(
         (value): value is number =>
-          typeof value === "number" &&
-          Number.isInteger(value) &&
-          value >= 0 &&
-          value < hunkCount
+          typeof value === "number"
+          && Number.isInteger(value)
+          && value >= 0
+          && value < hunkCount,
       )
     : [];
   const hiddenHunkIndexSet = new Set(hiddenHunkIndices);
-  const decisions: FocusedDiffHunkDecision[] = createDefaultDecisions(hunkCount).map(
+  const decisions: FocusedDiffHunkDecision[] = createDefaultDecisions(
+    hunkCount,
+  ).map(
     (decision): FocusedDiffHunkDecision =>
       hiddenHunkIndexSet.has(decision.index)
         ? {
@@ -330,9 +352,9 @@ function readFocusedDiffTestOverride(
             disposition: "hide",
             reasonCode: "comment_only",
             reason: "Hidden by focused diff test override",
-            confidence: 1
+            confidence: 1,
           }
-        : decision
+        : decision,
   );
 
   return {
@@ -343,14 +365,14 @@ function readFocusedDiffTestOverride(
     decisions,
     ...(typeof record.reason === "string" && record.reason.trim()
       ? { reason: record.reason.trim() }
-      : {})
+      : {}),
   };
 }
 
 function buildFocusedDiffCacheKey(
   promptVersion: string,
   filePath: string | undefined,
-  diff: string
+  diff: string,
 ): string {
   return createHash("sha256")
     .update(promptVersion)
@@ -362,7 +384,10 @@ function buildFocusedDiffCacheKey(
 }
 
 function asFocusedReasonCode(value: unknown): FocusedDiffReasonCode {
-  if (typeof value === "string" && FOCUSED_DIFF_REASON_CODES.includes(value as never)) {
+  if (
+    typeof value === "string"
+    && FOCUSED_DIFF_REASON_CODES.includes(value as never)
+  ) {
     return value as FocusedDiffReasonCode;
   }
 

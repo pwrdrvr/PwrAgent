@@ -12,7 +12,8 @@ import { ProjectPicker } from "../ProjectPicker";
 
 afterEach(() => {
   cleanup();
-  delete (window as unknown as { __pwragentHomeDir?: unknown }).__pwragentHomeDir;
+  delete (window as unknown as { __pwragentHomeDir?: unknown })
+    .__pwragentHomeDir;
 });
 
 const dirA: NavigationDirectorySummary = {
@@ -271,7 +272,9 @@ describe("ProjectPicker", () => {
 
     // No value set → the launchpad is directory-less, so the row is active.
     fireEvent.click(screen.getByRole("button", { name: /choose a project/i }));
-    const row = screen.getByRole("button", { name: /chat without a directory/i });
+    const row = screen.getByRole("button", {
+      name: /chat without a directory/i,
+    });
     expect(row).toHaveAttribute("aria-pressed", "true");
     expect(row.className).toContain("is-active");
 

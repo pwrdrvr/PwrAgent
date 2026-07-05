@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAutomationCardActivityEntries } from "../automation-card-entries";
 import { TranscriptList } from "../TranscriptList";
@@ -43,7 +50,7 @@ describe("TranscriptList", () => {
     scrollToMock = vi.fn(function scrollTo(
       this: HTMLElement,
       options?: number | ScrollToOptions,
-      y?: number
+      y?: number,
     ) {
       if (typeof options === "number") {
         this.scrollTop = y ?? 0;
@@ -57,28 +64,28 @@ describe("TranscriptList", () => {
       configurable: true,
       get() {
         return scrollHeight;
-      }
+      },
     });
 
     Object.defineProperty(HTMLElement.prototype, "clientHeight", {
       configurable: true,
       get() {
         return clientHeight;
-      }
+      },
     });
 
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
       configurable: true,
       get() {
         return clientWidth;
-      }
+      },
     });
 
     Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
       configurable: true,
       get() {
         return offsetWidth;
-      }
+      },
     });
 
     Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
@@ -95,23 +102,23 @@ describe("TranscriptList", () => {
           y: 0,
           toJSON: () => undefined,
         };
-      }
+      },
     });
 
     Object.defineProperty(HTMLElement.prototype, "scrollTo", {
       configurable: true,
-      value: scrollToMock
+      value: scrollToMock,
     });
 
     createObjectURLMock = vi.fn(() => "blob:transcript-image");
     revokeObjectURLMock = vi.fn();
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
-      value: createObjectURLMock
+      value: createObjectURLMock,
     });
     Object.defineProperty(URL, "revokeObjectURL", {
       configurable: true,
-      value: revokeObjectURLMock
+      value: revokeObjectURLMock,
     });
   });
 
@@ -140,12 +147,14 @@ describe("TranscriptList", () => {
           },
         ]}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.queryByText("No thread history yet.")).not.toBeInTheDocument();
     expect(
-      screen.getByText("Channel bound: Telegram - PwrDrvr / PwrDrvr/Topic")
+      screen.queryByText("No thread history yet."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Channel bound: Telegram - PwrDrvr / PwrDrvr/Topic"),
     ).toBeInTheDocument();
   });
 
@@ -159,7 +168,7 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)\n\n- **Check Unit 4**\n- Keep Unit 3 isolated"
+            text: "Open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)\n\n- **Check Unit 4**\n- Keep Unit 3 isolated",
           },
           {
             type: "activity",
@@ -169,70 +178,82 @@ describe("TranscriptList", () => {
               {
                 id: "detail-1",
                 kind: "read",
-                label: "Read TranscriptList.tsx"
+                label: "Read TranscriptList.tsx",
               },
               {
                 id: "detail-2",
                 kind: "read",
-                label: "Read ThreadView.tsx"
+                label: "Read ThreadView.tsx",
               },
               {
                 id: "detail-3",
                 kind: "command",
-                label: "pwd && rg --files"
-              }
-            ]
+                label: "pwd && rg --files",
+              },
+            ],
           },
           {
             type: "message",
             id: "message-2",
             role: "assistant",
-            text: "The desktop shell is live.\n\nRun `pnpm test -- --project desktop-renderer` next."
-          }
+            text: "The desktop shell is live.\n\nRun `pnpm test -- --project desktop-renderer` next.",
+          },
         ]}
         loading={false}
         loadingMore={false}
         pagination={{
           supportsPagination: true,
           hasPreviousPage: true,
-          previousCursor: "cursor-1"
+          previousCursor: "cursor-1",
         }}
         threadId="thread-1"
         onLoadOlder={loadOlder}
-      />
+      />,
     );
 
     expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
       "href",
-      "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
+      "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md",
     );
-    expect(screen.getByText("Check Unit 4", { selector: "strong" })).toBeInTheDocument();
-    expect(screen.getByText("Keep Unit 3 isolated")).toBeInTheDocument();
-    expect(screen.getByText("pnpm test -- --project desktop-renderer")).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "ce:work" }).closest("article")
+      screen.getByText("Check Unit 4", { selector: "strong" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Keep Unit 3 isolated")).toBeInTheDocument();
+    expect(
+      screen.getByText("pnpm test -- --project desktop-renderer"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "ce:work" }).closest("article"),
     ).toHaveClass("transcript-message--user");
     expect(
-      screen.getByText("pnpm test -- --project desktop-renderer").closest("article")
+      screen
+        .getByText("pnpm test -- --project desktop-renderer")
+        .closest("article"),
     ).toHaveClass("transcript-message--assistant");
-    expect(screen.getByText("Explored 2 files, ran 1 command")).toBeInTheDocument();
-    expect(screen.queryByText("Read TranscriptList.tsx")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Explored 2 files, ran 1 command"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Read TranscriptList.tsx"),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("Read ThreadView.tsx")).not.toBeInTheDocument();
     expect(screen.queryByText("pwd && rg --files")).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: /Explored 2 files, ran 1 command/i })
+      screen.getByRole("button", { name: /Explored 2 files, ran 1 command/i }),
     );
 
     expect(screen.getByText("Read TranscriptList.tsx")).toBeInTheDocument();
     expect(screen.getByText("Read ThreadView.tsx")).toBeInTheDocument();
     expect(screen.getByText("pwd && rg --files")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Load older messages" }),
+    );
 
     expect(loadOlder).toHaveBeenCalledTimes(1);
     expect(
-      screen.queryByRole("button", { name: "Jump to latest message" })
+      screen.queryByRole("button", { name: "Jump to latest message" }),
     ).not.toBeInTheDocument();
   });
 
@@ -259,19 +280,21 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     fireEvent.click(
       screen.getByRole("button", {
         name: /Automation - Daily health: found actionable outliers/i,
-      })
+      }),
     );
 
-    expect(container.querySelector("table.thread-markdown__table")).toBeInTheDocument();
+    expect(
+      container.querySelector("table.thread-markdown__table"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Priority")).toBeInTheDocument();
     expect(screen.getByText("transcoding-worker")).toHaveClass(
-      "transcript-message__code"
+      "transcript-message__code",
     );
     expect(screen.queryByText(automationMarkdown)).not.toBeInTheDocument();
   });
@@ -286,21 +309,21 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Load [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md) and **keep** the current styling."
+            text: "Load [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md) and **keep** the current styling.",
           },
           {
             type: "message",
             id: "message-2",
             role: "assistant",
-            text: "The desktop shell is live and listing Codex threads."
-          }
+            text: "The desktop shell is live and listing Codex threads.",
+          },
         ]}
         loading={false}
         loadingMore={false}
         pagination={{
           supportsPagination: true,
           hasPreviousPage: true,
-          previousCursor: "cursor-1"
+          previousCursor: "cursor-1",
         }}
         skills={[
           {
@@ -312,14 +335,16 @@ describe("TranscriptList", () => {
         ]}
         threadId="thread-1"
         onLoadOlder={loadOlder}
-      />
+      />,
     );
 
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
-    expect(screen.getByText("keep", { selector: "strong" })).toBeInTheDocument();
     expect(
-      screen.getByText("$frontend-design").closest("article")
-    ).toHaveClass("transcript-message--user");
+      screen.getByText("keep", { selector: "strong" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("$frontend-design").closest("article")).toHaveClass(
+      "transcript-message--user",
+    );
   });
 
   it("keeps prose in readable bubbles while wide markdown tables get their own wide bubble", () => {
@@ -336,10 +361,12 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    const articles = container.querySelectorAll("article.transcript-message--assistant");
+    const articles = container.querySelectorAll(
+      "article.transcript-message--assistant",
+    );
     expect(articles).toHaveLength(3);
     expect(articles[0]).not.toHaveClass("transcript-message--table");
     expect(articles[0]).not.toHaveClass("transcript-message--table-wide");
@@ -348,11 +375,15 @@ describe("TranscriptList", () => {
     expect(articles[2]).not.toHaveClass("transcript-message--table");
     expect(articles[2]).not.toHaveClass("transcript-message--table-wide");
     expect(screen.getAllByText("Assistant")).toHaveLength(1);
-    expect(screen.getByText("Intro prose should stay", { exact: false })).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "InvoiceDispatcher.scala (line 48)" })
+      screen.getByText("Intro prose should stay", { exact: false }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Follow-up prose should not inherit", { exact: false })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "InvoiceDispatcher.scala (line 48)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Follow-up prose should not inherit", { exact: false }),
+    ).toBeInTheDocument();
   });
 
   it("copies the full original message when the rendered message is split into segments", async () => {
@@ -373,11 +404,15 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getAllByRole("button", { name: "Copy message" })).toHaveLength(1);
-    expect(container.querySelector(".transcript-copy-button svg")).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: "Copy message" }),
+    ).toHaveLength(1);
+    expect(
+      container.querySelector(".transcript-copy-button svg"),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
 
@@ -404,7 +439,7 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
@@ -441,7 +476,7 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
@@ -468,7 +503,8 @@ describe("TranscriptList", () => {
               {
                 id: "turn-failed:turn-1:detail",
                 kind: "read",
-                label: "json-rpc error (-32603): Internal error: invalid API key",
+                label:
+                  "json-rpc error (-32603): Internal error: invalid API key",
                 status: "failed",
               },
             ],
@@ -477,24 +513,28 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    const activity = screen.getByText("Turn failed").closest(".transcript-activity");
+    const activity = screen
+      .getByText("Turn failed")
+      .closest(".transcript-activity");
     expect(activity).toHaveClass("transcript-activity--warning");
 
     fireEvent.click(screen.getByRole("button", { name: "Copy activity" }));
 
     await waitFor(() => {
       expect(copyText).toHaveBeenCalledWith(
-        "Turn failed\njson-rpc error (-32603): Internal error: invalid API key"
+        "Turn failed\njson-rpc error (-32603): Internal error: invalid API key",
       );
     });
 
     fireEvent.click(screen.getByRole("button", { name: /Turn failed/i }));
 
     expect(
-      screen.getByText("json-rpc error (-32603): Internal error: invalid API key")
+      screen.getByText(
+        "json-rpc error (-32603): Internal error: invalid API key",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -516,15 +556,19 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    const articles = container.querySelectorAll("article.transcript-message--assistant");
+    const articles = container.querySelectorAll(
+      "article.transcript-message--assistant",
+    );
     expect(articles).toHaveLength(2);
     expect(articles[1]).toHaveClass("transcript-message--table-wide");
-    expect(screen.getByRole("link", { name: "Invoice dispatcher" })).toHaveAttribute(
+    expect(
+      screen.getByRole("link", { name: "Invoice dispatcher" }),
+    ).toHaveAttribute(
       "href",
-      "file:///Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:48"
+      "file:///Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:48",
     );
     expect(container).not.toHaveTextContent("[invoice-dispatcher]:");
   });
@@ -543,15 +587,21 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    const articles = container.querySelectorAll("article.transcript-message--assistant");
+    const articles = container.querySelectorAll(
+      "article.transcript-message--assistant",
+    );
     expect(articles).toHaveLength(3);
     expect(articles[1]).toHaveClass("transcript-message--table-wide");
     expect(container.querySelectorAll("pre code")).toHaveLength(2);
-    expect(screen.getByText("pnpm test before", { selector: "pre code" })).toBeInTheDocument();
-    expect(screen.getByText("pnpm test after", { selector: "pre code" })).toBeInTheDocument();
+    expect(
+      screen.getByText("pnpm test before", { selector: "pre code" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("pnpm test after", { selector: "pre code" }),
+    ).toBeInTheDocument();
   });
 
   it("leaves compact markdown tables inside normal readable bubbles", () => {
@@ -568,15 +618,21 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    const articles = container.querySelectorAll("article.transcript-message--assistant");
+    const articles = container.querySelectorAll(
+      "article.transcript-message--assistant",
+    );
     expect(articles).toHaveLength(1);
     expect(articles[0]).not.toHaveClass("transcript-message--table");
     expect(articles[0]).not.toHaveClass("transcript-message--table-wide");
-    expect(container.querySelector("table.thread-markdown__table")).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Key" })).toBeInTheDocument();
+    expect(
+      container.querySelector("table.thread-markdown__table"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: "Key" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("cell", { name: "Billing" })).toBeInTheDocument();
   });
 
@@ -594,14 +650,20 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    const tableArticle = container.querySelector("article.transcript-message--table");
+    const tableArticle = container.querySelector(
+      "article.transcript-message--table",
+    );
     expect(tableArticle).toHaveClass("transcript-message--table-wide");
-    expect(container.querySelector(".thread-markdown__table-scroll")).toBeInTheDocument();
     expect(
-      screen.getByText("north-america-invoice-pacing-window-retry-suppressed-001")
+      container.querySelector(".thread-markdown__table-scroll"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "north-america-invoice-pacing-window-retry-suppressed-001",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -619,13 +681,19 @@ describe("TranscriptList", () => {
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(container.querySelectorAll("article.transcript-message--assistant")).toHaveLength(1);
-    expect(container.querySelector("article.transcript-message--table")).toBeNull();
+    expect(
+      container.querySelectorAll("article.transcript-message--assistant"),
+    ).toHaveLength(1);
+    expect(
+      container.querySelector("article.transcript-message--table"),
+    ).toBeNull();
     expect(container.querySelector("table")).toBeNull();
-    expect(container.querySelector("pre code")).toHaveTextContent("| Key | Value |");
+    expect(container.querySelector("pre code")).toHaveTextContent(
+      "| Key | Value |",
+    );
   });
 
   it("opens transcript file links in the configured editor", async () => {
@@ -676,7 +744,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
@@ -711,13 +779,13 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={vi.fn(async () => undefined)}
-      />
+      />,
     );
 
     expect(
       screen.getByText(
-        "Use docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md for the fix."
-      )
+        "Use docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md for the fix.",
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
@@ -738,19 +806,19 @@ describe("TranscriptList", () => {
             parts: [
               {
                 type: "text",
-                text: "Describe this image"
+                text: "Describe this image",
               },
               {
                 type: "image",
                 url: dataUrl,
-                alt: "Transcript screenshot"
+                alt: "Transcript screenshot",
               },
               {
                 type: "image",
                 url: secondDataUrl,
-                alt: "Second transcript screenshot"
-              }
-            ]
+                alt: "Second transcript screenshot",
+              },
+            ],
           },
           {
             type: "message",
@@ -761,42 +829,48 @@ describe("TranscriptList", () => {
               {
                 type: "image",
                 url: "https://example.com/thread-image.png",
-                alt: "Assistant image"
-              }
-            ]
-          }
+                alt: "Assistant image",
+              },
+            ],
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onOpenImage={onOpenImage}
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(screen.getByText("Describe this image")).toBeInTheDocument();
     expect(screen.getByAltText("Transcript screenshot")).toHaveAttribute(
       "src",
-      "blob:transcript-image"
+      "blob:transcript-image",
     );
     expect(screen.getByAltText("Second transcript screenshot")).toHaveAttribute(
       "src",
-      "blob:transcript-image"
+      "blob:transcript-image",
     );
     expect(screen.getByAltText("Assistant image")).toBeInTheDocument();
     expect(createObjectURLMock).toHaveBeenCalledTimes(2);
     expect(
-      screen.getByAltText("Transcript screenshot").closest(".transcript-message__image-grid")
+      screen
+        .getByAltText("Transcript screenshot")
+        .closest(".transcript-message__image-grid"),
     ).toBe(
-      screen.getByAltText("Second transcript screenshot").closest(".transcript-message__image-grid")
+      screen
+        .getByAltText("Second transcript screenshot")
+        .closest(".transcript-message__image-grid"),
     );
 
-    fireEvent.click(screen.getByAltText("Transcript screenshot").closest("button")!);
+    fireEvent.click(
+      screen.getByAltText("Transcript screenshot").closest("button")!,
+    );
 
     expect(onOpenImage).toHaveBeenCalledWith({
       type: "image",
       url: dataUrl,
-      alt: "Transcript screenshot"
+      alt: "Transcript screenshot",
     });
   });
 
@@ -832,7 +906,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const image = screen.getByAltText("Missing transcript image");
@@ -844,14 +918,16 @@ describe("TranscriptList", () => {
       expect(screen.getByText("Image failed to load")).toBeInTheDocument();
     });
     expect(
-      screen.getByText("/Users/test/.pwragent/profiles/dev/state/image-inputs/missing.png")
+      screen.getByText(
+        "/Users/test/.pwragent/profiles/dev/state/image-inputs/missing.png",
+      ),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy image path" }));
 
     await waitFor(() => {
       expect(copyText).toHaveBeenCalledWith(
-        "/Users/test/.pwragent/profiles/dev/state/image-inputs/missing.png"
+        "/Users/test/.pwragent/profiles/dev/state/image-inputs/missing.png",
       );
     });
   });
@@ -864,8 +940,8 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "What can this skill do?"
-          }
+            text: "What can this skill do?",
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -873,14 +949,18 @@ describe("TranscriptList", () => {
         runningTurnUsageText="Usage so far: 1,100 uncached in · 1,900 cached · 50 out"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent("Waiting for the app server…");
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Usage so far: 1,100 uncached in · 1,900 cached · 50 out"
+      "Waiting for the app server…",
     );
-    expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Usage so far: 1,100 uncached in · 1,900 cached · 50 out",
+    );
+    expect(
+      screen.getByRole("status").querySelector(".thinking-scanner"),
+    ).not.toBeNull();
   });
 
   it("renders replayed plan progress inline in the transcript", () => {
@@ -891,37 +971,40 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Show the desktop task list."
+            text: "Show the desktop task list.",
           },
           {
             type: "plan",
             id: "plan-1",
             explanation: "Keep the renderer and replay contract aligned.",
-            markdown: "## Final plan\n\nUse the transcript plan renderer for durable output.",
+            markdown:
+              "## Final plan\n\nUse the transcript plan renderer for durable output.",
             steps: [
               { step: "Normalize replay", status: "pending" },
               { step: "Render transcript plan card", status: "pending" },
-              { step: "Verify with tests", status: "pending" }
-            ]
-          }
+              { step: "Verify with tests", status: "pending" },
+            ],
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(screen.getByText("0 out of 3 tasks completed")).toBeInTheDocument();
     expect(
-      screen.getByText("Keep the renderer and replay contract aligned.")
+      screen.getByText("Keep the renderer and replay contract aligned."),
     ).toBeInTheDocument();
     expect(screen.getByText("Normalize replay")).toBeInTheDocument();
     expect(screen.getByText("Render transcript plan card")).toBeInTheDocument();
     expect(screen.getByText("Verify with tests")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Final plan" })).toBeInTheDocument();
     expect(
-      screen.getByText("Use the transcript plan renderer for durable output.")
+      screen.getByRole("heading", { name: "Final plan" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Use the transcript plan renderer for durable output."),
     ).toBeInTheDocument();
     expect(screen.getAllByText("Pending")).toHaveLength(3);
   });
@@ -934,8 +1017,8 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Run npm view dive"
-          }
+            text: "Run npm view dive",
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -943,17 +1026,17 @@ describe("TranscriptList", () => {
           type: "message",
           id: "pending-assistant-1",
           role: "assistant",
-          text: "I ran `npm view dive`"
+          text: "I ran `npm view dive`",
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(screen.getByText("I ran")).toBeInTheDocument();
     expect(screen.getByText("npm view dive")).toBeInTheDocument();
     expect(screen.getByText("I ran").closest("article")).toHaveClass(
-      "transcript-message--assistant"
+      "transcript-message--assistant",
     );
   });
 
@@ -994,7 +1077,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const toggle = screen.getByRole("button", { name: "3 previous messages" });
@@ -1047,10 +1130,12 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.queryByRole("button", { name: /previous message/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /previous message/ }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("First commentary.")).toBeVisible();
     expect(screen.getByText("Second commentary.")).toBeVisible();
     expect(screen.getByText("Third commentary.")).toBeVisible();
@@ -1065,8 +1150,8 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Fix the merge markers"
-          }
+            text: "Fix the merge markers",
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -1090,30 +1175,40 @@ describe("TranscriptList", () => {
                   "@@ -1,3 +1,2 @@",
                   "-<<<<<<< HEAD",
                   "-function appendMessageEntries(",
-                  "+function messageMatchesOptimisticEntry("
-                ].join("\n")
-              }
-            }
-          ]
+                  "+function messageMatchesOptimisticEntry(",
+                ].join("\n"),
+              },
+            },
+          ],
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    const toggle = screen.getByRole("button", { name: /Edited 1 file, \+1, -2/i });
+    const toggle = screen.getByRole("button", {
+      name: /Edited 1 file, \+1, -2/i,
+    });
     expect(toggle).toBeInTheDocument();
 
     fireEvent.click(toggle);
 
-    expect(screen.getByText("Update useThreadSessionState.ts")).toBeInTheDocument();
+    expect(
+      screen.getByText("Update useThreadSessionState.ts"),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("-2")[0]).toBeInTheDocument();
     expect(screen.getAllByText("+1")[0]).toBeInTheDocument();
-    expect(screen.queryByText("function messageMatchesOptimisticEntry(")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("function messageMatchesOptimisticEntry("),
+    ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /Update useThreadSessionState.ts/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Update useThreadSessionState.ts/i }),
+    );
 
-    expect(screen.getByText("function messageMatchesOptimisticEntry(")).toBeInTheDocument();
+    expect(
+      screen.getByText("function messageMatchesOptimisticEntry("),
+    ).toBeInTheDocument();
   });
 
   it("inserts pending activity by event time among optimistic turn entries", () => {
@@ -1132,7 +1227,7 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Keep testing the composer."
+            text: "Keep testing the composer.",
           },
           {
             type: "activity",
@@ -1143,10 +1238,10 @@ describe("TranscriptList", () => {
               {
                 id: "detail-1",
                 kind: "command",
-                label: "pnpm --filter @pwragent/desktop typecheck"
-              }
+                label: "pnpm --filter @pwragent/desktop typecheck",
+              },
             ],
-            turn: activeTurn
+            turn: activeTurn,
           },
           {
             type: "message",
@@ -1155,7 +1250,7 @@ describe("TranscriptList", () => {
             phase: "commentary",
             text: "The focused composer tests are green.",
             createdAt: 3_000,
-            turn: activeTurn
+            turn: activeTurn,
           },
           {
             type: "activity",
@@ -1166,11 +1261,12 @@ describe("TranscriptList", () => {
               {
                 id: "detail-2",
                 kind: "command",
-                label: "pnpm --filter @pwragent/desktop test:e2e -- directory-launchpad-skills.spec.ts"
-              }
+                label:
+                  "pnpm --filter @pwragent/desktop test:e2e -- directory-launchpad-skills.spec.ts",
+              },
             ],
-            turn: activeTurn
-          }
+            turn: activeTurn,
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -1184,22 +1280,26 @@ describe("TranscriptList", () => {
               id: "pending-detail-1",
               kind: "write",
               label: "Update Composer.tsx",
-              path: "/repo/apps/desktop/src/renderer/src/features/composer/Composer.tsx"
-            }
+              path: "/repo/apps/desktop/src/renderer/src/features/composer/Composer.tsx",
+            },
           ],
-          turn: activeTurn
+          turn: activeTurn,
         }}
         pendingStatusText="Thinking"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const transcriptText = document.body.textContent ?? "";
     const firstActivityIndex = transcriptText.indexOf("Used 2 tools");
     const changedIndex = transcriptText.indexOf("Changed 1 file");
-    const commentaryIndex = transcriptText.indexOf("The focused composer tests are green.");
-    const laterActivityIndex = transcriptText.indexOf("pnpm --filter @pwragent/desktop test");
+    const commentaryIndex = transcriptText.indexOf(
+      "The focused composer tests are green.",
+    );
+    const laterActivityIndex = transcriptText.indexOf(
+      "pnpm --filter @pwragent/desktop test",
+    );
 
     expect(firstActivityIndex).toBeGreaterThanOrEqual(0);
     expect(changedIndex).toBeGreaterThan(firstActivityIndex);
@@ -1235,7 +1335,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(screen.queryByText(/Working for/)).not.toBeInTheDocument();
@@ -1272,7 +1372,7 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Fix the transcript activity."
+            text: "Fix the transcript activity.",
           },
           {
             type: "message",
@@ -1280,7 +1380,7 @@ describe("TranscriptList", () => {
             role: "assistant",
             text: "Fixed.",
             turn: completedTurn,
-          }
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -1292,29 +1392,33 @@ describe("TranscriptList", () => {
             {
               id: "tool-detail-1",
               kind: "command",
-              label: "rg -n transcript activity"
+              label: "rg -n transcript activity",
             },
             {
               id: "tool-detail-2",
               kind: "read",
-              label: "Read TranscriptList.tsx"
-            }
+              label: "Read TranscriptList.tsx",
+            },
           ],
           turn: completedTurn,
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    const workGroup = screen.getByRole("button", { name: /Worked for 1m 11s/i });
+    const workGroup = screen.getByRole("button", {
+      name: /Worked for 1m 11s/i,
+    });
     expect(workGroup).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("Used 2 tools")).not.toBeInTheDocument();
 
     fireEvent.click(workGroup);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Used 2 tools/i })).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: /Used 2 tools/i }),
+      ).toBeVisible();
     });
   });
 
@@ -1357,7 +1461,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Worked for 1m 11s/i }));
@@ -1365,7 +1469,7 @@ describe("TranscriptList", () => {
 
     await waitFor(() => {
       expect(copyText).toHaveBeenCalledWith(
-        "Used 2 tools\nrg -n transcript activity"
+        "Used 2 tools\nrg -n transcript activity",
       );
     });
   });
@@ -1378,7 +1482,7 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Show me the current desktop thread shell"
+            text: "Show me the current desktop thread shell",
           },
           {
             type: "activity",
@@ -1388,32 +1492,32 @@ describe("TranscriptList", () => {
               {
                 id: "detail-1",
                 kind: "read",
-                label: "Read TranscriptList.tsx"
+                label: "Read TranscriptList.tsx",
               },
               {
                 id: "detail-2",
                 kind: "read",
-                label: "Read ThreadView.tsx"
+                label: "Read ThreadView.tsx",
               },
               {
                 id: "detail-3",
                 kind: "command",
-                label: "pwd && rg --files"
-              }
-            ]
+                label: "pwd && rg --files",
+              },
+            ],
           },
           {
             type: "message",
             id: "message-2",
             role: "assistant",
-            text: "The desktop shell is live and listing Codex threads."
-          }
+            text: "The desktop shell is live and listing Codex threads.",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -1434,43 +1538,49 @@ describe("TranscriptList", () => {
               {
                 id: "detail-1",
                 kind: "read",
-                label: "Read TranscriptActivity.tsx"
+                label: "Read TranscriptActivity.tsx",
               },
               {
                 id: "detail-2",
                 kind: "read",
-                label: "Read TranscriptList.tsx"
+                label: "Read TranscriptList.tsx",
               },
               {
                 id: "detail-3",
                 kind: "command",
-                label: "Searched transcript-activity"
-              }
-            ]
-          }
+                label: "Searched transcript-activity",
+              },
+            ],
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const toggle = screen.getByRole("button", { name: /Explored 3 files/i });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByText("Read TranscriptActivity.tsx")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Read TranscriptActivity.tsx"),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(toggle);
 
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Read TranscriptActivity.tsx")).toBeInTheDocument();
     expect(screen.getByText("Read TranscriptList.tsx")).toBeInTheDocument();
-    expect(screen.getByText("Searched transcript-activity")).toBeInTheDocument();
+    expect(
+      screen.getByText("Searched transcript-activity"),
+    ).toBeInTheDocument();
 
     fireEvent.click(toggle);
 
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByText("Read TranscriptActivity.tsx")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Read TranscriptActivity.tsx"),
+    ).not.toBeInTheDocument();
   });
 
   it("renders pending same-turn work before a persisted final assistant reply", () => {
@@ -1482,7 +1592,7 @@ describe("TranscriptList", () => {
             id: "user-1",
             role: "user",
             text: "Are there two websocket layers?",
-            turn: { id: "turn-1", status: "completed" }
+            turn: { id: "turn-1", status: "completed" },
           },
           {
             type: "message",
@@ -1490,8 +1600,8 @@ describe("TranscriptList", () => {
             role: "assistant",
             phase: "final",
             text: "Yes, there are two separate websocket layers.",
-            turn: { id: "turn-1", status: "completed" }
-          }
+            turn: { id: "turn-1", status: "completed" },
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -1505,21 +1615,24 @@ describe("TranscriptList", () => {
               id: "mcp-status-1",
               kind: "command",
               label: "MCP server status updated",
-              status: "completed"
-            }
+              status: "completed",
+            },
           ],
-          turn: { id: "turn-1", status: "completed" }
+          turn: { id: "turn-1", status: "completed" },
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const workGroup = screen.getByRole("button", { name: /Previous work/i });
-    const finalReply = screen.getByText("Yes, there are two separate websocket layers.");
+    const finalReply = screen.getByText(
+      "Yes, there are two separate websocket layers.",
+    );
 
     expect(
-      workGroup.compareDocumentPosition(finalReply) & Node.DOCUMENT_POSITION_FOLLOWING
+      workGroup.compareDocumentPosition(finalReply)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(workGroup).toHaveAttribute("aria-expanded", "false");
   });
@@ -1538,10 +1651,10 @@ describe("TranscriptList", () => {
                 id: "mcp-status-context7",
                 kind: "command",
                 label: "MCP context7 starting",
-                status: "in_progress"
-              }
-            ]
-          }
+                status: "in_progress",
+              },
+            ],
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -1555,17 +1668,21 @@ describe("TranscriptList", () => {
               id: "mcp-status-context7",
               kind: "command",
               label: "MCP context7 ready",
-              status: "completed"
-            }
-          ]
+              status: "completed",
+            },
+          ],
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getAllByRole("button", { name: /MCP server ready/i })).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: /MCP server starting/i })).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /MCP server ready/i }),
+    ).toHaveLength(1);
+    expect(
+      screen.queryByRole("button", { name: /MCP server starting/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps a pending tool below the earlier pending assistant message that started first", () => {
@@ -1577,8 +1694,8 @@ describe("TranscriptList", () => {
             id: "user-1",
             role: "user",
             text: "Run npm view dive pls",
-            turn: { id: "turn-1", status: "in_progress" }
-          }
+            turn: { id: "turn-1", status: "in_progress" },
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -1593,10 +1710,10 @@ describe("TranscriptList", () => {
               id: "call-dive",
               kind: "command",
               label: "npm view dive (419ms)",
-              status: "completed"
-            }
+              status: "completed",
+            },
           ],
-          turn: { id: "turn-1", status: "in_progress" }
+          turn: { id: "turn-1", status: "in_progress" },
         }}
         pendingAssistantMessage={{
           type: "message",
@@ -1604,20 +1721,21 @@ describe("TranscriptList", () => {
           role: "assistant",
           createdAt: 1_777_480_901_377,
           text: "I’ll run the package lookup directly and relay the useful parts of the output.",
-          turn: { id: "turn-1", status: "in_progress" }
+          turn: { id: "turn-1", status: "in_progress" },
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const commentary = screen.getByText(
-      "I’ll run the package lookup directly and relay the useful parts of the output."
+      "I’ll run the package lookup directly and relay the useful parts of the output.",
     );
     const tool = screen.getByRole("button", { name: /Ran 1 command/i });
 
     expect(
-      commentary.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING
+      commentary.compareDocumentPosition(tool)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -1631,7 +1749,7 @@ describe("TranscriptList", () => {
             role: "user",
             text: "Keep the visible transcript chronological.",
             createdAt: 1_777_480_900_000,
-            turn: { id: "turn-1", status: "completed" }
+            turn: { id: "turn-1", status: "completed" },
           },
           {
             type: "message",
@@ -1640,8 +1758,8 @@ describe("TranscriptList", () => {
             phase: "final",
             text: "First visible assistant update.",
             createdAt: 1_777_480_902_000,
-            turn: { id: "turn-1", status: "completed" }
-          }
+            turn: { id: "turn-1", status: "completed" },
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -1651,18 +1769,18 @@ describe("TranscriptList", () => {
           role: "assistant",
           text: "Second visible assistant update.",
           createdAt: 1_777_480_903_000,
-          turn: { id: "turn-1", status: "completed" }
+          turn: { id: "turn-1", status: "completed" },
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const first = screen.getByText("First visible assistant update.");
     const second = screen.getByText("Second visible assistant update.");
 
     expect(
-      first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING
+      first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -1678,8 +1796,8 @@ describe("TranscriptList", () => {
             turn: {
               id: "turn-1",
               status: "completed",
-              durationMs: 956_000
-            }
+              durationMs: 956_000,
+            },
           },
           {
             type: "message",
@@ -1690,8 +1808,8 @@ describe("TranscriptList", () => {
             turn: {
               id: "turn-1",
               status: "completed",
-              durationMs: 956_000
-            }
+              durationMs: 956_000,
+            },
           },
           {
             type: "message",
@@ -1702,9 +1820,9 @@ describe("TranscriptList", () => {
             turn: {
               id: "turn-1",
               status: "completed",
-              durationMs: 956_000
-            }
-          }
+              durationMs: 956_000,
+            },
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -1718,21 +1836,23 @@ describe("TranscriptList", () => {
               id: "call-1",
               kind: "command",
               label: "rg -n transcript apps/desktop",
-              status: "completed"
-            }
+              status: "completed",
+            },
           ],
           turn: {
             id: "turn-1",
             status: "completed",
-            durationMs: 956_000
-          }
+            durationMs: 956_000,
+          },
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    const workGroup = screen.getByRole("button", { name: /Worked for 15m 56s/i });
+    const workGroup = screen.getByRole("button", {
+      name: /Worked for 15m 56s/i,
+    });
 
     await waitFor(() => {
       expect(workGroup).toHaveAttribute("aria-expanded", "false");
@@ -1767,29 +1887,35 @@ describe("TranscriptList", () => {
                     "   const c = 3;",
                     "-  return a + b;",
                     "+  return a + b + c;",
-                    " }"
-                  ].join("\n")
-                }
-              }
-            ]
-          }
+                    " }",
+                  ].join("\n"),
+                },
+              },
+            ],
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Edited 1 file/i }));
 
     expect(screen.getByText("Update TranscriptList.tsx")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Update TranscriptList.tsx/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Update TranscriptList.tsx/i }),
+    );
 
     expect(screen.getByText("const b = 2;")).toBeInTheDocument();
     expect(screen.getByText("const c = 3;")).toBeInTheDocument();
-    expect(screen.queryByText("2 unmodified lines skipped")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("2 unmodified lines skipped"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Zoom in" }),
+    ).not.toBeInTheDocument();
   });
 
   it("preserves the reader position when older messages are prepended", () => {
@@ -1800,20 +1926,20 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-2",
             role: "user",
-            text: "Second message"
+            text: "Second message",
           },
           {
             type: "message",
             id: "message-3",
             role: "assistant",
-            text: "Third message"
-          }
+            text: "Third message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -1829,26 +1955,26 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "assistant",
-            text: "First message"
+            text: "First message",
           },
           {
             type: "message",
             id: "message-2",
             role: "user",
-            text: "Second message"
+            text: "Second message",
           },
           {
             type: "message",
             id: "message-3",
             role: "assistant",
-            text: "Third message"
-          }
+            text: "Third message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(240);
@@ -1862,32 +1988,34 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "First message"
+            text: "First message",
           },
           {
             type: "message",
             id: "message-2",
             role: "assistant",
-            text: "Second message"
-          }
+            text: "Second message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
 
     expect(
-      screen.queryByRole("button", { name: "Jump to latest message" })
+      screen.queryByRole("button", { name: "Jump to latest message" }),
     ).not.toBeInTheDocument();
 
     list.scrollTop = 0;
     fireEvent.scroll(list);
 
-    expect(screen.getByRole("button", { name: "Jump to latest message" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Jump to latest message" }),
+    ).toBeInTheDocument();
   });
 
   it("jumps instantly to the bottom when jump-to-latest is clicked", () => {
@@ -1898,20 +2026,20 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "First message"
+            text: "First message",
           },
           {
             type: "message",
             id: "message-2",
             role: "assistant",
-            text: "Second message"
-          }
+            text: "Second message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -1919,7 +2047,9 @@ describe("TranscriptList", () => {
     fireEvent.scroll(list);
     scrollToMock.mockClear();
 
-    fireEvent.click(screen.getByRole("button", { name: "Jump to latest message" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Jump to latest message" }),
+    );
 
     // Clicking jump-to-latest goes all the way to the bottom NOW, not
     // via a smooth animation that captures a stale scrollHeight target
@@ -1927,10 +2057,10 @@ describe("TranscriptList", () => {
     // contract is single-click → at the bottom → glued.
     expect(list.scrollTop).toBe(480);
     expect(scrollToMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ behavior: "smooth" })
+      expect.objectContaining({ behavior: "smooth" }),
     );
     expect(
-      screen.queryByRole("button", { name: "Jump to latest message" })
+      screen.queryByRole("button", { name: "Jump to latest message" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1942,26 +2072,26 @@ describe("TranscriptList", () => {
             type: "message",
             id: "thread-1-message-1",
             role: "user",
-            text: "Thread one first message"
+            text: "Thread one first message",
           },
           {
             type: "message",
             id: "thread-1-message-2",
             role: "assistant",
-            text: "Thread one second message"
+            text: "Thread one second message",
           },
           {
             type: "message",
             id: "thread-1-message-3",
             role: "assistant",
-            text: "Thread one third message"
-          }
+            text: "Thread one third message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -1974,20 +2104,20 @@ describe("TranscriptList", () => {
             type: "message",
             id: "thread-2-message-1",
             role: "user",
-            text: "Thread two first message"
+            text: "Thread two first message",
           },
           {
             type: "message",
             id: "thread-2-message-2",
             role: "assistant",
-            text: "Thread two second message"
-          }
+            text: "Thread two second message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-2"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     list.scrollTop = 18;
@@ -2000,26 +2130,26 @@ describe("TranscriptList", () => {
             type: "message",
             id: "thread-1-message-1",
             role: "user",
-            text: "Thread one first message"
+            text: "Thread one first message",
           },
           {
             type: "message",
             id: "thread-1-message-2",
             role: "assistant",
-            text: "Thread one second message"
+            text: "Thread one second message",
           },
           {
             type: "message",
             id: "thread-1-message-3",
             role: "assistant",
-            text: "Thread one third message"
-          }
+            text: "Thread one third message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(72);
@@ -2033,20 +2163,20 @@ describe("TranscriptList", () => {
             type: "message",
             id: "thread-1-message-1",
             role: "user",
-            text: "Thread one first message"
+            text: "Thread one first message",
           },
           {
             type: "message",
             id: "thread-1-message-2",
             role: "assistant",
-            text: "Thread one second message"
-          }
+            text: "Thread one second message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2060,14 +2190,14 @@ describe("TranscriptList", () => {
             type: "message",
             id: "thread-2-message-1",
             role: "user",
-            text: "Thread two first message"
-          }
+            text: "Thread two first message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-2"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     rerender(
@@ -2077,20 +2207,20 @@ describe("TranscriptList", () => {
             type: "message",
             id: "thread-1-message-1",
             role: "user",
-            text: "Thread one first message"
+            text: "Thread one first message",
           },
           {
             type: "message",
             id: "thread-1-message-2",
             role: "assistant",
-            text: "Thread one second message"
-          }
+            text: "Thread one second message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(60);
@@ -2104,26 +2234,26 @@ describe("TranscriptList", () => {
             type: "message",
             id: "thread-1-message-1",
             role: "user",
-            text: "Thread one first message"
+            text: "Thread one first message",
           },
           {
             type: "message",
             id: "thread-1-message-2",
             role: "assistant",
-            text: "Thread one second message"
+            text: "Thread one second message",
           },
           {
             type: "message",
             id: "thread-1-message-3",
             role: "assistant",
-            text: "Thread one third message"
-          }
+            text: "Thread one third message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2137,26 +2267,26 @@ describe("TranscriptList", () => {
             type: "message",
             id: "thread-1-message-1",
             role: "user",
-            text: "Thread one first message"
+            text: "Thread one first message",
           },
           {
             type: "message",
             id: "thread-1-message-2",
             role: "assistant",
-            text: "Thread one second message"
+            text: "Thread one second message",
           },
           {
             type: "message",
             id: "thread-1-message-3",
             role: "assistant",
-            text: "Thread one third message"
-          }
+            text: "Thread one third message",
+          },
         ]}
         loading={true}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     scrollHeight = 640;
@@ -2168,32 +2298,32 @@ describe("TranscriptList", () => {
             type: "message",
             id: "thread-1-message-1",
             role: "user",
-            text: "Thread one first message"
+            text: "Thread one first message",
           },
           {
             type: "message",
             id: "thread-1-message-2",
             role: "assistant",
-            text: "Thread one second message"
+            text: "Thread one second message",
           },
           {
             type: "message",
             id: "thread-1-message-3",
             role: "assistant",
-            text: "Thread one third message"
+            text: "Thread one third message",
           },
           {
             type: "message",
             id: "thread-1-message-4",
             role: "assistant",
-            text: "Thread one fourth message"
-          }
+            text: "Thread one fourth message",
+          },
         ]}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(72);
@@ -2205,7 +2335,7 @@ describe("TranscriptList", () => {
       type: "message" as const,
       id: `history-message-${index + 1}`,
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      text: `History message ${index + 1}`
+      text: `History message ${index + 1}`,
     }));
     scrollHeight = 720;
     const { rerender } = render(
@@ -2215,7 +2345,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2229,8 +2359,8 @@ describe("TranscriptList", () => {
         type: "message" as const,
         id: "user-prompt-1",
         role: "user" as const,
-        text: "Please continue from here."
-      }
+        text: "Please continue from here.",
+      },
     ];
     rerender(
       <TranscriptList
@@ -2240,7 +2370,7 @@ describe("TranscriptList", () => {
         pendingStatusText="Thinking"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
     expect(list.scrollTop).toBe(840);
 
@@ -2260,21 +2390,21 @@ describe("TranscriptList", () => {
             {
               id: "tool-detail-1",
               kind: "command",
-              label: "rg -n scroll apps/desktop/src"
-            }
-          ]
+              label: "rg -n scroll apps/desktop/src",
+            },
+          ],
         }}
         pendingAssistantMessage={{
           type: "message",
           id: "assistant-stream-1",
           role: "assistant",
           phase: "commentary",
-          text: "I found the transcript scroll handling."
+          text: "I found the transcript scroll handling.",
         }}
         pendingStatusText="Thinking"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
     expect(list.scrollTop).toBe(980);
 
@@ -2294,14 +2424,14 @@ describe("TranscriptList", () => {
             {
               id: "tool-detail-1",
               kind: "command",
-              label: "rg -n scroll apps/desktop/src"
+              label: "rg -n scroll apps/desktop/src",
             },
             {
               id: "tool-detail-2",
               kind: "read",
-              label: "Read TranscriptList.tsx"
-            }
-          ]
+              label: "Read TranscriptList.tsx",
+            },
+          ],
         }}
         pendingAssistantMessage={{
           type: "message",
@@ -2311,13 +2441,13 @@ describe("TranscriptList", () => {
           text: [
             "I found the transcript scroll handling.",
             "The pending assistant message is still streaming, so the same message id grows taller.",
-            "When the viewport was already pinned to the bottom, that growth should keep moving the viewport."
-          ].join(" ")
+            "When the viewport was already pinned to the bottom, that growth should keep moving the viewport.",
+          ].join(" "),
         }}
         pendingStatusText="Thinking"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(1120);
@@ -2328,7 +2458,7 @@ describe("TranscriptList", () => {
       type: "message" as const,
       id: `long-message-${index + 1}`,
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      text: `Long transcript message ${index + 1}`
+      text: `Long transcript message ${index + 1}`,
     }));
     scrollHeight = 960;
     const { rerender } = render(
@@ -2338,7 +2468,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2351,8 +2481,8 @@ describe("TranscriptList", () => {
         type: "message" as const,
         id: "user-prompt-2",
         role: "user" as const,
-        text: "Add one more answer at the bottom."
-      }
+        text: "Add one more answer at the bottom.",
+      },
     ];
     scrollHeight = 1080;
     rerender(
@@ -2363,7 +2493,7 @@ describe("TranscriptList", () => {
         pendingStatusText="Thinking"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
     expect(list.scrollTop).toBe(1080);
 
@@ -2380,12 +2510,12 @@ describe("TranscriptList", () => {
           id: "assistant-stream-2",
           role: "assistant",
           phase: "final",
-          text: "Here is the beginning of the answer."
+          text: "Here is the beginning of the answer.",
         }}
         pendingStatusText="Thinking"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
     expect(list.scrollTop).toBe(1200);
 
@@ -2404,13 +2534,13 @@ describe("TranscriptList", () => {
           phase: "final",
           text: [
             "Here is the beginning of the answer.",
-            "More streamed content arrived after the prompt, and following mode should keep the latest line visible."
-          ].join(" ")
+            "More streamed content arrived after the prompt, and following mode should keep the latest line visible.",
+          ].join(" "),
         }}
         pendingStatusText="Thinking"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(1340);
@@ -2421,7 +2551,7 @@ describe("TranscriptList", () => {
       type: "message" as const,
       id: `generic-scroll-message-${index + 1}`,
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      text: `Generic scroll transcript message ${index + 1}`
+      text: `Generic scroll transcript message ${index + 1}`,
     }));
     scrollHeight = 720;
     const { rerender } = render(
@@ -2431,7 +2561,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2450,15 +2580,15 @@ describe("TranscriptList", () => {
             type: "message",
             id: "assistant-live-append",
             role: "assistant",
-            text: "This live append should still pull the glued transcript to the bottom."
-          }
+            text: "This live append should still pull the glued transcript to the bottom.",
+          },
         ]}
         loading={false}
         loadingMore={false}
         pendingStatusText="Thinking"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(120);
@@ -2469,7 +2599,7 @@ describe("TranscriptList", () => {
       type: "message" as const,
       id: `stream-scroll-message-${index + 1}`,
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      text: `Stream scroll transcript message ${index + 1}`
+      text: `Stream scroll transcript message ${index + 1}`,
     }));
     scrollHeight = 720;
     const { rerender } = render(
@@ -2482,12 +2612,12 @@ describe("TranscriptList", () => {
           id: "assistant-stream-scroll-away",
           role: "assistant",
           phase: "final",
-          text: "Streaming starts."
+          text: "Streaming starts.",
         }}
         pendingStatusText="Thinking"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2510,13 +2640,13 @@ describe("TranscriptList", () => {
           phase: "final",
           text: [
             "Streaming starts.",
-            "More text arrived while the reader was inspecting older transcript content."
-          ].join(" ")
+            "More text arrived while the reader was inspecting older transcript content.",
+          ].join(" "),
         }}
         pendingStatusText="Thinking"
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(120);
@@ -2527,7 +2657,7 @@ describe("TranscriptList", () => {
       type: "message" as const,
       id: `reglue-message-${index + 1}`,
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      text: `Reglue transcript message ${index + 1}`
+      text: `Reglue transcript message ${index + 1}`,
     }));
     scrollHeight = 720;
     const { rerender } = render(
@@ -2537,7 +2667,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2551,7 +2681,7 @@ describe("TranscriptList", () => {
         reglueRequestKey={1}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
     expect(list.scrollTop).toBe(720);
 
@@ -2564,8 +2694,8 @@ describe("TranscriptList", () => {
             type: "message",
             id: "reglued-user-prompt",
             role: "user",
-            text: "This prompt should stay at the bottom after send."
-          }
+            text: "This prompt should stay at the bottom after send.",
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -2573,7 +2703,7 @@ describe("TranscriptList", () => {
         reglueRequestKey={1}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(840);
@@ -2584,7 +2714,7 @@ describe("TranscriptList", () => {
       type: "message" as const,
       id: `consumed-reglue-message-${index + 1}`,
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      text: `Consumed reglue transcript message ${index + 1}`
+      text: `Consumed reglue transcript message ${index + 1}`,
     }));
     scrollHeight = 720;
     const { rerender } = render(
@@ -2595,7 +2725,7 @@ describe("TranscriptList", () => {
         reglueRequestKey={1}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2615,13 +2745,13 @@ describe("TranscriptList", () => {
           id: "consumed-reglue-stream",
           role: "assistant",
           phase: "final",
-          text: "Streaming should not reuse the old send-time reglue request."
+          text: "Streaming should not reuse the old send-time reglue request.",
         }}
         pendingStatusText="Thinking"
         reglueRequestKey={1}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(120);
@@ -2649,7 +2779,7 @@ describe("TranscriptList", () => {
         type: "message" as const,
         id: `resize-message-${index + 1}`,
         role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-        text: `Resize transcript message ${index + 1}`
+        text: `Resize transcript message ${index + 1}`,
       }));
       scrollHeight = 720;
       render(
@@ -2659,7 +2789,7 @@ describe("TranscriptList", () => {
           loadingMore={false}
           threadId="thread-1"
           onLoadOlder={async () => undefined}
-        />
+        />,
       );
 
       const list = screen.getByRole("list");
@@ -2683,7 +2813,7 @@ describe("TranscriptList", () => {
       type: "message" as const,
       id: `viewport-resize-message-${index + 1}`,
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      text: `Viewport resize transcript message ${index + 1}`
+      text: `Viewport resize transcript message ${index + 1}`,
     }));
     scrollHeight = 720;
     clientHeight = 240;
@@ -2694,7 +2824,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2705,7 +2835,9 @@ describe("TranscriptList", () => {
     fireEvent.scroll(list);
 
     expect(list.scrollTop).toBe(720);
-    expect(screen.queryByRole("button", { name: "Jump to latest message" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Jump to latest message" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not move the reader when new messages arrive below an older viewport", () => {
@@ -2713,7 +2845,7 @@ describe("TranscriptList", () => {
       type: "message" as const,
       id: `message-${index + 1}`,
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      text: `Message ${index + 1}`
+      text: `Message ${index + 1}`,
     }));
     scrollHeight = 720;
     const { rerender } = render(
@@ -2723,7 +2855,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2738,8 +2870,8 @@ describe("TranscriptList", () => {
             type: "message",
             id: "new-message-1",
             role: "assistant",
-            text: "This arrived out of view."
-          }
+            text: "This arrived out of view.",
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -2748,11 +2880,11 @@ describe("TranscriptList", () => {
           id: "new-message-2",
           role: "assistant",
           phase: "commentary",
-          text: "This is still below the reader."
+          text: "This is still below the reader.",
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(96);
@@ -2767,14 +2899,14 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "First message"
+            text: "First message",
           },
           {
             type: "message",
             id: "message-2",
             role: "assistant",
-            text: "Second message"
-          }
+            text: "Second message",
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -2783,17 +2915,19 @@ describe("TranscriptList", () => {
           id: "assistant-stream-3",
           role: "assistant",
           phase: "commentary",
-          text: "Streaming starts."
+          text: "Streaming starts.",
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
     list.scrollTop = 80;
     fireEvent.scroll(list);
-    fireEvent.click(screen.getByRole("button", { name: "Jump to latest message" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Jump to latest message" }),
+    );
     // Instant scroll: lands at scrollHeight in a single click, no
     // smooth animation that could stop partway.
     expect(list.scrollTop).toBe(720);
@@ -2807,14 +2941,14 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "First message"
+            text: "First message",
           },
           {
             type: "message",
             id: "message-2",
             role: "assistant",
-            text: "Second message"
-          }
+            text: "Second message",
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -2823,11 +2957,11 @@ describe("TranscriptList", () => {
           id: "assistant-stream-3",
           role: "assistant",
           phase: "commentary",
-          text: "Streaming starts. More content arrives after the jump button re-entered following mode."
+          text: "Streaming starts. More content arrives after the jump button re-entered following mode.",
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(860);
@@ -2842,14 +2976,14 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "First message"
+            text: "First message",
           },
           {
             type: "message",
             id: "message-2",
             role: "assistant",
-            text: "Second message"
-          }
+            text: "Second message",
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -2858,11 +2992,11 @@ describe("TranscriptList", () => {
           id: "assistant-stream-4",
           role: "assistant",
           phase: "commentary",
-          text: "Streaming starts."
+          text: "Streaming starts.",
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2879,14 +3013,14 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "First message"
+            text: "First message",
           },
           {
             type: "message",
             id: "message-2",
             role: "assistant",
-            text: "Second message"
-          }
+            text: "Second message",
+          },
         ]}
         loading={false}
         loadingMore={false}
@@ -2895,11 +3029,11 @@ describe("TranscriptList", () => {
           id: "assistant-stream-4",
           role: "assistant",
           phase: "commentary",
-          text: "Streaming starts. Manual scrolling reached the bottom, so the next streamed chunk should stay visible."
+          text: "Streaming starts. Manual scrolling reached the bottom, so the next streamed chunk should stay visible.",
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(860);
@@ -2930,7 +3064,7 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     const list = screen.getByRole("list");
@@ -2972,12 +3106,12 @@ describe("TranscriptList", () => {
         loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(list.scrollTop).toBe(4800);
     expect(
-      screen.queryByRole("button", { name: "Jump to latest message" })
+      screen.queryByRole("button", { name: "Jump to latest message" }),
     ).not.toBeInTheDocument();
   });
 
@@ -2998,15 +3132,17 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending approval" }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Network access is required/)).toBeInTheDocument();
     expect(screen.getByText("Command:")).toBeInTheDocument();
-    expect(container.querySelector(".transcript-request pre code")).toHaveTextContent(
-      "npm view dive"
-    );
+    expect(
+      container.querySelector(".transcript-request pre code"),
+    ).toHaveTextContent("npm view dive");
     expect(screen.queryByText(/\/bin\/zsh -lc/)).not.toBeInTheDocument();
   });
 
@@ -3027,15 +3163,19 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
-    expect(screen.getByText(/Kimi Code CLI wants to run Bash/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending approval" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Kimi Code CLI wants to run Bash/),
+    ).toBeInTheDocument();
     expect(screen.getByText("Command:")).toBeInTheDocument();
-    expect(container.querySelector(".transcript-request pre code")).toHaveTextContent(
-      "node --version && pnpm --version"
-    );
+    expect(
+      container.querySelector(".transcript-request pre code"),
+    ).toHaveTextContent("node --version && pnpm --version");
   });
 
   it("derives Kimi approval commands from prompt text when command is a shell title", () => {
@@ -3055,17 +3195,21 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
-    expect(screen.getByText(/Requesting approval to Running: npm view pnpm/)).toBeInTheDocument();
-    expect(container.querySelector(".transcript-request pre code")).toHaveTextContent(
-      "npm view pnpm"
-    );
-    expect(container.querySelector(".transcript-request pre code")).not.toHaveTextContent(
-      "Bash"
-    );
+    expect(
+      screen.getByRole("group", { name: "Pending approval" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Requesting approval to Running: npm view pnpm/),
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector(".transcript-request pre code"),
+    ).toHaveTextContent("npm view pnpm");
+    expect(
+      container.querySelector(".transcript-request pre code"),
+    ).not.toHaveTextContent("Bash");
   });
 
   it("prefers parsed command actions for command approval display", () => {
@@ -3091,14 +3235,16 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending approval" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Command:")).toBeInTheDocument();
-    expect(container.querySelector(".transcript-request pre code")).toHaveTextContent(
-      "npm view dive"
-    );
+    expect(
+      container.querySelector(".transcript-request pre code"),
+    ).toHaveTextContent("npm view dive");
     expect(screen.queryByText(/\/bin\/zsh -lc/)).not.toBeInTheDocument();
   });
 
@@ -3121,12 +3267,16 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending approval" }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Write access is required/)).toBeInTheDocument();
-    expect(screen.getByText(/File: \.github\/PULL_REQUEST_TEMPLATE\.md/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/File: \.github\/PULL_REQUEST_TEMPLATE\.md/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Write root: \./)).toBeInTheDocument();
   });
 
@@ -3157,12 +3307,18 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
-    expect(screen.getByText(/File: \/Users\/huntharo\/huntharo_rocks\.txt/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Hide diff/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending approval" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/File: \/Users\/huntharo\/huntharo_rocks\.txt/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Hide diff/ }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/new dumb sentence/)).toBeInTheDocument();
   });
 
@@ -3186,12 +3342,12 @@ describe("TranscriptList", () => {
               label: "Add pwragent-pr-refresh-body.md",
               path: "/repo/pwragent/pwragent-pr-refresh-body.md",
               status: "in_progress",
-                fileDiff: {
-                  kind: "add",
-                  diff: "@@ -0,0 +1 @@\n+Draft PR body",
-                  additions: 1,
-                  removals: 0,
-                },
+              fileDiff: {
+                kind: "add",
+                diff: "@@ -0,0 +1 @@\n+Draft PR body",
+                additions: 1,
+                removals: 0,
+              },
             },
           ],
         }}
@@ -3206,13 +3362,19 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending approval" }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Action: add/)).toBeInTheDocument();
-    expect(screen.getByText(/File: pwragent-pr-refresh-body\.md/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Hide diff/ })).toBeInTheDocument();
+    expect(
+      screen.getByText(/File: pwragent-pr-refresh-body\.md/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Hide diff/ }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Draft PR body/)).toBeInTheDocument();
   });
 
@@ -3258,15 +3420,19 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("button", { name: /Show diff/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Show diff/ }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(longLine.slice(1))).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Show diff/ }));
 
-    expect(screen.getByRole("button", { name: /Hide diff/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Hide diff/ }),
+    ).toBeInTheDocument();
     expect(screen.getByText(longLine.slice(1))).toBeInTheDocument();
   });
 
@@ -3303,13 +3469,19 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("group", { name: "Pending input" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending input" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Question 1 of 1")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Decline" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Approve" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Decline" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders pending MCP interaction without shell approval actions", () => {
@@ -3323,7 +3495,8 @@ describe("TranscriptList", () => {
           threadId: "thread-1",
           requestId: "mcp-request-1",
           serverName: "playwright",
-          message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+          message:
+            'Allow the playwright MCP server to run tool "browser_tabs"?',
           mode: "form",
           turnId: "turn-1",
           _meta: {
@@ -3337,14 +3510,16 @@ describe("TranscriptList", () => {
         }}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
-      />
+      />,
     );
 
     expect(
-      screen.getByRole("group", { name: "Pending MCP interaction" })
+      screen.getByRole("group", { name: "Pending MCP interaction" }),
     ).toBeInTheDocument();
     expect(screen.getByText("MCP approval")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Approve" }),
+    ).not.toBeInTheDocument();
   });
 });

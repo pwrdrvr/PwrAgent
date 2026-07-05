@@ -123,7 +123,9 @@ describe("DesktopMessagingBackendBridge", () => {
   });
 });
 
-function createBridge(replay: AppServerThreadReplay): DesktopMessagingBackendBridge {
+function createBridge(
+  replay: AppServerThreadReplay,
+): DesktopMessagingBackendBridge {
   const response: AppServerReadThreadResponse = {
     backend: "codex",
     fetchedAt: 1,

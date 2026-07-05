@@ -89,7 +89,7 @@ export type PendingMcpInteractionState = {
 type FieldValue = string | number | boolean | string[] | null;
 
 export function createMcpElicitationState(
-  request: AppServerMcpElicitationRequestNotification
+  request: AppServerMcpElicitationRequestNotification,
 ): PendingMcpInteractionState | undefined {
   const requestId = trimString(request.params.requestId);
   const threadId = trimString(request.params.threadId);
@@ -121,10 +121,12 @@ export function createMcpElicitationState(
     return undefined;
   }
 
-  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  const required = new Set(
+    Array.isArray(schema.required) ? schema.required : [],
+  );
   const properties = asRecord(schema.properties) ?? {};
   const fields = Object.entries(properties).map(([key, value]) =>
-    buildField(key, asRecord(value) ?? {}, required.has(key))
+    buildField(key, asRecord(value) ?? {}, required.has(key)),
   );
 
   return baseState(request, {
@@ -139,7 +141,7 @@ export function createMcpElicitationState(
 export function updateMcpFieldValue(
   state: PendingMcpInteractionState,
   key: string,
-  value: FieldValue
+  value: FieldValue,
 ): PendingMcpInteractionState {
   if (!state.form) {
     return state;
@@ -160,7 +162,7 @@ export function updateMcpFieldValue(
 }
 
 export function canAcceptMcpElicitation(
-  state: PendingMcpInteractionState
+  state: PendingMcpInteractionState,
 ): boolean {
   if (state.mode === "url") {
     return Boolean(state.url?.url);
@@ -173,7 +175,7 @@ export function canAcceptMcpElicitation(
 
 export function buildMcpElicitationResponse(
   state: PendingMcpInteractionState,
-  action: "accept" | "decline" | "cancel"
+  action: "accept" | "decline" | "cancel",
 ): AppServerMcpElicitationResponse {
   if (action !== "accept") {
     return {
@@ -196,7 +198,7 @@ export function buildMcpElicitationResponse(
     content: Object.fromEntries(
       state.form?.fields
         .filter((field) => field.kind !== "unsupported")
-        .map((field) => [field.key, fieldContentValue(field)]) ?? []
+        .map((field) => [field.key, fieldContentValue(field)]) ?? [],
     ),
     _meta: null,
   };
@@ -216,7 +218,7 @@ export function redactDisplayValue(value: unknown): string {
 
 function baseState(
   request: AppServerMcpElicitationRequestNotification,
-  modeState: Pick<PendingMcpInteractionState, "form" | "url">
+  modeState: Pick<PendingMcpInteractionState, "form" | "url">,
 ): PendingMcpInteractionState {
   return {
     method: request.method,
@@ -234,7 +236,7 @@ function baseState(
 function buildField(
   key: string,
   schema: Record<string, unknown>,
-  required: boolean
+  required: boolean,
 ): PendingMcpField {
   const label = trimString(schema.title) || key;
   const description = trimString(schema.description);
@@ -303,7 +305,9 @@ function buildField(
         minItems: readBigIntLike(schema.minItems),
         maxItems: readBigIntLike(schema.maxItems),
         value: Array.isArray(schema.default)
-          ? schema.default.filter((entry): entry is string => typeof entry === "string")
+          ? schema.default.filter(
+              (entry): entry is string => typeof entry === "string",
+            )
           : [],
       };
     }
@@ -318,11 +322,17 @@ function buildField(
   };
 }
 
-function updateFieldValue(field: Exclude<PendingMcpField, { kind: "unsupported" }>, value: FieldValue): PendingMcpField {
+function updateFieldValue(
+  field: Exclude<PendingMcpField, { kind: "unsupported" }>,
+  value: FieldValue,
+): PendingMcpField {
   if (field.kind === "string" && typeof value === "string") {
     return { ...field, value };
   }
-  if (field.kind === "number" && (typeof value === "number" || value === null)) {
+  if (
+    field.kind === "number"
+    && (typeof value === "number" || value === null)
+  ) {
     return { ...field, value };
   }
   if (field.kind === "boolean" && typeof value === "boolean") {
@@ -332,9 +342,9 @@ function updateFieldValue(field: Exclude<PendingMcpField, { kind: "unsupported" 
     return { ...field, value };
   }
   if (
-    field.kind === "multiSelect" &&
-    Array.isArray(value) &&
-    value.every((entry) => typeof entry === "string")
+    field.kind === "multiSelect"
+    && Array.isArray(value)
+    && value.every((entry) => typeof entry === "string")
   ) {
     return { ...field, value };
   }
@@ -374,7 +384,7 @@ function fieldIsValid(field: PendingMcpField): boolean {
       return false;
     }
     return field.value.every((entry) =>
-      field.options.some((option) => option.value === entry)
+      field.options.some((option) => option.value === entry),
     );
   }
 
@@ -396,14 +406,18 @@ function fieldIsValid(field: PendingMcpField): boolean {
   return true;
 }
 
-function fieldContentValue(field: Exclude<PendingMcpField, { kind: "unsupported" }>): unknown {
+function fieldContentValue(
+  field: Exclude<PendingMcpField, { kind: "unsupported" }>,
+): unknown {
   if (field.kind === "string" || field.kind === "singleSelect") {
     return field.value;
   }
   return field.value;
 }
 
-function readStringOptions(schema: Record<string, unknown>): PendingMcpFieldOption[] {
+function readStringOptions(
+  schema: Record<string, unknown>,
+): PendingMcpFieldOption[] {
   if (Array.isArray(schema.oneOf)) {
     return schema.oneOf.flatMap((entry) => {
       const record = asRecord(entry);
@@ -428,7 +442,9 @@ function readStringOptions(schema: Record<string, unknown>): PendingMcpFieldOpti
   return [];
 }
 
-function readArrayOptions(schema: Record<string, unknown>): PendingMcpFieldOption[] {
+function readArrayOptions(
+  schema: Record<string, unknown>,
+): PendingMcpFieldOption[] {
   const items = asRecord(schema.items);
   if (!items) {
     return [];
@@ -447,7 +463,7 @@ function readArrayOptions(schema: Record<string, unknown>): PendingMcpFieldOptio
 
   if (Array.isArray(items.enum)) {
     return items.enum.flatMap((entry) =>
-      typeof entry === "string" ? [{ value: entry, label: entry }] : []
+      typeof entry === "string" ? [{ value: entry, label: entry }] : [],
     );
   }
 
@@ -468,9 +484,11 @@ function redactUrl(value: string): string {
 function looksSecret(value: string): boolean {
   const trimmed = value.trim();
   return (
-    /^bearer\s+/i.test(trimmed) ||
-    /^[A-Za-z0-9_-]{32,}$/.test(trimmed) ||
-    /(api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password)=/i.test(trimmed)
+    /^bearer\s+/i.test(trimmed)
+    || /^[A-Za-z0-9_-]{32,}$/.test(trimmed)
+    || /(api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password)=/i.test(
+      trimmed,
+    )
   );
 }
 
@@ -482,7 +500,9 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function readNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function readBigIntLike(value: unknown): number | undefined {

@@ -53,7 +53,9 @@ export function validateDiscordInteractionToken(
   return { ok: true };
 }
 
-export function validateDiscordCustomId(value: unknown): IdentifierValidationResult {
+export function validateDiscordCustomId(
+  value: unknown,
+): IdentifierValidationResult {
   if (typeof value !== "string") {
     return { ok: false, reason: "type" };
   }
@@ -98,7 +100,10 @@ export function validateDiscordAttachmentUrl(
   } catch {
     return { ok: false, reason: "format" };
   }
-  if (parsed.protocol !== "https:" || !DISCORD_ATTACHMENT_HOSTS.has(parsed.hostname)) {
+  if (
+    parsed.protocol !== "https:"
+    || !DISCORD_ATTACHMENT_HOSTS.has(parsed.hostname)
+  ) {
     return { ok: false, reason: "format" };
   }
   return { ok: true };
@@ -125,11 +130,11 @@ function isAsciiDigit(code: number): boolean {
 
 function isBase64UrlChar(code: number): boolean {
   return (
-    (code >= 0x30 && code <= 0x39) ||
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    code === 0x2d ||
-    code === 0x5f
+    (code >= 0x30 && code <= 0x39)
+    || (code >= 0x41 && code <= 0x5a)
+    || (code >= 0x61 && code <= 0x7a)
+    || code === 0x2d
+    || code === 0x5f
   );
 }
 

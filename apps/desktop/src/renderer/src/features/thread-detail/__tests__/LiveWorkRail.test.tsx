@@ -25,8 +25,7 @@ function buildEditedFilesEntry(): AppServerThreadActivityEntry {
           kind: "update",
           additions: 3,
           removals: 0,
-          diff:
-            "--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1,1 +1,4 @@\n line\n+a\n+b\n+c\n",
+          diff: "--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1,1 +1,4 @@\n line\n+a\n+b\n+c\n",
         },
       },
       {
@@ -121,7 +120,10 @@ describe("LiveWorkRail", () => {
 
   it("uses the section summary as the rail title when not pinned", () => {
     render(
-      <LiveWorkRail pinned={false} editedFileGroups={buildEditedFileGroups()} />,
+      <LiveWorkRail
+        pinned={false}
+        editedFileGroups={buildEditedFileGroups()}
+      />,
     );
     expect(
       screen.getByRole("complementary", { name: "Edited 2 files, +5, -2" }),
@@ -187,7 +189,10 @@ describe("LiveWorkRail", () => {
 
   it("expands a file's diff in place when its row is clicked", () => {
     render(
-      <LiveWorkRail pinned={false} editedFileGroups={buildEditedFileGroups()} />,
+      <LiveWorkRail
+        pinned={false}
+        editedFileGroups={buildEditedFileGroups()}
+      />,
     );
     // There is no separate section heading; the rail title carries the
     // summary while the body keeps the per-turn group header metadata.
@@ -201,12 +206,17 @@ describe("LiveWorkRail", () => {
     // Diff body not visible until the file row is expanded.
     expect(screen.queryByText(/@@ -1,1 \+1,4 @@/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Update AGENTS\.md/i }));
-    expect(screen.getByText(/Diff for AGENTS\.md|@@ -1,1 \+1,4 @@|\+a/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Diff for AGENTS\.md|@@ -1,1 \+1,4 @@|\+a/),
+    ).toBeInTheDocument();
   });
 
   it("renders the Changed Files section as a static list (no diff expand, no section heading)", () => {
     render(
-      <LiveWorkRail pinned={false} changedFilesEntry={buildChangedFilesEntry()} />,
+      <LiveWorkRail
+        pinned={false}
+        changedFilesEntry={buildChangedFilesEntry()}
+      />,
     );
     // Section heading was redundant with the rail title, dropped.
     expect(
@@ -231,7 +241,10 @@ describe("LiveWorkRail", () => {
 
   it("toggles the whole rail collapsed and expanded from the title button", () => {
     render(
-      <LiveWorkRail pinned={false} editedFileGroups={buildEditedFileGroups()} />,
+      <LiveWorkRail
+        pinned={false}
+        editedFileGroups={buildEditedFileGroups()}
+      />,
     );
     const collapseButton = screen.getByRole("button", {
       name: /Edited 2 files, \+5, -2/,
@@ -278,7 +291,10 @@ describe("LiveWorkRail", () => {
 
   it("hides the sidebar button when no move handler is provided (edits docked to sidebar)", () => {
     render(
-      <LiveWorkRail pinned={false} changedFilesEntry={buildChangedFilesEntry()} />,
+      <LiveWorkRail
+        pinned={false}
+        changedFilesEntry={buildChangedFilesEntry()}
+      />,
     );
     expect(
       screen.queryByRole("button", {

@@ -189,9 +189,7 @@ describe("DesktopSettingsService", () => {
       value: "user-home",
       source: "default",
     });
-    expect(snapshot.worktrees.effectivePath).toMatch(
-      /\.pwragent\/worktrees$/,
-    );
+    expect(snapshot.worktrees.effectivePath).toMatch(/\.pwragent\/worktrees$/);
   });
 
   it("defaults the update channel and only persists prerelease", async () => {
@@ -329,10 +327,14 @@ describe("DesktopSettingsService", () => {
     expect(saved).toContain("hot_cpu_profiling_enabled = true");
     expect(saved).toContain("hot_cpu_profiling_start_delay_ms = 5000");
     expect(saved).toContain('hot_cpu_profiling_trigger_mode = "slowburn"');
-    expect(saved).toContain("hot_cpu_profiling_slowburn_threshold_percent = 20");
+    expect(saved).toContain(
+      "hot_cpu_profiling_slowburn_threshold_percent = 20",
+    );
     expect(saved).toContain("hot_cpu_profiling_capture_heap_snapshot = true");
     expect(saved).toContain("hot_cpu_profiling_heap_snapshot_limit = 3");
-    expect((await service.readSettings()).general.hotCpuProfilingEnabled).toEqual({
+    expect(
+      (await service.readSettings()).general.hotCpuProfilingEnabled,
+    ).toEqual({
       value: true,
       source: "config",
     });
@@ -349,7 +351,8 @@ describe("DesktopSettingsService", () => {
       source: "config",
     });
     expect(
-      (await service.readSettings()).general.hotCpuProfilingSlowburnThresholdPercent,
+      (await service.readSettings()).general
+        .hotCpuProfilingSlowburnThresholdPercent,
     ).toEqual({
       value: 20,
       source: "config",
@@ -398,10 +401,12 @@ describe("DesktopSettingsService", () => {
     const saved = fs.readFileSync(configPath, "utf8");
     expect(saved).toContain("[general]");
     expect(saved).toContain("notifications_enabled = true");
-    expect((await service.readSettings()).general.notificationsEnabled).toEqual({
-      value: true,
-      source: "config",
-    });
+    expect((await service.readSettings()).general.notificationsEnabled).toEqual(
+      {
+        value: true,
+        source: "config",
+      },
+    );
   });
 
   it("defaults quit confirmation to enabled and persists overrides", async () => {
@@ -620,7 +625,9 @@ describe("DesktopSettingsService", () => {
     const afterActual = fs.readFileSync(configPath, "utf8");
     expect(afterActual).toContain("[messaging.attachments]");
     expect(afterActual).toContain('image_profile = "actual"');
-    expect((await service.readSettings()).messaging.attachments.imageProfile).toEqual({
+    expect(
+      (await service.readSettings()).messaging.attachments.imageProfile,
+    ).toEqual({
       value: "actual",
       source: "config",
     });
@@ -633,7 +640,9 @@ describe("DesktopSettingsService", () => {
 
     const afterDefault = fs.readFileSync(configPath, "utf8");
     expect(afterDefault).not.toContain("image_profile");
-    expect((await service.readSettings()).messaging.attachments.imageProfile).toEqual({
+    expect(
+      (await service.readSettings()).messaging.attachments.imageProfile,
+    ).toEqual({
       value: "medium",
       source: "default",
     });
@@ -663,7 +672,9 @@ describe("DesktopSettingsService", () => {
     const afterCompact = fs.readFileSync(configPath, "utf8");
     expect(afterCompact).toContain("[image_uploads]");
     expect(afterCompact).toContain("pasted_image_max_patches = 1024");
-    expect((await service.readSettings()).imageUploads.pastedImageMaxPatches).toEqual({
+    expect(
+      (await service.readSettings()).imageUploads.pastedImageMaxPatches,
+    ).toEqual({
       value: 1024,
       source: "config",
     });
@@ -676,7 +687,9 @@ describe("DesktopSettingsService", () => {
 
     const afterDefault = fs.readFileSync(configPath, "utf8");
     expect(afterDefault).not.toContain("pasted_image_max_patches");
-    expect((await service.readSettings()).imageUploads.pastedImageMaxPatches).toEqual({
+    expect(
+      (await service.readSettings()).imageUploads.pastedImageMaxPatches,
+    ).toEqual({
       value: 1536,
       source: "default",
     });
@@ -826,7 +839,9 @@ describe("DesktopSettingsService", () => {
     );
     expect(contents).toContain('authorized_user_ids = ["111111111"]');
     expect(contents).toContain("[[messaging.telegram.authorized_users]]");
-    expect(contents).not.toContain("[[messaging.telegram.authorized_user_ids_list]]");
+    expect(contents).not.toContain(
+      "[[messaging.telegram.authorized_user_ids_list]]",
+    );
     expect(contents).toContain('id = "111111111"');
     expect(contents).toContain('display_name = "Harold"');
     expect(contents).toContain("streaming_responses = true");
@@ -927,9 +942,7 @@ describe("DesktopSettingsService", () => {
       source: "env",
       overriddenByEnv: true,
     });
-    expect(snapshot.worktrees.effectivePath).toMatch(
-      /\.pwragent\/worktrees$/,
-    );
+    expect(snapshot.worktrees.effectivePath).toMatch(/\.pwragent\/worktrees$/);
   });
 
   it("round-trips the worktree storage setting through write + read", async () => {
@@ -1182,10 +1195,14 @@ describe("DesktopSettingsService", () => {
 
   it("reads secret metadata without decrypting stored values", async () => {
     const getSecret = vi.fn(async () => {
-      throw new Error("secret values should not be decrypted for settings snapshots");
+      throw new Error(
+        "secret values should not be decrypted for settings snapshots",
+      );
     });
     const getSecretSync = vi.fn(() => {
-      throw new Error("secret values should not be decrypted for settings snapshots");
+      throw new Error(
+        "secret values should not be decrypted for settings snapshots",
+      );
     });
     const hasSecret = vi.fn(async (name) => name === "grokApiKey");
     const secretStore: DesktopSecretStore = {
@@ -1225,11 +1242,10 @@ describe("DesktopSettingsService", () => {
         backend: "safeStorage",
         encrypted: true,
       }),
-      getSecretAccessError: vi.fn(
-        (name) =>
-          name === "telegramBotToken"
-            ? "PwrAgent could not unlock secret storage."
-            : undefined,
+      getSecretAccessError: vi.fn((name) =>
+        name === "telegramBotToken"
+          ? "PwrAgent could not unlock secret storage."
+          : undefined,
       ),
       hasSecret: vi.fn(async () => false),
       getSecret: vi.fn(),
@@ -1354,7 +1370,11 @@ describe("DesktopSettingsService", () => {
   it("reports malformed TOML without throwing from readSettings", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
-    fs.writeFileSync(configPath, "[experimental]\nchat_reply_composer\n", "utf8");
+    fs.writeFileSync(
+      configPath,
+      "[experimental]\nchat_reply_composer\n",
+      "utf8",
+    );
     const service = new DesktopSettingsService({
       configPath,
       env: {},
@@ -1393,7 +1413,9 @@ describe("DesktopSettingsService", () => {
         },
       }),
     ).rejects.toThrow("could not be parsed");
-    expect(fs.readFileSync(configPath, "utf8")).toContain("chat_reply_composer");
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "chat_reply_composer",
+    );
     expect(fs.readFileSync(configPath, "utf8")).toContain("enabled = true");
   });
 
@@ -1446,7 +1468,9 @@ describe("DesktopSettingsService", () => {
     expect(contents).toContain('display_name = "Alice"');
     expect(contents).toContain("[[messaging.mattermost.authorized_teams]]");
     expect(contents).toContain('id = "teamabcdefghijklmnopqrstu1"');
-    expect(contents).toContain("[[messaging.mattermost.authorized_conversations]]");
+    expect(contents).toContain(
+      "[[messaging.mattermost.authorized_conversations]]",
+    );
     expect(contents).toContain('id = "channelabcdefghijklmn12345"');
     // Bot token + HMAC secret never written to TOML
     expect(contents).not.toContain("token-abc");
@@ -1480,9 +1504,9 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.messaging.mattermost.authorizedTeams.value).toEqual([
       { id: "teamabcdefghijklmnopqrstu1", displayName: "Dev Team" },
     ]);
-    expect(snapshot.messaging.mattermost.authorizedConversations.value).toEqual([
-      { id: "channelabcdefghijklmn12345", displayName: "Town Square" },
-    ]);
+    expect(snapshot.messaging.mattermost.authorizedConversations.value).toEqual(
+      [{ id: "channelabcdefghijklmn12345", displayName: "Town Square" }],
+    );
     expect(snapshot.messaging.mattermost.botToken).toMatchObject({
       configured: true,
       source: "keychain",
@@ -1594,7 +1618,9 @@ describe("DesktopSettingsService", () => {
       value: "",
       source: "default",
     });
-    expect(service.resolveFeishuTenantUrlSync()).toBe("https://open.larksuite.com");
+    expect(service.resolveFeishuTenantUrlSync()).toBe(
+      "https://open.larksuite.com",
+    );
   });
 
   it("reports unavailable secret storage and blocks secret writes", async () => {
@@ -1618,9 +1644,9 @@ describe("DesktopSettingsService", () => {
       writable: false,
       unavailableReason: "No secure backend",
     });
-    await expect(service.replaceSecret("grokApiKey", "xai-secret")).rejects.toThrow(
-      "No secure backend",
-    );
+    await expect(
+      service.replaceSecret("grokApiKey", "xai-secret"),
+    ).rejects.toThrow("No secure backend");
   });
 
   it("defaults diff condensation to disabled / auto and round-trips a custom value", async () => {
@@ -1880,7 +1906,9 @@ describe("DesktopSettingsService", () => {
     expect(after).toContain("# config edited by hand — comments must survive");
     expect(after).toContain("[messaging.mattermost]");
     expect(after).toContain('server_url = "https://chat.example.com"');
-    expect(after).toContain('callback_base_url = "https://callbacks.example.com"');
+    expect(after).toContain(
+      'callback_base_url = "https://callbacks.example.com"',
+    );
     expect(after).toContain('authorized_user_ids = ["abc-123", "def-456"]');
     expect(after).toContain("[unknown.future.section]");
     expect(after).toContain('opaque_field = "preserve me"');

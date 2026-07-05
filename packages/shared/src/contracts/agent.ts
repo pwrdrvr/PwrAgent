@@ -523,13 +523,14 @@ export type MaterializeDirectoryLaunchpadOptions = {
   ) => void | Promise<void>;
 };
 
-export type MaterializeDirectoryLaunchpadResponse = MaterializedDirectoryLaunchpadThread & {
-  turnId?: string;
-  turnStartFailure?: {
-    message: string;
-    phase: "turn" | "review";
+export type MaterializeDirectoryLaunchpadResponse =
+  MaterializedDirectoryLaunchpadThread & {
+    turnId?: string;
+    turnStartFailure?: {
+      message: string;
+      phase: "turn" | "review";
+    };
   };
-};
 
 export type CodexEnvironmentSetupProgressEvent = {
   directoryKey: string;

@@ -13,9 +13,9 @@ export function truncateRendererPayloadString(
   const head = value.slice(0, RENDERER_PAYLOAD_STRING_HEAD_CHARS);
   const tail = value.slice(-RENDERER_PAYLOAD_STRING_TAIL_CHARS);
   const omitted =
-    value.length -
-    RENDERER_PAYLOAD_STRING_HEAD_CHARS -
-    RENDERER_PAYLOAD_STRING_TAIL_CHARS;
+    value.length
+    - RENDERER_PAYLOAD_STRING_HEAD_CHARS
+    - RENDERER_PAYLOAD_STRING_TAIL_CHARS;
 
   return [
     head,
@@ -53,7 +53,11 @@ function sanitizeRendererPayloadValue(
     const sanitized: unknown[] = [];
     seen.set(value, sanitized);
     value.forEach((entry, index) => {
-      const next = sanitizeRendererPayloadValue(entry, `${path}[${index}]`, seen);
+      const next = sanitizeRendererPayloadValue(
+        entry,
+        `${path}[${index}]`,
+        seen,
+      );
       sanitized.push(next);
       if (next !== entry) {
         changed = true;
@@ -105,8 +109,8 @@ function isRendererImageUrlField(
     return isRendererImageUrl(value);
   }
   if (
-    key === "image_url" &&
-    (type === "image" || type === "input_image" || type === "image_url")
+    key === "image_url"
+    && (type === "image" || type === "input_image" || type === "image_url")
   ) {
     return isRendererImageUrl(value);
   }
@@ -116,9 +120,9 @@ function isRendererImageUrlField(
 
 function isRendererImageUrl(value: string): boolean {
   return (
-    value.startsWith("data:image/") ||
-    value.startsWith("file://") ||
-    value.startsWith("pwragent-image://") ||
-    /^https?:\/\/.+/i.test(value)
+    value.startsWith("data:image/")
+    || value.startsWith("file://")
+    || value.startsWith("pwragent-image://")
+    || /^https?:\/\/.+/i.test(value)
   );
 }

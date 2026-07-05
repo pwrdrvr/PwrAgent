@@ -7,8 +7,8 @@ import {
 
 function buildEntry(
   overrides: Partial<Omit<ThreadTurnQueueEntry, "input">> = {},
-): Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
-  Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">> {
+): Omit<ThreadTurnQueueEntry, "id" | "createdAt">
+  & Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">> {
   return {
     id: "entry-1",
     backend: "codex",
@@ -70,11 +70,12 @@ describe("ThreadTurnQueue", () => {
       },
     });
 
-    await expect(queue.submit(buildEntry({ id: "manual-1", origin: "manual" })))
-      .resolves.toMatchObject({
-        status: "queued",
-        position: 1,
-      });
+    await expect(
+      queue.submit(buildEntry({ id: "manual-1", origin: "manual" })),
+    ).resolves.toMatchObject({
+      status: "queued",
+      position: 1,
+    });
     await expect(
       queue.submit(buildEntry({ id: "automation-1", origin: "automation" })),
     ).resolves.toMatchObject({
@@ -170,7 +171,8 @@ describe("ThreadTurnQueue", () => {
     expect(queue.cancelEntry("queued-1", "test cancel")).toMatchObject({
       id: "queued-1",
     });
-    expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
-      .toEqual([]);
+    expect(
+      queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }),
+    ).toEqual([]);
   });
 });

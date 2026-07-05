@@ -51,12 +51,12 @@ type ThreadRowProps = {
   thread: NavigationThreadSummary;
   onOpenContextMenu: (
     thread: NavigationThreadSummary,
-    position: { x: number; y: number; anchorTop?: number }
+    position: { x: number; y: number; anchorTop?: number },
   ) => void;
   onOpenPullRequestContextMenu?: (
     thread: NavigationThreadSummary,
     pr: PrSummary,
-    position: { x: number; y: number; anchorTop?: number }
+    position: { x: number; y: number; anchorTop?: number },
   ) => void;
   /**
    * Fired after a 750ms hover over a non-merged PR chip. The parent
@@ -97,9 +97,11 @@ type ThreadRowProps = {
 };
 
 export function ThreadRow(props: ThreadRowProps) {
-  const threadKey = buildThreadIdentityKey(props.thread.source, props.thread.id);
-  const selected =
-    threadKey === props.selectedThreadKey;
+  const threadKey = buildThreadIdentityKey(
+    props.thread.source,
+    props.thread.id,
+  );
+  const selected = threadKey === props.selectedThreadKey;
   const isComposerSource = threadKey === props.composerSourceThreadKey;
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -119,12 +121,15 @@ export function ThreadRow(props: ThreadRowProps) {
   // user's first click. Terminal-only PR sets still request a user
   // refresh; main owns the longer terminal-state rate limit.
   const hoverTimerRef = useRef<number | undefined>(undefined);
-  useEffect(() => () => {
-    if (hoverTimerRef.current !== undefined) {
-      window.clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = undefined;
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      if (hoverTimerRef.current !== undefined) {
+        window.clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = undefined;
+      }
+    },
+    [],
+  );
   const armHoverPrefetch = (): void => {
     if (!props.onPrefetchPullRequests) return;
     if (hoverTimerRef.current !== undefined) return;
@@ -204,13 +209,13 @@ export function ThreadRow(props: ThreadRowProps) {
           // macOS Finder's "go to parent folder" mental model and
           // diverged from the directory shortcut.
           if (
-            props.onMovePinnedThread &&
-            props.thread.pinnedRank &&
-            event.metaKey &&
-            event.shiftKey &&
-            !event.altKey &&
-            !event.ctrlKey &&
-            (event.key === "ArrowUp" || event.key === "ArrowDown")
+            props.onMovePinnedThread
+            && props.thread.pinnedRank
+            && event.metaKey
+            && event.shiftKey
+            && !event.altKey
+            && !event.ctrlKey
+            && (event.key === "ArrowUp" || event.key === "ArrowDown")
           ) {
             event.preventDefault();
             props.onMovePinnedThread(
@@ -245,7 +250,9 @@ export function ThreadRow(props: ThreadRowProps) {
           onMouseLeave={prs.length > 0 ? cancelHoverPrefetch : undefined}
         >
           <ThreadMetaChips
-            hasApprovalRequest={props.approvalRequestThreadKeys?.[threadKey] === true}
+            hasApprovalRequest={
+              props.approvalRequestThreadKeys?.[threadKey] === true
+            }
             hasInputRequest={props.inputRequestThreadKeys?.[threadKey] === true}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
@@ -283,7 +290,8 @@ export function ThreadRow(props: ThreadRowProps) {
               }
               onDetach={
                 props.onDetachPullRequest
-                  ? (targetPr) => props.onDetachPullRequest!(props.thread, targetPr)
+                  ? (targetPr) =>
+                      props.onDetachPullRequest!(props.thread, targetPr)
                   : undefined
               }
             />
@@ -297,7 +305,6 @@ export function ThreadRow(props: ThreadRowProps) {
             />
           ))}
         </span>
-
       </button>
 
       <div className="thread-row__actions">
@@ -498,9 +505,13 @@ function BindingChip(props: {
         role="button"
         tabIndex={onUnbind ? 0 : -1}
         className="thread-row__chip thread-row__chip--binding"
-        onMouseEnter={(event) => tooltipController.show(event.currentTarget, tooltip)}
+        onMouseEnter={(event) =>
+          tooltipController.show(event.currentTarget, tooltip)
+        }
         onMouseLeave={tooltipController.hide}
-        onFocus={(event) => tooltipController.show(event.currentTarget, tooltip)}
+        onFocus={(event) =>
+          tooltipController.show(event.currentTarget, tooltip)
+        }
         onBlur={tooltipController.hide}
         aria-label={ariaLabel}
         aria-haspopup={onUnbind ? "menu" : undefined}
@@ -595,7 +606,8 @@ function isSlackGroupDmBinding(
   return (
     binding.platform === "slack"
     && binding.conversationKind === "channel"
-    && (binding.conversationTitle?.trim().toLowerCase().startsWith("mpdm") ?? false)
+    && (binding.conversationTitle?.trim().toLowerCase().startsWith("mpdm")
+      ?? false)
   );
 }
 
@@ -725,7 +737,9 @@ function formatBindingTooltip(binding: MessagingThreadBindingSummary): string {
   return lines.join("\n");
 }
 
-function formatConversationType(binding: MessagingThreadBindingSummary): string {
+function formatConversationType(
+  binding: MessagingThreadBindingSummary,
+): string {
   if (isSlackGroupDmBinding(binding)) return "Group DM";
   const platform = binding.platform;
   switch (binding.conversationKind) {
@@ -774,7 +788,7 @@ function formatRelativeTime(timestamp?: number): string {
 
   const deltaMinutes = Math.max(
     0,
-    Math.round((Date.now() - timestamp) / (1000 * 60))
+    Math.round((Date.now() - timestamp) / (1000 * 60)),
   );
 
   if (deltaMinutes < 1) {

@@ -46,9 +46,9 @@ export function buildAutomationInspectionAcpMcpServers(params: {
   threadId?: string;
 }): AcpMcpServerConfig[] {
   if (
-    !params.threadId ||
-    !params.command ||
-    !acpRuntimeSupportsAutomationInspectionMcp(params.runtimeCapabilities)
+    !params.threadId
+    || !params.command
+    || !acpRuntimeSupportsAutomationInspectionMcp(params.runtimeCapabilities)
   ) {
     return [];
   }
@@ -124,7 +124,10 @@ function parseAutomationInspectionCliArgs(argv: string[]):
   | { ok: false; error: string } {
   const [operationValue, ...rest] = argv;
   if (!isAutomationInspectionMcpToolName(operationValue)) {
-    return { ok: false, error: "Missing or unsupported automation inspection operation." };
+    return {
+      ok: false,
+      error: "Missing or unsupported automation inspection operation.",
+    };
   }
   const options = readOptions(rest);
   const backend = readString(options.backend);

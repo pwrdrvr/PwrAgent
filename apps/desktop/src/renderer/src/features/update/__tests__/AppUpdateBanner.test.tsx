@@ -86,18 +86,18 @@ describe("AppUpdateBanner", () => {
 
   it("does not let a stale initial read hide a newer downloaded event", async () => {
     let listener: ((status: AppUpdateStatus) => void) | undefined;
-    let resolveInitialStatus:
-      | ((status: AppUpdateStatus) => void)
-      | undefined;
+    let resolveInitialStatus: ((status: AppUpdateStatus) => void) | undefined;
     const initialStatus = new Promise<AppUpdateStatus>((resolve) => {
       resolveInitialStatus = resolve;
     });
     const desktopApi = {
       readAppUpdateStatus: vi.fn(async () => await initialStatus),
-      onAppUpdateStatus: vi.fn((callback: (status: AppUpdateStatus) => void) => {
-        listener = callback;
-        return vi.fn();
-      }),
+      onAppUpdateStatus: vi.fn(
+        (callback: (status: AppUpdateStatus) => void) => {
+          listener = callback;
+          return vi.fn();
+        },
+      ),
       installAppUpdate: vi.fn(async () => ({ status: "restarting" as const })),
     } satisfies DesktopApi;
 

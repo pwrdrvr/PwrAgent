@@ -94,7 +94,10 @@ export function buildSkillsBrowserIntent(params: {
       )
     : SKILLS_BROWSER_PAGE_SIZE;
   const effectivePageSize = Math.max(1, pageSize);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / effectivePageSize));
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filtered.length / effectivePageSize),
+  );
   const pageIndex = clampPageIndex(params.pageIndex ?? 0, totalPages);
   const pageStart = pageIndex * effectivePageSize;
   const pageEntries = filtered.slice(pageStart, pageStart + effectivePageSize);
@@ -246,7 +249,8 @@ export function buildSkillSelectedIntent(params: {
     ...(params.targetSurface ? { targetSurface: params.targetSurface } : {}),
     title: "Skill Selected",
     body: formatSkillSelectionHelp(params.selection),
-    fallbackText: "Reply Remove to clear this skill, or send your next request.",
+    fallbackText:
+      "Reply Remove to clear this skill, or send your next request.",
     actions: applyActionCapabilityLimits(
       [
         {
@@ -287,7 +291,8 @@ export function buildSkillRemovedIntent(params: {
     body: params.removed
       ? `$${params.removed.name} will no longer be prepended to your next request.`
       : "No skill is currently selected.",
-    fallbackText: "Reply Skills to choose another skill, or send your next request.",
+    fallbackText:
+      "Reply Skills to choose another skill, or send your next request.",
     actions: [
       {
         id: "status:skills",
@@ -333,28 +338,28 @@ export function skillsBrowserPageFromValue(
   };
 }
 
-export function isSkillsSearchIntent(
-  intent: MessagingSurfaceIntent,
-): boolean {
+export function isSkillsSearchIntent(intent: MessagingSurfaceIntent): boolean {
   return intent.bindingId !== undefined && intent.id.includes("skills-search");
 }
 
 export function isSkillSelectionNoticeIntent(
   intent: MessagingSurfaceIntent,
 ): boolean {
-  return intent.bindingId !== undefined && (
-    intent.id.includes("skill-selected") ||
-    intent.id.includes("skill-removed")
+  return (
+    intent.bindingId !== undefined
+    && (intent.id.includes("skill-selected")
+      || intent.id.includes("skill-removed"))
   );
 }
 
 export function isSkillsWorkflowIntent(
   intent: MessagingSurfaceIntent,
 ): boolean {
-  return intent.bindingId !== undefined && (
-    intent.id.includes("skills-browser") ||
-    isSkillsSearchIntent(intent) ||
-    isSkillSelectionNoticeIntent(intent)
+  return (
+    intent.bindingId !== undefined
+    && (intent.id.includes("skills-browser")
+      || isSkillsSearchIntent(intent)
+      || isSkillSelectionNoticeIntent(intent))
   );
 }
 
@@ -429,13 +434,19 @@ function skillsBrowserFallbackText(params: {
       const description = skillDescription(entry);
       return `${number}. $${entry.name}${description ? ` - ${description}` : ""}`;
     }),
-    params.filteredCount === 0 ? "Reply Back, Search, or Cancel." : "Reply with a number, Search, Back, Next, Prev, or Cancel.",
+    params.filteredCount === 0
+      ? "Reply Back, Search, or Cancel."
+      : "Reply with a number, Search, Back, Next, Prev, or Cancel.",
   ];
   return lines.filter((line): line is string => Boolean(line)).join("\n");
 }
 
-function skillDescription(entry: MessagingSkillBrowserEntry): string | undefined {
-  return entry.description?.trim() || entry.shortDescription?.trim() || undefined;
+function skillDescription(
+  entry: MessagingSkillBrowserEntry,
+): string | undefined {
+  return (
+    entry.description?.trim() || entry.shortDescription?.trim() || undefined
+  );
 }
 
 function scoreSkillEntry(
@@ -457,12 +468,16 @@ function scoreSkillEntry(
   return haystack.includes(normalizedQuery) ? 2 : undefined;
 }
 
-function skillSelectionValue(entry: MessagingSkillBrowserEntry): MessagingJsonValue {
+function skillSelectionValue(
+  entry: MessagingSkillBrowserEntry,
+): MessagingJsonValue {
   return {
     name: entry.name,
     ...(entry.path ? { path: entry.path } : {}),
     ...(entry.description ? { description: entry.description } : {}),
-    ...(entry.shortDescription ? { shortDescription: entry.shortDescription } : {}),
+    ...(entry.shortDescription
+      ? { shortDescription: entry.shortDescription }
+      : {}),
     ...(entry.cwd ? { cwd: entry.cwd } : {}),
     ...(typeof entry.enabled === "boolean" ? { enabled: entry.enabled } : {}),
   };
@@ -486,7 +501,7 @@ function clampPageIndex(pageIndex: number, totalPages: number): number {
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined;
 }
 

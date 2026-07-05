@@ -6,7 +6,10 @@ export type {
   MattermostProviderLogger,
   MattermostAdapterOptions,
 } from "./mattermost-adapter.ts";
-export { MattermostAdapter, createMattermostAdapter } from "./mattermost-adapter.ts";
+export {
+  MattermostAdapter,
+  createMattermostAdapter,
+} from "./mattermost-adapter.ts";
 export {
   MATTERMOST_MESSAGE_TEXT_LIMIT,
   MATTERMOST_INTEGRATION_CONTEXT_LIMIT_BYTES,

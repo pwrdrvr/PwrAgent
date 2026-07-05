@@ -12,7 +12,10 @@ type ThinkingScannerStyle = CSSProperties & {
 };
 
 function getThinkingScannerPhaseMs(): number {
-  if (typeof performance === "undefined" || typeof performance.now !== "function") {
+  if (
+    typeof performance === "undefined"
+    || typeof performance.now !== "function"
+  ) {
     return 0;
   }
 

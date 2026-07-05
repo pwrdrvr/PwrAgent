@@ -38,7 +38,8 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 describe("image normalization ipc", () => {
   it("converts HEIC with Electron when native decode succeeds", async () => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
+    const { convertImageUploadFallback } =
+      await import("../ipc/image-normalization");
 
     await expect(
       convertImageUploadFallback(
@@ -49,7 +50,9 @@ describe("image normalization ipc", () => {
         },
         {
           createImageFromBuffer: () =>
-            fakeNativeImage({ output: Buffer.from([4, 5, 6]) }) as Electron.NativeImage,
+            fakeNativeImage({
+              output: Buffer.from([4, 5, 6]),
+            }) as Electron.NativeImage,
           execFile: vi.fn(),
           platform: "darwin",
         },
@@ -62,13 +65,16 @@ describe("image normalization ipc", () => {
   });
 
   it("falls back to sips on macOS when Electron cannot decode HEIC", async () => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
+    const { convertImageUploadFallback } =
+      await import("../ipc/image-normalization");
     let outputPath = "";
-    const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
-      outputPath = args.at(-1) ?? "";
-      await writeFile(outputPath, Buffer.from([7, 8, 9]));
-      return { stdout: "", stderr: "" };
-    });
+    const execFile = vi.fn(
+      async (_command: string, args: readonly string[]) => {
+        outputPath = args.at(-1) ?? "";
+        await writeFile(outputPath, Buffer.from([7, 8, 9]));
+        return { stdout: "", stderr: "" };
+      },
+    );
 
     await expect(
       convertImageUploadFallback(
@@ -101,11 +107,14 @@ describe("image normalization ipc", () => {
   });
 
   it("falls back to sips on macOS when Electron probing throws", async () => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
-    const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
-      await writeFile(args.at(-1) ?? "", Buffer.from([7, 8, 9]));
-      return { stdout: "", stderr: "" };
-    });
+    const { convertImageUploadFallback } =
+      await import("../ipc/image-normalization");
+    const execFile = vi.fn(
+      async (_command: string, args: readonly string[]) => {
+        await writeFile(args.at(-1) ?? "", Buffer.from([7, 8, 9]));
+        return { stdout: "", stderr: "" };
+      },
+    );
 
     await expect(
       convertImageUploadFallback(
@@ -130,7 +139,8 @@ describe("image normalization ipc", () => {
   });
 
   it("rejects HEIC conversion without macOS fallback support", async () => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
+    const { convertImageUploadFallback } =
+      await import("../ipc/image-normalization");
 
     await expect(
       convertImageUploadFallback(
@@ -150,7 +160,8 @@ describe("image normalization ipc", () => {
   });
 
   it("rejects non-HEIC fallback requests", async () => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
+    const { convertImageUploadFallback } =
+      await import("../ipc/image-normalization");
 
     await expect(
       convertImageUploadFallback(
@@ -170,12 +181,15 @@ describe("image normalization ipc", () => {
   });
 
   it("cleans up temporary files when sips fails", async () => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
+    const { convertImageUploadFallback } =
+      await import("../ipc/image-normalization");
     let outputPath = "";
-    const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
-      outputPath = args.at(-1) ?? "";
-      throw new Error("sips exploded");
-    });
+    const execFile = vi.fn(
+      async (_command: string, args: readonly string[]) => {
+        outputPath = args.at(-1) ?? "";
+        throw new Error("sips exploded");
+      },
+    );
 
     await expect(
       convertImageUploadFallback(

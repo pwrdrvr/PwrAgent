@@ -75,7 +75,9 @@ export class DeterministicInteractionMapper implements MessagingInteractionMappe
   }
 }
 
-export function actionsForIntent(intent: MessagingSurfaceIntent): MessagingSurfaceAction[] {
+export function actionsForIntent(
+  intent: MessagingSurfaceIntent,
+): MessagingSurfaceAction[] {
   switch (intent.kind) {
     case "thread_picker":
     case "project_picker":
@@ -94,7 +96,9 @@ export function actionsForIntent(intent: MessagingSurfaceIntent): MessagingSurfa
   }
 }
 
-function questionnaireActions(intent: MessagingQuestionnaireIntent): MessagingSurfaceAction[] {
+function questionnaireActions(
+  intent: MessagingQuestionnaireIntent,
+): MessagingSurfaceAction[] {
   return messagingQuestionnaireActions(intent);
 }
 
@@ -128,18 +132,20 @@ function matchApprovalSynonym(
   normalized: string,
 ): MessagingSurfaceAction | undefined {
   if (
-    normalized === "yes for this session" ||
-    normalized === "approve for session" ||
-    normalized === "allow for session" ||
-    normalized === "approve this session"
+    normalized === "yes for this session"
+    || normalized === "approve for session"
+    || normalized === "allow for session"
+    || normalized === "approve this session"
   ) {
-    return intent.decisions.find((action) => action.decision === "accept_for_session");
+    return intent.decisions.find(
+      (action) => action.decision === "accept_for_session",
+    );
   }
   if (
-    normalized === "approve and remember" ||
-    normalized === "remember" ||
-    normalized === "approve prefix" ||
-    normalized === "allow prefix"
+    normalized === "approve and remember"
+    || normalized === "remember"
+    || normalized === "approve prefix"
+    || normalized === "allow prefix"
   ) {
     return intent.decisions.find(
       (action) => action.decision === "accept_with_execpolicy_amendment",

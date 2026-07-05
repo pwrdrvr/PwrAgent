@@ -95,15 +95,21 @@ describe("PendingQuestionnaire", () => {
         state={buildState()}
         onChange={() => undefined}
         onSubmit={async () => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("group", { name: "Pending input" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending input" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Question 1 of 2")).toBeInTheDocument();
     expect(screen.getByText("Small patch (Recommended)")).toBeInTheDocument();
     expect(screen.getByText("Recommended")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Decline" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Approve" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Decline" }),
+    ).not.toBeInTheDocument();
   });
 
   it("emits changed state for option selection and navigation", () => {
@@ -114,11 +120,19 @@ describe("PendingQuestionnaire", () => {
     });
     const onSubmit = vi.fn(async () => undefined);
     const { rerender } = render(
-      <PendingQuestionnaire state={state} onChange={onChange} onSubmit={onSubmit} />
+      <PendingQuestionnaire
+        state={state}
+        onChange={onChange}
+        onSubmit={onSubmit}
+      />,
     );
     const rerenderQuestionnaire = () => {
       rerender(
-        <PendingQuestionnaire state={state} onChange={onChange} onSubmit={onSubmit} />
+        <PendingQuestionnaire
+          state={state}
+          onChange={onChange}
+          onSubmit={onSubmit}
+        />,
       );
     };
 
@@ -130,10 +144,9 @@ describe("PendingQuestionnaire", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.getByText("Question 1 of 2")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Large refactor/ })).toHaveAttribute(
-      "aria-pressed",
-      "true"
-    );
+    expect(
+      screen.getByRole("button", { name: /Large refactor/ }),
+    ).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByRole("button", { name: /Unit only/ }));
@@ -145,7 +158,7 @@ describe("PendingQuestionnaire", () => {
           expect.objectContaining({ kind: "option", optionKey: "B" }),
           expect.objectContaining({ kind: "option", optionKey: "A" }),
         ],
-      })
+      }),
     );
   });
 
@@ -159,7 +172,9 @@ describe("PendingQuestionnaire", () => {
       />,
     );
 
-    const textarea = screen.getByLabelText("Other answer") as HTMLTextAreaElement;
+    const textarea = screen.getByLabelText(
+      "Other answer",
+    ) as HTMLTextAreaElement;
     expect(textarea).toHaveAttribute("rows", "1");
 
     Object.defineProperty(textarea, "scrollHeight", {

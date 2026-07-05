@@ -33,13 +33,13 @@ export function findLegacyPaths(options?: {
 }): LegacyPaths {
   const homeDir = options?.homeDir ?? os.homedir();
   const xdgConfigHome =
-    options?.xdgConfigHome?.trim() ||
-    process.env.XDG_CONFIG_HOME?.trim() ||
-    path.join(homeDir, ".config");
+    options?.xdgConfigHome?.trim()
+    || process.env.XDG_CONFIG_HOME?.trim()
+    || path.join(homeDir, ".config");
   const xdgStateHome =
-    options?.xdgStateHome?.trim() ||
-    process.env.XDG_STATE_HOME?.trim() ||
-    path.join(homeDir, ".local", "state");
+    options?.xdgStateHome?.trim()
+    || process.env.XDG_STATE_HOME?.trim()
+    || path.join(homeDir, ".local", "state");
 
   const paths: LegacyPaths = {};
 
@@ -77,7 +77,10 @@ export function migrateIfNeeded(options?: {
   const nativeBinding = getNativeBinding();
 
   if (fs.existsSync(dbPath)) {
-    const db = new Database(dbPath, { readonly: true, ...(nativeBinding ? { nativeBinding } : {}) });
+    const db = new Database(dbPath, {
+      readonly: true,
+      ...(nativeBinding ? { nativeBinding } : {}),
+    });
     try {
       const row = db
         .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
@@ -98,11 +101,11 @@ export function migrateIfNeeded(options?: {
 
   const legacy = findLegacyPaths(options);
   const hasAnySources =
-    legacy.messagingState ||
-    legacy.overlayState ||
-    legacy.settingsSecrets ||
-    legacy.desktopConfig ||
-    legacy.grokAppServerConfig;
+    legacy.messagingState
+    || legacy.overlayState
+    || legacy.settingsSecrets
+    || legacy.desktopConfig
+    || legacy.grokAppServerConfig;
 
   if (!hasAnySources) {
     const stateDb = StateDb.open(dbPath, {
@@ -423,10 +426,7 @@ function migrateDirectoryLaunchpads(
   return count;
 }
 
-function migrateThreads(
-  db: BetterSqlite3.Database,
-  threads: unknown,
-): number {
+function migrateThreads(db: BetterSqlite3.Database, threads: unknown): number {
   if (!threads || typeof threads !== "object") return 0;
   const stmt = db.prepare(
     `INSERT OR IGNORE INTO threads(thread_id, directory_path, last_seen_at, dismissed_at, snoozed_until, payload)
@@ -453,10 +453,7 @@ function migrateThreads(
   return count;
 }
 
-function migrateSecrets(
-  db: BetterSqlite3.Database,
-  secrets: unknown,
-): number {
+function migrateSecrets(db: BetterSqlite3.Database, secrets: unknown): number {
   if (!secrets || typeof secrets !== "object") return 0;
   const stmt = db.prepare(
     "INSERT OR IGNORE INTO secrets(key, ciphertext, updated_at) VALUES (?, ?, ?)",
@@ -523,7 +520,10 @@ function cleanupSidecars(tmpDbPath: string): void {
 
 function verifyCounts(dbPath: string): Record<string, number> {
   const nativeBinding = getNativeBinding();
-  const db = new Database(dbPath, { readonly: true, ...(nativeBinding ? { nativeBinding } : {}) });
+  const db = new Database(dbPath, {
+    readonly: true,
+    ...(nativeBinding ? { nativeBinding } : {}),
+  });
   try {
     const tableCountQueries = [
       ["bindings", "SELECT COUNT(*) as count FROM bindings"],
@@ -532,16 +532,20 @@ function verifyCounts(dbPath: string): Record<string, number> {
       ["callback_handles", "SELECT COUNT(*) as count FROM callback_handles"],
       ["deliveries", "SELECT COUNT(*) as count FROM deliveries"],
       ["backends", "SELECT COUNT(*) as count FROM backends"],
-      ["launchpad_defaults", "SELECT COUNT(*) as count FROM launchpad_defaults"],
-      ["directory_launchpads", "SELECT COUNT(*) as count FROM directory_launchpads"],
+      [
+        "launchpad_defaults",
+        "SELECT COUNT(*) as count FROM launchpad_defaults",
+      ],
+      [
+        "directory_launchpads",
+        "SELECT COUNT(*) as count FROM directory_launchpads",
+      ],
       ["threads", "SELECT COUNT(*) as count FROM threads"],
       ["secrets", "SELECT COUNT(*) as count FROM secrets"],
     ] as const;
     const counts: Record<string, number> = {};
     for (const [table, query] of tableCountQueries) {
-      const row = db
-        .prepare(query)
-        .get() as { count: number };
+      const row = db.prepare(query).get() as { count: number };
       counts[table] = row.count;
     }
     return counts;

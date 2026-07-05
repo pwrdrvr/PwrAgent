@@ -44,7 +44,10 @@ describe("PrChip", () => {
     expect(chip).not.toHaveClass("pr-chip--draft");
     expect(chip).not.toHaveClass("pr-chip--conflicting");
     expect(chip.querySelector(".pr-chip__draft-bar")).toBeNull();
-    expect(chip).toHaveAttribute("aria-label", expect.stringContaining("checks passing"));
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("checks passing"),
+    );
   });
 
   it("keeps the check-state dot color and adds a bar for an open draft", () => {
@@ -55,13 +58,19 @@ describe("PrChip", () => {
     expect(chip).toHaveClass("pr-chip--passing");
     expect(chip).toHaveClass("pr-chip--draft");
     expect(chip.querySelector(".pr-chip__draft-bar")).not.toBeNull();
-    expect(chip).toHaveAttribute("aria-label", expect.stringContaining("draft · checks passing"));
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("draft · checks passing"),
+    );
   });
 
   it("recolors the dot red and labels the conflict for a conflicting PR", () => {
     const chip = renderChip(basePr({ mergeState: "conflicting" }));
     expect(chip).toHaveClass("pr-chip--conflicting");
-    expect(chip).toHaveAttribute("aria-label", expect.stringContaining("merge conflict"));
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("merge conflict"),
+    );
   });
 
   it("renders a closed PR distinctly and without a draft affordance", () => {
@@ -73,7 +82,10 @@ describe("PrChip", () => {
     expect(chip).toHaveClass("pr-chip--closed");
     expect(chip).not.toHaveClass("pr-chip--draft");
     expect(chip.querySelector(".pr-chip__draft-bar")).toBeNull();
-    expect(chip).toHaveAttribute("aria-label", expect.stringContaining("closed without merge"));
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("closed without merge"),
+    );
   });
 
   it("defers draft + conflict to sibling pills when withStatusPills is set", () => {
@@ -99,6 +111,9 @@ describe("PrChip", () => {
     expect(withPills).not.toHaveClass("pr-chip--conflicting");
     expect(withPills.querySelector(".pr-chip__draft-bar")).toBeNull();
     // The accessible name still reports the full status for screen readers.
-    expect(withPills).toHaveAttribute("aria-label", expect.stringContaining("draft · merge conflict"));
+    expect(withPills).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("draft · merge conflict"),
+    );
   });
 });

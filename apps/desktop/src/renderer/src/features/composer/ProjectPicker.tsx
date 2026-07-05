@@ -1,4 +1,11 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import type { NavigationDirectorySummary } from "@pwragent/shared";
 import { FolderIcon, SearchIcon } from "../../icons";
 import { tildifyPath } from "../../lib/tildify-path";
@@ -47,7 +54,10 @@ export type ProjectPickerProps = {
 const RECENTS_LIMIT = 10;
 
 function formatLabel(directory: NavigationDirectorySummary): string {
-  return directory.label || (directory.path ? tildifyPath(directory.path) : directory.key);
+  return (
+    directory.label
+    || (directory.path ? tildifyPath(directory.path) : directory.key)
+  );
 }
 
 function formatPath(directory: NavigationDirectorySummary): string {
@@ -93,7 +103,8 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
   const sorted = useMemo(() => {
     const pickable = props.directories.filter(isPickable);
     const ordered = [...pickable].sort(
-      (left, right) => (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0),
+      (left, right) =>
+        (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0),
     );
     const top = ordered.slice(0, RECENTS_LIMIT);
     const trimmed = query.trim().toLowerCase();
@@ -107,7 +118,9 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
     });
   }, [props.directories, query]);
 
-  const buttonLabel = props.value ? formatLabel(props.value) : "No selected project";
+  const buttonLabel = props.value
+    ? formatLabel(props.value)
+    : "No selected project";
   const isEmpty = !props.value;
 
   return (
@@ -141,7 +154,11 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
       </button>
 
       {open ? (
-        <div className="project-picker__pop" role="dialog" aria-label="Project picker">
+        <div
+          className="project-picker__pop"
+          role="dialog"
+          aria-label="Project picker"
+        >
           <div className="project-picker__search">
             <span aria-hidden="true" className="project-picker__search-icon">
               <SearchIcon size={13} />
@@ -171,7 +188,10 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
               <span aria-hidden="true" className="project-picker__row-check">
                 {isEmpty ? "✓" : ""}
               </span>
-              <span className="project-picker__no-directory-icon" aria-hidden="true">
+              <span
+                className="project-picker__no-directory-icon"
+                aria-hidden="true"
+              >
                 <FolderIcon size={13} />
                 <span className="project-picker__no-directory-slash" />
               </span>
@@ -194,8 +214,7 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
               </li>
             ) : (
               sorted.map((directory) => {
-                const active =
-                  props.value && props.value.key === directory.key;
+                const active = props.value && props.value.key === directory.key;
                 return (
                   <li key={directory.key}>
                     <button
@@ -210,10 +229,16 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
                         props.onSelect(directory);
                       }}
                     >
-                      <span aria-hidden="true" className="project-picker__row-check">
+                      <span
+                        aria-hidden="true"
+                        className="project-picker__row-check"
+                      >
                         {active ? "✓" : ""}
                       </span>
-                      <span aria-hidden="true" className="project-picker__row-icon">
+                      <span
+                        aria-hidden="true"
+                        className="project-picker__row-icon"
+                      >
                         <FolderIcon size={13} />
                       </span>
                       <span className="project-picker__row-name">
@@ -250,11 +275,7 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
           </button>
 
           {props.pickError ? (
-            <p
-              id={errorId}
-              role="alert"
-              className="project-picker__error"
-            >
+            <p id={errorId} role="alert" className="project-picker__error">
               {props.pickError}
             </p>
           ) : null}

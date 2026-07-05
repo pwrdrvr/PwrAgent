@@ -212,7 +212,9 @@ export class AppServerSessionState {
     }
     const next: ThreadState = {
       ...thread,
-      ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)),
+      ...Object.fromEntries(
+        Object.entries(patch).filter(([, value]) => value !== undefined),
+      ),
       updatedAt: this.nextTimestamp(),
     };
     if ("threadName" in patch && patch.threadName === null) {
@@ -233,7 +235,8 @@ export class AppServerSessionState {
     });
     const text = input
       .filter(
-        (item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text",
+        (item): item is Extract<AppServerTurnInputItem, { type: "text" }> =>
+          item.type === "text",
       )
       .map((item) => item.text.trim())
       .filter(Boolean)
@@ -242,19 +245,25 @@ export class AppServerSessionState {
       this.touchThread(threadId);
       return;
     }
-    const partsForMessage = parts.some((item) => item.type !== "text") ? parts : undefined;
+    const partsForMessage = parts.some((item) => item.type !== "text")
+      ? parts
+      : undefined;
     const thread = this.threads.get(threadId);
     if (thread && !thread.firstUserMessage) {
       thread.firstUserMessage = text;
     }
-    this.appendMessage(threadId, { role: "user", text, parts: partsForMessage }, {
-      id: this.nextItemId("user"),
-      type: "userMessage",
-      status: "completed",
-      role: "user",
-      text,
-      parts: partsForMessage,
-    });
+    this.appendMessage(
+      threadId,
+      { role: "user", text, parts: partsForMessage },
+      {
+        id: this.nextItemId("user"),
+        type: "userMessage",
+        status: "completed",
+        role: "user",
+        text,
+        parts: partsForMessage,
+      },
+    );
   }
 
   appendAssistant(
@@ -267,15 +276,19 @@ export class AppServerSessionState {
       this.touchThread(threadId);
       return;
     }
-    this.appendMessage(threadId, { role: "assistant", text: trimmed }, {
-      id: this.nextItemId("assistant"),
-      type: "agentMessage",
-      status: "completed",
-      role: "assistant",
-      text: trimmed,
-      sources: metadata?.sources,
-      data: metadata?.data,
-    });
+    this.appendMessage(
+      threadId,
+      { role: "assistant", text: trimmed },
+      {
+        id: this.nextItemId("assistant"),
+        type: "agentMessage",
+        status: "completed",
+        role: "assistant",
+        text: trimmed,
+        sources: metadata?.sources,
+        data: metadata?.data,
+      },
+    );
   }
 
   upsertItem(threadId: string, item: ThreadReplayItem): ThreadReplayItem {
@@ -289,7 +302,9 @@ export class AppServerSessionState {
             ...normalized,
             id: resolvedId,
           });
-    const resolvedIndex = items.findIndex((entry) => entry.id === normalizedWithResolvedId.id);
+    const resolvedIndex = items.findIndex(
+      (entry) => entry.id === normalizedWithResolvedId.id,
+    );
     if (resolvedIndex >= 0) {
       items[resolvedIndex] = {
         ...items[resolvedIndex],
@@ -314,7 +329,9 @@ export class AppServerSessionState {
     type = "plan",
     status: AppServerItemStatus = "in_progress",
   ): ThreadReplayItem {
-    const existing = (this.items.get(threadId) ?? []).find((item) => item.id === itemId);
+    const existing = (this.items.get(threadId) ?? []).find(
+      (item) => item.id === itemId,
+    );
     return this.upsertItem(threadId, {
       id: itemId,
       type: existing?.type ?? type,
@@ -351,11 +368,14 @@ export class AppServerSessionState {
     });
   }
 
-  readThread(threadId: string, options: {
-    before?: string;
-    includeTurns?: boolean;
-    limit?: number;
-  } = {}): ThreadReplay {
+  readThread(
+    threadId: string,
+    options: {
+      before?: string;
+      includeTurns?: boolean;
+      limit?: number;
+    } = {},
+  ): ThreadReplay {
     this.refreshFromStore();
     const thread = this.threads.get(threadId);
     if (!thread) {
@@ -374,20 +394,19 @@ export class AppServerSessionState {
 
     const limitedItems = pageReplayItems(items, options);
     const isPagedRead = limitedItems !== items;
-    const replayMessages =
-      !isPagedRead
-        ? messages.map((message) => stripUndefinedRecord(message))
-        : limitedItems.flatMap((item) =>
-            item.role && item.text
-              ? [
-                  {
-                    role: item.role,
-                    text: item.text,
-                    ...(item.parts ? { parts: item.parts } : {}),
-                  },
-                ]
-              : []
-          );
+    const replayMessages = !isPagedRead
+      ? messages.map((message) => stripUndefinedRecord(message))
+      : limitedItems.flatMap((item) =>
+          item.role && item.text
+            ? [
+                {
+                  role: item.role,
+                  text: item.text,
+                  ...(item.parts ? { parts: item.parts } : {}),
+                },
+              ]
+            : [],
+        );
     let lastUserMessage: string | undefined;
     let lastAssistantMessage: string | undefined;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -415,7 +434,10 @@ export class AppServerSessionState {
     };
   }
 
-  setPreviousResponseId(threadId: string, responseId: string | undefined): void {
+  setPreviousResponseId(
+    threadId: string,
+    responseId: string | undefined,
+  ): void {
     if (!responseId?.trim()) {
       return;
     }
@@ -484,7 +506,10 @@ export class AppServerSessionState {
     return run;
   }
 
-  private summarizeThread(threadId: string, suppressedTexts: Array<string | undefined>): string | undefined {
+  private summarizeThread(
+    threadId: string,
+    suppressedTexts: Array<string | undefined>,
+  ): string | undefined {
     const messages = this.messages.get(threadId) ?? [];
     const ignored = new Set(
       suppressedTexts
@@ -508,7 +533,9 @@ export class AppServerSessionState {
     const title = getThreadTitle(thread);
     const summary = this.summarizeThread(thread.threadId, [
       title.title,
-      title.titleSource === "derived" ? thread.firstUserMessage?.trim() : undefined,
+      title.titleSource === "derived"
+        ? thread.firstUserMessage?.trim()
+        : undefined,
     ]);
     return {
       threadId: thread.threadId,
@@ -604,7 +631,10 @@ export class AppServerSessionState {
     }
 
     if (existing.lastMessageCount < currentMessageCount) {
-      const resolvedId = nextReplayItemOccurrenceId(baseId, this.items.get(threadId) ?? []);
+      const resolvedId = nextReplayItemOccurrenceId(
+        baseId,
+        this.items.get(threadId) ?? [],
+      );
       occurrences.set(baseId, {
         resolvedId,
         lastMessageCount: currentMessageCount,
@@ -624,7 +654,10 @@ function normalizeReplayItem(item: ThreadReplayItem): ThreadReplayItem {
   ) as ThreadReplayItem;
 }
 
-function nextReplayItemOccurrenceId(baseId: string, items: ThreadReplayItem[]): string {
+function nextReplayItemOccurrenceId(
+  baseId: string,
+  items: ThreadReplayItem[],
+): string {
   const takenIds = new Set(items.map((item) => item.id));
   for (let index = 2; ; index += 1) {
     const candidate = `${baseId}#${index}`;

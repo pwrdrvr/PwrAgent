@@ -12,7 +12,12 @@ import type { SVGAttributes } from "react";
  */
 export type IconProps = Omit<
   SVGAttributes<SVGSVGElement>,
-  "children" | "viewBox" | "fill" | "stroke" | "strokeLinecap" | "strokeLinejoin"
+  | "children"
+  | "viewBox"
+  | "fill"
+  | "stroke"
+  | "strokeLinecap"
+  | "strokeLinejoin"
 > & {
   size?: number;
   strokeWidth?: number;
@@ -44,7 +49,7 @@ export function resolveIconSvgProps({
     strokeLinejoin: "round",
     "aria-hidden": ariaHidden ?? !ariaLabel,
     "aria-label": ariaLabel,
-    role: ariaLabel ? role ?? "img" : role,
+    role: ariaLabel ? (role ?? "img") : role,
     ...rest,
   };
 }

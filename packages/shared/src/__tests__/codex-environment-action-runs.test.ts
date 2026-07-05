@@ -126,7 +126,9 @@ describe("applyCodexEnvironmentActionRunUpdate", () => {
   it("evicts the oldest non-running entry when the cap is exceeded", () => {
     const runs: CodexEnvironmentActionRun[] = [];
     for (let i = 0; i < CODEX_ENVIRONMENT_ACTION_RUNS_MAX; i += 1) {
-      runs.push(buildRun({ runId: `r${i}`, status: i < 3 ? "exited" : "started" }));
+      runs.push(
+        buildRun({ runId: `r${i}`, status: i < 3 ? "exited" : "started" }),
+      );
     }
     const next = applyCodexEnvironmentActionRunUpdate(runs, {
       kind: "append",

@@ -78,7 +78,9 @@ function inferRepositoryFromGitdir(gitdirPath: string): {
   inferredWorktreeAdminName?: string;
 } {
   const normalized = path.resolve(gitdirPath).replace(/[\\/]+$/, "");
-  const match = normalized.match(/^(.*)[\\/]\.git[\\/]worktrees[\\/]([^\\/]+)$/);
+  const match = normalized.match(
+    /^(.*)[\\/]\.git[\\/]worktrees[\\/]([^\\/]+)$/,
+  );
   if (!match) {
     return {};
   }
@@ -109,7 +111,9 @@ async function readGitMetadataEvidence(
       dotGitKind: "file",
       dotGitPath,
       gitdirPath,
-      gitdirParentName: gitdirPath ? path.basename(path.dirname(gitdirPath)) : undefined,
+      gitdirParentName: gitdirPath
+        ? path.basename(path.dirname(gitdirPath))
+        : undefined,
       ...inferred,
     };
   } catch (error) {
@@ -131,7 +135,10 @@ async function readGitMetadataEvidence(
 
 async function buildLinkedDirectoryFromGitMetadata(
   currentPath: string,
-): Promise<{ evidence: GitMetadataEvidence; directory?: LinkedDirectorySummary }> {
+): Promise<{
+  evidence: GitMetadataEvidence;
+  directory?: LinkedDirectorySummary;
+}> {
   const evidence = await readGitMetadataEvidence(currentPath);
   if (!evidence.inferredRepositoryPath) {
     return { evidence };
@@ -186,7 +193,8 @@ function findContainingWorktree(
     .map((worktreePath) => path.resolve(worktreePath))
     .filter(
       (worktreePath) =>
-        currentPath === worktreePath || currentPath.startsWith(`${worktreePath}${path.sep}`),
+        currentPath === worktreePath
+        || currentPath.startsWith(`${worktreePath}${path.sep}`),
     )
     .sort((left, right) => right.length - left.length);
 
@@ -210,33 +218,40 @@ async function loadThreadDirectoryEnrichment(
       await Promise.all([
         runGit(currentPath, ["rev-parse", "--show-toplevel"]),
         runGit(currentPath, ["worktree", "list", "--porcelain"]),
-        runGit(currentPath, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => undefined),
+        runGit(currentPath, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(
+          () => undefined,
+        ),
         readGitMetadataEvidence(currentPath),
       ]);
     const worktreePaths = parseGitWorktrees(worktreeList);
     const primaryPath = path.resolve(worktreePaths[0] || repoRoot);
     const currentWorktreePath =
-      findContainingWorktree(currentPath, worktreePaths) ?? path.resolve(repoRoot);
+      findContainingWorktree(currentPath, worktreePaths)
+      ?? path.resolve(repoRoot);
     const gitFileRepositoryPath = gitMetadata.inferredRepositoryPath
       ? path.resolve(gitMetadata.inferredRepositoryPath)
       : undefined;
     const isWorktree =
-      currentWorktreePath !== primaryPath ||
-      Boolean(gitFileRepositoryPath && gitFileRepositoryPath !== currentWorktreePath);
-    const repositoryPath = isWorktree && gitFileRepositoryPath
-      ? gitFileRepositoryPath
-      : primaryPath;
+      currentWorktreePath !== primaryPath
+      || Boolean(
+        gitFileRepositoryPath && gitFileRepositoryPath !== currentWorktreePath,
+      );
+    const repositoryPath =
+      isWorktree && gitFileRepositoryPath ? gitFileRepositoryPath : primaryPath;
 
     if (isToolManagedWorktreePath(currentPath) && !isWorktree) {
-      threadDirectoryLog.warn("managed worktree path classified as local by git", {
-        projectKey,
-        currentPath,
-        repoRoot,
-        primaryPath,
-        currentWorktreePath,
-        worktreePaths,
-        gitMetadata,
-      });
+      threadDirectoryLog.warn(
+        "managed worktree path classified as local by git",
+        {
+          projectKey,
+          currentPath,
+          repoRoot,
+          primaryPath,
+          currentWorktreePath,
+          worktreePaths,
+          gitMetadata,
+        },
+      );
     }
 
     return {
@@ -244,7 +259,9 @@ async function loadThreadDirectoryEnrichment(
         {
           id: toDirectoryId(repositoryPath),
           path: toDirectoryId(repositoryPath),
-          worktreePath: isWorktree ? toDirectoryId(currentWorktreePath) : undefined,
+          worktreePath: isWorktree
+            ? toDirectoryId(currentWorktreePath)
+            : undefined,
           label: path.basename(repositoryPath) || repositoryPath,
           kind: isWorktree ? "worktree" : "local",
         },
@@ -252,15 +269,19 @@ async function loadThreadDirectoryEnrichment(
       observedGitBranch: observedGitBranch?.trim() || undefined,
     };
   } catch (error) {
-    const gitMetadataFallback = await buildLinkedDirectoryFromGitMetadata(currentPath);
+    const gitMetadataFallback =
+      await buildLinkedDirectoryFromGitMetadata(currentPath);
     if (gitMetadataFallback.directory) {
-      threadDirectoryLog.warn("recovered worktree directory relationship from .git metadata", {
-        projectKey,
-        currentPath,
-        error: error instanceof Error ? error.message : String(error),
-        gitMetadata: gitMetadataFallback.evidence,
-        linkedDirectory: gitMetadataFallback.directory,
-      });
+      threadDirectoryLog.warn(
+        "recovered worktree directory relationship from .git metadata",
+        {
+          projectKey,
+          currentPath,
+          error: error instanceof Error ? error.message : String(error),
+          gitMetadata: gitMetadataFallback.evidence,
+          linkedDirectory: gitMetadataFallback.directory,
+        },
+      );
       return {
         linkedDirectories: [gitMetadataFallback.directory],
       };
@@ -268,12 +289,15 @@ async function loadThreadDirectoryEnrichment(
 
     const fallbackPath = path.resolve(currentPath);
     if (isToolManagedWorktreePath(fallbackPath)) {
-      threadDirectoryLog.warn("managed worktree path fell back to local directory", {
-        projectKey,
-        fallbackPath,
-        error: error instanceof Error ? error.message : String(error),
-        gitMetadata: gitMetadataFallback.evidence,
-      });
+      threadDirectoryLog.warn(
+        "managed worktree path fell back to local directory",
+        {
+          projectKey,
+          fallbackPath,
+          error: error instanceof Error ? error.message : String(error),
+          gitMetadata: gitMetadataFallback.evidence,
+        },
+      );
     }
 
     return {

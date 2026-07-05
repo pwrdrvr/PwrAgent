@@ -12,27 +12,34 @@ afterEach(async () => {
 
 describe("shell_command tool", () => {
   // Unix-only: relies on grep + the "search" command classification; Windows shell coverage is tracked separately.
-  it.skipIf(process.platform === "win32")("runs a safe shell read command without approval", async () => {
-    const workspace = await createTemporaryTestDirectory();
-    cleanups.push(workspace.cleanup);
-    await fs.writeFile(path.join(workspace.path, "needle.txt"), "SAFE_NEEDLE\n", "utf8");
-    const tool = createShellCommandTool();
+  it.skipIf(process.platform === "win32")(
+    "runs a safe shell read command without approval",
+    async () => {
+      const workspace = await createTemporaryTestDirectory();
+      cleanups.push(workspace.cleanup);
+      await fs.writeFile(
+        path.join(workspace.path, "needle.txt"),
+        "SAFE_NEEDLE\n",
+        "utf8",
+      );
+      const tool = createShellCommandTool();
 
-    const result = await tool.execute(
-      tool.parseArguments({ command: "grep -rn SAFE_NEEDLE ." }),
-      { cwd: workspace.path, approvalPolicy: "on-request" },
-    );
+      const result = await tool.execute(
+        tool.parseArguments({ command: "grep -rn SAFE_NEEDLE ." }),
+        { cwd: workspace.path, approvalPolicy: "on-request" },
+      );
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        success: true,
-        commandAction: "search",
-        itemType: "commandExecution",
-        command: "grep -rn SAFE_NEEDLE .",
-      }),
-    );
-    expect(result.output).toContain("needle.txt:1:SAFE_NEEDLE");
-  });
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: true,
+          commandAction: "search",
+          itemType: "commandExecution",
+          command: "grep -rn SAFE_NEEDLE .",
+        }),
+      );
+      expect(result.output).toContain("needle.txt:1:SAFE_NEEDLE");
+    },
+  );
 
   it("requests approval for unsafe commands and does not run when declined", async () => {
     const workspace = await createTemporaryTestDirectory();
@@ -49,7 +56,9 @@ describe("shell_command tool", () => {
       },
     );
 
-    await expect(fs.stat(path.join(workspace.path, "created.txt"))).rejects.toThrow();
+    await expect(
+      fs.stat(path.join(workspace.path, "created.txt")),
+    ).rejects.toThrow();
     expect(requestApproval).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "commandExecution",
@@ -72,16 +81,15 @@ describe("shell_command tool", () => {
     const requestApproval = vi.fn(async () => ({ decision: "approve" }));
     const command = `${JSON.stringify(process.execPath)} -e "require('fs').writeFileSync('created.txt','x')"`;
 
-    const result = await tool.execute(
-      tool.parseArguments({ command }),
-      {
-        cwd: workspace.path,
-        approvalPolicy: "on-request",
-        requestApproval,
-      },
-    );
+    const result = await tool.execute(tool.parseArguments({ command }), {
+      cwd: workspace.path,
+      approvalPolicy: "on-request",
+      requestApproval,
+    });
 
-    await expect(fs.stat(path.join(workspace.path, "created.txt"))).resolves.toBeTruthy();
+    await expect(
+      fs.stat(path.join(workspace.path, "created.txt")),
+    ).resolves.toBeTruthy();
     expect(result).toEqual(
       expect.objectContaining({
         success: true,
@@ -103,10 +111,10 @@ describe("shell_command tool", () => {
     const tool = createShellCommandTool();
     const command = `${JSON.stringify(process.execPath)} -e "process.stdout.write('A'.repeat(11 * 1024 * 1024))"`;
 
-    const result = await tool.execute(
-      tool.parseArguments({ command }),
-      { cwd: workspace.path, approvalPolicy: "never" },
-    );
+    const result = await tool.execute(tool.parseArguments({ command }), {
+      cwd: workspace.path,
+      approvalPolicy: "never",
+    });
 
     expect(result.success).toBe(true);
     expect(result.output).toContain("output truncated");
@@ -126,16 +134,13 @@ describe("shell_command tool", () => {
     const deltas: string[] = [];
     const command = `${JSON.stringify(process.execPath)} -e "process.stdout.write('first'); process.stderr.write('second')"`;
 
-    const result = await tool.execute(
-      tool.parseArguments({ command }),
-      {
-        cwd: workspace.path,
-        approvalPolicy: "never",
-        onOutputDelta: (delta) => {
-          deltas.push(`${delta.stream}:${delta.text}`);
-        },
+    const result = await tool.execute(tool.parseArguments({ command }), {
+      cwd: workspace.path,
+      approvalPolicy: "never",
+      onOutputDelta: (delta) => {
+        deltas.push(`${delta.stream}:${delta.text}`);
       },
-    );
+    });
 
     expect(result.success).toBe(true);
     expect(result.output).toContain("first");

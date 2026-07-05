@@ -110,7 +110,9 @@ describe("messaging surface contract", () => {
       },
     } satisfies MessagingThreadPickerIntent;
 
-    expect(JSON.stringify(intent)).not.toMatch(/telegram|discord|callback_data|custom_id/);
+    expect(JSON.stringify(intent)).not.toMatch(
+      /telegram|discord|callback_data|custom_id/,
+    );
   });
 
   it("lays out actions with channel-neutral row hints", () => {
@@ -142,7 +144,10 @@ describe("messaging surface contract", () => {
       },
     );
 
-    expect(rows).toEqual([["one", "two"], ["next", "cancel"]]);
+    expect(rows).toEqual([
+      ["one", "two"],
+      ["next", "cancel"],
+    ]);
   });
 
   it("interleaves explicit-row groups with automatic items in document order", () => {
@@ -167,13 +172,7 @@ describe("messaging surface contract", () => {
       { defaultColumns: 1, maxColumns: 8 },
     );
 
-    expect(rows).toEqual([
-      ["a"],
-      ["b"],
-      ["c"],
-      ["prev", "next"],
-      ["cancel"],
-    ]);
+    expect(rows).toEqual([["a"], ["b"], ["c"], ["prev", "next"], ["cancel"]]);
   });
 
   it("describes mixed markdown and image message parts", () => {
@@ -222,7 +221,9 @@ describe("messaging surface contract", () => {
     } satisfies MessagingStreamUpdateIntent;
 
     expect(intent.text).toBe("hello world");
-    expect(JSON.stringify(intent)).not.toMatch(/agentMessage\/delta|telegram|discord/);
+    expect(JSON.stringify(intent)).not.toMatch(
+      /agentMessage\/delta|telegram|discord/,
+    );
   });
 
   it("describes degraded platform health and provider-neutral rate scopes", () => {
@@ -319,7 +320,8 @@ describe("messaging surface contract", () => {
       kind: "single_select",
       createdAt: 1000,
       bindingId: "binding-1",
-      prompt: "Workspace Handoff\nRepository: /repo/pwragent\nBranch: feature/handoff",
+      prompt:
+        "Workspace Handoff\nRepository: /repo/pwragent\nBranch: feature/handoff",
       fallbackText: "Reply with 1, Back, Refresh, or Cancel.",
       audit: {
         actor: {

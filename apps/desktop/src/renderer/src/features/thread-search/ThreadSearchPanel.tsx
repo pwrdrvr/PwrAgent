@@ -107,7 +107,9 @@ const MATCH_REASON_LABELS: Record<ThreadSearchMatchReasonKind, string> = {
   recent_activity: "Recent activity",
 };
 
-function describeMatchReason(kind: ThreadSearchMatchReasonKind | undefined): string {
+function describeMatchReason(
+  kind: ThreadSearchMatchReasonKind | undefined,
+): string {
   if (!kind) {
     return "Match";
   }
@@ -137,7 +139,9 @@ export function highlightSnippet(text: string, query: string): ReactNode[] {
   if (tokens.length === 0) {
     return [text];
   }
-  const escaped = tokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const escaped = tokens.map((token) =>
+    token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  );
   const splitter = new RegExp(`(${escaped.join("|")})`, "ig");
   const tokenSet = new Set(tokens);
   return text
@@ -167,14 +171,19 @@ function ThreadSearchResultRow(props: {
   // (not `??`) so an empty-string projectKey falls through to the directory.
   const rawWorkspace = result.projectKey || directory?.label || directory?.path;
   const workspaceLabel = rawWorkspace ? basename(rawWorkspace) : undefined;
-  const WorkspaceIcon = directory?.kind === "worktree" ? WorktreeIcon : FolderIcon;
+  const WorkspaceIcon =
+    directory?.kind === "worktree" ? WorktreeIcon : FolderIcon;
   const titleNormalized = result.title.trim().toLowerCase();
   const snippet = result.snippets.find(
     (entry) => entry.text.trim().toLowerCase() !== titleNormalized,
   )?.text;
 
   return (
-    <button className="thread-search-result" type="button" onClick={props.onOpen}>
+    <button
+      className="thread-search-result"
+      type="button"
+      onClick={props.onOpen}
+    >
       <span className="thread-search-result__body">
         <span className="thread-search-result__title">{result.title}</span>
         <span className="thread-search-result__meta">
@@ -182,23 +191,31 @@ function ThreadSearchResultRow(props: {
           {workspaceLabel ? (
             <span className="thread-search-result__meta-item">
               <WorkspaceIcon size={13} aria-hidden />
-              <span className="thread-search-result__meta-text">{workspaceLabel}</span>
+              <span className="thread-search-result__meta-text">
+                {workspaceLabel}
+              </span>
             </span>
           ) : null}
           {result.gitBranch ? (
             <span className="thread-search-result__meta-item thread-search-result__meta-item--mono">
               <BranchIcon size={13} aria-hidden />
-              <span className="thread-search-result__meta-text">{result.gitBranch}</span>
+              <span className="thread-search-result__meta-text">
+                {result.gitBranch}
+              </span>
             </span>
           ) : null}
           {result.model ? (
             <span className="thread-search-result__meta-item thread-search-result__meta-item--mono thread-search-result__meta-item--muted">
-              <span className="thread-search-result__meta-text">{result.model}</span>
+              <span className="thread-search-result__meta-text">
+                {result.model}
+              </span>
             </span>
           ) : null}
         </span>
         {snippet ? (
-          <span className="thread-search-result__snippet">{highlightSnippet(snippet, query)}</span>
+          <span className="thread-search-result__snippet">
+            {highlightSnippet(snippet, query)}
+          </span>
         ) : null}
       </span>
       <span className="thread-search-result__side">
@@ -255,7 +272,11 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
       });
       setResponse(mergePrNumberMatches(result, trimmed, props.threads));
     } catch (searchError) {
-      setError(searchError instanceof Error ? searchError.message : String(searchError));
+      setError(
+        searchError instanceof Error
+          ? searchError.message
+          : String(searchError),
+      );
     } finally {
       setLoading(false);
     }
@@ -273,9 +294,9 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
       // so it won't also dismiss an overlay (e.g. the sidebar quick-search).
       onKeyDown={(event) => {
         if (
-          event.key === "Escape" &&
-          !event.defaultPrevented &&
-          props.onClose
+          event.key === "Escape"
+          && !event.defaultPrevented
+          && props.onClose
         ) {
           event.preventDefault();
           props.onClose();
@@ -287,14 +308,19 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
         title="Search"
         onOpenMessagingActivity={props.onOpenMessagingActivity}
         layout={
-          props.layout ? { ...props.layout, railToggleDisabled: true } : undefined
+          props.layout
+            ? { ...props.layout, railToggleDisabled: true }
+            : undefined
         }
         masthead={props.masthead}
         history={props.history}
       />
 
       <div className="thread-search__body">
-        <form className="thread-search__form" onSubmit={(event) => void submit(event)}>
+        <form
+          className="thread-search__form"
+          onSubmit={(event) => void submit(event)}
+        >
           <div className="thread-search__field">
             <span className="thread-search__field-icon" aria-hidden>
               <SearchIcon size={16} />
@@ -320,7 +346,10 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
         {error ? <p className="thread-search__error">{error}</p> : null}
 
         {response?.unavailableScopes.length ? (
-          <div className="thread-search__scopes" aria-label="Unavailable scopes">
+          <div
+            className="thread-search__scopes"
+            aria-label="Unavailable scopes"
+          >
             {response.unavailableScopes.map((scope, index) => (
               <span key={`${scope.scope}:${scope.backend ?? "all"}:${index}`}>
                 {scope.backend ? `${scope.backend} ` : ""}
@@ -333,7 +362,8 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
         {response && resultCount > 0 ? (
           <p className="thread-search-results-meta">
             <span>
-              <strong>{resultCount}</strong> {resultCount === 1 ? "thread" : "threads"}
+              <strong>{resultCount}</strong>{" "}
+              {resultCount === 1 ? "thread" : "threads"}
             </span>
             {response.truncated ? <span>Showing the top matches</span> : null}
           </p>
@@ -371,7 +401,11 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
           )
         ) : (
           <ThreadSearchEmptyState
-            title={searchUnavailable ? "Search is unavailable" : "Search your threads"}
+            title={
+              searchUnavailable
+                ? "Search is unavailable"
+                : "Search your threads"
+            }
             hint={
               searchUnavailable
                 ? "Thread search isn’t available in this session yet."

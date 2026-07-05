@@ -56,7 +56,9 @@ describe("test harness helpers", () => {
   it("creates and removes a temporary test directory", async () => {
     const temp = await createTemporaryTestDirectory();
     await fs.writeFile(path.join(temp.path, "marker.txt"), "ok");
-    await expect(fs.stat(path.join(temp.path, "marker.txt"))).resolves.toBeDefined();
+    await expect(
+      fs.stat(path.join(temp.path, "marker.txt")),
+    ).resolves.toBeDefined();
 
     await temp.cleanup();
 
@@ -77,14 +79,17 @@ describe("test harness helpers", () => {
     const temp = await createTemporaryTestDirectory();
     const currentDir = path.join(temp.path, "packages/agent-core/src/testing");
     await fs.mkdir(currentDir, { recursive: true });
-    await fs.writeFile(path.join(temp.path, ".env.local"), "XAI_API_KEY=root-key\n");
+    await fs.writeFile(
+      path.join(temp.path, ".env.local"),
+      "XAI_API_KEY=root-key\n",
+    );
     await fs.writeFile(
       path.join(temp.path, "packages/agent-core/.env.local"),
-      "XAI_API_KEY=package-key\n"
+      "XAI_API_KEY=package-key\n",
     );
 
     expect(defaultLocalEnvPath({ currentDir })).toBe(
-      path.join(temp.path, ".env.local")
+      path.join(temp.path, ".env.local"),
     );
 
     await temp.cleanup();
@@ -96,11 +101,11 @@ describe("test harness helpers", () => {
     await fs.mkdir(currentDir, { recursive: true });
     await fs.writeFile(
       path.join(temp.path, "packages/agent-core/.env.local"),
-      "XAI_API_KEY=package-key\n"
+      "XAI_API_KEY=package-key\n",
     );
 
     expect(defaultLocalEnvPath({ currentDir })).toBe(
-      path.join(temp.path, "packages/agent-core/.env.local")
+      path.join(temp.path, "packages/agent-core/.env.local"),
     );
 
     await temp.cleanup();
@@ -109,7 +114,10 @@ describe("test harness helpers", () => {
   it("loads values from a local env file", async () => {
     const temp = await createTemporaryTestDirectory();
     const envPath = path.join(temp.path, ".env.local");
-    await fs.writeFile(envPath, "XAI_API_KEY=test-key\nGROK_MODEL=grok-4.20-reasoning\n");
+    await fs.writeFile(
+      envPath,
+      "XAI_API_KEY=test-key\nGROK_MODEL=grok-4.20-reasoning\n",
+    );
 
     const result = loadLocalEnv({ envPath });
 
@@ -125,7 +133,9 @@ describe("test harness helpers", () => {
     const temp = await createTemporaryTestDirectory();
     process.env.HOME = temp.path;
     delete process.env.XDG_CONFIG_HOME;
-    const [configPath] = defaultGrokAppServerConfigPaths({ homeDir: temp.path });
+    const [configPath] = defaultGrokAppServerConfigPaths({
+      homeDir: temp.path,
+    });
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
       configPath,
@@ -220,11 +230,19 @@ describe("test harness helpers", () => {
     process.env.HOME = temp.path;
     delete process.env.XDG_CONFIG_HOME;
     process.env.XAI_API_KEY = "existing-key";
-    const [configPath] = defaultGrokAppServerConfigPaths({ homeDir: temp.path });
+    const [configPath] = defaultGrokAppServerConfigPaths({
+      homeDir: temp.path,
+    });
     await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, "XAI_API_KEY=config-key\nGROK_MODEL=grok-4.20-non-reasoning\n");
+    await fs.writeFile(
+      configPath,
+      "XAI_API_KEY=config-key\nGROK_MODEL=grok-4.20-non-reasoning\n",
+    );
 
-    const result = loadGrokAppServerConfig({ homeDir: temp.path, override: false });
+    const result = loadGrokAppServerConfig({
+      homeDir: temp.path,
+      override: false,
+    });
 
     expect(result.loaded).toBe(true);
     expect(process.env.XAI_API_KEY).toBe("existing-key");
@@ -238,7 +256,9 @@ describe("test harness helpers", () => {
     const envPath = path.join(temp.path, ".env.local");
     await fs.writeFile(envPath, "XAI_API_KEY\n");
 
-    expect(() => loadLocalEnv({ envPath })).toThrow(`Invalid env line 1 in ${envPath}`);
+    expect(() => loadLocalEnv({ envPath })).toThrow(
+      `Invalid env line 1 in ${envPath}`,
+    );
 
     await temp.cleanup();
   });
@@ -247,7 +267,7 @@ describe("test harness helpers", () => {
     const temp = await createTemporaryTestDirectory();
     const configPath = defaultGrokAppServerConfigPath({ homeDir: temp.path });
     await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, "[thread]\nname = \"bad\"\n");
+    await fs.writeFile(configPath, '[thread]\nname = "bad"\n');
 
     expect(() =>
       resolveGrokAppServerRuntimeConfig({

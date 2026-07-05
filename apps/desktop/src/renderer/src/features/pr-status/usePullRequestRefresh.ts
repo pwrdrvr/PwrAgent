@@ -42,7 +42,9 @@ export function usePullRequestRefresh(params: {
       if (!desktopApi?.refreshThreadPullRequests) return;
       const branch = resolvePullRequestLookupBranch(thread);
       if (!branch) return;
-      const directoryPaths = resolveFetchableDirectoryPaths(thread.linkedDirectories);
+      const directoryPaths = resolveFetchableDirectoryPaths(
+        thread.linkedDirectories,
+      );
       if (directoryPaths.length === 0) return;
       void desktopApi
         .refreshThreadPullRequests({
@@ -68,7 +70,7 @@ export function usePullRequestRefresh(params: {
   const selected = params.selectedThread;
   const selectedRef = useRef<NavigationThreadSummary | undefined>(selected);
   const selectedRefreshKey = useMemo(
-    () => selected ? buildRefreshRequestKey(selected) : undefined,
+    () => (selected ? buildRefreshRequestKey(selected) : undefined),
     [selected],
   );
 
@@ -86,7 +88,8 @@ export function usePullRequestRefresh(params: {
     const refreshSelected = (): void => {
       const currentSelected = selectedRef.current;
       if (!currentSelected) return;
-      if (buildRefreshRequestKey(currentSelected) !== selectedRefreshKey) return;
+      if (buildRefreshRequestKey(currentSelected) !== selectedRefreshKey)
+        return;
       refresh(currentSelected, "scheduled");
     };
 
@@ -126,11 +129,15 @@ export function usePullRequestRefresh(params: {
   return { prefetch };
 }
 
-function buildRefreshRequestKey(thread: NavigationThreadSummary): string | undefined {
+function buildRefreshRequestKey(
+  thread: NavigationThreadSummary,
+): string | undefined {
   const branch = resolvePullRequestLookupBranch(thread);
   if (!branch) return undefined;
 
-  const directoryPaths = resolveFetchableDirectoryPaths(thread.linkedDirectories);
+  const directoryPaths = resolveFetchableDirectoryPaths(
+    thread.linkedDirectories,
+  );
   if (directoryPaths.length === 0) return undefined;
 
   return JSON.stringify({
@@ -143,7 +150,9 @@ function buildRefreshRequestKey(thread: NavigationThreadSummary): string | undef
 function resolvePullRequestLookupBranch(
   thread: NavigationThreadSummary,
 ): string | undefined {
-  return thread.observedGitBranch?.trim() || thread.gitBranch?.trim() || undefined;
+  return (
+    thread.observedGitBranch?.trim() || thread.gitBranch?.trim() || undefined
+  );
 }
 
 function prSummariesEqual(
@@ -158,17 +167,17 @@ function prSummariesEqual(
   return leftPrs.every((pr, index) => {
     const candidate = right[index];
     return (
-      candidate?.number === pr.number &&
-      candidate.provider === pr.provider &&
-      candidate.org === pr.org &&
-      candidate.repo === pr.repo &&
-      candidate.title === pr.title &&
-      candidate.state === pr.state &&
-      candidate.checkState === pr.checkState &&
-      candidate.lifecycleState === pr.lifecycleState &&
-      candidate.reviewState === pr.reviewState &&
-      candidate.mergeState === pr.mergeState &&
-      candidate.url === pr.url
+      candidate?.number === pr.number
+      && candidate.provider === pr.provider
+      && candidate.org === pr.org
+      && candidate.repo === pr.repo
+      && candidate.title === pr.title
+      && candidate.state === pr.state
+      && candidate.checkState === pr.checkState
+      && candidate.lifecycleState === pr.lifecycleState
+      && candidate.reviewState === pr.reviewState
+      && candidate.mergeState === pr.mergeState
+      && candidate.url === pr.url
     );
   });
 }

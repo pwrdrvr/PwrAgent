@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { AppServerReadThreadResponse, ThreadSearchResult } from "@pwragent/shared";
+import type {
+  AppServerReadThreadResponse,
+  ThreadSearchResult,
+} from "@pwragent/shared";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 
 describe("ProviderTranscriptThreadSearchAdapter", () => {
   it("searches transcript messages through the injected provider reader", async () => {
     const adapter = new ProviderTranscriptThreadSearchAdapter(async () =>
-      readThreadResponse("We discussed branch drift screenshots in this thread."),
+      readThreadResponse(
+        "We discussed branch drift screenshots in this thread.",
+      ),
     );
 
     const response = await adapter.searchContent({
@@ -17,7 +22,9 @@ describe("ProviderTranscriptThreadSearchAdapter", () => {
     expect(response.results).toHaveLength(1);
     expect(response.results[0]).toMatchObject({
       threadId: "thread-1",
-      matchReasons: [expect.objectContaining({ kind: "provider_content_match" })],
+      matchReasons: [
+        expect.objectContaining({ kind: "provider_content_match" }),
+      ],
       snippets: [expect.objectContaining({ scope: "provider_content" })],
     });
   });

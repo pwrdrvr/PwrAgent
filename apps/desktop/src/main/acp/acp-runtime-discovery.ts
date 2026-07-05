@@ -34,8 +34,8 @@ export async function discoverAcpRuntimeCapabilities(
   let runtimeState: BackendAcpSessionRuntimeState | undefined;
   const store = new MemoryAcpSessionStore();
   const transport =
-    options.transportFactory?.(agent) ??
-    new AcpStdioJsonRpcTransport({
+    options.transportFactory?.(agent)
+    ?? new AcpStdioJsonRpcTransport({
       launchDescriptor: agent.launchDescriptor,
       requestTimeoutMs: ACP_DISCOVERY_REQUEST_TIMEOUT_MS,
     });
@@ -70,7 +70,10 @@ class MemoryAcpSessionStore implements Pick<
   private readonly sessions = new Map<string, AcpSessionMetadata>();
 
   upsertSession(metadata: AcpSessionMetadata): void {
-    this.sessions.set(sessionKey(metadata.backendId, metadata.sessionId), metadata);
+    this.sessions.set(
+      sessionKey(metadata.backendId, metadata.sessionId),
+      metadata,
+    );
   }
 
   listSessions(
@@ -80,8 +83,8 @@ class MemoryAcpSessionStore implements Pick<
     const archived = params?.archived === true;
     return [...this.sessions.values()].filter(
       (session) =>
-        session.backendId === backendId &&
-        Boolean(session.archivedAt) === archived,
+        session.backendId === backendId
+        && Boolean(session.archivedAt) === archived,
     );
   }
 

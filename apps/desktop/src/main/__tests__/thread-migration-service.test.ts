@@ -223,9 +223,9 @@ describe("ThreadMigrationService", () => {
       label: "giphy-bandwidth-saver",
       path: "/Users/alice/GIPHY/giphy-bandwidth-saver",
     });
-    expect(response.projects[0]!.threads.map((thread) => thread.threadId)).toEqual(
-      expect.arrayContaining(["local-thread", "worktree-thread"]),
-    );
+    expect(
+      response.projects[0]!.threads.map((thread) => thread.threadId),
+    ).toEqual(expect.arrayContaining(["local-thread", "worktree-thread"]));
     expect(response.projects[0]!.threads).toHaveLength(2);
   });
 
@@ -410,7 +410,8 @@ describe("ThreadMigrationService", () => {
             id: "worktree:/Users/alice/.codex/profiles/work/worktrees/repo/app",
             label: "app",
             path: "/repo/app",
-            worktreePath: "/Users/alice/.codex/profiles/work/worktrees/repo/app",
+            worktreePath:
+              "/Users/alice/.codex/profiles/work/worktrees/repo/app",
             kind: "worktree" as const,
           },
           workMode: "worktree" as const,
@@ -574,7 +575,8 @@ describe("ThreadMigrationService", () => {
             id: "worktree:/Users/alice/.codex/profiles/work/worktrees/repo/app",
             label: "app",
             path: "/repo/app",
-            worktreePath: "/Users/alice/.codex/profiles/work/worktrees/repo/app",
+            worktreePath:
+              "/Users/alice/.codex/profiles/work/worktrees/repo/app",
             kind: "worktree" as const,
           },
           workMode: "worktree" as const,
@@ -641,7 +643,8 @@ describe("ThreadMigrationService", () => {
             id: "worktree:/Users/alice/.codex/profiles/work/worktrees/repo/app",
             label: "app",
             path: "/repo/app",
-            worktreePath: "/Users/alice/.codex/profiles/work/worktrees/repo/app",
+            worktreePath:
+              "/Users/alice/.codex/profiles/work/worktrees/repo/app",
             kind: "worktree" as const,
           },
           workMode: "worktree" as const,
@@ -726,9 +729,7 @@ describe("ThreadMigrationService", () => {
         expect(request).toMatchObject({
           branchName: "codex/chunk-file-errors",
           directoryPath: "/repo/web-app",
-          excludedWorktreePaths: [
-            "/Users/alice/.codex/worktrees/0cb4/web-app",
-          ],
+          excludedWorktreePaths: ["/Users/alice/.codex/worktrees/0cb4/web-app"],
           sourceThreadId: "source-thread",
           workMode: "worktree",
           worktreeBranchMode: "attached",
@@ -742,8 +743,7 @@ describe("ThreadMigrationService", () => {
             id: "worktree:/Users/alice/.codex/profiles/work/worktrees/web-app",
             label: "web-app",
             path: "/repo/web-app",
-            worktreePath:
-              "/Users/alice/.codex/profiles/work/worktrees/web-app",
+            worktreePath: "/Users/alice/.codex/profiles/work/worktrees/web-app",
             kind: "worktree" as const,
           },
           workMode: "worktree" as const,

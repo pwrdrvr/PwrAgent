@@ -38,9 +38,11 @@ vi.mock("electron", () => ({
     ]),
   },
   ipcMain: {
-    handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
-      ipcHandlers.set(channel, handler);
-    }),
+    handle: vi.fn(
+      (channel: string, handler: (...args: unknown[]) => unknown) => {
+        ipcHandlers.set(channel, handler);
+      },
+    ),
     removeHandler: vi.fn((channel: string) => {
       ipcHandlers.delete(channel);
     }),

@@ -6,7 +6,7 @@ import {
   render,
   screen,
   waitFor,
-  within
+  within,
 } from "@testing-library/react";
 import type {
   AgentEvent,
@@ -57,8 +57,8 @@ function pasteComposerText(textbox: HTMLElement, value: string): void {
 
 function getComposerValueHost(textbox: HTMLElement): HTMLElement {
   return (
-    textbox.closest<HTMLElement>('[data-testid="composer-tiptap-input"]') ??
-    textbox
+    textbox.closest<HTMLElement>('[data-testid="composer-tiptap-input"]')
+    ?? textbox
   );
 }
 
@@ -194,11 +194,15 @@ describe("App", () => {
     render(<App />);
 
     expect(screen.queryByText("Exit Settings")).not.toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", { name: "Threads" }),
+    ).toBeInTheDocument();
     expect(document.querySelector(".app-main")).toHaveClass(
-      "app-main--thread-detail-pending"
+      "app-main--thread-detail-pending",
     );
-    expect(screen.getByRole("heading", { level: 2, name: "Loading..." })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Loading..." }),
+    ).toBeInTheDocument();
     await waitFor(() => {
       expect(readSettings).toHaveBeenCalledTimes(1);
     });
@@ -258,11 +262,12 @@ describe("App", () => {
             method: "configWarning",
             params: {
               summary:
-                "Project-local config, hooks, and exec policies are disabled.\n" +
-                "To load project-local config, hooks, and exec policies, add /Users/huntharo/github/PwrAgnt as a trusted project in /Users/huntharo/.codex/profiles/acp-smoke/config.toml.",
+                "Project-local config, hooks, and exec policies are disabled.\n"
+                + "To load project-local config, hooks, and exec policies, add /Users/huntharo/github/PwrAgnt as a trusted project in /Users/huntharo/.codex/profiles/acp-smoke/config.toml.",
               details: null,
               trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
-              configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+              configPath:
+                "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
             },
           },
         });
@@ -270,7 +275,7 @@ describe("App", () => {
     });
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Codex config warning"
+      "Codex config warning",
     );
     fireEvent.click(screen.getByRole("button", { name: "Trust PwrAgnt" }));
 
@@ -299,8 +304,8 @@ describe("App", () => {
           method: "configWarning" as const,
           params: {
             summary:
-              "Project-local config, hooks, and exec policies are disabled.\n" +
-              "To load project-local config, hooks, and exec policies, add /Users/huntharo/github/PwrAgnt as a trusted project in /Users/huntharo/.codex/profiles/acp-smoke/config.toml.",
+              "Project-local config, hooks, and exec policies are disabled.\n"
+              + "To load project-local config, hooks, and exec policies, add /Users/huntharo/github/PwrAgnt as a trusted project in /Users/huntharo/.codex/profiles/acp-smoke/config.toml.",
             details: null,
             trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
             configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
@@ -336,7 +341,7 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Codex config warning"
+      "Codex config warning",
     );
     expect(getLatestCodexConfigWarning).toHaveBeenCalledTimes(1);
 
@@ -518,10 +523,16 @@ describe("App", () => {
           workspaceUrl: { value: "", source: "default" },
           inboundMode: { value: "socket", source: "default" },
           teamAuthorizationMode: { value: "approved_only", source: "default" },
-          channelAuthorizationMode: { value: "approved_only", source: "default" },
+          channelAuthorizationMode: {
+            value: "approved_only",
+            source: "default",
+          },
           dmAccessMode: { value: "authorized_users", source: "default" },
           groupDmAccessMode: { value: "none", source: "default" },
-          channelUserAccessMode: { value: "authorized_users", source: "default" },
+          channelUserAccessMode: {
+            value: "authorized_users",
+            source: "default",
+          },
           slashCommandPrefix: { value: "pwragent_", source: "default" },
           registerSlashCommands: { value: false, source: "default" },
           authorizedUserIds: { value: [], source: "default" },
@@ -534,11 +545,18 @@ describe("App", () => {
           appId: { configured: false, source: "unset", writable: true },
           appSecret: { configured: false, source: "unset", writable: true },
           encryptKey: { configured: false, source: "unset", writable: true },
-          verificationToken: { configured: false, source: "unset", writable: true },
+          verificationToken: {
+            configured: false,
+            source: "unset",
+            writable: true,
+          },
           inboundMode: { value: "persistent", source: "default" },
           tenantRegion: { value: "feishu", source: "default" },
           tenantUrl: { value: "https://open.feishu.cn", source: "default" },
-          callbackBaseUrl: { value: "http://127.0.0.1:47823", source: "default" },
+          callbackBaseUrl: {
+            value: "http://127.0.0.1:47823",
+            source: "default",
+          },
           slashCommandPrefix: { value: "pwragent_", source: "default" },
           registerSlashCommands: { value: false, source: "default" },
           authorizedUserIds: { value: [], source: "default" },
@@ -548,7 +566,11 @@ describe("App", () => {
         line: {
           enabled: { value: false, source: "default" },
           streamingResponses: { value: false, source: "default" },
-          channelAccessToken: { configured: false, source: "unset", writable: true },
+          channelAccessToken: {
+            configured: false,
+            source: "unset",
+            writable: true,
+          },
           channelSecret: { configured: false, source: "unset", writable: true },
           webhookUrl: { value: "", source: "default" },
           callbackBaseUrl: { value: "", source: "default" },
@@ -620,8 +642,12 @@ describe("App", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Settings config did not load",
     );
-    expect(screen.getByRole("alert")).toHaveTextContent("line 3: expected a key");
-    expect(screen.queryByRole("complementary", { name: "Threads" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "line 3: expected a key",
+    );
+    expect(
+      screen.queryByRole("complementary", { name: "Threads" }),
+    ).not.toBeInTheDocument();
   });
 
   it("starts loading navigation after settings discovery completes", async () => {
@@ -684,7 +710,9 @@ describe("App", () => {
     await waitFor(() => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
     });
-    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", { name: "Threads" }),
+    ).toBeInTheDocument();
   });
 
   it("renders the live thread shell with transcript history", async () => {
@@ -705,18 +733,18 @@ describe("App", () => {
               name: "frontend-design",
               description: "Design and verify renderer UI work.",
               path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
-              enabled: true
-            }
-          ]
-        }
-      ]
+              enabled: true,
+            },
+          ],
+        },
+      ],
     }));
     const startTurn = vi.fn<
       (request: StartTurnRequest) => Promise<StartTurnResponse>
     >(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
-      turnId: "turn-1"
+      turnId: "turn-1",
     }));
     const interruptTurn = vi.fn(async () => ({
       backend: "codex" as const,
@@ -752,7 +780,7 @@ describe("App", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Open the desktop plan and build the Codex client."
+            text: "Open the desktop plan and build the Codex client.",
           },
           {
             type: "plan",
@@ -761,8 +789,8 @@ describe("App", () => {
             steps: [
               { step: "Normalize replay", status: "pending" },
               { step: "Render plan card", status: "pending" },
-              { step: "Verify with tests", status: "pending" }
-            ]
+              { step: "Verify with tests", status: "pending" },
+            ],
           },
           {
             type: "activity",
@@ -772,47 +800,47 @@ describe("App", () => {
               {
                 id: "detail-1",
                 kind: "read",
-                label: "Read TranscriptList.tsx"
+                label: "Read TranscriptList.tsx",
               },
               {
                 id: "detail-2",
                 kind: "read",
-                label: "Read ThreadView.tsx"
+                label: "Read ThreadView.tsx",
               },
               {
                 id: "detail-3",
                 kind: "command",
-                label: "pwd && rg --files"
-              }
-            ]
+                label: "pwd && rg --files",
+              },
+            ],
           },
           {
             type: "message",
             id: "message-2",
             role: "assistant",
-            text: "The Codex client is wired and the thread browser is live."
-          }
+            text: "The Codex client is wired and the thread browser is live.",
+          },
         ],
         messages: [
           {
             id: "message-1",
             role: "user",
-            text: "Open the desktop plan and build the Codex client."
+            text: "Open the desktop plan and build the Codex client.",
           },
           {
             id: "message-2",
             role: "assistant",
-            text: "The Codex client is wired and the thread browser is live."
-          }
+            text: "The Codex client is wired and the thread browser is live.",
+          },
         ],
         lastUserMessage: "Open the desktop plan and build the Codex client.",
         lastAssistantMessage:
           "The Codex client is wired and the thread browser is live.",
         pagination: {
           supportsPagination: false,
-          hasPreviousPage: false
-        }
-      }
+          hasPreviousPage: false,
+        },
+      },
     };
 
     Object.defineProperty(window, "pwragent", {
@@ -832,7 +860,12 @@ describe("App", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read", "skills/list", "turn/start"],
+              methods: [
+                "thread/list",
+                "thread/read",
+                "skills/list",
+                "turn/start",
+              ],
               capabilities: {
                 listThreads: true,
                 createThread: false,
@@ -845,7 +878,7 @@ describe("App", () => {
                 transcriptPagination: true,
                 toolUse: false,
                 approvalRequests: false,
-                multiDirectoryThreads: true
+                multiDirectoryThreads: true,
               },
               executionModes: [
                 {
@@ -878,7 +911,7 @@ describe("App", () => {
                 transcriptPagination: false,
                 toolUse: false,
                 approvalRequests: false,
-                multiDirectoryThreads: false
+                multiDirectoryThreads: false,
               },
               executionModes: [
                 {
@@ -888,8 +921,8 @@ describe("App", () => {
                   isDefault: true,
                 },
               ],
-            }
-          ]
+            },
+          ],
         }),
         getNavigationSnapshot: async () => ({
           backend: "all",
@@ -910,22 +943,23 @@ describe("App", () => {
                   id: "/Users/huntharo/pwrdrvr/PwrAgent",
                   label: "PwrAgent",
                   path: "/Users/huntharo/pwrdrvr/PwrAgent",
-                  worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
-                  kind: "worktree"
-                }
+                  worktreePath:
+                    "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
+                  kind: "worktree",
+                },
               ],
               inbox: {
                 inInbox: true,
-                reason: "new-thread"
+                reason: "new-thread",
               },
-              updatedAt: Date.now()
-            }
-          ]
+              updatedAt: Date.now(),
+            },
+          ],
         }),
         markThreadSeen: async () => ({
           backend: "codex",
           threadId: "thread-1",
-          seenAt: Date.now()
+          seenAt: Date.now(),
         }),
         onWindowFocus: () => () => undefined,
         readThread: async () => {
@@ -943,29 +977,35 @@ describe("App", () => {
         interruptTurn,
         onAgentEvent: () => () => undefined,
         versions: {
-          electron: "41.2.1"
-        }
-      }
+          electron: "41.2.1",
+        },
+      },
     });
 
     render(<App />);
 
-    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { level: 1, name: "Threads" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "inbox" })).not.toBeInTheDocument();
     expect(
-      screen.getByRole("tab", { name: "Created" })
+      screen.getByRole("complementary", { name: "Threads" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New thread" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { level: 1, name: "Threads" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("tab", { name: "inbox" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Created" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "New thread" }),
+    ).toBeInTheDocument();
     expect(
       await screen.findByRole(
         "heading",
         {
           level: 2,
-          name: "Build Codex client"
+          name: "Build Codex client",
         },
         { timeout: 5_000 },
-      )
+      ),
     ).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", {
@@ -978,41 +1018,68 @@ describe("App", () => {
       inline: "nearest",
     });
     expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
-    expect(await screen.findByText(".worktrees/pwragent-fix-t...ng-moioth2352")).toBeInTheDocument();
-    expect(screen.getByText("codex/fix-thread-naming-ephemeral")).toBeInTheDocument();
-    expect(screen.getAllByText("codex/build-codex-client").length).toBeGreaterThan(0);
-    expect(screen.queryByRole("heading", { level: 3, name: "Transcript" })).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(".worktrees/pwragent-fix-t...ng-moioth2352"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("codex/fix-thread-naming-ephemeral"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText("codex/build-codex-client").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("heading", { level: 3, name: "Transcript" }),
+    ).not.toBeInTheDocument();
     const transcript = screen.getByRole("region", { name: "Transcript" });
     await waitFor(() => {
-      expect(transcript).toHaveTextContent("Open the desktop plan and build the Codex client.");
+      expect(transcript).toHaveTextContent(
+        "Open the desktop plan and build the Codex client.",
+      );
     });
     expect(transcript).toHaveTextContent(
-      "The Codex client is wired and the thread browser is live."
+      "The Codex client is wired and the thread browser is live.",
     );
     expect(screen.getByText("0 out of 3 tasks completed")).toBeInTheDocument();
     expect(screen.getByText("Render plan card")).toBeInTheDocument();
-    expect(screen.getByText("Explored 2 files, ran 1 command")).toBeInTheDocument();
+    expect(
+      screen.getByText("Explored 2 files, ran 1 command"),
+    ).toBeInTheDocument();
     const context = screen.getByLabelText("Thread context");
     fireEvent.click(within(context).getByRole("tab", { name: "Thread info" }));
     expect(
-      await screen.findByRole("heading", { level: 3, name: "Linked directories" })
+      await screen.findByRole("heading", {
+        level: 3,
+        name: "Linked directories",
+      }),
     ).toBeInTheDocument();
     fireEvent.click(
-      within(context).getByRole("button", { name: "Copy path for PwrAgent" })
+      within(context).getByRole("button", { name: "Copy path for PwrAgent" }),
     );
     fireEvent.click(
-      within(context).getByRole("button", { name: "Copy path for worktree PwrAgent" })
+      within(context).getByRole("button", {
+        name: "Copy path for worktree PwrAgent",
+      }),
     );
-    expect(copyText).toHaveBeenNthCalledWith(1, "/Users/huntharo/pwrdrvr/PwrAgent");
-    expect(copyText).toHaveBeenNthCalledWith(2, "/Users/huntharo/.codex/worktrees/0f38/PwrAgent");
+    expect(copyText).toHaveBeenNthCalledWith(
+      1,
+      "/Users/huntharo/pwrdrvr/PwrAgent",
+    );
+    expect(copyText).toHaveBeenNthCalledWith(
+      2,
+      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
+    );
     expect(screen.getAllByText("Codex app server").length).toBeGreaterThan(0);
     expect(screen.getByText("darwin")).toBeInTheDocument();
     // Provider availability now lives under its own context-rail tab.
-    fireEvent.click(within(context).getByRole("tab", { name: "Provider status" }));
+    fireEvent.click(
+      within(context).getByRole("tab", { name: "Provider status" }),
+    );
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(
-      screen.queryByText("This thread's backend is unavailable right now. You can keep drafting, but send is unavailable.")
+      screen.queryByText(
+        "This thread's backend is unavailable right now. You can keep drafting, but send is unavailable.",
+      ),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
@@ -1031,20 +1098,24 @@ describe("App", () => {
       input: [
         {
           type: "text",
-          text: expect.stringContaining("what can this skill do")
-        }
-      ]
+          text: expect.stringContaining("what can this skill do"),
+        },
+      ],
     });
     expect(
-      screen.getByText("The Codex client is wired and the thread browser is live.")
+      screen.getByText(
+        "The Codex client is wired and the thread browser is live.",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Thinking");
-    expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
+    expect(
+      screen.getByRole("status").querySelector(".thinking-scanner"),
+    ).not.toBeNull();
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     expect(
       screen.queryByText("Thinking", {
-        selector: ".composer__meta"
-      })
+        selector: ".composer__meta",
+      }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("3 messages")).not.toBeInTheDocument();
 
@@ -1100,7 +1171,13 @@ describe("App", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read", "skills/list", "thread/start", "turn/start"],
+              methods: [
+                "thread/list",
+                "thread/read",
+                "skills/list",
+                "thread/start",
+                "turn/start",
+              ],
               capabilities: {
                 listThreads: true,
                 createThread: true,
@@ -1215,7 +1292,10 @@ describe("App", () => {
       { timeout: 5_000 },
     );
 
-    pasteComposerText(screen.getByRole("textbox", { name: "New thread" }), "$front");
+    pasteComposerText(
+      screen.getByRole("textbox", { name: "New thread" }),
+      "$front",
+    );
 
     await waitFor(() => {
       expect(listSkills).toHaveBeenCalledWith({
@@ -1226,7 +1306,11 @@ describe("App", () => {
     });
 
     expect(
-      await screen.findByRole("button", { name: /\$frontend-design/i }, { timeout: 5_000 })
+      await screen.findByRole(
+        "button",
+        { name: /\$frontend-design/i },
+        { timeout: 5_000 },
+      ),
     ).toBeInTheDocument();
   }, 10_000);
 
@@ -1248,25 +1332,25 @@ describe("App", () => {
               workMode: "local" as const,
             });
           };
-        })
+        }),
     );
     const startTurn = vi.fn(
       async ({
         backend,
-        threadId
+        threadId,
       }: {
         backend: "codex" | "grok";
         threadId: string;
       }) => ({
         backend,
         threadId,
-        turnId: "turn-1"
-      })
+        turnId: "turn-1",
+      }),
     );
     const readThread = vi.fn(
       async ({
         backend,
-        threadId
+        threadId,
       }: {
         backend: "codex" | "grok";
         threadId: string;
@@ -1279,10 +1363,10 @@ describe("App", () => {
           messages: [],
           pagination: {
             supportsPagination: false,
-            hasPreviousPage: false
-          }
-        }
-      })
+            hasPreviousPage: false,
+          },
+        },
+      }),
     );
     let launchpadState = {
       directoryKey: "workspace:new-thread",
@@ -1304,7 +1388,7 @@ describe("App", () => {
         listSkills: async () => ({
           backend: "codex",
           fetchedAt: Date.now(),
-          data: []
+          data: [],
         }),
         listBackends: async () => ({
           fetchedAt: Date.now(),
@@ -1326,7 +1410,7 @@ describe("App", () => {
                 transcriptPagination: true,
                 toolUse: false,
                 approvalRequests: false,
-                multiDirectoryThreads: true
+                multiDirectoryThreads: true,
               },
               executionModes: [
                 {
@@ -1346,7 +1430,12 @@ describe("App", () => {
               kind: "grok",
               label: "Grok app server",
               available: true,
-              methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+              methods: [
+                "thread/list",
+                "thread/read",
+                "thread/start",
+                "turn/start",
+              ],
               capabilities: {
                 listThreads: true,
                 createThread: true,
@@ -1359,7 +1448,7 @@ describe("App", () => {
                 transcriptPagination: false,
                 toolUse: false,
                 approvalRequests: false,
-                multiDirectoryThreads: false
+                multiDirectoryThreads: false,
               },
               executionModes: [
                 {
@@ -1369,8 +1458,8 @@ describe("App", () => {
                   isDefault: true,
                 },
               ],
-            }
-          ]
+            },
+          ],
         }),
         getNavigationSnapshot: async () => {
           navigationCallCount += 1;
@@ -1398,11 +1487,11 @@ describe("App", () => {
                   linkedDirectories: [],
                   inbox: {
                     inInbox: true,
-                    reason: "new-thread"
+                    reason: "new-thread",
                   },
-                  updatedAt: Date.now()
-                }
-              ]
+                  updatedAt: Date.now(),
+                },
+              ],
             };
           }
 
@@ -1427,9 +1516,9 @@ describe("App", () => {
                 linkedDirectories: [],
                 inbox: {
                   inInbox: true,
-                  reason: "new-thread"
+                  reason: "new-thread",
                 },
-                updatedAt: Date.now()
+                updatedAt: Date.now(),
               },
               {
                 id: "thread-1",
@@ -1440,29 +1529,29 @@ describe("App", () => {
                 executionMode: "default",
                 linkedDirectories: [],
                 inbox: {
-                  inInbox: false
+                  inInbox: false,
                 },
-                updatedAt: Date.now() - 1000
-              }
-            ]
+                updatedAt: Date.now() - 1000,
+              },
+            ],
           };
         },
         markThreadSeen: async ({
           backend,
-          threadId
+          threadId,
         }: {
           backend: "codex" | "grok";
           threadId: string;
         }) => ({
           backend,
           threadId,
-          seenAt: Date.now()
+          seenAt: Date.now(),
         }),
         onAgentEvent: () => () => undefined,
         onWindowFocus: () => () => undefined,
         readThread: async ({
           backend,
-          threadId
+          threadId,
         }: {
           backend: "codex" | "grok";
           threadId: string;
@@ -1486,38 +1575,38 @@ describe("App", () => {
                   type: "message",
                   id: "message-1",
                   role: "user",
-                  text: userText
+                  text: userText,
                 },
                 {
                   type: "activity",
                   id: "activity-1",
                   summary: "Explored 2 files, ran 1 command",
-                  details: []
+                  details: [],
                 },
                 {
                   type: "message",
                   id: "message-2",
                   role: "assistant",
-                  text: assistantText
-                }
+                  text: assistantText,
+                },
               ],
               messages: [
                 {
                   id: "message-1",
                   role: "user",
-                  text: userText
+                  text: userText,
                 },
                 {
                   id: "message-2",
                   role: "assistant",
-                  text: assistantText
-                }
+                  text: assistantText,
+                },
               ],
               pagination: {
                 supportsPagination: false,
-                hasPreviousPage: false
-              }
-            }
+                hasPreviousPage: false,
+              },
+            },
           };
         },
         ensureDirectoryLaunchpad: async () => ({
@@ -1553,22 +1642,27 @@ describe("App", () => {
         startTurn,
         platform: "darwin",
         versions: {
-          electron: "41.2.1"
-        }
-      }
+          electron: "41.2.1",
+        },
+      },
     });
 
     render(<App />);
 
     await screen.findByRole("heading", {
       level: 2,
-      name: "Build Codex client"
+      name: "Build Codex client",
     });
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
-    const newThreadComposer = await screen.findByRole("textbox", { name: "New thread" });
+    const newThreadComposer = await screen.findByRole("textbox", {
+      name: "New thread",
+    });
     await act(async () => {
-      pasteComposerText(newThreadComposer, "Start a Grok-backed thread from the sidebar.");
+      pasteComposerText(
+        newThreadComposer,
+        "Start a Grok-backed thread from the sidebar.",
+      );
     });
     await waitFor(() => {
       expect(getComposerValueHost(newThreadComposer)).toHaveAttribute(
@@ -1576,16 +1670,23 @@ describe("App", () => {
         "Start a Grok-backed thread from the sidebar.",
       );
     });
-    const startThreadButton = screen.getByRole("button", { name: "Start thread" });
-    await waitFor(() => {
-      expect(startThreadButton).toBeEnabled();
-    }, { timeout: 5000 });
+    const startThreadButton = screen.getByRole("button", {
+      name: "Start thread",
+    });
+    await waitFor(
+      () => {
+        expect(startThreadButton).toBeEnabled();
+      },
+      { timeout: 5000 },
+    );
     fireEvent.click(startThreadButton);
 
     expect(
-      await screen.findByRole("region", { name: "Preparing transcript" })
+      await screen.findByRole("region", { name: "Preparing transcript" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "New thread" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "New thread" }),
+    ).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
@@ -1605,13 +1706,16 @@ describe("App", () => {
       resolveMaterializeLaunchpad?.();
     });
     expect(
-      await screen.findByRole("heading", { level: 2, name: "Investigate Grok thread" })
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "Investigate Grok thread",
+      }),
     ).toBeInTheDocument();
     expect(screen.getAllByText(/Grok/).length).toBeGreaterThan(0);
     await waitFor(() => {
-      expect(screen.getByRole("region", { name: "Transcript" })).toHaveTextContent(
-        "The Grok thread is live and selected."
-      );
+      expect(
+        screen.getByRole("region", { name: "Transcript" }),
+      ).toHaveTextContent("The Grok thread is live and selected.");
     });
 
     pasteComposerText(
@@ -1707,8 +1811,9 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("heading", { level: 2, name: "Select a thread" }))
-      .toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Select a thread" }),
+    ).toBeInTheDocument();
 
     await act(async () => {
       openNewThreadListener?.();
@@ -1722,7 +1827,9 @@ describe("App", () => {
       directoryPath: undefined,
       preferredBackend: undefined,
     });
-    expect(await screen.findByRole("textbox", { name: "New thread" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("textbox", { name: "New thread" }),
+    ).toBeInTheDocument();
   });
 
   it("releases a queued review for a thread after navigating away", async () => {
@@ -1751,7 +1858,7 @@ describe("App", () => {
     const readThread = vi.fn(
       async ({
         backend,
-        threadId
+        threadId,
       }: {
         backend: "codex";
         threadId: string;
@@ -1764,10 +1871,10 @@ describe("App", () => {
           messages: [],
           pagination: {
             supportsPagination: false,
-            hasPreviousPage: false
-          }
-        }
-      })
+            hasPreviousPage: false,
+          },
+        },
+      }),
     );
 
     Object.defineProperty(window, "pwragent", {
@@ -1777,7 +1884,7 @@ describe("App", () => {
         listSkills: async () => ({
           backend: "codex",
           fetchedAt: Date.now(),
-          data: []
+          data: [],
         }),
         listBackends: async () => ({
           fetchedAt: Date.now(),
@@ -1786,7 +1893,12 @@ describe("App", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read", "turn/start", "review/start"],
+              methods: [
+                "thread/list",
+                "thread/read",
+                "turn/start",
+                "review/start",
+              ],
               capabilities: {
                 listThreads: true,
                 createThread: true,
@@ -1800,18 +1912,18 @@ describe("App", () => {
                 transcriptPagination: true,
                 toolUse: false,
                 approvalRequests: false,
-                multiDirectoryThreads: true
+                multiDirectoryThreads: true,
               },
               executionModes: [
                 {
                   mode: "default",
                   label: "Default Access",
                   available: true,
-                  isDefault: true
-                }
-              ]
-            }
-          ]
+                  isDefault: true,
+                },
+              ],
+            },
+          ],
         }),
         getNavigationSnapshot: async () => ({
           backend: "all",
@@ -1834,9 +1946,9 @@ describe("App", () => {
               linkedDirectories: [],
               inbox: {
                 inInbox: true,
-                reason: "new-thread"
+                reason: "new-thread",
               },
-              updatedAt: Date.now()
+              updatedAt: Date.now(),
             },
             {
               id: "thread-b",
@@ -1848,22 +1960,22 @@ describe("App", () => {
               linkedDirectories: [],
               inbox: {
                 inInbox: true,
-                reason: "new-thread"
+                reason: "new-thread",
               },
-              updatedAt: Date.now() - 1000
-            }
-          ]
+              updatedAt: Date.now() - 1000,
+            },
+          ],
         }),
         markThreadSeen: async ({
           backend,
-          threadId
+          threadId,
         }: {
           backend: "codex";
           threadId: string;
         }) => ({
           backend,
           threadId,
-          seenAt: Date.now()
+          seenAt: Date.now(),
         }),
         onAgentEvent: (
           listener: (event: {
@@ -1872,7 +1984,7 @@ describe("App", () => {
               method: string;
               params: Record<string, unknown>;
             };
-          }) => void
+          }) => void,
         ) => {
           agentEventListeners.add(listener);
           return () => {
@@ -1885,16 +1997,16 @@ describe("App", () => {
         startTurn,
         platform: "darwin",
         versions: {
-          electron: "41.2.1"
-        }
-      }
+          electron: "41.2.1",
+        },
+      },
     });
 
     render(<App />);
 
     await screen.findByRole("heading", {
       level: 2,
-      name: "Active background thread"
+      name: "Active background thread",
     });
 
     pasteComposerText(
@@ -1909,7 +2021,7 @@ describe("App", () => {
           backend: "codex",
           threadId: "thread-a",
           input: [{ type: "text", text: "Start the active turn" }],
-        })
+        }),
       );
     });
 
@@ -1919,13 +2031,13 @@ describe("App", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Queue" }));
     expect(await screen.findByLabelText("Queued message")).toHaveTextContent(
-      "Review changes against main"
+      "Review changes against main",
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Focused thread/i }));
     await screen.findByRole("heading", {
       level: 2,
-      name: "Focused thread"
+      name: "Focused thread",
     });
 
     await act(async () => {
@@ -1974,7 +2086,7 @@ describe("App", () => {
         listSkills: async () => ({
           backend: "codex",
           fetchedAt: Date.now(),
-          data: []
+          data: [],
         }),
         listBackends: async () => ({
           fetchedAt: Date.now(),
@@ -1996,7 +2108,7 @@ describe("App", () => {
                 transcriptPagination: false,
                 toolUse: false,
                 approvalRequests: false,
-                multiDirectoryThreads: false
+                multiDirectoryThreads: false,
               },
               executionModes: [
                 {
@@ -2006,8 +2118,8 @@ describe("App", () => {
                   isDefault: true,
                 },
               ],
-            }
-          ]
+            },
+          ],
         }),
         getNavigationSnapshot: async () => ({
           backend: "all",
@@ -2017,7 +2129,8 @@ describe("App", () => {
           threads: [
             {
               id: "thread-1",
-              title: "Use X Search to find stats on huntharo's latest tweets for me",
+              title:
+                "Use X Search to find stats on huntharo's latest tweets for me",
               titleSource: "explicit",
               summary,
               source: "grok",
@@ -2025,16 +2138,16 @@ describe("App", () => {
               linkedDirectories: [],
               inbox: {
                 inInbox: true,
-                reason: "new-thread"
+                reason: "new-thread",
               },
-              updatedAt: Date.now()
-            }
-          ]
+              updatedAt: Date.now(),
+            },
+          ],
         }),
         markThreadSeen: async () => ({
           backend: "grok",
           threadId: "thread-1",
-          seenAt: Date.now()
+          seenAt: Date.now(),
         }),
         onAgentEvent: () => () => undefined,
         onWindowFocus: () => () => undefined,
@@ -2048,43 +2161,43 @@ describe("App", () => {
                 type: "message",
                 id: "message-1",
                 role: "user",
-                text: "Use X Search to find stats on huntharo's latest tweets for me"
+                text: "Use X Search to find stats on huntharo's latest tweets for me",
               },
               {
                 type: "message",
                 id: "message-2",
                 role: "assistant",
-                text: response
-              }
+                text: response,
+              },
             ],
             messages: [
               {
                 id: "message-1",
                 role: "user",
-                text: "Use X Search to find stats on huntharo's latest tweets for me"
+                text: "Use X Search to find stats on huntharo's latest tweets for me",
               },
               {
                 id: "message-2",
                 role: "assistant",
-                text: response
-              }
+                text: response,
+              },
             ],
             pagination: {
               supportsPagination: false,
-              hasPreviousPage: false
-            }
-          }
+              hasPreviousPage: false,
+            },
+          },
         }),
         platform: "darwin",
         startTurn: async () => ({
           backend: "grok",
           threadId: "thread-1",
-          turnId: "turn-1"
+          turnId: "turn-1",
         }),
         versions: {
-          electron: "41.2.1"
-        }
-      }
+          electron: "41.2.1",
+        },
+      },
     });
 
     render(<App />);
@@ -2092,8 +2205,8 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", {
         level: 2,
-        name: "Use X Search to find stats on huntharo's latest tweets for me"
-      })
+        name: "Use X Search to find stats on huntharo's latest tweets for me",
+      }),
     ).toBeInTheDocument();
 
     const transcript = screen.getByRole("region", { name: "Transcript" });
@@ -2103,8 +2216,12 @@ describe("App", () => {
     expect(await within(transcript).findByText(response)).toBeInTheDocument();
     expect(header).not.toBeNull();
     expect(main).not.toHaveClass("app-main--thread-detail-pending");
-    expect(screen.queryByRole("heading", { level: 2, name: "Loading..." })).toBeNull();
-    expect(within(header as HTMLElement).queryByText(response)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { level: 2, name: "Loading..." }),
+    ).toBeNull();
+    expect(
+      within(header as HTMLElement).queryByText(response),
+    ).not.toBeInTheDocument();
     expect(within(header as HTMLElement).queryByText(summary)).toBeNull();
   });
 
@@ -2201,7 +2318,7 @@ describe("App", () => {
               method: string;
               params: Record<string, unknown>;
             };
-          }) => void
+          }) => void,
         ) => {
           agentEventListeners.add(listener);
           return () => {
@@ -2240,7 +2357,7 @@ describe("App", () => {
       await screen.findByRole("heading", {
         level: 2,
         name: "Thread that disappears",
-      })
+      }),
     ).toBeInTheDocument();
 
     navigationSnapshot = {
@@ -2275,13 +2392,13 @@ describe("App", () => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
     });
     expect(
-      screen.queryByRole("heading", { level: 2, name: "Loading..." })
+      screen.queryByRole("heading", { level: 2, name: "Loading..." }),
     ).toBeNull();
     expect(
-      screen.getByRole("heading", { level: 2, name: "Pick a Thread" })
+      screen.getByRole("heading", { level: 2, name: "Pick a Thread" }),
     ).toBeInTheDocument();
     expect(document.querySelector(".app-main")).not.toHaveClass(
-      "app-main--thread-detail-pending"
+      "app-main--thread-detail-pending",
     );
   });
 
@@ -2321,24 +2438,24 @@ describe("App", () => {
           linkedDirectories: [],
           inbox: {
             inInbox: true,
-            reason: "new-thread" as const
+            reason: "new-thread" as const,
           },
-          updatedAt: Date.now()
-        }
-      ]
+          updatedAt: Date.now(),
+        },
+      ],
     };
     const startTurn = vi.fn(
       async ({
         backend,
-        threadId
+        threadId,
       }: {
         backend: "codex" | "grok";
         threadId: string;
       }) => ({
         backend,
         threadId,
-        turnId: "turn-1"
-      })
+        turnId: "turn-1",
+      }),
     );
 
     Object.defineProperty(window, "pwragent", {
@@ -2352,7 +2469,12 @@ describe("App", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+              methods: [
+                "thread/list",
+                "thread/read",
+                "thread/start",
+                "turn/start",
+              ],
               capabilities: {
                 listThreads: true,
                 createThread: true,
@@ -2365,7 +2487,7 @@ describe("App", () => {
                 transcriptPagination: true,
                 toolUse: false,
                 approvalRequests: false,
-                multiDirectoryThreads: true
+                multiDirectoryThreads: true,
               },
               executionModes: [
                 {
@@ -2380,20 +2502,20 @@ describe("App", () => {
                   available: true,
                 },
               ],
-            }
-          ]
+            },
+          ],
         }),
         getNavigationSnapshot: async () => navigationSnapshot,
         markThreadSeen: async ({
           backend,
-          threadId
+          threadId,
         }: {
           backend: "codex" | "grok";
           threadId: string;
         }) => ({
           backend,
           threadId,
-          seenAt: Date.now()
+          seenAt: Date.now(),
         }),
         onAgentEvent: (
           listener: (event: {
@@ -2402,7 +2524,7 @@ describe("App", () => {
               method: string;
               params: Record<string, unknown>;
             };
-          }) => void
+          }) => void,
         ) => {
           agentEventListeners.add(listener);
           return () => {
@@ -2412,7 +2534,7 @@ describe("App", () => {
         onWindowFocus: () => () => undefined,
         readThread: async ({
           backend,
-          threadId
+          threadId,
         }: {
           backend: "codex" | "grok";
           threadId: string;
@@ -2425,9 +2547,9 @@ describe("App", () => {
             messages: [],
             pagination: {
               supportsPagination: false,
-              hasPreviousPage: false
-            }
-          }
+              hasPreviousPage: false,
+            },
+          },
         }),
         ensureDirectoryLaunchpad: async () => ({
           launchpad: {
@@ -2473,21 +2595,21 @@ describe("App", () => {
         startTurn,
         platform: "darwin",
         versions: {
-          electron: "41.2.1"
-        }
-      }
+          electron: "41.2.1",
+        },
+      },
     });
 
     render(<App />);
 
     await screen.findByRole("heading", {
       level: 2,
-      name: "Existing Codex thread"
+      name: "Existing Codex thread",
     });
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
     expect(
-      await screen.findByRole("heading", { level: 2, name: "New thread" })
+      await screen.findByRole("heading", { level: 2, name: "New thread" }),
     ).toBeInTheDocument();
 
     pasteComposerText(
@@ -2495,7 +2617,9 @@ describe("App", () => {
       "hello new codex thread",
     );
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "Start thread" }),
+      ).toBeEnabled();
     });
     await clickButton("Start thread");
 
@@ -2505,7 +2629,7 @@ describe("App", () => {
         launchpad: expect.objectContaining({
           directoryKey: "workspace:new-thread",
         }),
-        input: [{ type: "text", text: "hello new codex thread" }]
+        input: [{ type: "text", text: "hello new codex thread" }],
       });
     });
 
@@ -2524,7 +2648,7 @@ describe("App", () => {
       model: undefined,
       reasoningEffort: undefined,
       serviceTier: undefined,
-      fastMode: undefined
+      fastMode: undefined,
     });
 
     navigationSnapshot = {
@@ -2547,12 +2671,12 @@ describe("App", () => {
           linkedDirectories: [],
           inbox: {
             inInbox: true,
-            reason: "new-thread"
+            reason: "new-thread",
           },
-          updatedAt: Date.now()
+          updatedAt: Date.now(),
         },
         ...navigationSnapshot.threads,
-      ]
+      ],
     };
 
     await act(async () => {
@@ -2572,7 +2696,10 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("heading", { level: 2, name: "hello new codex thread" })
+        screen.getByRole("heading", {
+          level: 2,
+          name: "hello new codex thread",
+        }),
       ).toBeInTheDocument();
     });
   });
@@ -2583,7 +2710,7 @@ describe("App", () => {
       threadId: "thread-new",
       executionMode: "default" as const,
       workMode: "local" as const,
-      turnId: "turn-1"
+      turnId: "turn-1",
     }));
     const agentEventListeners = new Set<
       (event: {
@@ -2614,24 +2741,24 @@ describe("App", () => {
           linkedDirectories: [],
           inbox: {
             inInbox: true,
-            reason: "new-thread" as const
+            reason: "new-thread" as const,
           },
-          updatedAt: Date.now()
-        }
-      ]
+          updatedAt: Date.now(),
+        },
+      ],
     };
     const startTurn = vi.fn(
       async ({
         backend,
-        threadId
+        threadId,
       }: {
         backend: "codex" | "grok";
         threadId: string;
       }) => ({
         backend,
         threadId,
-        turnId: "turn-1"
-      })
+        turnId: "turn-1",
+      }),
     );
 
     Object.defineProperty(window, "pwragent", {
@@ -2645,7 +2772,12 @@ describe("App", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+              methods: [
+                "thread/list",
+                "thread/read",
+                "thread/start",
+                "turn/start",
+              ],
               capabilities: {
                 listThreads: true,
                 createThread: true,
@@ -2658,35 +2790,35 @@ describe("App", () => {
                 transcriptPagination: true,
                 toolUse: false,
                 approvalRequests: false,
-                multiDirectoryThreads: true
+                multiDirectoryThreads: true,
               },
               executionModes: [
                 {
                   mode: "default",
                   label: "Default Access",
                   available: true,
-                  isDefault: true
+                  isDefault: true,
                 },
                 {
                   mode: "full-access",
                   label: "Full Access",
-                  available: true
-                }
-              ]
-            }
-          ]
+                  available: true,
+                },
+              ],
+            },
+          ],
         }),
         getNavigationSnapshot: async () => navigationSnapshot,
         markThreadSeen: async ({
           backend,
-          threadId
+          threadId,
         }: {
           backend: "codex" | "grok";
           threadId: string;
         }) => ({
           backend,
           threadId,
-          seenAt: Date.now()
+          seenAt: Date.now(),
         }),
         onAgentEvent: (
           listener: (event: {
@@ -2695,7 +2827,7 @@ describe("App", () => {
               method: string;
               params: Record<string, unknown>;
             };
-          }) => void
+          }) => void,
         ) => {
           agentEventListeners.add(listener);
           return () => {
@@ -2705,7 +2837,7 @@ describe("App", () => {
         onWindowFocus: () => () => undefined,
         readThread: async ({
           backend,
-          threadId
+          threadId,
         }: {
           backend: "codex" | "grok";
           threadId: string;
@@ -2718,9 +2850,9 @@ describe("App", () => {
             messages: [],
             pagination: {
               supportsPagination: false,
-              hasPreviousPage: false
-            }
-          }
+              hasPreviousPage: false,
+            },
+          },
         }),
         ensureDirectoryLaunchpad: async () => ({
           launchpad: {
@@ -2766,16 +2898,16 @@ describe("App", () => {
         startTurn,
         platform: "darwin",
         versions: {
-          electron: "41.2.1"
-        }
-      }
+          electron: "41.2.1",
+        },
+      },
     });
 
     render(<App />);
 
     await screen.findByRole("heading", {
       level: 2,
-      name: "Existing Codex thread"
+      name: "Existing Codex thread",
     });
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
@@ -2785,7 +2917,9 @@ describe("App", () => {
       "Name this thread something funny and spunky. Something about potatoes.",
     );
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "Start thread" }),
+      ).toBeEnabled();
     });
     await clickButton("Start thread");
 
@@ -2798,9 +2932,9 @@ describe("App", () => {
         input: [
           {
             type: "text",
-            text: "Name this thread something funny and spunky. Something about potatoes."
-          }
-        ]
+            text: "Name this thread something funny and spunky. Something about potatoes.",
+          },
+        ],
       });
     });
 
@@ -2817,18 +2951,19 @@ describe("App", () => {
       threads: [
         {
           id: "thread-new",
-          title: "Name this thread something funny and spunky. Something about potatoes.",
+          title:
+            "Name this thread something funny and spunky. Something about potatoes.",
           titleSource: "derived",
           summary: undefined,
           source: "codex",
           linkedDirectories: [],
           inbox: {
             inInbox: true,
-            reason: "new-thread"
+            reason: "new-thread",
           },
-          updatedAt: Date.now()
-        }
-      ]
+          updatedAt: Date.now(),
+        },
+      ],
     };
 
     await act(async () => {
@@ -2848,7 +2983,7 @@ describe("App", () => {
 
     await screen.findByRole("heading", {
       level: 2,
-      name: "Name this thread something funny and spunky. Something about potatoes."
+      name: "Name this thread something funny and spunky. Something about potatoes.",
     });
 
     await act(async () => {
@@ -2868,7 +3003,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("heading", { level: 2, name: "Spud up the thread" })
+        screen.getByRole("heading", { level: 2, name: "Spud up the thread" }),
       ).toBeInTheDocument();
     });
   });
@@ -2906,7 +3041,7 @@ describe("App", () => {
             hasPreviousPage: false,
           },
         },
-      })
+      }),
     );
 
     Object.defineProperty(window, "pwragent", {
@@ -3025,7 +3160,9 @@ describe("App", () => {
       threadId: "thread-1",
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /Second cached thread/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Second cached thread/i }),
+    );
 
     await screen.findByRole("heading", {
       level: 2,
@@ -3040,7 +3177,9 @@ describe("App", () => {
       threadId: "thread-2",
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /First cached thread/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /First cached thread/i }),
+    );
 
     await screen.findByRole("heading", {
       level: 2,
@@ -3283,14 +3422,20 @@ describe("App", () => {
   it("renames the selected thread from the sidebar actions menu", async () => {
     let threadTitle = "Build Codex client";
     const renameThread = vi.fn(
-      async ({ name }: { backend: "codex"; threadId: string; name: string }) => {
+      async ({
+        name,
+      }: {
+        backend: "codex";
+        threadId: string;
+        name: string;
+      }) => {
         threadTitle = name;
         return {
           backend: "codex" as const,
           threadId: "thread-1",
           renamedAt: Date.now(),
         };
-      }
+      },
     );
     const readThread = vi.fn(async () => ({
       backend: "codex" as const,
@@ -3402,9 +3547,13 @@ describe("App", () => {
       name: "Build Codex client",
     });
 
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const browseSection = screen.getByRole("region", {
+      name: "Thread browser",
+    });
     fireEvent.click(
-      within(browseSection).getByRole("button", { name: "Open thread actions" })
+      within(browseSection).getByRole("button", {
+        name: "Open thread actions",
+      }),
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
@@ -3412,7 +3561,9 @@ describe("App", () => {
     fireEvent.change(within(dialog).getByLabelText("Name"), {
       target: { value: "Renamed Codex client" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Rename Thread" }),
+    );
 
     expect(renameThread).toHaveBeenCalledWith({
       backend: "codex",

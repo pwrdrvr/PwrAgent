@@ -78,7 +78,10 @@ import {
 } from "@pwrdrvr/codex-discovery";
 import { getMainLogger } from "../log";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
-import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp";
+import {
+  BUILT_IN_ACP_STRATEGIES,
+  type AcpAgentStrategy,
+} from "@pwrdrvr/agent-acp";
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
@@ -175,7 +178,8 @@ async function listAcpAgentSettingsImpl(
       snapshot = await registryService.fetchRegistry();
       store.saveRegistrySnapshot(snapshot);
     } catch (fetchError) {
-      error = fetchError instanceof Error ? fetchError.message : String(fetchError);
+      error =
+        fetchError instanceof Error ? fetchError.message : String(fetchError);
     }
   }
 
@@ -191,7 +195,9 @@ async function listAcpAgentSettingsImpl(
         .flatMap((agent) => {
           const entry = acpAgentSettingsEntry({
             agent,
-            installed: installed.find((record) => record.backendId === agent.backendId),
+            installed: installed.find(
+              (record) => record.backendId === agent.backendId,
+            ),
             registryService,
           });
           return entry ? [entry] : [];
@@ -213,8 +219,8 @@ async function listAcpAgentSettingsImpl(
   const presentBackendIds = new Set(entries.map((entry) => entry.backendId));
   for (const strategy of BUILT_IN_ACP_STRATEGIES) {
     if (
-      isBannedAcpRegistryId(strategy.id) ||
-      presentBackendIds.has(`acp:${strategy.id}`)
+      isBannedAcpRegistryId(strategy.id)
+      || presentBackendIds.has(`acp:${strategy.id}`)
     ) {
       continue;
     }
@@ -353,8 +359,8 @@ async function listInstalledAndLocalAcpAgents(
     ...allowedInstalled,
     ...discovered.filter(
       (record) =>
-        !installedBackendIds.has(record.backendId) &&
-        !isBannedAcpRegistryId(record.registryId),
+        !installedBackendIds.has(record.backendId)
+        && !isBannedAcpRegistryId(record.registryId),
     ),
   ];
 }
@@ -382,7 +388,8 @@ async function refreshAcpRuntimeCapabilities(
   } catch (error) {
     return {
       ...record,
-      lastDiscoveryError: error instanceof Error ? error.message : String(error),
+      lastDiscoveryError:
+        error instanceof Error ? error.message : String(error),
       updatedAt: Math.max(record.updatedAt, now),
     };
   }
@@ -425,7 +432,7 @@ function acpAgentSettingsEntry(params: {
       websiteUrl: params.agent.websiteUrl,
       distributionKind: displayDistribution.kind,
       distributionSource: describeDistributionSource(displayDistribution),
-    installable: false,
+      installable: false,
       installed: false,
       installStatus: "unavailable",
       authStatus: params.agent.auth.required ? "required" : "not-required",
@@ -433,7 +440,8 @@ function acpAgentSettingsEntry(params: {
       allowlistRuleId: params.agent.allowlist.allowed
         ? params.agent.allowlist.ruleId
         : undefined,
-    unavailableReason: "Install is not supported. Install the agent separately and run Discover new.",
+      unavailableReason:
+        "Install is not supported. Install the agent separately and run Discover new.",
     };
   }
   const distributionPolicy = params.registryService.evaluateDistribution(
@@ -461,9 +469,9 @@ function acpAgentSettingsEntry(params: {
       ? distributionPolicy.allowlist.ruleId
       : undefined,
     unavailableReason:
-      distributionPolicy.unavailableReason ??
-      params.agent.unavailableReason ??
-      "Install is not supported. Install the agent separately and run Discover new.",
+      distributionPolicy.unavailableReason
+      ?? params.agent.unavailableReason
+      ?? "Install is not supported. Install the agent separately and run Discover new.",
   };
 }
 
@@ -507,7 +515,10 @@ function selectAcpDistribution(
   agent: Pick<AcpRegistryAgent, "distributions">,
   preferredKind?: AcpRegistryDistribution["kind"],
 ): AcpRegistryDistribution | undefined {
-  return selectAcpDistributionForCurrentPlatform(agent.distributions, preferredKind);
+  return selectAcpDistributionForCurrentPlatform(
+    agent.distributions,
+    preferredKind,
+  );
 }
 
 async function resolveCodexCommandForProfileWorkflow(
@@ -540,7 +551,6 @@ function resolveRequiredCodexProfileHome(profile: string): string {
   }
   return codexHome;
 }
-
 
 async function checkCodexProfileAuthStatus(
   service: DesktopSettingsService,
@@ -577,8 +587,6 @@ async function checkCodexProfileAuthStatus(
     ...(authInfo.planType ? { planType: authInfo.planType } : {}),
   };
 }
-
-
 
 function messagingPatchTouchesRuntime(
   patch: DesktopSettingsConfigPatch | undefined,
@@ -668,10 +676,7 @@ async function resolveMessagingContact(
       if (!botToken) return { status: "unset", id };
       const provider = await import("@pwragent/messaging-provider-telegram");
       return sanitizeMessagingContactLookupResponse(
-        await provider.resolveContact(
-          { botToken },
-          { id, kind: request.kind },
-        ),
+        await provider.resolveContact({ botToken }, { id, kind: request.kind }),
       );
     }
     case "discord": {
@@ -682,10 +687,7 @@ async function resolveMessagingContact(
       if (!botToken) return { status: "unset", id };
       const provider = await import("@pwragent/messaging-provider-discord");
       return sanitizeMessagingContactLookupResponse(
-        await provider.resolveContact(
-          { botToken },
-          { id, kind: request.kind },
-        ),
+        await provider.resolveContact({ botToken }, { id, kind: request.kind }),
       );
     }
     case "mattermost": {
@@ -715,10 +717,7 @@ async function resolveMessagingContact(
       if (!botToken) return { status: "unset", id };
       const provider = await import("@pwragent/messaging-provider-slack");
       return sanitizeMessagingContactLookupResponse(
-        await provider.resolveContact(
-          { botToken },
-          { id, kind: request.kind },
-        ),
+        await provider.resolveContact({ botToken }, { id, kind: request.kind }),
       );
     }
     case "feishu": {
@@ -802,10 +801,8 @@ function getCredentialTester(
         resolveService().resolveMattermostBotTokenSync(),
       resolveMattermostServerUrl: () =>
         resolveService().resolveMattermostServerUrlSync(),
-      resolveSlackBotToken: () =>
-        resolveService().resolveSlackBotTokenSync(),
-      resolveFeishuAppId: () =>
-        resolveService().resolveFeishuAppIdSync(),
+      resolveSlackBotToken: () => resolveService().resolveSlackBotTokenSync(),
+      resolveFeishuAppId: () => resolveService().resolveFeishuAppIdSync(),
       resolveFeishuAppSecret: () =>
         resolveService().resolveFeishuAppSecretSync(),
       resolveFeishuTenantUrl: () =>
@@ -836,7 +833,8 @@ function startupCredentialResult(
   ) {
     return undefined;
   }
-  const metadata = getDesktopMessagingRuntime().getPlatformCredentialMetadata(kind);
+  const metadata =
+    getDesktopMessagingRuntime().getPlatformCredentialMetadata(kind);
   if (!metadata) return undefined;
   return {
     kind,
@@ -868,7 +866,8 @@ export function registerSettingsIpcHandlers(
     async (
       _event,
       request?: ListAcpAgentSettingsRequest,
-    ): Promise<ListAcpAgentSettingsResponse> => await listAcpAgentSettings(request),
+    ): Promise<ListAcpAgentSettingsResponse> =>
+      await listAcpAgentSettings(request),
   );
 
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
@@ -974,7 +973,9 @@ export function registerSettingsIpcHandlers(
       request: StartDesktopCodexAuthProfileLoginRequest,
     ): Promise<StartDesktopCodexAuthProfileLoginResponse> => {
       const profile =
-        request.profile.trim() === "" ? "" : normalizeProfileName(request.profile);
+        request.profile.trim() === ""
+          ? ""
+          : normalizeProfileName(request.profile);
       if (request.profile.trim() !== "" && !profile) {
         throw new Error(
           `Codex profile name "${request.profile}" must contain at least one letter or number.`,
@@ -1021,7 +1022,8 @@ export function registerSettingsIpcHandlers(
   ipcMain.handle(
     SETTINGS_PICK_GH_COMMAND_CHANNEL,
     async (event): Promise<PickGhCommandResponse> => {
-      const window = BrowserWindow.fromWebContents(event.sender)
+      const window =
+        BrowserWindow.fromWebContents(event.sender)
         ?? BrowserWindow.getFocusedWindow()
         ?? undefined;
       const result = window
@@ -1082,7 +1084,9 @@ export function registerSettingsIpcHandlers(
       request: { kind: SettingsCredentialTestKind },
     ): Promise<SettingsCredentialTestResult | undefined> => {
       const tester = getCredentialTester(service);
-      return tester.lastResult(request.kind) ?? startupCredentialResult(request.kind);
+      return (
+        tester.lastResult(request.kind) ?? startupCredentialResult(request.kind)
+      );
     },
   );
 

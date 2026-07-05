@@ -24,7 +24,9 @@ import { getMainLogger } from "../log";
 import { windowsBashCandidates } from "../windows-shell";
 import type { CodexEnvironmentHydrationStoreLike } from "./codex-environment-hydration-store";
 
-const environmentRuntimeLog = getMainLogger("pwragent:codex-environment-runtime");
+const environmentRuntimeLog = getMainLogger(
+  "pwragent:codex-environment-runtime",
+);
 
 const MAX_OUTPUT_PREVIEW_CHARS = 4_000;
 const EXIT_ERROR_SUFFIX_LINES = 8;
@@ -71,11 +73,14 @@ export class CodexEnvironmentCommandError extends Error {
   exitCode?: number;
   output?: string;
 
-  constructor(message: string, details?: {
-    durationMs?: number;
-    exitCode?: number;
-    output?: string;
-  }) {
+  constructor(
+    message: string,
+    details?: {
+      durationMs?: number;
+      exitCode?: number;
+      output?: string;
+    },
+  ) {
     super(message);
     this.name = "CodexEnvironmentCommandError";
     this.durationMs = details?.durationMs;
@@ -272,13 +277,12 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       : undefined,
     sourcePath: selection.environment.sourcePath,
   };
-  const cachedShellEnvironment =
-    params.hydrationStore?.get({
-      environmentId: selection.environment.id,
-      sourcePath: selection.environment.sourcePath,
-      cwd,
-      setupScript: selection.environment.setupScript,
-    })?.shellEnvironment;
+  const cachedShellEnvironment = params.hydrationStore?.get({
+    environmentId: selection.environment.id,
+    sourcePath: selection.environment.sourcePath,
+    cwd,
+    setupScript: selection.environment.setupScript,
+  })?.shellEnvironment;
 
   if (selection.runSetup && selection.environment.setupScript) {
     const emitSetupProgress = (
@@ -308,8 +312,8 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         mode: "wait",
         captureShellEnvironment: true,
         timeoutMs:
-          params.setupTimeoutMs ??
-          readCodexEnvironmentSetupTimeoutMs(params.env ?? process.env),
+          params.setupTimeoutMs
+          ?? readCodexEnvironmentSetupTimeoutMs(params.env ?? process.env),
         onProgress: (event) => {
           emitSetupProgress(event);
         },
@@ -318,7 +322,8 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       runtime.setupOutput = result.output;
       runtime.setupExitCode = result.exitCode;
       runtime.setupDurationMs = result.durationMs;
-      runtime.shellEnvironment = result.shellEnvironment ?? cachedShellEnvironment;
+      runtime.shellEnvironment =
+        result.shellEnvironment ?? cachedShellEnvironment;
       if (result.shellEnvironment) {
         params.hydrationStore?.set({
           environmentId: selection.environment.id,
@@ -454,7 +459,9 @@ export async function startLocalCodexEnvironmentAction(params: {
     (candidate) => candidate.id === params.actionId,
   );
   if (!action) {
-    throw new Error(`Codex environment action '${params.actionId}' is not available.`);
+    throw new Error(
+      `Codex environment action '${params.actionId}' is not available.`,
+    );
   }
 
   const startedAt = Date.now();
@@ -521,7 +528,9 @@ export async function startLocalCodexEnvironmentAction(params: {
 function runShellCommand(
   params: CodexEnvironmentCommandParams,
 ): Promise<CodexEnvironmentCommandResult> {
-  const commandEnv = sanitizeLocalEnvironmentCommandEnv(params.env ?? process.env);
+  const commandEnv = sanitizeLocalEnvironmentCommandEnv(
+    params.env ?? process.env,
+  );
   const cwdProblem = inspectCommandCwd(params.cwd);
   if (cwdProblem) {
     return Promise.reject(new CodexEnvironmentCommandError(cwdProblem.message));
@@ -681,7 +690,11 @@ function runShellCommand(
     // DETACHED_OUTPUT_SNAPSHOT_MS, regardless of how chatty the child is.
     let snapshotTimer: NodeJS.Timeout | undefined;
     const scheduleDetachedOutputSnapshot = () => {
-      if (params.mode !== "detach" || !params.onDetachedOutput || snapshotTimer) {
+      if (
+        params.mode !== "detach"
+        || !params.onDetachedOutput
+        || snapshotTimer
+      ) {
         return;
       }
       snapshotTimer = setTimeout(() => {
@@ -1003,33 +1016,33 @@ function shouldPersistCapturedShellEnvironmentKey(
   }
   const upperKey = key.toUpperCase();
   if (
-    upperKey.includes("TOKEN") ||
-    upperKey.includes("SECRET") ||
-    upperKey.includes("PASSWORD") ||
-    upperKey.includes("PASSWD") ||
-    upperKey.includes("AUTH") ||
-    upperKey.includes("CREDENTIAL") ||
-    upperKey.includes("COOKIE") ||
-    upperKey.includes("KEY")
+    upperKey.includes("TOKEN")
+    || upperKey.includes("SECRET")
+    || upperKey.includes("PASSWORD")
+    || upperKey.includes("PASSWD")
+    || upperKey.includes("AUTH")
+    || upperKey.includes("CREDENTIAL")
+    || upperKey.includes("COOKIE")
+    || upperKey.includes("KEY")
   ) {
     return false;
   }
   if (
-    upperKey === "PATH" ||
-    upperKey === "MANPATH" ||
-    upperKey === "INFOPATH" ||
-    upperKey === "JAVA_HOME" ||
-    upperKey === "MAVEN_HOME" ||
-    upperKey === "GRADLE_HOME" ||
-    upperKey === "GOROOT" ||
-    upperKey === "GOPATH" ||
-    upperKey === "GOBIN" ||
-    upperKey === "CARGO_HOME" ||
-    upperKey === "RUSTUP_HOME" ||
-    upperKey === "GEM_HOME" ||
-    upperKey === "GEM_PATH" ||
-    upperKey === "VIRTUAL_ENV" ||
-    upperKey === "CONDA_PREFIX"
+    upperKey === "PATH"
+    || upperKey === "MANPATH"
+    || upperKey === "INFOPATH"
+    || upperKey === "JAVA_HOME"
+    || upperKey === "MAVEN_HOME"
+    || upperKey === "GRADLE_HOME"
+    || upperKey === "GOROOT"
+    || upperKey === "GOPATH"
+    || upperKey === "GOBIN"
+    || upperKey === "CARGO_HOME"
+    || upperKey === "RUSTUP_HOME"
+    || upperKey === "GEM_HOME"
+    || upperKey === "GEM_PATH"
+    || upperKey === "VIRTUAL_ENV"
+    || upperKey === "CONDA_PREFIX"
   ) {
     return true;
   }
@@ -1062,11 +1075,11 @@ function containsUrlUserInfo(value: string): boolean {
 
 function isParentElectronRuntimeEnvKey(key: string): boolean {
   return (
-    key.startsWith("ELECTRON_") ||
-    key === "VITE_DEV_SERVER_URL" ||
-    key.startsWith("MAIN_VITE_") ||
-    key.startsWith("PRELOAD_VITE_") ||
-    key.startsWith("RENDERER_VITE_")
+    key.startsWith("ELECTRON_")
+    || key === "VITE_DEV_SERVER_URL"
+    || key.startsWith("MAIN_VITE_")
+    || key.startsWith("PRELOAD_VITE_")
+    || key.startsWith("RENDERER_VITE_")
   );
 }
 
@@ -1102,10 +1115,12 @@ function resolveCommandShell(env: NodeJS.ProcessEnv): string {
   return requested || "/bin/sh";
 }
 
-function inspectCommandPath(shell: string): { available: true } | {
-  available: false;
-  reason: string;
-} {
+function inspectCommandPath(shell: string):
+  | { available: true }
+  | {
+      available: false;
+      reason: string;
+    } {
   if (!isAbsoluteCommandPath(shell)) {
     return { available: true };
   }
@@ -1136,7 +1151,9 @@ function isAbsoluteCommandPath(value: string): boolean {
   return path.isAbsolute(value) || path.win32.isAbsolute(value);
 }
 
-function inspectCommandCwd(cwd: string | undefined): { message: string } | undefined {
+function inspectCommandCwd(
+  cwd: string | undefined,
+): { message: string } | undefined {
   const trimmed = cwd?.trim();
   if (!trimmed) {
     return undefined;
@@ -1217,7 +1234,9 @@ function wrapShellCommand(
     "set -e",
     command,
     ...(captureEnvPath
-      ? [`{ /usr/bin/env || /bin/env || env; } > ${quoteShellArg(captureEnvPath)} || true`]
+      ? [
+          `{ /usr/bin/env || /bin/env || env; } > ${quoteShellArg(captureEnvPath)} || true`,
+        ]
       : []),
   ].join("\n");
 }

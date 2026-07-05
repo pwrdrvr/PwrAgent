@@ -29,7 +29,8 @@ export const DESKTOP_UPDATE_CHANNEL_DEFAULT: DesktopUpdateChannel = "latest";
 
 export const DESKTOP_APPEARANCE_THEMES = ["system", "dark", "light"] as const;
 export type DesktopAppearanceTheme = (typeof DESKTOP_APPEARANCE_THEMES)[number];
-export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme = "system";
+export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme =
+  "system";
 
 export const DESKTOP_APPEARANCE_DENSITIES = [
   "mission-control",
@@ -61,11 +62,12 @@ export type DesktopCodexProfileModel =
 export const DESKTOP_CODEX_PROFILE_MODEL_DEFAULT: DesktopCodexProfileModel =
   "shared";
 
-export const DESKTOP_HOT_CPU_PROFILE_START_DELAYS_MS = [0, 5_000, 10_000] as const;
+export const DESKTOP_HOT_CPU_PROFILE_START_DELAYS_MS = [
+  0, 5_000, 10_000,
+] as const;
 export type DesktopHotCpuProfileStartDelayMs =
   (typeof DESKTOP_HOT_CPU_PROFILE_START_DELAYS_MS)[number];
-export const DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS: DesktopHotCpuProfileStartDelayMs =
-  0;
+export const DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS: DesktopHotCpuProfileStartDelayMs = 0;
 
 export const DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODES = [
   "spike",
@@ -120,7 +122,9 @@ export type DesktopMessagingSlackChannelUserAccessMode =
   | "any_channel_user"
   | "authorized_users"
   | "none";
-export type DesktopMessagingSlackGroupDmAccessMode = "none" | "authorized_users";
+export type DesktopMessagingSlackGroupDmAccessMode =
+  | "none"
+  | "authorized_users";
 
 export type DesktopMessagingFullAccessWarningGlobalPolicy =
   | "always"

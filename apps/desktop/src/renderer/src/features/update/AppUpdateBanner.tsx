@@ -6,7 +6,9 @@ export function AppUpdateBanner(props: { desktopApi?: DesktopApi }) {
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>({
     status: "idle",
   });
-  const [dismissedVersion, setDismissedVersion] = useState<string | undefined>();
+  const [dismissedVersion, setDismissedVersion] = useState<
+    string | undefined
+  >();
   const [restartError, setRestartError] = useState<string | undefined>();
   const [restarting, setRestarting] = useState(false);
   const desktopApi = props.desktopApi;

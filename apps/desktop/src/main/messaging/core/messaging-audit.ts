@@ -1,7 +1,4 @@
-import type {
-  AppServerBackendKind,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+import type { AppServerBackendKind, ThreadIdentifier } from "@pwragent/shared";
 import type {
   MessagingActorIdentity,
   MessagingAuditContext,

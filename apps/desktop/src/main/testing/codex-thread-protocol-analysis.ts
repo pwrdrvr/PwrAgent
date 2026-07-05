@@ -99,13 +99,20 @@ export async function analyzeCodexThreadProtocolCapture(params: {
 
   for (const entry of records) {
     const method = entry.envelope.method?.trim();
-    if (entry.record.direction === "outbound" && entry.record.kind === "request" && method) {
+    if (
+      entry.record.direction === "outbound"
+      && entry.record.kind === "request"
+      && method
+    ) {
       requestCounts[method] = (requestCounts[method] ?? 0) + 1;
 
       if (method === "thread/list" || method === "thread/loaded/list") {
         requestMethods.add(method);
         const paramsRecord = asRecord(entry.envelope.params);
-        const archived = typeof paramsRecord?.archived === "boolean" ? paramsRecord.archived : undefined;
+        const archived =
+          typeof paramsRecord?.archived === "boolean"
+            ? paramsRecord.archived
+            : undefined;
         if (archived === true) {
           archivedRequestCount += 1;
         } else if (archived === false) {
@@ -113,13 +120,17 @@ export async function analyzeCodexThreadProtocolCapture(params: {
         }
 
         const filterKey = (["searchTerm", "query", "filter"] as const).find(
-          (key) => typeof paramsRecord?.[key] === "string" && String(paramsRecord[key]).trim(),
+          (key) =>
+            typeof paramsRecord?.[key] === "string"
+            && String(paramsRecord[key]).trim(),
         );
         const variant: ThreadListRequestVariant = {
           method,
           paramsKeys: Object.keys(paramsRecord ?? {}).sort(),
           ...(archived !== undefined ? { archived } : {}),
-          ...(typeof paramsRecord?.limit === "number" ? { limit: paramsRecord.limit } : {}),
+          ...(typeof paramsRecord?.limit === "number"
+            ? { limit: paramsRecord.limit }
+            : {}),
           ...(filterKey ? { filterKey } : {}),
         };
         requestVariants.set(JSON.stringify(variant), variant);
@@ -133,7 +144,11 @@ export async function analyzeCodexThreadProtocolCapture(params: {
       continue;
     }
 
-    if (entry.record.direction === "inbound" && entry.record.kind === "notification" && method) {
+    if (
+      entry.record.direction === "inbound"
+      && entry.record.kind === "notification"
+      && method
+    ) {
       notificationCounts[method] = (notificationCounts[method] ?? 0) + 1;
       const orderEvent = extractNotificationOrderEvent(entry);
       if (orderEvent) {
@@ -142,17 +157,26 @@ export async function analyzeCodexThreadProtocolCapture(params: {
       continue;
     }
 
-    if (entry.record.direction !== "inbound" || entry.record.kind !== "response") {
+    if (
+      entry.record.direction !== "inbound"
+      || entry.record.kind !== "response"
+    ) {
       continue;
     }
 
-    const responseMethod = lookupMethodForResponse(requestsById, entry.envelope);
+    const responseMethod = lookupMethodForResponse(
+      requestsById,
+      entry.envelope,
+    );
     if (responseMethod === "thread/read") {
       threadOrderEvents.push(
         ...extractThreadReadOrderEvents(entry, requestEnvelopesById),
       );
     }
-    if (responseMethod !== "thread/list" && responseMethod !== "thread/loaded/list") {
+    if (
+      responseMethod !== "thread/list"
+      && responseMethod !== "thread/loaded/list"
+    ) {
       continue;
     }
 
@@ -172,22 +196,32 @@ export async function analyzeCodexThreadProtocolCapture(params: {
         accumulateIdentityFields(record, identityFieldCounts);
 
         const threadId = pickString(record, ["id", "threadId", "thread_id"]);
-        if (!threadId || sampleThreads.has(threadId) || sampleThreads.size >= 8) {
+        if (
+          !threadId
+          || sampleThreads.has(threadId)
+          || sampleThreads.size >= 8
+        ) {
           continue;
         }
 
         sampleThreads.set(threadId, {
           id: threadId,
           cwd:
-            pickString(record, ["cwd"]) ?? pickString(asRecord(record.session) ?? {}, ["cwd"]),
+            pickString(record, ["cwd"])
+            ?? pickString(asRecord(record.session) ?? {}, ["cwd"]),
           projectKey:
-            pickString(record, ["projectKey", "project_key"]) ??
-            pickString(asRecord(record.session) ?? {}, ["projectKey", "project_key"]),
+            pickString(record, ["projectKey", "project_key"])
+            ?? pickString(asRecord(record.session) ?? {}, [
+              "projectKey",
+              "project_key",
+            ]),
           path: pickString(record, ["path"]),
           gitBranch:
-            pickString(asRecord(record.gitInfo) ?? {}, ["branch"]) ??
-            pickString(asRecord(record.git_info) ?? {}, ["branch"]) ??
-            pickString(asRecord(asRecord(record.session)?.gitInfo) ?? {}, ["branch"]),
+            pickString(asRecord(record.gitInfo) ?? {}, ["branch"])
+            ?? pickString(asRecord(record.git_info) ?? {}, ["branch"])
+            ?? pickString(asRecord(asRecord(record.session)?.gitInfo) ?? {}, [
+              "branch",
+            ]),
           statusType: pickString(asRecord(record.status) ?? {}, ["type"]),
         });
       }
@@ -201,7 +235,9 @@ export async function analyzeCodexThreadProtocolCapture(params: {
     notificationCounts: sortRecord(notificationCounts),
     threadList: {
       requestMethods: [...requestMethods].sort(),
-      requestVariants: [...requestVariants.values()].sort(compareRequestVariants),
+      requestVariants: [...requestVariants.values()].sort(
+        compareRequestVariants,
+      ),
       responseContainerKeys: [...responseContainerKeys].sort(),
       responseResultKeys: [...responseResultKeys].sort(),
       activeRequestCount,
@@ -226,11 +262,11 @@ function buildRequestIndex(
   for (const entry of records) {
     const method = entry.envelope.method?.trim();
     if (
-      entry.record.direction === "outbound" &&
-      entry.record.kind === "request" &&
-      method &&
-      entry.envelope.id !== null &&
-      entry.envelope.id !== undefined
+      entry.record.direction === "outbound"
+      && entry.record.kind === "request"
+      && method
+      && entry.envelope.id !== null
+      && entry.envelope.id !== undefined
     ) {
       requestsById.set(String(entry.envelope.id), method);
     }
@@ -245,11 +281,11 @@ function buildRequestEnvelopeIndex(
   for (const entry of records) {
     const method = entry.envelope.method?.trim();
     if (
-      entry.record.direction === "outbound" &&
-      entry.record.kind === "request" &&
-      method &&
-      entry.envelope.id !== null &&
-      entry.envelope.id !== undefined
+      entry.record.direction === "outbound"
+      && entry.record.kind === "request"
+      && method
+      && entry.envelope.id !== null
+      && entry.envelope.id !== undefined
     ) {
       requestsById.set(String(entry.envelope.id), entry.envelope);
     }
@@ -272,9 +308,9 @@ function compareThreadOrderEvents(
   right: ThreadOrderEvent,
 ): number {
   return (
-    left.sequence - right.sequence ||
-    (left.itemIndex ?? -1) - (right.itemIndex ?? -1) ||
-    left.label.localeCompare(right.label)
+    left.sequence - right.sequence
+    || (left.itemIndex ?? -1) - (right.itemIndex ?? -1)
+    || left.label.localeCompare(right.label)
   );
 }
 
@@ -294,11 +330,11 @@ function extractNotificationOrderEvent(
 
   const item = asRecord(params.item);
   const itemId =
-    pickString(params, ["itemId", "item_id"]) ??
-    pickString(item ?? {}, ["id", "itemId", "item_id"]);
+    pickString(params, ["itemId", "item_id"])
+    ?? pickString(item ?? {}, ["id", "itemId", "item_id"]);
   const turnId =
-    pickString(params, ["turnId", "turn_id"]) ??
-    pickString(item ?? {}, ["turnId", "turn_id"]);
+    pickString(params, ["turnId", "turn_id"])
+    ?? pickString(item ?? {}, ["turnId", "turn_id"]);
   const itemType = pickString(item ?? {}, ["type"]);
   const delta = pickString(params, ["delta"]);
 
@@ -383,7 +419,11 @@ function classifyOrderEventKind(
   method: string,
   itemType: string | undefined,
 ): ThreadOrderEvent["kind"] {
-  if (method === "turn/completed" || method === "turn/started" || method === "turn/failed") {
+  if (
+    method === "turn/completed"
+    || method === "turn/started"
+    || method === "turn/failed"
+  ) {
     return "turn";
   }
 
@@ -392,11 +432,11 @@ function classifyOrderEventKind(
   }
 
   if (
-    itemType === "commandExecution" ||
-    itemType === "functionCall" ||
-    itemType === "mcpToolCall" ||
-    method.includes("commandExecution") ||
-    method.includes("mcpToolCall")
+    itemType === "commandExecution"
+    || itemType === "functionCall"
+    || itemType === "mcpToolCall"
+    || method.includes("commandExecution")
+    || method.includes("mcpToolCall")
   ) {
     return "tool-activity";
   }
@@ -420,13 +460,15 @@ function describeOrderEvent(params: {
   }
 
   if (params.itemType === "agentMessage") {
-    return compactLabel(pickString(params.item ?? {}, ["text"]) ?? "assistant message");
+    return compactLabel(
+      pickString(params.item ?? {}, ["text"]) ?? "assistant message",
+    );
   }
 
   if (params.itemType === "commandExecution") {
     return compactLabel(
-      pickString(params.item ?? {}, ["command", "displayCommand"]) ??
-        "command execution",
+      pickString(params.item ?? {}, ["command", "displayCommand"])
+        ?? "command execution",
     );
   }
 
@@ -435,7 +477,9 @@ function describeOrderEvent(params: {
 
 function compactLabel(value: string): string {
   const normalized = value.trim().replace(/\s+/g, " ");
-  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+  return normalized.length > 120
+    ? `${normalized.slice(0, 117)}...`
+    : normalized;
 }
 
 function compareRequestVariants(
@@ -446,7 +490,9 @@ function compareRequestVariants(
 }
 
 function sortRecord(input: Record<string, number>): Record<string, number> {
-  return Object.fromEntries(Object.entries(input).sort(([left], [right]) => left.localeCompare(right)));
+  return Object.fromEntries(
+    Object.entries(input).sort(([left], [right]) => left.localeCompare(right)),
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -493,7 +539,9 @@ function looksLikeThreadRecord(record: Record<string, unknown>): boolean {
   ].some((key) => key in record);
 }
 
-function isThreadRecord(value: Record<string, unknown> | null): value is Record<string, unknown> {
+function isThreadRecord(
+  value: Record<string, unknown> | null,
+): value is Record<string, unknown> {
   return value !== null && looksLikeThreadRecord(value);
 }
 
@@ -506,14 +554,19 @@ function extractThreadRecords(value: unknown): Array<{
     return [];
   }
 
-  const output: Array<{ containerKey: string; records: Record<string, unknown>[] }> = [];
+  const output: Array<{
+    containerKey: string;
+    records: Record<string, unknown>[];
+  }> = [];
   for (const containerKey of ["data", "threads", "results", "items"]) {
     const container = resultRecord[containerKey];
     if (!Array.isArray(container)) {
       continue;
     }
 
-    const records = container.map((entry) => asRecord(entry)).filter(isThreadRecord);
+    const records = container
+      .map((entry) => asRecord(entry))
+      .filter(isThreadRecord);
     if (records.length > 0) {
       output.push({
         containerKey,
@@ -523,7 +576,9 @@ function extractThreadRecords(value: unknown): Array<{
   }
 
   if (output.length === 0 && Array.isArray(value)) {
-    const records = value.map((entry) => asRecord(entry)).filter(isThreadRecord);
+    const records = value
+      .map((entry) => asRecord(entry))
+      .filter(isThreadRecord);
     if (records.length > 0) {
       output.push({
         containerKey: "root",
@@ -553,10 +608,10 @@ function accumulateIdentityFields(
     counts.path += 1;
   }
   if (
-    pickString(asRecord(record.gitInfo) ?? {}, ["branch"]) ||
-    pickString(asRecord(record.git_info) ?? {}, ["branch"]) ||
-    pickString(asRecord(sessionRecord?.gitInfo) ?? {}, ["branch"]) ||
-    pickString(asRecord(sessionRecord?.git_info) ?? {}, ["branch"])
+    pickString(asRecord(record.gitInfo) ?? {}, ["branch"])
+    || pickString(asRecord(record.git_info) ?? {}, ["branch"])
+    || pickString(asRecord(sessionRecord?.gitInfo) ?? {}, ["branch"])
+    || pickString(asRecord(sessionRecord?.git_info) ?? {}, ["branch"])
   ) {
     counts.gitBranch += 1;
   }

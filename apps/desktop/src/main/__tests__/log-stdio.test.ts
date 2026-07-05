@@ -77,13 +77,17 @@ describe("initializeMainLogger stdio handling", () => {
   });
 
   afterEach(() => {
-    for (const listener of process.stdout.listeners("error") as ErrorListener[]) {
+    for (const listener of process.stdout.listeners(
+      "error",
+    ) as ErrorListener[]) {
       if (!stdoutErrorListeners.includes(listener)) {
         process.stdout.off("error", listener);
       }
     }
 
-    for (const listener of process.stderr.listeners("error") as ErrorListener[]) {
+    for (const listener of process.stderr.listeners(
+      "error",
+    ) as ErrorListener[]) {
       if (!stderrErrorListeners.includes(listener)) {
         process.stderr.off("error", listener);
       }
@@ -114,7 +118,9 @@ describe("initializeMainLogger stdio handling", () => {
 
     mocks.consoleTransport.level = "silly";
 
-    expect(() => process.stdout.emit("error", makeBrokenPipeError())).not.toThrow();
+    expect(() =>
+      process.stdout.emit("error", makeBrokenPipeError()),
+    ).not.toThrow();
     expect(mocks.consoleTransport.level).toBe(false);
   });
 

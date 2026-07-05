@@ -52,7 +52,10 @@ export function buildPendingRequestApprovalContext(
   options: { directoryPaths?: string[]; entries?: AppServerThreadEntry[] } = {},
 ): PendingRequestApprovalContext | undefined {
   const params = request.params;
-  const embeddedFiles = readEmbeddedApprovalFiles(params, options.directoryPaths);
+  const embeddedFiles = readEmbeddedApprovalFiles(
+    params,
+    options.directoryPaths,
+  );
   const requestFiles = embeddedFiles.length
     ? []
     : readRequestApprovalFiles(params, options.directoryPaths);
@@ -60,7 +63,7 @@ export function buildPendingRequestApprovalContext(
     ? embeddedFiles
     : requestFiles.length
       ? requestFiles
-    : inferFileChangeApprovalFiles(request, options);
+      : inferFileChangeApprovalFiles(request, options);
   const path = readFirstString(params, [
     "path",
     "filePath",
@@ -77,12 +80,19 @@ export function buildPendingRequestApprovalContext(
     "write_root",
   ]);
   const action = readFirstString(params, ["action", "operation"]);
-  const diff = readFirstString(params, ["diff", "patch", "unifiedDiff", "unified_diff"]);
+  const diff = readFirstString(params, [
+    "diff",
+    "patch",
+    "unifiedDiff",
+    "unified_diff",
+  ]);
   const primaryFile = inferredFiles[0];
   const resolvedPath = path ?? primaryFile?.path;
   const resolvedAction = action ?? primaryFile?.action;
   const resolvedDiff = diff ?? primaryFile?.diff;
-  const hasSubject = Boolean(resolvedPath || grantRoot || resolvedDiff || inferredFiles.length);
+  const hasSubject = Boolean(
+    resolvedPath || grantRoot || resolvedDiff || inferredFiles.length,
+  );
 
   const context: PendingRequestApprovalContext = {
     ...(hasSubject && resolvedAction ? { action: resolvedAction } : {}),
@@ -96,7 +106,10 @@ export function buildPendingRequestApprovalContext(
     ...(grantRoot
       ? {
           grantRoot,
-          displayGrantRoot: formatApprovalPath(grantRoot, options.directoryPaths),
+          displayGrantRoot: formatApprovalPath(
+            grantRoot,
+            options.directoryPaths,
+          ),
         }
       : {}),
     ...(resolvedDiff ? { diff: resolvedDiff } : {}),
@@ -118,10 +131,18 @@ function inferFileChangeApprovalFiles(
     return [];
   }
 
-  const itemId = readFirstString(request.params, ["itemId", "item_id", "callId", "call_id"]);
+  const itemId = readFirstString(request.params, [
+    "itemId",
+    "item_id",
+    "callId",
+    "call_id",
+  ]);
   const turnId = readString(request.params.turnId);
   const activities = entries
-    .filter((entry): entry is AppServerThreadActivityEntry => entry.type === "activity")
+    .filter(
+      (entry): entry is AppServerThreadActivityEntry =>
+        entry.type === "activity",
+    )
     .filter((entry) => !turnId || entry.turn?.id === turnId);
   const matchingActivities = itemId
     ? activities.filter((entry) => activityMatchesItem(entry, itemId))
@@ -129,15 +150,26 @@ function inferFileChangeApprovalFiles(
   const sourceActivities = matchingActivities.length
     ? matchingActivities
     : activities
-        .filter((entry) => entry.details.some((detail) => detail.kind === "write"))
+        .filter((entry) =>
+          entry.details.some((detail) => detail.kind === "write"),
+        )
         .slice(-1);
 
   const files = sourceActivities.flatMap((entry) =>
     entry.details
       .filter((detail) => detail.kind === "write")
-      .filter((detail) => !itemId || detailMatchesItem(detail, itemId) || !matchingActivities.length)
-      .map((detail) => fileContextFromActivityDetail(detail, options.directoryPaths))
-      .filter((file): file is PendingRequestApprovalFileContext => Boolean(file)),
+      .filter(
+        (detail) =>
+          !itemId
+          || detailMatchesItem(detail, itemId)
+          || !matchingActivities.length,
+      )
+      .map((detail) =>
+        fileContextFromActivityDetail(detail, options.directoryPaths),
+      )
+      .filter((file): file is PendingRequestApprovalFileContext =>
+        Boolean(file),
+      ),
   );
 
   return dedupeApprovalFiles(files);
@@ -148,9 +180,9 @@ function readEmbeddedApprovalFiles(
   directoryPaths: string[] | undefined,
 ): PendingRequestApprovalFileContext[] {
   const context =
-    asRecord(params._pwragentApprovalContext) ??
-    asRecord(params.approvalContext) ??
-    asRecord(params.fileChangeContext);
+    asRecord(params._pwragentApprovalContext)
+    ?? asRecord(params.approvalContext)
+    ?? asRecord(params.fileChangeContext);
   const rawFiles = context?.files;
   if (!Array.isArray(rawFiles)) {
     return [];
@@ -162,7 +194,9 @@ function readEmbeddedApprovalFiles(
         const record = asRecord(entry);
         return fileContextFromApprovalRecord(record, directoryPaths);
       })
-      .filter((file): file is PendingRequestApprovalFileContext => Boolean(file)),
+      .filter((file): file is PendingRequestApprovalFileContext =>
+        Boolean(file),
+      ),
   );
 }
 
@@ -189,7 +223,9 @@ function readRequestApprovalFiles(
       .map((entry) =>
         fileContextFromApprovalRecord(asRecord(entry), directoryPaths),
       )
-      .filter((file): file is PendingRequestApprovalFileContext => Boolean(file)),
+      .filter((file): file is PendingRequestApprovalFileContext =>
+        Boolean(file),
+      ),
   );
 }
 
@@ -212,11 +248,21 @@ function fileContextFromApprovalRecord(
 
   const kind = asRecord(record.kind);
   const action =
-    readFirstString(kind ?? {}, ["type", "action", "operation"]) ??
-    readFirstString(record, ["action", "operation", "kind", "type"]);
+    readFirstString(kind ?? {}, ["type", "action", "operation"])
+    ?? readFirstString(record, ["action", "operation", "kind", "type"]);
   const directDiff =
-    readFirstString(kind ?? {}, ["diff", "patch", "unifiedDiff", "unified_diff"]) ??
-    readFirstString(record, ["diff", "patch", "unifiedDiff", "unified_diff"]);
+    readFirstString(kind ?? {}, [
+      "diff",
+      "patch",
+      "unifiedDiff",
+      "unified_diff",
+    ])
+    ?? readFirstString(record, [
+      "diff",
+      "patch",
+      "unifiedDiff",
+      "unified_diff",
+    ]);
   const content =
     readOptionalString(kind?.content) ?? readOptionalString(record.content);
   const generatedDiff =
@@ -249,8 +295,8 @@ function contentDiffForApproval(params: {
   path: string;
 }): string | undefined {
   if (
-    params.content === undefined ||
-    (params.action !== "add" && params.action !== "delete")
+    params.content === undefined
+    || (params.action !== "add" && params.action !== "delete")
   ) {
     return undefined;
   }
@@ -272,9 +318,11 @@ function activityMatchesItem(
   entry: AppServerThreadActivityEntry,
   itemId: string,
 ): boolean {
-  return entry.id === itemId ||
-    entry.id === `activity-${itemId}` ||
-    entry.details.some((detail) => detailMatchesItem(detail, itemId));
+  return (
+    entry.id === itemId
+    || entry.id === `activity-${itemId}`
+    || entry.details.some((detail) => detailMatchesItem(detail, itemId))
+  );
 }
 
 function detailMatchesItem(
@@ -390,8 +438,8 @@ export function buildPendingRequestActions(
   request: AppServerPendingRequestNotification,
 ): PendingRequestAction[] {
   const availableDecisions =
-    readDecisionEntries(request.params.availableDecisions) ??
-    readDecisionEntries(request.params.decisions);
+    readDecisionEntries(request.params.availableDecisions)
+    ?? readDecisionEntries(request.params.decisions);
   const optionDecisions = availableDecisions
     ? undefined
     : readDecisionEntries(request.params.options);
@@ -416,13 +464,13 @@ function selectAvailableAction(
   const actions = buildPendingRequestActions(request);
   if (decision === "approve") {
     return (
-      actions.find((action) => action.decision === "accept") ??
-      actions.find(
+      actions.find((action) => action.decision === "accept")
+      ?? actions.find(
         (action) =>
-          (action.decision === "accept_for_session" ||
-            action.decision === "accept_with_execpolicy_amendment" ||
-            action.decision === "apply_network_policy_amendment") &&
-          action.style !== "danger",
+          (action.decision === "accept_for_session"
+            || action.decision === "accept_with_execpolicy_amendment"
+            || action.decision === "apply_network_policy_amendment")
+          && action.style !== "danger",
       )
     );
   }
@@ -459,8 +507,8 @@ function actionFromEntry(
   const label = readString(record.label) ?? readString(record.title);
 
   const execpolicyPayload =
-    record.acceptWithExecpolicyAmendment ??
-    record.accept_with_execpolicy_amendment;
+    record.acceptWithExecpolicyAmendment
+    ?? record.accept_with_execpolicy_amendment;
   if (execpolicyPayload && typeof execpolicyPayload === "object") {
     return buildAction({
       decision: "accept_with_execpolicy_amendment",
@@ -641,7 +689,10 @@ function buildAction(params: {
 function normalizeDecision(
   value: string,
 ): PendingRequestActionDecision | undefined {
-  const normalized = value.trim().toLowerCase().replace(/[-_\s]/g, "");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[-_\s]/g, "");
   if (
     ["acceptforsession", "approveforsession", "allowforsession"].includes(
       normalized,
@@ -713,7 +764,9 @@ function defaultLabel(
   }
 }
 
-function defaultStyle(decision: PendingRequestActionDecision): PendingRequestActionStyle {
+function defaultStyle(
+  decision: PendingRequestActionDecision,
+): PendingRequestActionStyle {
   switch (decision) {
     case "accept":
     case "accept_with_execpolicy_amendment":
@@ -729,16 +782,20 @@ function defaultStyle(decision: PendingRequestActionDecision): PendingRequestAct
 
 function execpolicyLabel(payload: object): string {
   const record = payload as Record<string, unknown>;
-  const prefix = record.execpolicy_amendment ?? record.proposed_execpolicy_amendment;
+  const prefix =
+    record.execpolicy_amendment ?? record.proposed_execpolicy_amendment;
   const command = Array.isArray(prefix)
     ? prefix.filter((part): part is string => typeof part === "string")
     : undefined;
   const rendered = command?.join(" ").trim();
-  return rendered ? `Always Allow Prefix: ${rendered}` : "Always Allow Command Prefix";
+  return rendered
+    ? `Always Allow Prefix: ${rendered}`
+    : "Always Allow Command Prefix";
 }
 
 function networkPolicyLabel(payload: object): string {
-  const amendment = (payload as Record<string, unknown>).network_policy_amendment;
+  const amendment = (payload as Record<string, unknown>)
+    .network_policy_amendment;
   const record =
     amendment && typeof amendment === "object"
       ? (amendment as Record<string, unknown>)
@@ -755,8 +812,8 @@ function hasNetworkApprovalContext(
   request: AppServerPendingRequestNotification,
 ): boolean {
   return Boolean(
-    request.params.network_approval_context ??
-      request.params.networkApprovalContext,
+    request.params.network_approval_context
+    ?? request.params.networkApprovalContext,
   );
 }
 
@@ -769,7 +826,9 @@ function readOptionalString(value: unknown): string | undefined {
 }
 
 function readNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function readDiffRefFields(
@@ -798,11 +857,11 @@ function readDiffRef(value: unknown): AppServerThreadFileDiffRef | undefined {
   const entryId = readString(record?.entryId);
   const detailId = readString(record?.detailId);
   if (
-    (source !== "live" && source !== "thread") ||
-    !key ||
-    !threadId ||
-    !entryId ||
-    !detailId
+    (source !== "live" && source !== "thread")
+    || !key
+    || !threadId
+    || !entryId
+    || !detailId
   ) {
     return undefined;
   }
@@ -821,7 +880,11 @@ function readDiffRefBackend(
   value: unknown,
 ): AppServerThreadFileDiffRef["backend"] | undefined {
   const backend = readString(value);
-  if (backend === "codex" || backend === "grok" || backend?.startsWith("acp:")) {
+  if (
+    backend === "codex"
+    || backend === "grok"
+    || backend?.startsWith("acp:")
+  ) {
     return backend as AppServerThreadFileDiffRef["backend"];
   }
   return undefined;

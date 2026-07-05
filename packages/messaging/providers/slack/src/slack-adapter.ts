@@ -1,4 +1,9 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import { SocketModeClient } from "@slack/socket-mode";
 import { WebClient } from "@slack/web-api";
 import type {
@@ -86,7 +91,9 @@ export type SlackApi = {
     threadTs: string;
   }): Promise<void>;
   authTest(): Promise<SlackAuthTestResult>;
-  conversationsInfo?(params: { channel: string }): Promise<SlackConversationInfo | undefined>;
+  conversationsInfo?(params: {
+    channel: string;
+  }): Promise<SlackConversationInfo | undefined>;
   conversationsHistory?(params: {
     channel: string;
     limit?: number;
@@ -100,7 +107,9 @@ export type SlackApi = {
   downloadFile(params: { url: string; maxBytes: number }): Promise<Uint8Array>;
   filesInfo(params: { file: string }): Promise<SlackFileInfo | undefined>;
   postMessage(params: SlackPostBody): Promise<SlackMessageResult>;
-  updateMessage(params: SlackPostBody & { ts: string }): Promise<SlackMessageResult>;
+  updateMessage(
+    params: SlackPostBody & { ts: string },
+  ): Promise<SlackMessageResult>;
   uploadFile?(params: {
     channel: string;
     data: Uint8Array;
@@ -181,9 +190,13 @@ export type SlackProviderAdapter = {
   channel: "slack";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
-  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  resolveDeliveryScope?(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
-  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateAuthorization?(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void>;
   updateRenderingPreferences?(
     update: MessagingAdapterRenderingPreferencesUpdate,
   ): Promise<void>;
@@ -194,7 +207,9 @@ export type SlackProviderAdapter = {
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
-  start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
+  start(
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void>;
   stop(): Promise<void>;
 };
 
@@ -260,7 +275,8 @@ type SlackSlashCommandPayload = {
 
 export class SlackAdapter implements SlackProviderAdapter {
   readonly channel = "slack" as const;
-  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "externalized";
+  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy =
+    "externalized";
   readonly capabilityProfile: MessagingCapabilityProfile = {
     actions: {
       // Slack Block Kit actions blocks allow at most 25 elements.
@@ -317,9 +333,15 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly now: () => number;
   private readonly signingSecret: string;
   private readonly socketClient: SlackSocketClient | undefined;
-  private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
-  private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
-  private readonly conversationTitleCache = new Map<string, string | undefined>();
+  private readonly inboundRejectedListeners =
+    new Set<MessagingInboundRejectedListener>();
+  private readonly rateLimitListeners = new Set<
+    (info: MessagingRateLimitInfo) => void
+  >();
+  private readonly conversationTitleCache = new Map<
+    string,
+    string | undefined
+  >();
   // Caches whether a channel id is a multi-person DM (mpim / "group DM").
   private readonly conversationGroupDmCache = new Map<string, boolean>();
   private readonly recentInboundMessageEvents = new Map<string, number>();
@@ -380,13 +402,16 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
-  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+  async updateAuthorization(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void> {
     this.authorizedActorIdsValue = [...update.authorizedActorIds];
     if (update.responseMode !== undefined) {
       this.config.responseMode = update.responseMode;
     }
     if (update.conversationAuthorizationMode !== undefined) {
-      this.config.channelAuthorizationMode = update.conversationAuthorizationMode;
+      this.config.channelAuthorizationMode =
+        update.conversationAuthorizationMode;
     }
     if (update.workspaceAuthorizationMode !== undefined) {
       this.config.teamAuthorizationMode = update.workspaceAuthorizationMode;
@@ -450,7 +475,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
-  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+  resolveDeliveryScope(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined {
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
   }
@@ -465,7 +492,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.botAccountDetail = auth.team ?? hostFromUrl(auth.url) ?? auth.team_id;
 
     if (this.config.inboundMode === "events") {
-      throw new Error("Slack Events API mode is not implemented yet; use Socket Mode");
+      throw new Error(
+        "Slack Events API mode is not implemented yet; use Socket Mode",
+      );
     }
     if (!this.socketClient) {
       throw new Error("Slack Socket Mode requires an app token");
@@ -488,7 +517,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.listener = undefined;
   }
 
-  async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
+  async deliver(
+    intent: MessagingSurfaceIntent,
+  ): Promise<MessagingDeliveryResult> {
     if (intent.kind === "activity") {
       return await this.deliverActivity(intent);
     }
@@ -533,10 +564,10 @@ export class SlackAdapter implements SlackProviderAdapter {
     // simple case — a plain message with no buttons, no attachments, and no
     // in-place edit — which is exactly the assistant-response path.
     if (
-      intent.kind === "message" &&
-      (actionBlocks?.length ?? 0) === 0 &&
-      intent.delivery?.mode !== "update" &&
-      !intent.parts.some((part) => part.type === "file")
+      intent.kind === "message"
+      && (actionBlocks?.length ?? 0) === 0
+      && intent.delivery?.mode !== "update"
+      && !intent.parts.some((part) => part.type === "file")
     ) {
       const chunks = splitTextForDelivery(markdownToSlackMrkdwn(rawText), {
         limit: SLACK_SECTION_TEXT_LIMIT,
@@ -664,10 +695,13 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
-  private readonly handleSlackEvent = async (payload: unknown): Promise<void> => {
+  private readonly handleSlackEvent = async (
+    payload: unknown,
+  ): Promise<void> => {
     const envelope = payload as SlackSocketEnvelope;
     await envelope.ack?.();
-    const event = (envelope.event ?? (envelope.body as { event?: unknown })?.event) as
+    const event = (envelope.event
+      ?? (envelope.body as { event?: unknown })?.event) as
       | SlackMessageEvent
       | undefined;
     if (!event || (event.type !== "message" && event.type !== "app_mention")) {
@@ -676,13 +710,17 @@ export class SlackAdapter implements SlackProviderAdapter {
     await this.handleMessageEvent(event);
   };
 
-  private readonly handleInteractive = async (payload: unknown): Promise<void> => {
+  private readonly handleInteractive = async (
+    payload: unknown,
+  ): Promise<void> => {
     const envelope = payload as SlackSocketEnvelope;
     await envelope.ack?.();
     await this.handleBlockAction(envelope.body as SlackBlockActionPayload);
   };
 
-  private readonly handleSlashCommand = async (payload: unknown): Promise<void> => {
+  private readonly handleSlashCommand = async (
+    payload: unknown,
+  ): Promise<void> => {
     const envelope = payload as SlackSocketEnvelope;
     await envelope.ack?.();
     await this.handleSlashPayload(envelope.body as SlackSlashCommandPayload);
@@ -691,8 +729,8 @@ export class SlackAdapter implements SlackProviderAdapter {
   private async handleMessageEvent(event: SlackMessageEvent): Promise<void> {
     if (!this.listener) return;
     if (
-      (this.botId && event.bot_id === this.botId) ||
-      (this.botUserId && event.user === this.botUserId)
+      (this.botId && event.bot_id === this.botId)
+      || (this.botUserId && event.user === this.botUserId)
     ) {
       return;
     }
@@ -729,9 +767,10 @@ export class SlackAdapter implements SlackProviderAdapter {
     const isMention = strippedText !== rawText;
     const text = strippedText.trim();
     const isPairingMessage = Boolean(extractMessagingPairingToken(rawText));
-    const command = isMention && text.length === 0
-      ? { command: "help", args: [] }
-      : parseCommand(text);
+    const command =
+      isMention && text.length === 0
+        ? { command: "help", args: [] }
+        : parseCommand(text);
     const kind = command ? "command" : event.files?.length ? "media" : "text";
 
     const isGroupDm = await this.resolveIsGroupDm({
@@ -747,15 +786,18 @@ export class SlackAdapter implements SlackProviderAdapter {
     // are explicit invocations and are exempt.
     if (isGroupDm && !isMention && !command && !isPairingMessage) return;
 
-    if (!this.authorizeInbound({
-      actor,
-      channel,
-      kind,
-      isGroupDm,
-      pairing: isPairingMessage,
-      routingState,
-      teamId: ids.teamId,
-    })) return;
+    if (
+      !this.authorizeInbound({
+        actor,
+        channel,
+        kind,
+        isGroupDm,
+        pairing: isPairingMessage,
+        routingState,
+        teamId: ids.teamId,
+      })
+    )
+      return;
 
     if (event.files?.length) {
       await this.listener({
@@ -802,7 +844,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     });
   }
 
-  private async handleBlockAction(body: SlackBlockActionPayload): Promise<void> {
+  private async handleBlockAction(
+    body: SlackBlockActionPayload,
+  ): Promise<void> {
     if (!this.listener) return;
     const action = body.actions?.[0];
     const ids = this.validateInboundIds({
@@ -841,17 +885,19 @@ export class SlackAdapter implements SlackProviderAdapter {
       teamId: ids.teamId,
       ts: ids.ts,
     });
-    if (!this.authorizeInbound({
-      actor,
-      channel,
-      kind: "callback",
-      isGroupDm: await this.resolveIsGroupDm({
-        channelId: ids.channelId,
-        channelName: body.channel?.name,
-      }),
-      routingState,
-      teamId: ids.teamId,
-    })) {
+    if (
+      !this.authorizeInbound({
+        actor,
+        channel,
+        kind: "callback",
+        isGroupDm: await this.resolveIsGroupDm({
+          channelId: ids.channelId,
+          channelName: body.channel?.name,
+        }),
+        routingState,
+        teamId: ids.teamId,
+      })
+    ) {
       return;
     }
 
@@ -866,7 +912,10 @@ export class SlackAdapter implements SlackProviderAdapter {
         actorId: actor.platformUserId,
         channelId: channel.conversation.id,
         conversationKind: channel.conversation.kind,
-        handleHash: createHash("sha256").update(signed.handle).digest("hex").slice(0, 8),
+        handleHash: createHash("sha256")
+          .update(signed.handle)
+          .digest("hex")
+          .slice(0, 8),
       });
       return;
     }
@@ -888,7 +937,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     });
   }
 
-  private async handleSlashPayload(body: SlackSlashCommandPayload): Promise<void> {
+  private async handleSlashPayload(
+    body: SlackSlashCommandPayload,
+  ): Promise<void> {
     if (!this.listener) return;
     const ids = this.validateInboundIds({
       channelId: body.channel_id,
@@ -910,17 +961,19 @@ export class SlackAdapter implements SlackProviderAdapter {
       teamId: ids.teamId,
       ...(body.thread_ts ? { ts: ids.ts } : {}),
     });
-    if (!this.authorizeInbound({
-      actor,
-      channel,
-      kind: "command",
-      isGroupDm: await this.resolveIsGroupDm({
-        channelId: ids.channelId,
-        channelName: body.channel_name,
-      }),
-      routingState,
-      teamId: ids.teamId,
-    })) {
+    if (
+      !this.authorizeInbound({
+        actor,
+        channel,
+        kind: "command",
+        isGroupDm: await this.resolveIsGroupDm({
+          channelId: ids.channelId,
+          channelName: body.channel_name,
+        }),
+        routingState,
+        teamId: ids.teamId,
+      })
+    ) {
       return;
     }
     const command = normalizeSlackSlashCommand(
@@ -962,9 +1015,13 @@ export class SlackAdapter implements SlackProviderAdapter {
         deliveredAt: this.now(),
       };
     } catch (error) {
-      const rateLimit = this.emitRateLimitFromError(error, { channelId }, {
-        retryable: true,
-      });
+      const rateLimit = this.emitRateLimitFromError(
+        error,
+        { channelId },
+        {
+          retryable: true,
+        },
+      );
       return {
         outcome: "failed",
         channel: this.channel,
@@ -990,12 +1047,17 @@ export class SlackAdapter implements SlackProviderAdapter {
     let deliveredAny = false;
     try {
       for (const chunk of params.chunks) {
-        const blocks = buildSlackBlocksForIntent({ intent: params.intent, text: chunk });
+        const blocks = buildSlackBlocksForIntent({
+          intent: params.intent,
+          text: chunk,
+        });
         const result = await this.api.postMessage({
           channel: params.target.channelId,
           text: chunk || "PwrAgent",
           ...(blocks.length > 0 ? { blocks } : {}),
-          ...(params.target.threadTs ? { thread_ts: params.target.threadTs } : {}),
+          ...(params.target.threadTs
+            ? { thread_ts: params.target.threadTs }
+            : {}),
           unfurl_links: false,
           unfurl_media: false,
         });
@@ -1009,7 +1071,9 @@ export class SlackAdapter implements SlackProviderAdapter {
               opaque: {
                 channelId: result.channel ?? params.target.channelId,
                 ts,
-                ...(params.target.threadTs ? { threadTs: params.target.threadTs } : {}),
+                ...(params.target.threadTs
+                  ? { threadTs: params.target.threadTs }
+                  : {}),
               },
             },
           };
@@ -1041,8 +1105,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     intent: Extract<MessagingSurfaceIntent, { kind: "stream_update" }>,
   ): Promise<MessagingDeliveryResult> {
     if (
-      intent.policy === "disabled" ||
-      (this.config.streamingResponses !== true && intent.policy !== "enabled")
+      intent.policy === "disabled"
+      || (this.config.streamingResponses !== true
+        && intent.policy !== "enabled")
     ) {
       return {
         outcome: "discarded",
@@ -1080,8 +1145,8 @@ export class SlackAdapter implements SlackProviderAdapter {
     // controller may hand us a surface we no longer have in memory) so the
     // first chunk edits it rather than posting a duplicate.
     const anchors =
-      this.streamSurfaces.get(intent.stream.key) ??
-      (target.ts
+      this.streamSurfaces.get(intent.stream.key)
+      ?? (target.ts
         ? [
             {
               channelId: target.channelId,
@@ -1192,30 +1257,32 @@ export class SlackAdapter implements SlackProviderAdapter {
       sourceRelative === "source_channel"
         ? undefined
         : sourceRelative === "source_thread"
-          ? surfaceState?.threadTs ?? surfaceState?.ts ?? auditChannel?.conversation.parentId
-          : surfaceState?.threadTs
+          ? (surfaceState?.threadTs
+            ?? surfaceState?.ts
+            ?? auditChannel?.conversation.parentId)
+          : (surfaceState?.threadTs
             ?? auditChannel?.conversation.parentId
             ?? (auditChannel?.conversation.kind === "thread"
               ? auditChannel.conversation.parentId
-              : undefined);
+              : undefined));
     return {
       channelId,
-      channelRef:
-        auditChannel
-        ?? {
-          channel: this.channel,
-          conversation: {
-            id: channelId,
-            kind: threadTs ? "thread" : "channel",
-            ...(threadTs ? { parentId: threadTs } : {}),
-          },
+      channelRef: auditChannel ?? {
+        channel: this.channel,
+        conversation: {
+          id: channelId,
+          kind: threadTs ? "thread" : "channel",
+          ...(threadTs ? { parentId: threadTs } : {}),
         },
+      },
       ...(threadTs ? { threadTs } : {}),
       ...(surfaceState?.ts ? { ts: surfaceState.ts } : {}),
     };
   }
 
-  private rateLimitScopeForTarget(target: { channelId: string }): MessagingDeliveryScope {
+  private rateLimitScopeForTarget(target: {
+    channelId: string;
+  }): MessagingDeliveryScope {
     const isDm = target.channelId.startsWith("D");
     return {
       platform: this.channel,
@@ -1272,7 +1339,9 @@ export class SlackAdapter implements SlackProviderAdapter {
   }): (action: MessagingSurfaceAction) => string {
     return (action) => {
       const handle = `${this.channel}:${createHash("sha256")
-        .update(JSON.stringify([params.intent.id, action.id, action.value ?? null]))
+        .update(
+          JSON.stringify([params.intent.id, action.id, action.value ?? null]),
+        )
         .digest("base64url")
         .slice(0, 18)}`;
       const issuedAt = this.now();
@@ -1335,14 +1404,21 @@ export class SlackAdapter implements SlackProviderAdapter {
     const expected = this.signCallbackValue(record.h, record.i, record.t);
     if (!safeEqual(expected, record.s)) {
       this.logger.warn?.("slack callback signature rejected", {
-        handleHash: createHash("sha256").update(record.h).digest("hex").slice(0, 8),
+        handleHash: createHash("sha256")
+          .update(record.h)
+          .digest("hex")
+          .slice(0, 8),
       });
       return undefined;
     }
     return { handle: record.h, intentId: record.i, issuedAt: record.t };
   }
 
-  private signCallbackValue(handle: string, intentId: string, issuedAt: number): string {
+  private signCallbackValue(
+    handle: string,
+    intentId: string,
+    issuedAt: number,
+  ): string {
     return createHmac("sha256", this.signingSecret)
       .update(JSON.stringify([handle, intentId, issuedAt]))
       .digest("base64url")
@@ -1354,7 +1430,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     teamId?: unknown;
     ts?: unknown;
     userId: unknown;
-  }): { channelId: string; teamId?: string; ts: string; userId: string } | undefined {
+  }):
+    | { channelId: string; teamId?: string; ts: string; userId: string }
+    | undefined {
     const userValidation = validateSlackUserId(params.userId);
     if (!userValidation.ok) {
       logSlackInvalidIdentifier({
@@ -1387,7 +1465,8 @@ export class SlackAdapter implements SlackProviderAdapter {
         return undefined;
       }
     }
-    const ts = typeof params.ts === "string" ? params.ts : `${this.now() / 1000}`;
+    const ts =
+      typeof params.ts === "string" ? params.ts : `${this.now() / 1000}`;
     const tsValidation = validateSlackMessageTs(ts);
     if (!tsValidation.ok) {
       logSlackInvalidIdentifier({
@@ -1400,7 +1479,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
     return {
       channelId: params.channelId as string,
-      ...(params.teamId !== undefined ? { teamId: params.teamId as string } : {}),
+      ...(params.teamId !== undefined
+        ? { teamId: params.teamId as string }
+        : {}),
       ts,
       userId: params.userId as string,
     };
@@ -1412,7 +1493,15 @@ export class SlackAdapter implements SlackProviderAdapter {
     teamId?: unknown;
     ts?: unknown;
     userId?: unknown;
-  }): { botId?: string; channelId: string; teamId?: string; ts: string; userId: string } | undefined {
+  }):
+    | {
+        botId?: string;
+        channelId: string;
+        teamId?: string;
+        ts: string;
+        userId: string;
+      }
+    | undefined {
     let senderId: string;
     if (typeof params.botId === "string" && params.botId) {
       const botValidation = validateSlackBotId(params.botId);
@@ -1462,7 +1551,8 @@ export class SlackAdapter implements SlackProviderAdapter {
         return undefined;
       }
     }
-    const ts = typeof params.ts === "string" ? params.ts : `${this.now() / 1000}`;
+    const ts =
+      typeof params.ts === "string" ? params.ts : `${this.now() / 1000}`;
     const tsValidation = validateSlackMessageTs(ts);
     if (!tsValidation.ok) {
       logSlackInvalidIdentifier({
@@ -1476,7 +1566,9 @@ export class SlackAdapter implements SlackProviderAdapter {
 
     return {
       channelId: params.channelId as string,
-      ...(params.teamId !== undefined ? { teamId: params.teamId as string } : {}),
+      ...(params.teamId !== undefined
+        ? { teamId: params.teamId as string }
+        : {}),
       ts,
       userId: senderId,
       ...(typeof params.botId === "string" && params.botId
@@ -1499,7 +1591,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     const actorAuthorized = this.authorizedActorIds.includes(
       params.actor.platformUserId,
     );
-    const reject = (reason: "unauthorized-actor" | "unauthorized-conversation"): boolean => {
+    const reject = (
+      reason: "unauthorized-actor" | "unauthorized-conversation",
+    ): boolean => {
       this.emitInboundRejected({
         id: this.newEventId("slack-rejected"),
         kind: params.kind,
@@ -1538,14 +1632,16 @@ export class SlackAdapter implements SlackProviderAdapter {
 
     // Channel / thread traffic must clear the team gate, then the
     // channel gate, then the per-user channel access mode.
-    const allowedConversations = this.config.authorizedConversationIds?.map((item) => item.id)
-      ?? [];
-    const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id)
-      ?? [];
+    const allowedConversations =
+      this.config.authorizedConversationIds?.map((item) => item.id) ?? [];
+    const allowedTeams =
+      this.config.authorizedTeamIds?.map((item) => item.id) ?? [];
 
-    const teamAllowed = slackTeamAuthorizationMode(this.config) === "allow_all"
+    const teamAllowed =
+      slackTeamAuthorizationMode(this.config) === "allow_all"
       || (params.teamId !== undefined && allowedTeams.includes(params.teamId));
-    const conversationAllowed = slackChannelAuthorizationMode(this.config) === "allow_all"
+    const conversationAllowed =
+      slackChannelAuthorizationMode(this.config) === "allow_all"
       || allowedConversations.includes(params.channel.conversation.id);
 
     if (!teamAllowed || !conversationAllowed) {
@@ -1578,11 +1674,12 @@ export class SlackAdapter implements SlackProviderAdapter {
     const channelTitle =
       kind === "dm"
         ? params.peerTitle
-        : normalizeSlackConversationTitle(params.channelName)
-          ?? (await this.lookupSlackConversationTitle(params.channelId));
-    const threadTitle = isThread && params.threadTs
-      ? await this.lookupSlackThreadTitle(params.channelId, params.threadTs)
-      : undefined;
+        : (normalizeSlackConversationTitle(params.channelName)
+          ?? (await this.lookupSlackConversationTitle(params.channelId)));
+    const threadTitle =
+      isThread && params.threadTs
+        ? await this.lookupSlackThreadTitle(params.channelId, params.threadTs)
+        : undefined;
     return {
       channel: this.channel,
       conversation: {
@@ -1620,7 +1717,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     userId: string,
     username?: string,
   ): Promise<MessagingActorIdentity> {
-    const contact = this.config.authorizedActorIds.find((item) => item.id === userId);
+    const contact = this.config.authorizedActorIds.find(
+      (item) => item.id === userId,
+    );
     const displayName =
       contact?.displayName
       || (await this.lookupSlackUserDisplayName(userId))
@@ -1633,7 +1732,9 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   private actorForSlackBot(botId: string): MessagingActorIdentity {
-    const contact = this.config.authorizedActorIds.find((item) => item.id === botId);
+    const contact = this.config.authorizedActorIds.find(
+      (item) => item.id === botId,
+    );
     return {
       platformUserId: botId,
       displayName: contact?.displayName ?? botId,
@@ -1673,7 +1774,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       } else {
         this.logger.warn?.("slack user profile lookup failed", {
           reason,
-          userHash: createHash("sha256").update(userId).digest("hex").slice(0, 8),
+          userHash: createHash("sha256")
+            .update(userId)
+            .digest("hex")
+            .slice(0, 8),
         });
       }
       this.userDisplayNameCache.set(userId, undefined);
@@ -1693,7 +1797,12 @@ export class SlackAdapter implements SlackProviderAdapter {
     channelType?: string;
     channelName?: string;
   }): Promise<boolean> {
-    if (isSlackGroupDm({ channelType: params.channelType, channelName: params.channelName })) {
+    if (
+      isSlackGroupDm({
+        channelType: params.channelType,
+        channelName: params.channelName,
+      })
+    ) {
       return true;
     }
     const cached = this.conversationGroupDmCache.get(params.channelId);
@@ -1702,7 +1811,9 @@ export class SlackAdapter implements SlackProviderAdapter {
       return false;
     }
     try {
-      const info = await this.api.conversationsInfo({ channel: params.channelId });
+      const info = await this.api.conversationsInfo({
+        channel: params.channelId,
+      });
       const isGroupDm = info?.is_mpim === true;
       this.conversationGroupDmCache.set(params.channelId, isGroupDm);
       return isGroupDm;
@@ -1727,7 +1838,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
 
     try {
-      const conversation = await this.api.conversationsInfo({ channel: channelId });
+      const conversation = await this.api.conversationsInfo({
+        channel: channelId,
+      });
       const title = normalizeSlackConversationTitle(conversation?.name);
       this.conversationTitleCache.set(channelId, title);
       return title;
@@ -1742,7 +1855,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       } else {
         this.logger.warn?.("slack conversation lookup failed", {
           reason,
-          channelHash: createHash("sha256").update(channelId).digest("hex").slice(0, 8),
+          channelHash: createHash("sha256")
+            .update(channelId)
+            .digest("hex")
+            .slice(0, 8),
         });
       }
       this.conversationTitleCache.set(channelId, undefined);
@@ -1769,7 +1885,8 @@ export class SlackAdapter implements SlackProviderAdapter {
         limit: 1,
         ts: threadTs,
       });
-      const root = messages.find((message) => message.ts === threadTs) ?? messages[0];
+      const root =
+        messages.find((message) => message.ts === threadTs) ?? messages[0];
       const title = normalizeSlackThreadTitle(root?.text);
       this.threadTitleCache.set(cacheKey, title);
       return title;
@@ -1784,8 +1901,14 @@ export class SlackAdapter implements SlackProviderAdapter {
       } else {
         this.logger.warn?.("slack thread root lookup failed", {
           reason,
-          channelHash: createHash("sha256").update(channelId).digest("hex").slice(0, 8),
-          threadHash: createHash("sha256").update(threadTs).digest("hex").slice(0, 8),
+          channelHash: createHash("sha256")
+            .update(channelId)
+            .digest("hex")
+            .slice(0, 8),
+          threadHash: createHash("sha256")
+            .update(threadTs)
+            .digest("hex")
+            .slice(0, 8),
         });
       }
       this.threadTitleCache.set(cacheKey, undefined);
@@ -1834,8 +1957,8 @@ export class SlackAdapter implements SlackProviderAdapter {
       // accepts). Without this the preview surfaces the bot's own output and
       // drops file_share messages that triggers DO match.
       if (
-        (this.botId && message.bot_id === this.botId) ||
-        (this.botUserId && message.user === this.botUserId)
+        (this.botId && message.bot_id === this.botId)
+        || (this.botUserId && message.user === this.botUserId)
       ) {
         continue;
       }
@@ -1897,7 +2020,9 @@ export class SlackAdapter implements SlackProviderAdapter {
               ? { url: file.url_private_download ?? file.url_private }
               : {}),
             ...(mimeType ? { mimeType } : {}),
-            ...(file.name ?? file.title ? { name: file.name ?? file.title } : {}),
+            ...((file.name ?? file.title)
+              ? { name: file.name ?? file.title }
+              : {}),
             ...(file.size !== undefined ? { size: file.size } : {}),
           },
         },
@@ -1953,7 +2078,8 @@ export class SlackAdapter implements SlackProviderAdapter {
     try {
       await this.api.setAssistantThreadStatus({
         channelId: target.channelId,
-        status: intent.state === "active" ? "is working on your request..." : "",
+        status:
+          intent.state === "active" ? "is working on your request..." : "",
         threadTs,
       });
       return {
@@ -2057,7 +2183,9 @@ export function createSlackApi(botToken: string): SlackApi {
       }
       await assistant.threads.setStatus({
         channel_id: params.channelId,
-        ...(params.loadingMessages ? { loading_messages: params.loadingMessages } : {}),
+        ...(params.loadingMessages
+          ? { loading_messages: params.loadingMessages }
+          : {}),
         status: params.status,
         thread_ts: params.threadTs,
       });
@@ -2145,12 +2273,17 @@ function hostFromUrl(url: string | undefined): string | undefined {
   }
 }
 
-export function stripBotMention(text: string, botUserId: string | undefined): string {
+export function stripBotMention(
+  text: string,
+  botUserId: string | undefined,
+): string {
   if (!botUserId) return text;
   return text.replace(new RegExp(`^\\s*<@${escapeRegex(botUserId)}>\\s*`), "");
 }
 
-function parseCommand(text: string): { command: string; args: string[] } | undefined {
+function parseCommand(
+  text: string,
+): { command: string; args: string[] } | undefined {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return undefined;
   const [commandWithSlash, ...args] = trimmed.split(/\s+/);
@@ -2179,8 +2312,12 @@ function readSlackSurfaceState(
   }
   const record = opaque as Record<string, MessagingJsonValue>;
   return {
-    ...(typeof record.channelId === "string" ? { channelId: record.channelId } : {}),
-    ...(typeof record.threadTs === "string" ? { threadTs: record.threadTs } : {}),
+    ...(typeof record.channelId === "string"
+      ? { channelId: record.channelId }
+      : {}),
+    ...(typeof record.threadTs === "string"
+      ? { threadTs: record.threadTs }
+      : {}),
     ...(typeof record.ts === "string" ? { ts: record.ts } : {}),
   };
 }
@@ -2206,7 +2343,9 @@ function slackContactsFromIds(
       }[]
     | undefined,
 ): { id: string; displayName: string; responseMode?: MessagingResponseMode }[] {
-  const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
+  const previousById = new Map(
+    (previous ?? []).map((contact) => [contact.id, contact]),
+  );
   return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 
@@ -2285,9 +2424,7 @@ function slackCallbackRecordId(
   return `slack-callback:${handle}:${deliveryScope}`;
 }
 
-function readSlackAttachmentState(
-  state: MessagingAdapterState | undefined,
-):
+function readSlackAttachmentState(state: MessagingAdapterState | undefined):
   | {
       fileId?: string;
       mimeType?: string;
@@ -2303,14 +2440,18 @@ function readSlackAttachmentState(
   const record = opaque as Record<string, MessagingJsonValue>;
   return {
     ...(typeof record.fileId === "string" ? { fileId: record.fileId } : {}),
-    ...(typeof record.mimeType === "string" ? { mimeType: record.mimeType } : {}),
+    ...(typeof record.mimeType === "string"
+      ? { mimeType: record.mimeType }
+      : {}),
     ...(typeof record.name === "string" ? { name: record.name } : {}),
     ...(typeof record.size === "number" ? { size: record.size } : {}),
     ...(typeof record.url === "string" ? { url: record.url } : {}),
   };
 }
 
-function kindForSlackMime(mimeType: string | undefined): MessagingAttachmentDescriptor["kind"] {
+function kindForSlackMime(
+  mimeType: string | undefined,
+): MessagingAttachmentDescriptor["kind"] {
   if (!mimeType) return "unknown";
   if (mimeType.startsWith("image/gif")) return "gif";
   if (mimeType.startsWith("image/")) return "image";
@@ -2319,7 +2460,9 @@ function kindForSlackMime(mimeType: string | undefined): MessagingAttachmentDesc
   return "file";
 }
 
-function normalizeSlackConversationTitle(value: string | undefined): string | undefined {
+function normalizeSlackConversationTitle(
+  value: string | undefined,
+): string | undefined {
   const normalized = value?.trim();
   if (!normalized) return undefined;
   const lower = normalized.toLowerCase();
@@ -2327,7 +2470,9 @@ function normalizeSlackConversationTitle(value: string | undefined): string | un
   return normalized;
 }
 
-function normalizeSlackThreadTitle(value: string | undefined): string | undefined {
+function normalizeSlackThreadTitle(
+  value: string | undefined,
+): string | undefined {
   const normalized = value
     ?.replace(/:[A-Za-z0-9_+-]+:/g, " ")
     .replace(/\s+/g, " ")
@@ -2358,24 +2503,29 @@ function slackTimestampToMs(ts: string | undefined): number | undefined {
 
 function retryAfterMsFromError(error: unknown): number | undefined {
   const retryAfter =
-    readNumberProperty(error, "retryAfter") ??
-    readNumberProperty(error, "retry_after") ??
-    readNumberProperty(error, "retryAfterMs");
+    readNumberProperty(error, "retryAfter")
+    ?? readNumberProperty(error, "retry_after")
+    ?? readNumberProperty(error, "retryAfterMs");
   if (retryAfter !== undefined) {
-    return retryAfter > 1_000 ? Math.ceil(retryAfter) : Math.ceil(retryAfter * 1000);
+    return retryAfter > 1_000
+      ? Math.ceil(retryAfter)
+      : Math.ceil(retryAfter * 1000);
   }
-  const status = readNumberProperty(error, "status") ?? readNumberProperty(error, "code");
+  const status =
+    readNumberProperty(error, "status") ?? readNumberProperty(error, "code");
   return status === 429 ? 1_000 : undefined;
 }
 
 function isSlackAssistantThreadStatusUnsupportedError(error: unknown): boolean {
   const reason = slackErrorReason(error).toLowerCase();
-  return reason.includes("missing_scope")
+  return (
+    reason.includes("missing_scope")
     || reason.includes("not_assistant")
     || reason.includes("assistant_not")
     || reason.includes("not an assistant")
     || reason.includes("method_not_supported")
-    || reason.includes("unsupported");
+    || reason.includes("unsupported")
+  );
 }
 
 function slackErrorReason(error: unknown): string {
@@ -2414,8 +2564,10 @@ function readNestedStringProperty(
 function safeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
-  return leftBuffer.byteLength === rightBuffer.byteLength
-    && timingSafeEqual(leftBuffer, rightBuffer);
+  return (
+    leftBuffer.byteLength === rightBuffer.byteLength
+    && timingSafeEqual(leftBuffer, rightBuffer)
+  );
 }
 
 function escapeRegex(value: string): string {

@@ -6,7 +6,10 @@ import {
   HistoryNavButtons,
   type HistoryNavControls,
 } from "../chrome/HistoryNavButtons";
-import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
+import {
+  MastheadActions,
+  type MastheadActionsProps,
+} from "../chrome/MastheadActions";
 
 type ThreadPlaceholderLayoutControls = {
   sidebarOpen: boolean;

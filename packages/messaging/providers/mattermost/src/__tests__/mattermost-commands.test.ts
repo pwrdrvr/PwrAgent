@@ -20,7 +20,8 @@ const SPECS: MattermostCommandSpec[] = [
     trigger: "resume",
     displayName: "PwrAgent Resume",
     description: "Bind this conversation to a PwrAgent thread.",
-    autoCompleteDesc: "Choose a PwrAgent thread to control from this conversation.",
+    autoCompleteDesc:
+      "Choose a PwrAgent thread to control from this conversation.",
     autoCompleteHint: "[--projects | --new]",
   },
   {
@@ -31,7 +32,10 @@ const SPECS: MattermostCommandSpec[] = [
   },
 ];
 
-function existingFor(spec: MattermostCommandSpec, overrides: Partial<MattermostCommandRecord> = {}): MattermostCommandRecord {
+function existingFor(
+  spec: MattermostCommandSpec,
+  overrides: Partial<MattermostCommandRecord> = {},
+): MattermostCommandRecord {
   const desired = buildMattermostCommandRequest({
     spec,
     teamId: TEAM_ID,
@@ -174,8 +178,9 @@ describe("sanitizeMattermostCommandPrefix", () => {
 
   it("falls back to default with a warning when chars are invalid", () => {
     const logged: Array<{ msg: string; extra?: Record<string, unknown> }> = [];
-    const result = sanitizeMattermostCommandPrefix("bad prefix!", (msg, extra) =>
-      logged.push({ msg, extra }),
+    const result = sanitizeMattermostCommandPrefix(
+      "bad prefix!",
+      (msg, extra) => logged.push({ msg, extra }),
     );
     expect(result).toBe(DEFAULT_MATTERMOST_COMMAND_PREFIX);
     expect(logged).toHaveLength(1);
@@ -190,9 +195,15 @@ describe("sanitizeMattermostCommandPrefix", () => {
 
 describe("baseTriggerForPrefixed", () => {
   it("recovers the canonical base from a namespaced trigger", () => {
-    expect(baseTriggerForPrefixed("/pwragent_resume", "pwragent_")).toBe("resume");
-    expect(baseTriggerForPrefixed("/pwragent_status", "pwragent_")).toBe("status");
-    expect(baseTriggerForPrefixed("/pwragent_monitor", "pwragent_")).toBe("monitor");
+    expect(baseTriggerForPrefixed("/pwragent_resume", "pwragent_")).toBe(
+      "resume",
+    );
+    expect(baseTriggerForPrefixed("/pwragent_status", "pwragent_")).toBe(
+      "status",
+    );
+    expect(baseTriggerForPrefixed("/pwragent_monitor", "pwragent_")).toBe(
+      "monitor",
+    );
   });
 
   it("handles bare triggers when prefix is empty", () => {
@@ -200,11 +211,15 @@ describe("baseTriggerForPrefixed", () => {
   });
 
   it("returns undefined for unknown commands", () => {
-    expect(baseTriggerForPrefixed("/pwragent_weather", "pwragent_")).toBeUndefined();
+    expect(
+      baseTriggerForPrefixed("/pwragent_weather", "pwragent_"),
+    ).toBeUndefined();
   });
 
   it("is case-insensitive for trigger lookup", () => {
-    expect(baseTriggerForPrefixed("/PwrAgent_Resume", "pwragent_")).toBe("resume");
+    expect(baseTriggerForPrefixed("/PwrAgent_Resume", "pwragent_")).toBe(
+      "resume",
+    );
   });
 });
 

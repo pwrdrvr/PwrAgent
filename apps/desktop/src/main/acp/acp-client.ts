@@ -142,7 +142,7 @@ export type AcpAgentClientOptions = {
     runtimeState: BackendAcpSessionRuntimeState;
   }) => Promise<void> | void;
   onRequest?: (
-    request: AppServerPendingRequestNotification
+    request: AppServerPendingRequestNotification,
   ) => Promise<unknown> | unknown;
   mcpServers?: (context: {
     backendId: AcpBackendId;
@@ -179,40 +179,45 @@ export class AcpAgentClient {
   }
 
   async initialize(): Promise<void> {
-    this.unsubscribe = this.options.transport.onNotification((method, params) => {
-      if (method === "session/update") {
-        this.applySessionUpdate(params);
-        return;
-      }
-      // Grok's vendor notification carries the auto-generated session
-      // summary at the end of the first turn. Its envelope shape matches
-      // session/update (`{ sessionId, update: { sessionUpdate, ... } }`), so
-      // the same dispatch path handles it — readAcpTopicTitle picks the
-      // title out of the "session_summary_generated" kind, and the
-      // normalizer treats the inner update as thread metadata rather than
-      // a transcript entry (see acp-session-normalizer.ts:118).
-      if (method === "_x.ai/session_notification") {
-        // Log the raw shape at debug so a future Grok CLI release that
-        // renames the kind or moves the title field surfaces visibly
-        // instead of silently degrading to "ACP session" forever. Kept
-        // off the info channel because this fires once per turn-end.
-        const update = (params as { update?: { sessionUpdate?: string } })
-          .update;
-        acpClientLog.debug("grok vendor notification", {
-          backendId: this.options.backendId,
-          sessionUpdate: update?.sessionUpdate,
-          hasSummary: Boolean(
-            (update as { session_summary?: string } | undefined)
-              ?.session_summary?.trim()
-              || (update as { sessionSummary?: string } | undefined)
-                ?.sessionSummary?.trim(),
-          ),
-        });
-        this.applySessionUpdate(params);
-      }
-    });
+    this.unsubscribe = this.options.transport.onNotification(
+      (method, params) => {
+        if (method === "session/update") {
+          this.applySessionUpdate(params);
+          return;
+        }
+        // Grok's vendor notification carries the auto-generated session
+        // summary at the end of the first turn. Its envelope shape matches
+        // session/update (`{ sessionId, update: { sessionUpdate, ... } }`), so
+        // the same dispatch path handles it — readAcpTopicTitle picks the
+        // title out of the "session_summary_generated" kind, and the
+        // normalizer treats the inner update as thread metadata rather than
+        // a transcript entry (see acp-session-normalizer.ts:118).
+        if (method === "_x.ai/session_notification") {
+          // Log the raw shape at debug so a future Grok CLI release that
+          // renames the kind or moves the title field surfaces visibly
+          // instead of silently degrading to "ACP session" forever. Kept
+          // off the info channel because this fires once per turn-end.
+          const update = (params as { update?: { sessionUpdate?: string } })
+            .update;
+          acpClientLog.debug("grok vendor notification", {
+            backendId: this.options.backendId,
+            sessionUpdate: update?.sessionUpdate,
+            hasSummary: Boolean(
+              (
+                update as { session_summary?: string } | undefined
+              )?.session_summary?.trim()
+              || (
+                update as { sessionSummary?: string } | undefined
+              )?.sessionSummary?.trim(),
+            ),
+          });
+          this.applySessionUpdate(params);
+        }
+      },
+    );
     this.unsubscribeRequest = this.options.transport.onRequest?.(
-      async (method, params, id) => await this.handleAcpRequest(method, params, id),
+      async (method, params, id) =>
+        await this.handleAcpRequest(method, params, id),
     );
     const result = await this.options.transport.request("initialize", {
       protocolVersion: ACP_PROTOCOL_VERSION,
@@ -371,14 +376,13 @@ export class AcpAgentClient {
     const record = asRecord(result);
     return {
       sessionId: params.sessionId,
-      turnId:
-        typeof record?.turnId === "string"
-          ? record.turnId
-          : turnId,
+      turnId: typeof record?.turnId === "string" ? record.turnId : turnId,
     };
   }
 
-  async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
+  async loadSession(
+    metadata: AcpSessionMetadata,
+  ): Promise<AppServerThreadReplay> {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
     const localHistory = this.hydrateSessionFromHistory(metadata);
@@ -388,8 +392,8 @@ export class AcpAgentClient {
       });
     }
     return this.replayForSessionMetadata(
-      this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
-        metadata,
+      this.options.store.getSession(this.options.backendId, metadata.sessionId)
+        ?? metadata,
     );
   }
 
@@ -409,8 +413,8 @@ export class AcpAgentClient {
     const cwd = metadata.cwd ?? process.cwd();
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
     if (
-      this.loadedSessionCwds.has(protocolSessionId) &&
-      this.loadedSessionCwds.get(protocolSessionId) === cwd
+      this.loadedSessionCwds.has(protocolSessionId)
+      && this.loadedSessionCwds.get(protocolSessionId) === cwd
     ) {
       return;
     }
@@ -515,9 +519,9 @@ export class AcpAgentClient {
       );
       return {
         text:
-          suppression.finalTextChunks.join("").trim() ||
-          suppression.fallbackOutputText?.trim() ||
-          "",
+          suppression.finalTextChunks.join("").trim()
+          || suppression.fallbackOutputText?.trim()
+          || "",
       };
     } finally {
       this.suppressedControlPromptSessions.delete(protocolSessionId);
@@ -638,8 +642,8 @@ export class AcpAgentClient {
           suppressedControlPrompt.finalTextChunks.push(text);
         }
       } else if (
-        updateKind === "turn_finished" &&
-        suppressedControlPrompt.finalTextChunks.length === 0
+        updateKind === "turn_finished"
+        && suppressedControlPrompt.finalTextChunks.length === 0
       ) {
         const text = readUpdateText(update);
         if (text) {
@@ -661,7 +665,10 @@ export class AcpAgentClient {
       return;
     }
     const loadState = this.loadingSessions.get(protocolSessionId);
-    if (loadState?.suppressTranscriptReplay && isTranscriptReplayUpdate(update)) {
+    if (
+      loadState?.suppressTranscriptReplay
+      && isTranscriptReplayUpdate(update)
+    ) {
       return;
     }
     if (updateKind === "available_commands_update") {
@@ -670,12 +677,16 @@ export class AcpAgentClient {
     if (updateKind === "turn_started") {
       this.updateSessionStatus(sessionId, "active");
     } else if (
-      updateKind === "turn_finished" ||
-      updateKind === "pwragent_turn_failed"
+      updateKind === "turn_finished"
+      || updateKind === "pwragent_turn_failed"
     ) {
       this.updateSessionStatus(sessionId, "idle");
     }
-    const title = this.updateSessionTitleFromAcpUpdate(sessionId, update, receivedAt);
+    const title = this.updateSessionTitleFromAcpUpdate(
+      sessionId,
+      update,
+      receivedAt,
+    );
     if (isConversationHistoryUpdate(update)) {
       this.markSessionHasConversationHistory(sessionId, receivedAt);
     }
@@ -683,10 +694,12 @@ export class AcpAgentClient {
       this.appendHistoryUpdate(sessionId, receivedAt, update);
     }
     const isAssistantTextUpdate =
-      updateKind === "agent_message_chunk" || updateKind === "agent_thought_chunk";
+      updateKind === "agent_message_chunk"
+      || updateKind === "agent_thought_chunk";
     const shouldTrackAssistantTextUpdate =
-      updateKind === "agent_message_chunk" ||
-      (updateKind === "agent_thought_chunk" && this.surfaceThoughtsAsMessages);
+      updateKind === "agent_message_chunk"
+      || (updateKind === "agent_thought_chunk"
+        && this.surfaceThoughtsAsMessages);
     const text = readUpdateText(update);
     let assistantMessageItemId: string | undefined;
     if (shouldTrackAssistantTextUpdate && activeTurn && text) {
@@ -761,7 +774,8 @@ export class AcpAgentClient {
         : typeof toolCall.tool_call_id === "string"
           ? toolCall.tool_call_id
           : undefined;
-    const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
+    const requestId =
+      id == null ? (toolCallId ?? `acp:${this.now()}`) : String(id);
     const activeTurn = this.activeTurns.get(sessionId);
     const command = permissionCommand(title, toolCall);
 
@@ -777,7 +791,8 @@ export class AcpAgentClient {
         displayCommand: command,
         acpMethod: "session/request_permission",
         acpToolCallId: toolCallId,
-        acpToolKind: typeof toolCall.kind === "string" ? toolCall.kind : undefined,
+        acpToolKind:
+          typeof toolCall.kind === "string" ? toolCall.kind : undefined,
         acpPermissionOptions: readPermissionOptions(params.options),
       },
     };
@@ -801,7 +816,10 @@ export class AcpAgentClient {
     const replay = normalizer.replay();
     return {
       ...replay,
-      threadStatus: acpSessionThreadStatus(metadata.status, replay.threadStatus),
+      threadStatus: acpSessionThreadStatus(
+        metadata.status,
+        replay.threadStatus,
+      ),
     };
   }
 
@@ -833,7 +851,8 @@ export class AcpAgentClient {
     const replay = normalizer.replay();
     const hasReplay = replay.messages.length > 0 || replay.entries.length > 0;
     return {
-      isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
+      isComplete:
+        (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
     };
   }
 
@@ -841,7 +860,10 @@ export class AcpAgentClient {
     sessionId: string,
     receivedAt: number,
   ): void {
-    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    const metadata = this.options.store.getSession(
+      this.options.backendId,
+      sessionId,
+    );
     if (!metadata || metadata.hasConversationHistory) {
       return;
     }
@@ -857,7 +879,10 @@ export class AcpAgentClient {
     update: Record<string, unknown>,
     receivedAt: number,
   ): void {
-    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    const metadata = this.options.store.getSession(
+      this.options.backendId,
+      sessionId,
+    );
     if (!metadata) {
       return;
     }
@@ -908,14 +933,20 @@ export class AcpAgentClient {
     sessionId: string,
     runtimeState: BackendAcpSessionRuntimeState,
   ): void {
-    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    const metadata = this.options.store.getSession(
+      this.options.backendId,
+      sessionId,
+    );
     if (!metadata) {
       return;
     }
     this.options.store.upsertSession({
       ...metadata,
       acpRuntime: mergeAcpRuntimeState(metadata.acpRuntime, runtimeState),
-      updatedAt: Math.max(metadata.updatedAt, runtimeState.updatedAt ?? this.now()),
+      updatedAt: Math.max(
+        metadata.updatedAt,
+        runtimeState.updatedAt ?? this.now(),
+      ),
     });
   }
 
@@ -1038,7 +1069,10 @@ export class AcpAgentClient {
   ): AppServerThreadReplay {
     const message = errorMessage(error);
     const receivedAt = this.now();
-    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    const metadata = this.options.store.getSession(
+      this.options.backendId,
+      sessionId,
+    );
     if (metadata) {
       this.options.store.upsertSession({
         ...metadata,
@@ -1080,7 +1114,10 @@ export class AcpAgentClient {
     sessionId: string,
     status: AcpSessionMetadata["status"],
   ): void {
-    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    const metadata = this.options.store.getSession(
+      this.options.backendId,
+      sessionId,
+    );
     if (!metadata) {
       return;
     }
@@ -1100,13 +1137,16 @@ export class AcpAgentClient {
     if (!title) {
       return undefined;
     }
-    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    const metadata = this.options.store.getSession(
+      this.options.backendId,
+      sessionId,
+    );
     if (!metadata || metadata.title === title) {
       return undefined;
     }
     const currentTitleSource =
-      metadata.titleSource ??
-      (metadata.title === "ACP session" || !metadata.title.trim()
+      metadata.titleSource
+      ?? (metadata.title === "ACP session" || !metadata.title.trim()
         ? "fallback"
         : "derived");
     if (currentTitleSource !== "fallback") {
@@ -1123,12 +1163,21 @@ export class AcpAgentClient {
 
   private rememberSessionIds(metadata: AcpSessionMetadata): void {
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
-    this.agentSessionIdsByAppSessionId.set(metadata.sessionId, protocolSessionId);
-    this.appSessionIdsByAgentSessionId.set(protocolSessionId, metadata.sessionId);
+    this.agentSessionIdsByAppSessionId.set(
+      metadata.sessionId,
+      protocolSessionId,
+    );
+    this.appSessionIdsByAgentSessionId.set(
+      protocolSessionId,
+      metadata.sessionId,
+    );
   }
 
   private protocolSessionIdFor(sessionId: string): string {
-    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    const metadata = this.options.store.getSession(
+      this.options.backendId,
+      sessionId,
+    );
     if (metadata) {
       this.rememberSessionIds(metadata);
       return protocolSessionIdForMetadata(metadata);
@@ -1137,7 +1186,10 @@ export class AcpAgentClient {
   }
 
   private appSessionIdFor(protocolSessionId: string): string {
-    return this.appSessionIdsByAgentSessionId.get(protocolSessionId) ?? protocolSessionId;
+    return (
+      this.appSessionIdsByAgentSessionId.get(protocolSessionId)
+      ?? protocolSessionId
+    );
   }
 }
 
@@ -1154,24 +1206,24 @@ function readUpdateKind(update: Record<string, unknown>): string | undefined {
 function isConversationHistoryUpdate(update: Record<string, unknown>): boolean {
   const kind = readUpdateKind(update);
   return (
-    kind === "pwragent_user_prompt" ||
-    kind === "user_message_chunk" ||
-    kind === "agent_message_chunk" ||
-    kind === "agent_thought_chunk"
+    kind === "pwragent_user_prompt"
+    || kind === "user_message_chunk"
+    || kind === "agent_message_chunk"
+    || kind === "agent_thought_chunk"
   );
 }
 
 function isTranscriptReplayUpdate(update: Record<string, unknown>): boolean {
   const kind = readUpdateKind(update);
   return (
-    isConversationHistoryUpdate(update) ||
-    kind === "plan" ||
-    kind === "tool_call" ||
-    kind === "tool_call_update" ||
-    kind === "file" ||
-    kind === "terminal" ||
-    kind === "turn_finished" ||
-    kind === "pwragent_turn_failed"
+    isConversationHistoryUpdate(update)
+    || kind === "plan"
+    || kind === "tool_call"
+    || kind === "tool_call_update"
+    || kind === "file"
+    || kind === "terminal"
+    || kind === "turn_finished"
+    || kind === "pwragent_turn_failed"
   );
 }
 
@@ -1300,10 +1352,9 @@ function readPermissionOptions(value: unknown): AcpPermissionOption[] {
   });
 }
 
-function approvalRequesterNameForOptions(options: Pick<
-  AcpAgentClientOptions,
-  "agentDisplayName" | "backendId"
->): string {
+function approvalRequesterNameForOptions(
+  options: Pick<AcpAgentClientOptions, "agentDisplayName" | "backendId">,
+): string {
   const configured = options.agentDisplayName?.trim();
   if (configured) {
     return configured;
@@ -1324,8 +1375,9 @@ function permissionPrompt(
 ): string {
   const contentText = readToolCallText(toolCall.content);
   if (
-    contentText &&
-    (!readAcpToolContentCommand(toolCall) || isApprovalPromptText(contentText))
+    contentText
+    && (!readAcpToolContentCommand(toolCall)
+      || isApprovalPromptText(contentText))
   ) {
     return contentText;
   }
@@ -1353,7 +1405,9 @@ function permissionCommand(
 function permissionOutcomeFromResponse(
   response: unknown,
   options: AcpPermissionOption[],
-): { outcome: { outcome: "selected"; optionId: string } | { outcome: "cancelled" } } {
+): {
+  outcome: { outcome: "selected"; optionId: string } | { outcome: "cancelled" };
+} {
   const decision = asRecord(response)?.decision;
   if (typeof decision !== "string") {
     return cancelledPermissionOutcome();
@@ -1386,25 +1440,25 @@ function selectPermissionOptionId(
   }
 
   if (
-    normalizedDecision === "approve" ||
-    normalizedDecision === "accept" ||
-    normalizedDecision === "allow"
+    normalizedDecision === "approve"
+    || normalizedDecision === "accept"
+    || normalizedDecision === "allow"
   ) {
     return (
-      options.find((option) => option.kind === "allow_once") ??
-      options.find((option) => option.kind === "allow_always") ??
-      options.find((option) => option.name?.toLowerCase().includes("allow"))
+      options.find((option) => option.kind === "allow_once")
+      ?? options.find((option) => option.kind === "allow_always")
+      ?? options.find((option) => option.name?.toLowerCase().includes("allow"))
     )?.optionId;
   }
 
   if (
-    normalizedDecision === "decline" ||
-    normalizedDecision === "reject" ||
-    normalizedDecision === "deny"
+    normalizedDecision === "decline"
+    || normalizedDecision === "reject"
+    || normalizedDecision === "deny"
   ) {
     return (
-      options.find((option) => option.kind === "reject_once") ??
-      options.find((option) => option.name?.toLowerCase().includes("reject"))
+      options.find((option) => option.kind === "reject_once")
+      ?? options.find((option) => option.name?.toLowerCase().includes("reject"))
     )?.optionId;
   }
 
@@ -1436,8 +1490,7 @@ function assistantMessageItemIdForUpdate(params: {
   }
 
   if (!params.activeTurn.activeAssistantMessageItemId) {
-    params.activeTurn.activeAssistantMessageItemId =
-      `assistant:${params.activeTurn.turnId}:${params.activeTurn.assistantMessageSequence++}`;
+    params.activeTurn.activeAssistantMessageItemId = `assistant:${params.activeTurn.turnId}:${params.activeTurn.assistantMessageSequence++}`;
   }
   return params.activeTurn.activeAssistantMessageItemId;
 }

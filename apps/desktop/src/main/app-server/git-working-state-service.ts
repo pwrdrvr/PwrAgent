@@ -144,8 +144,8 @@ function remoteAgnosticBranchName(refName: string): string {
 function isLikelyBaseBranch(refName: string): boolean {
   const branch = remoteAgnosticBranchName(refName);
   return (
-    /^(main|master|develop|development|trunk)$/.test(branch) ||
-    /^(release|releases|stable|support|maintenance)\//.test(branch)
+    /^(main|master|develop|development|trunk)$/.test(branch)
+    || /^(release|releases|stable|support|maintenance)\//.test(branch)
   );
 }
 
@@ -206,9 +206,10 @@ async function resolveWorktreeBaseState(
   const rawCurrentBranch = (
     await runGitNoLocks(["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "")
   ).trim();
-  const currentBranch = rawCurrentBranch && rawCurrentBranch !== "HEAD"
-    ? rawCurrentBranch
-    : undefined;
+  const currentBranch =
+    rawCurrentBranch && rawCurrentBranch !== "HEAD"
+      ? rawCurrentBranch
+      : undefined;
   if (currentBranch && isLikelyBaseBranch(currentBranch)) {
     return undefined;
   }
@@ -221,9 +222,11 @@ async function resolveWorktreeBaseState(
           `branch.${currentBranch}.vscode-merge-base`,
         ]).catch(() => "")
       : Promise.resolve(""),
-    runGitNoLocks(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).catch(
-      () => "",
-    ),
+    runGitNoLocks([
+      "symbolic-ref",
+      "refs/remotes/origin/HEAD",
+      "--short",
+    ]).catch(() => ""),
     runGitNoLocks([
       "for-each-ref",
       "refs/heads",
@@ -243,9 +246,9 @@ async function resolveWorktreeBaseState(
   for (const ref of parseGitLines(refsOutput)) {
     const label = normalizeBaseBranchLabel(ref);
     if (
-      label === "origin/HEAD" ||
-      isCurrentBranchRef(label, currentBranch) ||
-      !isLikelyBaseBranch(label)
+      label === "origin/HEAD"
+      || isCurrentBranchRef(label, currentBranch)
+      || !isLikelyBaseBranch(label)
     ) {
       continue;
     }
@@ -333,7 +336,8 @@ function statusCodeToChangeStatus(
   indexCode: string,
   worktreeCode: string,
 ): WorktreeOtherChangeStatus {
-  const code = indexCode !== " " && indexCode !== "?" ? indexCode : worktreeCode;
+  const code =
+    indexCode !== " " && indexCode !== "?" ? indexCode : worktreeCode;
   switch (code) {
     case "A":
       return "added";
@@ -492,7 +496,11 @@ function parseNumstatByPath(
 
 function isPathInsideWorktree(cwd: string, absolutePath: string): boolean {
   const relative = path.relative(cwd, absolutePath);
-  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+  return (
+    Boolean(relative)
+    && !relative.startsWith("..")
+    && !path.isAbsolute(relative)
+  );
 }
 
 function summarizeDiffText(diff: string): {
@@ -503,10 +511,10 @@ function summarizeDiffText(diff: string): {
   let removals = 0;
   for (const line of diff.split("\n")) {
     if (
-      line.startsWith("+++") ||
-      line.startsWith("---") ||
-      line.startsWith("@@") ||
-      line.startsWith("\\")
+      line.startsWith("+++")
+      || line.startsWith("---")
+      || line.startsWith("@@")
+      || line.startsWith("\\")
     ) {
       continue;
     }
@@ -714,8 +722,13 @@ async function summarizeUntrackedChanges(
   const untrackedEntries = parseStatusPorcelain(statusOutput, cwd).filter(
     (entry) => entry.status === "untracked",
   );
-  const visibleEntries = untrackedEntries.slice(0, DEFAULT_OTHER_CHANGES_MAX_FILES);
-  await Promise.all(visibleEntries.map((entry) => enrichUntrackedChangeStats(entry)));
+  const visibleEntries = untrackedEntries.slice(
+    0,
+    DEFAULT_OTHER_CHANGES_MAX_FILES,
+  );
+  await Promise.all(
+    visibleEntries.map((entry) => enrichUntrackedChangeStats(entry)),
+  );
   return {
     files: untrackedEntries.length,
     additions: visibleEntries.reduce(
@@ -789,25 +802,29 @@ export async function probeWorktreeWorkingState(
   const runGitNoLocks = (args: string[]): Promise<string> =>
     runGit(worktreePath, ["--no-optional-locks", ...args], gitEnv);
 
-  const [numstatOutput, statusOutput, remotesOutput, baseState] = await Promise.all([
-    // Staged + unstaged line counts vs HEAD. Fails on an unborn HEAD
-    // (fresh repo with no commits) — treated as "no tracked changes".
-    runGitNoLocks(["diff", "--numstat", "HEAD"]).catch(() => undefined),
-    runGitNoLocks([
-      "status",
-      "--porcelain=v1",
-      "-z",
-      "--untracked-files=normal",
-    ]).catch(() => undefined),
-    runGitNoLocks(["remote"]).catch(() => undefined),
-    resolveWorktreeBaseState(runGitNoLocks).catch(() => undefined),
-  ]);
+  const [numstatOutput, statusOutput, remotesOutput, baseState] =
+    await Promise.all([
+      // Staged + unstaged line counts vs HEAD. Fails on an unborn HEAD
+      // (fresh repo with no commits) — treated as "no tracked changes".
+      runGitNoLocks(["diff", "--numstat", "HEAD"]).catch(() => undefined),
+      runGitNoLocks([
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=normal",
+      ]).catch(() => undefined),
+      runGitNoLocks(["remote"]).catch(() => undefined),
+      resolveWorktreeBaseState(runGitNoLocks).catch(() => undefined),
+    ]);
   if (numstatOutput === undefined && statusOutput === undefined) {
     return undefined;
   }
 
   const numstat = parseNumstat(numstatOutput ?? "");
-  const untracked = await summarizeUntrackedChanges(worktreePath, statusOutput ?? "");
+  const untracked = await summarizeUntrackedChanges(
+    worktreePath,
+    statusOutput ?? "",
+  );
 
   // "Unpushed" means reachable from HEAD but on no remote ref. With no
   // remotes configured, every commit would count — meaningless for a
@@ -824,13 +841,14 @@ export async function probeWorktreeWorkingState(
         "--not",
         "--remotes",
       ]).catch(() => undefined);
-      unpushedCommits = output === undefined
-        ? 0
-        : output
-          .split("\n")
-          .map((sha) => sha.trim().toLowerCase())
-          .filter((sha) => sha && !acceptedPushedCommitShas.has(sha))
-          .length;
+      unpushedCommits =
+        output === undefined
+          ? 0
+          : output
+              .split("\n")
+              .map((sha) => sha.trim().toLowerCase())
+              .filter((sha) => sha && !acceptedPushedCommitShas.has(sha))
+              .length;
     } else {
       const count = await runGitNoLocks([
         "rev-list",
@@ -931,7 +949,10 @@ export class GitWorkingStateService {
     if (!key) {
       return undefined;
     }
-    const cacheKey = buildWorkingStateCacheKey(key, options.acceptedPushedCommitShas);
+    const cacheKey = buildWorkingStateCacheKey(
+      key,
+      options.acceptedPushedCommitShas,
+    );
 
     const now = Date.now();
     const cached = this.cache.get(cacheKey);
@@ -948,7 +969,10 @@ export class GitWorkingStateService {
       acceptedPushedCommitShas: options.acceptedPushedCommitShas,
     })
       .then((value) => {
-        this.cache.set(cacheKey, { expiresAt: Date.now() + this.cacheTtlMs, value });
+        this.cache.set(cacheKey, {
+          expiresAt: Date.now() + this.cacheTtlMs,
+          value,
+        });
         return value;
       })
       .catch((error) => {
@@ -1054,8 +1078,8 @@ export class GitWorkingStateService {
       } else {
         const bucket = topLevelChangeBucket(entry.repoPath);
         const remainingForTopLevel =
-          OTHER_CHANGES_MAX_FILES_PER_TOP_LEVEL -
-          (changesByTopLevel.get(bucket) ?? 0);
+          OTHER_CHANGES_MAX_FILES_PER_TOP_LEVEL
+          - (changesByTopLevel.get(bucket) ?? 0);
         if (remainingForTopLevel <= 0) {
           topLevelTruncated = true;
           continue;
@@ -1130,10 +1154,10 @@ export class GitWorkingStateService {
       changes: visible,
       totalChanges,
       truncated:
-        expansionTruncated ||
-        topLevelTruncated ||
-        stoppedBeforeEnd ||
-        allChanges.length > visible.length,
+        expansionTruncated
+        || topLevelTruncated
+        || stoppedBeforeEnd
+        || allChanges.length > visible.length,
       maxFiles,
     };
   }
@@ -1193,9 +1217,13 @@ export class GitWorkingStateService {
         omittedReason = "Diff unavailable for this untracked file.";
       }
     } else {
-      diff = await noLocks(["diff", "--no-ext-diff", "HEAD", "--", repoPath]).catch(
-        () => "",
-      );
+      diff = await noLocks([
+        "diff",
+        "--no-ext-diff",
+        "HEAD",
+        "--",
+        repoPath,
+      ]).catch(() => "");
       if (diff.length > maxBytes) {
         omittedReason = `Diff omitted because it exceeds ${maxBytes.toLocaleString()} bytes.`;
         diff = "";

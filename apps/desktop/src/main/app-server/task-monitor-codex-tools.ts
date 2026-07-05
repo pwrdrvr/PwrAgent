@@ -136,13 +136,15 @@ export function readTaskMonitorDynamicToolCall(request: {
 export function isTaskMonitorDynamicToolCall(
   call: Pick<DynamicToolCallParams, "namespace" | "tool">,
 ): call is DynamicToolCallParams & {
-  namespace: typeof PWRAGENT_TOOL_NAMESPACE | typeof TASK_MONITOR_TOOL_NAMESPACE;
+  namespace:
+    | typeof PWRAGENT_TOOL_NAMESPACE
+    | typeof TASK_MONITOR_TOOL_NAMESPACE;
   tool: TaskMonitorOperationName;
 } {
   return (
-    call.namespace === TASK_MONITOR_TOOL_NAMESPACE ||
-    (call.namespace === PWRAGENT_TOOL_NAMESPACE &&
-      isTaskMonitorOperationName(call.tool))
+    call.namespace === TASK_MONITOR_TOOL_NAMESPACE
+    || (call.namespace === PWRAGENT_TOOL_NAMESPACE
+      && isTaskMonitorOperationName(call.tool))
   );
 }
 
@@ -181,7 +183,12 @@ export async function handleTaskMonitorDynamicToolCall(params: {
 }
 
 export function buildTaskMonitorDynamicToolErrorResponse(params: {
-  code: "forbidden" | "internal_error" | "invalid_arguments" | "not_found" | "unsupported_operation";
+  code:
+    | "forbidden"
+    | "internal_error"
+    | "invalid_arguments"
+    | "not_found"
+    | "unsupported_operation";
   message: string;
   operation?: TaskMonitorOperationName;
 }): DynamicToolCallResponse {
@@ -206,8 +213,8 @@ export function buildMonitorDelegationPrompt(params: {
   task: string;
 }): string {
   const pollInterval =
-    normalizePollIntervalSeconds(params.pollIntervalSeconds) ??
-    DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
+    normalizePollIntervalSeconds(params.pollIntervalSeconds)
+    ?? DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
   const heartbeatInterval = pollInterval;
   const preferredModel = normalizePreferredMonitorModel(params.preferredModel);
   const preferredReasoningEffort = normalizePreferredMonitorReasoningEffort(
@@ -238,7 +245,12 @@ export function buildMonitorDelegationPrompt(params: {
     params.task.trim(),
     "</task>",
     params.monitorContext?.trim()
-      ? ["", "<monitor_context>", params.monitorContext.trim(), "</monitor_context>"].join("\n")
+      ? [
+          "",
+          "<monitor_context>",
+          params.monitorContext.trim(),
+          "</monitor_context>",
+        ].join("\n")
       : "",
     "",
     "<delegated_monitoring_procedure>",
@@ -246,16 +258,16 @@ export function buildMonitorDelegationPrompt(params: {
     "- Parent-local tool session ids are not portable. Do not use Codex/agent tool session handles such as exec_command or write_stdin session_id values; this monitor thread cannot access the parent turn's stdin, stdout, stderr, or exit status for those handles.",
     "- For a local build/test/script: if the delegated context gives cwd plus an exact command, run the command yourself in this monitor thread, capture stdout/stderr and exit status, and include the relevant output tail in progress/final reports.",
     "- When you run a local command, capture stdout and stderr to durable files under the working directory or a temp directory. Prefer separate stdout/stderr files plus a combined output file when practical. Include those file paths and the final exit status in complete_monitoring details.",
-    "- For an already-started local process: monitor it only when the context gives a durable OS-level process id, pidfile, log file, status file, or wait API that this thread can access. If only a parent tool session id was provided, call inject_progress with status \"blocked\", then complete_monitoring with outcome \"failure\" explaining that the parent session is not accessible to the monitor.",
+    '- For an already-started local process: monitor it only when the context gives a durable OS-level process id, pidfile, log file, status file, or wait API that this thread can access. If only a parent tool session id was provided, call inject_progress with status "blocked", then complete_monitoring with outcome "failure" explaining that the parent session is not accessible to the monitor.',
     "- For a remote or external operation: use the provided target identifiers, URLs, APIs, or status commands to poll until all required status checks are terminal.",
     `- Repeat the delegated status check about every ${pollInterval} seconds until the task is terminal.`,
-    "- If the task or monitor_context does not include enough information to perform the same polling the parent was about to do, call inject_progress with status \"blocked\" explaining the missing input, then call complete_monitoring with outcome \"failure\" and triggerParentTurn true.",
+    '- If the task or monitor_context does not include enough information to perform the same polling the parent was about to do, call inject_progress with status "blocked" explaining the missing input, then call complete_monitoring with outcome "failure" and triggerParentTurn true.',
     "</delegated_monitoring_procedure>",
     "",
     "<progress_protocol>",
-    "- Immediately after startup, before the first external poll or sleep, call pwragent.inject_progress with monitorId, status \"running\", and a concise message such as \"Monitor started: checking task status.\"",
+    '- Immediately after startup, before the first external poll or sleep, call pwragent.inject_progress with monitorId, status "running", and a concise message such as "Monitor started: checking task status."',
     `- After the startup injection, poll about every ${pollInterval} seconds while the task is incomplete.`,
-    "- Every poll should produce one non-waking progress injection: report the externally visible state change, or if nothing changed and the task is still running, send a brief heartbeat such as \"Still running: waiting for the task to finish.\"",
+    '- Every poll should produce one non-waking progress injection: report the externally visible state change, or if nothing changed and the task is still running, send a brief heartbeat such as "Still running: waiting for the task to finish."',
     `- Do not send routine heartbeat updates more often than about every ${heartbeatInterval} seconds unless the external state changed.`,
     "- Progress injections are non-waking: they must not ask the parent agent to act.",
     "- Do not include the parent transcript or broad repository context in progress updates.",
@@ -263,7 +275,12 @@ export function buildMonitorDelegationPrompt(params: {
     "- The completion call is the only handoff that should trigger the parent agent.",
     "</progress_protocol>",
     params.finalHandoffPrompt?.trim()
-      ? ["", "<final_handoff_guidance>", params.finalHandoffPrompt.trim(), "</final_handoff_guidance>"].join("\n")
+      ? [
+          "",
+          "<final_handoff_guidance>",
+          params.finalHandoffPrompt.trim(),
+          "</final_handoff_guidance>",
+        ].join("\n")
       : "",
   ]
     .filter(Boolean)
@@ -277,11 +294,11 @@ export function buildMonitorParentAgentGuidance(params: {
   startupTimeoutSeconds?: number;
 }): string {
   const startupTimeoutSeconds =
-    normalizeStartupTimeoutSeconds(params.startupTimeoutSeconds) ??
-    DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS;
+    normalizeStartupTimeoutSeconds(params.startupTimeoutSeconds)
+    ?? DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS;
   const pollIntervalSeconds =
-    normalizePollIntervalSeconds(params.pollIntervalSeconds) ??
-    DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
+    normalizePollIntervalSeconds(params.pollIntervalSeconds)
+    ?? DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
   const heartbeatIntervalSeconds = pollIntervalSeconds;
   return [
     "PwrAgent starts one lightweight monitor thread for this delegation; do not call generic spawnAgent for this flow.",
@@ -300,14 +317,18 @@ export function buildMonitorParentAgentGuidance(params: {
   ].join("\n");
 }
 
-export function normalizePollIntervalSeconds(value: unknown): number | undefined {
+export function normalizePollIntervalSeconds(
+  value: unknown,
+): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
   return Math.max(5, Math.floor(value));
 }
 
-export function normalizeHeartbeatIntervalSeconds(value: unknown): number | undefined {
+export function normalizeHeartbeatIntervalSeconds(
+  value: unknown,
+): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
@@ -318,11 +339,15 @@ export function normalizePreferredMonitorModel(value: unknown): string {
   return readString(value) ?? DEFAULT_TASK_MONITOR_MODEL;
 }
 
-export function normalizePreferredMonitorReasoningEffort(value: unknown): string {
+export function normalizePreferredMonitorReasoningEffort(
+  value: unknown,
+): string {
   return readString(value) ?? DEFAULT_TASK_MONITOR_REASONING_EFFORT;
 }
 
-export function normalizeStartupTimeoutSeconds(value: unknown): number | undefined {
+export function normalizeStartupTimeoutSeconds(
+  value: unknown,
+): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
@@ -342,7 +367,9 @@ export function findUnsupportedCodexExecSessionReference(
   if (/\bexec_command\b.{0,80}\bsession_id\b\s*[:=]\s*\d+\b/is.test(text)) {
     return "Codex exec_command session_id";
   }
-  if (/\b(?:codex|agent)\s+(?:tool\s+)?session_id\b\s*[:=]\s*\d+\b/i.test(text)) {
+  if (
+    /\b(?:codex|agent)\s+(?:tool\s+)?session_id\b\s*[:=]\s*\d+\b/i.test(text)
+  ) {
     return "Codex tool session_id";
   }
   return undefined;
@@ -358,7 +385,9 @@ function normalizeTaskMonitorToolArguments(
       task: readString(args.task) ?? "",
       monitorContext: readString(args.monitorContext),
       cwd: readString(args.cwd),
-      pollIntervalSeconds: normalizePollIntervalSeconds(args.pollIntervalSeconds),
+      pollIntervalSeconds: normalizePollIntervalSeconds(
+        args.pollIntervalSeconds,
+      ),
       heartbeatIntervalSeconds: normalizeHeartbeatIntervalSeconds(
         args.heartbeatIntervalSeconds,
       ),
@@ -380,17 +409,25 @@ function normalizeTaskMonitorToolArguments(
     summary: readString(args.summary) ?? "",
     details: readString(args.details),
     triggerParentTurn:
-      typeof args.triggerParentTurn === "boolean" ? args.triggerParentTurn : undefined,
+      typeof args.triggerParentTurn === "boolean"
+        ? args.triggerParentTurn
+        : undefined,
   } satisfies CompleteMonitoringToolArgs;
 }
 
-function toDynamicToolResponse(response: TaskMonitorResponse): DynamicToolCallResponse {
+function toDynamicToolResponse(
+  response: TaskMonitorResponse,
+): DynamicToolCallResponse {
   return {
     success: response.ok,
     contentItems: [
       {
         type: "inputText",
-        text: JSON.stringify(response.ok ? response.data : response.error, null, 2),
+        text: JSON.stringify(
+          response.ok ? response.data : response.error,
+          null,
+          2,
+        ),
       },
     ],
   };
@@ -399,15 +436,17 @@ function toDynamicToolResponse(response: TaskMonitorResponse): DynamicToolCallRe
 function readMonitorProgressStatus(
   value: unknown,
 ): InjectMonitorProgressToolArgs["status"] {
-  return value === "pending" ||
-    value === "running" ||
-    value === "blocked" ||
-    value === "failed"
+  return value === "pending"
+    || value === "running"
+    || value === "blocked"
+    || value === "failed"
     ? value
     : undefined;
 }
 
-function readMonitorOutcome(value: unknown): CompleteMonitoringToolArgs["outcome"] | undefined {
+function readMonitorOutcome(
+  value: unknown,
+): CompleteMonitoringToolArgs["outcome"] | undefined {
   return value === "success" || value === "failure" || value === "cancelled"
     ? value
     : undefined;

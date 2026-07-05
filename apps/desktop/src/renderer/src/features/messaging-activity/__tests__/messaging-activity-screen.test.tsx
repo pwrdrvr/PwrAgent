@@ -35,14 +35,19 @@ describe("MessagingActivityScreen", () => {
     render(<MessagingActivityScreen desktopApi={desktopApi} />);
 
     await waitFor(() => {
-      expect(desktopApi.listMessagingActivity).toHaveBeenCalledWith({ limit: 200 });
+      expect(desktopApi.listMessagingActivity).toHaveBeenCalledWith({
+        limit: 200,
+      });
     });
-    expect((await screen.findByText("1177378744822943744")).closest("button"))
-      .toHaveTextContent("User ID");
-    expect(screen.getByText("1480554271907905731").closest("button"))
-      .toHaveTextContent("Guild ID");
-    expect(screen.getByText("1480554271907905000").closest("button"))
-      .toHaveTextContent("Channel ID");
+    expect(
+      (await screen.findByText("1177378744822943744")).closest("button"),
+    ).toHaveTextContent("User ID");
+    expect(
+      screen.getByText("1480554271907905731").closest("button"),
+    ).toHaveTextContent("Guild ID");
+    expect(
+      screen.getByText("1480554271907905000").closest("button"),
+    ).toHaveTextContent("Channel ID");
   });
 
   it("labels Telegram topic pairing IDs with their parent supergroup", async () => {
@@ -70,14 +75,19 @@ describe("MessagingActivityScreen", () => {
     render(<MessagingActivityScreen desktopApi={desktopApi} />);
 
     await waitFor(() => {
-      expect(desktopApi.listMessagingActivity).toHaveBeenCalledWith({ limit: 200 });
+      expect(desktopApi.listMessagingActivity).toHaveBeenCalledWith({
+        limit: 200,
+      });
     });
-    expect((await screen.findByText("8460800771")).closest("button"))
-      .toHaveTextContent("Peer ID");
-    expect(screen.getByText("-1003841603622").closest("button"))
-      .toHaveTextContent("Supergroup ID");
-    expect(screen.getByText("5642").closest("button"))
-      .toHaveTextContent("Topic ID");
+    expect(
+      (await screen.findByText("8460800771")).closest("button"),
+    ).toHaveTextContent("Peer ID");
+    expect(
+      screen.getByText("-1003841603622").closest("button"),
+    ).toHaveTextContent("Supergroup ID");
+    expect(screen.getByText("5642").closest("button")).toHaveTextContent(
+      "Topic ID",
+    );
   });
 
   it("shows friendly provider, conversation, and thread chips for diagnostics", async () => {
@@ -111,18 +121,27 @@ describe("MessagingActivityScreen", () => {
     render(<MessagingActivityScreen desktopApi={desktopApi} />);
 
     await waitFor(() => {
-      expect(desktopApi.listMessagingActivity).toHaveBeenCalledWith({ limit: 200 });
+      expect(desktopApi.listMessagingActivity).toHaveBeenCalledWith({
+        limit: 200,
+      });
     });
-    expect((await screen.findByText("Telegram")).closest("button"))
-      .toHaveTextContent("Provider");
-    expect(screen.getByText("PwrAgent Mini Dev Group / Test Thread").closest("button"))
-      .toHaveTextContent("Conversation");
-    expect(screen.getByText("Rate Limit Test").closest("button"))
-      .toHaveTextContent("Thread");
-    expect(screen.getByText("-1003841603622").closest("button"))
-      .toHaveTextContent("Supergroup ID");
-    expect(screen.getByText("56").closest("button"))
-      .toHaveTextContent("Topic ID");
+    expect(
+      (await screen.findByText("Telegram")).closest("button"),
+    ).toHaveTextContent("Provider");
+    expect(
+      screen
+        .getByText("PwrAgent Mini Dev Group / Test Thread")
+        .closest("button"),
+    ).toHaveTextContent("Conversation");
+    expect(
+      screen.getByText("Rate Limit Test").closest("button"),
+    ).toHaveTextContent("Thread");
+    expect(
+      screen.getByText("-1003841603622").closest("button"),
+    ).toHaveTextContent("Supergroup ID");
+    expect(screen.getByText("56").closest("button")).toHaveTextContent(
+      "Topic ID",
+    );
   });
 
   it("shows Slack workspace IDs from bucket metadata", async () => {
@@ -150,14 +169,19 @@ describe("MessagingActivityScreen", () => {
     render(<MessagingActivityScreen desktopApi={desktopApi} />);
 
     await waitFor(() => {
-      expect(desktopApi.listMessagingActivity).toHaveBeenCalledWith({ limit: 200 });
+      expect(desktopApi.listMessagingActivity).toHaveBeenCalledWith({
+        limit: 200,
+      });
     });
-    expect((await screen.findByText("U079K80HTGS")).closest("button"))
-      .toHaveTextContent("User ID");
-    expect(screen.getByText("T079K80HTGS").closest("button"))
-      .toHaveTextContent("Workspace ID");
-    expect(screen.getByText("C079K80HTGS").closest("button"))
-      .toHaveTextContent("Channel ID");
+    expect(
+      (await screen.findByText("U079K80HTGS")).closest("button"),
+    ).toHaveTextContent("User ID");
+    expect(screen.getByText("T079K80HTGS").closest("button")).toHaveTextContent(
+      "Workspace ID",
+    );
+    expect(screen.getByText("C079K80HTGS").closest("button")).toHaveTextContent(
+      "Channel ID",
+    );
     const row = screen.getByText("Observed pairing token").closest("li");
     expect(row).not.toHaveTextContent("sl");
     expect(row?.querySelector("img")).toBeInTheDocument();

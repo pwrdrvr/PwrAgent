@@ -47,16 +47,16 @@ type DirectoriesListProps = {
   threads: NavigationThreadSummary[];
   onOpenThreadContextMenu: (
     thread: NavigationThreadSummary,
-    position: { x: number; y: number }
+    position: { x: number; y: number },
   ) => void;
   onOpenPullRequestContextMenu?: (
     thread: NavigationThreadSummary,
     pr: PrSummary,
-    position: { x: number; y: number; anchorTop?: number }
+    position: { x: number; y: number; anchorTop?: number },
   ) => void;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
-    preferredBackend?: AppServerBackendKind
+    preferredBackend?: AppServerBackendKind,
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
@@ -133,16 +133,18 @@ function isPinnableDirectoryKind(
   return directory.kind === "directory" || directory.kind === "workspace";
 }
 
-function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolean {
+function hasPendingLaunchpadState(
+  directory: NavigationDirectorySummary,
+): boolean {
   const launchpad = directory.launchpad;
   if (!launchpad) {
     return false;
   }
 
   return (
-    launchpad.prompt.trim().length > 0 ||
-    (launchpad.imageAttachments?.length ?? 0) > 0 ||
-    launchpad.settingsTouchedAt !== undefined
+    launchpad.prompt.trim().length > 0
+    || (launchpad.imageAttachments?.length ?? 0) > 0
+    || launchpad.settingsTouchedAt !== undefined
   );
 }
 
@@ -156,7 +158,9 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
 const UNPINNED_THREAD_CAP = 10;
 
 export function DirectoriesList(props: DirectoriesListProps) {
-  const [expandedByKey, setExpandedByKey] = useState<Record<string, boolean>>({});
+  const [expandedByKey, setExpandedByKey] = useState<Record<string, boolean>>(
+    {},
+  );
   // Per-directory "show all unpinned threads" toggle, keyed by directory.key.
   const [unpinnedExpandedByKey, setUnpinnedExpandedByKey] = useState<
     Record<string, boolean>
@@ -192,8 +196,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [directoryDropIndicator, setDirectoryDropIndicator] = useState<
     DropIndicatorState | undefined
   >(undefined);
-  const [directoriesPinnedDividerDropTarget, setDirectoriesPinnedDividerDropTarget] =
-    useState(false);
+  const [
+    directoriesPinnedDividerDropTarget,
+    setDirectoriesPinnedDividerDropTarget,
+  ] = useState(false);
   /**
    * Suppress the directory summary button's expand/collapse click
    * when the click is the trailing edge of a drag gesture. Browsers
@@ -218,13 +224,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
           thread,
         ]),
       ),
-    [props.threads]
+    [props.threads],
   );
   const pinnedThreads = useMemo(
-    () =>
-      props.threads
-        .filter(isPinnedThread)
-        .sort(comparePinnedThreads),
+    () => props.threads.filter(isPinnedThread).sort(comparePinnedThreads),
     [props.threads],
   );
   const pinnedThreadKeys = useMemo(
@@ -253,11 +256,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
     [pinnedDirectories],
   );
   const unpinnedDirectories = useMemo(
-    () => props.directories.filter((directory) => !isPinnedDirectory(directory)),
+    () =>
+      props.directories.filter((directory) => !isPinnedDirectory(directory)),
     [props.directories],
   );
   const directoryByKey = useMemo(
-    () => new Map(props.directories.map((directory) => [directory.key, directory])),
+    () =>
+      new Map(props.directories.map((directory) => [directory.key, directory])),
     [props.directories],
   );
 
@@ -272,7 +277,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const currentIndex = pinnedDirectoryKeys.indexOf(directory.key);
     if (currentIndex === -1) return;
 
-    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    const targetIndex =
+      direction === "up" ? currentIndex - 1 : currentIndex + 1;
     const targetKey = pinnedDirectoryKeys[targetIndex];
     if (!targetKey) return;
 
@@ -354,7 +360,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const currentIndex = directoryPinnedThreadKeys.indexOf(threadKey);
     if (currentIndex === -1) return;
 
-    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    const targetIndex =
+      direction === "up" ? currentIndex - 1 : currentIndex + 1;
     const targetKey = directoryPinnedThreadKeys[targetIndex];
     if (!targetKey) return;
 
@@ -375,8 +382,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     setExpandedByKey((current) => {
       for (const directory of props.directories) {
         if (
-          selectedItemKey === buildLaunchpadSelectionKey(directory.key) ||
-          directory.threadKeys.includes(selectedItemKey)
+          selectedItemKey === buildLaunchpadSelectionKey(directory.key)
+          || directory.threadKeys.includes(selectedItemKey)
         ) {
           // Respect explicit user state in either direction. If the
           // user has touched this directory's expand state at all
@@ -420,33 +427,41 @@ export function DirectoriesList(props: DirectoriesListProps) {
   ): ReactElement => {
     const directoryPinned = isPinnedDirectory(directory);
     const directoryDraggable =
-      directoryDragEnabled &&
-      isPinnableDirectoryKind(directory) &&
+      directoryDragEnabled
+      && isPinnableDirectoryKind(directory)
       // Unpinned directories only become draggable when at least one
       // directory is already pinned (matches the thread-pin pattern:
       // first pin lives via context menu, drag is reordering).
-      (directoryPinned || pinnedDirectories.length > 0);
+      && (directoryPinned || pinnedDirectories.length > 0);
     const isDirectoryDropTarget =
       directoryDropIndicator?.targetKey === directory.key;
 
     const selectedLaunchpad =
       props.selectedItemKey === buildLaunchpadSelectionKey(directory.key);
     const selectedThreadInDirectory = directory.threadKeys.includes(
-      props.selectedItemKey ?? ""
+      props.selectedItemKey ?? "",
     );
     const expanded =
-      expandedByKey[directory.key] ??
-      (selectedLaunchpad || selectedThreadInDirectory);
+      expandedByKey[directory.key]
+      ?? (selectedLaunchpad || selectedThreadInDirectory);
     const visibleThreads = directory.threadKeys
       .map((threadKey) => threadsByKey.get(threadKey))
       .filter((thread): thread is NavigationThreadSummary => Boolean(thread));
     const visibleThreadKeys = new Set(
-      visibleThreads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+      visibleThreads.map((thread) =>
+        buildThreadIdentityKey(thread.source, thread.id),
+      ),
     );
-    const childThreadsByParentKey = new Map<string, NavigationThreadSummary[]>();
+    const childThreadsByParentKey = new Map<
+      string,
+      NavigationThreadSummary[]
+    >();
     for (const thread of visibleThreads) {
       if (!thread.parentThreadId) continue;
-      const parentKey = buildThreadIdentityKey(thread.source, thread.parentThreadId);
+      const parentKey = buildThreadIdentityKey(
+        thread.source,
+        thread.parentThreadId,
+      );
       if (!visibleThreadKeys.has(parentKey)) continue;
       const children = childThreadsByParentKey.get(parentKey) ?? [];
       children.push(thread);
@@ -454,11 +469,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
     }
     const topLevelVisibleThreads = visibleThreads.filter((thread) => {
       if (!thread.parentThreadId) return true;
-      return !visibleThreadKeys.has(buildThreadIdentityKey(thread.source, thread.parentThreadId));
+      return !visibleThreadKeys.has(
+        buildThreadIdentityKey(thread.source, thread.parentThreadId),
+      );
     });
-    const renderStaticSubthreads = (parent: NavigationThreadSummary): ReactElement | null => {
+    const renderStaticSubthreads = (
+      parent: NavigationThreadSummary,
+    ): ReactElement | null => {
       const parentKey = buildThreadIdentityKey(parent.source, parent.id);
-      const children = sortSubthreadSummaries(parent, childThreadsByParentKey.get(parentKey) ?? []);
+      const children = sortSubthreadSummaries(
+        parent,
+        childThreadsByParentKey.get(parentKey) ?? [],
+      );
       if (children.length === 0 || parent.subthreadsCollapsed) {
         return null;
       }
@@ -472,98 +494,112 @@ export function DirectoriesList(props: DirectoriesListProps) {
       const reorderable =
         children.length > 1 && Boolean(props.onUpdateSubthreadOrder);
       return (
-        <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`}>
+        <div
+          className="subthread-list subthread-list--compact"
+          role="list"
+          aria-label={`Sub-threads of ${parent.title}`}
+        >
           {children.map((child) => {
             const childKey = buildThreadIdentityKey(child.source, child.id);
             const rowDropKey = `subthread:${parentKey}:${childKey}`;
             return (
-            <ThreadRow
-              key={`${directory.key}:${childKey}`}
-              approvalRequestThreadKeys={props.approvalRequestThreadKeys}
-              inputRequestThreadKeys={props.inputRequestThreadKeys}
-              composerSourceThreadKey={props.composerSourceThreadKey}
-              compact
-              draggable={reorderable}
-              dropIndicator={
-                subthreadDropIndicator?.targetKey === rowDropKey
-                  ? subthreadDropIndicator.position
-                  : undefined
-              }
-              includeLinkedDirectories
-              linkedDirectoryMode="kind"
-              nested
-              selectedThreadKey={props.selectedItemKey}
-              thinkingThreadKeys={props.thinkingThreadKeys}
-              thread={child}
-              onDragStartThread={(event) => {
-                setDraggedSubthreadKey(childKey);
-                event.dataTransfer.effectAllowed = "move";
-                // Subthread-only MIME — top-level drop handlers read
-                // `text/plain` and so ignore a child reorder drag.
-                event.dataTransfer.setData(
-                  "application/x-pwragent-subthread",
-                  childKey,
-                );
-              }}
-              onDragOverThread={(event) => {
-                event.preventDefault();
-                const draggedThread = draggedSubthreadKey
-                  ? threadsByKey.get(draggedSubthreadKey)
-                  : undefined;
-                if (!draggedThread || draggedThread.parentThreadId !== parent.id) {
-                  event.dataTransfer.dropEffect = "none";
+              <ThreadRow
+                key={`${directory.key}:${childKey}`}
+                approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                inputRequestThreadKeys={props.inputRequestThreadKeys}
+                composerSourceThreadKey={props.composerSourceThreadKey}
+                compact
+                draggable={reorderable}
+                dropIndicator={
+                  subthreadDropIndicator?.targetKey === rowDropKey
+                    ? subthreadDropIndicator.position
+                    : undefined
+                }
+                includeLinkedDirectories
+                linkedDirectoryMode="kind"
+                nested
+                selectedThreadKey={props.selectedItemKey}
+                thinkingThreadKeys={props.thinkingThreadKeys}
+                thread={child}
+                onDragStartThread={(event) => {
+                  setDraggedSubthreadKey(childKey);
+                  event.dataTransfer.effectAllowed = "move";
+                  // Subthread-only MIME — top-level drop handlers read
+                  // `text/plain` and so ignore a child reorder drag.
+                  event.dataTransfer.setData(
+                    "application/x-pwragent-subthread",
+                    childKey,
+                  );
+                }}
+                onDragOverThread={(event) => {
+                  event.preventDefault();
+                  const draggedThread = draggedSubthreadKey
+                    ? threadsByKey.get(draggedSubthreadKey)
+                    : undefined;
+                  if (
+                    !draggedThread
+                    || draggedThread.parentThreadId !== parent.id
+                  ) {
+                    event.dataTransfer.dropEffect = "none";
+                    setSubthreadDropIndicator(undefined);
+                    return;
+                  }
+                  event.dataTransfer.dropEffect = "move";
+                  setSubthreadDropIndicator({
+                    targetKey: rowDropKey,
+                    position: getDropIndicatorPosition(event),
+                  });
+                }}
+                onDragLeaveThread={(event) => {
+                  if (didDragLeaveCurrentTarget(event)) {
+                    setSubthreadDropIndicator(undefined);
+                  }
+                }}
+                onDragEndThread={() => {
+                  setDraggedSubthreadKey(undefined);
                   setSubthreadDropIndicator(undefined);
-                  return;
-                }
-                event.dataTransfer.dropEffect = "move";
-                setSubthreadDropIndicator({
-                  targetKey: rowDropKey,
-                  position: getDropIndicatorPosition(event),
-                });
-              }}
-              onDragLeaveThread={(event) => {
-                if (didDragLeaveCurrentTarget(event)) {
+                }}
+                onDropOnThread={(event) => {
+                  event.preventDefault();
+                  setDraggedSubthreadKey(undefined);
                   setSubthreadDropIndicator(undefined);
+                  const draggedKey = event.dataTransfer.getData(
+                    "application/x-pwragent-subthread",
+                  );
+                  const draggedThread = draggedKey
+                    ? threadsByKey.get(draggedKey)
+                    : undefined;
+                  if (
+                    !draggedThread
+                    || draggedThread.parentThreadId !== parent.id
+                  ) {
+                    return;
+                  }
+                  const nextKeys = moveThreadKey(
+                    childOrderKeys,
+                    draggedKey,
+                    childKey,
+                    getDropIndicatorPosition(event),
+                  );
+                  void props.onUpdateSubthreadOrder?.(
+                    parent,
+                    nextKeys
+                      .map((key) => parseThreadIdentityKey(key)?.threadId)
+                      .filter((threadId): threadId is string =>
+                        Boolean(threadId),
+                      ),
+                  );
+                }}
+                onOpenContextMenu={props.onOpenThreadContextMenu}
+                onOpenPullRequestContextMenu={
+                  props.onOpenPullRequestContextMenu
                 }
-              }}
-              onDragEndThread={() => {
-                setDraggedSubthreadKey(undefined);
-                setSubthreadDropIndicator(undefined);
-              }}
-              onDropOnThread={(event) => {
-                event.preventDefault();
-                setDraggedSubthreadKey(undefined);
-                setSubthreadDropIndicator(undefined);
-                const draggedKey = event.dataTransfer.getData(
-                  "application/x-pwragent-subthread",
-                );
-                const draggedThread = draggedKey
-                  ? threadsByKey.get(draggedKey)
-                  : undefined;
-                if (!draggedThread || draggedThread.parentThreadId !== parent.id) {
-                  return;
-                }
-                const nextKeys = moveThreadKey(
-                  childOrderKeys,
-                  draggedKey,
-                  childKey,
-                  getDropIndicatorPosition(event),
-                );
-                void props.onUpdateSubthreadOrder?.(
-                  parent,
-                  nextKeys
-                    .map((key) => parseThreadIdentityKey(key)?.threadId)
-                    .filter((threadId): threadId is string => Boolean(threadId)),
-                );
-              }}
-              onOpenContextMenu={props.onOpenThreadContextMenu}
-              onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
-              onDetachPullRequest={props.onDetachPullRequest}
-              onPrefetchPullRequests={props.onPrefetchPullRequests}
-              onSelectThread={props.onSelectThread}
-              onSetReaction={props.onSetReaction}
-              onUnbindMessagingBinding={props.onUnbindMessagingBinding}
-            />
+                onDetachPullRequest={props.onDetachPullRequest}
+                onPrefetchPullRequests={props.onPrefetchPullRequests}
+                onSelectThread={props.onSelectThread}
+                onSetReaction={props.onSetReaction}
+                onUnbindMessagingBinding={props.onUnbindMessagingBinding}
+              />
             );
           })}
         </div>
@@ -588,8 +624,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // toggle still wins (`??`), so the user can deliberately collapse.
     const selectedUnpinnedInOverflow = overflowUnpinnedThreads.some(
       (thread) =>
-        buildThreadIdentityKey(thread.source, thread.id) ===
-        props.selectedItemKey,
+        buildThreadIdentityKey(thread.source, thread.id)
+        === props.selectedItemKey,
     );
     const unpinnedExpanded =
       unpinnedExpandedByKey[directory.key] ?? selectedUnpinnedInOverflow;
@@ -670,8 +706,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 // drags don't set this state, so they fall through
                 // and the inner thread-row handlers take over.
                 const draggedKey =
-                  draggedDirectoryKey ??
-                  event.dataTransfer.getData(
+                  draggedDirectoryKey
+                  ?? event.dataTransfer.getData(
                     "application/x-pwragent-directory",
                   );
                 if (!draggedKey || draggedKey === directory.key) {
@@ -679,8 +715,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 }
                 const draggedDirectory = directoryByKey.get(draggedKey);
                 if (
-                  !draggedDirectory ||
-                  !isPinnableDirectoryKind(draggedDirectory)
+                  !draggedDirectory
+                  || !isPinnableDirectoryKind(draggedDirectory)
                 ) {
                   return;
                 }
@@ -707,8 +743,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
           directoryDragEnabled
             ? (event) => {
                 const draggedKey =
-                  draggedDirectoryKey ??
-                  event.dataTransfer.getData(
+                  draggedDirectoryKey
+                  ?? event.dataTransfer.getData(
                     "application/x-pwragent-directory",
                   );
                 // Bail without consuming the event for non-directory
@@ -726,8 +762,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 }
                 const draggedDirectory = directoryByKey.get(draggedKey);
                 if (
-                  !draggedDirectory ||
-                  !isPinnableDirectoryKind(draggedDirectory)
+                  !draggedDirectory
+                  || !isPinnableDirectoryKind(draggedDirectory)
                 ) {
                   return;
                 }
@@ -826,8 +862,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
               // on its own, so we can never get stuck in a
               // permanently-suppressed state.
               if (
-                Date.now() - lastDirectoryDragEndedAtRef.current <
-                POST_DRAG_CLICK_SUPPRESS_MS
+                Date.now() - lastDirectoryDragEndedAtRef.current
+                < POST_DRAG_CLICK_SUPPRESS_MS
               ) {
                 return;
               }
@@ -892,198 +928,215 @@ export function DirectoriesList(props: DirectoriesListProps) {
             }`}
             type="button"
             onClick={() => {
-              void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
+              void props.onOpenLaunchpad(
+                directory,
+                directory.launchpad?.backend,
+              );
             }}
           >
             <NewThreadIcon size={16} />
           </button>
         </div>
 
-            {expanded ? (
-              <div className="directory-row__details">
-                {visibleThreads.length > 0 ? (
-                  <div className="sidebar-list sidebar-list--compact directory-row__threads">
-                    {directoryPinnedThreads.map((thread) => {
-	                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-	                      const rowDropKey = `${directory.key}:${threadKey}`;
-                          const subthreadCount =
-                            childThreadsByParentKey.get(threadKey)?.length ?? 0;
-	                      return (
-                            <Fragment key={`${directory.key}:${threadKey}`}>
-	                        <ThreadRow
-	                          key={`${directory.key}:${threadKey}`}
-                          approvalRequestThreadKeys={props.approvalRequestThreadKeys}
-                          inputRequestThreadKeys={props.inputRequestThreadKeys}
-                          composerSourceThreadKey={props.composerSourceThreadKey}
-                          compact
-                          dropIndicator={
-                            dropIndicator?.targetKey === rowDropKey
-                              ? dropIndicator.position
-                              : undefined
-                          }
-                          draggable={Boolean(props.onReorderThreadPins)}
-                          includeLinkedDirectories
-                          linkedDirectoryMode="kind"
-	                          selectedThreadKey={props.selectedItemKey}
-                              subthreadCount={subthreadCount}
-                              subthreadsCollapsed={thread.subthreadsCollapsed === true}
-	                          thinkingThreadKeys={props.thinkingThreadKeys}
-	                          thread={thread}
-                              onToggleSubthreads={
-                                subthreadCount > 0 && props.onSetSubthreadsCollapsed
-                                  ? () =>
-                                      void props.onSetSubthreadsCollapsed!(
-                                        thread,
-                                        thread.subthreadsCollapsed !== true,
-                                      )
-                                  : undefined
-                              }
-                          onDragOverThread={(event) => {
-                            event.preventDefault();
-                            const draggedThread = draggedThreadKey
-                              ? threadsByKey.get(draggedThreadKey)
-                              : undefined;
-                            if (
-                              !draggedThreadKey ||
-                              !draggedThread ||
-                              !directory.threadKeys.includes(draggedThreadKey)
-                            ) {
-                              event.dataTransfer.dropEffect = "none";
-                              setDropIndicator(undefined);
-                              return;
-                            }
-
-                            event.dataTransfer.dropEffect = "move";
-                            setDropIndicator({
-                              targetKey: rowDropKey,
-                              position: getDropIndicatorPosition(event),
-                            });
-                            setDividerDropTarget(undefined);
-                          }}
-                          onDragStartThread={(event) => {
-                            setDraggedThreadKey(threadKey);
-                            event.dataTransfer.effectAllowed = "move";
-                            event.dataTransfer.setData("text/plain", threadKey);
-                          }}
-                          onDragLeaveThread={(event) => {
-                            if (didDragLeaveCurrentTarget(event)) {
-                              setDropIndicator(undefined);
-                            }
-                          }}
-                          onDragEndThread={() => {
-                            setDraggedThreadKey(undefined);
-                            setDropIndicator(undefined);
-                            setDividerDropTarget(undefined);
-                          }}
-                          onDropOnThread={(event) => {
-                            event.preventDefault();
-                            setDraggedThreadKey(undefined);
-                            setDropIndicator(undefined);
-                            setDividerDropTarget(undefined);
-                            const draggedKey = event.dataTransfer.getData("text/plain");
-                            if (!draggedKey) return;
-                            const position = getDropIndicatorPosition(event);
-                            moveDirectoryPin(
-                              directory,
-                              draggedKey,
-                              threadKey,
-                              position,
-                            );
-                          }}
-                          onMovePinnedThread={(pinnedThread, direction) => {
-                            movePinnedThreadByKeyboard(
-                              directory,
-                              pinnedThread,
-                              direction,
-                            );
-                          }}
-                          onOpenContextMenu={props.onOpenThreadContextMenu}
-                          onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
-                          onDetachPullRequest={props.onDetachPullRequest}
-                          onPrefetchPullRequests={props.onPrefetchPullRequests}
-                          onSelectThread={props.onSelectThread}
-                          onSetReaction={props.onSetReaction}
-	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
-	                        />
-                              {renderStaticSubthreads(thread)}
-                            </Fragment>
-	                      );
-                    })}
-
-                    {directoryPinnedThreads.length > 0 &&
-                    directoryUnpinnedThreads.length > 0 ? (
-                      <div
-                        className={`recents-pinned-divider directory-row__thread-divider${
-                          dividerDropTarget === directory.key
-                            ? " is-drop-target"
-                            : ""
-                        }`}
-                        role="separator"
-                        aria-label={`Directory threads for ${directory.label}`}
-                        onDragOver={(event) => {
+        {expanded ? (
+          <div className="directory-row__details">
+            {visibleThreads.length > 0 ? (
+              <div className="sidebar-list sidebar-list--compact directory-row__threads">
+                {directoryPinnedThreads.map((thread) => {
+                  const threadKey = buildThreadIdentityKey(
+                    thread.source,
+                    thread.id,
+                  );
+                  const rowDropKey = `${directory.key}:${threadKey}`;
+                  const subthreadCount =
+                    childThreadsByParentKey.get(threadKey)?.length ?? 0;
+                  return (
+                    <Fragment key={`${directory.key}:${threadKey}`}>
+                      <ThreadRow
+                        key={`${directory.key}:${threadKey}`}
+                        approvalRequestThreadKeys={
+                          props.approvalRequestThreadKeys
+                        }
+                        inputRequestThreadKeys={props.inputRequestThreadKeys}
+                        composerSourceThreadKey={props.composerSourceThreadKey}
+                        compact
+                        dropIndicator={
+                          dropIndicator?.targetKey === rowDropKey
+                            ? dropIndicator.position
+                            : undefined
+                        }
+                        draggable={Boolean(props.onReorderThreadPins)}
+                        includeLinkedDirectories
+                        linkedDirectoryMode="kind"
+                        selectedThreadKey={props.selectedItemKey}
+                        subthreadCount={subthreadCount}
+                        subthreadsCollapsed={
+                          thread.subthreadsCollapsed === true
+                        }
+                        thinkingThreadKeys={props.thinkingThreadKeys}
+                        thread={thread}
+                        onToggleSubthreads={
+                          subthreadCount > 0 && props.onSetSubthreadsCollapsed
+                            ? () =>
+                                void props.onSetSubthreadsCollapsed!(
+                                  thread,
+                                  thread.subthreadsCollapsed !== true,
+                                )
+                            : undefined
+                        }
+                        onDragOverThread={(event) => {
                           event.preventDefault();
+                          const draggedThread = draggedThreadKey
+                            ? threadsByKey.get(draggedThreadKey)
+                            : undefined;
                           if (
-                            !draggedThreadKey ||
-                            !directory.threadKeys.includes(draggedThreadKey)
+                            !draggedThreadKey
+                            || !draggedThread
+                            || !directory.threadKeys.includes(draggedThreadKey)
                           ) {
                             event.dataTransfer.dropEffect = "none";
-                            setDividerDropTarget(undefined);
+                            setDropIndicator(undefined);
                             return;
                           }
 
                           event.dataTransfer.dropEffect = "move";
-                          setDropIndicator(undefined);
-                          setDividerDropTarget(directory.key);
+                          setDropIndicator({
+                            targetKey: rowDropKey,
+                            position: getDropIndicatorPosition(event),
+                          });
+                          setDividerDropTarget(undefined);
                         }}
-                        onDragLeave={(event) => {
+                        onDragStartThread={(event) => {
+                          setDraggedThreadKey(threadKey);
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("text/plain", threadKey);
+                        }}
+                        onDragLeaveThread={(event) => {
                           if (didDragLeaveCurrentTarget(event)) {
-                            setDividerDropTarget(undefined);
+                            setDropIndicator(undefined);
                           }
                         }}
-                        onDrop={(event) => {
+                        onDragEndThread={() => {
+                          setDraggedThreadKey(undefined);
+                          setDropIndicator(undefined);
+                          setDividerDropTarget(undefined);
+                        }}
+                        onDropOnThread={(event) => {
                           event.preventDefault();
                           setDraggedThreadKey(undefined);
+                          setDropIndicator(undefined);
                           setDividerDropTarget(undefined);
-                          dropThreadAfterDirectoryPins(
+                          const draggedKey =
+                            event.dataTransfer.getData("text/plain");
+                          if (!draggedKey) return;
+                          const position = getDropIndicatorPosition(event);
+                          moveDirectoryPin(
                             directory,
-                            event.dataTransfer.getData("text/plain"),
+                            draggedKey,
+                            threadKey,
+                            position,
                           );
                         }}
-                      >
-                        <span>Directory threads</span>
-                      </div>
-                    ) : null}
-
-                    {cappedUnpinnedThreads.map(renderUnpinnedRow)}
-                    {hiddenUnpinnedCount > 0 ? (
-                      <button
-                        type="button"
-                        className="directory-row__show-more"
-                        aria-expanded={unpinnedExpanded}
-                        onClick={() =>
-                          setUnpinnedExpandedByKey((prev) => ({
-                            ...prev,
-                            [directory.key]: !unpinnedExpanded,
-                          }))
+                        onMovePinnedThread={(pinnedThread, direction) => {
+                          movePinnedThreadByKeyboard(
+                            directory,
+                            pinnedThread,
+                            direction,
+                          );
+                        }}
+                        onOpenContextMenu={props.onOpenThreadContextMenu}
+                        onOpenPullRequestContextMenu={
+                          props.onOpenPullRequestContextMenu
                         }
-                      >
-                        {unpinnedExpanded
-                          ? "Show less"
-                          : `Show ${hiddenUnpinnedCount} more`}
-                      </button>
-                    ) : null}
-                    {unpinnedExpanded
-                      ? overflowUnpinnedThreads.map(renderUnpinnedRow)
-                      : null}
+                        onDetachPullRequest={props.onDetachPullRequest}
+                        onPrefetchPullRequests={props.onPrefetchPullRequests}
+                        onSelectThread={props.onSelectThread}
+                        onSetReaction={props.onSetReaction}
+                        onUnbindMessagingBinding={
+                          props.onUnbindMessagingBinding
+                        }
+                      />
+                      {renderStaticSubthreads(thread)}
+                    </Fragment>
+                  );
+                })}
+
+                {directoryPinnedThreads.length > 0
+                && directoryUnpinnedThreads.length > 0 ? (
+                  <div
+                    className={`recents-pinned-divider directory-row__thread-divider${
+                      dividerDropTarget === directory.key
+                        ? " is-drop-target"
+                        : ""
+                    }`}
+                    role="separator"
+                    aria-label={`Directory threads for ${directory.label}`}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      if (
+                        !draggedThreadKey
+                        || !directory.threadKeys.includes(draggedThreadKey)
+                      ) {
+                        event.dataTransfer.dropEffect = "none";
+                        setDividerDropTarget(undefined);
+                        return;
+                      }
+
+                      event.dataTransfer.dropEffect = "move";
+                      setDropIndicator(undefined);
+                      setDividerDropTarget(directory.key);
+                    }}
+                    onDragLeave={(event) => {
+                      if (didDragLeaveCurrentTarget(event)) {
+                        setDividerDropTarget(undefined);
+                      }
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      setDraggedThreadKey(undefined);
+                      setDividerDropTarget(undefined);
+                      dropThreadAfterDirectoryPins(
+                        directory,
+                        event.dataTransfer.getData("text/plain"),
+                      );
+                    }}
+                  >
+                    <span>Directory threads</span>
                   </div>
-                ) : (
-                  <p className="sidebar-empty directory-row__empty">No threads in this directory yet.</p>
-                )}
+                ) : null}
+
+                {cappedUnpinnedThreads.map(renderUnpinnedRow)}
+                {hiddenUnpinnedCount > 0 ? (
+                  <button
+                    type="button"
+                    className="directory-row__show-more"
+                    aria-expanded={unpinnedExpanded}
+                    onClick={() =>
+                      setUnpinnedExpandedByKey((prev) => ({
+                        ...prev,
+                        [directory.key]: !unpinnedExpanded,
+                      }))
+                    }
+                  >
+                    {unpinnedExpanded
+                      ? "Show less"
+                      : `Show ${hiddenUnpinnedCount} more`}
+                  </button>
+                ) : null}
+                {unpinnedExpanded
+                  ? overflowUnpinnedThreads.map(renderUnpinnedRow)
+                  : null}
               </div>
-            ) : null}
-          </section>
-        );
-      };
+            ) : (
+              <p className="sidebar-empty directory-row__empty">
+                No threads in this directory yet.
+              </p>
+            )}
+          </div>
+        ) : null}
+      </section>
+    );
+  };
 
   return (
     <div className="directory-list sidebar-list sidebar-list--dense">
@@ -1097,17 +1150,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
           aria-label="Unpinned directories"
           onDragOver={(event) => {
             const draggedKey =
-              draggedDirectoryKey ??
-              event.dataTransfer.getData("application/x-pwragent-directory");
+              draggedDirectoryKey
+              ?? event.dataTransfer.getData("application/x-pwragent-directory");
             if (!draggedKey) return;
             const draggedDirectory = directoryByKey.get(draggedKey);
             // Only allow promote-to-pinned drops here. Pinned →
             // divider should be a no-op (unpin happens via the
             // unpinned-section's drop target, or context menu).
             if (
-              !draggedDirectory ||
-              !isPinnableDirectoryKind(draggedDirectory) ||
-              pinnedDirectoryKeys.includes(draggedKey)
+              !draggedDirectory
+              || !isPinnableDirectoryKind(draggedDirectory)
+              || pinnedDirectoryKeys.includes(draggedKey)
             ) {
               event.dataTransfer.dropEffect = "none";
               setDirectoriesPinnedDividerDropTarget(false);
@@ -1126,17 +1179,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
           onDrop={(event) => {
             event.preventDefault();
             const draggedKey =
-              draggedDirectoryKey ??
-              event.dataTransfer.getData("application/x-pwragent-directory");
+              draggedDirectoryKey
+              ?? event.dataTransfer.getData("application/x-pwragent-directory");
             setDraggedDirectoryKey(undefined);
             setDirectoriesPinnedDividerDropTarget(false);
             lastDirectoryDragEndedAtRef.current = Date.now();
             if (!draggedKey) return;
             const draggedDirectory = directoryByKey.get(draggedKey);
             if (
-              !draggedDirectory ||
-              !isPinnableDirectoryKind(draggedDirectory) ||
-              pinnedDirectoryKeys.includes(draggedKey)
+              !draggedDirectory
+              || !isPinnableDirectoryKind(draggedDirectory)
+              || pinnedDirectoryKeys.includes(draggedKey)
             ) {
               return;
             }

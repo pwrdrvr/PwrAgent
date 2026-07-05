@@ -43,7 +43,9 @@ function createOverlayStoreMock() {
 function createPassiveClient() {
   return {
     close: async () => undefined,
-    getInitializeResult: async () => ({ methods: ["thread/list", "thread/read"] }),
+    getInitializeResult: async () => ({
+      methods: ["thread/list", "thread/read"],
+    }),
     listThreads: async () => [],
     listSkills: async () => [],
     onNotification: () => () => undefined,
@@ -57,7 +59,10 @@ function createPassiveClient() {
     }),
     startThread: async () => ({ threadId: "noop-thread" }),
     startTurn: async () => ({ threadId: "noop-thread", turnId: "noop-turn" }),
-    interruptTurn: async () => ({ threadId: "noop-thread", turnId: "noop-turn" }),
+    interruptTurn: async () => ({
+      threadId: "noop-thread",
+      turnId: "noop-turn",
+    }),
   };
 }
 
@@ -66,7 +71,7 @@ describe("DesktopBackendRegistry replay integration", () => {
     const replayClient = ReplayClient.fromFixture({
       metadata: {
         backend: "codex",
-        scenario: "registry-replay"
+        scenario: "registry-replay",
       },
       steps: [
         {
@@ -76,10 +81,10 @@ describe("DesktopBackendRegistry replay integration", () => {
           result: {
             serverInfo: {
               name: "Replay Codex",
-              version: "1.0.0"
+              version: "1.0.0",
             },
-            methods: ["thread/read"]
-          }
+            methods: ["thread/read"],
+          },
         },
         {
           id: "read-1",
@@ -92,7 +97,7 @@ describe("DesktopBackendRegistry replay integration", () => {
               supportsPagination: false,
               hasPreviousPage: false,
             },
-          }
+          },
         },
         {
           id: "notif-1",
@@ -105,10 +110,10 @@ describe("DesktopBackendRegistry replay integration", () => {
               turn: {
                 id: "turn-1",
                 status: "completed",
-                output: [{ type: "text", text: "Done." }]
-              }
-            }
-          }
+                output: [{ type: "text", text: "Done." }],
+              },
+            },
+          },
         },
         {
           id: "req-1",
@@ -118,11 +123,11 @@ describe("DesktopBackendRegistry replay integration", () => {
             params: {
               threadId: "thread-1",
               turnId: "turn-1",
-              requestId: "approval-1"
-            }
-          }
-        }
-      ]
+              requestId: "approval-1",
+            },
+          },
+        },
+      ],
     });
 
     const registry = new DesktopBackendRegistry({
@@ -138,13 +143,13 @@ describe("DesktopBackendRegistry replay integration", () => {
     await expect(
       registry.readThread({
         backend: "codex",
-        threadId: "thread-1"
-      })
+        threadId: "thread-1",
+      }),
     ).resolves.toEqual(
       expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
-      })
+      }),
     );
 
     await replayClient.advance({ stepId: "notif-1" });
@@ -153,8 +158,8 @@ describe("DesktopBackendRegistry replay integration", () => {
     await replayClient.advance({ stepId: "req-1" });
     expect(replayClient.getPendingRequest()).toMatchObject({
       params: {
-        requestId: "approval-1"
-      }
+        requestId: "approval-1",
+      },
     });
 
     await registry.submitServerRequest({
@@ -163,8 +168,8 @@ describe("DesktopBackendRegistry replay integration", () => {
       turnId: "turn-1",
       requestId: "approval-1",
       response: {
-        decision: "approve"
-      }
+        decision: "approve",
+      },
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -176,7 +181,7 @@ describe("DesktopBackendRegistry replay integration", () => {
     const replayClient = ReplayClient.fromFixture({
       metadata: {
         backend: "codex",
-        scenario: "registry-user-input-replay"
+        scenario: "registry-user-input-replay",
       },
       steps: [
         {
@@ -186,10 +191,10 @@ describe("DesktopBackendRegistry replay integration", () => {
           result: {
             serverInfo: {
               name: "Replay Codex",
-              version: "1.0.0"
+              version: "1.0.0",
             },
-            methods: ["thread/read"]
-          }
+            methods: ["thread/read"],
+          },
         },
         {
           id: "read-1",
@@ -202,7 +207,7 @@ describe("DesktopBackendRegistry replay integration", () => {
               supportsPagination: false,
               hasPreviousPage: false,
             },
-          }
+          },
         },
         {
           id: "req-input-1",
@@ -224,19 +229,19 @@ describe("DesktopBackendRegistry replay integration", () => {
                   options: [
                     {
                       label: "Small patch (Recommended)",
-                      description: "Keep this scoped."
+                      description: "Keep this scoped.",
                     },
                     {
                       label: "Large refactor",
-                      description: "Touch adjacent flows."
-                    }
-                  ]
-                }
-              ]
-            }
-          }
-        }
-      ]
+                      description: "Touch adjacent flows.",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      ],
     });
 
     const registry = new DesktopBackendRegistry({
@@ -244,7 +249,8 @@ describe("DesktopBackendRegistry replay integration", () => {
       grokClient: createPassiveClient() as any,
       overlayStore: createOverlayStoreMock(),
     });
-    const events: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const events: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
     registry.onEvent((event) => {
       events.push({
         method: event.notification.method,
@@ -254,7 +260,7 @@ describe("DesktopBackendRegistry replay integration", () => {
 
     await registry.readThread({
       backend: "codex",
-      threadId: "thread-1"
+      threadId: "thread-1",
     });
     await replayClient.advance({ stepId: "req-input-1" });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -268,14 +274,16 @@ describe("DesktopBackendRegistry replay integration", () => {
       itemId: "input-1",
     });
     const [question] =
-      (inputEvent?.params.questions as Array<{
-        id?: string;
-        options?: Array<{ label?: string }>;
-      }> | undefined) ?? [];
+      (inputEvent?.params.questions as
+        | Array<{
+            id?: string;
+            options?: Array<{ label?: string }>;
+          }>
+        | undefined) ?? [];
     expect(question?.id).toBe("approach");
     expect(question?.options?.map((option) => option.label)).toEqual([
       "Small patch (Recommended)",
-      "Large refactor"
+      "Large refactor",
     ]);
 
     await registry.submitServerRequest({
@@ -286,10 +294,10 @@ describe("DesktopBackendRegistry replay integration", () => {
       response: {
         answers: {
           approach: {
-            answers: ["Small patch (Recommended)"]
-          }
-        }
-      }
+            answers: ["Small patch (Recommended)"],
+          },
+        },
+      },
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -301,7 +309,7 @@ describe("DesktopBackendRegistry replay integration", () => {
     const replayClient = ReplayClient.fromFixture({
       metadata: {
         backend: "codex",
-        scenario: "registry-mcp-elicitation-replay"
+        scenario: "registry-mcp-elicitation-replay",
       },
       steps: [
         {
@@ -311,10 +319,10 @@ describe("DesktopBackendRegistry replay integration", () => {
           result: {
             serverInfo: {
               name: "Replay Codex",
-              version: "1.0.0"
+              version: "1.0.0",
             },
-            methods: ["thread/read"]
-          }
+            methods: ["thread/read"],
+          },
         },
         {
           id: "read-1",
@@ -327,7 +335,7 @@ describe("DesktopBackendRegistry replay integration", () => {
               supportsPagination: false,
               hasPreviousPage: false,
             },
-          }
+          },
         },
         {
           id: "req-mcp-1",
@@ -341,23 +349,25 @@ describe("DesktopBackendRegistry replay integration", () => {
               serverName: "playwright",
               mode: "form",
               _meta: {
-                tool_description: "List, create, close, or select a browser tab.",
+                tool_description:
+                  "List, create, close, or select a browser tab.",
                 tool_params_display: [
                   {
                     label: "action",
-                    value: "list"
-                  }
-                ]
+                    value: "list",
+                  },
+                ],
               },
-              message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+              message:
+                'Allow the playwright MCP server to run tool "browser_tabs"?',
               requestedSchema: {
                 type: "object",
-                properties: {}
-              }
-            }
-          }
-        }
-      ]
+                properties: {},
+              },
+            },
+          },
+        },
+      ],
     });
 
     const registry = new DesktopBackendRegistry({
@@ -365,7 +375,8 @@ describe("DesktopBackendRegistry replay integration", () => {
       grokClient: createPassiveClient() as any,
       overlayStore: createOverlayStoreMock(),
     });
-    const events: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const events: Array<{ method: string; params: Record<string, unknown> }> =
+      [];
     registry.onEvent((event) => {
       events.push({
         method: event.notification.method,
@@ -375,7 +386,7 @@ describe("DesktopBackendRegistry replay integration", () => {
 
     await registry.readThread({
       backend: "codex",
-      threadId: "thread-1"
+      threadId: "thread-1",
     });
     await replayClient.advance({ stepId: "req-mcp-1" });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -388,11 +399,11 @@ describe("DesktopBackendRegistry replay integration", () => {
       requestId: "mcp-request-1",
       serverName: "playwright",
       mode: "form",
-      message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+      message: 'Allow the playwright MCP server to run tool "browser_tabs"?',
       requestedSchema: {
         type: "object",
-        properties: {}
-      }
+        properties: {},
+      },
     });
 
     await registry.submitServerRequest({
@@ -403,8 +414,8 @@ describe("DesktopBackendRegistry replay integration", () => {
       response: {
         action: "accept",
         content: {},
-        _meta: null
-      }
+        _meta: null,
+      },
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
 

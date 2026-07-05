@@ -113,10 +113,12 @@ describe("messaging skills browser", () => {
     });
 
     expect(intent.prompt).toBe("Skills");
-    expect(intent.fallbackText).toBe([
-      "1. $ce:work - Execute implementation plans",
-      "Reply with a number, Search, Back, Next, Prev, or Cancel.",
-    ].join("\n"));
+    expect(intent.fallbackText).toBe(
+      [
+        "1. $ce:work - Execute implementation plans",
+        "Reply with a number, Search, Back, Next, Prev, or Cancel.",
+      ].join("\n"),
+    );
   });
 
   it("ranks name matches before description matches while preserving source order", () => {
@@ -189,9 +191,8 @@ describe("messaging skills browser", () => {
     });
 
     expect(intent.prompt).toBe('Skills matching "missing"\nNo skills matched.');
-    expect(intent.fallbackText).toBe([
-      "No skills matched.",
-      "Reply Back, Search, or Cancel.",
-    ].join("\n"));
+    expect(intent.fallbackText).toBe(
+      ["No skills matched.", "Reply Back, Search, or Cancel."].join("\n"),
+    );
   });
 });

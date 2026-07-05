@@ -16,7 +16,7 @@ function makePerformanceTimeline(params: {
         return Array.from({ length: params.markCount });
       }
       return [];
-    })
+    }),
   };
 }
 
@@ -24,19 +24,19 @@ describe("installDevPerformancePruning", () => {
   it("leaves small user timing buffers alone", () => {
     const performance = makePerformanceTimeline({
       markCount: 2,
-      measureCount: 3
+      measureCount: 3,
     });
     const intervalId = 42;
     const timerApi = {
       setInterval: vi.fn(() => intervalId),
-      clearInterval: vi.fn()
+      clearInterval: vi.fn(),
     };
 
     const handle = installDevPerformancePruning({
       maxMarks: 10,
       maxMeasures: 10,
       performance,
-      timerApi
+      timerApi,
     });
 
     expect(handle.prune()).toBe(0);
@@ -50,7 +50,7 @@ describe("installDevPerformancePruning", () => {
   it("clears marks and measures once either buffer exceeds the cap", () => {
     const performance = makePerformanceTimeline({
       markCount: 11,
-      measureCount: 3
+      measureCount: 3,
     });
 
     const handle = installDevPerformancePruning({
@@ -59,8 +59,8 @@ describe("installDevPerformancePruning", () => {
       performance,
       timerApi: {
         setInterval: vi.fn(() => 7),
-        clearInterval: vi.fn()
-      }
+        clearInterval: vi.fn(),
+      },
     });
 
     expect(handle.prune()).toBe(14);

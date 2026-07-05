@@ -96,7 +96,9 @@ describe("AcpRolloutStore", () => {
       });
     }
 
-    expect(store.readUpdates({ backendId, sessionId: "session-1" })).toHaveLength(1);
+    expect(
+      store.readUpdates({ backendId, sessionId: "session-1" }),
+    ).toHaveLength(1);
   });
 
   it("coalesces adjacent streaming text chunks before writing rollout records", () => {
@@ -154,13 +156,20 @@ describe("AcpRolloutStore", () => {
       backendId,
       sessionId: "session-1",
       receivedAt: 1000,
-      update: { kind: "pwragent_user_prompt", prompt: "What is this project?", turnId: "turn-1" },
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "What is this project?",
+        turnId: "turn-1",
+      },
     });
     store.appendUpdate({
       backendId,
       sessionId: "session-1",
       receivedAt: 1001,
-      update: { kind: "agent_message_chunk", content: { type: "text", text: "It is PwrAgent." } },
+      update: {
+        kind: "agent_message_chunk",
+        content: { type: "text", text: "It is PwrAgent." },
+      },
     });
     store.appendUpdate({
       backendId,
@@ -185,14 +194,16 @@ describe("AcpRolloutStore", () => {
     expect(
       updates.some(
         (record) =>
-          (record.update.kind ?? record.update.session_update) ===
-          "user_message_chunk",
+          (record.update.kind ?? record.update.session_update)
+          === "user_message_chunk",
       ),
     ).toBe(false);
 
     const replay = store.readReplay({ backendId, sessionId: "session-1" });
     expect(
-      replay.messages.some((message) => message.text.includes("session_context")),
+      replay.messages.some((message) =>
+        message.text.includes("session_context"),
+      ),
     ).toBe(false);
     expect(replay.messages).toEqual([
       expect.objectContaining({ role: "user", text: "What is this project?" }),
@@ -240,8 +251,8 @@ describe("AcpRolloutStore", () => {
     expect(
       updates.some(
         (record) =>
-          (record.update.kind ?? record.update.session_update) ===
-          "user_message_chunk",
+          (record.update.kind ?? record.update.session_update)
+          === "user_message_chunk",
       ),
     ).toBe(false);
 
@@ -251,7 +262,9 @@ describe("AcpRolloutStore", () => {
       "pwrdrvr exists on npm.",
     ]);
     expect(
-      replay.messages.some((message) => message.text.includes("system-reminder")),
+      replay.messages.some((message) =>
+        message.text.includes("system-reminder"),
+      ),
     ).toBe(false);
   });
 });

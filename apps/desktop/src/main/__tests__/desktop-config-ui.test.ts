@@ -35,7 +35,10 @@ describe("desktop config [ui] section", () => {
   });
 
   it("omits config.ui when the section is absent", () => {
-    const config = parseDesktopSettingsToml('[general]\ndeveloper_mode = true\n', "test.toml");
+    const config = parseDesktopSettingsToml(
+      "[general]\ndeveloper_mode = true\n",
+      "test.toml",
+    );
     expect(config.ui).toBeUndefined();
   });
 
@@ -93,7 +96,7 @@ describe("desktop config [ui] section", () => {
 describe("desktop config [integrated_terminal] section", () => {
   it("reads the Windows shell preference", () => {
     const config = parseDesktopSettingsToml(
-      ['[integrated_terminal]', 'windows_shell = "powershell"', ""].join("\n"),
+      ["[integrated_terminal]", 'windows_shell = "powershell"', ""].join("\n"),
       "test.toml",
     );
 
@@ -104,7 +107,7 @@ describe("desktop config [integrated_terminal] section", () => {
 
   it("omits invalid Windows shell preferences", () => {
     const config = parseDesktopSettingsToml(
-      ['[integrated_terminal]', 'windows_shell = "bash"', ""].join("\n"),
+      ["[integrated_terminal]", 'windows_shell = "bash"', ""].join("\n"),
       "test.toml",
     );
 
@@ -133,7 +136,7 @@ describe("desktop config [integrated_terminal] section", () => {
         },
       },
       parseTomlTables(
-        ['[integrated_terminal]', 'windows_shell = "cmd"', ""].join("\n"),
+        ["[integrated_terminal]", 'windows_shell = "cmd"', ""].join("\n"),
         "test.toml",
       ),
     );

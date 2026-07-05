@@ -5,13 +5,13 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
-  NavigationThreadSummary
+  NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
 function mergeItems<T extends { id: string }>(
   olderItems: T[],
-  newerItems: T[]
+  newerItems: T[],
 ): T[] {
   const deduped = new Map<string, T>();
 
@@ -24,21 +24,27 @@ function mergeItems<T extends { id: string }>(
 
 function messageMatchesOptimisticEntry(
   message: AppServerThreadMessage,
-  entry: AppServerThreadMessageEntry
+  entry: AppServerThreadMessageEntry,
 ): boolean {
   if (message.role !== entry.role || message.text !== entry.text) {
     return false;
   }
 
-  const entryImages = (entry.parts ?? []).filter((part) => part.type === "image");
+  const entryImages = (entry.parts ?? []).filter(
+    (part) => part.type === "image",
+  );
   if (entryImages.length === 0) {
     return true;
   }
 
-  const messageImages = (message.parts ?? []).filter((part) => part.type === "image");
+  const messageImages = (message.parts ?? []).filter(
+    (part) => part.type === "image",
+  );
   return (
-    messageImages.length === entryImages.length &&
-    entryImages.every((image, index) => messageImages[index]?.url === image.url)
+    messageImages.length === entryImages.length
+    && entryImages.every(
+      (image, index) => messageImages[index]?.url === image.url,
+    )
   );
 }
 
@@ -49,7 +55,7 @@ export function useThreadTranscript(params: {
 }): {
   addOptimisticUserMessage: (
     text: string,
-    imageParts?: AppServerThreadImagePart[]
+    imageParts?: AppServerThreadImagePart[],
   ) => string;
   error?: string;
   entries: AppServerThreadEntry[];
@@ -63,7 +69,9 @@ export function useThreadTranscript(params: {
 } {
   const { desktopApi, initialHistoryLimit, thread } = params;
   const [response, setResponse] = useState<AppServerReadThreadResponse>();
-  const [optimisticEntries, setOptimisticEntries] = useState<AppServerThreadMessageEntry[]>([]);
+  const [optimisticEntries, setOptimisticEntries] = useState<
+    AppServerThreadMessageEntry[]
+  >([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string>();
@@ -96,7 +104,7 @@ export function useThreadTranscript(params: {
     setLoading(true);
     setError(undefined);
     setResponse((current) =>
-      current?.threadId === thread.id ? current : undefined
+      current?.threadId === thread.id ? current : undefined,
     );
 
     try {
@@ -105,7 +113,7 @@ export function useThreadTranscript(params: {
         ...(initialHistoryLimit !== undefined
           ? { limit: initialHistoryLimit }
           : {}),
-        threadId: thread.id
+        threadId: thread.id,
       });
       if (requestVersionRef.current !== requestVersion) {
         return;
@@ -116,7 +124,9 @@ export function useThreadTranscript(params: {
         return;
       }
       setResponse(undefined);
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
     } finally {
       if (requestVersionRef.current === requestVersion) {
         setLoading(false);
@@ -130,11 +140,11 @@ export function useThreadTranscript(params: {
 
   const loadOlder = useCallback(async (): Promise<void> => {
     if (
-      !thread ||
-      !desktopApi?.readThread ||
-      !response?.replay.pagination.supportsPagination ||
-      !response.replay.pagination.hasPreviousPage ||
-      !response.replay.pagination.previousCursor
+      !thread
+      || !desktopApi?.readThread
+      || !response?.replay.pagination.supportsPagination
+      || !response.replay.pagination.hasPreviousPage
+      || !response.replay.pagination.previousCursor
     ) {
       return;
     }
@@ -147,7 +157,7 @@ export function useThreadTranscript(params: {
       const olderResponse = await desktopApi.readThread({
         backend: thread.source,
         threadId: thread.id,
-        before: response.replay.pagination.previousCursor
+        before: response.replay.pagination.previousCursor,
       });
       if (requestVersionRef.current !== requestVersion) {
         return;
@@ -162,14 +172,22 @@ export function useThreadTranscript(params: {
           ...olderResponse,
           replay: {
             ...olderResponse.replay,
-            entries: mergeItems(olderResponse.replay.entries, current.replay.entries),
-            messages: mergeItems(olderResponse.replay.messages, current.replay.messages)
-          }
+            entries: mergeItems(
+              olderResponse.replay.entries,
+              current.replay.entries,
+            ),
+            messages: mergeItems(
+              olderResponse.replay.messages,
+              current.replay.messages,
+            ),
+          },
         };
       });
     } catch (nextError) {
       if (requestVersionRef.current === requestVersion) {
-        setError(nextError instanceof Error ? nextError.message : String(nextError));
+        setError(
+          nextError instanceof Error ? nextError.message : String(nextError),
+        );
       }
     } finally {
       if (requestVersionRef.current === requestVersion) {
@@ -178,56 +196,58 @@ export function useThreadTranscript(params: {
     }
   }, [desktopApi, response, thread]);
 
-  const addOptimisticUserMessage = useCallback((
-    text: string,
-    imageParts: AppServerThreadImagePart[] = []
-  ): string => {
-    const id = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const parts: AppServerThreadMessageEntry["parts"] = [
-      ...(text ? [{ type: "text" as const, text }] : []),
-      ...imageParts
-    ];
-    setOptimisticEntries((current) => [
-      ...current,
-      {
-        type: "message",
-        id,
-        role: "user",
-        text,
-        parts,
-        createdAt: Date.now()
-      }
-    ]);
-    return id;
-  }, []);
+  const addOptimisticUserMessage = useCallback(
+    (text: string, imageParts: AppServerThreadImagePart[] = []): string => {
+      const id = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const parts: AppServerThreadMessageEntry["parts"] = [
+        ...(text ? [{ type: "text" as const, text }] : []),
+        ...imageParts,
+      ];
+      setOptimisticEntries((current) => [
+        ...current,
+        {
+          type: "message",
+          id,
+          role: "user",
+          text,
+          parts,
+          createdAt: Date.now(),
+        },
+      ]);
+      return id;
+    },
+    [],
+  );
 
   const removeOptimisticMessage = useCallback((id: string): void => {
-    setOptimisticEntries((current) => current.filter((entry) => entry.id !== id));
+    setOptimisticEntries((current) =>
+      current.filter((entry) => entry.id !== id),
+    );
   }, []);
 
   const visibleOptimisticEntries = useMemo(
     () =>
       optimisticEntries.filter(
         (entry) =>
-          !response?.replay.messages.some(
-            (message) => messageMatchesOptimisticEntry(message, entry)
-          )
+          !response?.replay.messages.some((message) =>
+            messageMatchesOptimisticEntry(message, entry),
+          ),
       ),
-    [optimisticEntries, response?.replay.messages]
+    [optimisticEntries, response?.replay.messages],
   );
 
   const entries = useMemo(
     () => mergeItems(response?.replay.entries ?? [], visibleOptimisticEntries),
-    [response?.replay.entries, visibleOptimisticEntries]
+    [response?.replay.entries, visibleOptimisticEntries],
   );
 
   const messages = useMemo(
     () =>
       mergeItems(
         response?.replay.messages ?? [],
-        visibleOptimisticEntries.map(({ type: _type, ...message }) => message)
+        visibleOptimisticEntries.map(({ type: _type, ...message }) => message),
       ),
-    [response?.replay.messages, visibleOptimisticEntries]
+    [response?.replay.messages, visibleOptimisticEntries],
   );
 
   return {
@@ -240,6 +260,6 @@ export function useThreadTranscript(params: {
     messages,
     removeOptimisticMessage,
     refresh: loadLatest,
-    response
+    response,
   };
 }

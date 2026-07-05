@@ -65,7 +65,12 @@ export type HeapSession = {
 
 export type HeapSessionCreateResult =
   | { ok: true; session: HeapSession }
-  | { ok: false; code: "SESSION_CREATE_FAILED"; message: string; cause: unknown };
+  | {
+      ok: false;
+      code: "SESSION_CREATE_FAILED";
+      message: string;
+      cause: unknown;
+    };
 
 function formatSessionPrefix(date: Date): string {
   const year = String(date.getFullYear());
@@ -76,11 +81,16 @@ function formatSessionPrefix(date: Date): string {
   return `${year}-${month}-${day}-${hours}${minutes}`;
 }
 
-function createSessionDirectoryName(createdAt: Date, sessionId: string): string {
+function createSessionDirectoryName(
+  createdAt: Date,
+  sessionId: string,
+): string {
   return `heap-${formatSessionPrefix(createdAt)}-${sessionId}`;
 }
 
-function serializeNdjsonRecord(record: HeapSessionSample | HeapSessionEvent): string {
+function serializeNdjsonRecord(
+  record: HeapSessionSample | HeapSessionEvent,
+): string {
   return `${JSON.stringify(record)}\n`;
 }
 
@@ -88,7 +98,11 @@ async function writeManifest(
   manifestPath: string,
   manifest: HeapSessionManifest,
 ): Promise<void> {
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await fs.writeFile(
+    manifestPath,
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 export async function createHeapSession(options: {

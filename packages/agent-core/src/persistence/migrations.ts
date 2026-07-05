@@ -24,8 +24,8 @@ export type OverlayStoreData = {
         knownThreadKeys: string[];
         lastSnapshotHash?: string;
       }
-    > &
-      Partial<
+    >
+      & Partial<
         Record<
           Extract<AppServerBackendScope, "all">,
           {
@@ -109,12 +109,12 @@ function migrateLaunchpadImageAttachments(
   const attachments = value.flatMap((item) => {
     const record = asRecord(item);
     if (
-      !record ||
-      typeof record.id !== "string" ||
-      typeof record.name !== "string" ||
-      typeof record.size !== "number" ||
-      typeof record.type !== "string" ||
-      typeof record.url !== "string"
+      !record
+      || typeof record.id !== "string"
+      || typeof record.name !== "string"
+      || typeof record.size !== "number"
+      || typeof record.type !== "string"
+      || typeof record.url !== "string"
     ) {
       return [];
     }
@@ -150,10 +150,10 @@ function migratePermissionTransitionLog(
   const entries = value.flatMap((item): ThreadPermissionTransition[] => {
     const record = asRecord(item);
     if (
-      !record ||
-      typeof record.id !== "string" ||
-      typeof record.occurredAt !== "number" ||
-      !isPermissionTransitionStatus(record.status)
+      !record
+      || typeof record.id !== "string"
+      || typeof record.occurredAt !== "number"
+      || !isPermissionTransitionStatus(record.status)
     ) {
       return [];
     }
@@ -188,12 +188,12 @@ function migrateMessagingBindingTransitionLog(
   const entries = value.flatMap((item): ThreadMessagingBindingTransition[] => {
     const record = asRecord(item);
     if (
-      !record ||
-      typeof record.id !== "string" ||
-      typeof record.bindingId !== "string" ||
-      typeof record.platform !== "string" ||
-      typeof record.occurredAt !== "number" ||
-      !isMessagingBindingTransitionAction(record.action)
+      !record
+      || typeof record.id !== "string"
+      || typeof record.bindingId !== "string"
+      || typeof record.platform !== "string"
+      || typeof record.occurredAt !== "number"
+      || !isMessagingBindingTransitionAction(record.action)
     ) {
       return [];
     }
@@ -202,7 +202,8 @@ function migrateMessagingBindingTransitionLog(
         id: record.id,
         action: record.action,
         bindingId: record.bindingId,
-        platform: record.platform as ThreadMessagingBindingTransition["platform"],
+        platform:
+          record.platform as ThreadMessagingBindingTransition["platform"],
         conversationKind:
           typeof record.conversationKind === "string"
             ? (record.conversationKind as ThreadMessagingBindingTransition["conversationKind"])
@@ -249,9 +250,9 @@ function migrateRetainedBranchDriftPairs(
   const pairs = value.flatMap((item) => {
     const record = asRecord(item);
     if (
-      !record ||
-      typeof record.expectedBranch !== "string" ||
-      typeof record.observedBranch !== "string"
+      !record
+      || typeof record.expectedBranch !== "string"
+      || typeof record.observedBranch !== "string"
     ) {
       return [];
     }
@@ -260,7 +261,10 @@ function migrateRetainedBranchDriftPairs(
       {
         expectedBranch: record.expectedBranch,
         observedBranch: record.observedBranch,
-        retainedAt: typeof record.retainedAt === "number" ? record.retainedAt : Date.now(),
+        retainedAt:
+          typeof record.retainedAt === "number"
+            ? record.retainedAt
+            : Date.now(),
       },
     ];
   });
@@ -300,7 +304,9 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
   }
 
   const version =
-    typeof record.version === "number" ? record.version : CURRENT_OVERLAY_STORE_VERSION;
+    typeof record.version === "number"
+      ? record.version
+      : CURRENT_OVERLAY_STORE_VERSION;
   const backendsRecord = asRecord(record.backends) ?? {};
   const launchpadDefaultsRecord = asRecord(record.launchpadDefaults) ?? {};
   const directoryLaunchpadsRecord = asRecord(record.directoryLaunchpads) ?? {};
@@ -315,12 +321,15 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
     },
     launchpadDefaults: {
       backend:
-        launchpadDefaultsRecord.backend === "grok" ||
-        launchpadDefaultsRecord.backend === "codex"
+        launchpadDefaultsRecord.backend === "grok"
+        || launchpadDefaultsRecord.backend === "codex"
           ? (launchpadDefaultsRecord.backend as AppServerBackendKind)
           : "codex",
-      executionMode: normalizeExecutionMode(launchpadDefaultsRecord.executionMode),
-      workMode: launchpadDefaultsRecord.workMode === "worktree" ? "worktree" : "local",
+      executionMode: normalizeExecutionMode(
+        launchpadDefaultsRecord.executionMode,
+      ),
+      workMode:
+        launchpadDefaultsRecord.workMode === "worktree" ? "worktree" : "local",
       model:
         typeof launchpadDefaultsRecord.model === "string"
           ? launchpadDefaultsRecord.model
@@ -347,8 +356,8 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
           {
             directoryKey,
             directoryKind:
-              launchpadRecord.directoryKind === "workspace" ||
-              launchpadRecord.directoryKind === "unlinked"
+              launchpadRecord.directoryKind === "workspace"
+              || launchpadRecord.directoryKind === "unlinked"
                 ? launchpadRecord.directoryKind
                 : "directory",
             directoryLabel:
@@ -360,12 +369,17 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
                 ? launchpadRecord.directoryPath
                 : undefined,
             backend:
-              launchpadRecord.backend === "grok" || launchpadRecord.backend === "codex"
+              launchpadRecord.backend === "grok"
+              || launchpadRecord.backend === "codex"
                 ? (launchpadRecord.backend as AppServerBackendKind)
                 : "codex",
-            executionMode: normalizeExecutionMode(launchpadRecord.executionMode),
+            executionMode: normalizeExecutionMode(
+              launchpadRecord.executionMode,
+            ),
             prompt:
-              typeof launchpadRecord.prompt === "string" ? launchpadRecord.prompt : "",
+              typeof launchpadRecord.prompt === "string"
+                ? launchpadRecord.prompt
+                : "",
             imageAttachments: migrateLaunchpadImageAttachments(
               launchpadRecord.imageAttachments,
             ),
@@ -418,7 +432,9 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
       Object.entries(threadsRecord).map(([rawKey, value]) => {
         const threadRecord = asRecord(value) ?? {};
         const threadId =
-          typeof threadRecord.threadId === "string" ? threadRecord.threadId : rawKey;
+          typeof threadRecord.threadId === "string"
+            ? threadRecord.threadId
+            : rawKey;
         const backend =
           threadRecord.backend === "grok" || threadRecord.backend === "codex"
             ? (threadRecord.backend as AppServerBackendKind)
@@ -474,7 +490,9 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
             retainedBranchDriftPairs: migrateRetainedBranchDriftPairs(
               threadRecord.retainedBranchDriftPairs,
             ),
-            extraLinkedDirectories: Array.isArray(threadRecord.extraLinkedDirectories)
+            extraLinkedDirectories: Array.isArray(
+              threadRecord.extraLinkedDirectories,
+            )
               ? (threadRecord.extraLinkedDirectories as ThreadOverlayState["extraLinkedDirectories"])
               : [],
             worktreeSnapshots: Array.isArray(threadRecord.worktreeSnapshots)

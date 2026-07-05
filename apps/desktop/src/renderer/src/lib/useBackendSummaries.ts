@@ -16,14 +16,14 @@ export function useBackendSummaries(
 ): BackendSummaryState {
   const enabled = options.enabled ?? true;
   const [state, setState] = useState<BackendSummaryState>({
-    backends: []
+    backends: [],
   });
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!enabled) {
       setState({
         backends: [],
-        error: undefined
+        error: undefined,
       });
       return;
     }
@@ -31,23 +31,23 @@ export function useBackendSummaries(
     if (!desktopApi?.listBackends) {
       setState({
         backends: [],
-        error: undefined
+        error: undefined,
       });
       return;
     }
 
     try {
       const response = await desktopApi.listBackends({
-        includeUnavailable: true
+        includeUnavailable: true,
       });
       setState({
         backends: response.backends,
-        error: undefined
+        error: undefined,
       });
     } catch (error) {
       setState({
         backends: [],
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }, [desktopApi, enabled]);
@@ -72,10 +72,11 @@ export function useBackendSummaries(
     }
     return desktopApi.onAgentEvent((event) => {
       if (
-        (event.backend === "codex" &&
-          (event.notification.method === "account/rateLimits/updated" ||
-            event.notification.method === "account/updated")) ||
-        event.notification.method === "backend/acpRuntimeCapabilities/updated"
+        (event.backend === "codex"
+          && (event.notification.method === "account/rateLimits/updated"
+            || event.notification.method === "account/updated"))
+        || event.notification.method
+          === "backend/acpRuntimeCapabilities/updated"
       ) {
         void refresh();
       }

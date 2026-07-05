@@ -47,14 +47,15 @@ export type ToolDescriptor = {
   readOnly: boolean;
 };
 
-export type ToolDefinition<TArgs extends Record<string, unknown> = Record<string, unknown>> =
-  ToolDescriptor & {
-    parseArguments: (arguments_: Record<string, unknown>) => TArgs;
-    execute: (
-      arguments_: TArgs,
-      context: ToolExecutionContext,
-    ) => Promise<ToolExecutionOutput>;
-  };
+export type ToolDefinition<
+  TArgs extends Record<string, unknown> = Record<string, unknown>,
+> = ToolDescriptor & {
+  parseArguments: (arguments_: Record<string, unknown>) => TArgs;
+  execute: (
+    arguments_: TArgs,
+    context: ToolExecutionContext,
+  ) => Promise<ToolExecutionOutput>;
+};
 
 export interface ToolExecutor {
   listTools(): ToolDescriptor[];
@@ -101,7 +102,10 @@ export function asObjectArguments(
   value: unknown,
 ): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new InvalidToolArgumentsError(toolName, "arguments must be an object");
+    throw new InvalidToolArgumentsError(
+      toolName,
+      "arguments must be an object",
+    );
   }
   return value as Record<string, unknown>;
 }
@@ -170,12 +174,14 @@ export function readOptionalPositiveInteger(
   return value;
 }
 
-export function normalizeApprovalDecision(value: unknown): ToolApprovalDecision {
+export function normalizeApprovalDecision(
+  value: unknown,
+): ToolApprovalDecision {
   if (
-    value &&
-    typeof value === "object" &&
-    "decision" in value &&
-    typeof (value as { decision?: unknown }).decision === "string"
+    value
+    && typeof value === "object"
+    && "decision" in value
+    && typeof (value as { decision?: unknown }).decision === "string"
   ) {
     return normalizeApprovalDecision((value as { decision: string }).decision);
   }

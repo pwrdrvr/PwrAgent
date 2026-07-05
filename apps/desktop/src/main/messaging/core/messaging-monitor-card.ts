@@ -62,7 +62,8 @@ export function buildMonitorStatusIntent(params: {
   topicControls?: boolean;
 }): MessagingStatusIntent {
   const monitor = params.binding?.monitor ?? params.monitor;
-  const monitorSurface = params.binding?.monitorSurface ?? params.monitorSurface;
+  const monitorSurface =
+    params.binding?.monitorSurface ?? params.monitorSurface;
   const selection = selectMonitorThreads({
     monitor,
     navigation: params.navigation,
@@ -71,7 +72,9 @@ export function buildMonitorStatusIntent(params: {
   const threads = selection.threads;
   const activeTurns = params.activeTurnsByThreadKey ?? new Map();
   const hasWorkingThread = threads.some((thread) => {
-    const turn = activeTurns.get(buildThreadIdentityKey(thread.source, thread.id));
+    const turn = activeTurns.get(
+      buildThreadIdentityKey(thread.source, thread.id),
+    );
     return turn?.status === "working" || turn?.status === "waiting";
   });
   const lines = formatMonitorThreadSections({
@@ -84,8 +87,8 @@ export function buildMonitorStatusIntent(params: {
     snippetsByThreadKey: params.snippetsByThreadKey ?? new Map(),
   });
   const canUpdateSurface = Boolean(
-    monitorSurface &&
-      params.capabilityProfile?.text.supportsMessageEdit !== false,
+    monitorSurface
+    && params.capabilityProfile?.text.supportsMessageEdit !== false,
   );
 
   return {
@@ -172,7 +175,9 @@ export function nextMonitorThreadLimit(value: number | undefined): number {
     current as (typeof MESSAGING_MONITOR_THREAD_LIMIT_OPTIONS)[number],
   );
   const nextIndex =
-    index === -1 ? 0 : (index + 1) % MESSAGING_MONITOR_THREAD_LIMIT_OPTIONS.length;
+    index === -1
+      ? 0
+      : (index + 1) % MESSAGING_MONITOR_THREAD_LIMIT_OPTIONS.length;
   return MESSAGING_MONITOR_THREAD_LIMIT_OPTIONS[nextIndex];
 }
 
@@ -185,17 +190,24 @@ export function normalizeMonitorIntervalMs(
   }
   const positive = Math.max(0, value);
   return MESSAGING_MONITOR_INTERVAL_OPTIONS_MS.reduce((nearest, option) =>
-    Math.abs(option - positive) < Math.abs(nearest - positive) ? option : nearest,
+    Math.abs(option - positive) < Math.abs(nearest - positive)
+      ? option
+      : nearest,
   );
 }
 
 export function nextMonitorIntervalMs(value: number | undefined): number {
-  const current = normalizeMonitorIntervalMs(value, MESSAGING_MONITOR_INTERVAL_MS);
+  const current = normalizeMonitorIntervalMs(
+    value,
+    MESSAGING_MONITOR_INTERVAL_MS,
+  );
   const index = MESSAGING_MONITOR_INTERVAL_OPTIONS_MS.indexOf(
     current as (typeof MESSAGING_MONITOR_INTERVAL_OPTIONS_MS)[number],
   );
   const nextIndex =
-    index === -1 ? 0 : (index + 1) % MESSAGING_MONITOR_INTERVAL_OPTIONS_MS.length;
+    index === -1
+      ? 0
+      : (index + 1) % MESSAGING_MONITOR_INTERVAL_OPTIONS_MS.length;
   return MESSAGING_MONITOR_INTERVAL_OPTIONS_MS[nextIndex];
 }
 
@@ -209,7 +221,10 @@ function buildMonitorActions(params: {
   topicControls: boolean;
 }): MessagingSurfaceAction[] {
   const { profile } = params;
-  if (profile && !capabilityProfileSupportsActionCount(profile, MONITOR_MIN_ACTIONS)) {
+  if (
+    profile
+    && !capabilityProfileSupportsActionCount(profile, MONITOR_MIN_ACTIONS)
+  ) {
     return [];
   }
 
@@ -307,7 +322,9 @@ function formatMonitorThreadSections(params: {
             buildThreadIdentityKey(thread.source, thread.id),
           ),
           thread,
-          turn: params.activeTurns.get(buildThreadIdentityKey(thread.source, thread.id)),
+          turn: params.activeTurns.get(
+            buildThreadIdentityKey(thread.source, thread.id),
+          ),
         }),
       ),
     );
@@ -330,7 +347,9 @@ function formatMonitorThreadSections(params: {
             buildThreadIdentityKey(thread.source, thread.id),
           ),
           thread,
-          turn: params.activeTurns.get(buildThreadIdentityKey(thread.source, thread.id)),
+          turn: params.activeTurns.get(
+            buildThreadIdentityKey(thread.source, thread.id),
+          ),
         }),
       ),
     );
@@ -340,8 +359,8 @@ function formatMonitorThreadSections(params: {
     return lines;
   }
   if (
-    params.selection.pinnedThreadLimit === 0 &&
-    params.selection.recentThreadLimit === 0
+    params.selection.pinnedThreadLimit === 0
+    && params.selection.recentThreadLimit === 0
   ) {
     return ["No threads selected. Increase Pins or Recent to show items."];
   }
@@ -380,9 +399,10 @@ function formatThreadLine(params: {
 }
 
 function formatThreadTitle(thread: NavigationThreadSummary): string {
-  const title = (thread.titleSource === "derived"
-    ? shortenDerivedThreadTitle(thread.title ?? "")
-    : thread.title) ?? "";
+  const title =
+    (thread.titleSource === "derived"
+      ? shortenDerivedThreadTitle(thread.title ?? "")
+      : thread.title) ?? "";
   const trimmed = title.trim();
   if (trimmed.length > 0) {
     return trimmed.length > 64 ? `${trimmed.slice(0, 61)}...` : trimmed;
@@ -395,9 +415,9 @@ function projectLabelForThread(
   thread: NavigationThreadSummary,
 ): string | undefined {
   const linked =
-    thread.linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
-    thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
-    thread.linkedDirectories[0];
+    thread.linkedDirectories.find((candidate) => candidate.kind === "worktree")
+    ?? thread.linkedDirectories.find((candidate) => candidate.kind === "local")
+    ?? thread.linkedDirectories[0];
   if (linked?.label) {
     return linked.label;
   }

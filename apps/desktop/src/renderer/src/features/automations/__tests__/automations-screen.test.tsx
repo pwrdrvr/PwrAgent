@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AutomationDetail,
@@ -105,7 +112,9 @@ describe("AutomationsScreen", () => {
 
     expect(await screen.findByText("Check email")).toBeInTheDocument();
     expect(screen.getByText("every 5 minutes")).toBeInTheDocument();
-    expect(screen.queryByRole("tablist", { name: "Thread lenses" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("tablist", { name: "Thread lenses" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Email Agent" }));
 
@@ -131,14 +140,18 @@ describe("AutomationsScreen", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "New Automation" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New Automation" }),
+    );
     const editor = screen.getByLabelText("Name").closest("form") as HTMLElement;
     expect(editor).not.toBeNull();
     fireEvent.change(within(editor).getByLabelText("Name"), {
       target: { value: "Check email" },
     });
     fireEvent.click(within(editor).getByLabelText("Agent"));
-    fireEvent.click(within(editor).getByRole("option", { name: /Email Agent/ }));
+    fireEvent.click(
+      within(editor).getByRole("option", { name: /Email Agent/ }),
+    );
     fireEvent.change(within(editor).getByLabelText("Task prompt"), {
       target: { value: "Check email." },
     });
@@ -160,7 +173,9 @@ describe("AutomationsScreen", () => {
       id: "automation-promoted",
       threadId: "ordinary-thread",
     };
-    const createAutomation = vi.fn(async () => ({ automation: promotedAutomation }));
+    const createAutomation = vi.fn(async () => ({
+      automation: promotedAutomation,
+    }));
     const setThreadAgent = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "ordinary-thread",
@@ -191,7 +206,9 @@ describe("AutomationsScreen", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "New Automation" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New Automation" }),
+    );
     const editor = screen.getByLabelText("Name").closest("form") as HTMLElement;
     expect(editor).not.toBeNull();
     fireEvent.change(within(editor).getByLabelText("Name"), {
@@ -199,7 +216,9 @@ describe("AutomationsScreen", () => {
     });
     fireEvent.click(within(editor).getByLabelText("Agent"));
     fireEvent.click(within(editor).getByRole("tab", { name: "Threads" }));
-    fireEvent.click(within(editor).getByRole("option", { name: /Slack helper/ }));
+    fireEvent.click(
+      within(editor).getByRole("option", { name: /Slack helper/ }),
+    );
 
     await waitFor(() => expect(setThreadAgent).toHaveBeenCalledTimes(1));
     expect(setThreadAgent).toHaveBeenCalledWith({
@@ -207,7 +226,9 @@ describe("AutomationsScreen", () => {
       backend: "codex",
       threadId: "ordinary-thread",
     });
-    expect(within(editor).getByLabelText("Agent")).toHaveTextContent("Slack Agent");
+    expect(within(editor).getByLabelText("Agent")).toHaveTextContent(
+      "Slack Agent",
+    );
 
     fireEvent.change(within(editor).getByLabelText("Task prompt"), {
       target: { value: "Post the latest automation state." },

@@ -50,7 +50,10 @@ export function createPwrAgentAppManagementHandler(
             action,
             check,
             options,
-            result: { status: "check_completed", check: toToolUpdateStatus(check) },
+            result: {
+              status: "check_completed",
+              check: toToolUpdateStatus(check),
+            },
             updateStatus: toToolUpdateStatus(check),
           }),
         };
@@ -91,12 +94,14 @@ export function createPwrAgentAppManagementHandler(
           };
         }
 
-        const accepted = await (options.requestRestart ??
-          (async (performRestart) =>
+        const accepted = await (
+          options.requestRestart
+          ?? (async (performRestart) =>
             await requestQuit({
               performQuit: () => defer(performRestart),
               source: "agent-tool",
-            })))(() => {
+            }))
+        )(() => {
           app.relaunch();
           app.quit();
         });
@@ -118,12 +123,14 @@ export function createPwrAgentAppManagementHandler(
 
       if (action === "stop") {
         const status = readAppUpdateStatus();
-        const accepted = await (options.requestStop ??
-          (async (performStop) =>
+        const accepted = await (
+          options.requestStop
+          ?? (async (performStop) =>
             await requestQuit({
               performQuit: () => defer(performStop),
               source: "agent-tool",
-            })))(() => {
+            }))
+        )(() => {
           app.quit();
         });
         return {

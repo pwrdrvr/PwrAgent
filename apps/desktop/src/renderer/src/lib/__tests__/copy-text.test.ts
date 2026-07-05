@@ -41,10 +41,10 @@ describe("copyText", () => {
 
   it("formats tooltips with an elided path and copy hint", () => {
     expect(
-      formatCopyTooltip("/Users/huntharo/.codex/worktrees/0f38/PwrAgent", 24)
+      formatCopyTooltip("/Users/huntharo/.codex/worktrees/0f38/PwrAgent", 24),
     ).toContain("Click to copy to clipboard");
     expect(
-      formatCopyTooltip("/Users/huntharo/.codex/worktrees/0f38/PwrAgent", 24)
+      formatCopyTooltip("/Users/huntharo/.codex/worktrees/0f38/PwrAgent", 24),
     ).toContain("…");
   });
 });

@@ -92,8 +92,10 @@ function migrationSourcesResponse(): ListThreadMigrationSourcesResponse {
 
 describe("ThreadManagementSettings", () => {
   it("ignores stale source thread responses after switching profiles", async () => {
-    const defaultThreads = createDeferred<ListThreadMigrationSourceThreadsResponse>();
-    const personalThreads = createDeferred<ListThreadMigrationSourceThreadsResponse>();
+    const defaultThreads =
+      createDeferred<ListThreadMigrationSourceThreadsResponse>();
+    const personalThreads =
+      createDeferred<ListThreadMigrationSourceThreadsResponse>();
     const listThreadMigrationSourceThreads = vi.fn<
       NonNullable<DesktopApi["listThreadMigrationSourceThreads"]>
     >((request) =>
@@ -130,7 +132,9 @@ describe("ThreadManagementSettings", () => {
       );
     });
 
-    expect(await screen.findByText("Personal profile thread")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Personal profile thread"),
+    ).toBeInTheDocument();
 
     await act(async () => {
       defaultThreads.resolve(
@@ -139,14 +143,18 @@ describe("ThreadManagementSettings", () => {
     });
 
     expect(screen.getByText("Personal profile thread")).toBeInTheDocument();
-    expect(screen.queryByText("Stale default profile thread")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Stale default profile thread"),
+    ).not.toBeInTheDocument();
   });
 
   it("uses direct action buttons and tolerates threads without linked directories", async () => {
     const threadsResponse = migrationThreadsResponse("", "GIFusion thread");
     threadsResponse.projects[0]!.label = "GIFusion";
     threadsResponse.projects[0]!.path = "/Users/alice/GIPHY/GIFusion";
-    threadsResponse.projects[0]!.threads[0]!.linkedDirectories = [null] as never;
+    threadsResponse.projects[0]!.threads[0]!.linkedDirectories = [
+      null,
+    ] as never;
     const logRendererDiagnostic = vi.fn(async () => undefined);
     const desktopApi: DesktopApi = {
       listThreadMigrationSources: vi.fn(async () => migrationSourcesResponse()),
@@ -156,18 +164,27 @@ describe("ThreadManagementSettings", () => {
 
     render(<ThreadManagementSettings desktopApi={desktopApi} />);
 
-    expect(await screen.findByRole("button", { name: "Move 0" })).toBeDisabled();
+    expect(
+      await screen.findByRole("button", { name: "Move 0" }),
+    ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Copy 0" })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "Move" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Move" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Copy" }),
+    ).not.toBeInTheDocument();
 
-    fireEvent.click((await screen.findAllByRole("checkbox", { name: /GIFusion/ }))[0]!);
+    fireEvent.click(
+      (await screen.findAllByRole("checkbox", { name: /GIFusion/ }))[0]!,
+    );
 
     expect(screen.getByRole("button", { name: "Move 1" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Copy 1" })).toBeEnabled();
     expect(logRendererDiagnostic).toHaveBeenCalledWith({
       level: "warn",
-      message: "Thread migration source project has malformed linked directories.",
+      message:
+        "Thread migration source project has malformed linked directories.",
       details: {
         malformedThreadCount: 1,
         projectKey: "directory:/repo/default",
@@ -210,7 +227,10 @@ describe("ThreadManagementSettings", () => {
   });
 
   it("keeps Move and detached Copy available for selected managed worktrees", async () => {
-    const threadsResponse = migrationThreadsResponse("", "Managed worktree thread");
+    const threadsResponse = migrationThreadsResponse(
+      "",
+      "Managed worktree thread",
+    );
     threadsResponse.projects[0]!.threads[0]!.linkedDirectories = [
       {
         id: "worktree:/Users/alice/.codex/worktrees/mpabc/app",
@@ -235,9 +255,9 @@ describe("ThreadManagementSettings", () => {
 
     expect(screen.getByRole("button", { name: "Move 1" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Copy 1" })).toBeEnabled();
-    expect(
-      screen.getByRole("combobox", { name: "Copy strategy" }),
-    ).toHaveValue("detached-destination");
+    expect(screen.getByRole("combobox", { name: "Copy strategy" })).toHaveValue(
+      "detached-destination",
+    );
     expect(
       screen.getByText(
         "Move transfers branches to destination worktrees before archiving the source. Copy leaves source branches active and uses the selected strategy.",
@@ -253,8 +273,8 @@ describe("ThreadManagementSettings", () => {
     expect(actionbar).not.toBeNull();
     expect(projectsList).not.toBeNull();
     expect(
-      actionbar!.compareDocumentPosition(projectsList!) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      actionbar!.compareDocumentPosition(projectsList!)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -303,8 +323,9 @@ describe("ThreadManagementSettings", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("completed with warning")).toBeInTheDocument();
-    expect(screen.getByText("Run run-1: 1 of 1 completed, 1 with a warning."))
-      .toBeInTheDocument();
+    expect(
+      screen.getByText("Run run-1: 1 of 1 completed, 1 with a warning."),
+    ).toBeInTheDocument();
   });
 
   it("offers try harder on failed migrations and merges the retried result", async () => {

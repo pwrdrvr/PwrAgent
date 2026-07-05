@@ -170,12 +170,16 @@ describe("IntegratedTerminal", () => {
 
   it("buffers user input until the pty session attaches", async () => {
     let resolveCreate: (
-      value: Awaited<ReturnType<NonNullable<DesktopApi["createIntegratedTerminal"]>>>,
+      value: Awaited<
+        ReturnType<NonNullable<DesktopApi["createIntegratedTerminal"]>>
+      >,
     ) => void = () => undefined;
     const createIntegratedTerminal = vi.fn(
       () =>
         new Promise<
-          Awaited<ReturnType<NonNullable<DesktopApi["createIntegratedTerminal"]>>>
+          Awaited<
+            ReturnType<NonNullable<DesktopApi["createIntegratedTerminal"]>>
+          >
         >((resolve) => {
           resolveCreate = resolve;
         }),

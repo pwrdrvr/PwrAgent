@@ -55,7 +55,9 @@ describe("AcpSessionReplayNormalizer", () => {
       expect.objectContaining({ role: "assistant", text: "It is PwrAgent." }),
     ]);
     expect(
-      replay.messages.some((message) => message.text.includes("session_context")),
+      replay.messages.some((message) =>
+        message.text.includes("session_context"),
+      ),
     ).toBe(false);
   });
 
@@ -98,7 +100,9 @@ describe("AcpSessionReplayNormalizer", () => {
       }),
     ]);
     expect(
-      replay.messages.some((message) => message.text.includes("system-reminder")),
+      replay.messages.some((message) =>
+        message.text.includes("system-reminder"),
+      ),
     ).toBe(false);
   });
 
@@ -244,8 +248,8 @@ describe("AcpSessionReplayNormalizer", () => {
       expect.objectContaining({
         role: "assistant",
         text:
-          "I found the thread creation path.\n\n" +
-          "**Refining Button Logic**\nI am checking the disabled state.",
+          "I found the thread creation path.\n\n"
+          + "**Refining Button Logic**\nI am checking the disabled state.",
       }),
     ]);
   });
@@ -346,7 +350,8 @@ describe("AcpSessionReplayNormalizer", () => {
     const failedReplay = normalizer.recordTurnFailed({
       sessionId: "session-1",
       turnId: "pending:session-1",
-      error: "json-rpc error (500): You have exhausted your capacity on this model.",
+      error:
+        "json-rpc error (500): You have exhausted your capacity on this model.",
       receivedAt: 1001,
     });
 
@@ -488,7 +493,9 @@ describe("AcpSessionReplayNormalizer", () => {
       },
     });
 
-    expect(replay.messages.map((message) => [message.id, message.text])).toEqual([
+    expect(
+      replay.messages.map((message) => [message.id, message.text]),
+    ).toEqual([
       ["user:pending:session-1:1000", "What is this project?"],
       ["assistant:pending:session-1:1000:0", "It is PwrSnap."],
       ["user:pending:session-1:2000", "What is the CWD?"],
@@ -712,7 +719,7 @@ describe("AcpSessionReplayNormalizer", () => {
 
   it("keeps non-shell ACP content with command fields as transcript output", () => {
     const normalizer = new AcpSessionReplayNormalizer();
-    const output = "{\"command\":\"npm view pnpm\",\"result\":\"found text\"}";
+    const output = '{"command":"npm view pnpm","result":"found text"}';
 
     const replay = normalizer.apply({
       sessionId: "session-1",
@@ -786,7 +793,7 @@ describe("AcpSessionReplayNormalizer", () => {
             type: "content",
             content: {
               type: "text",
-              text: "{\"command\":\"npm view pnpm\"}",
+              text: '{"command":"npm view pnpm"}',
             },
           },
         ],
@@ -928,7 +935,10 @@ describe("AcpSessionReplayNormalizer", () => {
       receivedAt: 1001,
       update: {
         sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Yes, the project builds successfully." },
+        content: {
+          type: "text",
+          text: "Yes, the project builds successfully.",
+        },
       },
     });
 
@@ -1036,7 +1046,7 @@ describe("AcpSessionReplayNormalizer", () => {
 
     expect(
       replay.entries.map((entry) =>
-        entry.type === "message" ? `${entry.id}:${entry.text}` : entry.type
+        entry.type === "message" ? `${entry.id}:${entry.text}` : entry.type,
       ),
     ).toEqual([
       "user:turn-1:does it build?",

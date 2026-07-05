@@ -82,8 +82,8 @@ export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesRespon
   // other not-in-registry profile name) when the directory is
   // actually present.
   if (
-    !byName.has(defaultProfile) &&
-    fs.existsSync(resolveProfileDir(defaultProfile))
+    !byName.has(defaultProfile)
+    && fs.existsSync(resolveProfileDir(defaultProfile))
   ) {
     byName.set(defaultProfile, { name: defaultProfile });
   }
@@ -121,8 +121,10 @@ function readPwrAgentProfileCodexProfile(profileName: string) {
     configuredProfile = undefined;
   }
   const discovery = discoverCodexAuthProfiles({ configuredProfile });
-  return discovery.profiles.find((profile) => profile.selected)
-    ?? discovery.profiles[0]!;
+  return (
+    discovery.profiles.find((profile) => profile.selected)
+    ?? discovery.profiles[0]!
+  );
 }
 
 export function openDesktopPwrAgentProfile(

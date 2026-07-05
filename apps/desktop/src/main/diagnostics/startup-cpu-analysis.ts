@@ -87,7 +87,10 @@ export function analyzeCpuProfile(params: {
     const nodeId = samples[index];
     const delta = timeDeltas[index] ?? 0;
     durationMicros += delta;
-    selfMicrosByNodeId.set(nodeId, (selfMicrosByNodeId.get(nodeId) ?? 0) + delta);
+    selfMicrosByNodeId.set(
+      nodeId,
+      (selfMicrosByNodeId.get(nodeId) ?? 0) + delta,
+    );
 
     let currentNodeId: number | undefined = nodeId;
     while (currentNodeId !== undefined) {
@@ -164,7 +167,9 @@ export function analyzeCpuProfile(params: {
   };
 }
 
-function normalizeLocationNumber(value: number | undefined): number | undefined {
+function normalizeLocationNumber(
+  value: number | undefined,
+): number | undefined {
   return typeof value === "number" && value >= 0 ? value : undefined;
 }
 
@@ -194,7 +199,9 @@ export function renderStartupCpuAnalysisSummary(params: {
       );
     }
     if (params.timeline.length > 80) {
-      lines.push(`- … ${params.timeline.length - 80} more events in analysis.json`);
+      lines.push(
+        `- … ${params.timeline.length - 80} more events in analysis.json`,
+      );
     }
     lines.push("");
   }
@@ -270,7 +277,9 @@ export async function analyzeStartupCpuProfileSession(options: {
   }
 
   if (results.length === 0) {
-    throw new Error("No startup CPU profile artifacts found in session directory");
+    throw new Error(
+      "No startup CPU profile artifacts found in session directory",
+    );
   }
 
   const analysis: StartupCpuSessionAnalysis = {
@@ -283,7 +292,11 @@ export async function analyzeStartupCpuProfileSession(options: {
     timeline,
   };
 
-  await fs.writeFile(options.analysisPath, `${JSON.stringify(analysis, null, 2)}\n`, "utf8");
+  await fs.writeFile(
+    options.analysisPath,
+    `${JSON.stringify(analysis, null, 2)}\n`,
+    "utf8",
+  );
   await fs.writeFile(
     options.summaryPath,
     renderStartupCpuAnalysisSummary({
@@ -297,7 +310,9 @@ export async function analyzeStartupCpuProfileSession(options: {
   return analysis;
 }
 
-function formatTimelineDetail(detail: Record<string, unknown> | undefined): string {
+function formatTimelineDetail(
+  detail: Record<string, unknown> | undefined,
+): string {
   if (!detail) {
     return "";
   }
@@ -315,9 +330,15 @@ function formatTimelineDetail(detail: Record<string, unknown> | undefined): stri
 
 function formatTimelineValue(value: unknown): string {
   if (typeof value === "string") {
-    return JSON.stringify(value.length > 80 ? `${value.slice(0, 77)}...` : value);
+    return JSON.stringify(
+      value.length > 80 ? `${value.slice(0, 77)}...` : value,
+    );
   }
-  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+  if (
+    typeof value === "number"
+    || typeof value === "boolean"
+    || value === null
+  ) {
     return String(value);
   }
   if (value === undefined) {
@@ -344,19 +365,24 @@ async function readStartupProfileTimeline(
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as {
-      detail?: Record<string, unknown>;
-      source?: unknown;
-      type?: unknown;
-    })
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          detail?: Record<string, unknown>;
+          source?: unknown;
+          type?: unknown;
+        },
+    )
     .filter(
-      (event): event is {
+      (
+        event,
+      ): event is {
         detail?: Record<string, unknown>;
         source: "main" | "renderer";
         type: string;
       } =>
-        (event.source === "main" || event.source === "renderer") &&
-        typeof event.type === "string",
+        (event.source === "main" || event.source === "renderer")
+        && typeof event.type === "string",
     )
     .map((event) => ({
       source: event.source,
@@ -419,7 +445,10 @@ function normalizeSourceBucket(params: {
     const parsed = new URL(value);
     const pathname = decodeURIComponent(parsed.pathname);
     if (pathname.startsWith("/@fs/")) {
-      return normalizeFilesystemPath(pathname.slice("/@fs".length), params.repoRoot);
+      return normalizeFilesystemPath(
+        pathname.slice("/@fs".length),
+        params.repoRoot,
+      );
     }
     if (pathname.startsWith("/src/")) {
       return path.posix.join("apps/desktop", pathname.slice(1));
@@ -452,7 +481,9 @@ function normalizeFilesystemPath(filePath: string, repoRoot: string): string {
   return normalizedFilePath.split(path.sep).join(path.posix.sep);
 }
 
-async function readOptionalCpuProfile(filePath: string): Promise<CpuProfile | undefined> {
+async function readOptionalCpuProfile(
+  filePath: string,
+): Promise<CpuProfile | undefined> {
   try {
     return JSON.parse(await fs.readFile(filePath, "utf8")) as CpuProfile;
   } catch (error) {

@@ -37,10 +37,10 @@ export function ProviderStatusPanel(props: ProviderStatusPanelProps) {
               <p className="backend-status-list__details">
                 {backend.available
                   ? "Available"
-                  : backend.unavailableReason ?? "Unavailable"}
+                  : (backend.unavailableReason ?? "Unavailable")}
               </p>
-              {backend.available &&
-              (backend.account || (backend.rateLimits?.length ?? 0) > 0) ? (
+              {backend.available
+              && (backend.account || (backend.rateLimits?.length ?? 0) > 0) ? (
                 <div className="backend-status-list__metadata">
                   {backend.account ? (
                     <dl className="backend-status-list__metadata-grid">

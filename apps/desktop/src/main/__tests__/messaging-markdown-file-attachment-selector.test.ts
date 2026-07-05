@@ -32,7 +32,10 @@ describe("MessagingMarkdownFileAttachmentSelector", () => {
       maxPreviewLines: 20,
     });
     const longLine = "x".repeat(1_200);
-    const manyLines = Array.from({ length: 25 }, (_, index) => `line ${index + 1}`).join("\n");
+    const manyLines = Array.from(
+      { length: 25 },
+      (_, index) => `line ${index + 1}`,
+    ).join("\n");
 
     const longLineSelection = selector.selectFromCompletedItem({
       type: "fileChange",
@@ -81,13 +84,17 @@ describe("MessagingMarkdownFileAttachmentSelector", () => {
     expect(
       selector.selectFromCompletedItem({
         type: "fileChange",
-        changes: [{ path: "notes.txt", kind: { type: "add", content: "notes" } }],
+        changes: [
+          { path: "notes.txt", kind: { type: "add", content: "notes" } },
+        ],
       }),
     ).toBeUndefined();
     expect(
       selector.selectFromCompletedItem({
         type: "fileChange",
-        changes: [{ path: "notes.md", kind: { type: "update", content: "notes" } }],
+        changes: [
+          { path: "notes.md", kind: { type: "update", content: "notes" } },
+        ],
       }),
     ).toBeUndefined();
     expect(

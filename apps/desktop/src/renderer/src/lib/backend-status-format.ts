@@ -1,6 +1,8 @@
 import type { BackendSummary } from "@pwragent/shared";
 
-export type BackendRateLimitSummary = NonNullable<BackendSummary["rateLimits"]>[number];
+export type BackendRateLimitSummary = NonNullable<
+  BackendSummary["rateLimits"]
+>[number];
 
 export function formatBackendAccountText(
   account: NonNullable<BackendSummary["account"]>,

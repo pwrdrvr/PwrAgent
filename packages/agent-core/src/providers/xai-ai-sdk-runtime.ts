@@ -1,6 +1,9 @@
 import { createXai, type XaiProvider } from "@ai-sdk/xai";
 import { generateText, streamText, type LanguageModel } from "ai";
-import { DEFAULT_GROK_SEARCH_MODEL, selectXaiModel } from "./xai-model-selection.js";
+import {
+  DEFAULT_GROK_SEARCH_MODEL,
+  selectXaiModel,
+} from "./xai-model-selection.js";
 
 export type XaiAiSdkRuntimeOptions = {
   apiKey: string;
@@ -23,7 +26,9 @@ export class XaiAiSdkRuntime {
   private readonly defaultModel?: string;
   private readonly defaultSearchModel?: string;
   private readonly streamTextImpl: (params: Record<string, unknown>) => unknown;
-  private readonly generateTextImpl: (params: Record<string, unknown>) => Promise<unknown>;
+  private readonly generateTextImpl: (
+    params: Record<string, unknown>,
+  ) => Promise<unknown>;
 
   constructor(options: XaiAiSdkRuntimeOptions) {
     const apiKey = options.apiKey.trim();
@@ -33,21 +38,23 @@ export class XaiAiSdkRuntime {
     this.defaultModel = options.model?.trim() || undefined;
     this.defaultSearchModel = options.searchModel?.trim() || undefined;
     this.searchToolTimeoutMs =
-      Number.isFinite(options.searchToolTimeoutMs) &&
-      options.searchToolTimeoutMs !== undefined
+      Number.isFinite(options.searchToolTimeoutMs)
+      && options.searchToolTimeoutMs !== undefined
         ? Math.max(0, options.searchToolTimeoutMs)
         : DEFAULT_XAI_SEARCH_TOOL_TIMEOUT_MS;
     this.provider =
-      options.provider ??
-      createXai({
+      options.provider
+      ?? createXai({
         apiKey,
         baseURL: options.baseUrl?.trim() || undefined,
         headers: options.headers,
         fetch: options.fetchImpl,
       });
-    this.streamTextImpl = options.streamTextImpl ?? ((params) => streamText(params as never));
+    this.streamTextImpl =
+      options.streamTextImpl ?? ((params) => streamText(params as never));
     this.generateTextImpl =
-      options.generateTextImpl ?? (async (params) => await generateText(params as never));
+      options.generateTextImpl
+      ?? (async (params) => await generateText(params as never));
   }
 
   model(params?: { model?: string }): LanguageModel {
@@ -60,7 +67,8 @@ export class XaiAiSdkRuntime {
   searchModel(model?: string): LanguageModel {
     return selectXaiModel({
       provider: this.provider,
-      model: model?.trim() || this.defaultSearchModel || DEFAULT_GROK_SEARCH_MODEL,
+      model:
+        model?.trim() || this.defaultSearchModel || DEFAULT_GROK_SEARCH_MODEL,
     });
   }
 

@@ -48,9 +48,7 @@ export function SettingsPathRow(props: {
   const selectedLabel = props.selectedLabel ?? "Selected";
 
   return (
-    <div
-      className={`settings-pathrow${props.selected ? " is-selected" : ""}`}
-    >
+    <div className={`settings-pathrow${props.selected ? " is-selected" : ""}`}>
       {props.icon ? (
         <span className="settings-pathrow__icon">{props.icon}</span>
       ) : null}

@@ -416,9 +416,7 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
       {
         op: "setTableArray",
         path: ["messaging", "mattermost", "authorized_teams"],
-        value: [
-          { id: "teamabcdefghijklmnopqrstu1", display_name: "Dev Team" },
-        ],
+        value: [{ id: "teamabcdefghijklmnopqrstu1", display_name: "Dev Team" }],
       },
       {
         op: "delete",
@@ -464,7 +462,7 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
 
   it("keeps a legacy scalar mirror when the current config already has one", () => {
     const tables = parseTomlTables(
-      "[messaging.mattermost]\nauthorized_user_ids = [\"old\"]\n",
+      '[messaging.mattermost]\nauthorized_user_ids = ["old"]\n',
       "/tmp/config.toml",
     );
 

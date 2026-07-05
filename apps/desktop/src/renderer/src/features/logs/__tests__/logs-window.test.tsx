@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_RENDERED_LOG_ENTRIES,
@@ -266,7 +273,9 @@ describe("LogsWindow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Debug" }));
 
     await waitFor(() => {
-      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(true);
+      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(
+        true,
+      );
     });
     expect(await screen.findByText(/hidden debug line/)).toBeInTheDocument();
     expect(screen.getByText("Debug collection on")).toBeInTheDocument();
@@ -274,7 +283,9 @@ describe("LogsWindow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Debug" }));
 
     await waitFor(() => {
-      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(false);
+      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(
+        false,
+      );
     });
     expect(screen.queryByText(/hidden debug line/)).not.toBeInTheDocument();
   });
@@ -325,7 +336,9 @@ describe("LogsWindow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Debug" }));
     await waitFor(() => {
-      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(true);
+      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(
+        true,
+      );
     });
     fireEvent.click(screen.getByRole("button", { name: "Debug" }));
     expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledTimes(1);
@@ -342,7 +355,9 @@ describe("LogsWindow", () => {
     });
 
     await waitFor(() => {
-      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(false);
+      expect(desktopApi.setAppLogDebugCollectionEnabled).toHaveBeenCalledWith(
+        false,
+      );
     });
 
     await act(async () => {
@@ -363,7 +378,9 @@ describe("LogsWindow", () => {
   });
 
   it("appends streamed log entries while following", async () => {
-    let listener: Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0] | undefined;
+    let listener:
+      | Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0]
+      | undefined;
     const desktopApi = {
       readAppLogSnapshot: vi.fn(async () => ({
         kind: "log-snapshot",
@@ -396,7 +413,9 @@ describe("LogsWindow", () => {
   });
 
   it("ignores streamed log entries while the log output is being selected", async () => {
-    let listener: Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0] | undefined;
+    let listener:
+      | Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0]
+      | undefined;
     const desktopApi = {
       readAppLogSnapshot: vi.fn(async () => ({
         kind: "log-snapshot",
@@ -438,7 +457,9 @@ describe("LogsWindow", () => {
   });
 
   it("does not trim visible paused output while newer stream entries arrive", async () => {
-    let listener: Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0] | undefined;
+    let listener:
+      | Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0]
+      | undefined;
     const desktopApi = {
       readAppLogSnapshot: vi.fn(async () => ({
         kind: "log-snapshot",
@@ -483,7 +504,9 @@ describe("LogsWindow", () => {
   });
 
   it("reloads the current tail before following again when scrolled back to bottom", async () => {
-    let listener: Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0] | undefined;
+    let listener:
+      | Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0]
+      | undefined;
     const desktopApi = {
       readAppLogSnapshot: vi
         .fn()
@@ -559,57 +582,53 @@ describe("LogsWindow", () => {
     expect(desktopApi.readAppLogSnapshot).toHaveBeenCalledTimes(2);
   });
 
-  it(
-    "marks the view as tail-only when the live renderer buffer wraps",
-    async () => {
-      let listener:
-        | Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0]
-        | undefined;
-      const desktopApi = {
-        readAppLogSnapshot: vi.fn(async () => ({
-          kind: "log-snapshot",
-          title: "Logs",
-          debugCollectionEnabled: false,
-          entries: Array.from(
-            { length: MAX_RENDERED_LOG_ENTRIES },
-            (_, index) => ({
-              sequence: index + 1,
-              timestamp: Date.now(),
-              level: "info",
-              line:
-                index === 0
-                  ? "[2026-05-12 20:06:28.722] [info] (pwragent:main) oldest visible marker"
-                  : `[2026-05-12 20:06:28.722] [info] (pwragent:main) line ${index + 1}`,
-            }),
-          ),
-          readAt: Date.now(),
-          truncated: false,
-        })),
-        onAppLogEntry: vi.fn((callback) => {
-          listener = callback;
-          return () => undefined;
-        }),
-      } as unknown as DesktopApi;
-      (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
+  it("marks the view as tail-only when the live renderer buffer wraps", async () => {
+    let listener:
+      | Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0]
+      | undefined;
+    const desktopApi = {
+      readAppLogSnapshot: vi.fn(async () => ({
+        kind: "log-snapshot",
+        title: "Logs",
+        debugCollectionEnabled: false,
+        entries: Array.from(
+          { length: MAX_RENDERED_LOG_ENTRIES },
+          (_, index) => ({
+            sequence: index + 1,
+            timestamp: Date.now(),
+            level: "info",
+            line:
+              index === 0
+                ? "[2026-05-12 20:06:28.722] [info] (pwragent:main) oldest visible marker"
+                : `[2026-05-12 20:06:28.722] [info] (pwragent:main) line ${index + 1}`,
+          }),
+        ),
+        readAt: Date.now(),
+        truncated: false,
+      })),
+      onAppLogEntry: vi.fn((callback) => {
+        listener = callback;
+        return () => undefined;
+      }),
+    } as unknown as DesktopApi;
+    (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
 
-      render(<LogsWindow />);
+    render(<LogsWindow />);
 
-      await screen.findByText(/oldest visible marker/);
-      expect(screen.queryByText("Showing tail")).not.toBeInTheDocument();
+    await screen.findByText(/oldest visible marker/);
+    expect(screen.queryByText("Showing tail")).not.toBeInTheDocument();
 
-      act(() => {
-        listener?.({
-          sequence: MAX_RENDERED_LOG_ENTRIES + 1,
-          timestamp: Date.now(),
-          level: "info",
-          line: "[2026-05-12 20:06:29.000] [info] (pwragent:main) wrapped line",
-        });
+    act(() => {
+      listener?.({
+        sequence: MAX_RENDERED_LOG_ENTRIES + 1,
+        timestamp: Date.now(),
+        level: "info",
+        line: "[2026-05-12 20:06:29.000] [info] (pwragent:main) wrapped line",
       });
+    });
 
-      expect(screen.getByText("Showing tail")).toBeInTheDocument();
-      expect(screen.queryByText(/oldest visible marker/)).not.toBeInTheDocument();
-      expect(screen.getByText(/wrapped line/)).toBeInTheDocument();
-    },
-    30_000,
-  );
+    expect(screen.getByText("Showing tail")).toBeInTheDocument();
+    expect(screen.queryByText(/oldest visible marker/)).not.toBeInTheDocument();
+    expect(screen.getByText(/wrapped line/)).toBeInTheDocument();
+  }, 30_000);
 });

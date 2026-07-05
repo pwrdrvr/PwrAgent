@@ -12,10 +12,7 @@ import type {
   AgentToolDefinition,
   AgentToolDispatchResult,
 } from "./agent-tool-definition.js";
-import {
-  agentToolFailure,
-  agentToolSuccess,
-} from "./agent-tool-definition.js";
+import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 
 export const PWRAGENT_MESSAGING_UNAVAILABLE_MESSAGE =
@@ -29,12 +26,15 @@ export function buildPwrAgentMessagingToolRouter(
   handler: PwrAgentMessagingHandler | undefined,
   options: { namespace?: string; unsupportedMessage?: string } = {},
 ): AgentToolRouter {
-  return new AgentToolRouter(buildPwrAgentMessagingToolDefinitions(handler, {
-    namespace: options.namespace,
-  }), {
-    unsupportedMessage:
-      options.unsupportedMessage ?? "Unsupported PwrAgent messaging tool.",
-  });
+  return new AgentToolRouter(
+    buildPwrAgentMessagingToolDefinitions(handler, {
+      namespace: options.namespace,
+    }),
+    {
+      unsupportedMessage:
+        options.unsupportedMessage ?? "Unsupported PwrAgent messaging tool.",
+    },
+  );
 }
 
 export function buildPwrAgentMessagingToolDefinitions(
@@ -71,7 +71,9 @@ export function buildPwrAgentMessagingToolDefinitions(
   }));
 }
 
-function descriptionForOperation(operation: PwrAgentMessagingOperationName): string {
+function descriptionForOperation(
+  operation: PwrAgentMessagingOperationName,
+): string {
   switch (operation) {
     case "get_current_location":
       return "Deprecated alias for get_current_messaging_surface. Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";

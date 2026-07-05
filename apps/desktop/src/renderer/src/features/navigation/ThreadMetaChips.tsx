@@ -28,14 +28,17 @@ export function ThreadMetaChips({
   // scroll region, matching the copyable branch/path chips.
   const pinTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const gitStateTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
+  const branchDrifted = isBranchDrifted(
+    thread.gitBranch,
+    thread.observedGitBranch,
+  );
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
   const hasDirtySummary = Boolean(
-    gitWorking &&
-      (gitWorking.dirtyFiles > 0 ||
-        gitWorking.dirtyAdditions > 0 ||
-        gitWorking.dirtyDeletions > 0),
+    gitWorking
+    && (gitWorking.dirtyFiles > 0
+      || gitWorking.dirtyAdditions > 0
+      || gitWorking.dirtyDeletions > 0),
   );
   const hasUntracked = Boolean(gitWorking && gitWorking.untrackedFiles > 0);
   const dirtyTooltip = gitWorking
@@ -58,63 +61,67 @@ export function ThreadMetaChips({
   const unpushedTooltip = `${unpushedCount} commit${
     unpushedCount === 1 ? "" : "s"
   } not pushed to a remote`;
-  const linkedDirectoryChips = includeLinkedDirectories
-    ? thread.linkedDirectories.length > 0
-      ? linkedDirectoryMode === "kind"
-        ? [
-            ...new Map(
-              thread.linkedDirectories.map((directory) => [
-                directory.kind,
-                (
-                  <CopyableThreadChip
-                    aria-label={
-                      directory.kind === "worktree"
-                        ? `Copy path for worktree ${directory.label}`
-                        : `Copy local path for ${directory.label}`
-                    }
-                    key={`${thread.id}:${directory.kind}:location-kind`}
-                    className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
-                    value={
-                      directory.kind === "worktree"
-                        ? directory.worktreePath ?? directory.path
-                        : directory.path
-                    }
-                  >
-                    {directory.kind}
-                  </CopyableThreadChip>
-                ),
-              ]),
-            ).values(),
-          ]
-        : thread.linkedDirectories.map((directory) => {
-            const copyPath =
-              directory.kind === "worktree"
-                ? directory.worktreePath ?? directory.path
-                : directory.path;
-            return (
+  const linkedDirectoryChips = includeLinkedDirectories ? (
+    thread.linkedDirectories.length > 0 ? (
+      linkedDirectoryMode === "kind" ? (
+        [
+          ...new Map(
+            thread.linkedDirectories.map((directory) => [
+              directory.kind,
               <CopyableThreadChip
                 aria-label={
                   directory.kind === "worktree"
                     ? `Copy path for worktree ${directory.label}`
-                    : `Copy path for ${directory.label}`
+                    : `Copy local path for ${directory.label}`
                 }
-                key={`${thread.id}:${directory.id}:root`}
-                className="thread-row__chip path-copy-target tooltip-target"
-                value={copyPath}
+                key={`${thread.id}:${directory.kind}:location-kind`}
+                className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
+                value={
+                  directory.kind === "worktree"
+                    ? (directory.worktreePath ?? directory.path)
+                    : directory.path
+                }
               >
-                <span aria-hidden="true" className="thread-row__chip-icon">
-                  {directory.kind === "worktree" ? <WorktreeIcon size={12} /> : <FolderIcon size={12} />}
-                </span>
-                <span className="thread-row__chip-label">{directory.label}</span>
-              </CopyableThreadChip>
-            );
-          })
-      : (
-          <span className="thread-row__chip thread-row__chip--muted">
-            No linked directory
-          </span>
-        )
-    : null;
+                {directory.kind}
+              </CopyableThreadChip>,
+            ]),
+          ).values(),
+        ]
+      ) : (
+        thread.linkedDirectories.map((directory) => {
+          const copyPath =
+            directory.kind === "worktree"
+              ? (directory.worktreePath ?? directory.path)
+              : directory.path;
+          return (
+            <CopyableThreadChip
+              aria-label={
+                directory.kind === "worktree"
+                  ? `Copy path for worktree ${directory.label}`
+                  : `Copy path for ${directory.label}`
+              }
+              key={`${thread.id}:${directory.id}:root`}
+              className="thread-row__chip path-copy-target tooltip-target"
+              value={copyPath}
+            >
+              <span aria-hidden="true" className="thread-row__chip-icon">
+                {directory.kind === "worktree" ? (
+                  <WorktreeIcon size={12} />
+                ) : (
+                  <FolderIcon size={12} />
+                )}
+              </span>
+              <span className="thread-row__chip-label">{directory.label}</span>
+            </CopyableThreadChip>
+          );
+        })
+      )
+    ) : (
+      <span className="thread-row__chip thread-row__chip--muted">
+        No linked directory
+      </span>
+    )
+  ) : null;
 
   // Returns a fragment (no wrapping container) so the chips flow as
   // direct siblings inside the row's single .thread-row__chips
@@ -152,7 +159,9 @@ export function ThreadMetaChips({
           aria-label="Pinned"
           role="img"
           className="thread-row__chip thread-row__chip--pin"
-          onMouseEnter={(event) => pinTooltip.show(event.currentTarget, "Pinned")}
+          onMouseEnter={(event) =>
+            pinTooltip.show(event.currentTarget, "Pinned")
+          }
           onMouseLeave={pinTooltip.hide}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">
@@ -191,7 +200,9 @@ export function ThreadMetaChips({
           <span aria-hidden="true" className="thread-row__chip-icon">
             !
           </span>
-          <span className="thread-row__chip-label">now {thread.observedGitBranch}</span>
+          <span className="thread-row__chip-label">
+            now {thread.observedGitBranch}
+          </span>
         </CopyableThreadChip>
       ) : null}
 
@@ -253,7 +264,10 @@ function formatCommit(value: string | undefined): string | undefined {
   return commit ? commit.slice(0, 12) : undefined;
 }
 
-function formatCommitCount(value: number | undefined, label: string): string | undefined {
+function formatCommitCount(
+  value: number | undefined,
+  label: string,
+): string | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -292,7 +306,9 @@ function CopyableThreadChip(props: {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const [copied, setCopied] = useState(false);
   const tooltipBody = props.tooltipText ?? props.value;
-  const tooltipText = copied ? "Copied" : `${tooltipBody}\nClick to copy to clipboard`;
+  const tooltipText = copied
+    ? "Copied"
+    : `${tooltipBody}\nClick to copy to clipboard`;
 
   useEffect(() => {
     if (!copied) {

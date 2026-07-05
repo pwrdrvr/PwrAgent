@@ -1,5 +1,15 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { Readable } from "node:stream";
 import { messagingApi } from "@line/bot-sdk";
 import type {
@@ -73,10 +83,14 @@ export type LineBotInfo = {
 export type LineApi = {
   downloadMessageContent(messageId: string): Promise<Uint8Array>;
   getBotInfo(): Promise<LineBotInfo>;
-  pushMessage(params: { messages: LineMessage[]; to: string }): Promise<LineSendResult>;
-  showLoadingAnimation?(
-    params: { chatId: string; loadingSeconds?: number },
-  ): Promise<unknown>;
+  pushMessage(params: {
+    messages: LineMessage[];
+    to: string;
+  }): Promise<LineSendResult>;
+  showLoadingAnimation?(params: {
+    chatId: string;
+    loadingSeconds?: number;
+  }): Promise<unknown>;
 };
 
 export type LineSendResult = {
@@ -89,15 +103,23 @@ export type LineProviderAdapter = {
   channel: "line";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
-  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  resolveDeliveryScope?(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined;
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
-  start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
+  start(
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void>;
   stop(): Promise<void>;
-  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
-  updateRenderingPreferences?(update: MessagingAdapterRenderingPreferencesUpdate): Promise<void>;
+  updateAuthorization?(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void>;
+  updateRenderingPreferences?(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void>;
 };
 
 export type LineAdapterOptions = {
@@ -130,7 +152,14 @@ type LineWebhookEvent = {
       }>;
     };
     text?: string;
-    type?: "audio" | "file" | "image" | "location" | "sticker" | "text" | "video";
+    type?:
+      | "audio"
+      | "file"
+      | "image"
+      | "location"
+      | "sticker"
+      | "text"
+      | "video";
   };
   postback?: {
     data?: string;
@@ -204,18 +233,22 @@ export class LineAdapter implements LineProviderAdapter {
   private listener: LineInboundListener | undefined;
   private botUserId: string | undefined;
   private started = false;
-  private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  private readonly inboundRejectedListeners =
+    new Set<MessagingInboundRejectedListener>();
 
   constructor(options: LineAdapterOptions) {
     this.config = options.config;
-    this.api = options.api ??
-      (options.config.channelAccessToken
+    this.api =
+      options.api
+      ?? (options.config.channelAccessToken
         ? createLineApi(options.config.channelAccessToken)
         : undefined);
     this.callbackHandleStore = options.callbackHandleStore;
     this.logger = options.logger ?? {};
     this.now = options.now ?? Date.now;
-    this.authorizedActorIdsValue = options.config.authorizedActorIds.map((actor) => actor.id);
+    this.authorizedActorIdsValue = options.config.authorizedActorIds.map(
+      (actor) => actor.id,
+    );
     this.signingSecret = createHash("sha256")
       .update(options.config.channelSecret)
       .digest("hex");
@@ -229,18 +262,24 @@ export class LineAdapter implements LineProviderAdapter {
     return this.authorizedActorIdsValue;
   }
 
-  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+  async updateAuthorization(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void> {
     this.authorizedActorIdsValue = [...update.authorizedActorIds];
     this.config.authorizedActorIds = lineContactsFromIds(
       update.authorizedActorIds,
       this.config.authorizedActorIds,
     );
     this.config.authorizedGroupIds = lineContactsFromIds(
-      (update.authorizedConversationIds ?? []).filter((id) => id.startsWith("C")),
+      (update.authorizedConversationIds ?? []).filter((id) =>
+        id.startsWith("C"),
+      ),
       this.config.authorizedGroupIds,
     );
     this.config.authorizedRoomIds = lineContactsFromIds(
-      (update.authorizedConversationIds ?? []).filter((id) => id.startsWith("R")),
+      (update.authorizedConversationIds ?? []).filter((id) =>
+        id.startsWith("R"),
+      ),
       this.config.authorizedRoomIds,
     );
   }
@@ -303,7 +342,9 @@ export class LineAdapter implements LineProviderAdapter {
     };
   }
 
-  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+  resolveDeliveryScope(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined {
     const channel = intent.audit?.channel;
     if (!channel) return undefined;
     return {
@@ -314,7 +355,9 @@ export class LineAdapter implements LineProviderAdapter {
     };
   }
 
-  async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
+  async deliver(
+    intent: MessagingSurfaceIntent,
+  ): Promise<MessagingDeliveryResult> {
     const deliveredAt = this.now();
     if (intent.kind === "dismiss") {
       return { channel: "line", deliveredAt, outcome: "unsupported" };
@@ -398,10 +441,12 @@ export class LineAdapter implements LineProviderAdapter {
           to: target.conversationId,
           messages: messages.slice(index, index + 5),
         });
-        firstMessageId ??= result.sentMessages?.find((message) => message.id)?.id;
+        firstMessageId ??= result.sentMessages?.find(
+          (message) => message.id,
+        )?.id;
       }
-      const messageId = firstMessageId
-        ?? `${target.conversationId}:${intent.id}`;
+      const messageId =
+        firstMessageId ?? `${target.conversationId}:${intent.id}`;
       return {
         channel: "line",
         deliveredAt: this.now(),
@@ -436,12 +481,16 @@ export class LineAdapter implements LineProviderAdapter {
       throw new Error("LINE attachment is missing a message id");
     }
     if (!this.api) {
-      throw new Error("LINE channel access token is required to download attachments");
+      throw new Error(
+        "LINE channel access token is required to download attachments",
+      );
     }
-    const providerMaxBytes = this.capabilityProfile.inboundAttachments?.maxDownloadBytes;
-    const maxBytes = providerMaxBytes === undefined
-      ? request.maxBytes
-      : Math.min(request.maxBytes, providerMaxBytes);
+    const providerMaxBytes =
+      this.capabilityProfile.inboundAttachments?.maxDownloadBytes;
+    const maxBytes =
+      providerMaxBytes === undefined
+        ? request.maxBytes
+        : Math.min(request.maxBytes, providerMaxBytes);
     if (
       maxBytes !== undefined
       && request.attachment.sizeBytes !== undefined
@@ -569,7 +618,14 @@ export class LineAdapter implements LineProviderAdapter {
       case "follow":
       case "unfollow":
         if (!ids.userId) return;
-        if (!this.authorizeInbound({ actor, channel, kind: "lifecycle", routingState })) {
+        if (
+          !this.authorizeInbound({
+            actor,
+            channel,
+            kind: "lifecycle",
+            routingState,
+          })
+        ) {
           return;
         }
         await this.listener({
@@ -588,13 +644,23 @@ export class LineAdapter implements LineProviderAdapter {
           return;
         }
         if (!ids.userId) {
-          this.logger.debug?.("line lifecycle event ignored without source user", {
-            conversationId: channel.conversation.id,
-            eventType: event.type,
-          });
+          this.logger.debug?.(
+            "line lifecycle event ignored without source user",
+            {
+              conversationId: channel.conversation.id,
+              eventType: event.type,
+            },
+          );
           return;
         }
-        if (!this.authorizeInbound({ actor, channel, kind: "lifecycle", routingState })) {
+        if (
+          !this.authorizeInbound({
+            actor,
+            channel,
+            kind: "lifecycle",
+            routingState,
+          })
+        ) {
           return;
         }
         await this.listener({
@@ -604,10 +670,7 @@ export class LineAdapter implements LineProviderAdapter {
           channel,
           receivedAt: this.now(),
           routingState,
-          lifecycle:
-            event.type === "join"
-              ? "bound"
-              : "detached",
+          lifecycle: event.type === "join" ? "bound" : "detached",
         });
         return;
       default:
@@ -622,18 +685,21 @@ export class LineAdapter implements LineProviderAdapter {
     routingState: MessagingAdapterState,
   ): Promise<void> {
     if (!this.listener || !event.message) return;
-    const text = event.message.type === "text" ? event.message.text ?? "" : "";
+    const text =
+      event.message.type === "text" ? (event.message.text ?? "") : "";
     const isPairing = Boolean(extractMessagingPairingToken(text));
     if (!isPairing && !this.shouldAcceptTextEvent(event, channel, text)) {
       return;
     }
-    if (!this.authorizeInbound({
-      actor,
-      channel,
-      kind: event.message.type === "text" ? "text" : "media",
-      pairing: isPairing,
-      routingState,
-    })) {
+    if (
+      !this.authorizeInbound({
+        actor,
+        channel,
+        kind: event.message.type === "text" ? "text" : "media",
+        pairing: isPairing,
+        routingState,
+      })
+    ) {
       return;
     }
     if (event.message.type === "text") {
@@ -697,7 +763,9 @@ export class LineAdapter implements LineProviderAdapter {
       });
       return;
     }
-    if (!this.authorizeInbound({ actor, channel, kind: "callback", routingState })) {
+    if (
+      !this.authorizeInbound({ actor, channel, kind: "callback", routingState })
+    ) {
       return;
     }
     const record = await this.callbackHandleStore.resolveCallbackHandle({
@@ -710,7 +778,10 @@ export class LineAdapter implements LineProviderAdapter {
       this.logger.warn?.("line callback handle unresolved", {
         actorId: actor.platformUserId,
         channelId: channel.conversation.id,
-        handleHash: createHash("sha256").update(signed.handle).digest("hex").slice(0, 8),
+        handleHash: createHash("sha256")
+          .update(signed.handle)
+          .digest("hex")
+          .slice(0, 8),
       });
       return;
     }
@@ -768,8 +839,10 @@ export class LineAdapter implements LineProviderAdapter {
 
   private isAuthorizedConversation(channel: MessagingChannelRef): boolean {
     if (channel.conversation.kind === "dm") return true;
-    const groupIds = this.config.authorizedGroupIds?.map((entry) => entry.id) ?? [];
-    const roomIds = this.config.authorizedRoomIds?.map((entry) => entry.id) ?? [];
+    const groupIds =
+      this.config.authorizedGroupIds?.map((entry) => entry.id) ?? [];
+    const roomIds =
+      this.config.authorizedRoomIds?.map((entry) => entry.id) ?? [];
     if (channel.conversation.id.startsWith("C")) {
       return groupIds.includes(channel.conversation.id);
     }
@@ -787,16 +860,20 @@ export class LineAdapter implements LineProviderAdapter {
     if (channel.conversation.kind === "dm") return true;
     if (text.startsWith("/")) return true;
     const mentionees = event.message?.mention?.mentionees ?? [];
-    return mentionees.some((mention) => mention.isSelf === true || mention.userId === this.botUserId);
+    return mentionees.some(
+      (mention) => mention.isSelf === true || mention.userId === this.botUserId,
+    );
   }
 
-  private validateInboundIds(event: LineWebhookEvent): {
-    eventId: string;
-    groupId?: string;
-    messageId?: string;
-    roomId?: string;
-    userId?: string;
-  } | undefined {
+  private validateInboundIds(event: LineWebhookEvent):
+    | {
+        eventId: string;
+        groupId?: string;
+        messageId?: string;
+        roomId?: string;
+        userId?: string;
+      }
+    | undefined {
     if (!event.source) {
       return undefined;
     }
@@ -876,7 +953,9 @@ export class LineAdapter implements LineProviderAdapter {
   }
 
   private actorForLineUser(userId: string): MessagingActorIdentity {
-    const contact = this.config.authorizedActorIds.find((item) => item.id === userId);
+    const contact = this.config.authorizedActorIds.find(
+      (item) => item.id === userId,
+    );
     return {
       platformUserId: userId,
       displayName: contact?.displayName,
@@ -897,7 +976,9 @@ export class LineAdapter implements LineProviderAdapter {
     ids: { groupId?: string; roomId?: string; userId?: string },
   ): MessagingChannelRef {
     if (source.type === "group" && ids.groupId) {
-      const contact = this.config.authorizedGroupIds?.find((item) => item.id === ids.groupId);
+      const contact = this.config.authorizedGroupIds?.find(
+        (item) => item.id === ids.groupId,
+      );
       return {
         channel: "line",
         conversation: {
@@ -908,7 +989,9 @@ export class LineAdapter implements LineProviderAdapter {
       };
     }
     if (source.type === "room" && ids.roomId) {
-      const contact = this.config.authorizedRoomIds?.find((item) => item.id === ids.roomId);
+      const contact = this.config.authorizedRoomIds?.find(
+        (item) => item.id === ids.roomId,
+      );
       return {
         channel: "line",
         conversation: {
@@ -923,8 +1006,9 @@ export class LineAdapter implements LineProviderAdapter {
       conversation: {
         id: ids.userId ?? "line:unknown-user",
         kind: "dm",
-        title: this.config.authorizedActorIds.find((item) => item.id === ids.userId)
-          ?.displayName,
+        title: this.config.authorizedActorIds.find(
+          (item) => item.id === ids.userId,
+        )?.displayName,
       },
     };
   }
@@ -952,9 +1036,12 @@ export class LineAdapter implements LineProviderAdapter {
   private attachmentForMessage(
     message: NonNullable<LineWebhookEvent["message"]>,
   ): MessagingAttachmentDescriptor | undefined {
-    if (!message.id || !message.type || message.type === "text") return undefined;
+    if (!message.id || !message.type || message.type === "text")
+      return undefined;
     const kind =
-      message.type === "image" || message.type === "video" || message.type === "audio"
+      message.type === "image"
+      || message.type === "video"
+      || message.type === "audio"
         ? message.type
         : message.type === "file"
           ? "file"
@@ -984,7 +1071,9 @@ export class LineAdapter implements LineProviderAdapter {
   }): (action: MessagingSurfaceAction) => string {
     return (action) => {
       const handle = `${this.channel}:${createHash("sha256")
-        .update(JSON.stringify([params.intent.id, action.id, action.value ?? null]))
+        .update(
+          JSON.stringify([params.intent.id, action.id, action.value ?? null]),
+        )
         .digest("base64url")
         .slice(0, 18)}`;
       const issuedAt = this.now();
@@ -1042,7 +1131,10 @@ export class LineAdapter implements LineProviderAdapter {
     const expected = this.signPostbackData(record.h, record.t);
     if (!safeEqual(expected, record.s)) {
       this.logger.warn?.("line callback signature rejected", {
-        handleHash: createHash("sha256").update(record.h).digest("hex").slice(0, 8),
+        handleHash: createHash("sha256")
+          .update(record.h)
+          .digest("hex")
+          .slice(0, 8),
       });
       return undefined;
     }
@@ -1060,12 +1152,17 @@ export class LineAdapter implements LineProviderAdapter {
     intent: MessagingSurfaceIntent,
   ): { channelRef: MessagingChannelRef; conversationId: string } | undefined {
     const opaque = readLineOpaque(intent.targetSurface?.state);
-    const conversationId = opaque?.conversationId ?? intent.audit?.channel.conversation.id;
+    const conversationId =
+      opaque?.conversationId ?? intent.audit?.channel.conversation.id;
     if (!conversationId) return undefined;
     const validation = validateLineConversationId(conversationId);
     if (!validation.ok) {
       logLineInvalidIdentifier({
-        field: conversationId.startsWith("R") ? "room_id" : conversationId.startsWith("C") ? "group_id" : "user_id",
+        field: conversationId.startsWith("R")
+          ? "room_id"
+          : conversationId.startsWith("C")
+            ? "group_id"
+            : "user_id",
         logger: this.logger,
         reason: validation.reason,
         value: conversationId,
@@ -1111,7 +1208,9 @@ export function createLineAdapter(
 
 export function createLineApi(channelAccessToken: string): LineApi {
   const client = new messagingApi.MessagingApiClient({ channelAccessToken });
-  const blobClient = new messagingApi.MessagingApiBlobClient({ channelAccessToken });
+  const blobClient = new messagingApi.MessagingApiBlobClient({
+    channelAccessToken,
+  });
   return {
     async getBotInfo() {
       return await client.getBotInfo();
@@ -1134,7 +1233,9 @@ export function verifyLineSignature(
   signature: string,
   channelSecret: string,
 ): boolean {
-  const expected = createHmac("sha256", channelSecret).update(body).digest("base64");
+  const expected = createHmac("sha256", channelSecret)
+    .update(body)
+    .digest("base64");
   return safeEqual(expected, signature);
 }
 
@@ -1145,9 +1246,7 @@ function bindAddressFromCallbackUrl(callbackBaseUrl: string): {
   try {
     const parsed = new URL(callbackBaseUrl);
     const host = parsed.hostname || DEFAULT_CALLBACK_HOST;
-    const port = parsed.port
-      ? Number(parsed.port)
-      : DEFAULT_CALLBACK_PORT;
+    const port = parsed.port ? Number(parsed.port) : DEFAULT_CALLBACK_PORT;
     if (Number.isInteger(port) && port > 0 && port <= 65535) {
       return { host, port };
     }
@@ -1177,8 +1276,12 @@ function readLineOpaque(
     conversationId: record.conversationId,
     conversationKind: record.conversationKind ?? "dm",
     ...(typeof record.groupId === "string" ? { groupId: record.groupId } : {}),
-    ...(typeof record.messageId === "string" ? { messageId: record.messageId } : {}),
-    ...(typeof record.replyToken === "string" ? { replyToken: record.replyToken } : {}),
+    ...(typeof record.messageId === "string"
+      ? { messageId: record.messageId }
+      : {}),
+    ...(typeof record.replyToken === "string"
+      ? { replyToken: record.replyToken }
+      : {}),
     ...(typeof record.roomId === "string" ? { roomId: record.roomId } : {}),
   };
 }
@@ -1192,7 +1295,9 @@ function stripSelfMention(
   return text.replace(/^@\S+\s*/, "").trimStart();
 }
 
-function shouldDiscardLineStatusUpdate(intent: MessagingSurfaceIntent): boolean {
+function shouldDiscardLineStatusUpdate(
+  intent: MessagingSurfaceIntent,
+): boolean {
   return (
     intent.kind === "status"
     && intent.delivery?.mode === "update"
@@ -1216,7 +1321,8 @@ function titleForLineActionBubble(
     case "status":
       return "Thread status";
     case "questionnaire": {
-      const question = intent.questions[intent.currentIndex] ?? intent.questions[0];
+      const question =
+        intent.questions[intent.currentIndex] ?? intent.questions[0];
       return question?.header || question?.question || "PwrAgent";
     }
     default:
@@ -1253,7 +1359,9 @@ function lineContactsFromIds(
   ids: readonly string[],
   previous: readonly { id: string; displayName: string }[] | undefined,
 ): { id: string; displayName: string }[] {
-  const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
+  const previousById = new Map(
+    (previous ?? []).map((contact) => [contact.id, contact]),
+  );
   return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 
@@ -1261,11 +1369,13 @@ function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
   return intent.audit?.bindingId ?? intent.bindingId;
 }
 
-function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | undefined {
-  return intent.kind === "thread_picker" ||
-    intent.kind === "project_picker" ||
-    intent.kind === "single_select" ||
-    intent.kind === "confirmation"
+function browseSessionIdForIntent(
+  intent: MessagingSurfaceIntent,
+): string | undefined {
+  return intent.kind === "thread_picker"
+    || intent.kind === "project_picker"
+    || intent.kind === "single_select"
+    || intent.kind === "confirmation"
     ? intent.browseSessionId
     : undefined;
 }

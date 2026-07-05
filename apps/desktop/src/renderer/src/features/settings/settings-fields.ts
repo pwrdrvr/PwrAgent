@@ -3,7 +3,10 @@ import type {
   DesktopSettingsValue,
 } from "@pwragent/shared";
 
-export function formatSourceLabel(source: string, overriddenByEnv?: boolean): string {
+export function formatSourceLabel(
+  source: string,
+  overriddenByEnv?: boolean,
+): string {
   if (source === "env") {
     return "env";
   }

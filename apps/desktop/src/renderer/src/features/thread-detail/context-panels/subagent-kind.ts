@@ -1,6 +1,8 @@
 import type { ThreadSubAgentSummary } from "@pwragent/shared";
 
-export function isCodexNativeSubAgent(subAgent: ThreadSubAgentSummary): boolean {
+export function isCodexNativeSubAgent(
+  subAgent: ThreadSubAgentSummary,
+): boolean {
   return subAgent.monitorId.startsWith("codex-native:");
 }
 

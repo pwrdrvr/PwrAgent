@@ -31,7 +31,10 @@ function geminiEntry(): AcpAgentSettingsEntry {
 describe("AcpAgentsSettings", () => {
   it("keeps cached ACP agents visible while background discovery refreshes", async () => {
     let resolveRefresh:
-      | ((value: { fetchedAt: number; entries: AcpAgentSettingsEntry[] }) => void)
+      | ((value: {
+          fetchedAt: number;
+          entries: AcpAgentSettingsEntry[];
+        }) => void)
       | undefined;
     const refreshPromise = new Promise<{
       fetchedAt: number;
@@ -81,11 +84,10 @@ describe("AcpAgentsSettings", () => {
         },
       },
     } satisfies AcpAgentSettingsEntry;
-    const listAcpAgents = vi.fn(
-      async (request?: { refresh?: boolean }) =>
-        request?.refresh
-          ? refreshPromise
-          : { fetchedAt: 1000, entries: [cachedEntry] },
+    const listAcpAgents = vi.fn(async (request?: { refresh?: boolean }) =>
+      request?.refresh
+        ? refreshPromise
+        : { fetchedAt: 1000, entries: [cachedEntry] },
     );
 
     render(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
@@ -128,7 +130,11 @@ describe("AcpAgentsSettings", () => {
             verificationStatus: "not-applicable",
             instances: [
               { command: "/usr/bin/qwen", version: "0.17.0", source: "path" },
-              { command: "/opt/homebrew/bin/qwen", version: "0.16.0", source: "path" },
+              {
+                command: "/opt/homebrew/bin/qwen",
+                version: "0.16.0",
+                source: "path",
+              },
             ],
             activeCommand: "/usr/bin/qwen",
           } satisfies AcpAgentSettingsEntry,
@@ -137,7 +143,10 @@ describe("AcpAgentsSettings", () => {
     };
 
     render(
-      <AcpAgentsSettings desktopApi={desktopApi} onCliPathChange={onCliPathChange} />,
+      <AcpAgentsSettings
+        desktopApi={desktopApi}
+        onCliPathChange={onCliPathChange}
+      />,
     );
 
     expect(await screen.findByText("Qwen Code")).toBeInTheDocument();
@@ -149,7 +158,10 @@ describe("AcpAgentsSettings", () => {
     // pins it by writing its command as the cliPath override.
     expect(screen.getByText("Using")).toBeInTheDocument();
     screen.getByRole("button", { name: "Use" }).click();
-    expect(onCliPathChange).toHaveBeenCalledWith("qwen", "/opt/homebrew/bin/qwen");
+    expect(onCliPathChange).toHaveBeenCalledWith(
+      "qwen",
+      "/opt/homebrew/bin/qwen",
+    );
   });
 
   it("renders an undiscovered provider as a 'Not installed' section", async () => {
@@ -231,7 +243,9 @@ describe("AcpAgentsSettings", () => {
 
     // When the bridge arrives the effect must re-run and load — not stay stuck
     // on the unavailable error (the regression the un-latched guard prevents).
-    rerender(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
+    rerender(
+      <AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />,
+    );
     expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
     await waitFor(() => {
       expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });

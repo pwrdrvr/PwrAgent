@@ -1,7 +1,4 @@
-import type {
-  BrowserWindow,
-  BrowserWindowConstructorOptions,
-} from "electron";
+import type { BrowserWindow, BrowserWindowConstructorOptions } from "electron";
 import {
   readBootstrapAppearance,
   themedTitleBarOverlay,

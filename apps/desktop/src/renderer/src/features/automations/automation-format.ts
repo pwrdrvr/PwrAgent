@@ -5,7 +5,9 @@ import type {
   AutomationStatus,
 } from "@pwragent/shared";
 
-export function formatAutomationTimestamp(timestamp: number | undefined): string {
+export function formatAutomationTimestamp(
+  timestamp: number | undefined,
+): string {
   if (!timestamp) {
     return "Not scheduled";
   }
@@ -16,7 +18,9 @@ export function formatAutomationTimestamp(timestamp: number | undefined): string
   }).format(new Date(timestamp));
 }
 
-export function formatAutomationRelative(timestamp: number | undefined): string {
+export function formatAutomationRelative(
+  timestamp: number | undefined,
+): string {
   if (!timestamp) {
     return "never";
   }
@@ -51,7 +55,9 @@ export function formatRunStatus(status: AutomationRunStatus): string {
   return status.replace("_", " ");
 }
 
-export function formatScheduleKind(schedule: AutomationScheduleDefinition): string {
+export function formatScheduleKind(
+  schedule: AutomationScheduleDefinition,
+): string {
   if (schedule.kind === "interval") {
     return "Interval";
   }

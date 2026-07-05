@@ -47,7 +47,10 @@ import {
   shouldConsumeDeliveryBudget,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
-import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
+import type {
+  MessagingAdapter,
+  MessagingBackendBridge,
+} from "../messaging/core/messaging-adapter";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
 
@@ -93,13 +96,16 @@ describe("MessagingController", () => {
       kind: "thread_picker",
       fallbackText: expect.stringContaining("Showing recent PwrAgent threads."),
     });
-    expect(JSON.stringify(harness.delivered[0])).not.toMatch(/callback_data|custom_id/);
-    await expect(harness.store.getPendingIntent(harness.delivered[0]!.id, { now: 1000 }))
-      .resolves.toMatchObject({
-        channel: {
-          channel: "telegram",
-        },
-      });
+    expect(JSON.stringify(harness.delivered[0])).not.toMatch(
+      /callback_data|custom_id/,
+    );
+    await expect(
+      harness.store.getPendingIntent(harness.delivered[0]!.id, { now: 1000 }),
+    ).resolves.toMatchObject({
+      channel: {
+        channel: "telegram",
+      },
+    });
   });
 
   it("presents an Agent-only picker for authorized /agent commands", async () => {
@@ -157,7 +163,9 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "thread_picker",
-      fallbackText: expect.stringContaining("No matching PwrAgent Agent threads found."),
+      fallbackText: expect.stringContaining(
+        "No matching PwrAgent Agent threads found.",
+      ),
       page: {
         actions: expect.arrayContaining([
           expect.objectContaining({
@@ -194,14 +202,17 @@ describe("MessagingController", () => {
       }),
     );
 
-    const binding = await harness.store.findActiveBindingForChannel(agentEvent.channel);
+    const binding = await harness.store.findActiveBindingForChannel(
+      agentEvent.channel,
+    );
     expect(binding).toMatchObject({
       backend: "codex",
       threadId: "thread-1",
       targetKind: "agent_thread",
     });
     const confirmation = harness.delivered.find(
-      (intent) => intent.kind === "confirmation" && intent.title === "Thread bound",
+      (intent) =>
+        intent.kind === "confirmation" && intent.title === "Thread bound",
     );
     expect(confirmation).toMatchObject({
       body: expect.stringContaining("selected Agent thread"),
@@ -212,11 +223,15 @@ describe("MessagingController", () => {
   it("starts a new Agent thread from /agent --new and binds it as an Agent target", async () => {
     const harness = await createHarness();
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/agent --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/agent --new"),
+    );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "project_picker",
-      prompt: expect.stringContaining("Choose a project for the new PwrAgent Agent thread"),
+      prompt: expect.stringContaining(
+        "Choose a project for the new PwrAgent Agent thread",
+      ),
     });
 
     await harness.controller.handleInboundEvent(
@@ -236,7 +251,9 @@ describe("MessagingController", () => {
       body: expect.stringContaining("Agent: Messaging Agent"),
     });
 
-    await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Check the queue"),
+    );
 
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       {
@@ -266,7 +283,9 @@ describe("MessagingController", () => {
       }),
     );
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/agent").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/agent").channel,
+      ),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "new-thread-1",
@@ -297,7 +316,8 @@ describe("MessagingController", () => {
     }));
     const getManagedConversationRights = vi.fn(async () => ({
       channel: "telegram" as const,
-      conversation: buildTelegramChannelCommandEvent("/agent").channel.conversation,
+      conversation:
+        buildTelegramChannelCommandEvent("/agent").channel.conversation,
       operations: [
         {
           operation: "create_child" as const,
@@ -418,7 +438,8 @@ describe("MessagingController", () => {
   it("preserves the messaging location for queued Agent-thread turns", async () => {
     const harness = await createHarness();
     harness.startTurn.mockImplementation(async (request: StartTurnRequest) => {
-      const turnId = harness.startTurn.mock.calls.length === 1 ? "turn-1" : "turn-2";
+      const turnId =
+        harness.startTurn.mock.calls.length === 1 ? "turn-1" : "turn-2";
       return {
         backend: request.backend,
         threadId: request.threadId,
@@ -439,7 +460,9 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(event);
-    await harness.controller.handleInboundEvent(buildTextEvent("queued request"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("queued request"),
+    );
 
     expect(harness.delivered).toContainEqual(
       expect.objectContaining({
@@ -520,7 +543,8 @@ describe("MessagingController", () => {
     });
     const getManagedConversationRights = vi.fn(async () => ({
       channel: "telegram" as const,
-      conversation: buildTelegramChannelCommandEvent("/agent").channel.conversation,
+      conversation:
+        buildTelegramChannelCommandEvent("/agent").channel.conversation,
       operations: [
         {
           operation: "create_child" as const,
@@ -607,8 +631,7 @@ describe("MessagingController", () => {
     expect(harness.delivered).toEqual([
       expect.objectContaining({
         kind: "status",
-        bindingId:
-          "binding:telegram:topic:-1001:500:codex:thread-2",
+        bindingId: "binding:telegram:topic:-1001:500:codex:thread-2",
         delivery: expect.objectContaining({
           mode: "present",
           pin: true,
@@ -618,8 +641,7 @@ describe("MessagingController", () => {
       }),
       expect.objectContaining({
         kind: "message",
-        bindingId:
-          "binding:telegram:topic:-1001:500:codex:thread-2",
+        bindingId: "binding:telegram:topic:-1001:500:codex:thread-2",
         role: "assistant",
         parts: [
           expect.objectContaining({
@@ -741,7 +763,9 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "project_picker",
-      prompt: expect.stringContaining("Choose a project for the new PwrAgent Agent thread"),
+      prompt: expect.stringContaining(
+        "Choose a project for the new PwrAgent Agent thread",
+      ),
     });
   });
 
@@ -760,7 +784,10 @@ describe("MessagingController", () => {
       fallbackText: expect.stringContaining("Showing recent PwrAgent threads."),
       page: {
         actions: expect.arrayContaining([
-          expect.objectContaining({ id: "browse:mode:new", label: "New Agent" }),
+          expect.objectContaining({
+            id: "browse:mode:new",
+            label: "New Agent",
+          }),
         ]),
       },
     });
@@ -773,7 +800,9 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "project_picker",
-      prompt: expect.stringContaining("Choose a project for the new PwrAgent Agent thread"),
+      prompt: expect.stringContaining(
+        "Choose a project for the new PwrAgent Agent thread",
+      ),
     });
 
     await harness.controller.handleInboundEvent(
@@ -786,7 +815,9 @@ describe("MessagingController", () => {
         },
       }),
     );
-    await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Check the queue"),
+    );
 
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -800,7 +831,9 @@ describe("MessagingController", () => {
       }),
     );
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/agent").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/agent").channel,
+      ),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "new-thread-1",
@@ -821,7 +854,9 @@ describe("MessagingController", () => {
     const newPicker = harness.delivered.at(-1);
     expect(newPicker).toMatchObject({
       kind: "project_picker",
-      prompt: expect.stringContaining("Choose a project for the new PwrAgent thread"),
+      prompt: expect.stringContaining(
+        "Choose a project for the new PwrAgent thread",
+      ),
       page: {
         actions: expect.arrayContaining([
           expect.objectContaining({
@@ -908,7 +943,9 @@ describe("MessagingController", () => {
   it("shows projects from /resume --projects and filters threads after a project click", async () => {
     const harness = await createHarness();
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --projects"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --projects"),
+    );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "project_picker",
@@ -949,7 +986,9 @@ describe("MessagingController", () => {
   it("starts a new thread from /resume --new only after the first prompt arrives", async () => {
     const harness = await createHarness();
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -964,7 +1003,9 @@ describe("MessagingController", () => {
     expect(harness.startThread).not.toHaveBeenCalled();
     expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      ),
     ).resolves.toBeUndefined();
     const readyIntent = harness.delivered.at(-1);
     expect(readyIntent).toMatchObject({
@@ -1023,7 +1064,9 @@ describe("MessagingController", () => {
     expect(harness.startThread).not.toHaveBeenCalled();
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      ),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "new-thread-1",
@@ -1057,7 +1100,9 @@ describe("MessagingController", () => {
       pendingIntentTtlMs: 60_000,
     });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -1070,7 +1115,9 @@ describe("MessagingController", () => {
     );
 
     now += 2 * 24 * 60 * 60 * 1000;
-    await harness.controller.handleInboundEvent(buildTextEvent("Fix the delayed prompt bug"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Fix the delayed prompt bug"),
+    );
 
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1106,7 +1153,9 @@ describe("MessagingController", () => {
       budget: { limit: 1, intervalMs: 1000, reserved: 0 },
     };
     const budgetEvents: Array<
-      Parameters<NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>>[0]
+      Parameters<
+        NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>
+      >[0]
     > = [];
     const harness = await createHarness({
       deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
@@ -1115,7 +1164,9 @@ describe("MessagingController", () => {
       resolveDeliveryScope: () => scope,
     });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     now = 2000;
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
@@ -1154,7 +1205,9 @@ describe("MessagingController", () => {
       budget: { limit: 1, intervalMs: 1000, reserved: 0 },
     };
     const budgetEvents: Array<
-      Parameters<NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>>[0]
+      Parameters<
+        NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>
+      >[0]
     > = [];
     const harness = await createHarness({
       deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
@@ -1230,7 +1283,9 @@ describe("MessagingController", () => {
       budget: { limit: 1, intervalMs: 1000, reserved: 0 },
     };
     const budgetEvents: Array<
-      Parameters<NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>>[0]
+      Parameters<
+        NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>
+      >[0]
     > = [];
     const harness = await createHarness({
       deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
@@ -1343,7 +1398,9 @@ describe("MessagingController", () => {
       },
     });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -1406,7 +1463,9 @@ describe("MessagingController", () => {
         value: { branchName: "release/v2" },
       }),
     );
-    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug in a worktree"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Fix bug in a worktree"),
+    );
 
     expect(harness.startThread).not.toHaveBeenCalled();
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
@@ -1434,7 +1493,9 @@ describe("MessagingController", () => {
   it("keeps non-git new-thread prompts local when a worktree action is requested", async () => {
     const harness = await createHarness();
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -1485,7 +1546,9 @@ describe("MessagingController", () => {
       ]),
     });
 
-    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug locally"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Fix bug locally"),
+    );
 
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1507,7 +1570,10 @@ describe("MessagingController", () => {
   });
 
   it("paginates the new-thread base branch picker", async () => {
-    const branches = Array.from({ length: 18 }, (_, index) => `branch-${index + 1}`);
+    const branches = Array.from(
+      { length: 18 },
+      (_, index) => `branch-${index + 1}`,
+    );
     const harness = await createHarness({
       navigation: {
         ...buildNavigationSnapshot(),
@@ -1524,7 +1590,9 @@ describe("MessagingController", () => {
       },
     });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -1548,7 +1616,9 @@ describe("MessagingController", () => {
     }
     expect(firstPage.body).toContain("Page 1/3.");
     expect(
-      firstPage.actions.filter((action) => action.id === "browse:new:set-base-branch"),
+      firstPage.actions.filter(
+        (action) => action.id === "browse:new:set-base-branch",
+      ),
     ).toHaveLength(8);
     expect(firstPage.actions).toContainEqual(
       expect.objectContaining({
@@ -1584,9 +1654,13 @@ describe("MessagingController", () => {
 
   it("uses the materialized worktree path in the optimistic status for messaging-started threads", async () => {
     const harness = await createHarness();
-    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeLaunchpadNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValue(
+      buildWorktreeLaunchpadNavigationSnapshot(),
+    );
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -1621,14 +1695,18 @@ describe("MessagingController", () => {
       text: expect.stringContaining("Directory: /repo/pwragent"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
-      text: expect.stringContaining("Worktree: /repo/pwragent/.worktrees/new-thread-1"),
+      text: expect.stringContaining(
+        "Worktree: /repo/pwragent/.worktrees/new-thread-1",
+      ),
     });
   });
 
   it("cancels a pending new-thread prompt without creating a thread", async () => {
     const harness = await createHarness();
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -1649,7 +1727,9 @@ describe("MessagingController", () => {
     expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      ),
     ).resolves.toBeUndefined();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
@@ -1657,7 +1737,9 @@ describe("MessagingController", () => {
     });
 
     harness.delivered.length = 0;
-    await harness.controller.handleInboundEvent(buildTextEvent("@huntharo_bot"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("@huntharo_bot"),
+    );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
@@ -1671,7 +1753,9 @@ describe("MessagingController", () => {
   it("resolves pending new-thread Back through persisted callback handles", async () => {
     const harness = await createHarness();
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -1684,7 +1768,9 @@ describe("MessagingController", () => {
     );
     const readyIntent = harness.delivered.at(-1);
     if (readyIntent?.kind !== "confirmation" || !readyIntent.browseSessionId) {
-      throw new Error("Expected ready-to-start confirmation with a browse session id");
+      throw new Error(
+        "Expected ready-to-start confirmation with a browse session id",
+      );
     }
     await harness.store.upsertCallbackHandle({
       id: "callback:ready-back",
@@ -1709,7 +1795,9 @@ describe("MessagingController", () => {
     expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "project_picker",
-      prompt: expect.stringContaining("Choose a project for the new PwrAgent thread"),
+      prompt: expect.stringContaining(
+        "Choose a project for the new PwrAgent thread",
+      ),
     });
   });
 
@@ -1725,7 +1813,10 @@ describe("MessagingController", () => {
         kind: "workspace",
         label: "Workspaces",
         path: "/Users/test/.pwragent/profiles/default/projects",
-        threadKeys: ["codex:profile-scratchpad-1", "codex:profile-scratchpad-2"],
+        threadKeys: [
+          "codex:profile-scratchpad-1",
+          "codex:profile-scratchpad-2",
+        ],
         needsAttentionCount: 0,
         latestUpdatedAt: 8_500,
       },
@@ -1750,7 +1841,9 @@ describe("MessagingController", () => {
     ];
     const harness = await createHarness({ navigation });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
 
     const pickerIntent = harness.delivered.at(-1);
     if (pickerIntent?.kind !== "project_picker") {
@@ -1758,13 +1851,16 @@ describe("MessagingController", () => {
     }
 
     expect(
-      pickerIntent.page.actions.filter((action) => action.id === "browse:select-project"),
+      pickerIntent.page.actions.filter(
+        (action) => action.id === "browse:select-project",
+      ),
     ).toEqual([
       expect.objectContaining({
         id: "browse:select-project",
         label: "1. Workspaces Scratchpad (3)",
         value: {
-          directoryKey: "workspace:/Users/test/.pwragent/profiles/default/projects",
+          directoryKey:
+            "workspace:/Users/test/.pwragent/profiles/default/projects",
           label: "Workspaces Scratchpad",
           path: "/Users/test/.pwragent/profiles/default/projects",
         },
@@ -1795,19 +1891,24 @@ describe("MessagingController", () => {
       ...navigation.directories,
     ];
     const materializeDirectoryLaunchpad = vi.fn(
-      async (
-        request: MaterializeDirectoryLaunchpadRequest,
-      ) => ({
+      async (request: MaterializeDirectoryLaunchpadRequest) => ({
         backend: request.launchpad?.backend ?? "codex",
         threadId: "new-thread-1",
-        ...(request.input && request.input.length > 0 ? { turnId: "turn-1" } : {}),
+        ...(request.input && request.input.length > 0
+          ? { turnId: "turn-1" }
+          : {}),
         executionMode: request.launchpad?.executionMode ?? "default",
         workMode: request.launchpad?.workMode ?? "local",
       }),
     );
-    const harness = await createHarness({ navigation, materializeDirectoryLaunchpad });
+    const harness = await createHarness({
+      navigation,
+      materializeDirectoryLaunchpad,
+    });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/agent --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/agent --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -1817,7 +1918,9 @@ describe("MessagingController", () => {
         },
       }),
     );
-    await harness.controller.handleInboundEvent(buildTextEvent("Create a scratch task"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Create a scratch task"),
+    );
 
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1840,7 +1943,9 @@ describe("MessagingController", () => {
     vi.useFakeTimers();
     const harness = await createHarness({ inputDebounceMs: 100 });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -1852,8 +1957,12 @@ describe("MessagingController", () => {
       }),
     );
 
-    await harness.controller.handleInboundEvent(buildTextEvent("First prompt chunk"));
-    await harness.controller.handleInboundEvent(buildTextEvent("second prompt chunk"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("First prompt chunk"),
+    );
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("second prompt chunk"),
+    );
     expect(harness.startThread).not.toHaveBeenCalled();
     expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
 
@@ -1895,7 +2004,9 @@ describe("MessagingController", () => {
       },
     });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -1928,15 +2039,15 @@ describe("MessagingController", () => {
       }),
     );
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      ),
     ).resolves.toBeUndefined();
   });
 
   it("binds a materialized thread when its first turn fails", async () => {
     const materializeDirectoryLaunchpad = vi.fn(
-      async (
-        request: MaterializeDirectoryLaunchpadRequest,
-      ) => ({
+      async (request: MaterializeDirectoryLaunchpadRequest) => ({
         backend: request.launchpad?.backend ?? "codex",
         threadId: "new-thread-1",
         executionMode: request.launchpad?.executionMode ?? "default",
@@ -1949,7 +2060,9 @@ describe("MessagingController", () => {
     );
     const harness = await createHarness({ materializeDirectoryLaunchpad });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -1976,7 +2089,9 @@ describe("MessagingController", () => {
       expectMaterializeOptions(),
     );
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      ),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "new-thread-1",
@@ -2036,7 +2151,9 @@ describe("MessagingController", () => {
     );
     harness = await createHarness({ materializeDirectoryLaunchpad });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -2053,7 +2170,8 @@ describe("MessagingController", () => {
       (intent) => intent.kind === "error" && intent.title === "Turn failed",
     );
     const turnStartFailedNotices = harness.delivered.filter(
-      (intent) => intent.kind === "error" && intent.title === "Turn could not start",
+      (intent) =>
+        intent.kind === "error" && intent.title === "Turn could not start",
     );
     expect(turnFailedNotices).toHaveLength(1);
     expect(turnFailedNotices[0]).toMatchObject({
@@ -2106,7 +2224,9 @@ describe("MessagingController", () => {
     );
     harness = await createHarness({ materializeDirectoryLaunchpad });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -2122,7 +2242,9 @@ describe("MessagingController", () => {
     expect(harness.startThread).not.toHaveBeenCalled();
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      ),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "new-thread-1",
@@ -2197,7 +2319,9 @@ describe("MessagingController", () => {
     );
     harness = await createHarness({ materializeDirectoryLaunchpad });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -2208,7 +2332,9 @@ describe("MessagingController", () => {
         },
       }),
     );
-    const firstPrompt = harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+    const firstPrompt = harness.controller.handleInboundEvent(
+      buildTextEvent("Fix bug"),
+    );
     await materialized;
 
     await expect(
@@ -2219,7 +2345,9 @@ describe("MessagingController", () => {
       }),
     ).resolves.toBeUndefined();
 
-    await harness.controller.handleInboundEvent(buildTextEvent("also check logs"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("also check logs"),
+    );
 
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledTimes(1);
     expect(harness.startTurn).not.toHaveBeenCalled();
@@ -2246,7 +2374,9 @@ describe("MessagingController", () => {
       updatedAt: 900,
     });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -2257,7 +2387,9 @@ describe("MessagingController", () => {
         },
       }),
     );
-    await harness.controller.handleInboundEvent(buildTextEvent("continue on the new thread"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("continue on the new thread"),
+    );
 
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2274,10 +2406,11 @@ describe("MessagingController", () => {
       expectMaterializeOptions(),
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
-    await expect(harness.store.getBinding("binding:telegram:dm::chat-1:codex:old-thread"))
-      .resolves.toMatchObject({
-        revokedAt: 1000,
-      });
+    await expect(
+      harness.store.getBinding("binding:telegram:dm::chat-1:codex:old-thread"),
+    ).resolves.toMatchObject({
+      revokedAt: 1000,
+    });
     expect(harness.recordMessagingBindingTransition).toHaveBeenCalledWith(
       expect.objectContaining({
         backend: "codex",
@@ -2317,7 +2450,9 @@ describe("MessagingController", () => {
     );
 
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      ),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "thread-1",
@@ -2336,7 +2471,9 @@ describe("MessagingController", () => {
         }),
       }),
     );
-    expect(harness.delivered.find((intent) => intent.kind === "confirmation")).toMatchObject({
+    expect(
+      harness.delivered.find((intent) => intent.kind === "confirmation"),
+    ).toMatchObject({
       kind: "confirmation",
       title: "Thread bound",
     });
@@ -2378,7 +2515,9 @@ describe("MessagingController", () => {
           "Input: @mention this bot for messages to reach this bound thread.",
       },
     };
-    const harness = await createHarness({ capabilityProfile: mentionRequiredProfile });
+    const harness = await createHarness({
+      capabilityProfile: mentionRequiredProfile,
+    });
     const sharedChannel = {
       channel: "mattermost" as const,
       conversation: {
@@ -2398,7 +2537,9 @@ describe("MessagingController", () => {
       }),
     );
 
-    expect(harness.delivered.find((intent) => intent.kind === "confirmation")).toMatchObject({
+    expect(
+      harness.delivered.find((intent) => intent.kind === "confirmation"),
+    ).toMatchObject({
       kind: "confirmation",
       title: "Thread bound",
       body: expect.stringContaining("@mention this bot"),
@@ -2436,7 +2577,9 @@ describe("MessagingController", () => {
     const bindingAfterDisable = await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/resume").channel,
     );
-    expect(bindingAfterDisable?.preferences?.streamingResponses).toBe("disabled");
+    expect(bindingAfterDisable?.preferences?.streamingResponses).toBe(
+      "disabled",
+    );
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Streaming: Off"),
@@ -2449,10 +2592,13 @@ describe("MessagingController", () => {
       buildCallbackEvent({ actionId: "status:streaming" }),
     );
 
-    const bindingAfterReenable = await harness.store.findActiveBindingForChannel(
-      buildCommandEvent("/resume").channel,
+    const bindingAfterReenable =
+      await harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      );
+    expect(bindingAfterReenable?.preferences?.streamingResponses).toBe(
+      "enabled",
     );
-    expect(bindingAfterReenable?.preferences?.streamingResponses).toBe("enabled");
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Streaming: On"),
@@ -2465,7 +2611,9 @@ describe("MessagingController", () => {
   it("shows and toggles the effective streaming default from the new-thread screen", async () => {
     const harness = await createHarness({ streamingResponsesDefault: true });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -2491,7 +2639,9 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "browse:new:streaming" }),
     );
-    await harness.controller.handleInboundEvent(buildTextEvent("Start with streams off"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Start with streams off"),
+    );
 
     const binding = await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/resume").channel,
@@ -2555,12 +2705,12 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(resumeEvent);
 
     const callbackEvent = buildCallbackEvent({
-        actionId: "browse:select-thread",
-        value: {
-          backend: "acp:codex-acp",
-          threadId: "session-1",
-        },
-      });
+      actionId: "browse:select-thread",
+      value: {
+        backend: "acp:codex-acp",
+        threadId: "session-1",
+      },
+    });
     await harness.controller.handleInboundEvent(callbackEvent);
 
     const binding = await harness.store.findActiveBindingForChannel(
@@ -2641,7 +2791,9 @@ describe("MessagingController", () => {
     ).resolves.not.toThrow();
     // Bind landed despite no callback wired.
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      ),
     ).resolves.toMatchObject({ backend: "codex", threadId: "thread-1" });
     // Detach also completes — fan-out is best-effort, mutation isn't.
     await expect(
@@ -2649,7 +2801,9 @@ describe("MessagingController", () => {
     ).resolves.not.toThrow();
     // Active lookup now misses (the row is revoked, not deleted).
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      ),
     ).resolves.toBeUndefined();
   });
 
@@ -2661,7 +2815,9 @@ describe("MessagingController", () => {
     // controller now fan-outs `onBindingChanged` on every mutation.
     const setConversationTitle = vi.fn(
       async (
-        request: Parameters<NonNullable<MessagingAdapter["setConversationTitle"]>>[0],
+        request: Parameters<
+          NonNullable<MessagingAdapter["setConversationTitle"]>
+        >[0],
       ) => ({
         channel: "telegram" as const,
         conversation: {
@@ -2950,7 +3106,9 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(buildTextEvent("1"));
 
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      ),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "thread-1",
@@ -2970,7 +3128,9 @@ describe("MessagingController", () => {
       }),
     );
 
-    await harness.controller.handleInboundEvent(buildTextEvent("please run the tests"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("please run the tests"),
+    );
 
     expect(harness.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2988,7 +3148,9 @@ describe("MessagingController", () => {
       kind: "status",
       status: "working",
     });
-    expect(harness.delivered.find((intent) => intent.kind === "activity")).toMatchObject({
+    expect(
+      harness.delivered.find((intent) => intent.kind === "activity"),
+    ).toMatchObject({
       kind: "activity",
       activity: "typing",
       state: "active",
@@ -3161,7 +3323,9 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     const artifactIntent = harness.delivered.find(
-      (intent): intent is MessagingSurfaceIntent & {
+      (
+        intent,
+      ): intent is MessagingSurfaceIntent & {
         artifactDelivery: { kind: "plan"; mode: string };
       } => intent.kind === "message" && "artifactDelivery" in intent,
     );
@@ -3190,7 +3354,9 @@ describe("MessagingController", () => {
     const harness = await createHarness({
       deliver: async (intent) => {
         attempts.push(intent);
-        const hasFile = intent.kind === "message" && intent.parts.some((part) => part.type === "file");
+        const hasFile =
+          intent.kind === "message"
+          && intent.parts.some((part) => part.type === "file");
         return {
           channel: "telegram",
           deliveredAt: 1000,
@@ -3235,15 +3401,18 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     const artifactAttempts = attempts.filter(
-      (intent): intent is MessagingSurfaceIntent & {
+      (
+        intent,
+      ): intent is MessagingSurfaceIntent & {
         artifactDelivery: { kind: "plan"; mode: string };
       } => intent.kind === "message" && "artifactDelivery" in intent,
     );
-    expect(artifactAttempts.map((intent) => intent.artifactDelivery.mode)).toEqual([
-      "attachment_summary",
-      "inline_fallback",
-    ]);
-    expect(artifactAttempts[1]?.kind === "message" ? artifactAttempts[1].parts : []).toHaveLength(1);
+    expect(
+      artifactAttempts.map((intent) => intent.artifactDelivery.mode),
+    ).toEqual(["attachment_summary", "inline_fallback"]);
+    expect(
+      artifactAttempts[1]?.kind === "message" ? artifactAttempts[1].parts : [],
+    ).toHaveLength(1);
   });
 
   it("delivers review artifacts for standard exited_review_mode items", async () => {
@@ -3269,7 +3438,9 @@ describe("MessagingController", () => {
 
     expect(
       harness.delivered.find(
-        (intent): intent is MessagingSurfaceIntent & {
+        (
+          intent,
+        ): intent is MessagingSurfaceIntent & {
           artifactDelivery: { kind: "review"; mode: string };
         } => intent.kind === "message" && "artifactDelivery" in intent,
       ),
@@ -3330,7 +3501,9 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     const artifactIntent = harness.delivered.find(
-      (intent): intent is MessagingSurfaceIntent & {
+      (
+        intent,
+      ): intent is MessagingSurfaceIntent & {
         artifactDelivery: { kind: "review"; mode: string };
       } => intent.kind === "message" && "artifactDelivery" in intent,
     );
@@ -3346,10 +3519,13 @@ describe("MessagingController", () => {
         }),
       ],
     });
-    const textPart = artifactIntent?.kind === "message" ? artifactIntent.parts[0] : undefined;
-    expect(textPart).toEqual(expect.objectContaining({
-      text: expect.stringContaining("Missing validation"),
-    }));
+    const textPart =
+      artifactIntent?.kind === "message" ? artifactIntent.parts[0] : undefined;
+    expect(textPart).toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("Missing validation"),
+      }),
+    );
   });
 
   it("delivers a single added markdown file as attachment plus bounded preview", async () => {
@@ -3383,7 +3559,9 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     const artifactIntent = harness.delivered.find(
-      (intent): intent is MessagingSurfaceIntent & {
+      (
+        intent,
+      ): intent is MessagingSurfaceIntent & {
         artifactDelivery: { kind: "markdown_file"; mode: string };
       } => intent.kind === "message" && "artifactDelivery" in intent,
     );
@@ -3406,15 +3584,19 @@ describe("MessagingController", () => {
         }),
       ],
     });
-    const textPart = artifactIntent?.kind === "message" ? artifactIntent.parts[0] : undefined;
-    const filePart = artifactIntent?.kind === "message" ? artifactIntent.parts[1] : undefined;
-    expect(textPart?.type === "text" ? textPart.text : "").toContain("Open the attachment");
+    const textPart =
+      artifactIntent?.kind === "message" ? artifactIntent.parts[0] : undefined;
+    const filePart =
+      artifactIntent?.kind === "message" ? artifactIntent.parts[1] : undefined;
+    expect(textPart?.type === "text" ? textPart.text : "").toContain(
+      "Open the attachment",
+    );
     expect(textPart?.type === "text" ? textPart.text : "").not.toContain(
       "Do not include this tail",
     );
-    expect(filePart?.type === "file" ? new TextDecoder().decode(filePart.data) : "").toBe(
-      markdown,
-    );
+    expect(
+      filePart?.type === "file" ? new TextDecoder().decode(filePart.data) : "",
+    ).toBe(markdown);
   });
 
   it("posts a durable start notice for automation turns", async () => {
@@ -3457,7 +3639,9 @@ describe("MessagingController", () => {
       }),
     );
 
-    await harness.controller.handleInboundEvent(buildTextEvent("Did we get an update?"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Did we get an update?"),
+    );
 
     expect(harness.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3472,7 +3656,8 @@ describe("MessagingController", () => {
     );
     expect(
       harness.delivered.filter(
-        (intent) => intent.kind === "confirmation" && intent.title === "Message queued",
+        (intent) =>
+          intent.kind === "confirmation" && intent.title === "Message queued",
       ),
     ).toEqual([]);
   });
@@ -3565,13 +3750,19 @@ describe("MessagingController", () => {
 
     expect(
       harness.delivered.filter(
-        (intent) => intent.kind === "stream_update" ||
-          (intent.kind === "message" && intent.role === "system" &&
-            intent.id.startsWith("tool-update")),
+        (intent) =>
+          intent.kind === "stream_update"
+          || (intent.kind === "message"
+            && intent.role === "system"
+            && intent.id.startsWith("tool-update")),
       ),
     ).toEqual([]);
-    expect(JSON.stringify(harness.delivered)).not.toContain("Intermediate thinking");
-    expect(JSON.stringify(harness.delivered)).not.toContain("Intermediate commentary");
+    expect(JSON.stringify(harness.delivered)).not.toContain(
+      "Intermediate thinking",
+    );
+    expect(JSON.stringify(harness.delivered)).not.toContain(
+      "Intermediate commentary",
+    );
     expect(
       harness.delivered.filter(
         (intent) => intent.kind === "message" && "artifactDelivery" in intent,
@@ -3701,7 +3892,9 @@ describe("MessagingController", () => {
         ],
       }),
     );
-    expect(JSON.stringify(harness.delivered)).not.toContain('"decision":"post_card"');
+    expect(JSON.stringify(harness.delivered)).not.toContain(
+      '"decision":"post_card"',
+    );
   });
 
   it("delivers recovered automation run updates to messaging surfaces", async () => {
@@ -3833,8 +4026,8 @@ describe("MessagingController", () => {
     expect(
       harness.delivered.filter(
         (intent) =>
-          intent.kind === "message" &&
-          (intent.role === "assistant" || intent.role === "system"),
+          intent.kind === "message"
+          && (intent.role === "assistant" || intent.role === "system"),
       ),
     ).toEqual([]);
   });
@@ -4024,7 +4217,9 @@ describe("MessagingController", () => {
       now: () => now,
       deliveryBudget,
       resolveDeliveryScope: (intent) =>
-        intent.kind === "activity" || intent.kind === "status" ? scope : undefined,
+        intent.kind === "activity" || intent.kind === "status"
+          ? scope
+          : undefined,
       onDeliveryBudgetEvent: (event) => {
         budgetEvents.push(event);
       },
@@ -4267,7 +4462,10 @@ describe("MessagingController", () => {
         return {
           channel: "telegram",
           deliveredAt: now,
-          outcome: intent.kind === "status" && intent.delivery?.pin ? "pinned" : "presented",
+          outcome:
+            intent.kind === "status" && intent.delivery?.pin
+              ? "pinned"
+              : "presented",
           surface: {
             channel: "telegram",
             id: `surface:${intent.id}`,
@@ -4328,7 +4526,9 @@ describe("MessagingController", () => {
     expect(
       delivered
         .slice(idleActivityIndex + 1)
-        .filter((intent) => intent.kind === "activity" && intent.state === "active"),
+        .filter(
+          (intent) => intent.kind === "activity" && intent.state === "active",
+        ),
     ).toEqual([]);
   });
 
@@ -4382,7 +4582,9 @@ describe("MessagingController", () => {
       text: expect.stringContaining("Project: PwrAgent"),
     });
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/status").channel,
+      ),
     ).resolves.toMatchObject({
       statusSurface: {
         id: `surface:${statusIntents[2]?.id}`,
@@ -4438,7 +4640,9 @@ describe("MessagingController", () => {
     expect(statusText).toContain(
       "Context usage: Latest request usage: 12,000 uncached in · 4,000 cached · 2,000 out",
     );
-    expect(statusText).toContain("Account: operator@example.com (ChatGPT team)");
+    expect(statusText).toContain(
+      "Account: operator@example.com (ChatGPT team)",
+    );
     expect(statusText).toContain(
       "Rate limits: gpt-5.3-codex primary: 76% left",
     );
@@ -4484,7 +4688,9 @@ describe("MessagingController", () => {
         mode: "update",
       },
       targetSurface: binding?.statusSurface,
-      text: expect.stringContaining("Account: operator@example.com (ChatGPT team)"),
+      text: expect.stringContaining(
+        "Account: operator@example.com (ChatGPT team)",
+      ),
     });
   });
 
@@ -4537,7 +4743,9 @@ describe("MessagingController", () => {
       ]),
     );
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/detach").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/detach").channel,
+      ),
     ).resolves.toBeUndefined();
   });
 
@@ -4545,9 +4753,12 @@ describe("MessagingController", () => {
     vi.useFakeTimers();
     const harness = await createHarness();
     try {
-      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      await harness.controller.handleInboundEvent(
+        buildCommandEvent("/monitor"),
+      );
       const monitorIntent = harness.delivered.at(-1);
-      const monitorSurface = monitorIntent?.targetSurface
+      const monitorSurface =
+        monitorIntent?.targetSurface
         ?? (monitorIntent
           ? { channel: "telegram" as const, id: `surface:${monitorIntent.id}` }
           : undefined);
@@ -4593,9 +4804,12 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     try {
       await bindThread(harness);
-      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      await harness.controller.handleInboundEvent(
+        buildCommandEvent("/monitor"),
+      );
       const monitorIntent = harness.delivered.at(-1);
-      const monitorSurface = monitorIntent?.targetSurface
+      const monitorSurface =
+        monitorIntent?.targetSurface
         ?? (monitorIntent
           ? { channel: "telegram" as const, id: `surface:${monitorIntent.id}` }
           : undefined);
@@ -4628,7 +4842,9 @@ describe("MessagingController", () => {
         ]),
       );
       await expect(
-        harness.store.findActiveBindingForChannel(buildCommandEvent("/detach").channel),
+        harness.store.findActiveBindingForChannel(
+          buildCommandEvent("/detach").channel,
+        ),
       ).resolves.toBeUndefined();
       await expect(
         harness.store.findActiveMonitorSubscriptionForChannel(
@@ -4832,7 +5048,9 @@ describe("MessagingController", () => {
             kind: "grok",
             label: "Grok",
             launchpadOptions: {
-              models: [{ id: "grok-4.20-reasoning", label: "Grok 4.20 Reasoning" }],
+              models: [
+                { id: "grok-4.20-reasoning", label: "Grok 4.20 Reasoning" },
+              ],
               reasoningEfforts: ["low", "medium", "high"],
               supportsFastMode: false,
             },
@@ -4917,7 +5135,9 @@ describe("MessagingController", () => {
       }),
     });
 
-    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug with Grok"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Fix bug with Grok"),
+    );
 
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -4937,7 +5157,9 @@ describe("MessagingController", () => {
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/new").channel,
+      ),
     ).resolves.toMatchObject({
       backend: "grok",
       threadId: "new-thread-1",
@@ -5010,7 +5232,8 @@ describe("MessagingController", () => {
     );
 
     const readyIntent = harness.delivered.at(-1);
-    const body = readyIntent && "body" in readyIntent ? String(readyIntent.body) : "";
+    const body =
+      readyIntent && "body" in readyIntent ? String(readyIntent.body) : "";
     expect(readyIntent).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
@@ -5029,7 +5252,8 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Use Kimi"));
 
-    const materializeRequest = harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0];
+    const materializeRequest =
+      harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0];
     expect(materializeRequest).toMatchObject({
       launchpad: expect.objectContaining({
         backend: "acp:kimi",
@@ -5057,7 +5281,12 @@ describe("MessagingController", () => {
             source: "acp",
             executionModes: [],
             launchpadOptions: {
-              models: [{ id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" }],
+              models: [
+                {
+                  id: "gemini-3-flash-preview",
+                  label: "Gemini 3 Flash Preview",
+                },
+              ],
               reasoningEfforts: [],
               supportsFastMode: false,
             },
@@ -5132,7 +5361,9 @@ describe("MessagingController", () => {
     );
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/new").channel,
+      ),
     ).resolves.toMatchObject({
       backend: "acp:gemini",
       threadId: "new-thread-1",
@@ -5366,7 +5597,9 @@ describe("MessagingController", () => {
       body: expect.stringContaining("Environment: PwrAgnt"),
     });
 
-    await harness.controller.handleInboundEvent(buildTextEvent("Check the build"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Check the build"),
+    );
 
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -5378,7 +5611,9 @@ describe("MessagingController", () => {
       }),
       expectMaterializeOptions(),
     );
-    expect(harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0]).not.toEqual(
+    expect(
+      harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0],
+    ).not.toEqual(
       expect.objectContaining({
         input: expect.anything(),
       }),
@@ -5567,7 +5802,12 @@ describe("MessagingController", () => {
             source: "acp",
             executionModes: [],
             launchpadOptions: {
-              models: [{ id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" }],
+              models: [
+                {
+                  id: "gemini-3-flash-preview",
+                  label: "Gemini 3 Flash Preview",
+                },
+              ],
             },
           }),
         ],
@@ -5675,9 +5915,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringMatching(
-        /Permissions: Yolo/,
-      ),
+      body: expect.stringMatching(/Permissions: Yolo/),
     });
 
     await harness.controller.handleInboundEvent(buildTextEvent("Use yolo"));
@@ -5955,7 +6193,9 @@ describe("MessagingController", () => {
     );
     availableBackends = [codexBackend];
 
-    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug with Grok"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Fix bug with Grok"),
+    );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "error",
@@ -5967,7 +6207,9 @@ describe("MessagingController", () => {
     expect(harness.startThread).not.toHaveBeenCalled();
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/new").channel,
+      ),
     ).resolves.toBeUndefined();
   });
 
@@ -6105,7 +6347,9 @@ describe("MessagingController", () => {
       ]),
     });
 
-    await harness.controller.handleInboundEvent(buildTextEvent("Install deps and run tests"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Install deps and run tests"),
+    );
 
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -6116,7 +6360,8 @@ describe("MessagingController", () => {
       }),
       expectMaterializeOptions(),
     );
-    const materializeRequest = harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0];
+    const materializeRequest =
+      harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0];
     expect(materializeRequest).not.toHaveProperty("input");
     expect(harness.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -6253,7 +6498,9 @@ describe("MessagingController", () => {
         },
       }),
     );
-    await harness.controller.handleInboundEvent(buildTextEvent("Fix the install"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Fix the install"),
+    );
 
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.not.objectContaining({
@@ -6290,7 +6537,9 @@ describe("MessagingController", () => {
       }),
     );
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      ),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "new-thread-1",
@@ -6415,7 +6664,10 @@ describe("MessagingController", () => {
       navigation,
       materializeDirectoryLaunchpad,
       deliver: async (intent) => {
-        if (intent.kind === "confirmation" && intent.title === "Environment setup running") {
+        if (
+          intent.kind === "confirmation"
+          && intent.title === "Environment setup running"
+        ) {
           resolveProgressStarted();
           await progressDelivery;
         }
@@ -6460,11 +6712,12 @@ describe("MessagingController", () => {
 
     const progressIndex = delivered.findIndex(
       (intent) =>
-        intent.kind === "confirmation" &&
-        intent.title === "Environment setup running",
+        intent.kind === "confirmation"
+        && intent.title === "Environment setup running",
     );
     const finalIndex = delivered.findIndex(
-      (intent) => intent.kind === "error" && intent.title === "Environment setup failed",
+      (intent) =>
+        intent.kind === "error" && intent.title === "Environment setup failed",
     );
     expect(progressIndex).toBeGreaterThanOrEqual(0);
     expect(finalIndex).toBeGreaterThan(progressIndex);
@@ -6498,14 +6751,18 @@ describe("MessagingController", () => {
             name: "Repo Env",
             sourcePath: "/repo/pwragent/.codex/environments/repo.toml",
             setupScript: "pnpm install",
-            actions: [{ id: "repo-setup", name: "Repo Setup", command: "pnpm install" }],
+            actions: [
+              { id: "repo-setup", name: "Repo Setup", command: "pnpm install" },
+            ],
           },
           {
             id: "ci",
             name: "CI Env",
             sourcePath: "/repo/pwragent/.codex/environments/ci.toml",
             setupScript: "pnpm test",
-            actions: [{ id: "ci-setup", name: "CI Setup", command: "pnpm test" }],
+            actions: [
+              { id: "ci-setup", name: "CI Setup", command: "pnpm test" },
+            ],
           },
         ],
         createdAt: 1000,
@@ -6542,14 +6799,19 @@ describe("MessagingController", () => {
       }),
     });
 
-    await harness.controller.handleInboundEvent(buildTextEvent("Use CI environment"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Use CI environment"),
+    );
 
-    const materializeRequest = harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0];
+    const materializeRequest =
+      harness.materializeDirectoryLaunchpad.mock.calls.at(-1)?.[0];
     expect(materializeRequest?.launchpad).toMatchObject({
       codexEnvironmentId: "ci",
       codexEnvironmentExecutionTarget: "local",
     });
-    expect(materializeRequest?.launchpad.codexEnvironmentActionId).toBeUndefined();
+    expect(
+      materializeRequest?.launchpad.codexEnvironmentActionId,
+    ).toBeUndefined();
   });
 
   it("clicking the New button on the help surface dispatches the new command", async () => {
@@ -6662,7 +6924,9 @@ describe("MessagingController", () => {
       ]),
     });
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/monitor").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
     ).resolves.toBeUndefined();
     await expect(
       harness.store.findActiveMonitorSubscriptionForChannel(
@@ -6807,7 +7071,9 @@ describe("MessagingController", () => {
       ]),
     });
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/monitor").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
     ).resolves.toEqual(binding);
     await expect(
       harness.store.findActiveMonitorSubscriptionForChannel(
@@ -6830,7 +7096,9 @@ describe("MessagingController", () => {
   it("configures Monitor pinned and recent counts from commands and buttons", async () => {
     const harness = await createHarness();
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor pins 10"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/monitor pins 10"),
+    );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
@@ -6866,7 +7134,9 @@ describe("MessagingController", () => {
       },
     });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor recent 0"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/monitor recent 0"),
+    );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
@@ -6878,7 +7148,9 @@ describe("MessagingController", () => {
     vi.useFakeTimers();
     const harness = await createHarness();
     try {
-      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor interval 30s"));
+      await harness.controller.handleInboundEvent(
+        buildCommandEvent("/monitor interval 30s"),
+      );
 
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "status",
@@ -6914,7 +7186,9 @@ describe("MessagingController", () => {
       });
       expect(vi.getTimerCount()).toBe(1);
 
-      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor every 5m"));
+      await harness.controller.handleInboundEvent(
+        buildCommandEvent("/monitor every 5m"),
+      );
 
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "status",
@@ -6932,7 +7206,9 @@ describe("MessagingController", () => {
         `${request.threadId} latest assistant response for monitor display.`,
     });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor status line"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/monitor status line"),
+    );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
@@ -6943,7 +7219,9 @@ describe("MessagingController", () => {
     );
     expect(harness.readThreadLastAssistantMessage).not.toHaveBeenCalled();
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor snippet on"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/monitor snippet on"),
+    );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
@@ -6986,7 +7264,11 @@ describe("MessagingController", () => {
         { operation: "create_child" as const, supported: true },
         { operation: "close" as const, supported: true },
         { operation: "reopen" as const, supported: true },
-        { operation: "delete" as const, supported: false, missingPermission: "can_delete_messages" },
+        {
+          operation: "delete" as const,
+          supported: false,
+          missingPermission: "can_delete_messages",
+        },
       ],
       updatedAt: 1000,
     }));
@@ -7082,7 +7364,9 @@ describe("MessagingController", () => {
     );
 
     await expect(
-      harness.store.getBinding("binding:telegram:topic:-1001:56:codex:thread-1"),
+      harness.store.getBinding(
+        "binding:telegram:topic:-1001:56:codex:thread-1",
+      ),
     ).resolves.toMatchObject({
       channel: {
         conversation: {
@@ -7102,7 +7386,9 @@ describe("MessagingController", () => {
     }));
     const harness = await createHarness({ closeManagedConversation });
 
-    await harness.controller.handleInboundEvent(buildTopicCommandEvent("/monitor topics", "100"));
+    await harness.controller.handleInboundEvent(
+      buildTopicCommandEvent("/monitor topics", "100"),
+    );
     await harness.controller.handleInboundEvent(
       buildTextEvent("hello", { channel: buildTopicChannel("200") }),
     );
@@ -7125,12 +7411,16 @@ describe("MessagingController", () => {
       ]),
     });
 
-    const approve = (harness.delivered.at(-1) as { actions?: Array<{ id: string }> })
-      .actions?.find((action) => action.id.includes(":200"));
+    const approve = (
+      harness.delivered.at(-1) as { actions?: Array<{ id: string }> }
+    ).actions?.find((action) => action.id.includes(":200"));
     if (!approve) throw new Error("approval action missing");
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: approve.id, channel: buildTopicChannel("100") }),
+      buildCallbackEvent({
+        actionId: approve.id,
+        channel: buildTopicChannel("100"),
+      }),
     );
 
     expect(closeManagedConversation).toHaveBeenCalledTimes(1);
@@ -7186,8 +7476,7 @@ describe("MessagingController", () => {
     expect(
       harness.delivered.filter(
         (intent) =>
-          intent.kind === "message" &&
-          intent.audit?.action === "topics.seed",
+          intent.kind === "message" && intent.audit?.action === "topics.seed",
       ),
     ).toHaveLength(1);
   });
@@ -7199,8 +7488,12 @@ describe("MessagingController", () => {
       await bindThread(harness);
       harness.getNavigationSnapshot.mockClear();
 
-      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
-      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      await harness.controller.handleInboundEvent(
+        buildCommandEvent("/monitor"),
+      );
+      await harness.controller.handleInboundEvent(
+        buildCommandEvent("/monitor"),
+      );
 
       expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(2);
       expect(vi.getTimerCount()).toBe(1);
@@ -7226,7 +7519,9 @@ describe("MessagingController", () => {
       );
       harness.delivered.splice(0);
 
-      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      await harness.controller.handleInboundEvent(
+        buildCommandEvent("/monitor"),
+      );
 
       expect(logger.debug).toHaveBeenCalledWith(
         "messaging channel monitor initial render failed",
@@ -7294,11 +7589,15 @@ describe("MessagingController", () => {
       }
 
       failDelivery = true;
-      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      await harness.controller.handleInboundEvent(
+        buildCommandEvent("/monitor"),
+      );
 
-      await expect(harness.store.getBinding(binding.id)).resolves.toMatchObject({
-        id: binding.id,
-      });
+      await expect(harness.store.getBinding(binding.id)).resolves.toMatchObject(
+        {
+          id: binding.id,
+        },
+      );
       await expect(
         harness.store.findActiveMonitorSubscriptionForChannel(
           buildCommandEvent("/monitor").channel,
@@ -7316,11 +7615,15 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     try {
       await bindThread(harness);
-      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      await harness.controller.handleInboundEvent(
+        buildCommandEvent("/monitor"),
+      );
       harness.getNavigationSnapshot.mockClear();
       harness.delivered.splice(0);
 
-      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor stop"));
+      await harness.controller.handleInboundEvent(
+        buildCommandEvent("/monitor stop"),
+      );
 
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "confirmation",
@@ -7332,9 +7635,10 @@ describe("MessagingController", () => {
       const binding = await harness.store.findActiveBindingForChannel(
         buildCommandEvent("/monitor").channel,
       );
-      const subscription = await harness.store.findActiveMonitorSubscriptionForChannel(
-        buildCommandEvent("/monitor").channel,
-      );
+      const subscription =
+        await harness.store.findActiveMonitorSubscriptionForChannel(
+          buildCommandEvent("/monitor").channel,
+        );
       expect(subscription).toMatchObject({
         monitor: {
           enabled: false,
@@ -7496,7 +7800,9 @@ describe("MessagingController", () => {
 
     expect(harness.startTurn).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        input: expect.arrayContaining([expect.objectContaining({ type: "file" })]),
+        input: expect.arrayContaining([
+          expect.objectContaining({ type: "file" }),
+        ]),
       }),
     );
     expect(harness.delivered.at(-1)).toMatchObject({
@@ -7550,7 +7856,9 @@ describe("MessagingController", () => {
         input: [
           {
             type: "text",
-            text: expect.stringContaining("Please inspect this\n\nAttached file: `streaming-logs.txt`"),
+            text: expect.stringContaining(
+              "Please inspect this\n\nAttached file: `streaming-logs.txt`",
+            ),
           },
         ],
       }),
@@ -7563,9 +7871,13 @@ describe("MessagingController", () => {
     await bindThread(harness);
     harness.delivered.length = 0;
 
-    await harness.controller.handleInboundEvent(buildTextEvent("Please review this code block:"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Please review this code block:"),
+    );
     await vi.advanceTimersByTimeAsync(250);
-    await harness.controller.handleInboundEvent(buildTextEvent("```ts\nconst answer = 42;\n```"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("```ts\nconst answer = 42;\n```"),
+    );
 
     expect(harness.startTurn).not.toHaveBeenCalled();
 
@@ -7621,7 +7933,9 @@ describe("MessagingController", () => {
       ],
       disposition: "available",
     });
-    await harness.controller.handleInboundEvent(buildTextEvent("Please summarize it"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Please summarize it"),
+    );
 
     expect(harness.startTurn).not.toHaveBeenCalled();
 
@@ -7673,7 +7987,9 @@ describe("MessagingController", () => {
       ],
       disposition: "available",
     });
-    await harness.controller.handleInboundEvent(buildTextEvent("Look at the sidebar"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Look at the sidebar"),
+    );
 
     await vi.advanceTimersByTimeAsync(500);
 
@@ -7702,23 +8018,34 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     await bindThread(harness);
 
-    await harness.controller.handleInboundEvent(buildTextEvent("make me a dinner reservation"));
-    await harness.controller.handleInboundEvent(buildTextEvent("Chinese sounds good"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("make me a dinner reservation"),
+    );
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Chinese sounds good"),
+    );
 
     expect(harness.startTurn).toHaveBeenCalledTimes(1);
     const queuedNotice = harness.delivered
-      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .filter(
+        (intent) =>
+          intent.kind === "confirmation" && intent.title === "Message queued",
+      )
       .at(-1);
     expect(queuedNotice).toMatchObject({
       kind: "confirmation",
       body: expect.stringContaining("> Chinese sounds good"),
     });
     const queuedActions =
-      queuedNotice && "actions" in queuedNotice && Array.isArray(queuedNotice.actions)
+      queuedNotice
+      && "actions" in queuedNotice
+      && Array.isArray(queuedNotice.actions)
         ? queuedNotice.actions
         : [];
     expect(
-      queuedActions.some((action) => action.id.startsWith("queued-turn:cancel:")),
+      queuedActions.some((action) =>
+        action.id.startsWith("queued-turn:cancel:"),
+      ),
     ).toBe(true);
 
     await harness.controller.handleBackendEvent({
@@ -7751,8 +8078,8 @@ describe("MessagingController", () => {
     expect(
       harness.delivered.find(
         (intent) =>
-          intent.kind === "confirmation" &&
-          intent.body === "Queued message sent as the next turn.",
+          intent.kind === "confirmation"
+          && intent.body === "Queued message sent as the next turn.",
       ),
     ).toMatchObject({
       kind: "confirmation",
@@ -7819,7 +8146,10 @@ describe("MessagingController", () => {
     );
     expect(
       harness.delivered
-        .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+        .filter(
+          (intent) =>
+            intent.kind === "confirmation" && intent.title === "Message queued",
+        )
         .at(-1),
     ).toMatchObject({
       body: expect.stringContaining("> follow up from discord"),
@@ -7860,11 +8190,18 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     await bindThread(harness);
 
-    await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
-    await harness.controller.handleInboundEvent(buildTextEvent("also check the logs"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("start the task"),
+    );
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("also check the logs"),
+    );
 
     const queuedNotice = harness.delivered
-      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .filter(
+        (intent) =>
+          intent.kind === "confirmation" && intent.title === "Message queued",
+      )
       .at(-1);
     if (!queuedNotice || !("actions" in queuedNotice)) {
       throw new Error("Queued notice was not delivered");
@@ -7967,13 +8304,20 @@ describe("MessagingController", () => {
       text: expect.not.stringContaining("Pending skill: $ce:plan"),
     });
     const queuedNotice = harness.delivered
-      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .filter(
+        (intent) =>
+          intent.kind === "confirmation" && intent.title === "Message queued",
+      )
       .at(-1);
     expect(queuedNotice).toMatchObject({
-      body: expect.stringContaining("> Use [$ce:plan](/skills/ce-plan/SKILL.md)"),
+      body: expect.stringContaining(
+        "> Use [$ce:plan](/skills/ce-plan/SKILL.md)",
+      ),
     });
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/status").channel,
+      ),
     ).resolves.not.toHaveProperty("pendingSkillSelection");
   });
 
@@ -7997,7 +8341,9 @@ describe("MessagingController", () => {
 
     expect(harness.startTurn).toHaveBeenCalledTimes(1);
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/status").channel,
+      ),
     ).resolves.not.toHaveProperty("pendingSkillSelection");
 
     await harness.controller.handleBackendEvent({
@@ -8043,7 +8389,9 @@ describe("MessagingController", () => {
   it("clears starting state when navigation lookup fails before retrying", async () => {
     const harness = await createHarness();
     await bindThread(harness);
-    harness.getNavigationSnapshot.mockRejectedValueOnce(new Error("navigation unavailable"));
+    harness.getNavigationSnapshot.mockRejectedValueOnce(
+      new Error("navigation unavailable"),
+    );
 
     await harness.controller.handleInboundEvent(buildTextEvent("first turn"));
 
@@ -8073,10 +8421,17 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     await bindThread(harness);
 
-    await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
-    await harness.controller.handleInboundEvent(buildTextEvent("also check the logs"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("start the task"),
+    );
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("also check the logs"),
+    );
     const queuedNotice = harness.delivered
-      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .filter(
+        (intent) =>
+          intent.kind === "confirmation" && intent.title === "Message queued",
+      )
       .at(-1);
     if (!queuedNotice || !("actions" in queuedNotice)) {
       throw new Error("Queued notice was not delivered");
@@ -8139,10 +8494,17 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     await bindThread(harness);
 
-    await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
-    await harness.controller.handleInboundEvent(buildTextEvent("also check the logs"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("start the task"),
+    );
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("also check the logs"),
+    );
     const queuedNotice = harness.delivered
-      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .filter(
+        (intent) =>
+          intent.kind === "confirmation" && intent.title === "Message queued",
+      )
       .at(-1);
     if (!queuedNotice || !("actions" in queuedNotice)) {
       throw new Error("Queued notice was not delivered");
@@ -8159,7 +8521,9 @@ describe("MessagingController", () => {
     expect(steerAction).toBeDefined();
     expect(cancelAction).toBeDefined();
 
-    harness.steerTurn.mockRejectedValueOnce(new Error("no active turn to steer"));
+    harness.steerTurn.mockRejectedValueOnce(
+      new Error("no active turn to steer"),
+    );
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
@@ -8193,7 +8557,9 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     await bindThread(harness);
 
-    await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("start the task"),
+    );
     await harness.controller.handleBackendPendingRequest("codex", {
       method: "item/commandExecution/requestApproval",
       params: {
@@ -8204,9 +8570,14 @@ describe("MessagingController", () => {
         command: "pnpm test",
       },
     });
-    await harness.controller.handleInboundEvent(buildTextEvent("also check the logs"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("also check the logs"),
+    );
     const queuedNotice = harness.delivered
-      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .filter(
+        (intent) =>
+          intent.kind === "confirmation" && intent.title === "Message queued",
+      )
       .at(-1);
     if (!queuedNotice || !("actions" in queuedNotice)) {
       throw new Error("Queued notice was not delivered");
@@ -8231,7 +8602,9 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "error",
       title: "Steer unavailable",
-      body: expect.stringContaining("There is no active turn available to steer"),
+      body: expect.stringContaining(
+        "There is no active turn available to steer",
+      ),
     });
   });
 
@@ -8268,16 +8641,19 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect([...harness.delivered].reverse().find((intent) => intent.kind === "message"))
-      .toMatchObject({
-        kind: "message",
-        role: "assistant",
-        parts: [
-          expect.objectContaining({
-            markdown: "markdown",
-          }),
-        ],
-      });
+    expect(
+      [...harness.delivered]
+        .reverse()
+        .find((intent) => intent.kind === "message"),
+    ).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      parts: [
+        expect.objectContaining({
+          markdown: "markdown",
+        }),
+      ],
+    });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
@@ -8328,10 +8704,13 @@ describe("MessagingController", () => {
     const recordPlatformResponseActivity = vi.fn();
     const harness = await createHarness({
       streamingResponsesDefault: true,
-      activityLog: () => ({
-        record: vi.fn(),
-        recordPlatformResponseActivity,
-      } as unknown as ReturnType<NonNullable<MessagingControllerOptions["activityLog"]>>),
+      activityLog: () =>
+        ({
+          record: vi.fn(),
+          recordPlatformResponseActivity,
+        }) as unknown as ReturnType<
+          NonNullable<MessagingControllerOptions["activityLog"]>
+        >,
       now: () => now,
     });
     await bindThread(harness);
@@ -8468,7 +8847,9 @@ describe("MessagingController", () => {
       platform: "telegram",
       createdAt: 1000,
     });
-    expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([]);
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([]);
   });
 
   it("ignores assistant stream deltas that are not tied to a turn", async () => {
@@ -8567,9 +8948,9 @@ describe("MessagingController", () => {
       deliver: async (intent) => {
         delivered.push(intent);
         if (
-          intent.kind === "stream_update" &&
-          intent.stream.isFinal &&
-          intent.bindingId === "binding-two"
+          intent.kind === "stream_update"
+          && intent.stream.isFinal
+          && intent.bindingId === "binding-two"
         ) {
           return {
             channel: "telegram" as const,
@@ -8580,9 +8961,10 @@ describe("MessagingController", () => {
         return {
           channel: "telegram" as const,
           deliveredAt: 1000,
-          outcome: intent.kind === "status" && intent.delivery?.pin
-            ? "pinned" as const
-            : "presented" as const,
+          outcome:
+            intent.kind === "status" && intent.delivery?.pin
+              ? ("pinned" as const)
+              : ("presented" as const),
           surface: {
             channel: "telegram" as const,
             id: `surface:${intent.id}`,
@@ -8657,7 +9039,7 @@ describe("MessagingController", () => {
   });
 
   it("rechecks budget admission after a provider rate-limit rejection", async () => {
-    let now = 1000;
+    const now = 1000;
     let rejectNextStream = false;
     const scope: MessagingDeliveryScope = {
       platform: "telegram",
@@ -8690,9 +9072,10 @@ describe("MessagingController", () => {
         return {
           channel: "telegram" as const,
           deliveredAt: now,
-          outcome: intent.kind === "status" && intent.delivery?.pin
-            ? "pinned" as const
-            : "presented" as const,
+          outcome:
+            intent.kind === "status" && intent.delivery?.pin
+              ? ("pinned" as const)
+              : ("presented" as const),
           surface: {
             channel: "telegram" as const,
             id: `surface:${intent.id}`,
@@ -8701,7 +9084,9 @@ describe("MessagingController", () => {
       },
     });
     await bindThread(harness);
-    const deliveriesBefore = Object.keys((await harness.store.readSnapshot()).deliveries).length;
+    const deliveriesBefore = Object.keys(
+      (await harness.store.readSnapshot()).deliveries,
+    ).length;
     attempts.length = 0;
     rejectNextStream = true;
 
@@ -8724,13 +9109,13 @@ describe("MessagingController", () => {
         text: "Hello",
       }),
     ]);
-    expect(Object.keys((await harness.store.readSnapshot()).deliveries)).toHaveLength(
-      deliveriesBefore,
-    );
+    expect(
+      Object.keys((await harness.store.readSnapshot()).deliveries),
+    ).toHaveLength(deliveriesBefore);
   });
 
   it("does not replay non-retryable provider rate-limit failures", async () => {
-    let now = 1000;
+    const now = 1000;
     let rejectNextStream = false;
     const scope: MessagingDeliveryScope = {
       platform: "telegram",
@@ -8763,9 +9148,10 @@ describe("MessagingController", () => {
         return {
           channel: "telegram" as const,
           deliveredAt: now,
-          outcome: intent.kind === "status" && intent.delivery?.pin
-            ? "pinned" as const
-            : "presented" as const,
+          outcome:
+            intent.kind === "status" && intent.delivery?.pin
+              ? ("pinned" as const)
+              : ("presented" as const),
           surface: {
             channel: "telegram" as const,
             id: `surface:${intent.id}`,
@@ -8774,7 +9160,9 @@ describe("MessagingController", () => {
       },
     });
     await bindThread(harness);
-    const deliveriesBefore = Object.keys((await harness.store.readSnapshot()).deliveries).length;
+    const deliveriesBefore = Object.keys(
+      (await harness.store.readSnapshot()).deliveries,
+    ).length;
     attempts.length = 0;
     rejectNextStream = true;
 
@@ -8792,7 +9180,9 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     expect(attempts).toHaveLength(1);
-    const deliveries = Object.values((await harness.store.readSnapshot()).deliveries);
+    const deliveries = Object.values(
+      (await harness.store.readSnapshot()).deliveries,
+    );
     expect(deliveries).toHaveLength(deliveriesBefore + 1);
     expect(deliveries.at(-1)).toMatchObject({
       outcome: "failed",
@@ -8815,9 +9205,11 @@ describe("MessagingController", () => {
       NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>
     >[0][] = [];
     const onDeliveryBudgetEvent = vi.fn(
-      (event: Parameters<
-        NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>
-      >[0]) => {
+      (
+        event: Parameters<
+          NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>
+        >[0],
+      ) => {
         budgetEvents.push(event);
       },
     );
@@ -9045,7 +9437,9 @@ describe("MessagingController", () => {
     } satisfies MessagingSurfaceIntent;
 
     expect(messagingDeliveryPriority(initialPinnedStatus)).toBe("user_command");
-    expect(messagingDeliveryPriority(routineStatusUpdate)).toBe("routine_status");
+    expect(messagingDeliveryPriority(routineStatusUpdate)).toBe(
+      "routine_status",
+    );
   });
 
   it("defers initial pinned status budget traffic instead of dropping it in slow mode", () => {
@@ -9122,9 +9516,9 @@ describe("MessagingController", () => {
       deliver: async (intent) => {
         delivered.push(intent);
         if (
-          intent.kind === "stream_update" &&
-          intent.stream.sequence === 1 &&
-          !releaseFirstDelivery
+          intent.kind === "stream_update"
+          && intent.stream.sequence === 1
+          && !releaseFirstDelivery
         ) {
           resolveFirstDeliveryStarted?.();
           await new Promise<void>((resolve) => {
@@ -9134,9 +9528,11 @@ describe("MessagingController", () => {
         return {
           channel: "telegram",
           deliveredAt: now,
-          outcome: intent.kind === "stream_update" && intent.delivery?.mode === "update"
-            ? "updated"
-            : "presented",
+          outcome:
+            intent.kind === "stream_update"
+            && intent.delivery?.mode === "update"
+              ? "updated"
+              : "presented",
           surface: {
             channel: "telegram",
             id: `surface:${intent.id}`,
@@ -9245,11 +9641,13 @@ describe("MessagingController", () => {
         return {
           channel: "telegram",
           deliveredAt: now,
-          outcome: intent.kind === "stream_update" && intent.delivery?.mode === "update"
-            ? "updated"
-            : intent.kind === "status" && intent.delivery?.pin
-              ? "pinned"
-              : "presented",
+          outcome:
+            intent.kind === "stream_update"
+            && intent.delivery?.mode === "update"
+              ? "updated"
+              : intent.kind === "status" && intent.delivery?.pin
+                ? "pinned"
+                : "presented",
           surface: {
             channel: "telegram",
             id: `surface:${intent.id}`,
@@ -9320,7 +9718,9 @@ describe("MessagingController", () => {
     await Promise.resolve();
 
     expect(
-      delivered.find((intent) => intent.kind === "activity" && intent.state === "idle"),
+      delivered.find(
+        (intent) => intent.kind === "activity" && intent.state === "idle",
+      ),
     ).toBeUndefined();
 
     releaseFinalStream();
@@ -9389,7 +9789,9 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(delivered.filter((intent) => intent.kind === "stream_update")).toEqual([
+    expect(
+      delivered.filter((intent) => intent.kind === "stream_update"),
+    ).toEqual([
       expect.objectContaining({
         stream: expect.objectContaining({
           isFinal: false,
@@ -9463,7 +9865,9 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(delivered.filter((intent) => intent.kind === "stream_update")).toEqual([
+    expect(
+      delivered.filter((intent) => intent.kind === "stream_update"),
+    ).toEqual([
       expect.objectContaining({
         stream: expect.objectContaining({
           isFinal: false,
@@ -9561,7 +9965,9 @@ describe("MessagingController", () => {
 
     // No stream_update intents at all — a disabled setting short-circuits
     // generation instead of being carried as a policy the adapter discards.
-    expect(delivered.filter((intent) => intent.kind === "stream_update")).toEqual([]);
+    expect(
+      delivered.filter((intent) => intent.kind === "stream_update"),
+    ).toEqual([]);
     // Exactly one assistant message on a single surface — no burst of posts.
     expect(
       delivered.filter(
@@ -9619,7 +10025,9 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(delivered.filter((intent) => intent.kind === "stream_update")).toEqual([]);
+    expect(
+      delivered.filter((intent) => intent.kind === "stream_update"),
+    ).toEqual([]);
     expect(
       delivered.filter(
         (intent) => intent.kind === "message" && intent.role === "assistant",
@@ -9629,7 +10037,9 @@ describe("MessagingController", () => {
         kind: "message",
         role: "assistant",
         parts: [
-          expect.objectContaining({ text: "Answer that only arrived as a delta." }),
+          expect.objectContaining({
+            text: "Answer that only arrived as a delta.",
+          }),
         ],
       }),
     ]);
@@ -9687,7 +10097,10 @@ describe("MessagingController", () => {
             id: "turn-1",
             status: "completed",
             output: [
-              { type: "text", text: "For 07747 / Matawan, NJ: sunny and very hot." },
+              {
+                type: "text",
+                text: "For 07747 / Matawan, NJ: sunny and very hot.",
+              },
             ],
           },
         },
@@ -9697,7 +10110,9 @@ describe("MessagingController", () => {
     // Only the final answer is posted — the commentary phases are dropped, so
     // the turn lands as a single message instead of a burst.
     expect(
-      delivered.filter((intent) => intent.kind === "message" && intent.role === "assistant"),
+      delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "assistant",
+      ),
     ).toEqual([
       expect.objectContaining({
         kind: "message",
@@ -9710,7 +10125,9 @@ describe("MessagingController", () => {
       }),
     ]);
     expect(JSON.stringify(delivered)).not.toContain("I'll check the weather");
-    expect(JSON.stringify(delivered)).not.toContain("Pulling current conditions");
+    expect(JSON.stringify(delivered)).not.toContain(
+      "Pulling current conditions",
+    );
   });
 
   it("does not re-post buffered text when deltas arrive after the turn is terminal", async () => {
@@ -9724,7 +10141,9 @@ describe("MessagingController", () => {
           channel: "telegram" as const,
           deliveredAt: now,
           outcome:
-            intent.kind === "stream_update" ? ("discarded" as const) : ("presented" as const),
+            intent.kind === "stream_update"
+              ? ("discarded" as const)
+              : ("presented" as const),
           surface: { channel: "telegram" as const, id: `surface:${intent.id}` },
         };
       },
@@ -9749,7 +10168,12 @@ describe("MessagingController", () => {
         backend: "codex",
         notification: {
           method: "item/agentMessage/delta",
-          params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", delta },
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "item-1",
+            delta,
+          },
         },
       } satisfies AgentEvent);
     }
@@ -9778,14 +10202,21 @@ describe("MessagingController", () => {
         backend: "codex",
         notification: {
           method: "item/agentMessage/delta",
-          params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", delta },
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "item-1",
+            delta,
+          },
         },
       } satisfies AgentEvent);
     }
 
     // Exactly one message; the post-terminal deltas do not re-flush.
     expect(
-      delivered.filter((intent) => intent.kind === "message" && intent.role === "assistant"),
+      delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "assistant",
+      ),
     ).toEqual([
       expect.objectContaining({
         kind: "message",
@@ -9801,7 +10232,9 @@ describe("MessagingController", () => {
       now: () => now,
     });
     await bindThread(harness);
-    await harness.controller.handleInboundEvent(buildTextEvent("start multi-step work"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("start multi-step work"),
+    );
     harness.delivered.length = 0;
 
     await harness.controller.handleBackendEvent({
@@ -9875,7 +10308,9 @@ describe("MessagingController", () => {
       activity: "typing",
       state: "idle",
     });
-    expect(harness.delivered.filter((intent) => intent.kind === "message")).toHaveLength(1);
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toHaveLength(1);
   });
 
   it("passes discrete work activity through so providers can renew typing leases", async () => {
@@ -9884,7 +10319,9 @@ describe("MessagingController", () => {
       now: () => now,
     });
     await bindThread(harness);
-    await harness.controller.handleInboundEvent(buildTextEvent("start long work"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("start long work"),
+    );
     harness.delivered.length = 0;
 
     now += 9_000;
@@ -9922,7 +10359,9 @@ describe("MessagingController", () => {
       now: () => now,
     });
     await bindThread(harness);
-    await harness.controller.handleInboundEvent(buildTextEvent("run noisy command"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("run noisy command"),
+    );
     harness.delivered.length = 0;
     logger.debug.mockClear();
 
@@ -9965,7 +10404,9 @@ describe("MessagingController", () => {
       }),
     ]);
     expect(logger.debug).toHaveBeenCalledTimes(1);
-    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining("typing signaled"));
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining("typing signaled"),
+    );
   });
 
   it("clears typing when status refresh observes an idle backend thread", async () => {
@@ -10089,8 +10530,9 @@ describe("MessagingController", () => {
       );
     }
 
-    expect(harness.delivered.filter((intent) => intent.kind === "message"))
-      .toHaveLength(3);
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toHaveLength(3);
 
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -10110,17 +10552,19 @@ describe("MessagingController", () => {
 
     const batchIndex = harness.delivered.findIndex(
       (intent) =>
-        intent.kind === "message" &&
-        intent.role === "system" &&
-        intent.parts.some(
-          (part) => part.type === "text" && part.text.includes("Tool updates: ran 1 tool"),
+        intent.kind === "message"
+        && intent.role === "system"
+        && intent.parts.some(
+          (part) =>
+            part.type === "text"
+            && part.text.includes("Tool updates: ran 1 tool"),
         ),
     );
     const activityIndex = harness.delivered.findIndex(
       (intent) =>
-        intent.kind === "activity" &&
-        intent.activity === "typing" &&
-        intent.state === "idle",
+        intent.kind === "activity"
+        && intent.activity === "typing"
+        && intent.state === "idle",
     );
 
     expect(batchIndex).toBeGreaterThanOrEqual(0);
@@ -10161,10 +10605,12 @@ describe("MessagingController", () => {
 
     const batchIndex = harness.delivered.findIndex(
       (intent) =>
-        intent.kind === "message" &&
-        intent.role === "system" &&
-        intent.parts.some(
-          (part) => part.type === "text" && part.text.includes("Tool updates: ran 1 tool"),
+        intent.kind === "message"
+        && intent.role === "system"
+        && intent.parts.some(
+          (part) =>
+            part.type === "text"
+            && part.text.includes("Tool updates: ran 1 tool"),
         ),
     );
     const assistantIndex = harness.delivered.findIndex(
@@ -10178,7 +10624,9 @@ describe("MessagingController", () => {
   it("suppresses generated tool messages in Show None while preserving assistant delivery", async () => {
     const harness = await createHarness();
     await bindThread(harness);
-    const binding = await harness.store.findActiveBindingForChannel(buildTextEvent("").channel);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildTextEvent("").channel,
+    );
     await harness.store.upsertBinding({
       ...binding!,
       preferences: {
@@ -10309,7 +10757,9 @@ describe("MessagingController", () => {
     });
 
     await expect(
-      harness.store.getBinding("binding:discord:channel::discord-channel:codex:thread-1"),
+      harness.store.getBinding(
+        "binding:discord:channel::discord-channel:codex:thread-1",
+      ),
     ).resolves.toMatchObject({
       revokedAt: 1000,
     });
@@ -10321,7 +10771,8 @@ describe("MessagingController", () => {
         channel: "telegram",
         deliveredAt: 1000,
         outcome: "failed",
-        errorMessage: "Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
+        errorMessage:
+          "Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
       }),
     });
     await harness.store.upsertBinding({
@@ -10356,7 +10807,9 @@ describe("MessagingController", () => {
     });
 
     await expect(
-      harness.store.getBinding("binding:telegram:topic:-1003659063549:405:acp:kimi:thread-1"),
+      harness.store.getBinding(
+        "binding:telegram:topic:-1003659063549:405:acp:kimi:thread-1",
+      ),
     ).resolves.toMatchObject({
       revokedAt: 1000,
     });
@@ -10530,14 +10983,17 @@ describe("MessagingController", () => {
       (intent) => intent.kind === "questionnaire",
     );
     expect(questionnaire).toBeDefined();
-    await expect(harness.store.getPendingIntent(questionnaire!.id, { now })).resolves
-      .toMatchObject({
-        expiresAt: now + MESSAGING_CALLBACK_HANDLE_TTL_MS,
-      });
+    await expect(
+      harness.store.getPendingIntent(questionnaire!.id, { now }),
+    ).resolves.toMatchObject({
+      expiresAt: now + MESSAGING_CALLBACK_HANDLE_TTL_MS,
+    });
 
     now += 5 * 24 * 60 * 60 * 1000;
     harness.delivered.length = 0;
-    await harness.controller.handleInboundEvent(buildTextEvent("Keep it pragmatic."));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Keep it pragmatic."),
+    );
 
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "questionnaire",
@@ -10768,7 +11224,9 @@ describe("MessagingController", () => {
     });
     harness.delivered.length = 0;
 
-    await harness.controller.handleInboundEvent(buildTextEvent("Recovered answer."));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Recovered answer."),
+    );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "questionnaire",
@@ -10796,8 +11254,12 @@ describe("MessagingController", () => {
         turnId: "turn-2",
       });
     await bindThread(harness);
-    await harness.controller.handleInboundEvent(buildTextEvent("run a command"));
-    harness.readThreadStatus.mockResolvedValueOnce("active").mockResolvedValue("idle");
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("run a command"),
+    );
+    harness.readThreadStatus
+      .mockResolvedValueOnce("active")
+      .mockResolvedValue("idle");
     harness.delivered.length = 0;
 
     await harness.controller.handleBackendPendingRequest("codex", {
@@ -10863,10 +11325,17 @@ describe("MessagingController", () => {
         turnId: "turn-2",
       });
     await bindThread(harness);
-    await harness.controller.handleInboundEvent(buildTextEvent("run a command"));
-    await harness.controller.handleInboundEvent(buildTextEvent("queued follow-up"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("run a command"),
+    );
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("queued follow-up"),
+    );
     const queuedNotice = harness.delivered
-      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .filter(
+        (intent) =>
+          intent.kind === "confirmation" && intent.title === "Message queued",
+      )
       .at(-1);
     expect(queuedNotice).toMatchObject({
       kind: "confirmation",
@@ -10924,12 +11393,18 @@ describe("MessagingController", () => {
       },
     });
 
-    expect(harness.delivered.find((intent) => intent.kind === "approval")).toMatchObject({
+    expect(
+      harness.delivered.find((intent) => intent.kind === "approval"),
+    ).toMatchObject({
       kind: "approval",
-      body: expect.stringContaining("```shell\npnpm test -- messaging-controller\n```"),
+      body: expect.stringContaining(
+        "```shell\npnpm test -- messaging-controller\n```",
+      ),
     });
 
-    await harness.controller.handleInboundEvent(buildTextEvent("yes for this session"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("yes for this session"),
+    );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
       backend: "codex",
@@ -10973,7 +11448,9 @@ describe("MessagingController", () => {
       },
     });
 
-    await harness.controller.handleInboundEvent(buildTextEvent("yes for this session"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("yes for this session"),
+    );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
       backend: "codex",
@@ -11026,7 +11503,9 @@ describe("MessagingController", () => {
   it("resumes typing after submitting an approval response for the waiting turn", async () => {
     const harness = await createHarness();
     await bindThread(harness);
-    await harness.controller.handleInboundEvent(buildTextEvent("run a command"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("run a command"),
+    );
     await harness.controller.handleBackendPendingRequest("codex", {
       method: "item/commandExecution/requestApproval",
       params: {
@@ -11060,7 +11539,9 @@ describe("MessagingController", () => {
   it("retires approval callbacks without submitting when the backend turn is already idle", async () => {
     const harness = await createHarness();
     await bindThread(harness);
-    await harness.controller.handleInboundEvent(buildTextEvent("run a command"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("run a command"),
+    );
     await harness.controller.handleBackendPendingRequest("codex", {
       method: "item/commandExecution/requestApproval",
       params: {
@@ -11115,7 +11596,9 @@ describe("MessagingController", () => {
         command: "/bin/zsh -lc 'pnpm test -- messaging-controller'",
       },
     });
-    const approvalIntent = harness.delivered.find((intent) => intent.kind === "approval");
+    const approvalIntent = harness.delivered.find(
+      (intent) => intent.kind === "approval",
+    );
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "approval:accept" }),
@@ -11178,7 +11661,9 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "approval:accept_with_execpolicy_amendment:1" }),
+      buildCallbackEvent({
+        actionId: "approval:accept_with_execpolicy_amendment:1",
+      }),
     );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
@@ -11226,7 +11711,9 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "approval:accept_with_execpolicy_amendment:1" }),
+      buildCallbackEvent({
+        actionId: "approval:accept_with_execpolicy_amendment:1",
+      }),
     );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
@@ -11261,7 +11748,9 @@ describe("MessagingController", () => {
         command: "/bin/zsh -lc 'pnpm test -- messaging-controller'",
       },
     });
-    const approvalIntent = harness.delivered.find((intent) => intent.kind === "approval");
+    const approvalIntent = harness.delivered.find(
+      (intent) => intent.kind === "approval",
+    );
 
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -11297,7 +11786,9 @@ describe("MessagingController", () => {
   it("resumes typing when the backend resolves an approval for the waiting turn", async () => {
     const harness = await createHarness();
     await bindThread(harness);
-    await harness.controller.handleInboundEvent(buildTextEvent("run a command"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("run a command"),
+    );
     await harness.controller.handleBackendPendingRequest("codex", {
       method: "item/commandExecution/requestApproval",
       params: {
@@ -11308,7 +11799,9 @@ describe("MessagingController", () => {
         command: "pnpm test",
       },
     });
-    const approvalIntent = harness.delivered.find((intent) => intent.kind === "approval");
+    const approvalIntent = harness.delivered.find(
+      (intent) => intent.kind === "approval",
+    );
     harness.delivered.length = 0;
 
     await harness.controller.handleBackendEvent({
@@ -11375,7 +11868,9 @@ describe("MessagingController", () => {
     });
     await bindThread(harness);
 
-    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:model" }));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:model" }),
+    );
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "single_select",
       prompt: "Select Model",
@@ -11423,14 +11918,18 @@ describe("MessagingController", () => {
     });
     expect(harness.updateDirectoryLaunchpad).not.toHaveBeenCalled();
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/status").channel,
+      ),
     ).resolves.toMatchObject({
       preferences: {
         model: "gpt-5.3-codex",
       },
     });
 
-    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:model" }));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:model" }),
+    );
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "single_select",
       choices: expect.arrayContaining([
@@ -11533,7 +12032,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(buildTextEvent("work"));
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "single_select",
-      prompt: expect.stringContaining("Skills matching \"work\""),
+      prompt: expect.stringContaining('Skills matching "work"'),
       choices: expect.arrayContaining([
         expect.objectContaining({
           id: "skills:select",
@@ -11559,7 +12058,9 @@ describe("MessagingController", () => {
       ]),
     });
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/status").channel,
+      ),
     ).resolves.toMatchObject({
       pendingSkillSelection: {
         name: "ce:work",
@@ -11570,7 +12071,9 @@ describe("MessagingController", () => {
       buildCallbackEvent({ actionId: "skills:remove" }),
     );
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/status").channel,
+      ),
     ).resolves.not.toHaveProperty("pendingSkillSelection");
 
     await harness.controller.handleInboundEvent(
@@ -11582,7 +12085,9 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/status").channel,
+      ),
     ).resolves.toMatchObject({
       pendingSkillSelection: {
         name: "ce:work",
@@ -11606,7 +12111,9 @@ describe("MessagingController", () => {
       }),
     );
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/status").channel,
+      ),
     ).resolves.not.toHaveProperty("pendingSkillSelection");
   });
 
@@ -11640,7 +12147,9 @@ describe("MessagingController", () => {
     });
     expect(skillsBrowser).not.toHaveProperty("targetSurface");
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/status").channel,
+      ),
     ).resolves.toMatchObject({
       statusSurface: {
         id: "status-surface",
@@ -11669,11 +12178,12 @@ describe("MessagingController", () => {
         id: `surface:${initialSkillsSurface}`,
       },
     });
-    const searchPromptIntent = await harness.store.findActivePendingIntentForChannel({
-      actorId: buildTextEvent("work").actor.platformUserId,
-      channel: buildTextEvent("work").channel,
-      now: 1000,
-    });
+    const searchPromptIntent =
+      await harness.store.findActivePendingIntentForChannel({
+        actorId: buildTextEvent("work").actor.platformUserId,
+        channel: buildTextEvent("work").channel,
+        now: 1000,
+      });
     expect(searchPromptIntent?.surface).toBeDefined();
 
     await harness.controller.handleInboundEvent(buildTextEvent("work"));
@@ -11888,8 +12398,12 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     await bindThread(harness);
 
-    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:fast" }));
-    await harness.controller.handleInboundEvent(buildTextEvent("please run tests"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:fast" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("please run tests"),
+    );
 
     expect(harness.setThreadModelSettings).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -11939,7 +12453,9 @@ describe("MessagingController", () => {
       text: expect.stringContaining("Permissions: Full Access"),
     });
 
-    await harness.controller.handleInboundEvent(buildTextEvent("run npm view dive"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("run npm view dive"),
+    );
 
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -12031,12 +12547,18 @@ describe("MessagingController", () => {
         channel: "telegram",
       }),
       actions: expect.arrayContaining([
-        expect.objectContaining({ id: "full-access-risk:accept", label: "Yes" }),
+        expect.objectContaining({
+          id: "full-access-risk:accept",
+          label: "Yes",
+        }),
         expect.objectContaining({
           id: "full-access-risk:dismiss",
           label: "Yes - and stop warning me",
         }),
-        expect.objectContaining({ id: "full-access-risk:cancel", label: "Cancel" }),
+        expect.objectContaining({
+          id: "full-access-risk:cancel",
+          label: "Cancel",
+        }),
       ]),
     });
     const dismiss = findAction(warning, "full-access-risk:dismiss");
@@ -12198,9 +12720,10 @@ describe("MessagingController", () => {
       delivery: expect.objectContaining({
         mode: "update",
       }),
-      targetSurface: warning && "targetSurface" in warning
-        ? warning.targetSurface
-        : undefined,
+      targetSurface:
+        warning && "targetSurface" in warning
+          ? warning.targetSurface
+          : undefined,
       text: expect.stringContaining("Permissions: Full Access"),
     });
   });
@@ -12245,9 +12768,10 @@ describe("MessagingController", () => {
       delivery: expect.objectContaining({
         mode: "update",
       }),
-      targetSurface: warning && "targetSurface" in warning
-        ? warning.targetSurface
-        : undefined,
+      targetSurface:
+        warning && "targetSurface" in warning
+          ? warning.targetSurface
+          : undefined,
       text: expect.stringContaining("Permissions: Default"),
     });
   });
@@ -12264,7 +12788,9 @@ describe("MessagingController", () => {
       },
     });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --yolo"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --yolo"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-thread",
@@ -12308,7 +12834,9 @@ describe("MessagingController", () => {
       },
     });
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume --new"),
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:select-project",
@@ -12358,9 +12886,10 @@ describe("MessagingController", () => {
       delivery: expect.objectContaining({
         mode: "update",
       }),
-      targetSurface: warning && "targetSurface" in warning
-        ? warning.targetSurface
-        : undefined,
+      targetSurface:
+        warning && "targetSurface" in warning
+          ? warning.targetSurface
+          : undefined,
     });
   });
 
@@ -12668,7 +13197,9 @@ describe("MessagingController", () => {
         },
       }),
     );
-    await harness.controller.handleInboundEvent(buildTextEvent("new thread prompt"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("new thread prompt"),
+    );
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Enable Full Access?",
@@ -12678,7 +13209,9 @@ describe("MessagingController", () => {
     harness.materializeDirectoryLaunchpad.mockClear();
 
     now += 90_000;
-    await harness.controller.handleInboundEvent(buildTextEvent("normal followup"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("normal followup"),
+    );
 
     expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
     expect(harness.startTurn).not.toHaveBeenCalled();
@@ -12758,7 +13291,9 @@ describe("MessagingController", () => {
     harness.materializeDirectoryLaunchpad.mockClear();
     harness.delivered.length = 0;
 
-    await harness.controller.handleInboundEvent(buildTextEvent("second prompt"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("second prompt"),
+    );
 
     const secondWarning = harness.delivered.at(-1);
     expect(secondWarning).toMatchObject({
@@ -12977,9 +13512,9 @@ describe("MessagingController", () => {
 
     const queuedIntent = harness.delivered.find(
       (intent) =>
-        intent.kind === "confirmation" &&
-        typeof intent.title === "string" &&
-        intent.title.includes("Permissions queue"),
+        intent.kind === "confirmation"
+        && typeof intent.title === "string"
+        && intent.title.includes("Permissions queue"),
     );
     expect(queuedIntent).toBeDefined();
     expect(queuedIntent).toMatchObject({
@@ -12989,8 +13524,10 @@ describe("MessagingController", () => {
     expect(queuedIntent).toMatchObject({
       body: expect.stringContaining("Will apply at end of current turn"),
     });
-    const cancelAction = (queuedIntent as { actions?: MessagingSurfaceAction[] }).actions?.find(
-      (action) => action.id.startsWith("permissions:queue:cancel:"),
+    const cancelAction = (
+      queuedIntent as { actions?: MessagingSurfaceAction[] }
+    ).actions?.find((action) =>
+      action.id.startsWith("permissions:queue:cancel:"),
     );
     expect(cancelAction).toBeDefined();
     expect(cancelAction).toMatchObject({ label: "Cancel" });
@@ -13028,9 +13565,9 @@ describe("MessagingController", () => {
 
     const cancelledIntent = harness.delivered.find(
       (intent) =>
-        intent.kind === "confirmation" &&
-        typeof intent.body === "string" &&
-        intent.body.includes("Cancelled queued permissions change"),
+        intent.kind === "confirmation"
+        && typeof intent.body === "string"
+        && intent.body.includes("Cancelled queued permissions change"),
     );
     expect(cancelledIntent).toBeDefined();
     expect(cancelledIntent).toMatchObject({
@@ -13081,9 +13618,9 @@ describe("MessagingController", () => {
 
     const appliedIntent = harness.delivered.find(
       (intent) =>
-        intent.kind === "confirmation" &&
-        typeof intent.body === "string" &&
-        intent.body.includes("Permissions changed"),
+        intent.kind === "confirmation"
+        && typeof intent.body === "string"
+        && intent.body.includes("Permissions changed"),
     );
     expect(appliedIntent).toBeDefined();
     expect(appliedIntent).toMatchObject({
@@ -13226,9 +13763,9 @@ describe("MessagingController", () => {
     // knows the click landed somewhere visible.
     const errorIntents = harness.delivered.filter(
       (intent) =>
-        intent.kind === "error" &&
-        typeof intent.body === "string" &&
-        intent.body.toLowerCase().includes("no longer waiting"),
+        intent.kind === "error"
+        && typeof intent.body === "string"
+        && intent.body.toLowerCase().includes("no longer waiting"),
     );
     expect(errorIntents.length).toBeGreaterThanOrEqual(1);
   });
@@ -13266,9 +13803,9 @@ describe("MessagingController", () => {
     expect(harness.cancelThreadExecutionModeQueue).not.toHaveBeenCalled();
     const errorIntents = harness.delivered.filter(
       (intent) =>
-        intent.kind === "error" &&
-        typeof intent.body === "string" &&
-        intent.body.toLowerCase().includes("no longer waiting"),
+        intent.kind === "error"
+        && typeof intent.body === "string"
+        && intent.body.toLowerCase().includes("no longer waiting"),
     );
     expect(errorIntents.length).toBeGreaterThanOrEqual(1);
   });
@@ -13286,9 +13823,9 @@ describe("MessagingController", () => {
 
     const statusIntent = harness.delivered.find(
       (intent) =>
-        intent.kind === "status" &&
-        typeof intent.text === "string" &&
-        intent.text.includes("Permissions:"),
+        intent.kind === "status"
+        && typeof intent.text === "string"
+        && intent.text.includes("Permissions:"),
     );
     expect(statusIntent).toBeDefined();
     expect(statusIntent).toMatchObject({
@@ -13297,9 +13834,11 @@ describe("MessagingController", () => {
         "Permissions: Default Access → Full Access (queued)",
       ),
     });
-    const permissionsAction = (statusIntent as {
-      actions?: MessagingSurfaceAction[];
-    }).actions?.find((action) => action.id === "status:permissions");
+    const permissionsAction = (
+      statusIntent as {
+        actions?: MessagingSurfaceAction[];
+      }
+    ).actions?.find((action) => action.id === "status:permissions");
     expect(permissionsAction?.label).toBe(
       "Permissions: Default → Full Access (queued)",
     );
@@ -13678,7 +14217,9 @@ describe("MessagingController", () => {
     navigation.threads[0]!.executionMode = "default";
     harness.getNavigationSnapshot.mockResolvedValue(navigation);
     await bindThread(harness);
-    const binding = await harness.store.findActiveBindingForChannel(buildTextEvent("").channel);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildTextEvent("").channel,
+    );
     expect(binding).toBeDefined();
     await harness.store.upsertBinding({
       ...binding!,
@@ -13697,7 +14238,9 @@ describe("MessagingController", () => {
       text: expect.stringContaining("Permissions: Default Access"),
     });
 
-    await harness.controller.handleInboundEvent(buildTextEvent("run npm view dive"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("run npm view dive"),
+    );
 
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -13746,7 +14289,9 @@ describe("MessagingController", () => {
       text: expect.stringContaining("Tool updates: Some"),
     });
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+      harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/status").channel,
+      ),
     ).resolves.toMatchObject({
       preferences: {
         toolUpdateMode: "show_some",
@@ -13791,7 +14336,9 @@ describe("MessagingController", () => {
     await bindThread(harness);
     await harness.controller.handleInboundEvent(buildTextEvent("start work"));
 
-    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:stop" }));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:stop" }),
+    );
 
     expect(harness.interruptTurn).toHaveBeenCalledWith({
       backend: "codex",
@@ -13824,7 +14371,9 @@ describe("MessagingController", () => {
 
   it("runs a local-to-worktree handoff from the status menu", async () => {
     const harness = await createHarness();
-    harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValue(
+      buildLocalHandoffNavigationSnapshot(),
+    );
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -13843,7 +14392,10 @@ describe("MessagingController", () => {
       ]),
     });
 
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
+    const toWorktree = findChoice(
+      harness.delivered.at(-1),
+      "handoff:move-branch",
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -13862,7 +14414,10 @@ describe("MessagingController", () => {
       ]),
     });
 
-    const leaveDetached = findChoice(harness.delivered.at(-1), "handoff:select-leave-branch");
+    const leaveDetached = findChoice(
+      harness.delivered.at(-1),
+      "handoff:select-leave-branch",
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: leaveDetached.id,
@@ -13876,7 +14431,9 @@ describe("MessagingController", () => {
     });
 
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
-    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValue(
+      buildWorktreeHandoffNavigationSnapshot(),
+    );
     harness.getNavigationSnapshot.mockResolvedValueOnce(
       buildLocalHandoffNavigationSnapshot(),
     );
@@ -13899,7 +14456,9 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "status",
       status: "completed",
-      text: expect.stringContaining("/repo/pwragent/.worktrees/pwragent-feature-handoff"),
+      text: expect.stringContaining(
+        "/repo/pwragent/.worktrees/pwragent-feature-handoff",
+      ),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
@@ -13914,7 +14473,10 @@ describe("MessagingController", () => {
     const navigation = buildLocalHandoffNavigationSnapshot();
     navigation.directories[0]!.gitStatus = {
       currentBranch: "feature/handoff",
-      handoffBranches: Array.from({ length: 18 }, (_, index) => `branch-${index + 1}`),
+      handoffBranches: Array.from(
+        { length: 18 },
+        (_, index) => `branch-${index + 1}`,
+      ),
     };
     harness.getNavigationSnapshot.mockResolvedValue(navigation);
     await bindThread(harness);
@@ -13923,7 +14485,10 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
+    const toWorktree = findChoice(
+      harness.delivered.at(-1),
+      "handoff:move-branch",
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -13937,7 +14502,9 @@ describe("MessagingController", () => {
     }
     expect(firstPage.prompt).toContain("Page 1/3.");
     expect(
-      firstPage.choices.filter((choice) => choice.id === "handoff:select-leave-branch"),
+      firstPage.choices.filter(
+        (choice) => choice.id === "handoff:select-leave-branch",
+      ),
     ).toHaveLength(8);
     expect(firstPage.choices).toContainEqual(
       expect.objectContaining({
@@ -13973,14 +14540,19 @@ describe("MessagingController", () => {
 
   it("runs a detached-head worktree handoff without asking for a leave-local branch", async () => {
     const harness = await createHarness();
-    harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValue(
+      buildLocalHandoffNavigationSnapshot(),
+    );
     await bindThread(harness);
     harness.delivered.length = 0;
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const createDetached = findChoice(harness.delivered.at(-1), "handoff:create-detached");
+    const createDetached = findChoice(
+      harness.delivered.at(-1),
+      "handoff:create-detached",
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: createDetached.id,
@@ -13994,7 +14566,9 @@ describe("MessagingController", () => {
     });
 
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
-    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValue(
+      buildWorktreeHandoffNavigationSnapshot(),
+    );
     harness.getNavigationSnapshot.mockResolvedValueOnce(
       buildLocalHandoffNavigationSnapshot(),
     );
@@ -14055,7 +14629,9 @@ describe("MessagingController", () => {
 
   it("runs a worktree-to-local handoff from the status menu", async () => {
     const harness = await createHarness();
-    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValue(
+      buildWorktreeHandoffNavigationSnapshot(),
+    );
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -14063,7 +14639,10 @@ describe("MessagingController", () => {
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
 
-    const toLocal = findChoice(harness.delivered.at(-1), "handoff:worktree-to-local");
+    const toLocal = findChoice(
+      harness.delivered.at(-1),
+      "handoff:worktree-to-local",
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toLocal.id,
@@ -14110,21 +14689,29 @@ describe("MessagingController", () => {
 
   it("rejects stale handoff confirmations when workspace metadata changes", async () => {
     const harness = await createHarness();
-    harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValue(
+      buildLocalHandoffNavigationSnapshot(),
+    );
     await bindThread(harness);
     harness.delivered.length = 0;
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
+    const toWorktree = findChoice(
+      harness.delivered.at(-1),
+      "handoff:move-branch",
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
         value: toWorktree.value,
       }),
     );
-    const leaveMain = findChoice(harness.delivered.at(-1), "handoff:select-leave-branch");
+    const leaveMain = findChoice(
+      harness.delivered.at(-1),
+      "handoff:select-leave-branch",
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: leaveMain.id,
@@ -14150,21 +14737,29 @@ describe("MessagingController", () => {
 
   it("rejects handoff confirmations while a turn is active", async () => {
     const harness = await createHarness();
-    harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValue(
+      buildLocalHandoffNavigationSnapshot(),
+    );
     await bindThread(harness);
     harness.delivered.length = 0;
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
+    const toWorktree = findChoice(
+      harness.delivered.at(-1),
+      "handoff:move-branch",
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
         value: toWorktree.value,
       }),
     );
-    const leaveMain = findChoice(harness.delivered.at(-1), "handoff:select-leave-branch");
+    const leaveMain = findChoice(
+      harness.delivered.at(-1),
+      "handoff:select-leave-branch",
+    );
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: leaveMain.id,
@@ -14206,7 +14801,9 @@ describe("MessagingController", () => {
 
   it("reports handoff as unavailable when the backend bridge does not expose it", async () => {
     const harness = await createHarness({ handoff: false });
-    harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValue(
+      buildLocalHandoffNavigationSnapshot(),
+    );
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -14224,17 +14821,20 @@ describe("MessagingController", () => {
   it("syncs the platform conversation name from the bound thread title", async () => {
     const setConversationTitle = vi.fn(
       async (
-        request: Parameters<NonNullable<MessagingAdapter["setConversationTitle"]>>[0],
+        request: Parameters<
+          NonNullable<MessagingAdapter["setConversationTitle"]>
+        >[0],
       ) => ({
-      channel: "telegram" as const,
-      conversation: {
-        ...request.channel.conversation,
+        channel: "telegram" as const,
+        conversation: {
+          ...request.channel.conversation,
+          title: request.title,
+        },
+        outcome: "updated" as const,
         title: request.title,
-      },
-      outcome: "updated" as const,
-      title: request.title,
-      updatedAt: 1000,
-    }));
+        updatedAt: 1000,
+      }),
+    );
     const harness = await createHarness({ setConversationTitle });
     const navigation = buildNavigationSnapshot();
     navigation.threads[0]!.title = "Renamed in Desktop";
@@ -14272,7 +14872,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "confirmation",
       title: "Name synced",
-      body: expect.stringContaining('Renamed in Desktop'),
+      body: expect.stringContaining("Renamed in Desktop"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
@@ -14283,7 +14883,9 @@ describe("MessagingController", () => {
 
 async function createHarness(options?: {
   deliveryBudget?: MessagingDeliveryBudget;
-  deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
+  deliver?: (
+    intent: MessagingSurfaceIntent,
+  ) => Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
   ensureDirectoryLaunchpad?: NonNullable<
     MessagingBackendBridge["ensureDirectoryLaunchpad"]
@@ -14367,7 +14969,8 @@ async function createHarness(options?: {
   const store = await createStore();
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter: MessagingAdapter = {
-    capabilityProfile: options?.capabilityProfile ?? PERMISSIVE_CAPABILITY_PROFILE,
+    capabilityProfile:
+      options?.capabilityProfile ?? PERMISSIVE_CAPABILITY_PROFILE,
     ...(options?.downloadAttachment
       ? { downloadAttachment: options.downloadAttachment }
       : {}),
@@ -14375,15 +14978,16 @@ async function createHarness(options?: {
       ? { resolveDeliveryScope: options.resolveDeliveryScope }
       : {}),
     deliver: vi.fn(
-      options?.deliver ??
-        (async (intent) => {
+      options?.deliver
+        ?? (async (intent) => {
           delivered.push(intent);
           return {
             channel: "telegram" as const,
             deliveredAt: 1000,
-            outcome: intent.kind === "status" && intent.delivery?.pin
-              ? "pinned" as const
-              : "presented" as const,
+            outcome:
+              intent.kind === "status" && intent.delivery?.pin
+                ? ("pinned" as const)
+                : ("presented" as const),
             surface: {
               channel: "telegram" as const,
               id: `surface:${intent.id}`,
@@ -14411,8 +15015,8 @@ async function createHarness(options?: {
     async () => options?.navigation ?? buildNavigationSnapshot(),
   );
   const ensureDirectoryLaunchpad = vi.fn(
-    options?.ensureDirectoryLaunchpad ??
-      (async (
+    options?.ensureDirectoryLaunchpad
+      ?? (async (
         request: EnsureDirectoryLaunchpadRequest,
       ): Promise<EnsureDirectoryLaunchpadResponse> => {
         const snapshot = options?.navigation ?? buildNavigationSnapshot();
@@ -14420,9 +15024,12 @@ async function createHarness(options?: {
           (candidate) => candidate.key === request.directoryKey,
         );
         const defaults = request.preferredBackend
-          ? applyNavigationLaunchpadProviderSettingsPatch(snapshot.launchpadDefaults, {
-              backend: request.preferredBackend,
-            })
+          ? applyNavigationLaunchpadProviderSettingsPatch(
+              snapshot.launchpadDefaults,
+              {
+                backend: request.preferredBackend,
+              },
+            )
           : snapshot.launchpadDefaults;
         return {
           defaults,
@@ -14445,27 +15052,29 @@ async function createHarness(options?: {
               createdAt: 1000,
               updatedAt: 1000,
             }),
-            ...(request.preferredBackend ? { backend: request.preferredBackend } : {}),
+            ...(request.preferredBackend
+              ? { backend: request.preferredBackend }
+              : {}),
           },
         };
       }),
   );
   const startThread = vi.fn(
-    options?.startThread ??
-      (async (request: StartThreadRequest) => ({
+    options?.startThread
+      ?? (async (request: StartThreadRequest) => ({
         backend: request.backend,
         threadId: "new-thread-1",
         executionMode: request.executionMode ?? "default",
       })),
   );
   const materializeDirectoryLaunchpad = vi.fn(
-    options?.materializeDirectoryLaunchpad ??
-      (async (
-        request: MaterializeDirectoryLaunchpadRequest,
-      ) => ({
+    options?.materializeDirectoryLaunchpad
+      ?? (async (request: MaterializeDirectoryLaunchpadRequest) => ({
         backend: request.launchpad?.backend ?? "codex",
         threadId: "new-thread-1",
-        ...(request.input && request.input.length > 0 ? { turnId: "turn-1" } : {}),
+        ...(request.input && request.input.length > 0
+          ? { turnId: "turn-1" }
+          : {}),
         executionMode: request.launchpad?.executionMode ?? "default",
         ...(request.launchpad?.workMode === "worktree"
           ? {
@@ -14473,7 +15082,9 @@ async function createHarness(options?: {
                 id: request.launchpad.directoryKey,
                 kind: "worktree" as const,
                 label: request.launchpad.directoryLabel,
-                path: request.launchpad.directoryPath ?? request.launchpad.directoryKey,
+                path:
+                  request.launchpad.directoryPath
+                  ?? request.launchpad.directoryKey,
                 worktreePath: "/repo/pwragent/.worktrees/new-thread-1",
               },
             }
@@ -14501,8 +15112,10 @@ async function createHarness(options?: {
     options?.listSkills === false
       ? undefined
       : vi.fn(
-          options?.listSkills ??
-            (async (): Promise<Pick<AppServerListSkillsResponse, "data">> => ({
+          options?.listSkills
+            ?? (async (): Promise<
+              Pick<AppServerListSkillsResponse, "data">
+            > => ({
               data: [
                 {
                   cwd: "/repo/pwragent",
@@ -14534,24 +15147,26 @@ async function createHarness(options?: {
   // mutation methods also fan out a notification on the bus so the
   // controller's refreshStatusSurfacesForThread path runs end-to-end.
   let controllerRef: MessagingController | undefined;
-  const setThreadExecutionMode = vi.fn(async (request: SetThreadExecutionModeRequest) => {
-    if (controllerRef) {
-      await controllerRef.handleBackendEvent({
-        backend: request.backend,
-        notification: {
-          method: "thread/executionMode/updated",
-          params: {
-            threadId: request.threadId,
-            executionMode: request.executionMode,
+  const setThreadExecutionMode = vi.fn(
+    async (request: SetThreadExecutionModeRequest) => {
+      if (controllerRef) {
+        await controllerRef.handleBackendEvent({
+          backend: request.backend,
+          notification: {
+            method: "thread/executionMode/updated",
+            params: {
+              threadId: request.threadId,
+              executionMode: request.executionMode,
+            },
           },
-        },
-      });
-    }
-    return request;
-  });
+        });
+      }
+      return request;
+    },
+  );
   const setAcpSessionRuntimeOption = vi.fn(
-    options?.setAcpSessionRuntimeOption ??
-      (async (request: SetAcpSessionRuntimeOptionRequest) => {
+    options?.setAcpSessionRuntimeOption
+      ?? (async (request: SetAcpSessionRuntimeOptionRequest) => {
         if (controllerRef) {
           await controllerRef.handleBackendEvent({
             backend: request.backend,
@@ -14563,7 +15178,8 @@ async function createHarness(options?: {
                   ...(request.source === "configOption"
                     ? { configValues: { [request.optionId]: request.value } }
                     : {}),
-                  ...(request.source === "mode" || request.source === "configOption"
+                  ...(request.source === "mode"
+                  || request.source === "configOption"
                     ? { currentModeId: request.value }
                     : {}),
                   ...(request.source === "model"
@@ -14597,24 +15213,32 @@ async function createHarness(options?: {
       executionMode: "default" as const,
     }),
   );
-  const setThreadModelSettings = vi.fn(async (request: SetThreadModelSettingsRequest) => {
-    if (controllerRef) {
-      await controllerRef.handleBackendEvent({
-        backend: request.backend,
-        notification: {
-          method: "thread/modelSettings/updated",
-          params: {
-            threadId: request.threadId,
-            ...(request.model !== undefined ? { model: request.model } : {}),
-            ...(request.fastMode !== undefined ? { fastMode: request.fastMode } : {}),
-            ...(request.reasoningEffort !== undefined ? { reasoningEffort: request.reasoningEffort } : {}),
-            ...(request.serviceTier !== undefined ? { serviceTier: request.serviceTier } : {}),
+  const setThreadModelSettings = vi.fn(
+    async (request: SetThreadModelSettingsRequest) => {
+      if (controllerRef) {
+        await controllerRef.handleBackendEvent({
+          backend: request.backend,
+          notification: {
+            method: "thread/modelSettings/updated",
+            params: {
+              threadId: request.threadId,
+              ...(request.model !== undefined ? { model: request.model } : {}),
+              ...(request.fastMode !== undefined
+                ? { fastMode: request.fastMode }
+                : {}),
+              ...(request.reasoningEffort !== undefined
+                ? { reasoningEffort: request.reasoningEffort }
+                : {}),
+              ...(request.serviceTier !== undefined
+                ? { serviceTier: request.serviceTier }
+                : {}),
+            },
           },
-        },
-      });
-    }
-    return request;
-  });
+        });
+      }
+      return request;
+    },
+  );
   const handoffThreadWorkspace =
     options?.handoff === false
       ? undefined
@@ -14622,43 +15246,45 @@ async function createHarness(options?: {
           backend: request.backend,
           threadId: request.threadId,
           direction: request.direction,
-          workMode: request.direction === "local-to-worktree"
-            ? "worktree" as const
-            : "local" as const,
+          workMode:
+            request.direction === "local-to-worktree"
+              ? ("worktree" as const)
+              : ("local" as const),
           branch: request.sourceBranch,
           repositoryPath: request.repositoryPath ?? "/repo/pwragent",
-          targetPath: request.direction === "local-to-worktree"
-            ? "/repo/pwragent/.worktrees/pwragent-feature-handoff"
-            : "/repo/pwragent",
-          linkedDirectory: request.direction === "local-to-worktree"
-            ? {
-                id: "pwragent-handoff:codex:thread-1",
-                kind: "worktree" as const,
-                label: "PwrAgent",
-                path: "/repo/pwragent",
-                worktreePath: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
-              }
-            : {
-                id: "directory:pwragent",
-                kind: "local" as const,
-                label: "PwrAgent",
-                path: "/repo/pwragent",
-              },
+          targetPath:
+            request.direction === "local-to-worktree"
+              ? "/repo/pwragent/.worktrees/pwragent-feature-handoff"
+              : "/repo/pwragent",
+          linkedDirectory:
+            request.direction === "local-to-worktree"
+              ? {
+                  id: "pwragent-handoff:codex:thread-1",
+                  kind: "worktree" as const,
+                  label: "PwrAgent",
+                  path: "/repo/pwragent",
+                  worktreePath:
+                    "/repo/pwragent/.worktrees/pwragent-feature-handoff",
+                }
+              : {
+                  id: "directory:pwragent",
+                  kind: "local" as const,
+                  label: "PwrAgent",
+                  path: "/repo/pwragent",
+                },
           warnings: [],
           completedAt: 1000,
         }));
   const listBackends = vi.fn(
-    options?.listBackends ??
-      (async (): Promise<ListBackendsResponse> => ({
+    options?.listBackends
+      ?? (async (): Promise<ListBackendsResponse> => ({
         fetchedAt: 1000,
         backends: [buildBackendSummary()],
       })),
   );
   const updateDirectoryLaunchpad = vi.fn(
-    options?.updateDirectoryLaunchpad ??
-      (async (
-        request: UpdateDirectoryLaunchpadRequest,
-      ) => ({
+    options?.updateDirectoryLaunchpad
+      ?? (async (request: UpdateDirectoryLaunchpadRequest) => ({
         defaults: buildNavigationSnapshot().launchpadDefaults,
         launchpad: {
           directoryKey: request.directoryKey,
@@ -14682,12 +15308,14 @@ async function createHarness(options?: {
   );
   const readThreadStatus = vi.fn(async () => undefined);
   const recordMessagingBindingTransition = vi.fn(async () => undefined);
-  const submitServerRequest = vi.fn(async (request: SubmitServerRequestRequest) => ({
-    backend: request.backend,
-    threadId: request.threadId,
-    turnId: request.turnId,
-    requestId: request.requestId,
-  }));
+  const submitServerRequest = vi.fn(
+    async (request: SubmitServerRequestRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: request.turnId,
+      requestId: request.requestId,
+    }),
+  );
   const backend: MessagingBackendBridge = {
     compactThread,
     cancelThreadExecutionModeQueue,
@@ -14736,9 +15364,7 @@ async function createHarness(options?: {
     // `bindingChangedListener: false` opt-out exists for tests that
     // verify the nullish-callback guard — production wiring always
     // supplies one.
-    ...(options?.bindingChangedListener === false
-      ? {}
-      : { onBindingChanged }),
+    ...(options?.bindingChangedListener === false ? {} : { onBindingChanged }),
     store,
     responseModeForConversation: options?.responseModeForConversation,
     streamingResponsesDefault: options?.streamingResponsesDefault,
@@ -14796,7 +15422,9 @@ async function bindThreadToBackend(
   );
 }
 
-function buildBackendSummary(overrides: Partial<BackendSummary> = {}): BackendSummary {
+function buildBackendSummary(
+  overrides: Partial<BackendSummary> = {},
+): BackendSummary {
   const kind = overrides.kind ?? "codex";
   const base: BackendSummary = {
     kind,
@@ -14887,7 +15515,9 @@ function buildAcpRuntimeBackendSummary(
       },
     },
     launchpadOptions: {
-      models: [{ id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" }],
+      models: [
+        { id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" },
+      ],
       reasoningEfforts: [],
       supportsFastMode: false,
     },
@@ -15109,7 +15739,9 @@ function findAction(
   return action;
 }
 
-function readDeliveredStatusText(intent: MessagingSurfaceIntent | undefined): string {
+function readDeliveredStatusText(
+  intent: MessagingSurfaceIntent | undefined,
+): string {
   if (!intent || intent.kind !== "status") {
     throw new Error("expected status intent");
   }
@@ -15118,7 +15750,9 @@ function readDeliveredStatusText(intent: MessagingSurfaceIntent | undefined): st
 
 function buildCommandEvent(
   rawText: string,
-  actor: { platformUserId: string; username?: string } = { platformUserId: "user-1" },
+  actor: { platformUserId: string; username?: string } = {
+    platformUserId: "user-1",
+  },
 ): MessagingInboundEvent & { kind: "command" } {
   const parts = rawText.replace(/^\//, "").split(/\s+/).filter(Boolean);
   const command = parts[0] ?? "";

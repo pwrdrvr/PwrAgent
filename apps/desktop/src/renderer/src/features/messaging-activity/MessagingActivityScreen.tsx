@@ -28,7 +28,10 @@ const KIND_LABEL: Record<MessagingActivityKind, string> = {
   binding: "Binding",
   diagnostic: "Diagnostic",
 };
-const KIND_TONE: Record<MessagingActivityKind, "ok" | "warning" | "error" | "muted"> = {
+const KIND_TONE: Record<
+  MessagingActivityKind,
+  "ok" | "warning" | "error" | "muted"
+> = {
   "inbound-routed": "ok",
   "inbound-rejected": "error",
   "inbound-ignored": "warning",
@@ -167,7 +170,10 @@ export function MessagingActivityScreen(props: { desktopApi?: DesktopApi }) {
           aria-label="Resize sections"
           onPointerDown={startDrag}
         >
-          <span className="messaging-activity__divider-grip" aria-hidden="true" />
+          <span
+            className="messaging-activity__divider-grip"
+            aria-hidden="true"
+          />
         </div>
       ) : null}
 
@@ -234,7 +240,9 @@ function ActivitySection(props: {
         <span className="messaging-activity-pane__count">{entries.length}</span>
       </button>
       {props.collapsed ? null : entries.length === 0 ? (
-        <p className="settings-empty messaging-activity-empty">{props.emptyLabel}</p>
+        <p className="settings-empty messaging-activity-empty">
+          {props.emptyLabel}
+        </p>
       ) : (
         <ul className="messaging-activity-list">
           {entries.map((entry) => (
@@ -254,19 +262,21 @@ function ActivityRow(props: { entry: MessagingActivityEntry }) {
   const Icon = MESSAGING_PLATFORM_ICONS[entry.platform];
   return (
     <li className="messaging-activity-row">
-      <span className={`messaging-activity-row__icon messaging-activity-row__icon--${tone}`}>
-        {Icon ? (
-          <Icon size={14} />
-        ) : (
-          <span>{entry.platform.slice(0, 2)}</span>
-        )}
+      <span
+        className={`messaging-activity-row__icon messaging-activity-row__icon--${tone}`}
+      >
+        {Icon ? <Icon size={14} /> : <span>{entry.platform.slice(0, 2)}</span>}
       </span>
       <div className="messaging-activity-row__body">
         <div className="messaging-activity-row__line">
-          <span className={`settings-pill settings-pill--${tone === "ok" ? "ok" : tone === "warning" ? "warn" : tone === "error" ? "bad" : "neutral"}`}>
+          <span
+            className={`settings-pill settings-pill--${tone === "ok" ? "ok" : tone === "warning" ? "warn" : tone === "error" ? "bad" : "neutral"}`}
+          >
             {KIND_LABEL[entry.kind]}
           </span>
-          <span className="messaging-activity-row__summary">{entry.summary}</span>
+          <span className="messaging-activity-row__summary">
+            {entry.summary}
+          </span>
         </div>
         <div className="messaging-activity-row__meta">
           {entry.conversationTitle ?? entry.conversationId ?? "—"}
@@ -274,7 +284,10 @@ function ActivityRow(props: { entry: MessagingActivityEntry }) {
           {formatRelative(entry.createdAt)}
         </div>
         {copyFields.length > 0 ? (
-          <div className="messaging-activity-row__ids" aria-label="Copy identifiers">
+          <div
+            className="messaging-activity-row__ids"
+            aria-label="Copy identifiers"
+          >
             {copyFields.map((field) => (
               <button
                 key={field.key}
@@ -416,7 +429,8 @@ function parentIdLabel(
   if (platform === "telegram") return "Supergroup ID";
   if (platform === "discord") return "Guild ID";
   if (platform === "feishu") return "Tenant Key";
-  if (platform === "mattermost" && conversationKind === "thread") return "Root ID";
+  if (platform === "mattermost" && conversationKind === "thread")
+    return "Root ID";
   return "Parent ID";
 }
 
@@ -439,7 +453,8 @@ function conversationIdLabel(
   if (platform === "discord" && conversationKind !== "dm") return "Channel ID";
   if (platform === "slack" && conversationKind !== "dm") return "Channel ID";
   if (platform === "feishu" && conversationKind !== "dm") return "Chat ID";
-  if (platform === "mattermost" && conversationKind !== "dm") return "Channel ID";
+  if (platform === "mattermost" && conversationKind !== "dm")
+    return "Channel ID";
   return "Conversation ID";
 }
 

@@ -15,8 +15,13 @@ import { MessagingStore } from "../messaging/core/messaging-store";
 
 const tempDirs: string[] = [];
 
-async function createStore(): Promise<{ filePath: string; store: MessagingStore }> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-messaging-store-"));
+async function createStore(): Promise<{
+  filePath: string;
+  store: MessagingStore;
+}> {
+  const tempDir = await mkdtemp(
+    path.join(os.tmpdir(), "pwragent-messaging-store-"),
+  );
   tempDirs.push(tempDir);
   const filePath = path.join(tempDir, "messaging-state.json");
   return {
@@ -229,19 +234,21 @@ describe("MessagingStore", () => {
       threadId: "thread-1",
       targetKind: "thread",
     });
-    await expect(reloaded.getPendingIntent("intent-1", { now: 1500 })).resolves
-      .toMatchObject({
-        id: "intent-1",
-        bindingId: "binding-1",
-      });
-    await expect(reloaded.getBrowseSession("browse-1", { now: 1500 })).resolves
-      .toMatchObject({
-        id: "browse-1",
-        mode: "recents",
-        selectedProject: {
-          label: "PwrAgent",
-        },
-      });
+    await expect(
+      reloaded.getPendingIntent("intent-1", { now: 1500 }),
+    ).resolves.toMatchObject({
+      id: "intent-1",
+      bindingId: "binding-1",
+    });
+    await expect(
+      reloaded.getBrowseSession("browse-1", { now: 1500 }),
+    ).resolves.toMatchObject({
+      id: "browse-1",
+      mode: "recents",
+      selectedProject: {
+        label: "PwrAgent",
+      },
+    });
     await expect(
       reloaded.resolveCallbackHandle({
         actorId: "user-1",
@@ -385,7 +392,9 @@ describe("MessagingStore", () => {
 
   it("replaces the active binding when a conversation is rebound", async () => {
     const { store } = await createStore();
-    await store.upsertBinding(buildBinding({ id: "binding-old", threadId: "thread-old" }));
+    await store.upsertBinding(
+      buildBinding({ id: "binding-old", threadId: "thread-old" }),
+    );
     await store.upsertBinding(
       buildBinding({
         id: "binding-new",
@@ -395,11 +404,12 @@ describe("MessagingStore", () => {
       }),
     );
 
-    await expect(store.findActiveBindingForChannel(buildBinding().channel)).resolves
-      .toMatchObject({
-        id: "binding-new",
-        threadId: "thread-new",
-      });
+    await expect(
+      store.findActiveBindingForChannel(buildBinding().channel),
+    ).resolves.toMatchObject({
+      id: "binding-new",
+      threadId: "thread-new",
+    });
     await expect(store.getBinding("binding-old")).resolves.toMatchObject({
       revokedAt: 2000,
     });
@@ -441,23 +451,28 @@ describe("MessagingStore", () => {
 
     await store.revokeBinding({ bindingId: "binding-1", revokedAt: 3000 });
 
-    await expect(store.getPendingIntent("intent-1", { now: 1500 })).resolves
-      .toBeUndefined();
-    await expect(store.getPendingIntent("channel-intent", { now: 1500 })).resolves
-      .toBeUndefined();
+    await expect(
+      store.getPendingIntent("intent-1", { now: 1500 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.getPendingIntent("channel-intent", { now: 1500 }),
+    ).resolves.toBeUndefined();
     await expect(
       store.getPendingIntent("other-channel-intent", { now: 1500 }),
     ).resolves.toMatchObject({
       id: "other-channel-intent",
     });
-    await expect(store.getBrowseSession("browse-1", { now: 1500 })).resolves
-      .toBeUndefined();
-    await expect(store.getCallbackHandle("callback-1", { now: 1500 })).resolves
-      .toBeUndefined();
-    await expect(store.getCallbackHandle("other-callback", { now: 1500 })).resolves
-      .toMatchObject({
-        id: "other-callback",
-      });
+    await expect(
+      store.getBrowseSession("browse-1", { now: 1500 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.getCallbackHandle("callback-1", { now: 1500 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.getCallbackHandle("other-callback", { now: 1500 }),
+    ).resolves.toMatchObject({
+      id: "other-callback",
+    });
     await expect(store.getBinding("binding-1")).resolves.toMatchObject({
       revokedAt: 3000,
     });
@@ -465,8 +480,12 @@ describe("MessagingStore", () => {
 
   it("deletes pending intents scoped to a thread", async () => {
     const { store } = await createStore();
-    await store.upsertBinding(buildBinding({ id: "binding-1", threadId: "thread-1" }));
-    await store.upsertBinding(buildBinding({ id: "binding-2", threadId: "thread-2" }));
+    await store.upsertBinding(
+      buildBinding({ id: "binding-1", threadId: "thread-1" }),
+    );
+    await store.upsertBinding(
+      buildBinding({ id: "binding-2", threadId: "thread-2" }),
+    );
     await store.upsertPendingIntent(
       buildPendingIntent({
         id: "intent-binding",
@@ -505,10 +524,15 @@ describe("MessagingStore", () => {
         threadId: "thread-1",
       }),
     ).resolves.toEqual(["intent-binding", "intent-request"]);
-    await expect(store.getPendingIntent("intent-binding")).resolves.toBeUndefined();
-    await expect(store.getPendingIntent("intent-request")).resolves.toBeUndefined();
-    await expect(store.getPendingIntent("intent-other-thread", { now: 1500 })).resolves
-      .toBeDefined();
+    await expect(
+      store.getPendingIntent("intent-binding"),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.getPendingIntent("intent-request"),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.getPendingIntent("intent-other-thread", { now: 1500 }),
+    ).resolves.toBeDefined();
   });
 
   it("finds active bindings scoped to a backend", async () => {
@@ -529,9 +553,7 @@ describe("MessagingStore", () => {
 
     await expect(
       store.findActiveBindingsForBackend({ backend: "codex" }),
-    ).resolves.toEqual([
-      expect.objectContaining({ id: "binding-codex" }),
-    ]);
+    ).resolves.toEqual([expect.objectContaining({ id: "binding-codex" })]);
   });
 
   it("can delete callback handles for a binding without revoking it", async () => {
@@ -548,20 +570,30 @@ describe("MessagingStore", () => {
     await expect(
       store.deleteCallbackHandlesForBinding({ bindingId: "binding-1" }),
     ).resolves.toEqual(["callback-1"]);
-    await expect(store.getCallbackHandle("callback-1", { now: 1500 })).resolves
-      .toBeUndefined();
-    await expect(store.getCallbackHandle("other-callback", { now: 1500 })).resolves
-      .toMatchObject({
-        id: "other-callback",
-      });
+    await expect(
+      store.getCallbackHandle("callback-1", { now: 1500 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.getCallbackHandle("other-callback", { now: 1500 }),
+    ).resolves.toMatchObject({
+      id: "other-callback",
+    });
   });
 
   it("ignores and cleans up expired pending intents and browse state without deleting active records", async () => {
     const { store } = await createStore();
-    await store.upsertPendingIntent(buildPendingIntent({ id: "expired", expiresAt: 1500 }));
-    await store.upsertPendingIntent(buildPendingIntent({ id: "active", expiresAt: 2500 }));
-    await store.upsertBrowseSession(buildBrowseSession({ id: "expired-browse", expiresAt: 1500 }));
-    await store.upsertBrowseSession(buildBrowseSession({ id: "active-browse", expiresAt: 2500 }));
+    await store.upsertPendingIntent(
+      buildPendingIntent({ id: "expired", expiresAt: 1500 }),
+    );
+    await store.upsertPendingIntent(
+      buildPendingIntent({ id: "active", expiresAt: 2500 }),
+    );
+    await store.upsertBrowseSession(
+      buildBrowseSession({ id: "expired-browse", expiresAt: 1500 }),
+    );
+    await store.upsertBrowseSession(
+      buildBrowseSession({ id: "active-browse", expiresAt: 2500 }),
+    );
     await store.upsertCallbackHandle(
       buildCallbackHandle({
         id: "expired-callback",
@@ -577,32 +609,39 @@ describe("MessagingStore", () => {
       }),
     );
 
-    await expect(store.getPendingIntent("expired", { now: 2000 })).resolves
-      .toBeUndefined();
-    await expect(store.cleanupExpiredPendingIntents({ now: 2000 })).resolves.toEqual([
-      "expired",
-    ]);
-    await expect(store.getPendingIntent("active", { now: 2000 })).resolves.toMatchObject({
+    await expect(
+      store.getPendingIntent("expired", { now: 2000 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.cleanupExpiredPendingIntents({ now: 2000 }),
+    ).resolves.toEqual(["expired"]);
+    await expect(
+      store.getPendingIntent("active", { now: 2000 }),
+    ).resolves.toMatchObject({
       id: "active",
     });
-    await expect(store.getBrowseSession("expired-browse", { now: 2000 })).resolves
-      .toBeUndefined();
-    await expect(store.cleanupExpiredBrowseSessions({ now: 2000 })).resolves.toEqual([
-      "expired-browse",
-    ]);
-    await expect(store.getBrowseSession("active-browse", { now: 2000 })).resolves
-      .toMatchObject({
-        id: "active-browse",
-      });
-    await expect(store.getCallbackHandle("expired-callback", { now: 2000 })).resolves
-      .toBeUndefined();
-    await expect(store.cleanupExpiredCallbackHandles({ now: 2000 })).resolves.toEqual([
-      "expired-callback",
-    ]);
-    await expect(store.getCallbackHandle("active-callback", { now: 2000 })).resolves
-      .toMatchObject({
-        id: "active-callback",
-      });
+    await expect(
+      store.getBrowseSession("expired-browse", { now: 2000 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.cleanupExpiredBrowseSessions({ now: 2000 }),
+    ).resolves.toEqual(["expired-browse"]);
+    await expect(
+      store.getBrowseSession("active-browse", { now: 2000 }),
+    ).resolves.toMatchObject({
+      id: "active-browse",
+    });
+    await expect(
+      store.getCallbackHandle("expired-callback", { now: 2000 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.cleanupExpiredCallbackHandles({ now: 2000 }),
+    ).resolves.toEqual(["expired-callback"]);
+    await expect(
+      store.getCallbackHandle("active-callback", { now: 2000 }),
+    ).resolves.toMatchObject({
+      id: "active-callback",
+    });
   });
 
   it("fails callback handle resolution closed for wrong actor, channel, or expiry", async () => {
@@ -719,8 +758,12 @@ describe("MessagingStore", () => {
     const { store } = await createStore();
 
     await Promise.all([
-      store.upsertBinding(buildBinding({ id: "binding-a", threadId: "thread-a" })),
-      store.upsertBinding(buildBinding({ id: "binding-b", threadId: "thread-b" })),
+      store.upsertBinding(
+        buildBinding({ id: "binding-a", threadId: "thread-a" }),
+      ),
+      store.upsertBinding(
+        buildBinding({ id: "binding-b", threadId: "thread-b" }),
+      ),
     ]);
 
     await expect(store.readSnapshot()).resolves.toMatchObject({
@@ -821,7 +864,9 @@ describe("MessagingStore", () => {
     ).resolves.toMatchObject({
       topicRecordId: "topic:telegram:-1001:100",
     });
-    await expect(store.getTopicCleanupProposal("proposal-1")).resolves.toMatchObject({
+    await expect(
+      store.getTopicCleanupProposal("proposal-1"),
+    ).resolves.toMatchObject({
       status: "pending",
       items: [expect.objectContaining({ action: "close" })],
     });

@@ -204,7 +204,9 @@ describe("buildMattermostPatchDelta", () => {
       },
       authorizedConversations: {
         ...snapshot.authorizedConversations,
-        value: [{ id: "channelabcdefghijklmn12345", displayName: "Town Square" }],
+        value: [
+          { id: "channelabcdefghijklmn12345", displayName: "Town Square" },
+        ],
       },
     };
 

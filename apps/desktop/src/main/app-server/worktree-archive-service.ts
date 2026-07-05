@@ -76,9 +76,7 @@ function trimGitOutput(value: string): string {
 }
 
 function snapshotIdForPath(worktreePath: string): string {
-  return createHash("sha1")
-    .update(path.resolve(worktreePath))
-    .digest("hex");
+  return createHash("sha1").update(path.resolve(worktreePath)).digest("hex");
 }
 
 function snapshotRefForBackend(
@@ -145,7 +143,9 @@ function findWorktree(
   worktreePath: string,
 ): WorktreeInfo | undefined {
   const resolvedPath = path.resolve(worktreePath);
-  return worktrees.find((worktree) => path.resolve(worktree.path) === resolvedPath);
+  return worktrees.find(
+    (worktree) => path.resolve(worktree.path) === resolvedPath,
+  );
 }
 
 export class WorktreeArchiveService {
@@ -155,7 +155,9 @@ export class WorktreeArchiveService {
     this.gitEnv = options.gitEnv;
   }
 
-  async archive(params: ArchiveWorktreeParams): Promise<WorktreeSnapshotSummary> {
+  async archive(
+    params: ArchiveWorktreeParams,
+  ): Promise<WorktreeSnapshotSummary> {
     const worktreePath = await realpath(path.resolve(params.worktreePath));
     const worktreeListPath = params.repositoryPath
       ? await realpath(path.resolve(params.repositoryPath))
@@ -171,7 +173,9 @@ export class WorktreeArchiveService {
       throw new Error(`Worktree is not registered with Git: ${worktreePath}`);
     }
     if (path.resolve(repositoryPath) === worktreePath) {
-      throw new Error("Refusing to archive the primary checkout as a worktree.");
+      throw new Error(
+        "Refusing to archive the primary checkout as a worktree.",
+      );
     }
 
     const snapshotCommit = await this.createSnapshotCommit({
@@ -181,8 +185,17 @@ export class WorktreeArchiveService {
       worktreePath,
     });
     const snapshotRef = snapshotRefForBackend(params.backend, worktreePath);
-    await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
-    await this.runGit(repositoryPath, ["worktree", "remove", "--force", worktreePath]);
+    await this.runGit(repositoryPath, [
+      "update-ref",
+      snapshotRef,
+      snapshotCommit,
+    ]);
+    await this.runGit(repositoryPath, [
+      "worktree",
+      "remove",
+      "--force",
+      worktreePath,
+    ]);
 
     const archivedAt = params.now ?? Date.now();
     return {
@@ -202,7 +215,9 @@ export class WorktreeArchiveService {
     };
   }
 
-  async restore(params: RestoreWorktreeParams): Promise<WorktreeSnapshotSummary> {
+  async restore(
+    params: RestoreWorktreeParams,
+  ): Promise<WorktreeSnapshotSummary> {
     const worktreePath = path.resolve(params.worktreePath);
     const repositoryPath = path.resolve(params.repositoryPath);
     const { commit: restoreCommit, fallbackReason } =
@@ -249,8 +264,12 @@ export class WorktreeArchiveService {
     const repositoryPath = path.resolve(params.repositoryPath);
     const restoreRef = params.restoreRef?.trim() || "HEAD";
     const snapshotCommit = trimGitOutput(
-      (await this.runGit(repositoryPath, ["rev-parse", `${restoreRef}^{commit}`]))
-        .stdout,
+      (
+        await this.runGit(repositoryPath, [
+          "rev-parse",
+          `${restoreRef}^{commit}`,
+        ])
+      ).stdout,
     );
 
     await mkdir(path.dirname(worktreePath), { recursive: true });
@@ -286,11 +305,12 @@ export class WorktreeArchiveService {
   ): Promise<{ commit: string; fallbackReason?: string }> {
     try {
       const snapshotCommit = trimGitOutput(
-        (await this.runGit(params.repositoryPath, [
-          "rev-parse",
-          `${params.snapshotRef}^{commit}`,
-        ]))
-          .stdout,
+        (
+          await this.runGit(params.repositoryPath, [
+            "rev-parse",
+            `${params.snapshotRef}^{commit}`,
+          ])
+        ).stdout,
       );
 
       if (snapshotCommit === params.snapshotCommit) {
@@ -337,10 +357,12 @@ export class WorktreeArchiveService {
 
       try {
         const commit = trimGitOutput(
-          (await this.runGit(params.repositoryPath, [
-            "rev-parse",
-            `${candidate.value}^{commit}`,
-          ])).stdout,
+          (
+            await this.runGit(params.repositoryPath, [
+              "rev-parse",
+              `${candidate.value}^{commit}`,
+            ])
+          ).stdout,
         );
         return {
           commit,
@@ -360,7 +382,9 @@ export class WorktreeArchiveService {
     worktree: WorktreeInfo;
     worktreePath: string;
   }): Promise<string> {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-index-"));
+    const tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-worktree-index-"),
+    );
     const indexPath = path.join(tempDir, "index");
 
     try {
@@ -368,15 +392,22 @@ export class WorktreeArchiveService {
       await this.runGit(params.worktreePath, ["read-tree", "HEAD"], { env });
       await this.runGit(params.worktreePath, ["add", "-A", "--", "."], { env });
       const tree = trimGitOutput(
-        (await this.runGit(params.worktreePath, ["write-tree"], { env })).stdout,
+        (await this.runGit(params.worktreePath, ["write-tree"], { env }))
+          .stdout,
       );
       const message = [
         `Snapshot worktree for ${params.backend}:${params.threadId}`,
         "",
         `Worktree: ${params.worktreePath}`,
-        params.worktree.branch ? `Branch: ${params.worktree.branch}` : undefined,
-        params.worktree.head ? `Source HEAD: ${params.worktree.head}` : undefined,
-      ].filter(Boolean).join("\n");
+        params.worktree.branch
+          ? `Branch: ${params.worktree.branch}`
+          : undefined,
+        params.worktree.head
+          ? `Source HEAD: ${params.worktree.head}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n");
       const commitArgs = ["commit-tree", tree, "-m", message];
       if (params.worktree.head) {
         commitArgs.push("-p", params.worktree.head);
@@ -384,9 +415,11 @@ export class WorktreeArchiveService {
       const commitEnv = {
         ...env,
         GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME ?? "PwrAgent",
-        GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL ?? "pwragent@example.invalid",
+        GIT_AUTHOR_EMAIL:
+          process.env.GIT_AUTHOR_EMAIL ?? "pwragent@example.invalid",
         GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME ?? "PwrAgent",
-        GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? "pwragent@example.invalid",
+        GIT_COMMITTER_EMAIL:
+          process.env.GIT_COMMITTER_EMAIL ?? "pwragent@example.invalid",
       };
 
       return trimGitOutput(
@@ -404,14 +437,20 @@ export class WorktreeArchiveService {
   }): Promise<string> {
     const primary = params.worktrees[0]?.path;
     if (!primary) {
-      throw new Error(`Unable to resolve repository root for ${params.worktreeListPath}.`);
+      throw new Error(
+        `Unable to resolve repository root for ${params.worktreeListPath}.`,
+      );
     }
 
     return await realpath(path.resolve(primary));
   }
 
   private async listWorktrees(repositoryPath: string): Promise<WorktreeInfo[]> {
-    const output = await this.runGit(repositoryPath, ["worktree", "list", "--porcelain"]);
+    const output = await this.runGit(repositoryPath, [
+      "worktree",
+      "list",
+      "--porcelain",
+    ]);
     return parseWorktreeList(output.stdout);
   }
 

@@ -59,9 +59,9 @@ type ThreadFindBarProps = {
  */
 function highlightsSupported(): boolean {
   return (
-    typeof CSS !== "undefined" &&
-    "highlights" in CSS &&
-    typeof Highlight !== "undefined"
+    typeof CSS !== "undefined"
+    && "highlights" in CSS
+    && typeof Highlight !== "undefined"
   );
 }
 
@@ -86,7 +86,10 @@ function collectMatchRanges(container: HTMLElement, query: string): Range[] {
         return NodeFilter.FILTER_REJECT;
       }
       const parent = node.parentElement;
-      if (parent && (parent.tagName === "SCRIPT" || parent.tagName === "STYLE")) {
+      if (
+        parent
+        && (parent.tagName === "SCRIPT" || parent.tagName === "STYLE")
+      ) {
         return NodeFilter.FILTER_REJECT;
       }
       return NodeFilter.FILTER_ACCEPT;
@@ -156,8 +159,8 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
     setMatches(ranges);
     setActiveIndex((current) => (current < ranges.length ? current : 0));
     const anchorPresent = props.turnId
-      ? container.querySelector(`[data-turn-id="${CSS.escape(props.turnId)}"]`) !==
-        null
+      ? container.querySelector(`[data-turn-id="${CSS.escape(props.turnId)}"]`)
+        !== null
       : false;
     setTargetFound(anchorPresent || ranges.length > 0);
   }, [query, props.refreshKey, props.containerRef, props.turnId]);
@@ -188,16 +191,16 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
   // history until it appears (or we run out / hit the cap). Each load grows the
   // transcript, bumping refreshKey, which re-collects matches and re-runs this.
   const autoLoadActive =
-    seededRef.current !== undefined &&
-    query === seededRef.current &&
-    query !== "";
+    seededRef.current !== undefined
+    && query === seededRef.current
+    && query !== "";
   useEffect(() => {
     if (
-      !autoLoadActive ||
-      targetFound ||
-      props.loadingMore ||
-      !props.hasMoreHistory ||
-      autoLoadsRef.current >= MAX_AUTO_LOADS
+      !autoLoadActive
+      || targetFound
+      || props.loadingMore
+      || !props.hasMoreHistory
+      || autoLoadsRef.current >= MAX_AUTO_LOADS
     ) {
       return;
     }
@@ -215,11 +218,11 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
   useEffect(() => {
     const seed = seededRef.current;
     if (
-      !seed ||
-      query !== seed ||
-      !targetFound ||
-      props.loadingMore ||
-      landedSeedRef.current === seed
+      !seed
+      || query !== seed
+      || !targetFound
+      || props.loadingMore
+      || landedSeedRef.current === seed
     ) {
       return;
     }
@@ -342,7 +345,9 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
 
   const count = matches.length;
   const searchingOlder =
-    autoLoadActive && !targetFound && (props.loadingMore || props.hasMoreHistory);
+    autoLoadActive
+    && !targetFound
+    && (props.loadingMore || props.hasMoreHistory);
   const status =
     query === ""
       ? ""
@@ -413,7 +418,11 @@ function ChevronGlyph(props: { direction: "up" | "down" }): ReactElement {
       aria-hidden="true"
       focusable="false"
     >
-      {props.direction === "up" ? <path d="m6 14 6-6 6 6" /> : <path d="m6 10 6 6 6-6" />}
+      {props.direction === "up" ? (
+        <path d="m6 14 6-6 6 6" />
+      ) : (
+        <path d="m6 10 6 6 6-6" />
+      )}
     </svg>
   );
 }

@@ -11,15 +11,17 @@ export const GIT_COMMAND_ENV = "PWRAGENT_GIT_PATH";
 const XCODE_LICENSE_COMMAND = "sudo xcodebuild -license";
 
 export function parseGitVersionOutput(output: string): string | undefined {
-  return output.match(/\bgit version\s+([^\s]+)/i)?.[1]
-    ?? output.match(/\b([0-9]+(?:\.[0-9]+){1,2}(?:-[0-9A-Za-z.-]+)?)\b/)?.[1];
+  return (
+    output.match(/\bgit version\s+([^\s]+)/i)?.[1]
+    ?? output.match(/\b([0-9]+(?:\.[0-9]+){1,2}(?:-[0-9A-Za-z.-]+)?)\b/)?.[1]
+  );
 }
 
 export function isXcodeLicenseFailure(reason?: string): boolean {
   return Boolean(
     reason?.includes("Xcode license")
-      || reason?.includes("license agreements")
-      || reason?.includes("xcodebuild -license"),
+    || reason?.includes("license agreements")
+    || reason?.includes("xcodebuild -license"),
   );
 }
 
@@ -49,14 +51,12 @@ async function buildGitCandidate(
     platform?: NodeJS.Platform;
   },
 ): Promise<DesktopGitDiscoveryCandidate | undefined> {
-  const candidate = await buildCommandDiscoveryCandidate<DesktopGitCandidateSource>(
-    input,
-    {
+  const candidate =
+    await buildCommandDiscoveryCandidate<DesktopGitCandidateSource>(input, {
       env: options.env,
       platform: options.platform,
       parseVersion: parseGitVersionOutput,
-    },
-  );
+    });
   if (!candidate) {
     return undefined;
   }
@@ -108,8 +108,9 @@ export async function discoverGitCommands(params?: {
     ),
   );
   const selected =
-    candidates.find((candidate) => candidate.source === "env" && candidate.executable)
-    ?? candidates.find((candidate) => candidate.executable);
+    candidates.find(
+      (candidate) => candidate.source === "env" && candidate.executable,
+    ) ?? candidates.find((candidate) => candidate.executable);
 
   if (selected) {
     selected.selected = true;

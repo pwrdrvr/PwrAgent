@@ -1,4 +1,7 @@
-import type { AppServerBackendKind, ThreadIdentifier } from "./normalized-app-server";
+import type {
+  AppServerBackendKind,
+  ThreadIdentifier,
+} from "./normalized-app-server";
 
 /** @deprecated Use PWRAGENT_TOOL_NAMESPACE for advertised dynamic tools. */
 export const TASK_MONITOR_TOOL_NAMESPACE = "pwragent_task_monitors";
@@ -16,7 +19,8 @@ export const TASK_MONITOR_OPERATION_NAMES = [
   "complete_monitoring",
 ] as const;
 
-export type TaskMonitorOperationName = (typeof TASK_MONITOR_OPERATION_NAMES)[number];
+export type TaskMonitorOperationName =
+  (typeof TASK_MONITOR_OPERATION_NAMES)[number];
 
 export type TaskMonitorContext = {
   backend: AppServerBackendKind;
@@ -176,7 +180,7 @@ export function isTaskMonitorOperationName(
   value: unknown,
 ): value is TaskMonitorOperationName {
   return (
-    typeof value === "string" &&
-    TASK_MONITOR_OPERATION_NAMES.includes(value as TaskMonitorOperationName)
+    typeof value === "string"
+    && TASK_MONITOR_OPERATION_NAMES.includes(value as TaskMonitorOperationName)
   );
 }

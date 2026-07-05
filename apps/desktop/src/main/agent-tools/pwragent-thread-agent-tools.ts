@@ -11,10 +11,7 @@ import type {
   AgentToolDefinition,
   AgentToolDispatchResult,
 } from "./agent-tool-definition.js";
-import {
-  agentToolFailure,
-  agentToolSuccess,
-} from "./agent-tool-definition.js";
+import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 
 export const PWRAGENT_THREAD_INSPECTION_UNAVAILABLE_MESSAGE =
@@ -22,18 +19,23 @@ export const PWRAGENT_THREAD_INSPECTION_UNAVAILABLE_MESSAGE =
 
 export type PwrAgentThreadInspectionHandler = (
   request: PwrAgentThreadInspectionRequest,
-) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
+) =>
+  | PwrAgentThreadInspectionResponse
+  | Promise<PwrAgentThreadInspectionResponse>;
 
 export function buildPwrAgentThreadToolRouter(
   handler: PwrAgentThreadInspectionHandler | undefined,
   options: { namespace?: string; unsupportedMessage?: string } = {},
 ): AgentToolRouter {
-  return new AgentToolRouter(buildPwrAgentThreadToolDefinitions(handler, {
-    namespace: options.namespace,
-  }), {
-    unsupportedMessage:
-      options.unsupportedMessage ?? "Unsupported PwrAgent thread tool.",
-  });
+  return new AgentToolRouter(
+    buildPwrAgentThreadToolDefinitions(handler, {
+      namespace: options.namespace,
+    }),
+    {
+      unsupportedMessage:
+        options.unsupportedMessage ?? "Unsupported PwrAgent thread tool.",
+    },
+  );
 }
 
 export function buildPwrAgentThreadToolDefinitions(

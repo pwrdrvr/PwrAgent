@@ -50,7 +50,10 @@ export function resolveTheme(preference: ThemePreference): ResolvedTheme {
   if (preference === "dark" || preference === "light") {
     return preference;
   }
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+  if (
+    typeof window === "undefined"
+    || typeof window.matchMedia !== "function"
+  ) {
     return "dark";
   }
   return window.matchMedia("(prefers-color-scheme: light)").matches
@@ -88,9 +91,11 @@ export function applyAppearanceAttributes(
  */
 export function readBridgedAppearance(): AppearancePreference {
   if (typeof window === "undefined") return DEFAULT_APPEARANCE;
-  const bridged = (window as unknown as {
-    __pwragentAppearance?: Partial<AppearancePreference>;
-  }).__pwragentAppearance;
+  const bridged = (
+    window as unknown as {
+      __pwragentAppearance?: Partial<AppearancePreference>;
+    }
+  ).__pwragentAppearance;
   return {
     theme: normalizeTheme(bridged?.theme),
     density: normalizeDensity(bridged?.density),

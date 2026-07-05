@@ -80,11 +80,15 @@ describe("buildLiveToolDetails", () => {
         status: "in_progress",
         command: expect.objectContaining({
           displayCommand: "spawnAgent 019e5630",
-          output: expect.stringContaining("Prompt: You are the correctness reviewer."),
+          output: expect.stringContaining(
+            "Prompt: You are the correctness reviewer.",
+          ),
         }),
       },
     ]);
-    expect(details[0]?.command?.output).toContain("Still running reviewer output.");
+    expect(details[0]?.command?.output).toContain(
+      "Still running reviewer output.",
+    );
   });
 });
 
@@ -141,7 +145,9 @@ describe("buildTokenUsageActivityEntry", () => {
     expect(entry).toMatchObject({
       type: "activity",
       id: "usage-1",
-      summary: expect.stringContaining("Latest request usage: 19,549 uncached in"),
+      summary: expect.stringContaining(
+        "Latest request usage: 19,549 uncached in",
+      ),
       status: "completed",
       turn: { id: "turn-1" },
     });
@@ -287,7 +293,9 @@ describe("buildTokenUsageActivityEntry", () => {
       },
     });
 
-    expect(entry?.summary).toBe("Usage: 110,000 uncached in · 20,000 cached · 1,000 out · $1.48 list price");
+    expect(entry?.summary).toBe(
+      "Usage: 110,000 uncached in · 20,000 cached · 1,000 out · $1.48 list price",
+    );
     expect(entry?.details.map((detail) => detail.label)).toContain(
       "Uncached input cost: 110,000 tokens at $12.50/M 2.5x Standard = $1.38",
     );
@@ -316,7 +324,9 @@ describe("buildTokenUsageActivityEntry", () => {
       },
     });
 
-    expect(entry?.summary).toBe("Usage: 800 uncached in · 200 cached · 100 out");
+    expect(entry?.summary).toBe(
+      "Usage: 800 uncached in · 200 cached · 100 out",
+    );
     expect(entry?.details.at(-1)?.label).toBe(
       "Cost unavailable: no local pricing entry for gpt-5.5 service tier flex",
     );
@@ -390,7 +400,8 @@ describe("buildTaskMonitorUsageActivityEntry", () => {
     expect(entry).toMatchObject({
       type: "activity",
       id: "monitor-usage-1",
-      summary: "Monitor usage so far: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
+      summary:
+        "Monitor usage so far: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
       status: "completed",
       turn: { id: "monitor:monitor-1" },
     });
@@ -431,8 +442,7 @@ describe("Windows command rendering", () => {
     const details = buildLiveToolDetails({
       type: "commandExecution",
       id: "cmd-3",
-      command:
-        '"C:\\Program Files\\Git\\bin\\bash.exe" -lc "git status"',
+      command: '"C:\\Program Files\\Git\\bin\\bash.exe" -lc "git status"',
       status: "completed",
     });
 

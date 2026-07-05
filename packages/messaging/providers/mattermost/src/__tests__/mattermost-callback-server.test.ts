@@ -63,15 +63,15 @@ describe("computeMattermostContextHmac", () => {
       issuedAt: 1000,
     };
     const baseHmac = computeMattermostContextHmac(base);
-    expect(computeMattermostContextHmac({ ...base, hmacSecret: "other" })).not.toBe(
-      baseHmac,
-    );
-    expect(computeMattermostContextHmac({ ...base, intentId: "other" })).not.toBe(
-      baseHmac,
-    );
-    expect(computeMattermostContextHmac({ ...base, actionId: "other" })).not.toBe(
-      baseHmac,
-    );
+    expect(
+      computeMattermostContextHmac({ ...base, hmacSecret: "other" }),
+    ).not.toBe(baseHmac);
+    expect(
+      computeMattermostContextHmac({ ...base, intentId: "other" }),
+    ).not.toBe(baseHmac);
+    expect(
+      computeMattermostContextHmac({ ...base, actionId: "other" }),
+    ).not.toBe(baseHmac);
     expect(computeMattermostContextHmac({ ...base, issuedAt: 2000 })).not.toBe(
       baseHmac,
     );

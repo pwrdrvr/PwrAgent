@@ -8,20 +8,28 @@ import {
   type MessagingRejectedInboundEvent,
   type MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
-import { LineAdapter, verifyLineSignature, type LineApi } from "../line-adapter.ts";
+import {
+  LineAdapter,
+  verifyLineSignature,
+  type LineApi,
+} from "../line-adapter.ts";
 import type { LineMessagingConfig } from "../line-config.ts";
 
 describe("LineAdapter", () => {
   const adapters: LineAdapter[] = [];
 
   afterEach(async () => {
-    await Promise.all(adapters.map((adapter) => adapter.stop().catch(() => undefined)));
+    await Promise.all(
+      adapters.map((adapter) => adapter.stop().catch(() => undefined)),
+    );
     adapters.length = 0;
   });
 
   it("verifies X-Line-Signature before processing webhook bodies", () => {
     const body = Buffer.from(JSON.stringify({ events: [] }));
-    const signature = createHmac("sha256", "secret").update(body).digest("base64");
+    const signature = createHmac("sha256", "secret")
+      .update(body)
+      .digest("base64");
     expect(verifyLineSignature(body, signature, "secret")).toBe(true);
     expect(verifyLineSignature(body, signature, "wrong")).toBe(false);
   });
@@ -60,7 +68,9 @@ describe("LineAdapter", () => {
     await adapter.start(async () => {});
 
     const rawBody = JSON.stringify({ events: [] });
-    const signature = createHmac("sha256", "secret").update(rawBody).digest("base64");
+    const signature = createHmac("sha256", "secret")
+      .update(rawBody)
+      .digest("base64");
     const response = await fetch(`http://127.0.0.1:${port}/`, {
       body: rawBody,
       method: "POST",
@@ -200,11 +210,15 @@ describe("LineAdapter", () => {
     expect(result.outcome).toBe("presented");
     // More than one push (batched), and every text message is within the limit.
     expect(api.pushMessage.mock.calls.length).toBeGreaterThan(1);
-    const allMessages = api.pushMessage.mock.calls.flatMap(([call]) => call.messages);
+    const allMessages = api.pushMessage.mock.calls.flatMap(
+      ([call]) => call.messages,
+    );
     const textMessages = allMessages.filter((m) => m.type === "text");
     expect(textMessages.length).toBeGreaterThan(1);
     for (const message of textMessages) {
-      expect((message as { text: string }).text.length).toBeLessThanOrEqual(5000);
+      expect((message as { text: string }).text.length).toBeLessThanOrEqual(
+        5000,
+      );
     }
   });
 
@@ -215,15 +229,17 @@ describe("LineAdapter", () => {
     });
     adapters.push(adapter);
 
-    await expect(adapter.downloadAttachment({
-      attachment: {
-        id: "123",
-        kind: "file",
-        name: "file.bin",
-        disposition: "available",
-      },
-      maxBytes: 10,
-    })).rejects.toThrow(/channel access token/);
+    await expect(
+      adapter.downloadAttachment({
+        attachment: {
+          id: "123",
+          kind: "file",
+          name: "file.bin",
+          disposition: "available",
+        },
+        maxBytes: 10,
+      }),
+    ).rejects.toThrow(/channel access token/);
   });
 
   it("delivers text and action chips as LINE push messages", async () => {
@@ -356,15 +372,18 @@ describe("LineAdapter", () => {
     const messages = api.pushMessage.mock.calls[0]?.[0].messages ?? [];
     const textMessage = messages.find((message) => message.type === "text");
     const flexMessage = messages.find((message) => message.type === "flex");
-    const title = flexMessage?.type === "flex"
-      ? flexMessage.contents.body?.contents[0]
-      : undefined;
+    const title =
+      flexMessage?.type === "flex"
+        ? flexMessage.contents.body?.contents[0]
+        : undefined;
 
-    expect(textMessage?.type === "text" ? textMessage.text : "").toBe([
-      "Showing recent PwrAgent threads. Page 1/7.",
-      "1. First thread",
-      "Reply with a number, or reply next, projects, new, or cancel.",
-    ].join("\n"));
+    expect(textMessage?.type === "text" ? textMessage.text : "").toBe(
+      [
+        "Showing recent PwrAgent threads. Page 1/7.",
+        "1. First thread",
+        "Reply with a number, or reply next, projects, new, or cancel.",
+      ].join("\n"),
+    );
     expect(title?.type === "text" ? title.text : "").toBe(
       "Showing recent PwrAgent threads. Page 1/7.",
     );
@@ -522,7 +541,9 @@ describe("LineAdapter", () => {
 
   it("resolves persisted postbacks across adapter restarts", async () => {
     const port = await getFreePort();
-    const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const config = createConfig({
+      callbackBaseUrl: `http://127.0.0.1:${port}/`,
+    });
     const store = createCallbackStore();
     const firstApi = createApi();
     const firstAdapter = new LineAdapter({
@@ -567,15 +588,17 @@ describe("LineAdapter", () => {
     });
 
     await postLineWebhook(port, config.channelSecret, {
-      events: [{
-        type: "postback",
-        webhookEventId: "event-1",
-        source: {
-          type: "user",
-          userId: "U0123456789abcdef0123456789abcdef",
+      events: [
+        {
+          type: "postback",
+          webhookEventId: "event-1",
+          source: {
+            type: "user",
+            userId: "U0123456789abcdef0123456789abcdef",
+          },
+          postback: { data: postbackData },
         },
-        postback: { data: postbackData },
-      }],
+      ],
     });
     await waitFor(() => events.length === 1);
 
@@ -589,7 +612,9 @@ describe("LineAdapter", () => {
 
   it("rejects shared conversation events when no group allowlist is configured", async () => {
     const port = await getFreePort();
-    const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const config = createConfig({
+      callbackBaseUrl: `http://127.0.0.1:${port}/`,
+    });
     const adapter = new LineAdapter({
       api: createApi(),
       callbackHandleStore: createCallbackStore(),
@@ -659,7 +684,9 @@ describe("LineAdapter", () => {
 
   it("allows pairing tokens from shared conversations before group authorization", async () => {
     const port = await getFreePort();
-    const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const config = createConfig({
+      callbackBaseUrl: `http://127.0.0.1:${port}/`,
+    });
     const adapter = new LineAdapter({
       api: createApi(),
       callbackHandleStore: createCallbackStore(),
@@ -712,16 +739,20 @@ describe("LineAdapter", () => {
     });
 
     await postLineWebhook(port, config.channelSecret, {
-      events: [{
-        type: "join",
-        webhookEventId: "event-join",
-        source: {
-          type: "group",
-          groupId: "C0123456789abcdef0123456789abcdef",
+      events: [
+        {
+          type: "join",
+          webhookEventId: "event-join",
+          source: {
+            type: "group",
+            groupId: "C0123456789abcdef0123456789abcdef",
+          },
         },
-      }],
+      ],
     });
-    await waitFor(() => events.length > 0 || logger.debug.mock.calls.length > 0);
+    await waitFor(
+      () => events.length > 0 || logger.debug.mock.calls.length > 0,
+    );
 
     expect(events).toHaveLength(0);
     expect(logger.debug).toHaveBeenCalledWith(
@@ -742,16 +773,18 @@ describe("LineAdapter", () => {
     });
     adapters.push(adapter);
 
-    await expect(adapter.downloadAttachment({
-      attachment: {
-        id: "123",
-        kind: "file",
-        name: "large.bin",
-        disposition: "available",
-        sizeBytes: 11,
-      },
-      maxBytes: 10,
-    })).rejects.toThrow(/download limit/);
+    await expect(
+      adapter.downloadAttachment({
+        attachment: {
+          id: "123",
+          kind: "file",
+          name: "large.bin",
+          disposition: "available",
+          sizeBytes: 11,
+        },
+        maxBytes: 10,
+      }),
+    ).rejects.toThrow(/download limit/);
     expect(api.downloadMessageContent).not.toHaveBeenCalled();
   });
 
@@ -765,15 +798,17 @@ describe("LineAdapter", () => {
     });
     adapters.push(adapter);
 
-    await expect(adapter.downloadAttachment({
-      attachment: {
-        id: "123",
-        kind: "file",
-        name: "large.bin",
-        disposition: "available",
-      },
-      maxBytes: 10,
-    })).rejects.toThrow(/download limit/);
+    await expect(
+      adapter.downloadAttachment({
+        attachment: {
+          id: "123",
+          kind: "file",
+          name: "large.bin",
+          disposition: "available",
+        },
+        maxBytes: 10,
+      }),
+    ).rejects.toThrow(/download limit/);
     expect(api.downloadMessageContent).toHaveBeenCalledWith("123");
   });
 
@@ -787,16 +822,18 @@ describe("LineAdapter", () => {
     });
     adapters.push(adapter);
 
-    await expect(adapter.downloadAttachment({
-      attachment: {
-        id: "123",
-        kind: "file",
-        name: "small.bin",
-        disposition: "available",
-        sizeBytes: 10,
-      },
-      maxBytes: 10,
-    })).resolves.toMatchObject({
+    await expect(
+      adapter.downloadAttachment({
+        attachment: {
+          id: "123",
+          kind: "file",
+          name: "small.bin",
+          disposition: "available",
+          sizeBytes: 10,
+        },
+        maxBytes: 10,
+      }),
+    ).resolves.toMatchObject({
       fileName: "small.bin",
       sizeBytes: 10,
     });
@@ -811,21 +848,25 @@ describe("LineAdapter", () => {
     });
     adapters.push(adapter);
 
-    await expect(adapter.downloadAttachment({
-      attachment: {
-        id: "123",
-        kind: "file",
-        name: "large.bin",
-        disposition: "available",
-        sizeBytes: 201 * 1024 * 1024,
-      },
-      maxBytes: 200 * 1024 * 1024,
-    })).rejects.toThrow(/download limit/);
+    await expect(
+      adapter.downloadAttachment({
+        attachment: {
+          id: "123",
+          kind: "file",
+          name: "large.bin",
+          disposition: "available",
+          sizeBytes: 201 * 1024 * 1024,
+        },
+        maxBytes: 200 * 1024 * 1024,
+      }),
+    ).rejects.toThrow(/download limit/);
     expect(api.downloadMessageContent).not.toHaveBeenCalled();
   });
 });
 
-function createConfig(overrides: Partial<LineMessagingConfig> = {}): LineMessagingConfig {
+function createConfig(
+  overrides: Partial<LineMessagingConfig> = {},
+): LineMessagingConfig {
   return {
     authorizedActorIds: [
       { id: "U0123456789abcdef0123456789abcdef", displayName: "Operator" },
@@ -839,7 +880,9 @@ function createConfig(overrides: Partial<LineMessagingConfig> = {}): LineMessagi
 }
 
 function createApi(): LineApi & {
-  downloadMessageContent: ReturnType<typeof vi.fn<LineApi["downloadMessageContent"]>>;
+  downloadMessageContent: ReturnType<
+    typeof vi.fn<LineApi["downloadMessageContent"]>
+  >;
   pushMessage: ReturnType<typeof vi.fn<LineApi["pushMessage"]>>;
   showLoadingAnimation: ReturnType<
     typeof vi.fn<NonNullable<LineApi["showLoadingAnimation"]>>
@@ -895,12 +938,13 @@ function createCallbackStore() {
   return {
     records,
     resolveCallbackHandle: vi.fn(async ({ actorId, channel, handle, now }) =>
-      records.find((record) =>
-        record.handle === handle
-        && record.allowedActorIds.includes(actorId)
-        && record.channel.channel === channel.channel
-        && record.channel.conversation.id === channel.conversation.id
-        && (!record.expiresAt || record.expiresAt > (now ?? Date.now())),
+      records.find(
+        (record) =>
+          record.handle === handle
+          && record.allowedActorIds.includes(actorId)
+          && record.channel.channel === channel.channel
+          && record.channel.conversation.id === channel.conversation.id
+          && (!record.expiresAt || record.expiresAt > (now ?? Date.now())),
       ),
     ),
     upsertCallbackHandle: vi.fn(
@@ -965,7 +1009,8 @@ function lineGroupTextEvent(params: { text: string }): unknown {
 function extractFirstPostbackData(api: ReturnType<typeof createApi>): string {
   const messages = api.pushMessage.mock.calls[0]?.[0].messages ?? [];
   const flex = messages.find((message) => message.type === "flex");
-  const row = flex?.type === "flex" ? flex.contents.footer?.contents[0] : undefined;
+  const row =
+    flex?.type === "flex" ? flex.contents.footer?.contents[0] : undefined;
   const button = row?.type === "box" ? row.contents[0] : undefined;
   const data = button?.type === "button" ? button.action.data : undefined;
   if (!data) throw new Error("missing LINE postback data");

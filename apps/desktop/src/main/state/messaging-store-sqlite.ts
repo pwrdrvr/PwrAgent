@@ -67,8 +67,8 @@ export class SqliteMessagingStore {
     for (const row of rows) {
       const binding: MessagingBindingRecord = JSON.parse(row.payload);
       if (
-        !binding.revokedAt &&
-        buildMessagingConversationKey(binding.channel) === channelKey
+        !binding.revokedAt
+        && buildMessagingConversationKey(binding.channel) === channelKey
       ) {
         return binding;
       }
@@ -170,7 +170,9 @@ export class SqliteMessagingStore {
     id: string,
   ): Promise<MessagingMonitorSubscriptionRecord | undefined> {
     const row = this.stateDb.raw
-      .prepare("SELECT payload FROM monitor_subscriptions WHERE subscription_id = ?")
+      .prepare(
+        "SELECT payload FROM monitor_subscriptions WHERE subscription_id = ?",
+      )
       .get(id) as { payload: string } | undefined;
     return row ? JSON.parse(row.payload) : undefined;
   }
@@ -185,13 +187,17 @@ export class SqliteMessagingStore {
       )
       .all(channel.channel) as { payload: string }[];
     return rows
-      .map((row) => JSON.parse(row.payload) as MessagingMonitorSubscriptionRecord)
+      .map(
+        (row) => JSON.parse(row.payload) as MessagingMonitorSubscriptionRecord,
+      )
       .filter(
         (subscription) =>
-          !subscription.revokedAt &&
-          buildMessagingConversationKey(subscription.channel) === channelKey,
+          !subscription.revokedAt
+          && buildMessagingConversationKey(subscription.channel) === channelKey,
       )
-      .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0];
+      .sort(
+        (a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt,
+      )[0];
   }
 
   async findActiveMonitorSubscriptionsForChannelKind(params: {
@@ -203,7 +209,9 @@ export class SqliteMessagingStore {
       )
       .all(params.channel) as { payload: string }[];
     return rows
-      .map((row) => JSON.parse(row.payload) as MessagingMonitorSubscriptionRecord)
+      .map(
+        (row) => JSON.parse(row.payload) as MessagingMonitorSubscriptionRecord,
+      )
       .filter((subscription) => !subscription.revokedAt);
   }
 
@@ -251,7 +259,9 @@ export class SqliteMessagingStore {
     id: string,
   ): Promise<MessagingManagedTopicRecord | undefined> {
     const row = this.stateDb.raw
-      .prepare("SELECT payload FROM messaging_managed_topics WHERE topic_record_id = ?")
+      .prepare(
+        "SELECT payload FROM messaging_managed_topics WHERE topic_record_id = ?",
+      )
       .get(id) as { payload: string } | undefined;
     return row ? JSON.parse(row.payload) : undefined;
   }
@@ -265,7 +275,9 @@ export class SqliteMessagingStore {
         "SELECT payload FROM messaging_managed_topics WHERE channel_kind = ? AND supergroup_id = ? ORDER BY updated_at DESC, created_at DESC",
       )
       .all(params.channel, params.supergroupId) as { payload: string }[];
-    return rows.map((row) => JSON.parse(row.payload) as MessagingManagedTopicRecord);
+    return rows.map(
+      (row) => JSON.parse(row.payload) as MessagingManagedTopicRecord,
+    );
   }
 
   async findManagedTopicByConversation(params: {
@@ -316,9 +328,12 @@ export class SqliteMessagingStore {
       .prepare(
         "SELECT payload FROM messaging_thread_topic_links WHERE channel_kind = ? AND supergroup_id = ? AND backend = ? AND thread_id = ?",
       )
-      .get(params.channel, params.supergroupId, params.backend, params.threadId) as
-      | { payload: string }
-      | undefined;
+      .get(
+        params.channel,
+        params.supergroupId,
+        params.backend,
+        params.threadId,
+      ) as { payload: string } | undefined;
     return row ? JSON.parse(row.payload) : undefined;
   }
 
@@ -402,9 +417,9 @@ export class SqliteMessagingStore {
       .map((r) => JSON.parse(r.payload) as MessagingPendingIntentRecord)
       .filter(
         (intent) =>
-          intent.allowedActorIds.includes(params.actorId) &&
-          intent.channel &&
-          buildMessagingConversationKey(intent.channel) === channelKey,
+          intent.allowedActorIds.includes(params.actorId)
+          && intent.channel
+          && buildMessagingConversationKey(intent.channel) === channelKey,
       )
       .sort((a, b) => b.createdAt - a.createdAt);
     return matches[0];
@@ -425,9 +440,9 @@ export class SqliteMessagingStore {
       .filter((intent) => {
         const ctx = intent.intent.requestContext;
         return (
-          ctx?.backend === params.backend &&
-          ctx.threadId === params.threadId &&
-          ctx.requestId === params.requestId
+          ctx?.backend === params.backend
+          && ctx.threadId === params.threadId
+          && ctx.requestId === params.requestId
         );
       })
       .sort((a, b) => b.createdAt - a.createdAt);
@@ -470,8 +485,8 @@ export class SqliteMessagingStore {
       try {
         const record = JSON.parse(row.payload) as MessagingPendingIntentRecord;
         if (
-          record.channel &&
-          buildMessagingConversationKey(record.channel) === channelKey
+          record.channel
+          && buildMessagingConversationKey(record.channel) === channelKey
         ) {
           removed.push(row.intent_id);
         }
@@ -521,9 +536,9 @@ export class SqliteMessagingStore {
         const intent = JSON.parse(row.payload) as MessagingPendingIntentRecord;
         const requestContext = intent.intent.requestContext;
         if (
-          (requestContext?.backend === params.backend &&
-            requestContext.threadId === params.threadId) ||
-          (row.binding_id && bindingIds.has(row.binding_id))
+          (requestContext?.backend === params.backend
+            && requestContext.threadId === params.threadId)
+          || (row.binding_id && bindingIds.has(row.binding_id))
         ) {
           removed.push(row.intent_id);
         }
@@ -550,9 +565,7 @@ export class SqliteMessagingStore {
   }): Promise<string[]> {
     const now = options?.now ?? Date.now();
     const rows = this.stateDb.raw
-      .prepare(
-        "SELECT intent_id FROM pending_intents WHERE expires_at <= ?",
-      )
+      .prepare("SELECT intent_id FROM pending_intents WHERE expires_at <= ?")
       .all(now) as { intent_id: string }[];
     const removed = rows.map((r) => r.intent_id);
     if (removed.length > 0) {
@@ -609,8 +622,8 @@ export class SqliteMessagingStore {
       .map((r) => JSON.parse(r.payload) as MessagingBrowseSessionRecord)
       .filter(
         (session) =>
-          session.allowedActorIds.includes(params.actorId) &&
-          buildMessagingConversationKey(session.channel) === channelKey,
+          session.allowedActorIds.includes(params.actorId)
+          && buildMessagingConversationKey(session.channel) === channelKey,
       )
       .sort((a, b) => b.updatedAt - a.updatedAt);
     return matches[0];
@@ -630,9 +643,7 @@ export class SqliteMessagingStore {
   }): Promise<string[]> {
     const now = options?.now ?? Date.now();
     const rows = this.stateDb.raw
-      .prepare(
-        "SELECT session_id FROM browse_sessions WHERE expires_at <= ?",
-      )
+      .prepare("SELECT session_id FROM browse_sessions WHERE expires_at <= ?")
       .all(now) as { session_id: string }[];
     const removed = rows.map((r) => r.session_id);
     if (removed.length > 0) {
@@ -695,9 +706,9 @@ export class SqliteMessagingStore {
       .map((r) => JSON.parse(r.payload) as MessagingCallbackHandleRecord)
       .filter(
         (handle) =>
-          handle.handle === params.handle &&
-          handle.allowedActorIds.includes(params.actorId) &&
-          buildMessagingConversationKey(handle.channel) === channelKey,
+          handle.handle === params.handle
+          && handle.allowedActorIds.includes(params.actorId)
+          && buildMessagingConversationKey(handle.channel) === channelKey,
       )
       .sort((a, b) => b.updatedAt - a.updatedAt);
     return matches[0];
@@ -745,9 +756,7 @@ export class SqliteMessagingStore {
   }): Promise<string[]> {
     const now = options?.now ?? Date.now();
     const rows = this.stateDb.raw
-      .prepare(
-        "SELECT handle_id FROM callback_handles WHERE expires_at <= ?",
-      )
+      .prepare("SELECT handle_id FROM callback_handles WHERE expires_at <= ?")
       .all(now) as { handle_id: string }[];
     const removed = rows.map((r) => r.handle_id);
     if (removed.length > 0) {
@@ -785,12 +794,18 @@ export class SqliteMessagingStore {
 
   async readSnapshot(): Promise<MessagingStoreData> {
     const bindings: Record<string, MessagingBindingRecord> = {};
-    const monitorSubscriptions: Record<string, MessagingMonitorSubscriptionRecord> = {};
+    const monitorSubscriptions: Record<
+      string,
+      MessagingMonitorSubscriptionRecord
+    > = {};
     const pendingIntents: Record<string, MessagingPendingIntentRecord> = {};
     const browseSessions: Record<string, MessagingBrowseSessionRecord> = {};
     const callbackHandles: Record<string, MessagingCallbackHandleRecord> = {};
     const deliveries: Record<string, MessagingDeliveryRecord> = {};
-    const topicCleanupProposals: Record<string, MessagingTopicCleanupProposalRecord> = {};
+    const topicCleanupProposals: Record<
+      string,
+      MessagingTopicCleanupProposalRecord
+    > = {};
     const topicLinks: Record<string, MessagingThreadTopicLinkRecord> = {};
     const topics: Record<string, MessagingManagedTopicRecord> = {};
 
@@ -835,7 +850,9 @@ export class SqliteMessagingStore {
       topicLinks[row.link_id] = JSON.parse(row.payload);
     }
     for (const row of this.stateDb.raw
-      .prepare("SELECT proposal_id, payload FROM messaging_topic_cleanup_proposals")
+      .prepare(
+        "SELECT proposal_id, payload FROM messaging_topic_cleanup_proposals",
+      )
       .all() as { proposal_id: string; payload: string }[]) {
       topicCleanupProposals[row.proposal_id] = JSON.parse(row.payload);
     }
@@ -877,8 +894,11 @@ function buildChannelId(channel: MessagingChannelRef): string {
 function sanitizeBinding(
   binding: MessagingBindingRecord,
 ): MessagingBindingRecord {
-  const { activeTurn: _activeTurn, threadDisplay: _threadDisplay, ...rest } =
-    binding;
+  const {
+    activeTurn: _activeTurn,
+    threadDisplay: _threadDisplay,
+    ...rest
+  } = binding;
   return {
     ...rest,
     authorizedActorIds: [...new Set(binding.authorizedActorIds)],

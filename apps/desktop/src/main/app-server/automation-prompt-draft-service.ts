@@ -44,7 +44,8 @@ export type StructuredGenerator = (request: {
   schemaName?: string;
   timeoutMs?: number;
 }) => Promise<
-  { status: "ok"; object: unknown } | { status: "unavailable" | "failed"; reason: string }
+  | { status: "ok"; object: unknown }
+  | { status: "unavailable" | "failed"; reason: string }
 >;
 
 export async function generateAutomationPromptDraft(params: {

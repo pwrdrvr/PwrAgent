@@ -68,10 +68,8 @@ describe("messaging artifact renderer", () => {
         markdownDialect: "plain",
       },
     };
-    const {
-      outboundAttachments: _outboundAttachments,
-      ...textOnlyProfile
-    } = textOnlyProfileWithUndefinedOutbound;
+    const { outboundAttachments: _outboundAttachments, ...textOnlyProfile } =
+      textOnlyProfileWithUndefinedOutbound;
 
     const intent = buildArtifactDeliveryIntent({
       artifact: {
@@ -121,8 +119,10 @@ function longMarkdown(): string {
   return [
     "# Artifact",
     "",
-    ...Array.from({ length: 120 }, (_, index) => (
-      `- Item ${index + 1}: ${"Detailed artifact content ".repeat(4)}`
-    )),
+    ...Array.from(
+      { length: 120 },
+      (_, index) =>
+        `- Item ${index + 1}: ${"Detailed artifact content ".repeat(4)}`,
+    ),
   ].join("\n");
 }

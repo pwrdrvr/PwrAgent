@@ -42,10 +42,14 @@ export function PricingPanel(props: PricingPanelProps) {
   const lines = props.pricing?.lines ?? [];
   const displayLines = buildPricingDisplayLines(lines);
   const estimatedLines = displayLines.filter(isEstimatedUsageGap);
-  const displaySummaries = addEstimatedLinesToSummaries(summaries, estimatedLines);
+  const displaySummaries = addEstimatedLinesToSummaries(
+    summaries,
+    estimatedLines,
+  );
   const summary =
     aggregateSummaries(displaySummaries) ?? aggregateUsageLines(displayLines);
-  const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
+  const displayOptions =
+    props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   const pricingTotals = buildPricingRunningTotals(displayLines);
 
   return (
@@ -89,7 +93,8 @@ export function PricingPanel(props: PricingPanelProps) {
           {summary.unpricedUsageLineCount > 0 ? (
             <p className="context-empty context-empty--warning">
               {summary.unpricedUsageLineCount.toLocaleString()} usage row
-              {summary.unpricedUsageLineCount === 1 ? "" : "s"} could not be priced.
+              {summary.unpricedUsageLineCount === 1 ? "" : "s"} could not be
+              priced.
             </p>
           ) : null}
           {displaySummaries.length > 1 ? (
@@ -107,7 +112,8 @@ export function PricingPanel(props: PricingPanelProps) {
                       providerSummary.totalCostMicros,
                       providerSummary.currency,
                     )}{" "}
-                    list price · {providerSummary.usageLineCount.toLocaleString()} row
+                    list price ·{" "}
+                    {providerSummary.usageLineCount.toLocaleString()} row
                     {providerSummary.usageLineCount === 1 ? "" : "s"}
                   </p>
                 </li>
@@ -141,10 +147,11 @@ export function PricingPanel(props: PricingPanelProps) {
             const runningTokens = formatUsageLineRunningTokens(line);
 
             return (
-              <li key={line.usageLineId} className="rail-card pricing-usage-row">
-                <p className="rail-card__title">
-                  {formatUsageLineTitle(line)}
-                </p>
+              <li
+                key={line.usageLineId}
+                className="rail-card pricing-usage-row"
+              >
+                <p className="rail-card__title">{formatUsageLineTitle(line)}</p>
                 <p className="rail-card__model">
                   {line.model ?? "Unknown model"}
                   {line.reasoningEffort ? ` · ${line.reasoningEffort}` : ""}
@@ -201,7 +208,9 @@ function formatServiceTierLabel(line: ThreadUsageLineRecord): string {
   return ` · ${line.serviceTier}`;
 }
 
-function buildPricingDisplayLines(lines: ThreadUsageLineRecord[]): PricingUsageLine[] {
+function buildPricingDisplayLines(
+  lines: ThreadUsageLineRecord[],
+): PricingUsageLine[] {
   const chronologicalLines = [...lines].sort(compareUsageLinesAscending);
   const displayLines: PricingUsageLine[] = [];
   let accountedMainTokens = emptyPricingTokenBreakdown();
@@ -228,7 +237,10 @@ function buildPricingDisplayLines(lines: ThreadUsageLineRecord[]): PricingUsageL
       : undefined;
     if (gapLine) {
       displayLines.push(gapLine);
-      accountedMainTokens = addPricingTokenBreakdowns(accountedMainTokens, gapTokens);
+      accountedMainTokens = addPricingTokenBreakdowns(
+        accountedMainTokens,
+        gapTokens,
+      );
     }
 
     displayLines.push(line);
@@ -258,8 +270,8 @@ function addEstimatedLinesToSummaries(
   for (const line of estimatedLines) {
     const key = usageLineSummaryKey(line);
     const existing =
-      byKey.get(key) ??
-      ({
+      byKey.get(key)
+      ?? ({
         backend: line.backend,
         cachedInputTokens: 0,
         currency: line.currency,
@@ -286,7 +298,9 @@ function addEstimatedLinesToSummaries(
   });
 }
 
-function aggregateUsageLines(lines: PricingUsageLine[]): ThreadPricingSummary | undefined {
+function aggregateUsageLines(
+  lines: PricingUsageLine[],
+): ThreadPricingSummary | undefined {
   if (lines.length === 0) {
     return undefined;
   }
@@ -420,16 +434,19 @@ function readCumulativeTokenBreakdown(
   }
   const uncachedInputTokens = readCumulativeUncachedInputTokens(line);
   if (
-    uncachedInputTokens === undefined ||
-    line.cumulativeCachedInputTokens === undefined ||
-    line.cumulativeOutputTokens === undefined
+    uncachedInputTokens === undefined
+    || line.cumulativeCachedInputTokens === undefined
+    || line.cumulativeOutputTokens === undefined
   ) {
     return undefined;
   }
   return {
     cachedInputTokens: Math.max(0, line.cumulativeCachedInputTokens),
     outputTokens: Math.max(0, line.cumulativeOutputTokens),
-    reasoningOutputTokens: Math.max(0, line.cumulativeReasoningOutputTokens ?? 0),
+    reasoningOutputTokens: Math.max(
+      0,
+      line.cumulativeReasoningOutputTokens ?? 0,
+    ),
     uncachedInputTokens: Math.max(0, uncachedInputTokens),
   };
 }
@@ -452,7 +469,10 @@ function subtractPricingTokenBreakdowns(
   right: PricingTokenBreakdown,
 ): PricingTokenBreakdown {
   return {
-    cachedInputTokens: Math.max(0, left.cachedInputTokens - right.cachedInputTokens),
+    cachedInputTokens: Math.max(
+      0,
+      left.cachedInputTokens - right.cachedInputTokens,
+    ),
     outputTokens: Math.max(0, left.outputTokens - right.outputTokens),
     reasoningOutputTokens: Math.max(
       0,
@@ -470,7 +490,10 @@ function maxPricingTokenBreakdowns(
   right: PricingTokenBreakdown,
 ): PricingTokenBreakdown {
   return {
-    cachedInputTokens: Math.max(left.cachedInputTokens, right.cachedInputTokens),
+    cachedInputTokens: Math.max(
+      left.cachedInputTokens,
+      right.cachedInputTokens,
+    ),
     outputTokens: Math.max(left.outputTokens, right.outputTokens),
     reasoningOutputTokens: Math.max(
       left.reasoningOutputTokens,
@@ -485,10 +508,10 @@ function maxPricingTokenBreakdowns(
 
 function hasPricingTokenBreakdownValue(tokens: PricingTokenBreakdown): boolean {
   return (
-    tokens.cachedInputTokens > 0 ||
-    tokens.outputTokens > 0 ||
-    tokens.reasoningOutputTokens > 0 ||
-    tokens.uncachedInputTokens > 0
+    tokens.cachedInputTokens > 0
+    || tokens.outputTokens > 0
+    || tokens.reasoningOutputTokens > 0
+    || tokens.uncachedInputTokens > 0
   );
 }
 
@@ -513,11 +536,16 @@ function buildEstimatedHistoricalGapLine(params: {
   const inputTokens =
     params.gapTokens.cachedInputTokens + params.gapTokens.uncachedInputTokens;
   const totalTokens =
-    inputTokens +
-    params.gapTokens.outputTokens +
-    params.gapTokens.reasoningOutputTokens;
-  const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
-    cost ? undefined : params.anchorLine.model ? "missing-rate" : "missing-model";
+    inputTokens
+    + params.gapTokens.outputTokens
+    + params.gapTokens.reasoningOutputTokens;
+  const priceUnavailableReason:
+    | ThreadUsageLineRecord["priceUnavailableReason"]
+    | undefined = cost
+    ? undefined
+    : params.anchorLine.model
+      ? "missing-rate"
+      : "missing-model";
 
   return {
     backend: params.anchorLine.backend,
@@ -535,7 +563,9 @@ function buildEstimatedHistoricalGapLine(params: {
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
     provider: cost?.provider ?? params.anchorLine.provider,
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
-    ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
+    ...(cost?.catalogVersion
+      ? { pricingCatalogVersion: cost.catalogVersion }
+      : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
     reasoningEffort: params.anchorLine.reasoningEffort,
     reasoningOutputTokens: params.gapTokens.reasoningOutputTokens,
@@ -564,12 +594,14 @@ function formatSummaryEstimates(params: {
 }): string {
   const estimates: string[] = [];
   if (params.displayOptions.usd) {
-    estimates.push(formatMoney(params.summary.totalCostMicros, params.summary.currency));
+    estimates.push(
+      formatMoney(params.summary.totalCostMicros, params.summary.currency),
+    );
   }
   if (
-    params.displayOptions.codexCredits &&
-    params.codexCreditMicros !== undefined &&
-    params.codexCreditMicros > 0
+    params.displayOptions.codexCredits
+    && params.codexCreditMicros !== undefined
+    && params.codexCreditMicros > 0
   ) {
     estimates.push(formatCodexCredits(params.codexCreditMicros));
   }
@@ -595,9 +627,9 @@ function formatUsageLineEstimates(params: {
     );
   }
   if (
-    params.displayOptions.codexCredits &&
-    params.lineTotals?.creditMicros !== undefined &&
-    params.lineTotals.creditMicros > 0
+    params.displayOptions.codexCredits
+    && params.lineTotals?.creditMicros !== undefined
+    && params.lineTotals.creditMicros > 0
   ) {
     const suffix = formatUsageLineCreditSuffix(params.line);
     estimates.push(
@@ -613,15 +645,18 @@ function formatUsageLineRunningTotal(params: {
   lineTotals: PricingRunningLineTotals | undefined;
 }): string | undefined {
   const estimates: string[] = [];
-  if (params.displayOptions.usd && params.lineTotals?.runningCostMicros !== undefined) {
+  if (
+    params.displayOptions.usd
+    && params.lineTotals?.runningCostMicros !== undefined
+  ) {
     estimates.push(
       `${formatMoney(params.lineTotals.runningCostMicros, params.line.currency)} list price`,
     );
   }
   if (
-    params.displayOptions.codexCredits &&
-    params.lineTotals?.runningCreditMicros !== undefined &&
-    params.lineTotals.runningCreditMicros > 0
+    params.displayOptions.codexCredits
+    && params.lineTotals?.runningCreditMicros !== undefined
+    && params.lineTotals.runningCreditMicros > 0
   ) {
     estimates.push(formatCodexCredits(params.lineTotals.runningCreditMicros));
   }
@@ -639,9 +674,9 @@ function formatContextReplayEstimate(params: {
     !isActiveLiveTurnUsageLine({
       activeTurnId: params.activeTurnId,
       line: params.line,
-    }) ||
-    isEstimatedUsageGap(params.line) ||
-    isHistoricalUsageSummary(params.line)
+    })
+    || isEstimatedUsageGap(params.line)
+    || isHistoricalUsageSummary(params.line)
   ) {
     return [];
   }
@@ -698,7 +733,8 @@ function estimateContextReplayBucket(
     return undefined;
   }
   const replaySize =
-    referenceReplayTokens && referenceReplayTokens >= MIN_CONTEXT_REPLAY_INPUT_TOKENS
+    referenceReplayTokens
+    && referenceReplayTokens >= MIN_CONTEXT_REPLAY_INPUT_TOKENS
       ? Math.min(referenceReplayTokens, MAX_ESTIMATED_CONTEXT_REPLAY_TOKENS)
       : MAX_ESTIMATED_CONTEXT_REPLAY_TOKENS;
   const count = Math.max(1, Math.ceil(totalTokens / replaySize));
@@ -718,9 +754,9 @@ function refineColdContextReplayBucket(params: {
     return undefined;
   }
   if (
-    !isCumulativeLiveTurnUsageLine(params.line) ||
-    !params.hotBucket ||
-    params.bucket.count !== 1
+    !isCumulativeLiveTurnUsageLine(params.line)
+    || !params.hotBucket
+    || params.bucket.count !== 1
   ) {
     return params.bucket;
   }
@@ -738,9 +774,9 @@ function refineColdContextReplayBucket(params: {
 
 function isCumulativeLiveTurnUsageLine(line: PricingUsageLine): boolean {
   return (
-    line.scope === "turn" &&
-    line.source === "live" &&
-    hasCumulativeTokenBreakdown(line)
+    line.scope === "turn"
+    && line.source === "live"
+    && hasCumulativeTokenBreakdown(line)
   );
 }
 
@@ -749,10 +785,10 @@ function isActiveLiveTurnUsageLine(params: {
   line: PricingUsageLine;
 }): boolean {
   return (
-    params.line.scope === "turn" &&
-    params.line.source === "live" &&
-    Boolean(params.activeTurnId) &&
-    params.line.turnId === params.activeTurnId
+    params.line.scope === "turn"
+    && params.line.source === "live"
+    && Boolean(params.activeTurnId)
+    && params.line.turnId === params.activeTurnId
   );
 }
 
@@ -832,7 +868,8 @@ function estimateContextReplayCodexCredits(params: {
   }
   const estimate = estimateOpenAiCodexCreditUsage({
     at: params.line.createdAt,
-    cachedInputTokens: params.tokenKind === "cached" ? params.bucket.totalTokens : 0,
+    cachedInputTokens:
+      params.tokenKind === "cached" ? params.bucket.totalTokens : 0,
     fastMode: params.line.fastMode,
     model: params.line.model,
     outputTokens: 0,
@@ -844,22 +881,25 @@ function estimateContextReplayCodexCredits(params: {
   return estimate?.totalCreditMicros;
 }
 
-function formatUsageLineRunningTokens(line: ThreadUsageLineRecord): string | undefined {
+function formatUsageLineRunningTokens(
+  line: ThreadUsageLineRecord,
+): string | undefined {
   if (!hasCumulativeTokenBreakdown(line)) {
     return undefined;
   }
   const uncachedInputTokens = readCumulativeUncachedInputTokens(line);
   if (
-    uncachedInputTokens === undefined ||
-    line.cumulativeCachedInputTokens === undefined ||
-    line.cumulativeOutputTokens === undefined
+    uncachedInputTokens === undefined
+    || line.cumulativeCachedInputTokens === undefined
+    || line.cumulativeOutputTokens === undefined
   ) {
     return undefined;
   }
   const tokens = [
     `${formatTokenCount(uncachedInputTokens)} uncached in`,
     `${formatTokenCount(line.cumulativeCachedInputTokens)} cached`,
-    line.cumulativeReasoningOutputTokens && line.cumulativeReasoningOutputTokens > 0
+    line.cumulativeReasoningOutputTokens
+    && line.cumulativeReasoningOutputTokens > 0
       ? `${formatTokenCount(line.cumulativeOutputTokens)} out (${formatTokenCount(
           line.cumulativeReasoningOutputTokens,
         )} reasoning)`
@@ -870,9 +910,9 @@ function formatUsageLineRunningTokens(line: ThreadUsageLineRecord): string | und
 
 function hasCumulativeTokenBreakdown(line: ThreadUsageLineRecord): boolean {
   return (
-    line.cumulativeCachedInputTokens !== undefined &&
-    line.cumulativeOutputTokens !== undefined &&
-    readCumulativeUncachedInputTokens(line) !== undefined
+    line.cumulativeCachedInputTokens !== undefined
+    && line.cumulativeOutputTokens !== undefined
+    && readCumulativeUncachedInputTokens(line) !== undefined
   );
 }
 
@@ -883,15 +923,20 @@ function readCumulativeUncachedInputTokens(
     return line.cumulativeUncachedInputTokens;
   }
   if (
-    line.cumulativeInputTokens !== undefined &&
-    line.cumulativeCachedInputTokens !== undefined
+    line.cumulativeInputTokens !== undefined
+    && line.cumulativeCachedInputTokens !== undefined
   ) {
-    return Math.max(0, line.cumulativeInputTokens - line.cumulativeCachedInputTokens);
+    return Math.max(
+      0,
+      line.cumulativeInputTokens - line.cumulativeCachedInputTokens,
+    );
   }
   return undefined;
 }
 
-function hasSelectedEstimateUnit(displayOptions: PricingDisplayOptions): boolean {
+function hasSelectedEstimateUnit(
+  displayOptions: PricingDisplayOptions,
+): boolean {
   return displayOptions.usd || displayOptions.codexCredits;
 }
 
@@ -946,10 +991,10 @@ function isHistoricalUsageSummary(line: ThreadUsageLineRecord): boolean {
     return true;
   }
   return (
-    line.source === "live" &&
-    line.status === "pending" &&
-    line.cumulativeTotalTokens === undefined &&
-    line.totalTokens >= 1_000_000
+    line.source === "live"
+    && line.status === "pending"
+    && line.cumulativeTotalTokens === undefined
+    && line.totalTokens >= 1_000_000
   );
 }
 
@@ -969,8 +1014,8 @@ function PricingUsageTimestamp(props: {
           title="Scroll the transcript to this turn"
           aria-label={`Scroll the transcript to this turn (${timestamp})`}
           onClick={() =>
-            props.line.turnId &&
-            props.onScrollToTurn?.(props.line.turnId, props.line.createdAt)
+            props.line.turnId
+            && props.onScrollToTurn?.(props.line.turnId, props.line.createdAt)
           }
         >
           {timestamp}
@@ -1087,7 +1132,9 @@ function estimateCodexCreditsForLine(line: PricingUsageLine):
     serviceTier: line.serviceTier,
     uncachedInputTokens: line.uncachedInputTokens,
   });
-  return estimate ? { totalCreditMicros: estimate.totalCreditMicros } : undefined;
+  return estimate
+    ? { totalCreditMicros: estimate.totalCreditMicros }
+    : undefined;
 }
 
 function formatCodexCredits(valueMicros: number): string {

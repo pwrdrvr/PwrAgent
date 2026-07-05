@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type { DesktopApi } from "./desktop-api";
 
-export function useRuntimeIdentity(desktopApi?: DesktopApi): RuntimeIdentity | undefined {
+export function useRuntimeIdentity(
+  desktopApi?: DesktopApi,
+): RuntimeIdentity | undefined {
   const [identity, setIdentity] = useState<RuntimeIdentity>();
 
   useEffect(() => {
@@ -51,11 +53,11 @@ export function formatRuntimePath(cwd: string): string {
 
   const bareWorktreesIndex = segments.lastIndexOf("worktrees");
   if (
-    bareWorktreesIndex >= 1 &&
-    (segments[bareWorktreesIndex - 1] === ".pwragent" ||
-      segments[bareWorktreesIndex - 1] === ".codex") &&
-    segments[bareWorktreesIndex + 1] &&
-    segments[bareWorktreesIndex + 2]
+    bareWorktreesIndex >= 1
+    && (segments[bareWorktreesIndex - 1] === ".pwragent"
+      || segments[bareWorktreesIndex - 1] === ".codex")
+    && segments[bareWorktreesIndex + 1]
+    && segments[bareWorktreesIndex + 2]
   ) {
     return `${segments[bareWorktreesIndex + 1]}/${segments[bareWorktreesIndex + 2]}`;
   }
@@ -68,10 +70,10 @@ function workspaceDisplaySegments(cwd: string): string[] {
   const desktopAppSuffix = ["apps", "desktop"];
 
   if (
-    segments.length > desktopAppSuffix.length &&
-    desktopAppSuffix.every(
+    segments.length > desktopAppSuffix.length
+    && desktopAppSuffix.every(
       (segment, index) =>
-        segments[segments.length - desktopAppSuffix.length + index] === segment
+        segments[segments.length - desktopAppSuffix.length + index] === segment,
     )
   ) {
     return segments.slice(0, -desktopAppSuffix.length);
@@ -84,7 +86,9 @@ export function formatRuntimeBranch(branch: string): string {
   return elideMiddle(branch, 34);
 }
 
-export function formatRuntimeGitRef(identity: RuntimeIdentity): string | undefined {
+export function formatRuntimeGitRef(
+  identity: RuntimeIdentity,
+): string | undefined {
   if (identity.detachedHead && identity.commitSha) {
     return "HEAD";
   }
@@ -92,7 +96,9 @@ export function formatRuntimeGitRef(identity: RuntimeIdentity): string | undefin
   return identity.branch ? formatRuntimeBranch(identity.branch) : undefined;
 }
 
-export function runtimeGitRefCopyValue(identity: RuntimeIdentity): string | undefined {
+export function runtimeGitRefCopyValue(
+  identity: RuntimeIdentity,
+): string | undefined {
   if (identity.detachedHead && identity.commitSha) {
     return identity.commitSha;
   }

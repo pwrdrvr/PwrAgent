@@ -38,11 +38,14 @@ export async function resolveContact(
   try {
     const rest = new REST({ version: "10" }).setToken(config.botToken);
     if (request.kind === "guild") {
-      const guild = (await rest.get(Routes.guild(request.id))) as DiscordLookupGuild;
+      const guild = (await rest.get(
+        Routes.guild(request.id),
+      )) as DiscordLookupGuild;
       return {
         status: "ok",
         id: request.id,
-        displayName: sanitizeOptionalContactLabel(guild.name)
+        displayName:
+          sanitizeOptionalContactLabel(guild.name)
           ?? sanitizeOptionalContactLabel(guild.id)
           ?? request.id,
         detail: "guild",
@@ -68,16 +71,22 @@ function formatDiscordUserDisplayName(
 ): string | undefined {
   const username = sanitizeOptionalContactLabel(user.username);
   const discriminator = sanitizeOptionalContactLabel(user.discriminator);
-  const legacyUsername = discriminator && discriminator !== "0"
-    ? sanitizeOptionalContactLabel(`${username ?? "unknown"} ${discriminator}`)
-    : username;
+  const legacyUsername =
+    discriminator && discriminator !== "0"
+      ? sanitizeOptionalContactLabel(
+          `${username ?? "unknown"} ${discriminator}`,
+        )
+      : username;
   const handle = formatContactHandle(user.username);
   const display = sanitizeOptionalContactLabel(user.global_name ?? undefined);
-  if (display && handle && display !== username) return `${display} (${handle})`;
+  if (display && handle && display !== username)
+    return `${display} (${handle})`;
   return display ?? legacyUsername ?? handle;
 }
 
-function sanitizeOptionalContactLabel(value: string | undefined): string | undefined {
+function sanitizeOptionalContactLabel(
+  value: string | undefined,
+): string | undefined {
   const sanitized = sanitizeMessagingContactLabel(value);
   return sanitized || undefined;
 }
@@ -87,11 +96,17 @@ function formatContactHandle(value: string | undefined): string | undefined {
   return sanitized ? `@${sanitized}` : undefined;
 }
 
-function lookupFailure(id: string, error: unknown): MessagingContactLookupResult {
+function lookupFailure(
+  id: string,
+  error: unknown,
+): MessagingContactLookupResult {
   const message = error instanceof Error ? error.message : String(error);
-  const status = /\b(403|404|10013|10004)\b|unknown user|unknown guild|missing access/i.test(message)
-    ? "not_found"
-    : "failed";
+  const status =
+    /\b(403|404|10013|10004)\b|unknown user|unknown guild|missing access/i.test(
+      message,
+    )
+      ? "not_found"
+      : "failed";
   return {
     status,
     id,

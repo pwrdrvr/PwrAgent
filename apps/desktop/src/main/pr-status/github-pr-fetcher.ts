@@ -97,7 +97,11 @@ export type GithubPrFetcherOptions = {
   /** Override gh discovery — used by tests. */
   discoverGhCommands?: () => Promise<DesktopGhDiscoverySnapshot>;
   /** Override `gh auth status` runner — used by tests. */
-  runGhAuthStatus?: () => Promise<{ stdout: string; stderr: string; ok: boolean }>;
+  runGhAuthStatus?: () => Promise<{
+    stdout: string;
+    stderr: string;
+    ok: boolean;
+  }>;
   /**
    * How long the parsed `gh auth status` value stays fresh. Defaults
    * to `DEFAULT_GH_AUTH_STATUS_CACHE_TTL_MS` (5 min). Tests use a
@@ -115,9 +119,9 @@ export type GithubPrFetcherOptions = {
 export class GithubPrFetcher {
   private readonly timeoutMs: number;
   private readonly exec: NonNullable<GithubPrFetcherOptions["exec"]>;
-  private readonly probeGhAvailable: NonNullable<
-    GithubPrFetcherOptions["probeGhAvailable"]
-  > | undefined;
+  private readonly probeGhAvailable:
+    | NonNullable<GithubPrFetcherOptions["probeGhAvailable"]>
+    | undefined;
   private readonly discoverGhCommands: NonNullable<
     GithubPrFetcherOptions["discoverGhCommands"]
   >;
@@ -147,14 +151,17 @@ export class GithubPrFetcher {
     this.discoverGhCommands =
       options.discoverGhCommands
       ?? (options.probeGhAvailable
-        ? async () => syntheticGhDiscovery(this.ghAvailableCache?.value ?? false)
+        ? async () =>
+            syntheticGhDiscovery(this.ghAvailableCache?.value ?? false)
         : async () =>
-          await discoverGhCommands({
-            configuredCommand:
-              getDesktopSettingsService().resolveGhCommandPreference(),
-            env: process.env,
-          }));
-    this.exec = options.exec ?? defaultExec(this.timeoutMs, () => this.resolveGhCommand());
+            await discoverGhCommands({
+              configuredCommand:
+                getDesktopSettingsService().resolveGhCommandPreference(),
+              env: process.env,
+            }));
+    this.exec =
+      options.exec
+      ?? defaultExec(this.timeoutMs, () => this.resolveGhCommand());
     this.runGhAuthStatus =
       options.runGhAuthStatus
       ?? defaultRunGhAuthStatus(() => this.resolveGhCommand());
@@ -167,7 +174,8 @@ export class GithubPrFetcher {
   async isGhAvailable(): Promise<boolean> {
     if (
       this.ghAvailableCache
-      && Date.now() - this.ghAvailableCache.fetchedAt < this.ghAvailableCacheTtlMs
+      && Date.now() - this.ghAvailableCache.fetchedAt
+        < this.ghAvailableCacheTtlMs
     ) {
       return this.ghAvailableCache.value;
     }
@@ -394,7 +402,8 @@ export class GithubPrFetcher {
   private async readGhDiscovery(): Promise<DesktopGhDiscoverySnapshot> {
     if (
       this.ghDiscoveryCache
-      && Date.now() - this.ghDiscoveryCache.fetchedAt < this.ghAvailableCacheTtlMs
+      && Date.now() - this.ghDiscoveryCache.fetchedAt
+        < this.ghAvailableCacheTtlMs
     ) {
       return this.ghDiscoveryCache.value;
     }
@@ -442,7 +451,9 @@ function parseCommitShas(
     ...new Set(
       (row.commits ?? [])
         .map((commit) => commit.oid?.trim().toLowerCase())
-        .filter((oid): oid is string => Boolean(oid && /^[0-9a-f]{40}$/.test(oid))),
+        .filter((oid): oid is string =>
+          Boolean(oid && /^[0-9a-f]{40}$/.test(oid)),
+        ),
     ),
   ].sort();
   return commitShas.length > 0 ? { commitShas } : {};
@@ -493,13 +504,17 @@ export function deriveChipState(row: GhPrPayload): PrChipState {
   return "passing";
 }
 
-export function deriveLifecycleState(row: Pick<GhPrPayload, "state">): PrLifecycleState {
+export function deriveLifecycleState(
+  row: Pick<GhPrPayload, "state">,
+): PrLifecycleState {
   if (row.state === "MERGED") return "merged";
   if (row.state === "CLOSED") return "closed";
   return "open";
 }
 
-export function deriveReviewState(row: Pick<GhPrPayload, "isDraft">): PrReviewState {
+export function deriveReviewState(
+  row: Pick<GhPrPayload, "isDraft">,
+): PrReviewState {
   return row.isDraft ? "draft" : "ready_for_review";
 }
 
@@ -539,9 +554,8 @@ export function parseGhAuthStatus(input: {
   // gh writes the human-readable status to stderr; older versions used
   // stdout. Handle both.
   const text = `${input.stdout}\n${input.stderr}`;
-  const accountMatch = text.match(
-    /Logged in to github\.com account ([^\s]+)/i,
-  )
+  const accountMatch =
+    text.match(/Logged in to github\.com account ([^\s]+)/i)
     ?? text.match(/Logged in to github\.com as ([^\s]+)/i);
   const scopesMatch = text.match(/Token scopes:\s*(.+)/i);
   const scopes = scopesMatch
@@ -550,8 +564,10 @@ export function parseGhAuthStatus(input: {
         .map((scope) => scope.trim().replace(/^['"]|['"]$/g, ""))
         .filter(Boolean)
     : [];
-  const hasRepoScope = scopes.includes("repo") || scopes.includes("public_repo");
-  const loggedIn = Boolean(accountMatch) || /Logged in to github\.com/i.test(text);
+  const hasRepoScope =
+    scopes.includes("repo") || scopes.includes("public_repo");
+  const loggedIn =
+    Boolean(accountMatch) || /Logged in to github\.com/i.test(text);
 
   return {
     installed: true,

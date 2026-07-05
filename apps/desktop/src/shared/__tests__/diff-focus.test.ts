@@ -3,7 +3,7 @@ import {
   buildDiffView,
   getFocusedDiffEligibility,
   parseUnifiedDiff,
-  summarizeHunksForFocus
+  summarizeHunksForFocus,
 } from "../diff-focus";
 
 describe("diff-focus", () => {
@@ -16,17 +16,19 @@ describe("diff-focus", () => {
         " const alpha = 1;",
         "-const beta = 2;",
         "+const beta = 3;",
-        " export { alpha, beta };"
-      ].join("\n")
+        " export { alpha, beta };",
+      ].join("\n"),
     );
 
     expect(parsed.hunks).toHaveLength(1);
     expect(parsed.stats.smallHunkCount).toBe(1);
     expect(getFocusedDiffEligibility(parsed)).toMatchObject({
       eligible: false,
-      reason: "too_few_hunks"
+      reason: "too_few_hunks",
     });
-    expect(buildDiffView(parsed, { mode: "full" }).hasHiddenContent).toBe(false);
+    expect(buildDiffView(parsed, { mode: "full" }).hasHiddenContent).toBe(
+      false,
+    );
   });
 
   it("marks noisy multi-hunk diffs as focus-eligible and summarizes them", () => {
@@ -66,27 +68,29 @@ describe("diff-focus", () => {
         "+  // linted",
         " }",
         " ",
-        " export const six = 6;"
-      ].join("\n")
+        " export const six = 6;",
+      ].join("\n"),
     );
 
     expect(parsed.hunks).toHaveLength(4);
     expect(getFocusedDiffEligibility(parsed)).toMatchObject({
       eligible: true,
-      reason: "eligible"
+      reason: "eligible",
     });
-    expect(buildDiffView(parsed, { mode: "condensed" }).hiddenContextLineCount).toBeGreaterThan(0);
+    expect(
+      buildDiffView(parsed, { mode: "condensed" }).hiddenContextLineCount,
+    ).toBeGreaterThan(0);
     const summaries = summarizeHunksForFocus(parsed);
     expect(summaries).toHaveLength(4);
     expect(summaries.slice(0, 2)).toMatchObject([
       expect.objectContaining({
         index: 0,
-        changedLineCount: 2
+        changedLineCount: 2,
       }),
       expect.objectContaining({
         index: 1,
-        changedLineCount: 2
-      })
+        changedLineCount: 2,
+      }),
     ]);
   });
 
@@ -102,8 +106,8 @@ describe("diff-focus", () => {
         "+const alpha = 2;",
         "@@ -4,2 +4,2 @@",
         "-const beta = 3;",
-        "+const beta = 4;"
-      ].join("\n")
+        "+const beta = 4;",
+      ].join("\n"),
     );
 
     expect(parsed.hunks).toHaveLength(2);
@@ -112,28 +116,28 @@ describe("diff-focus", () => {
         kind: "removed",
         hunkIndex: 0,
         oldNumber: 1,
-        text: "const alpha = 1;"
+        text: "const alpha = 1;",
       },
       {
         kind: "added",
         hunkIndex: 0,
         newNumber: 1,
-        text: "const alpha = 2;"
-      }
+        text: "const alpha = 2;",
+      },
     ]);
     expect(parsed.hunks[1]?.rows).toEqual([
       {
         kind: "removed",
         hunkIndex: 1,
         oldNumber: 4,
-        text: "const beta = 3;"
+        text: "const beta = 3;",
       },
       {
         kind: "added",
         hunkIndex: 1,
         newNumber: 4,
-        text: "const beta = 4;"
-      }
+        text: "const beta = 4;",
+      },
     ]);
   });
 
@@ -146,16 +150,16 @@ describe("diff-focus", () => {
         hunkCount: 0,
         changedLineCount: 0,
         contextLineCount: 0,
-        smallHunkCount: 0
-      }
+        smallHunkCount: 0,
+      },
     });
     expect(getFocusedDiffEligibility(parsed)).toMatchObject({
       eligible: false,
-      reason: "too_few_hunks"
+      reason: "too_few_hunks",
     });
     expect(buildDiffView(parsed, { mode: "full" })).toMatchObject({
       rows: [],
-      hasHiddenContent: false
+      hasHiddenContent: false,
     });
   });
 });

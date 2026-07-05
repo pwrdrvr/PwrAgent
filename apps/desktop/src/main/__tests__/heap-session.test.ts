@@ -60,7 +60,9 @@ describe("heap diagnostics session", () => {
     );
 
     expect(result.session.directoryPath).toBe(expectedDirectory);
-    await expect(fs.stat(path.join(workspace.path, ".local"))).resolves.toMatchObject({
+    await expect(
+      fs.stat(path.join(workspace.path, ".local")),
+    ).resolves.toMatchObject({
       isDirectory: expect.any(Function),
     });
     await expect(fs.stat(expectedDirectory)).resolves.toMatchObject({
@@ -154,13 +156,19 @@ describe("heap diagnostics session", () => {
     });
 
     const sampleLines = (
-      await fs.readFile(path.join(result.session.directoryPath, "samples.ndjson"), "utf8")
+      await fs.readFile(
+        path.join(result.session.directoryPath, "samples.ndjson"),
+        "utf8",
+      )
     )
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
     const eventLines = (
-      await fs.readFile(path.join(result.session.directoryPath, "events.ndjson"), "utf8")
+      await fs.readFile(
+        path.join(result.session.directoryPath, "events.ndjson"),
+        "utf8",
+      )
     )
       .trim()
       .split("\n")
@@ -218,7 +226,9 @@ describe("heap diagnostics session", () => {
     });
 
     expect(config).toEqual({ enabled: false });
-    await expect(fs.stat(path.join(workspace.path, ".local"))).rejects.toMatchObject({
+    await expect(
+      fs.stat(path.join(workspace.path, ".local")),
+    ).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
@@ -245,7 +255,11 @@ describe("heap diagnostics session", () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
 
-    await fs.writeFile(path.join(workspace.path, ".local"), "not-a-directory", "utf8");
+    await fs.writeFile(
+      path.join(workspace.path, ".local"),
+      "not-a-directory",
+      "utf8",
+    );
     const config = createEnabledConfig(workspace.path);
 
     const result = await createHeapSession({

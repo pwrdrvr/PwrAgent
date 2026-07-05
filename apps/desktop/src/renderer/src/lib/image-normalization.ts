@@ -189,8 +189,10 @@ export async function normalizeImageFile(
     jpegQuality: options.jpegQuality ?? profile.jpegQuality,
     maxLongEdge: options.maxLongEdge ?? profile.maxLongEdge,
     maxPatchCount:
-      options.maxPatchCount ??
-      (options.qualityProfile ? undefined : DEFAULT_PASTED_IMAGE_MAX_PATCHES),
+      options.maxPatchCount
+      ?? (options.qualityProfile
+        ? undefined
+        : DEFAULT_PASTED_IMAGE_MAX_PATCHES),
     maxShortEdge: options.maxShortEdge ?? profile.maxShortEdge,
     originalMimeType,
     originalSize: file.size,
@@ -221,7 +223,11 @@ async function normalizeBlob(params: {
   try {
     decoded = await params.dependencies.decodeImage(params.blob);
   } catch (error) {
-    if (params.allowFallback && isHeicMimeType(params.originalMimeType) && params.fallback) {
+    if (
+      params.allowFallback
+      && isHeicMimeType(params.originalMimeType)
+      && params.fallback
+    ) {
       const response = await params.fallback({
         data: await params.blob.arrayBuffer(),
         fileName: params.fileName,
@@ -257,8 +263,8 @@ async function normalizeBlob(params: {
     const blobMimeType = normalizeSourceMimeType(params.blob.type);
     if (canPreserveSourceBlob(blobMimeType, sourceMimeType)) {
       if (
-        dimensions.width === decoded.width &&
-        dimensions.height === decoded.height
+        dimensions.width === decoded.width
+        && dimensions.height === decoded.height
       ) {
         return await preservedSourceImage({
           blob: params.blob,
@@ -405,8 +411,8 @@ async function encodeSmallerImageWithinSourceSize(params: {
       height: Math.max(1, Math.floor(params.dimensions.height * scale)),
     };
     if (
-      dimensions.width === params.dimensions.width &&
-      dimensions.height === params.dimensions.height
+      dimensions.width === params.dimensions.width
+      && dimensions.height === params.dimensions.height
     ) {
       continue;
     }
@@ -431,8 +437,8 @@ function canPreserveSourceBlob(
   sourceMimeType: string,
 ): sourceMimeType is NormalizedImageMimeType {
   return (
-    (sourceMimeType === "image/jpeg" || sourceMimeType === "image/png") &&
-    blobMimeType === sourceMimeType
+    (sourceMimeType === "image/jpeg" || sourceMimeType === "image/png")
+    && blobMimeType === sourceMimeType
   );
 }
 
@@ -551,14 +557,21 @@ const defaultImageNormalizationDependencies: ImageNormalizationDependencies = {
     await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.addEventListener("load", () => {
-        if (typeof reader.result === "string" && reader.result.startsWith("data:image/")) {
+        if (
+          typeof reader.result === "string"
+          && reader.result.startsWith("data:image/")
+        ) {
           resolve(reader.result);
           return;
         }
-        reject(new Error("The normalized image did not produce an image data URL."));
+        reject(
+          new Error("The normalized image did not produce an image data URL."),
+        );
       });
       reader.addEventListener("error", () => {
-        reject(reader.error ?? new Error("The normalized image could not be read."));
+        reject(
+          reader.error ?? new Error("The normalized image could not be read."),
+        );
       });
       reader.readAsDataURL(blob);
     }),
@@ -566,7 +579,8 @@ const defaultImageNormalizationDependencies: ImageNormalizationDependencies = {
 
 function inferImageMimeType(file: File, sourceMimeType?: string): string {
   const sourceType =
-    normalizeSourceMimeType(sourceMimeType ?? "") || normalizeSourceMimeType(file.type);
+    normalizeSourceMimeType(sourceMimeType ?? "")
+    || normalizeSourceMimeType(file.type);
   if (sourceType) {
     return sourceType;
   }

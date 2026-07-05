@@ -20,13 +20,17 @@ describe("DiffStat", () => {
 
   it("locale-formats large counts", () => {
     const { container } = render(<DiffStat additions={1234} removals={0} />);
-    expect(container.querySelector(".diff-stat__added")).toHaveTextContent("+1,234");
+    expect(container.querySelector(".diff-stat__added")).toHaveTextContent(
+      "+1,234",
+    );
   });
 
   it("applies the chip modifier when requested", () => {
     const { container } = render(
       <DiffStat additions={1} removals={0} className="diff-stat--chip" />,
     );
-    expect(container.querySelector(".diff-stat")).toHaveClass("diff-stat--chip");
+    expect(container.querySelector(".diff-stat")).toHaveClass(
+      "diff-stat--chip",
+    );
   });
 });

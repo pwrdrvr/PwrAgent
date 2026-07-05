@@ -90,7 +90,9 @@ function buildMacAppMenu(
   };
 }
 
-function buildFileMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
+function buildFileMenu(
+  options: ApplicationMenuOptions,
+): MenuItemConstructorOptions {
   return {
     label: "File",
     submenu: [
@@ -138,7 +140,9 @@ function buildViewMenu(developerMode: boolean): MenuItemConstructorOptions {
   };
 }
 
-function buildProfilesMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
+function buildProfilesMenu(
+  options: ApplicationMenuOptions,
+): MenuItemConstructorOptions {
   const profiles = orderProfilesForMenu(options.profiles);
   const profileItems: MenuItemConstructorOptions[] = profiles.length
     ? profiles.map((profile, index) => ({
@@ -174,7 +178,9 @@ function buildProfilesMenu(options: ApplicationMenuOptions): MenuItemConstructor
   };
 }
 
-function buildWindowMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
+function buildWindowMenu(
+  options: ApplicationMenuOptions,
+): MenuItemConstructorOptions {
   if (options.isMac) {
     return { role: "windowMenu" };
   }
@@ -214,7 +220,9 @@ function orderProfilesForMenu(
   });
 }
 
-function buildHelpMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
+function buildHelpMenu(
+  options: ApplicationMenuOptions,
+): MenuItemConstructorOptions {
   return {
     role: "help",
     submenu: [

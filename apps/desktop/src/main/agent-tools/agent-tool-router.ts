@@ -81,7 +81,10 @@ export class AgentToolRouter {
     backend: AppServerBackendKind;
     call: DynamicToolCallParams;
   }): Promise<DynamicToolCallResponse> {
-    const definition = this.findDefinition(params.call.namespace, params.call.tool);
+    const definition = this.findDefinition(
+      params.call.namespace,
+      params.call.tool,
+    );
     if (!definition) {
       return toDynamicToolResponse(
         agentToolFailure({
@@ -99,7 +102,10 @@ export class AgentToolRouter {
       transport: "codex_dynamic_tool",
     };
     return toDynamicToolResponse(
-      await definition.dispatch(normalizeToolArguments(params.call.arguments), context),
+      await definition.dispatch(
+        normalizeToolArguments(params.call.arguments),
+        context,
+      ),
     );
   }
 
@@ -147,7 +153,9 @@ export class AgentToolRouter {
     if (namespace) {
       return this.findDefinition(namespace, tool);
     }
-    const matching = this.definitions.filter((definition) => definition.name === tool);
+    const matching = this.definitions.filter(
+      (definition) => definition.name === tool,
+    );
     return matching.length === 1 ? matching[0] : undefined;
   }
 }
@@ -183,19 +191,15 @@ export function readAgentDynamicToolCall(
 export function toDynamicToolResponse(
   result: AgentToolDispatchResult,
 ): DynamicToolCallResponse {
-  const payload = result.ok
-    ? result.data
-    : toFailurePayload(result);
+  const payload = result.ok ? result.data : toFailurePayload(result);
   return {
     success: result.ok,
-    contentItems:
-      result.contentItems ??
-      [
-        {
-          type: "inputText",
-          text: JSON.stringify(payload, null, 2),
-        },
-      ],
+    contentItems: result.contentItems ?? [
+      {
+        type: "inputText",
+        text: JSON.stringify(payload, null, 2),
+      },
+    ],
   };
 }
 
@@ -215,7 +219,9 @@ export function toMcpToolResponse(
   };
 }
 
-function toFailurePayload(result: AgentToolDispatchFailure): Record<string, unknown> {
+function toFailurePayload(
+  result: AgentToolDispatchFailure,
+): Record<string, unknown> {
   return result.data === undefined
     ? {
         code: result.code,

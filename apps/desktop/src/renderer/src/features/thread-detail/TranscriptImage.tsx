@@ -16,7 +16,10 @@ function useResolvedTranscriptImageSrc(src: string): string {
   const [resolvedSrc, setResolvedSrc] = useState(src);
 
   useEffect(() => {
-    if (!isEmbeddedImageDataUrl(src) || typeof URL.createObjectURL !== "function") {
+    if (
+      !isEmbeddedImageDataUrl(src)
+      || typeof URL.createObjectURL !== "function"
+    ) {
       setResolvedSrc(src);
       return;
     }
@@ -58,7 +61,9 @@ function createObjectUrlFromDataUrl(src: string): string | undefined {
     const bytes = isBase64
       ? decodeBase64Payload(payload)
       : new TextEncoder().encode(decodeURIComponent(payload));
-    return URL.createObjectURL(new Blob([toArrayBuffer(bytes)], { type: mimeType }));
+    return URL.createObjectURL(
+      new Blob([toArrayBuffer(bytes)], { type: mimeType }),
+    );
   } catch {
     return undefined;
   }

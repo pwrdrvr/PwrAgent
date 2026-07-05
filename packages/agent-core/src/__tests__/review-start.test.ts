@@ -160,7 +160,9 @@ describe("Codex review start", () => {
             output: [
               {
                 type: "text",
-                text: expect.stringContaining("The patch has one review issue."),
+                text: expect.stringContaining(
+                  "The patch has one review issue.",
+                ),
               },
             ],
           },
@@ -343,7 +345,9 @@ describe("Codex review start", () => {
     expect(provider.runs[1]?.input).toEqual([
       {
         type: "text",
-        text: expect.stringContaining("USER: Search for the Grok tool usage plan."),
+        text: expect.stringContaining(
+          "USER: Search for the Grok tool usage plan.",
+        ),
       },
     ]);
     expect(provider.runs[1]?.input[0]).toEqual({

@@ -1,4 +1,7 @@
-import type { AppServerNotification, ThreadState } from "./internal-contract.js";
+import type {
+  AppServerNotification,
+  ThreadState,
+} from "./internal-contract.js";
 import { AppServerSessionState } from "./session-state.js";
 import { TurnRunner } from "./turn-runner.js";
 import type { AppServerProvider } from "../providers/provider-contract.js";
@@ -37,10 +40,14 @@ export class CompactionRunner {
       input: [
         {
           type: "text",
-          text: buildCompactionPrompt(this.state.readThread(params.thread.threadId)),
+          text: buildCompactionPrompt(
+            this.state.readThread(params.thread.threadId),
+          ),
         },
       ],
-      previousResponseId: this.state.getPreviousResponseId(params.thread.threadId),
+      previousResponseId: this.state.getPreviousResponseId(
+        params.thread.threadId,
+      ),
       tools: this.tools,
     });
     this.state.createRun({
@@ -76,7 +83,10 @@ export class CompactionRunner {
           status: "completed",
           text: result.assistantText,
         });
-        this.state.appendAssistant(params.thread.threadId, result.assistantText ?? "");
+        this.state.appendAssistant(
+          params.thread.threadId,
+          result.assistantText ?? "",
+        );
         this.state.setPreviousResponseId(
           params.thread.threadId,
           result.providerResponseId,
@@ -132,7 +142,9 @@ export class CompactionRunner {
   }
 }
 
-function buildCompactionPrompt(replay: ReturnType<AppServerSessionState["readThread"]>): string {
+function buildCompactionPrompt(
+  replay: ReturnType<AppServerSessionState["readThread"]>,
+): string {
   const transcript = replay.messages
     .map((message) => `${message.role.toUpperCase()}: ${message.text}`)
     .join("\n\n");

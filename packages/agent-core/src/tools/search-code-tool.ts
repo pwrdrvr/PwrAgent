@@ -9,7 +9,10 @@ import {
   readRequiredString,
 } from "./tool-contract.js";
 import { runProcess, type ProcessRunResult } from "./process-runner.js";
-import { InvalidToolArgumentsError, ToolExecutionFailure } from "./tool-errors.js";
+import {
+  InvalidToolArgumentsError,
+  ToolExecutionFailure,
+} from "./tool-errors.js";
 import { resolveWorkspaceScopePath, toPosix } from "./workspace-paths.js";
 
 const TOOL_NAME = "search_code";
@@ -59,7 +62,8 @@ export function createSearchCodeTool(): ToolDefinition<SearchCodeArguments> {
         },
         fixedStrings: {
           type: "boolean",
-          description: "When true, treat the query as a literal string instead of a regular expression.",
+          description:
+            "When true, treat the query as a literal string instead of a regular expression.",
         },
       },
       required: ["query"],
@@ -76,7 +80,11 @@ export function createSearchCodeTool(): ToolDefinition<SearchCodeArguments> {
       };
     },
     async execute(arguments_, context) {
-      const root = resolveWorkspaceScopePath(context, TOOL_NAME, arguments_.path);
+      const root = resolveWorkspaceScopePath(
+        context,
+        TOOL_NAME,
+        arguments_.path,
+      );
       const limit = Math.min(arguments_.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
       const matches = await searchWorkspace(
         root.workspacePath,
@@ -122,12 +130,7 @@ async function searchWorkspace(
   context: ToolExecutionContext,
 ): Promise<SearchMatch[]> {
   const scope = await describeSearchScope(workspacePath, scopePath);
-  const result = await searchWithRipgrep(
-    scope,
-    arguments_,
-    limit,
-    context,
-  );
+  const result = await searchWithRipgrep(scope, arguments_, limit, context);
   if (result === "missing") {
     return await searchWithFallback(workspacePath, scope, arguments_, limit);
   }
@@ -263,7 +266,9 @@ function parseRipgrepLine(prefix: string, line: string): SearchMatch {
   const rawText = line.slice(secondColon + 1).trim();
   return {
     path: normalizeRelativePath(
-      prefix ? path.posix.join(toPosix(prefix), toPosix(rawPath)) : toPosix(rawPath),
+      prefix
+        ? path.posix.join(toPosix(prefix), toPosix(rawPath))
+        : toPosix(rawPath),
     ),
     line: Number.parseInt(rawLine, 10),
     text: rawText,
@@ -374,13 +379,14 @@ async function walk(
 function isCommandMissing(result: ProcessRunResult): boolean {
   const error = result.error;
   return Boolean(
-    error &&
-      "code" in error &&
-      (error as { code?: string }).code === "ENOENT",
+    error && "code" in error && (error as { code?: string }).code === "ENOENT",
   );
 }
 
-function processFailureMessage(prefix: string, result: ProcessRunResult): string {
+function processFailureMessage(
+  prefix: string,
+  result: ProcessRunResult,
+): string {
   return [
     prefix,
     result.output || result.error?.message,

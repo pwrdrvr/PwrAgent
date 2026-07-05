@@ -108,10 +108,12 @@ type TranscriptListProps = {
   onPendingMcpInteractionChange?: (state: PendingMcpInteractionState) => void;
   onSubmitPendingMcpInteraction?: (
     state: PendingMcpInteractionState,
-    action: "accept" | "decline" | "cancel"
+    action: "accept" | "decline" | "cancel",
   ) => Promise<void>;
   onPendingUserInputChange?: (state: PendingQuestionnaireState) => void;
-  onSubmitPendingUserInput?: (state: PendingQuestionnaireState) => Promise<void>;
+  onSubmitPendingUserInput?: (
+    state: PendingQuestionnaireState,
+  ) => Promise<void>;
   onLoadOlder: () => Promise<void>;
 };
 
@@ -141,9 +143,9 @@ type AutomationThreadTarget = {
 
 function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
   return (
-    entry.type === "message" &&
-    entry.role === "assistant" &&
-    entry.phase === "final"
+    entry.type === "message"
+    && entry.role === "assistant"
+    && entry.phase === "final"
   );
 }
 
@@ -151,7 +153,9 @@ function entryCreatedAt(entry: AppServerThreadEntry): number | undefined {
   return typeof entry.createdAt === "number" ? entry.createdAt : undefined;
 }
 
-function parseThreadIdentity(value: string | undefined): AutomationThreadTarget | undefined {
+function parseThreadIdentity(
+  value: string | undefined,
+): AutomationThreadTarget | undefined {
   const separatorIndex = value?.indexOf(":") ?? -1;
   if (!value || separatorIndex <= 0) return undefined;
   const backend = value.slice(0, separatorIndex);
@@ -162,28 +166,34 @@ function parseThreadIdentity(value: string | undefined): AutomationThreadTarget 
 }
 
 function pendingEntriesInEventOrder(
-  entries: Array<AppServerThreadEntry | undefined>
+  entries: Array<AppServerThreadEntry | undefined>,
 ): AppServerThreadEntry[] {
   return entries
     .map((entry, index) => ({ entry, index }))
     .filter((item): item is { entry: AppServerThreadEntry; index: number } =>
-      Boolean(item.entry)
+      Boolean(item.entry),
     )
     .sort((left, right) => {
       const leftCreatedAt = entryCreatedAt(left.entry);
       const rightCreatedAt = entryCreatedAt(right.entry);
       if (
-        typeof leftCreatedAt === "number" &&
-        typeof rightCreatedAt === "number" &&
-        leftCreatedAt !== rightCreatedAt
+        typeof leftCreatedAt === "number"
+        && typeof rightCreatedAt === "number"
+        && leftCreatedAt !== rightCreatedAt
       ) {
         return leftCreatedAt - rightCreatedAt;
       }
 
-      if (typeof leftCreatedAt === "number" && typeof rightCreatedAt !== "number") {
+      if (
+        typeof leftCreatedAt === "number"
+        && typeof rightCreatedAt !== "number"
+      ) {
         return -1;
       }
-      if (typeof leftCreatedAt !== "number" && typeof rightCreatedAt === "number") {
+      if (
+        typeof leftCreatedAt !== "number"
+        && typeof rightCreatedAt === "number"
+      ) {
         return 1;
       }
 
@@ -194,13 +204,15 @@ function pendingEntriesInEventOrder(
 
 function insertPendingEntry(
   entries: AppServerThreadEntry[],
-  pendingEntry: AppServerThreadEntry | undefined
+  pendingEntry: AppServerThreadEntry | undefined,
 ): void {
   if (!pendingEntry) {
     return;
   }
 
-  const existingIndex = entries.findIndex((entry) => entry.id === pendingEntry.id);
+  const existingIndex = entries.findIndex(
+    (entry) => entry.id === pendingEntry.id,
+  );
   if (existingIndex >= 0) {
     entries[existingIndex] = pendingEntry;
     return;
@@ -218,9 +230,9 @@ function insertPendingEntry(
       ? entries.findIndex((entry) => {
           const entryCreated = entryCreatedAt(entry);
           return (
-            entry.turn?.id === pendingTurnId &&
-            typeof entryCreated === "number" &&
-            entryCreated > pendingCreatedAt
+            entry.turn?.id === pendingTurnId
+            && typeof entryCreated === "number"
+            && entryCreated > pendingCreatedAt
           );
         })
       : -1;
@@ -236,8 +248,7 @@ function insertPendingEntry(
 
     const finalCreatedAt = entryCreatedAt(entry);
     return (
-      typeof pendingCreatedAt !== "number" ||
-      typeof finalCreatedAt !== "number"
+      typeof pendingCreatedAt !== "number" || typeof finalCreatedAt !== "number"
     );
   });
   if (finalMessageIndex === -1) {
@@ -256,7 +267,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
-function firstStringByKeys(record: Record<string, unknown>, keys: string[]): string {
+function firstStringByKeys(
+  record: Record<string, unknown>,
+  keys: string[],
+): string {
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) {
@@ -269,7 +283,7 @@ function firstStringByKeys(record: Record<string, unknown>, keys: string[]): str
 
 function stripShellLauncher(command: string): string {
   const match = command.match(
-    /^(?:\/[/\w]*\/)?(?:bash|zsh|sh|dash|ksh|tcsh|fish)\s+-lc\s+(['"])([\s\S]*)\1\s*$/
+    /^(?:\/[/\w]*\/)?(?:bash|zsh|sh|dash|ksh|tcsh|fish)\s+-lc\s+(['"])([\s\S]*)\1\s*$/,
   );
 
   return match ? match[2] : command;
@@ -279,7 +293,7 @@ function markdownCodeBlock(text: string, language: string): string {
   const normalized = text.replace(/\r\n/g, "\n").trim();
   const longestFence = [...normalized.matchAll(/`{3,}/g)].reduce(
     (max, match) => Math.max(max, match[0].length),
-    2
+    2,
   );
   const fence = "`".repeat(longestFence + 1);
   const languageTag = language.trim();
@@ -297,7 +311,9 @@ function commandFromActions(params: Record<string, unknown>): string {
     .map((action) => {
       const record = asRecord(action);
       const command = record?.command;
-      return typeof command === "string" && command.trim() ? command.trim() : undefined;
+      return typeof command === "string" && command.trim()
+        ? command.trim()
+        : undefined;
     })
     .filter((command): command is string => Boolean(command))
     .join(" && ");
@@ -310,8 +326,8 @@ function approvalDisplayCommand(params: Record<string, unknown>): string {
   }
 
   const promptCommand =
-    commandFromApprovalText(firstStringByKeys(params, ["prompt"])) ||
-    commandFromApprovalText(firstStringByKeys(params, ["reason"]));
+    commandFromApprovalText(firstStringByKeys(params, ["prompt"]))
+    || commandFromApprovalText(firstStringByKeys(params, ["reason"]));
   const rawCommand = firstStringByKeys(params, [
     "command",
     "cmd",
@@ -340,10 +356,17 @@ function pendingRequestPrompt(
   context: PendingRequestApprovalContext | undefined,
 ): string {
   const prompt =
-    typeof request.params.prompt === "string" ? request.params.prompt.trim() : "";
-  const reason = typeof request.params.reason === "string" ? request.params.reason.trim() : "";
+    typeof request.params.prompt === "string"
+      ? request.params.prompt.trim()
+      : "";
+  const reason =
+    typeof request.params.reason === "string"
+      ? request.params.reason.trim()
+      : "";
   const command = approvalDisplayCommand(request.params);
-  const commandBlock = command ? `Command:\n\n${markdownCodeBlock(command, "sh")}` : "";
+  const commandBlock = command
+    ? `Command:\n\n${markdownCodeBlock(command, "sh")}`
+    : "";
   const contextBlock = approvalContextMarkdown(context);
 
   if (prompt && commandBlock) {
@@ -403,7 +426,9 @@ function approvalContextMarkdown(
   } else if (fileContexts.length > 1) {
     lines.push("Files:");
     for (const file of fileContexts) {
-      lines.push(`- ${file.displayPath}${file.action ? ` (${file.action})` : ""}`);
+      lines.push(
+        `- ${file.displayPath}${file.action ? ` (${file.action})` : ""}`,
+      );
     }
   } else if (context.displayPath) {
     lines.push(`File: ${context.displayPath}`);
@@ -422,7 +447,12 @@ const APPROVAL_DIFF_INLINE_MAX_LINE_CHARS = 240;
 function shouldExpandApprovalDiffByDefault(
   file: PendingRequestApprovalFileContext,
 ): boolean {
-  if (file.omittedReason || file.diffRef || file.diffRefs?.length || !file.diff) {
+  if (
+    file.omittedReason
+    || file.diffRef
+    || file.diffRefs?.length
+    || !file.diff
+  ) {
     return false;
   }
   if (file.diff.length > APPROVAL_DIFF_INLINE_MAX_CHARS) {
@@ -430,8 +460,8 @@ function shouldExpandApprovalDiffByDefault(
   }
   const lines = file.diff.split(/\r?\n/);
   return (
-    lines.length <= APPROVAL_DIFF_INLINE_MAX_LINES &&
-    lines.every((line) => line.length <= APPROVAL_DIFF_INLINE_MAX_LINE_CHARS)
+    lines.length <= APPROVAL_DIFF_INLINE_MAX_LINES
+    && lines.every((line) => line.length <= APPROVAL_DIFF_INLINE_MAX_LINE_CHARS)
   );
 }
 
@@ -475,10 +505,10 @@ function ApprovalDiffDisclosure(props: {
   const additions = props.file.additions ?? counts.additions;
   const removals = props.file.removals ?? counts.removals;
   const hasDiff = Boolean(
-    props.file.diff ||
-      props.file.diffRef ||
-      props.file.diffRefs?.length ||
-      props.file.omittedReason,
+    props.file.diff
+    || props.file.diffRef
+    || props.file.diffRefs?.length
+    || props.file.omittedReason,
   );
   if (!hasDiff) {
     return null;
@@ -510,9 +540,11 @@ function ApprovalDiffDisclosure(props: {
               path: props.file.path,
               fileDiff: {
                 kind: normalizeFileChangeKind(props.file.action),
-                diff: props.file.omittedReason ? "" : props.file.diff ?? "",
+                diff: props.file.omittedReason ? "" : (props.file.diff ?? ""),
                 ...(props.file.diffRef ? { diffRef: props.file.diffRef } : {}),
-                ...(props.file.diffRefs ? { diffRefs: props.file.diffRefs } : {}),
+                ...(props.file.diffRefs
+                  ? { diffRefs: props.file.diffRefs }
+                  : {}),
                 additions,
                 removals,
                 ...(props.file.omittedReason
@@ -576,34 +608,38 @@ export function TranscriptList(props: TranscriptListProps) {
   // hydrate at a saved-scroll position other than the top.
   const [isAtTop, setIsAtTop] = useState(true);
   const [expandedCommentaryGroupIds, setExpandedCommentaryGroupIds] = useState(
-    () => new Set<string>()
+    () => new Set<string>(),
   );
   const [renderNow, setRenderNow] = useState(() => Date.now());
   const canLoadOlder = Boolean(
-    props.pagination?.supportsPagination && props.pagination.hasPreviousPage
+    props.pagination?.supportsPagination && props.pagination.hasPreviousPage,
   );
   const hasPendingContent = Boolean(
-    props.pendingActivityEntry ||
-      props.pendingProtocolActivityEntry ||
-      props.pendingUsageActivityEntry ||
-      props.pendingAssistantMessage ||
-      props.pendingPlanEntry ||
-      props.pendingRequest ||
-      props.pendingMcpInteraction ||
-      props.pendingUserInput ||
-      props.pendingStatusText ||
-      props.runningTurnUsageText
+    props.pendingActivityEntry
+    || props.pendingProtocolActivityEntry
+    || props.pendingUsageActivityEntry
+    || props.pendingAssistantMessage
+    || props.pendingPlanEntry
+    || props.pendingRequest
+    || props.pendingMcpInteraction
+    || props.pendingUserInput
+    || props.pendingStatusText
+    || props.runningTurnUsageText,
   );
   const pendingRequestActions = useMemo(
     () =>
-      props.pendingRequest ? buildPendingRequestActions(props.pendingRequest) : [],
+      props.pendingRequest
+        ? buildPendingRequestActions(props.pendingRequest)
+        : [],
     [props.pendingRequest],
   );
   const automationThreadTarget = useMemo(
     () => parseThreadIdentity(props.threadId),
     [props.threadId],
   );
-  const [automationCards, setAutomationCards] = useState<AutomationTimelineCard[]>([]);
+  const [automationCards, setAutomationCards] = useState<
+    AutomationTimelineCard[]
+  >([]);
   const refreshAutomationCards = useCallback(async () => {
     if (!automationThreadTarget || !props.desktopApi?.listAutomationCards) {
       setAutomationCards([]);
@@ -623,23 +659,24 @@ export function TranscriptList(props: TranscriptListProps) {
 
   useEffect(() => {
     if (
-      !automationThreadTarget ||
-      !props.desktopApi?.onAgentEvent ||
-      !props.desktopApi?.listAutomationCards
+      !automationThreadTarget
+      || !props.desktopApi?.onAgentEvent
+      || !props.desktopApi?.listAutomationCards
     ) {
       return;
     }
     return props.desktopApi.onAgentEvent((event) => {
       if (
-        event.backend !== automationThreadTarget.backend ||
-        !("threadId" in event.notification.params) ||
-        event.notification.params.threadId !== automationThreadTarget.threadId
+        event.backend !== automationThreadTarget.backend
+        || !("threadId" in event.notification.params)
+        || event.notification.params.threadId
+          !== automationThreadTarget.threadId
       ) {
         return;
       }
       if (
-        event.notification.method === "automation/run/updated" ||
-        event.notification.method === "thread/automations/updated"
+        event.notification.method === "automation/run/updated"
+        || event.notification.method === "thread/automations/updated"
       ) {
         void refreshAutomationCards();
       }
@@ -704,14 +741,14 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingAssistantMessage?.id,
       renderNow,
       transcriptEntries,
-    ]
+    ],
   );
   const visibleItemCount =
-    transcriptEntries.length +
-    (props.pendingStatusText || props.runningTurnUsageText ? 1 : 0) +
-    (props.pendingRequest ? 1 : 0) +
-    (props.pendingMcpInteraction ? 1 : 0) +
-    (props.pendingUserInput ? 1 : 0);
+    transcriptEntries.length
+    + (props.pendingStatusText || props.runningTurnUsageText ? 1 : 0)
+    + (props.pendingRequest ? 1 : 0)
+    + (props.pendingMcpInteraction ? 1 : 0)
+    + (props.pendingUserInput ? 1 : 0);
   const hasTranscriptContent = transcriptEntries.length > 0;
   useEffect(() => {
     setExpandedCommentaryGroupIds(new Set());
@@ -739,7 +776,7 @@ export function TranscriptList(props: TranscriptListProps) {
       setRenderNow((current) =>
         current > activeTurnStartedAt + ACTIVE_WORK_GROUP_THRESHOLD_MS
           ? current
-          : Date.now()
+          : Date.now(),
       );
       return undefined;
     }
@@ -774,7 +811,7 @@ export function TranscriptList(props: TranscriptListProps) {
     const lastMessageId = transcriptEntries[transcriptEntries.length - 1]?.id;
     const distanceFromBottom = Math.max(
       container.scrollHeight - container.clientHeight - container.scrollTop,
-      0
+      0,
     );
 
     return {
@@ -787,7 +824,7 @@ export function TranscriptList(props: TranscriptListProps) {
       runningTurnUsageText: props.runningTurnUsageText,
       scrollHeight: container.scrollHeight,
       scrollTop: container.scrollTop,
-      threadId: props.threadId
+      threadId: props.threadId,
     };
   }, [
     props.pendingRequest,
@@ -797,51 +834,59 @@ export function TranscriptList(props: TranscriptListProps) {
     props.runningTurnUsageText,
     props.threadId,
     transcriptEntries,
-    visibleItemCount
+    visibleItemCount,
   ]);
 
-  const syncScrollState = useCallback((options?: SyncScrollStateOptions) => {
-    let snapshot = captureSnapshot();
-    const previousSnapshot = snapshotRef.current;
-    const wasGluedToBottom =
-      isGluedToBottomRef.current ||
-      Boolean(previousSnapshot && previousSnapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX);
-    const resizedWhileBottomPinned = Boolean(
-      options?.preserveGlueOnResize &&
-        snapshot &&
-        previousSnapshot &&
-        wasGluedToBottom &&
-        snapshot.distanceFromBottom > BOTTOM_THRESHOLD_PX &&
-        snapshot.scrollTop === previousSnapshot.scrollTop &&
-        (snapshot.clientHeight !== previousSnapshot.clientHeight ||
-          snapshot.scrollHeight !== previousSnapshot.scrollHeight)
-    );
+  const syncScrollState = useCallback(
+    (options?: SyncScrollStateOptions) => {
+      let snapshot = captureSnapshot();
+      const previousSnapshot = snapshotRef.current;
+      const wasGluedToBottom =
+        isGluedToBottomRef.current
+        || Boolean(
+          previousSnapshot
+          && previousSnapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX,
+        );
+      const resizedWhileBottomPinned = Boolean(
+        options?.preserveGlueOnResize
+        && snapshot
+        && previousSnapshot
+        && wasGluedToBottom
+        && snapshot.distanceFromBottom > BOTTOM_THRESHOLD_PX
+        && snapshot.scrollTop === previousSnapshot.scrollTop
+        && (snapshot.clientHeight !== previousSnapshot.clientHeight
+          || snapshot.scrollHeight !== previousSnapshot.scrollHeight),
+      );
 
-    if (resizedWhileBottomPinned) {
-      const container = scrollContainerRef.current;
-      if (container) {
-        container.scrollTop = container.scrollHeight;
-        snapshot = captureSnapshot();
+      if (resizedWhileBottomPinned) {
+        const container = scrollContainerRef.current;
+        if (container) {
+          container.scrollTop = container.scrollHeight;
+          snapshot = captureSnapshot();
+        }
       }
-    }
 
-    snapshotRef.current = snapshot;
-    const isAtBottom = Boolean(snapshot && snapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX);
-    if (isAtBottom) {
-      isGluedToBottomRef.current = true;
-    } else {
-      isGluedToBottomRef.current = false;
-    }
-    setHasContentBelow(Boolean(snapshot && !isAtBottom));
-    setIsAtTop(Boolean(snapshot && snapshot.scrollTop <= 0));
-    if (snapshot?.threadId) {
-      savedViewportsRef.current.set(snapshot.threadId, {
-        distanceFromBottom: snapshot.distanceFromBottom,
-        isGluedToBottom: isGluedToBottomRef.current,
-        scrollTop: snapshot.scrollTop,
-      });
-    }
-  }, [captureSnapshot]);
+      snapshotRef.current = snapshot;
+      const isAtBottom = Boolean(
+        snapshot && snapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX,
+      );
+      if (isAtBottom) {
+        isGluedToBottomRef.current = true;
+      } else {
+        isGluedToBottomRef.current = false;
+      }
+      setHasContentBelow(Boolean(snapshot && !isAtBottom));
+      setIsAtTop(Boolean(snapshot && snapshot.scrollTop <= 0));
+      if (snapshot?.threadId) {
+        savedViewportsRef.current.set(snapshot.threadId, {
+          distanceFromBottom: snapshot.distanceFromBottom,
+          isGluedToBottom: isGluedToBottomRef.current,
+          scrollTop: snapshot.scrollTop,
+        });
+      }
+    },
+    [captureSnapshot],
+  );
 
   const scrollToBottom = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -874,7 +919,7 @@ export function TranscriptList(props: TranscriptListProps) {
       }
       const maxScrollTop = Math.max(
         liveContainer.scrollHeight - liveContainer.clientHeight,
-        0
+        0,
       );
       if (liveContainer.scrollTop < maxScrollTop - BOTTOM_THRESHOLD_PX) {
         liveContainer.scrollTop = liveContainer.scrollHeight;
@@ -894,7 +939,10 @@ export function TranscriptList(props: TranscriptListProps) {
   }, [hasTranscriptContent, props.loading]);
 
   useEffect(() => {
-    if (typeof props.reglueRequestKey !== "number" || props.reglueRequestKey <= 0) {
+    if (
+      typeof props.reglueRequestKey !== "number"
+      || props.reglueRequestKey <= 0
+    ) {
       return;
     }
     if (appliedReglueRequestKeyRef.current === props.reglueRequestKey) {
@@ -929,15 +977,17 @@ export function TranscriptList(props: TranscriptListProps) {
 
     const previousSnapshot = snapshotRef.current;
     const restoredViewport =
-      props.restoredViewport ??
-      (props.threadId ? savedViewportsRef.current.get(props.threadId) : undefined);
+      props.restoredViewport
+      ?? (props.threadId
+        ? savedViewportsRef.current.get(props.threadId)
+        : undefined);
     const firstMessageId = transcriptEntries[0]?.id;
     const lastMessageId = transcriptEntries[transcriptEntries.length - 1]?.id;
     const hasPrependedMessages = Boolean(
-      previousSnapshot &&
-        previousSnapshot.threadId === props.threadId &&
-        previousSnapshot.lastMessageId === lastMessageId &&
-        previousSnapshot.firstMessageId !== firstMessageId
+      previousSnapshot
+      && previousSnapshot.threadId === props.threadId
+      && previousSnapshot.lastMessageId === lastMessageId
+      && previousSnapshot.firstMessageId !== firstMessageId,
     );
     // hasAppendedMessages and hasGrownWhileFollowingBottom both intentionally
     // skip the firstMessageId equality check that earlier versions of this
@@ -951,30 +1001,31 @@ export function TranscriptList(props: TranscriptListProps) {
     // hasPrependedMessages already covers the only case the equality check
     // was protecting against (older messages paginated in at the top).
     const hasAppendedMessages = Boolean(
-      previousSnapshot &&
-        previousSnapshot.threadId === props.threadId &&
-        !hasPrependedMessages &&
-        (previousSnapshot.lastMessageId !== lastMessageId ||
-          previousSnapshot.pendingStatusText !== props.pendingStatusText ||
-          previousSnapshot.runningTurnUsageText !== props.runningTurnUsageText ||
-          previousSnapshot.itemCount < visibleItemCount)
+      previousSnapshot
+      && previousSnapshot.threadId === props.threadId
+      && !hasPrependedMessages
+      && (previousSnapshot.lastMessageId !== lastMessageId
+        || previousSnapshot.pendingStatusText !== props.pendingStatusText
+        || previousSnapshot.runningTurnUsageText !== props.runningTurnUsageText
+        || previousSnapshot.itemCount < visibleItemCount),
     );
     const hasGrownWhileFollowingBottom = Boolean(
-      previousSnapshot &&
-        previousSnapshot.threadId === props.threadId &&
-        !hasPrependedMessages &&
-        isGluedToBottomRef.current &&
-        container.scrollHeight > previousSnapshot.scrollHeight
+      previousSnapshot
+      && previousSnapshot.threadId === props.threadId
+      && !hasPrependedMessages
+      && isGluedToBottomRef.current
+      && container.scrollHeight > previousSnapshot.scrollHeight,
     );
 
     if (hasPrependedMessages && previousSnapshot) {
-      const heightDelta = container.scrollHeight - previousSnapshot.scrollHeight;
+      const heightDelta =
+        container.scrollHeight - previousSnapshot.scrollHeight;
       container.scrollTop = previousSnapshot.scrollTop + heightDelta;
     } else if (previousSnapshot?.threadId !== props.threadId) {
       if (restoredViewport) {
         const shouldRestoreBottom =
-          restoredViewport.isGluedToBottom ??
-          restoredViewport.distanceFromBottom <= BOTTOM_THRESHOLD_PX;
+          restoredViewport.isGluedToBottom
+          ?? restoredViewport.distanceFromBottom <= BOTTOM_THRESHOLD_PX;
         if (shouldRestoreBottom) {
           isGluedToBottomRef.current = true;
           scrollToBottom();
@@ -982,7 +1033,7 @@ export function TranscriptList(props: TranscriptListProps) {
           isGluedToBottomRef.current = false;
           container.scrollTop = Math.min(
             Math.max(0, restoredViewport.scrollTop),
-            Math.max(container.scrollHeight - container.clientHeight, 0)
+            Math.max(container.scrollHeight - container.clientHeight, 0),
           );
           syncScrollState();
         }
@@ -993,16 +1044,13 @@ export function TranscriptList(props: TranscriptListProps) {
       scrollToBottom();
       shouldScrollToBottomRef.current = false;
       return;
-    } else if (
-      shouldScrollToBottomRef.current ||
-      !previousSnapshot
-    ) {
+    } else if (shouldScrollToBottomRef.current || !previousSnapshot) {
       scrollToBottom();
       shouldScrollToBottomRef.current = false;
       return;
     } else if (
-      isGluedToBottomRef.current &&
-      (hasAppendedMessages || hasGrownWhileFollowingBottom)
+      isGluedToBottomRef.current
+      && (hasAppendedMessages || hasGrownWhileFollowingBottom)
     ) {
       scrollToBottom();
       return;
@@ -1135,7 +1183,11 @@ export function TranscriptList(props: TranscriptListProps) {
           inner wrapper sits between the list role and its items in
           the a11y tree and the rule fails.
         */}
-        <div ref={scrollContentRef} className="transcript-list__content" role="presentation">
+        <div
+          ref={scrollContentRef}
+          className="transcript-list__content"
+          role="presentation"
+        >
           {transcriptRenderItems.map((item) => {
             const entryKey =
               item.type === "workPhaseGroup" ? item.id : item.entry.id;
@@ -1217,7 +1269,9 @@ export function TranscriptList(props: TranscriptListProps) {
           {props.pendingStatusText || props.runningTurnUsageText ? (
             <div className="transcript-list__pending" role="status">
               {props.pendingStatusText ? <ThinkingScanner /> : null}
-              {props.pendingStatusText ? <span>{props.pendingStatusText}</span> : null}
+              {props.pendingStatusText ? (
+                <span>{props.pendingStatusText}</span>
+              ) : null}
               {props.runningTurnUsageText ? (
                 <span className="transcript-list__pending-usage">
                   {props.runningTurnUsageText}
@@ -1250,11 +1304,13 @@ export function TranscriptList(props: TranscriptListProps) {
             />
           ) : null}
           {props.pendingRequest ? (
-            <div className="transcript-request" role="group" aria-label="Pending approval">
+            <div
+              className="transcript-request"
+              role="group"
+              aria-label="Pending approval"
+            >
               <div className="transcript-request__header">
-                <span className="chip chip--mode">
-                  Approval needed
-                </span>
+                <span className="chip chip--mode">Approval needed</span>
                 <span className="transcript-message__time">
                   {props.pendingRequest.method}
                 </span>
@@ -1314,7 +1370,10 @@ export function TranscriptList(props: TranscriptListProps) {
             scrollToBottom();
           }}
         >
-          <span className="transcript-list__scroll-bottom-icon" aria-hidden="true" />
+          <span
+            className="transcript-list__scroll-bottom-icon"
+            aria-hidden="true"
+          />
         </button>
       ) : null}
     </div>

@@ -26,11 +26,15 @@ const MAX_SLACK_CALLBACK_HANDLE_LENGTH = 32;
 
 export type { IdentifierValidationReason, IdentifierValidationResult };
 
-export function validateSlackUserId(value: unknown): IdentifierValidationResult {
+export function validateSlackUserId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateSlackId(value, ["U", "W"]);
 }
 
-export function validateSlackBotUserId(value: unknown): IdentifierValidationResult {
+export function validateSlackBotUserId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateSlackId(value, ["U", "W"]);
 }
 
@@ -38,22 +42,31 @@ export function validateSlackBotId(value: unknown): IdentifierValidationResult {
   return validateSlackId(value, ["B"]);
 }
 
-export function validateSlackChannelId(value: unknown): IdentifierValidationResult {
+export function validateSlackChannelId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateSlackId(value, ["C", "G", "D"]);
 }
 
-export function validateSlackTeamId(value: unknown): IdentifierValidationResult {
+export function validateSlackTeamId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateSlackId(value, ["T"]);
 }
 
-export function validateSlackFileId(value: unknown): IdentifierValidationResult {
+export function validateSlackFileId(
+  value: unknown,
+): IdentifierValidationResult {
   return validateSlackId(value, ["F"]);
 }
 
-export function validateSlackMessageTs(value: unknown): IdentifierValidationResult {
+export function validateSlackMessageTs(
+  value: unknown,
+): IdentifierValidationResult {
   if (typeof value !== "string") return { ok: false, reason: "type" };
   if (value.length === 0) return { ok: false, reason: "empty" };
-  if (value.length > MAX_SLACK_TS_LENGTH) return { ok: false, reason: "length" };
+  if (value.length > MAX_SLACK_TS_LENGTH)
+    return { ok: false, reason: "length" };
   let dotSeen = false;
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -76,7 +89,10 @@ export function validateSlackCallbackHandle(
 ): IdentifierValidationResult {
   if (typeof value !== "string") return { ok: false, reason: "type" };
   if (value.length === 0) return { ok: false, reason: "empty" };
-  if (!value.startsWith("slack:") || value.length > MAX_SLACK_CALLBACK_HANDLE_LENGTH) {
+  if (
+    !value.startsWith("slack:")
+    || value.length > MAX_SLACK_CALLBACK_HANDLE_LENGTH
+  ) {
     return { ok: false, reason: "format" };
   }
   for (let index = "slack:".length; index < value.length; index += 1) {
@@ -87,7 +103,9 @@ export function validateSlackCallbackHandle(
   return { ok: true };
 }
 
-export function validateSlackActionId(value: unknown): IdentifierValidationResult {
+export function validateSlackActionId(
+  value: unknown,
+): IdentifierValidationResult {
   if (typeof value !== "string") return { ok: false, reason: "type" };
   if (value.length === 0) return { ok: false, reason: "empty" };
   if (value.length > 255) return { ok: false, reason: "length" };
@@ -128,16 +146,13 @@ function validateSlackId(
 ): IdentifierValidationResult {
   if (typeof value !== "string") return { ok: false, reason: "type" };
   if (value.length === 0) return { ok: false, reason: "empty" };
-  if (value.length > MAX_SLACK_ID_LENGTH) return { ok: false, reason: "length" };
-  if (!prefixes.includes(value[0] ?? "")) return { ok: false, reason: "format" };
+  if (value.length > MAX_SLACK_ID_LENGTH)
+    return { ok: false, reason: "length" };
+  if (!prefixes.includes(value[0] ?? ""))
+    return { ok: false, reason: "format" };
   for (let index = 1; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
-    if (
-      !(
-        (code >= 0x30 && code <= 0x39)
-        || (code >= 0x41 && code <= 0x5a)
-      )
-    ) {
+    if (!((code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5a))) {
       return { ok: false, reason: "format" };
     }
   }

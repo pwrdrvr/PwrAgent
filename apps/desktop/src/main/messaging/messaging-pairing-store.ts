@@ -120,7 +120,10 @@ export class MessagingPairingStore {
     return undefined;
   }
 
-  get(entryId: string, options?: { now?: number }): MessagingPairingEntry | undefined {
+  get(
+    entryId: string,
+    options?: { now?: number },
+  ): MessagingPairingEntry | undefined {
     if (options?.now !== undefined) {
       this.expireBefore(options.now);
     }
@@ -226,7 +229,10 @@ export class MessagingPairingStore {
 
   markStatus(params: {
     entryId: string;
-    status: Extract<MessagingPairingStatus, "approved" | "rejected" | "consumed">;
+    status: Extract<
+      MessagingPairingStatus,
+      "approved" | "rejected" | "consumed"
+    >;
     failureReason?: string;
   }): MessagingPairingEntry | undefined {
     const current = this.get(params.entryId);
@@ -268,7 +274,9 @@ export class MessagingPairingStore {
       observedActor: current.observedActor,
       observedChat: current.observedChat,
       approvedTargets,
-      ...(current.failureReason ? { failureReason: current.failureReason } : {}),
+      ...(current.failureReason
+        ? { failureReason: current.failureReason }
+        : {}),
     };
     this.stateDb.raw
       .prepare(

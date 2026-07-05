@@ -76,7 +76,9 @@ export function LicenseDocumentWindow() {
                 Could not load {title.toLowerCase()}: {error}
               </p>
             ) : licenseDocument ? (
-              <pre className="document-window__pre">{licenseDocument.content}</pre>
+              <pre className="document-window__pre">
+                {licenseDocument.content}
+              </pre>
             ) : (
               <p className="document-window__empty">Loading…</p>
             )}

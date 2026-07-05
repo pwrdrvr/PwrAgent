@@ -1,9 +1,4 @@
-import type {
-  FocusEvent,
-  KeyboardEvent,
-  MouseEvent,
-  ReactNode,
-} from "react";
+import type { FocusEvent, KeyboardEvent, MouseEvent, ReactNode } from "react";
 import type { WorktreeSnapshotSummary } from "@pwragent/shared";
 import { CopyIcon } from "../../../icons";
 import { copyText, formatCopyTooltip } from "../../../lib/copy-text";
@@ -51,7 +46,9 @@ export function CopyValueButton(props: {
       onClick={(event) => {
         void props.onCopy(event, props.value);
       }}
-      onFocus={(event) => props.onShowTooltip(event, props.value, props.maxTooltipLength)}
+      onFocus={(event) =>
+        props.onShowTooltip(event, props.value, props.maxTooltipLength)
+      }
       onMouseEnter={(event) =>
         props.onShowTooltip(event, props.value, props.maxTooltipLength)
       }
@@ -75,8 +72,12 @@ export function TooltipValue(props: {
       className="context-tooltip-value"
       tabIndex={0}
       onBlur={props.onBlur}
-      onFocus={(event) => props.onShowTooltip(event, props.value, undefined, false)}
-      onMouseEnter={(event) => props.onShowTooltip(event, props.value, undefined, false)}
+      onFocus={(event) =>
+        props.onShowTooltip(event, props.value, undefined, false)
+      }
+      onMouseEnter={(event) =>
+        props.onShowTooltip(event, props.value, undefined, false)
+      }
       onMouseLeave={props.onBlur}
     >
       {props.children}

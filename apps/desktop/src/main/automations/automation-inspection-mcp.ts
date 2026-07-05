@@ -30,8 +30,8 @@ export function isAutomationInspectionMcpToolName(
   value: unknown,
 ): value is AutomationInspectionOperationName {
   return (
-    typeof value === "string" &&
-    AUTOMATION_INSPECTION_OPERATION_NAMES.includes(
+    typeof value === "string"
+    && AUTOMATION_INSPECTION_OPERATION_NAMES.includes(
       value as AutomationInspectionOperationName,
     )
   );

@@ -14,7 +14,9 @@ describe("automation schedule calculations", () => {
     };
 
     expect(computeNextAutomationRunAt(schedule, 0)).toBe(5 * 60 * 1000);
-    expect(computeNextAutomationRunAt(schedule, 7 * 60 * 1000)).toBe(10 * 60 * 1000);
+    expect(computeNextAutomationRunAt(schedule, 7 * 60 * 1000)).toBe(
+      10 * 60 * 1000,
+    );
     expect(
       collectDueAutomationWindows({
         schedule,

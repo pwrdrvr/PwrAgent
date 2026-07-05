@@ -185,7 +185,10 @@ function createEmptyThreadSessionEntry(): ThreadSessionEntry {
   };
 }
 
-function mergeItems<T extends { id: string }>(olderItems: T[], newerItems: T[]): T[] {
+function mergeItems<T extends { id: string }>(
+  olderItems: T[],
+  newerItems: T[],
+): T[] {
   const deduped = new Map<string, T>();
 
   for (const item of [...olderItems, ...newerItems]) {
@@ -197,14 +200,14 @@ function mergeItems<T extends { id: string }>(olderItems: T[], newerItems: T[]):
 
 function mergeFinalizedUsageEntry(
   olderItems: AppServerThreadEntry[],
-  usageEntry: AppServerThreadActivityEntry
+  usageEntry: AppServerThreadActivityEntry,
 ): AppServerThreadEntry[] {
   const existingEntry = olderItems.find((entry) => entry.id === usageEntry.id);
   if (
-    existingEntry &&
-    existingEntry.type === "activity" &&
-    isTokenUsageActivityEntry(existingEntry) &&
-    existingEntry.status === "completed"
+    existingEntry
+    && existingEntry.type === "activity"
+    && isTokenUsageActivityEntry(existingEntry)
+    && existingEntry.status === "completed"
   ) {
     return olderItems;
   }
@@ -219,21 +222,23 @@ function persistFinalizedUsageEntry(params: {
   threadId: string;
 }): void {
   if (
-    !params.entry ||
-    params.entry.status !== "completed" ||
-    (tokenUsageActivityScope(params.entry) !== "turn" &&
-      !isDurableMonitorUsageActivity(params.entry))
+    !params.entry
+    || params.entry.status !== "completed"
+    || (tokenUsageActivityScope(params.entry) !== "turn"
+      && !isDurableMonitorUsageActivity(params.entry))
   ) {
     return;
   }
 
-  void params.desktopApi?.persistThreadUsageActivity?.({
-    backend: params.backend,
-    threadId: params.threadId,
-    activity: params.entry,
-  }).catch(() => {
-    // Usage display is still correct for the live session; retry on later final updates.
-  });
+  void params.desktopApi
+    ?.persistThreadUsageActivity?.({
+      backend: params.backend,
+      threadId: params.threadId,
+      activity: params.entry,
+    })
+    .catch(() => {
+      // Usage display is still correct for the live session; retry on later final updates.
+    });
 }
 
 function isTerminalTurnEntry(entry: AppServerThreadEntry): boolean {
@@ -242,44 +247,49 @@ function isTerminalTurnEntry(entry: AppServerThreadEntry): boolean {
   }
 
   return (
-    isTokenUsageActivityEntry(entry) ||
-    entry.type === "message" &&
-    entry.role === "assistant" &&
-    entry.phase === "final"
+    isTokenUsageActivityEntry(entry)
+    || (entry.type === "message"
+      && entry.role === "assistant"
+      && entry.phase === "final")
   );
 }
 
 function isTokenUsageActivityEntry(entry: AppServerThreadEntry): boolean {
   return (
-    entry.type === "activity" &&
-    (entry.id.startsWith("live-token-usage-") ||
-      entry.id.startsWith("live-turn-usage-") ||
-      entry.summary.startsWith("Turn usage:") ||
-      entry.summary.startsWith("Usage:") ||
-      entry.summary.startsWith("Latest request usage:"))
+    entry.type === "activity"
+    && (entry.id.startsWith("live-token-usage-")
+      || entry.id.startsWith("live-turn-usage-")
+      || entry.summary.startsWith("Turn usage:")
+      || entry.summary.startsWith("Usage:")
+      || entry.summary.startsWith("Latest request usage:"))
   );
 }
 
 function isMonitorUsageActivityEntry(
-  entry: AppServerThreadEntry
+  entry: AppServerThreadEntry,
 ): entry is AppServerThreadActivityEntry {
   return (
-    entry.type === "activity" &&
-    (entry.summary.startsWith("Monitor usage:") ||
-      entry.summary.startsWith("Monitor usage so far:"))
+    entry.type === "activity"
+    && (entry.summary.startsWith("Monitor usage:")
+      || entry.summary.startsWith("Monitor usage so far:"))
   );
 }
 
 function isDurableMonitorUsageActivity(
-  entry: AppServerThreadEntry
+  entry: AppServerThreadEntry,
 ): entry is AppServerThreadActivityEntry {
-  return entry.type === "activity" && entry.summary.startsWith("Monitor usage:");
+  return (
+    entry.type === "activity" && entry.summary.startsWith("Monitor usage:")
+  );
 }
 
 function tokenUsageActivityScope(
-  entry: AppServerThreadActivityEntry
+  entry: AppServerThreadActivityEntry,
 ): "latest-request" | "total" | "turn" | undefined {
-  if (entry.id.startsWith("live-turn-usage-") || entry.summary.startsWith("Turn usage:")) {
+  if (
+    entry.id.startsWith("live-turn-usage-")
+    || entry.summary.startsWith("Turn usage:")
+  ) {
     return "turn";
   }
   if (entry.summary.startsWith("Latest request usage:")) {
@@ -296,7 +306,7 @@ function tokenUsageActivityScope(
 
 function hasTurnUsageForEntry(
   entries: AppServerThreadEntry[],
-  usageEntry: AppServerThreadActivityEntry
+  usageEntry: AppServerThreadActivityEntry,
 ): boolean {
   const turnId = usageEntry.turn?.id;
   if (!turnId) {
@@ -305,15 +315,15 @@ function hasTurnUsageForEntry(
 
   return entries.some(
     (entry) =>
-      entry.type === "activity" &&
-      entry.turn?.id === turnId &&
-      tokenUsageActivityScope(entry) === "turn"
+      entry.type === "activity"
+      && entry.turn?.id === turnId
+      && tokenUsageActivityScope(entry) === "turn",
   );
 }
 
 function shouldSuppressLiveUsageEntry(
   session: ThreadSessionEntry,
-  usageEntry: AppServerThreadActivityEntry
+  usageEntry: AppServerThreadActivityEntry,
 ): boolean {
   const scope = tokenUsageActivityScope(usageEntry);
   if (scope !== "latest-request" && scope !== "total") {
@@ -321,13 +331,13 @@ function shouldSuppressLiveUsageEntry(
   }
 
   return (
-    hasTurnUsageForEntry(session.optimisticEntries, usageEntry) ||
-    hasTurnUsageForEntry(session.response?.replay.entries ?? [], usageEntry)
+    hasTurnUsageForEntry(session.optimisticEntries, usageEntry)
+    || hasTurnUsageForEntry(session.response?.replay.entries ?? [], usageEntry)
   );
 }
 
 function runningTurnUsageTextFromEntry(
-  entry: AppServerThreadActivityEntry | undefined
+  entry: AppServerThreadActivityEntry | undefined,
 ): string | undefined {
   if (!entry || tokenUsageActivityScope(entry) !== "turn") {
     return undefined;
@@ -338,38 +348,38 @@ function runningTurnUsageTextFromEntry(
 
 function hasOptimisticTurnUsageForEntry(
   entry: AppServerThreadEntry,
-  optimisticTurnUsageIds: ReadonlySet<string>
+  optimisticTurnUsageIds: ReadonlySet<string>,
 ): boolean {
   return Boolean(entry.turn?.id && optimisticTurnUsageIds.has(entry.turn.id));
 }
 
 function mergeTranscriptEntries(
   responseEntries: AppServerThreadEntry[],
-  optimisticEntries: AppServerThreadEntry[]
+  optimisticEntries: AppServerThreadEntry[],
 ): AppServerThreadEntry[] {
   const optimisticTurnUsageIds = new Set(
     optimisticEntries
       .filter(
         (entry): entry is AppServerThreadActivityEntry =>
-          entry.type === "activity" &&
-          tokenUsageActivityScope(entry) === "turn" &&
-          Boolean(entry.turn?.id)
+          entry.type === "activity"
+          && tokenUsageActivityScope(entry) === "turn"
+          && Boolean(entry.turn?.id),
       )
-      .map((entry) => entry.turn?.id as string)
+      .map((entry) => entry.turn?.id as string),
   );
-  const merged = responseEntries.filter(
-    (entry) => {
-      const usageScope =
-        entry.type === "activity" ? tokenUsageActivityScope(entry) : undefined;
-      return !(
-        (usageScope === "latest-request" || usageScope === "total") &&
-        hasOptimisticTurnUsageForEntry(entry, optimisticTurnUsageIds)
-      );
-    }
-  );
+  const merged = responseEntries.filter((entry) => {
+    const usageScope =
+      entry.type === "activity" ? tokenUsageActivityScope(entry) : undefined;
+    return !(
+      (usageScope === "latest-request" || usageScope === "total")
+      && hasOptimisticTurnUsageForEntry(entry, optimisticTurnUsageIds)
+    );
+  });
 
   for (const optimisticEntry of optimisticEntries) {
-    const existingIndex = merged.findIndex((entry) => entry.id === optimisticEntry.id);
+    const existingIndex = merged.findIndex(
+      (entry) => entry.id === optimisticEntry.id,
+    );
     if (existingIndex !== -1) {
       merged[existingIndex] = optimisticEntry;
       continue;
@@ -383,7 +393,7 @@ function mergeTranscriptEntries(
     const optimisticSequence = readRendererSequence(optimisticEntry);
     if (isTokenUsageActivityEntry(optimisticEntry) && optimisticTurnId) {
       const sameTurnIndex = merged.findLastIndex(
-        (entry) => entry.turn?.id === optimisticTurnId
+        (entry) => entry.turn?.id === optimisticTurnId,
       );
       if (sameTurnIndex !== -1) {
         merged.splice(sameTurnIndex + 1, 0, optimisticEntry);
@@ -394,10 +404,12 @@ function mergeTranscriptEntries(
         typeof optimisticCreatedAt === "number"
           ? merged.findIndex((entry) => {
               const entryCreatedAt =
-                typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+                typeof entry.createdAt === "number"
+                  ? entry.createdAt
+                  : undefined;
               return (
-                typeof entryCreatedAt === "number" &&
-                entryCreatedAt > optimisticCreatedAt
+                typeof entryCreatedAt === "number"
+                && entryCreatedAt > optimisticCreatedAt
               );
             })
           : -1;
@@ -412,10 +424,12 @@ function mergeTranscriptEntries(
         typeof optimisticCreatedAt === "number"
           ? merged.findIndex((entry) => {
               const entryCreatedAt =
-                typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+                typeof entry.createdAt === "number"
+                  ? entry.createdAt
+                  : undefined;
               return (
-                typeof entryCreatedAt === "number" &&
-                entryCreatedAt > optimisticCreatedAt
+                typeof entryCreatedAt === "number"
+                && entryCreatedAt > optimisticCreatedAt
               );
             })
           : -1;
@@ -426,15 +440,15 @@ function mergeTranscriptEntries(
     }
 
     const timedIndex =
-      optimisticTurnId &&
-      typeof optimisticCreatedAt === "number" &&
-      !isTokenUsageActivityEntry(optimisticEntry)
+      optimisticTurnId
+      && typeof optimisticCreatedAt === "number"
+      && !isTokenUsageActivityEntry(optimisticEntry)
         ? merged.findIndex((entry) => {
             const entryCreatedAt =
               typeof entry.createdAt === "number" ? entry.createdAt : undefined;
             if (
-              entry.turn?.id !== optimisticTurnId ||
-              typeof entryCreatedAt !== "number"
+              entry.turn?.id !== optimisticTurnId
+              || typeof entryCreatedAt !== "number"
             ) {
               return false;
             }
@@ -446,9 +460,9 @@ function mergeTranscriptEntries(
             }
             const entrySequence = readRendererSequence(entry);
             return (
-              typeof entrySequence === "number" &&
-              typeof optimisticSequence === "number" &&
-              entrySequence > optimisticSequence
+              typeof entrySequence === "number"
+              && typeof optimisticSequence === "number"
+              && entrySequence > optimisticSequence
             );
           })
         : -1;
@@ -464,8 +478,8 @@ function mergeTranscriptEntries(
             const entryCreatedAt =
               typeof entry.createdAt === "number" ? entry.createdAt : undefined;
             return (
-              typeof entryCreatedAt === "number" &&
-              entryCreatedAt > optimisticCreatedAt
+              typeof entryCreatedAt === "number"
+              && entryCreatedAt > optimisticCreatedAt
             );
           })
         : -1;
@@ -476,20 +490,21 @@ function mergeTranscriptEntries(
 
     const terminalIndex =
       optimisticTurnId && !isTerminalTurnEntry(optimisticEntry)
-        ? merged.findIndex(
-            (entry) => {
-              if (entry.turn?.id !== optimisticTurnId || !isTerminalTurnEntry(entry)) {
-                return false;
-              }
-
-              const entryCreatedAt =
-                typeof entry.createdAt === "number" ? entry.createdAt : undefined;
-              return (
-                typeof optimisticCreatedAt !== "number" ||
-                typeof entryCreatedAt !== "number"
-              );
+        ? merged.findIndex((entry) => {
+            if (
+              entry.turn?.id !== optimisticTurnId
+              || !isTerminalTurnEntry(entry)
+            ) {
+              return false;
             }
-          )
+
+            const entryCreatedAt =
+              typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+            return (
+              typeof optimisticCreatedAt !== "number"
+              || typeof entryCreatedAt !== "number"
+            );
+          })
         : -1;
 
     if (terminalIndex !== -1) {
@@ -505,12 +520,14 @@ function mergeTranscriptEntries(
 
 function mergeTranscriptMessages(
   responseMessages: AppServerThreadMessage[],
-  optimisticMessages: AppServerThreadMessage[]
+  optimisticMessages: AppServerThreadMessage[],
 ): AppServerThreadMessage[] {
   const merged = [...responseMessages];
 
   for (const optimisticMessage of optimisticMessages) {
-    const existingIndex = merged.findIndex((message) => message.id === optimisticMessage.id);
+    const existingIndex = merged.findIndex(
+      (message) => message.id === optimisticMessage.id,
+    );
     if (existingIndex !== -1) {
       merged[existingIndex] = optimisticMessage;
       continue;
@@ -524,10 +541,12 @@ function mergeTranscriptMessages(
       typeof optimisticCreatedAt === "number"
         ? merged.findIndex((message) => {
             const messageCreatedAt =
-              typeof message.createdAt === "number" ? message.createdAt : undefined;
+              typeof message.createdAt === "number"
+                ? message.createdAt
+                : undefined;
             return (
-              typeof messageCreatedAt === "number" &&
-              messageCreatedAt > optimisticCreatedAt
+              typeof messageCreatedAt === "number"
+              && messageCreatedAt > optimisticCreatedAt
             );
           })
         : -1;
@@ -545,12 +564,12 @@ function mergeTranscriptMessages(
 function preserveLoadedTranscriptHistory(
   response: AppServerReadThreadResponse,
   retainedResponse: AppServerReadThreadResponse | undefined,
-  shouldPreserve: boolean
+  shouldPreserve: boolean,
 ): AppServerReadThreadResponse {
   if (
-    !shouldPreserve ||
-    !retainedResponse ||
-    !response.replay.pagination.supportsPagination
+    !shouldPreserve
+    || !retainedResponse
+    || !response.replay.pagination.supportsPagination
   ) {
     return response;
   }
@@ -561,11 +580,11 @@ function preserveLoadedTranscriptHistory(
       ...response.replay,
       entries: mergeItems(
         retainedResponse.replay.entries,
-        response.replay.entries
+        response.replay.entries,
       ),
       messages: mergeItems(
         retainedResponse.replay.messages,
-        response.replay.messages
+        response.replay.messages,
       ),
       pagination: retainedResponse.replay.pagination,
     },
@@ -591,7 +610,7 @@ function stripCodexImageBoundaryText(value: string): string {
 }
 
 function stripCodexImageBoundaryParts(
-  parts: AppServerThreadMessagePart[] | undefined
+  parts: AppServerThreadMessagePart[] | undefined,
 ): AppServerThreadMessagePart[] | undefined {
   if (!parts?.length) {
     return parts;
@@ -640,7 +659,7 @@ function normalizeMessageImageBoundaryText<
 }
 
 function normalizeResponseImageBoundaryText(
-  response: AppServerReadThreadResponse
+  response: AppServerReadThreadResponse,
 ): AppServerReadThreadResponse {
   let changed = false;
   const entries = response.replay.entries.map((entry) => {
@@ -673,32 +692,29 @@ function normalizeResponseImageBoundaryText(
 }
 
 function hasImageParts(
-  message: Pick<AppServerThreadMessageEntry | AppServerThreadMessage, "parts">
+  message: Pick<AppServerThreadMessageEntry | AppServerThreadMessage, "parts">,
 ): boolean {
   return Boolean(message.parts?.some((part) => part.type === "image"));
 }
 
 function imageMessageSources(
-  sources: AppServerThreadEntry[]
+  sources: AppServerThreadEntry[],
 ): AppServerThreadMessageEntry[] {
   return sources.filter(
     (entry): entry is AppServerThreadMessageEntry =>
-      entry.type === "message" && entry.role === "user" && hasImageParts(entry)
+      entry.type === "message" && entry.role === "user" && hasImageParts(entry),
   );
 }
 
 function mergeImagePartsFromSources<
   T extends AppServerThreadMessage | AppServerThreadMessageEntry,
->(
-  message: T,
-  sources: AppServerThreadMessageEntry[]
-): T {
+>(message: T, sources: AppServerThreadMessageEntry[]): T {
   if (message.role !== "user" || hasImageParts(message)) {
     return message;
   }
 
   const source = sources.find((candidate) =>
-    messageTextMatchesOptimisticEntry(message, candidate)
+    messageTextMatchesOptimisticEntry(message, candidate),
   );
   if (!source?.parts) {
     return message;
@@ -712,7 +728,7 @@ function mergeImagePartsFromSources<
 
 function mergeImagePartsIntoResponse(
   response: AppServerReadThreadResponse | undefined,
-  sources: AppServerThreadEntry[]
+  sources: AppServerThreadEntry[],
 ): AppServerReadThreadResponse | undefined {
   if (!response || sources.length === 0) {
     return response;
@@ -773,60 +789,65 @@ function buildEmptyResponse(params: {
 }
 
 function getThreadHydrationVersion(
-  thread: Pick<NavigationThreadSummary, "updatedAt">
+  thread: Pick<NavigationThreadSummary, "updatedAt">,
 ): number | "unknown" {
   return typeof thread.updatedAt === "number" ? thread.updatedAt : "unknown";
 }
 
 function pruneOptimisticEntries(
   optimisticEntries: AppServerThreadEntry[],
-  response: AppServerReadThreadResponse | undefined
+  response: AppServerReadThreadResponse | undefined,
 ): AppServerThreadEntry[] {
   if (!response) {
     return optimisticEntries;
   }
 
   const latestResponseTurnId = latestTranscriptTurnId(response.replay.entries);
-  const latestResponseCreatedAt = latestTranscriptCreatedAt(response.replay.entries);
+  const latestResponseCreatedAt = latestTranscriptCreatedAt(
+    response.replay.entries,
+  );
   return optimisticEntries.filter((entry) => {
     if (entry.type === "message") {
       return !response.replay.messages.some((message) =>
         messageMatchesOptimisticEntry(message, entry, {
           allowImageUrlMismatch: true,
-        })
+        }),
       );
     }
 
     if (entry.type === "review") {
       return !response.replay.entries.some(
         (candidate) =>
-          candidate.type === "review" &&
-          reviewEntriesMatch(candidate, entry)
+          candidate.type === "review" && reviewEntriesMatch(candidate, entry),
       );
     }
 
     if (entry.type === "activity") {
       if (
-        latestResponseTurnId &&
-        entry.turn?.id !== latestResponseTurnId &&
-        isCompletedTurnMetadata(entry.turn) &&
-        !isEntryNewerThanHydratedTranscript(entry, latestResponseCreatedAt)
+        latestResponseTurnId
+        && entry.turn?.id !== latestResponseTurnId
+        && isCompletedTurnMetadata(entry.turn)
+        && !isEntryNewerThanHydratedTranscript(entry, latestResponseCreatedAt)
       ) {
         return false;
       }
 
       return !response.replay.entries.some(
         (candidate) =>
-          candidate.type === "activity" &&
-          activityEntriesMatch(candidate, entry)
+          candidate.type === "activity"
+          && activityEntriesMatch(candidate, entry),
       );
     }
 
-    return !response.replay.entries.some((candidate) => candidate.id === entry.id);
+    return !response.replay.entries.some(
+      (candidate) => candidate.id === entry.id,
+    );
   });
 }
 
-function latestTranscriptCreatedAt(entries: AppServerThreadEntry[]): number | undefined {
+function latestTranscriptCreatedAt(
+  entries: AppServerThreadEntry[],
+): number | undefined {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const createdAt = entries[index]?.createdAt;
     if (typeof createdAt === "number") {
@@ -839,38 +860,40 @@ function latestTranscriptCreatedAt(entries: AppServerThreadEntry[]): number | un
 
 function isEntryNewerThanHydratedTranscript(
   entry: AppServerThreadEntry,
-  latestResponseCreatedAt: number | undefined
+  latestResponseCreatedAt: number | undefined,
 ): boolean {
   return (
-    typeof entry.createdAt === "number" &&
-    typeof latestResponseCreatedAt === "number" &&
-    entry.createdAt > latestResponseCreatedAt
+    typeof entry.createdAt === "number"
+    && typeof latestResponseCreatedAt === "number"
+    && entry.createdAt > latestResponseCreatedAt
   );
 }
 
 function isCompletedTurnMetadata(
-  turn: AppServerThreadTurnMetadata | undefined
+  turn: AppServerThreadTurnMetadata | undefined,
 ): boolean {
   return Boolean(
-    turn &&
-      (turn.status === "completed" ||
-        turn.status === "failed" ||
-        turn.status === "cancelled" ||
-        turn.status === "interrupted" ||
-        typeof turn.durationMs === "number" ||
-        typeof turn.completedAt === "number")
+    turn
+    && (turn.status === "completed"
+      || turn.status === "failed"
+      || turn.status === "cancelled"
+      || turn.status === "interrupted"
+      || typeof turn.durationMs === "number"
+      || typeof turn.completedAt === "number"),
   );
 }
 
 function activityEntriesMatch(
   candidate: AppServerThreadActivityEntry,
-  optimisticEntry: AppServerThreadActivityEntry
+  optimisticEntry: AppServerThreadActivityEntry,
 ): boolean {
   const tokenUsageMatch =
-    isTokenUsageActivityEntry(candidate) && isTokenUsageActivityEntry(optimisticEntry);
+    isTokenUsageActivityEntry(candidate)
+    && isTokenUsageActivityEntry(optimisticEntry);
   if (
-    tokenUsageMatch &&
-    tokenUsageActivityScope(candidate) !== tokenUsageActivityScope(optimisticEntry)
+    tokenUsageMatch
+    && tokenUsageActivityScope(candidate)
+      !== tokenUsageActivityScope(optimisticEntry)
   ) {
     return false;
   }
@@ -896,19 +919,22 @@ function activityEntriesMatch(
         return true;
       }
       if (detail.command?.displayCommand) {
-        return candidateDetail.command?.displayCommand === detail.command.displayCommand;
+        return (
+          candidateDetail.command?.displayCommand
+          === detail.command.displayCommand
+        );
       }
       if (detail.fileDiff?.diff) {
         return candidateDetail.fileDiff?.diff === detail.fileDiff.diff;
       }
       return false;
-    })
+    }),
   );
 }
 
 function transcriptEntriesMatch(
   candidate: AppServerThreadEntry,
-  existingEntry: AppServerThreadEntry
+  existingEntry: AppServerThreadEntry,
 ): boolean {
   if (candidate.id === existingEntry.id) {
     return true;
@@ -928,7 +954,7 @@ function transcriptEntriesMatch(
         createdAt: candidate.createdAt,
       },
       existingEntry,
-      { allowImageUrlMismatch: true }
+      { allowImageUrlMismatch: true },
     );
   }
 
@@ -945,10 +971,10 @@ function transcriptEntriesMatch(
 
 function findUniqueTranscriptOrderSource(
   entry: AppServerThreadEntry,
-  sources: AppServerThreadEntry[]
+  sources: AppServerThreadEntry[],
 ): AppServerThreadEntry | undefined {
   const exactMatches = sources.filter(
-    (source) => source.id === entry.id && typeof source.createdAt === "number"
+    (source) => source.id === entry.id && typeof source.createdAt === "number",
   );
   if (exactMatches.length > 0) {
     return exactMatches[0];
@@ -956,9 +982,9 @@ function findUniqueTranscriptOrderSource(
 
   const logicalMatches = sources.filter(
     (source) =>
-      typeof source.createdAt === "number" &&
-      source.id !== entry.id &&
-      transcriptEntriesMatch(entry, source)
+      typeof source.createdAt === "number"
+      && source.id !== entry.id
+      && transcriptEntriesMatch(entry, source),
   );
 
   return logicalMatches.length === 1 ? logicalMatches[0] : undefined;
@@ -967,7 +993,7 @@ function findUniqueTranscriptOrderSource(
 function carryForwardTranscriptEntryOrder(
   response: AppServerReadThreadResponse,
   sources: AppServerThreadEntry[],
-  liveSources: AppServerThreadEntry[] = []
+  liveSources: AppServerThreadEntry[] = [],
 ): AppServerReadThreadResponse {
   if (sources.length === 0) {
     return response;
@@ -993,8 +1019,8 @@ function carryForwardTranscriptEntryOrder(
     freshCurrentTurnId ? sources : liveSources
   ).filter(
     (source): source is AppServerThreadActivityEntry =>
-      isDurableDiffActivity(source) &&
-      (!freshCurrentTurnId || source.turn?.id === freshCurrentTurnId)
+      isDurableDiffActivity(source)
+      && (!freshCurrentTurnId || source.turn?.id === freshCurrentTurnId),
   );
   const currentDurableDiffTurnId = durableDiffSources
     .map((source) => source.turn?.id)
@@ -1012,7 +1038,7 @@ function carryForwardTranscriptEntryOrder(
 
     const alreadyHydrated = entries.some(
       (entry): entry is AppServerThreadActivityEntry =>
-        entry.type === "activity" && activityEntriesMatch(entry, source)
+        entry.type === "activity" && activityEntriesMatch(entry, source),
     );
     if (alreadyHydrated) {
       continue;
@@ -1022,11 +1048,13 @@ function carryForwardTranscriptEntryOrder(
     entries = mergeTranscriptEntries(entries, [source]);
   }
 
-  const durableMonitorUsageSources = sources.filter(isDurableMonitorUsageActivity);
+  const durableMonitorUsageSources = sources.filter(
+    isDurableMonitorUsageActivity,
+  );
   for (const source of durableMonitorUsageSources) {
     const alreadyHydrated = entries.some(
       (entry): entry is AppServerThreadActivityEntry =>
-        entry.type === "activity" && activityEntriesMatch(entry, source)
+        entry.type === "activity" && activityEntriesMatch(entry, source),
     );
     if (alreadyHydrated) {
       continue;
@@ -1047,12 +1075,14 @@ function carryForwardTranscriptEntryOrder(
     : response;
 
   return (
-    mergeImagePartsIntoResponse(responseWithOrderedEntries, sources) ??
-    responseWithOrderedEntries
+    mergeImagePartsIntoResponse(responseWithOrderedEntries, sources)
+    ?? responseWithOrderedEntries
   );
 }
 
-function latestTranscriptTurnId(entries: AppServerThreadEntry[]): string | undefined {
+function latestTranscriptTurnId(
+  entries: AppServerThreadEntry[],
+): string | undefined {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const turnId = entries[index]?.turn?.id;
     if (turnId) {
@@ -1064,17 +1094,17 @@ function latestTranscriptTurnId(entries: AppServerThreadEntry[]): string | undef
 }
 
 function isDurableDiffActivity(
-  entry: AppServerThreadEntry
+  entry: AppServerThreadEntry,
 ): entry is AppServerThreadActivityEntry {
   return (
-    entry.type === "activity" &&
-    entry.details.some((detail) => Boolean(detail.fileDiff?.diff))
+    entry.type === "activity"
+    && entry.details.some((detail) => Boolean(detail.fileDiff?.diff))
   );
 }
 
 function reviewEntriesMatch(
   candidate: AppServerThreadReviewEntry,
-  optimisticEntry: AppServerThreadReviewEntry
+  optimisticEntry: AppServerThreadReviewEntry,
 ): boolean {
   if (isReviewStartEntry(candidate) !== isReviewStartEntry(optimisticEntry)) {
     return false;
@@ -1095,14 +1125,17 @@ function isReviewStartEntry(entry: AppServerThreadReviewEntry): boolean {
     return true;
   }
 
-  const normalizedDisplayText = normalizeReviewDisplayText(displayText).toLocaleLowerCase();
-  const normalizedReview = normalizeReviewDisplayText(entry.review).toLocaleLowerCase();
+  const normalizedDisplayText =
+    normalizeReviewDisplayText(displayText).toLocaleLowerCase();
+  const normalizedReview = normalizeReviewDisplayText(
+    entry.review,
+  ).toLocaleLowerCase();
   return (
-    normalizedDisplayText === normalizedReview ||
-    normalizedDisplayText === "code review started" ||
-    normalizedDisplayText.startsWith("review changes") ||
-    normalizedDisplayText.startsWith("review current") ||
-    normalizedDisplayText.startsWith("review commit")
+    normalizedDisplayText === normalizedReview
+    || normalizedDisplayText === "code review started"
+    || normalizedDisplayText.startsWith("review changes")
+    || normalizedDisplayText.startsWith("review current")
+    || normalizedDisplayText.startsWith("review commit")
   );
 }
 
@@ -1118,8 +1151,8 @@ function normalizeTranscriptText(value: string): string {
 
 function isPlainReviewFindingText(text: string): boolean {
   return (
-    /\b(?:full\s+)?review comments?:/i.test(text) &&
-    /(?:^|\n)\s*-\s*\[P[0-3]\]\s+.+(?:\s+—\s+|\s+-\s+).+:\d+/u.test(text)
+    /\b(?:full\s+)?review comments?:/i.test(text)
+    && /(?:^|\n)\s*-\s*\[P[0-3]\]\s+.+(?:\s+—\s+|\s+-\s+).+:\d+/u.test(text)
   );
 }
 
@@ -1134,23 +1167,23 @@ function shouldUseAssistantReviewText(params: {
   const normalizedAssistant = normalizeTranscriptText(params.assistantText);
   const normalizedReview = normalizeTranscriptText(params.reviewText);
   return (
-    !normalizedReview ||
-    normalizedAssistant === normalizedReview ||
-    normalizedAssistant.startsWith(normalizedReview) ||
-    normalizedAssistant.includes(normalizedReview)
+    !normalizedReview
+    || normalizedAssistant === normalizedReview
+    || normalizedAssistant.startsWith(normalizedReview)
+    || normalizedAssistant.includes(normalizedReview)
   );
 }
 
 function coalesceReviewAssistantMessages(
-  entries: AppServerThreadEntry[]
+  entries: AppServerThreadEntry[],
 ): AppServerThreadEntry[] {
   const output: AppServerThreadEntry[] = [];
 
   for (const entry of entries) {
     if (
-      entry.type === "message" &&
-      entry.role === "assistant" &&
-      shouldUseAssistantReviewText({
+      entry.type === "message"
+      && entry.role === "assistant"
+      && shouldUseAssistantReviewText({
         assistantText: entry.text,
         reviewText: "",
       })
@@ -1160,9 +1193,9 @@ function coalesceReviewAssistantMessages(
           return false;
         }
         if (
-          entry.turn?.id &&
-          candidate.turn?.id &&
-          entry.turn.id !== candidate.turn.id
+          entry.turn?.id
+          && candidate.turn?.id
+          && entry.turn.id !== candidate.turn.id
         ) {
           return false;
         }
@@ -1173,7 +1206,9 @@ function coalesceReviewAssistantMessages(
       });
 
       if (matchingReviewIndex !== -1) {
-        const reviewEntry = output[matchingReviewIndex] as AppServerThreadReviewEntry;
+        const reviewEntry = output[
+          matchingReviewIndex
+        ] as AppServerThreadReviewEntry;
         output[matchingReviewIndex] = {
           ...reviewEntry,
           review: entry.text,
@@ -1203,20 +1238,19 @@ function reviewResultTexts(entries: AppServerThreadEntry[]): Set<string> {
   return output;
 }
 
-function suppressReviewDuplicateMessages<T extends AppServerThreadMessage | AppServerThreadEntry>(
-  messagesOrEntries: T[],
-  reviewTexts: Set<string>
-): T[] {
+function suppressReviewDuplicateMessages<
+  T extends AppServerThreadMessage | AppServerThreadEntry,
+>(messagesOrEntries: T[], reviewTexts: Set<string>): T[] {
   if (reviewTexts.size === 0) {
     return messagesOrEntries;
   }
 
   return messagesOrEntries.filter((entry) => {
     if (
-      "role" in entry &&
-      entry.role === "assistant" &&
-      "text" in entry &&
-      typeof entry.text === "string"
+      "role" in entry
+      && entry.role === "assistant"
+      && "text" in entry
+      && typeof entry.text === "string"
     ) {
       return !reviewTexts.has(normalizeTranscriptText(entry.text));
     }
@@ -1225,21 +1259,21 @@ function suppressReviewDuplicateMessages<T extends AppServerThreadMessage | AppS
 }
 
 function optimisticMessageEntries(
-  optimisticEntries: AppServerThreadEntry[]
+  optimisticEntries: AppServerThreadEntry[],
 ): AppServerThreadMessageEntry[] {
   return optimisticEntries.filter(
-    (entry): entry is AppServerThreadMessageEntry => entry.type === "message"
+    (entry): entry is AppServerThreadMessageEntry => entry.type === "message",
   );
 }
 
 function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
   return Boolean(
-    session.response?.replay.entries.length ||
-      session.optimisticEntries.length ||
-      session.pendingAssistantMessage ||
-      session.pendingMcpInteraction ||
-      session.pendingRequest ||
-      session.pendingUserInput
+    session.response?.replay.entries.length
+    || session.optimisticEntries.length
+    || session.pendingAssistantMessage
+    || session.pendingMcpInteraction
+    || session.pendingRequest
+    || session.pendingUserInput,
   );
 }
 
@@ -1268,7 +1302,7 @@ function isLiveOptimisticEntry(entry: AppServerThreadEntry): boolean {
 }
 
 function summarizeOptimisticEntryReason(
-  entry: AppServerThreadEntry
+  entry: AppServerThreadEntry,
 ): ThinkingStateReason {
   return {
     entryId: entry.id,
@@ -1280,7 +1314,9 @@ function summarizeOptimisticEntryReason(
   };
 }
 
-function describeThinkingState(session: ThreadSessionEntry): ThinkingStateReason[] {
+function describeThinkingState(
+  session: ThreadSessionEntry,
+): ThinkingStateReason[] {
   const reasons: ThinkingStateReason[] = [];
 
   if (session.activeTurnId) {
@@ -1322,7 +1358,7 @@ function describeThinkingState(session: ThreadSessionEntry): ThinkingStateReason
     reasons.push(
       ...session.optimisticEntries
         .filter(isLiveOptimisticEntry)
-        .map(summarizeOptimisticEntryReason)
+        .map(summarizeOptimisticEntryReason),
     );
   }
 
@@ -1335,15 +1371,13 @@ function hasThinkingState(session: ThreadSessionEntry): boolean {
 
 function hasPendingInteraction(session: ThreadSessionEntry): boolean {
   return Boolean(
-    session.pendingMcpInteraction ||
-      session.pendingRequest ||
-      session.pendingUserInput
+    session.pendingMcpInteraction
+    || session.pendingRequest
+    || session.pendingUserInput,
   );
 }
 
-function summarizeOptimisticEntries(
-  entries: AppServerThreadEntry[]
-): Array<{
+function summarizeOptimisticEntries(entries: AppServerThreadEntry[]): Array<{
   entryStatus?: string;
   id: string;
   turnId?: string;
@@ -1360,21 +1394,21 @@ function summarizeOptimisticEntries(
 }
 
 function readResponseThreadStatus(
-  response: AppServerReadThreadResponse
+  response: AppServerReadThreadResponse,
 ): AppServerReadThreadResponse["threadStatus"] {
   return response.threadStatus ?? response.replay.threadStatus;
 }
 
 function responseHasInProgressTurn(
   response: AppServerReadThreadResponse,
-  turnId: string | undefined
+  turnId: string | undefined,
 ): boolean {
   if (!turnId) {
     return false;
   }
 
   const turnEntries = response.replay.entries.filter(
-    (entry) => entry.turn?.id === turnId
+    (entry) => entry.turn?.id === turnId,
   );
   if (turnEntries.some((entry) => isCompletedTurnMetadata(entry.turn))) {
     return false;
@@ -1391,7 +1425,9 @@ function normalizeNotificationTimestamp(value: unknown): number | undefined {
 }
 
 function normalizeNotificationDuration(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function readNotificationTurnId(notification: {
@@ -1402,7 +1438,10 @@ function readNotificationTurnId(notification: {
     : undefined;
 }
 
-function readFiniteNumber(record: Record<string, unknown>, keys: string[]): number | undefined {
+function readFiniteNumber(
+  record: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "number" && Number.isFinite(value)) {
@@ -1454,15 +1493,16 @@ function resolveTokenUsageModel(params: {
   threadId: string;
 }): string | undefined {
   return (
-    readStringValue(params.notificationParams.model) ??
-    readStringValue(
+    readStringValue(params.notificationParams.model)
+    ?? readStringValue(
       findFirstNestedValue(params.notificationParams.tokenUsage, [
         "model",
         "modelId",
         "model_id",
-      ])
-    ) ??
-    (params.thread?.source === params.backend && params.thread.id === params.threadId
+      ]),
+    )
+    ?? (params.thread?.source === params.backend
+    && params.thread.id === params.threadId
       ? params.thread.model
       : undefined)
   );
@@ -1482,9 +1522,10 @@ function resolveTokenUsageServiceTier(params: {
       findFirstNestedValue(params.notificationParams.tokenUsage, [
         "serviceTier",
         "service_tier",
-      ])
-    ) ??
-    (params.thread?.source === params.backend && params.thread.id === params.threadId
+      ]),
+    )
+    ?? (params.thread?.source === params.backend
+    && params.thread.id === params.threadId
       ? params.thread.serviceTier
       : undefined)
   );
@@ -1499,41 +1540,51 @@ function resolveTokenUsageFastMode(params: {
   thread?: NavigationThreadSummary;
   threadId: string;
 }): boolean | undefined {
-  const tokenUsageFastMode = findFirstNestedValue(params.notificationParams.tokenUsage, [
-    "fastMode",
-    "fast_mode",
-  ]);
+  const tokenUsageFastMode = findFirstNestedValue(
+    params.notificationParams.tokenUsage,
+    ["fastMode", "fast_mode"],
+  );
   if (typeof tokenUsageFastMode === "boolean") {
     return tokenUsageFastMode;
   }
 
-  return params.thread?.source === params.backend && params.thread.id === params.threadId
+  return params.thread?.source === params.backend
+    && params.thread.id === params.threadId
     ? params.thread.fastMode
     : undefined;
 }
 
-function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdown | undefined {
-  const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
+function readTokenBreakdown(
+  record: Record<string, unknown>,
+): TokenUsageBreakdown | undefined {
+  const explicitTotal = readFiniteNumber(record, [
+    "totalTokens",
+    "total_tokens",
+  ]);
   const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]);
   const cachedInputTokens = readFiniteNumber(record, [
     "cachedInputTokens",
     "cached_input_tokens",
   ]);
-  const outputTokens = readFiniteNumber(record, ["outputTokens", "output_tokens"]);
+  const outputTokens = readFiniteNumber(record, [
+    "outputTokens",
+    "output_tokens",
+  ]);
   const reasoningOutputTokens = readFiniteNumber(record, [
     "reasoningOutputTokens",
     "reasoning_output_tokens",
   ]);
   const derivedTotal =
     (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningOutputTokens ?? 0);
-  const totalTokens = explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
+  const totalTokens =
+    explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
 
   if (
-    totalTokens === undefined &&
-    inputTokens === undefined &&
-    cachedInputTokens === undefined &&
-    outputTokens === undefined &&
-    reasoningOutputTokens === undefined
+    totalTokens === undefined
+    && inputTokens === undefined
+    && cachedInputTokens === undefined
+    && outputTokens === undefined
+    && reasoningOutputTokens === undefined
   ) {
     return undefined;
   }
@@ -1553,24 +1604,31 @@ type TokenUsageRecords = {
   totalUsage?: TokenUsageBreakdown;
 };
 
-function readTokenUsageRecords(tokenUsage: unknown): TokenUsageRecords | undefined {
+function readTokenUsageRecords(
+  tokenUsage: unknown,
+): TokenUsageRecords | undefined {
   const root =
-    readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
-    readRecord(tokenUsage);
+    readRecord(
+      findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"]),
+    ) ?? readRecord(tokenUsage);
   if (!root) {
     return undefined;
   }
 
   const latestUsageRecord =
-    readRecord(findFirstNestedValue(root, ["last", "last_token_usage"])) ??
-    readRecord(root.last) ??
-    readRecord(root.last_token_usage);
+    readRecord(findFirstNestedValue(root, ["last", "last_token_usage"]))
+    ?? readRecord(root.last)
+    ?? readRecord(root.last_token_usage);
   const totalUsageRecord =
-    readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
-    readRecord(root.total) ??
-    readRecord(root.total_token_usage);
-  const latestUsage = latestUsageRecord ? readTokenBreakdown(latestUsageRecord) : undefined;
-  const totalUsage = totalUsageRecord ? readTokenBreakdown(totalUsageRecord) : undefined;
+    readRecord(findFirstNestedValue(root, ["total", "total_token_usage"]))
+    ?? readRecord(root.total)
+    ?? readRecord(root.total_token_usage);
+  const latestUsage = latestUsageRecord
+    ? readTokenBreakdown(latestUsageRecord)
+    : undefined;
+  const totalUsage = totalUsageRecord
+    ? readTokenBreakdown(totalUsageRecord)
+    : undefined;
   const currentUsage = latestUsage ?? totalUsage;
 
   if (!currentUsage && !latestUsage && !totalUsage) {
@@ -1585,7 +1643,7 @@ function readTokenUsageRecords(tokenUsage: unknown): TokenUsageRecords | undefin
 }
 
 function tokenBreakdownFromContextCumulative(
-  contextWindow: ThreadContextWindowState | undefined
+  contextWindow: ThreadContextWindowState | undefined,
 ): TokenUsageBreakdown | undefined {
   if (typeof contextWindow?.cumulativeTotalTokens !== "number") {
     return undefined;
@@ -1602,15 +1660,18 @@ function tokenBreakdownFromContextCumulative(
 
 function subtractTokenBreakdowns(
   total: TokenUsageBreakdown,
-  baseline: TokenUsageBreakdown
+  baseline: TokenUsageBreakdown,
 ): TokenUsageBreakdown | undefined {
   const result: TokenUsageBreakdown = {
-    cachedInputTokens: subtractTokenField(total.cachedInputTokens, baseline.cachedInputTokens),
+    cachedInputTokens: subtractTokenField(
+      total.cachedInputTokens,
+      baseline.cachedInputTokens,
+    ),
     inputTokens: subtractTokenField(total.inputTokens, baseline.inputTokens),
     outputTokens: subtractTokenField(total.outputTokens, baseline.outputTokens),
     reasoningOutputTokens: subtractTokenField(
       total.reasoningOutputTokens,
-      baseline.reasoningOutputTokens
+      baseline.reasoningOutputTokens,
     ),
     totalTokens: subtractTokenField(total.totalTokens, baseline.totalTokens),
   };
@@ -1620,7 +1681,7 @@ function subtractTokenBreakdowns(
 
 function subtractTokenField(
   total: number | undefined,
-  baseline: number | undefined
+  baseline: number | undefined,
 ): number | undefined {
   if (typeof total !== "number" || typeof baseline !== "number") {
     return undefined;
@@ -1630,11 +1691,11 @@ function subtractTokenField(
 
 function hasTokenBreakdownValue(tokens: TokenUsageBreakdown): boolean {
   return (
-    typeof tokens.cachedInputTokens === "number" ||
-    typeof tokens.inputTokens === "number" ||
-    typeof tokens.outputTokens === "number" ||
-    typeof tokens.reasoningOutputTokens === "number" ||
-    typeof tokens.totalTokens === "number"
+    typeof tokens.cachedInputTokens === "number"
+    || typeof tokens.inputTokens === "number"
+    || typeof tokens.outputTokens === "number"
+    || typeof tokens.reasoningOutputTokens === "number"
+    || typeof tokens.totalTokens === "number"
   );
 }
 
@@ -1642,15 +1703,18 @@ function tokenUsagePayloadFromBreakdown(tokens: TokenUsageBreakdown): {
   total: Record<string, number>;
 } {
   const total: Record<string, number> = {};
-  if (typeof tokens.inputTokens === "number") total.inputTokens = tokens.inputTokens;
+  if (typeof tokens.inputTokens === "number")
+    total.inputTokens = tokens.inputTokens;
   if (typeof tokens.cachedInputTokens === "number") {
     total.cachedInputTokens = tokens.cachedInputTokens;
   }
-  if (typeof tokens.outputTokens === "number") total.outputTokens = tokens.outputTokens;
+  if (typeof tokens.outputTokens === "number")
+    total.outputTokens = tokens.outputTokens;
   if (typeof tokens.reasoningOutputTokens === "number") {
     total.reasoningOutputTokens = tokens.reasoningOutputTokens;
   }
-  if (typeof tokens.totalTokens === "number") total.totalTokens = tokens.totalTokens;
+  if (typeof tokens.totalTokens === "number")
+    total.totalTokens = tokens.totalTokens;
 
   return { total };
 }
@@ -1660,7 +1724,9 @@ function deriveTurnUsageBaseline(params: {
   latestUsage?: TokenUsageBreakdown;
   totalUsage: TokenUsageBreakdown;
 }): TokenUsageBreakdown | undefined {
-  const previousCumulative = tokenBreakdownFromContextCumulative(params.contextWindow);
+  const previousCumulative = tokenBreakdownFromContextCumulative(
+    params.contextWindow,
+  );
   if (previousCumulative) {
     return previousCumulative;
   }
@@ -1689,10 +1755,11 @@ function buildPendingTurnUsage(params: {
     return {};
   }
 
-  const existing = params.existing?.turnId === turnId ? params.existing : undefined;
+  const existing =
+    params.existing?.turnId === turnId ? params.existing : undefined;
   const baseline =
-    existing?.baseline ??
-    deriveTurnUsageBaseline({
+    existing?.baseline
+    ?? deriveTurnUsageBaseline({
       contextWindow: params.contextWindow,
       latestUsage: usageRecords.latestUsage,
       totalUsage,
@@ -1723,14 +1790,15 @@ function buildPendingTurnUsage(params: {
 }
 
 function normalizeThreadContextWindowState(
-  tokenUsage: unknown
+  tokenUsage: unknown,
 ): ThreadContextWindowState | undefined {
   const usageRecords = readTokenUsageRecords(tokenUsage);
   const currentUsage = usageRecords?.currentUsage;
   const totalUsage = usageRecords?.totalUsage;
   const root =
-    readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
-    readRecord(tokenUsage);
+    readRecord(
+      findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"]),
+    ) ?? readRecord(tokenUsage);
   if (!root) {
     return undefined;
   }
@@ -1739,13 +1807,19 @@ function normalizeThreadContextWindowState(
     "model_context_window",
   ]);
   const modelContextWindow =
-    readFiniteNumber(root, ["modelContextWindow", "model_context_window"]) ??
-    (typeof nestedModelContextWindow === "number" && Number.isFinite(nestedModelContextWindow)
+    readFiniteNumber(root, ["modelContextWindow", "model_context_window"])
+    ?? (typeof nestedModelContextWindow === "number"
+    && Number.isFinite(nestedModelContextWindow)
       ? nestedModelContextWindow
       : undefined);
   const totalTokens = currentUsage?.totalTokens;
 
-  if (!currentUsage || !modelContextWindow || modelContextWindow <= 0 || totalTokens === undefined) {
+  if (
+    !currentUsage
+    || !modelContextWindow
+    || modelContextWindow <= 0
+    || totalTokens === undefined
+  ) {
     return undefined;
   }
 
@@ -1754,24 +1828,29 @@ function normalizeThreadContextWindowState(
   const remainingTokens = Math.max(0, modelContextWindow - totalTokens);
   const remainingPercent = Math.max(
     0,
-    Math.min(100, (remainingTokens / modelContextWindow) * 100)
+    Math.min(100, (remainingTokens / modelContextWindow) * 100),
   );
   const hasDistinctCumulativeUsage =
-    totalUsage?.totalTokens !== undefined && totalUsage.totalTokens !== totalTokens;
+    totalUsage?.totalTokens !== undefined
+    && totalUsage.totalTokens !== totalTokens;
 
   return {
     cachedInputTokens: currentUsage.cachedInputTokens,
     cumulativeCachedInputTokens: hasDistinctCumulativeUsage
       ? totalUsage.cachedInputTokens
       : undefined,
-    cumulativeInputTokens: hasDistinctCumulativeUsage ? totalUsage.inputTokens : undefined,
+    cumulativeInputTokens: hasDistinctCumulativeUsage
+      ? totalUsage.inputTokens
+      : undefined,
     cumulativeOutputTokens: hasDistinctCumulativeUsage
       ? totalUsage.outputTokens
       : undefined,
     cumulativeReasoningOutputTokens: hasDistinctCumulativeUsage
       ? totalUsage.reasoningOutputTokens
       : undefined,
-    cumulativeTotalTokens: hasDistinctCumulativeUsage ? totalUsage.totalTokens : undefined,
+    cumulativeTotalTokens: hasDistinctCumulativeUsage
+      ? totalUsage.totalTokens
+      : undefined,
     inputTokens: currentUsage.inputTokens,
     modelContextWindow,
     outputTokens: currentUsage.outputTokens,
@@ -1785,16 +1864,19 @@ function normalizeThreadContextWindowState(
 }
 
 function isContextCompactionItemNotification(
-  notification: AppServerNotification
+  notification: AppServerNotification,
 ): boolean {
-  if (notification.method !== "item/started" && notification.method !== "item/completed") {
+  if (
+    notification.method !== "item/started"
+    && notification.method !== "item/completed"
+  ) {
     return false;
   }
   const item =
-    typeof notification.params.item === "object" &&
-    notification.params.item !== null &&
-    !Array.isArray(notification.params.item)
-      ? notification.params.item as Record<string, unknown>
+    typeof notification.params.item === "object"
+    && notification.params.item !== null
+    && !Array.isArray(notification.params.item)
+      ? (notification.params.item as Record<string, unknown>)
       : undefined;
   const itemType = typeof item?.type === "string" ? item.type : undefined;
   return itemType?.replace(/[-_\s]/g, "").toLowerCase() === "contextcompaction";
@@ -1821,18 +1903,19 @@ function buildTurnMetadata(params: {
   }
 
   const status =
-    params.turn?.status === "in_progress" ||
-    params.turn?.status === "inProgress" ||
-    params.turn?.status === "completed" ||
-    params.turn?.status === "failed" ||
-    params.turn?.status === "cancelled" ||
-    params.turn?.status === "interrupted"
+    params.turn?.status === "in_progress"
+    || params.turn?.status === "inProgress"
+    || params.turn?.status === "completed"
+    || params.turn?.status === "failed"
+    || params.turn?.status === "cancelled"
+    || params.turn?.status === "interrupted"
       ? params.turn.status === "inProgress"
         ? "in_progress"
         : params.turn.status
       : params.fallbackStatus;
   const startedAt =
-    normalizeNotificationTimestamp(params.turn?.startedAt) ?? params.fallbackStartedAt;
+    normalizeNotificationTimestamp(params.turn?.startedAt)
+    ?? params.fallbackStartedAt;
   const completedAt = normalizeNotificationTimestamp(params.turn?.completedAt);
   const durationMs = normalizeNotificationDuration(params.turn?.durationMs);
 
@@ -1868,16 +1951,22 @@ function mergeKnownTurnMetadata(params: {
 
   return {
     id,
-    ...(params.turn?.status ?? params.knownTurn?.status
+    ...((params.turn?.status ?? params.knownTurn?.status)
       ? { status: params.turn?.status ?? params.knownTurn?.status }
       : {}),
-    ...(typeof (params.turn?.startedAt ?? params.knownTurn?.startedAt) === "number"
+    ...(typeof (params.turn?.startedAt ?? params.knownTurn?.startedAt)
+    === "number"
       ? { startedAt: params.turn?.startedAt ?? params.knownTurn?.startedAt }
       : {}),
-    ...(typeof (params.turn?.completedAt ?? params.knownTurn?.completedAt) === "number"
-      ? { completedAt: params.turn?.completedAt ?? params.knownTurn?.completedAt }
+    ...(typeof (params.turn?.completedAt ?? params.knownTurn?.completedAt)
+    === "number"
+      ? {
+          completedAt:
+            params.turn?.completedAt ?? params.knownTurn?.completedAt,
+        }
       : {}),
-    ...(typeof (params.turn?.durationMs ?? params.knownTurn?.durationMs) === "number"
+    ...(typeof (params.turn?.durationMs ?? params.knownTurn?.durationMs)
+    === "number"
       ? { durationMs: params.turn?.durationMs ?? params.knownTurn?.durationMs }
       : {}),
   };
@@ -1900,16 +1989,18 @@ function findKnownTurnUsageMetadata(
   ];
   const turnUsageEntry = entries.find(
     (candidate) =>
-      candidate.turn?.id === turnId &&
-      candidate.type === "activity" &&
-      isTokenUsageActivityEntry(candidate) &&
-      tokenUsageActivityScope(candidate) === "turn"
+      candidate.turn?.id === turnId
+      && candidate.type === "activity"
+      && isTokenUsageActivityEntry(candidate)
+      && tokenUsageActivityScope(candidate) === "turn",
   );
-  const entry = turnUsageEntry ?? entries.find((candidate) => candidate.turn?.id === turnId);
+  const entry =
+    turnUsageEntry
+    ?? entries.find((candidate) => candidate.turn?.id === turnId);
   const entryIsTurnUsage =
-    entry?.type === "activity" &&
-    isTokenUsageActivityEntry(entry) &&
-    tokenUsageActivityScope(entry) === "turn";
+    entry?.type === "activity"
+    && isTokenUsageActivityEntry(entry)
+    && tokenUsageActivityScope(entry) === "turn";
   const startedAt = entry?.turn?.startedAt ?? readUuidV7Timestamp(turnId);
   const turn = entry?.turn
     ? {
@@ -1932,9 +2023,9 @@ function terminalTurnMatchesActiveTurn(
   terminalTurnId: string | undefined,
 ): boolean {
   return Boolean(
-    !session.activeTurnId ||
-      !terminalTurnId ||
-      terminalTurnId === session.activeTurnId
+    !session.activeTurnId
+    || !terminalTurnId
+    || terminalTurnId === session.activeTurnId,
   );
 }
 
@@ -1963,7 +2054,7 @@ function shouldAdoptStartedTurn(
 
 function withTurnMetadata<T extends AppServerThreadMessageEntry>(
   entry: T,
-  turn: AppServerThreadTurnMetadata | undefined
+  turn: AppServerThreadTurnMetadata | undefined,
 ): T {
   if (!turn) {
     return entry;
@@ -1978,7 +2069,7 @@ function withTurnMetadata<T extends AppServerThreadMessageEntry>(
 function withTurnMetadataAndPhase(
   entry: AppServerThreadMessageEntry,
   turn: AppServerThreadTurnMetadata | undefined,
-  phase: AppServerThreadMessageEntry["phase"] | undefined
+  phase: AppServerThreadMessageEntry["phase"] | undefined,
 ): AppServerThreadMessageEntry {
   const nextEntry = withTurnMetadata(entry, turn);
   if (!phase || nextEntry.phase || nextEntry.role !== "assistant") {
@@ -1996,11 +2087,11 @@ function withCompletedAssistantTimestamp(
   params: {
     completedAt: number;
     phase: AppServerThreadMessageEntry["phase"] | undefined;
-  }
+  },
 ): AppServerThreadMessageEntry {
   if (
-    entry.role !== "assistant" ||
-    (params.phase && params.phase !== "final")
+    entry.role !== "assistant"
+    || (params.phase && params.phase !== "final")
   ) {
     return entry;
   }
@@ -2014,7 +2105,7 @@ function withCompletedAssistantTimestamp(
 function withCompletedResponseTurnMetadata(
   response: AppServerReadThreadResponse | undefined,
   turn: AppServerThreadTurnMetadata | undefined,
-  unphasedAssistantPhase?: AppServerThreadMessageEntry["phase"]
+  unphasedAssistantPhase?: AppServerThreadMessageEntry["phase"],
 ): AppServerReadThreadResponse | undefined {
   if (!response || !turn) {
     return response;
@@ -2029,14 +2120,14 @@ function withCompletedResponseTurnMetadata(
           ? entry.type === "message"
             ? withTurnMetadataAndPhase(entry, turn, unphasedAssistantPhase)
             : { ...entry, turn }
-          : entry
+          : entry,
       ),
     },
   };
 }
 
 function normalizeLiveAssistantMessagePhase(
-  value: unknown
+  value: unknown,
 ): AppServerThreadMessageEntry["phase"] | undefined {
   if (value === "commentary") {
     return "commentary";
@@ -2048,7 +2139,7 @@ function normalizeLiveAssistantMessagePhase(
 }
 
 function flushPendingAssistantToOptimistic(
-  current: ThreadSessionEntry
+  current: ThreadSessionEntry,
 ): ThreadSessionEntry {
   if (!current.pendingAssistantMessage) {
     return current;
@@ -2067,13 +2158,13 @@ function updateActivityEntry(
   entry: AppServerThreadActivityEntry,
   details: AppServerThreadActivityDetail[],
   turn: AppServerThreadTurnMetadata | undefined,
-  options: { suppressNoop?: boolean } = {}
+  options: { suppressNoop?: boolean } = {},
 ): AppServerThreadActivityEntry {
   const mergedDetails = mergeActivityDetails(entry.details, details);
   if (
-    options.suppressNoop &&
-    activityDetailsEqual(entry.details, mergedDetails) &&
-    turnMetadataEqual(entry.turn, entry.turn ?? turn)
+    options.suppressNoop
+    && activityDetailsEqual(entry.details, mergedDetails)
+    && turnMetadataEqual(entry.turn, entry.turn ?? turn)
   ) {
     return entry;
   }
@@ -2083,27 +2174,27 @@ function updateActivityEntry(
     summary: summarizeLiveActivity(mergedDetails),
     status: summarizeActivityStatus(mergedDetails),
     details: mergedDetails,
-    ...(entry.turn ?? turn ? { turn: entry.turn ?? turn } : {}),
+    ...((entry.turn ?? turn) ? { turn: entry.turn ?? turn } : {}),
   };
 }
 
 function activityCommandDetailsEqual(
   left: AppServerThreadCommandDetail | undefined,
-  right: AppServerThreadCommandDetail | undefined
+  right: AppServerThreadCommandDetail | undefined,
 ): boolean {
   return (
-    left?.displayCommand === right?.displayCommand &&
-    left?.rawCommand === right?.rawCommand &&
-    left?.cwd === right?.cwd &&
-    left?.output === right?.output &&
-    left?.exitCode === right?.exitCode &&
-    left?.durationMs === right?.durationMs
+    left?.displayCommand === right?.displayCommand
+    && left?.rawCommand === right?.rawCommand
+    && left?.cwd === right?.cwd
+    && left?.output === right?.output
+    && left?.exitCode === right?.exitCode
+    && left?.durationMs === right?.durationMs
   );
 }
 
 function activityDetailsEqual(
   left: AppServerThreadActivityDetail[],
-  right: AppServerThreadActivityDetail[]
+  right: AppServerThreadActivityDetail[],
 ): boolean {
   if (left.length !== right.length) {
     return false;
@@ -2112,43 +2203,43 @@ function activityDetailsEqual(
   return left.every((leftDetail, index) => {
     const rightDetail = right[index];
     return (
-      leftDetail.id === rightDetail?.id &&
-      leftDetail.kind === rightDetail.kind &&
-      leftDetail.label === rightDetail.label &&
-      leftDetail.markdown === rightDetail.markdown &&
-      leftDetail.path === rightDetail.path &&
-      leftDetail.status === rightDetail.status &&
-      leftDetail.url === rightDetail.url &&
-      leftDetail.fileDiff === rightDetail.fileDiff &&
-      activityCommandDetailsEqual(leftDetail.command, rightDetail.command)
+      leftDetail.id === rightDetail?.id
+      && leftDetail.kind === rightDetail.kind
+      && leftDetail.label === rightDetail.label
+      && leftDetail.markdown === rightDetail.markdown
+      && leftDetail.path === rightDetail.path
+      && leftDetail.status === rightDetail.status
+      && leftDetail.url === rightDetail.url
+      && leftDetail.fileDiff === rightDetail.fileDiff
+      && activityCommandDetailsEqual(leftDetail.command, rightDetail.command)
     );
   });
 }
 
 function turnMetadataEqual(
   left: AppServerThreadTurnMetadata | undefined,
-  right: AppServerThreadTurnMetadata | undefined
+  right: AppServerThreadTurnMetadata | undefined,
 ): boolean {
   return (
-    left?.id === right?.id &&
-    left?.status === right?.status &&
-    left?.startedAt === right?.startedAt &&
-    left?.completedAt === right?.completedAt &&
-    left?.durationMs === right?.durationMs
+    left?.id === right?.id
+    && left?.status === right?.status
+    && left?.startedAt === right?.startedAt
+    && left?.completedAt === right?.completedAt
+    && left?.durationMs === right?.durationMs
   );
 }
 
 function isThreadLocalTranscriptNotification(
-  notification: AppServerNotification
+  notification: AppServerNotification,
 ): boolean {
   return (
-    notification.method === "item/started" ||
-    notification.method === "item/completed" ||
-    notification.method === "item/agentMessage/delta" ||
-    notification.method === "item/mcpToolCall/progress" ||
-    notification.method === "item/commandExecution/outputDelta" ||
-    notification.method === "item/fileChange/outputDelta" ||
-    notification.method === "thread/tokenUsage/updated"
+    notification.method === "item/started"
+    || notification.method === "item/completed"
+    || notification.method === "item/agentMessage/delta"
+    || notification.method === "item/mcpToolCall/progress"
+    || notification.method === "item/commandExecution/outputDelta"
+    || notification.method === "item/fileChange/outputDelta"
+    || notification.method === "thread/tokenUsage/updated"
   );
 }
 
@@ -2158,8 +2249,8 @@ function liveActivityNotificationSignature(params: {
   threadId: string;
 }): string | undefined {
   if (
-    params.notification.method !== "item/started" &&
-    params.notification.method !== "item/completed"
+    params.notification.method !== "item/started"
+    && params.notification.method !== "item/completed"
   ) {
     return undefined;
   }
@@ -2191,8 +2282,12 @@ function liveActivityNotificationSignature(params: {
       detail.command?.rawCommand ?? "",
       detail.command?.cwd ?? "",
       detail.command?.output ?? "",
-      typeof detail.command?.exitCode === "number" ? String(detail.command.exitCode) : "",
-      typeof detail.command?.durationMs === "number" ? String(detail.command.durationMs) : "",
+      typeof detail.command?.exitCode === "number"
+        ? String(detail.command.exitCode)
+        : "",
+      typeof detail.command?.durationMs === "number"
+        ? String(detail.command.durationMs)
+        : "",
     ]),
   ];
 
@@ -2207,7 +2302,7 @@ function upsertLiveActivityEntry(
     suppressDuplicateLiveActivityUpdates?: boolean;
     threadId: string;
     turn?: AppServerThreadTurnMetadata;
-  }
+  },
 ): ThreadSessionEntry {
   if (params.details.length === 0) {
     return current;
@@ -2217,19 +2312,18 @@ function upsertLiveActivityEntry(
   const incomingIds = new Set(params.details.map((detail) => detail.id));
   const matchingIndex = flushed.optimisticEntries.findIndex(
     (entry): entry is AppServerThreadActivityEntry =>
-      entry.type === "activity" &&
-      entry.details.some((detail) => incomingIds.has(detail.id))
+      entry.type === "activity"
+      && entry.details.some((detail) => incomingIds.has(detail.id)),
   );
 
   if (matchingIndex !== -1) {
     const optimisticEntries = [...flushed.optimisticEntries];
-    const existing = optimisticEntries[matchingIndex] as AppServerThreadActivityEntry;
-    const updated = updateActivityEntry(
-      existing,
-      params.details,
-      params.turn,
-      { suppressNoop: params.suppressDuplicateLiveActivityUpdates }
-    );
+    const existing = optimisticEntries[
+      matchingIndex
+    ] as AppServerThreadActivityEntry;
+    const updated = updateActivityEntry(existing, params.details, params.turn, {
+      suppressNoop: params.suppressDuplicateLiveActivityUpdates,
+    });
     if (updated === existing) {
       return flushed;
     }
@@ -2243,22 +2337,23 @@ function upsertLiveActivityEntry(
     };
   }
 
-  const lastOptimisticEntry = flushed.optimisticEntries[flushed.optimisticEntries.length - 1];
+  const lastOptimisticEntry =
+    flushed.optimisticEntries[flushed.optimisticEntries.length - 1];
   const latestMergedEntry = mergeTranscriptEntries(
     flushed.response?.replay.entries ?? [],
-    flushed.optimisticEntries
+    flushed.optimisticEntries,
   ).at(-1);
   const canMergeWithLastActivity =
-    lastOptimisticEntry?.type === "activity" &&
-    lastOptimisticEntry.turn?.id === params.turn?.id &&
-    latestMergedEntry?.id === lastOptimisticEntry.id;
+    lastOptimisticEntry?.type === "activity"
+    && lastOptimisticEntry.turn?.id === params.turn?.id
+    && latestMergedEntry?.id === lastOptimisticEntry.id;
 
   if (canMergeWithLastActivity) {
     const updated = updateActivityEntry(
       lastOptimisticEntry as AppServerThreadActivityEntry,
       params.details,
       params.turn,
-      { suppressNoop: params.suppressDuplicateLiveActivityUpdates }
+      { suppressNoop: params.suppressDuplicateLiveActivityUpdates },
     );
     if (updated === lastOptimisticEntry) {
       return flushed;
@@ -2269,10 +2364,7 @@ function upsertLiveActivityEntry(
       expectOwnUpdate: true,
       interacted: true,
       lastTouchedAt: params.now,
-      optimisticEntries: [
-        ...flushed.optimisticEntries.slice(0, -1),
-        updated,
-      ],
+      optimisticEntries: [...flushed.optimisticEntries.slice(0, -1), updated],
     };
   }
 
@@ -2303,7 +2395,7 @@ function upsertLiveFileChangeEntry(
     entryId: string;
     now: number;
     turn?: AppServerThreadTurnMetadata;
-  }
+  },
 ): ThreadSessionEntry {
   const incomingDetails = parseFileChangeOutput(params.delta, params.entryId);
   if (incomingDetails.length === 0) {
@@ -2313,13 +2405,18 @@ function upsertLiveFileChangeEntry(
   const flushed = flushPendingAssistantToOptimistic(current);
   const matchingIndex = flushed.optimisticEntries.findIndex(
     (entry): entry is AppServerThreadActivityEntry =>
-      entry.type === "activity" && entry.id === params.entryId
+      entry.type === "activity" && entry.id === params.entryId,
   );
 
   if (matchingIndex !== -1) {
     const optimisticEntries = [...flushed.optimisticEntries];
-    const existing = optimisticEntries[matchingIndex] as AppServerThreadActivityEntry;
-    const mergedDetails = mergeActivityDetails(existing.details, incomingDetails);
+    const existing = optimisticEntries[
+      matchingIndex
+    ] as AppServerThreadActivityEntry;
+    const mergedDetails = mergeActivityDetails(
+      existing.details,
+      incomingDetails,
+    );
     optimisticEntries[matchingIndex] = {
       ...existing,
       summary: formatChangedFileSummary({
@@ -2329,7 +2426,9 @@ function upsertLiveFileChangeEntry(
         removals: 0,
       }),
       details: mergedDetails,
-      ...(existing.turn ?? params.turn ? { turn: existing.turn ?? params.turn } : {}),
+      ...((existing.turn ?? params.turn)
+        ? { turn: existing.turn ?? params.turn }
+        : {}),
     };
     return {
       ...flushed,
@@ -2367,12 +2466,12 @@ function appendLiveCommandOutputDelta(
     delta: string;
     itemId: string;
     now: number;
-  }
+  },
 ): ThreadSessionEntry {
   const matchingIndex = current.optimisticEntries.findIndex(
     (entry): entry is AppServerThreadActivityEntry =>
-      entry.type === "activity" &&
-      entry.details.some((detail) => detail.id === params.itemId)
+      entry.type === "activity"
+      && entry.details.some((detail) => detail.id === params.itemId),
   );
   if (matchingIndex === -1) {
     return current;
@@ -2384,7 +2483,7 @@ function appendLiveCommandOutputDelta(
     {
       delta: params.delta,
       itemId: params.itemId,
-    }
+    },
   );
 
   return {
@@ -2399,39 +2498,45 @@ function appendLiveCommandOutputDelta(
 function messageMatchesOptimisticEntry(
   message: AppServerThreadMessage,
   entry: AppServerThreadMessageEntry,
-  options: { allowImageUrlMismatch?: boolean } = {}
+  options: { allowImageUrlMismatch?: boolean } = {},
 ): boolean {
   if (!messageTextMatchesOptimisticEntry(message, entry)) {
     return false;
   }
 
-  const entryImages = (entry.parts ?? []).filter((part) => part.type === "image");
+  const entryImages = (entry.parts ?? []).filter(
+    (part) => part.type === "image",
+  );
   if (entryImages.length === 0) {
     return true;
   }
 
-  const messageImages = (message.parts ?? []).filter((part) => part.type === "image");
+  const messageImages = (message.parts ?? []).filter(
+    (part) => part.type === "image",
+  );
   if (
-    options.allowImageUrlMismatch &&
-    messageImages.length === entryImages.length
+    options.allowImageUrlMismatch
+    && messageImages.length === entryImages.length
   ) {
     return true;
   }
 
   return (
-    messageImages.length === entryImages.length &&
-    entryImages.every((image, index) => messageImages[index]?.url === image.url)
+    messageImages.length === entryImages.length
+    && entryImages.every(
+      (image, index) => messageImages[index]?.url === image.url,
+    )
   );
 }
 
 function messageTextMatchesOptimisticEntry(
   message: AppServerThreadMessage,
-  entry: AppServerThreadMessageEntry
+  entry: AppServerThreadMessageEntry,
 ): boolean {
   if (
-    message.role !== entry.role ||
-    stripCodexImageBoundaryText(message.text) !==
-      stripCodexImageBoundaryText(entry.text)
+    message.role !== entry.role
+    || stripCodexImageBoundaryText(message.text)
+      !== stripCodexImageBoundaryText(entry.text)
   ) {
     return false;
   }
@@ -2441,13 +2546,13 @@ function messageTextMatchesOptimisticEntry(
 
 function mergeCompletedUserMessageWithOptimisticEntry(
   message: AppServerThreadMessageEntry,
-  optimisticEntries: AppServerThreadEntry[]
+  optimisticEntries: AppServerThreadEntry[],
 ): AppServerThreadMessageEntry {
   const optimisticEntry = optimisticEntries.find(
     (entry): entry is AppServerThreadMessageEntry =>
-      entry.type === "message" &&
-      message.role === "user" &&
-      messageTextMatchesOptimisticEntry(message, entry)
+      entry.type === "message"
+      && message.role === "user"
+      && messageTextMatchesOptimisticEntry(message, entry),
   );
   if (!optimisticEntry?.parts?.some((part) => part.type === "image")) {
     return message;
@@ -2461,37 +2566,40 @@ function mergeCompletedUserMessageWithOptimisticEntry(
 }
 
 function isOptimisticUserMessageEntry(
-  entry: AppServerThreadEntry
+  entry: AppServerThreadEntry,
 ): entry is AppServerThreadMessageEntry {
   return (
-    entry.type === "message" &&
-    entry.role === "user" &&
-    entry.id.startsWith("optimistic-")
+    entry.type === "message"
+    && entry.role === "user"
+    && entry.id.startsWith("optimistic-")
   );
 }
 
 function findPromotedOptimisticUserMessageEntry(
   response: AppServerReadThreadResponse | undefined,
-  message: AppServerThreadMessageEntry
+  message: AppServerThreadMessageEntry,
 ): AppServerThreadMessageEntry | undefined {
   return response?.replay.entries.find(
     (entry): entry is AppServerThreadMessageEntry =>
-      isOptimisticUserMessageEntry(entry) &&
-      messageTextMatchesOptimisticEntry(message, entry)
+      isOptimisticUserMessageEntry(entry)
+      && messageTextMatchesOptimisticEntry(message, entry),
   );
 }
 
 function mergeCompletedUserMessageWithPromotedOptimisticEntry(
   message: AppServerThreadMessageEntry,
-  response: AppServerReadThreadResponse | undefined
+  response: AppServerReadThreadResponse | undefined,
 ): AppServerThreadMessageEntry {
-  const optimisticEntry = findPromotedOptimisticUserMessageEntry(response, message);
+  const optimisticEntry = findPromotedOptimisticUserMessageEntry(
+    response,
+    message,
+  );
   if (!optimisticEntry) {
     return message;
   }
 
   const optimisticImageParts = optimisticEntry.parts?.some(
-    (part) => part.type === "image"
+    (part) => part.type === "image",
   )
     ? optimisticEntry.parts
     : undefined;
@@ -2505,7 +2613,7 @@ function mergeCompletedUserMessageWithPromotedOptimisticEntry(
 
 function removePromotedOptimisticUserMessage(
   response: AppServerReadThreadResponse | undefined,
-  completedUserMessage: AppServerThreadMessageEntry
+  completedUserMessage: AppServerThreadMessageEntry,
 ): AppServerReadThreadResponse | undefined {
   if (!response) {
     return response;
@@ -2513,22 +2621,22 @@ function removePromotedOptimisticUserMessage(
 
   const optimisticEntry = findPromotedOptimisticUserMessageEntry(
     response,
-    completedUserMessage
+    completedUserMessage,
   );
   if (!optimisticEntry) {
     return response;
   }
 
   const entries = response.replay.entries.filter(
-    (entry) => entry.id !== optimisticEntry.id
+    (entry) => entry.id !== optimisticEntry.id,
   );
   const messages = response.replay.messages.filter(
-    (message) => message.id !== optimisticEntry.id
+    (message) => message.id !== optimisticEntry.id,
   );
 
   if (
-    entries.length === response.replay.entries.length &&
-    messages.length === response.replay.messages.length
+    entries.length === response.replay.entries.length
+    && messages.length === response.replay.messages.length
   ) {
     return response;
   }
@@ -2549,11 +2657,11 @@ function appendMessageEntries(
     backend: NavigationThreadSummary["source"];
     threadId: NavigationThreadSummary["id"];
   },
-  entries: AppServerThreadMessageEntry[]
+  entries: AppServerThreadMessageEntry[],
 ): AppServerReadThreadResponse {
   const baseResponse = response ?? buildEmptyResponse(params);
   const nextMessages: AppServerThreadMessage[] = entries.map(
-    ({ type: _type, ...message }) => message
+    ({ type: _type, ...message }) => message,
   );
   let lastUserMessage = baseResponse.replay.lastUserMessage;
   let lastAssistantMessage = baseResponse.replay.lastAssistantMessage;
@@ -2573,7 +2681,10 @@ function appendMessageEntries(
     replay: {
       ...baseResponse.replay,
       entries: mergeTranscriptEntries(baseResponse.replay.entries, entries),
-      messages: mergeTranscriptMessages(baseResponse.replay.messages, nextMessages),
+      messages: mergeTranscriptMessages(
+        baseResponse.replay.messages,
+        nextMessages,
+      ),
       lastUserMessage,
       lastAssistantMessage,
     },
@@ -2586,7 +2697,7 @@ function appendThreadEntries(
     backend: NavigationThreadSummary["source"];
     threadId: NavigationThreadSummary["id"];
   },
-  entries: AppServerThreadEntry[]
+  entries: AppServerThreadEntry[],
 ): AppServerReadThreadResponse {
   const baseResponse = response ?? buildEmptyResponse(params);
   return {
@@ -2606,7 +2717,7 @@ function appendPendingAssistantMessage(
     threadId: NavigationThreadSummary["id"];
   },
   optimisticEntries: AppServerThreadMessageEntry[],
-  pendingAssistantMessage: AppServerThreadMessageEntry | undefined
+  pendingAssistantMessage: AppServerThreadMessageEntry | undefined,
 ): AppServerReadThreadResponse | undefined {
   if (!pendingAssistantMessage) {
     return response;
@@ -2618,7 +2729,9 @@ function appendPendingAssistantMessage(
   ]);
 }
 
-function normalizeReviewOutput(value: unknown): AppServerReviewOutput | undefined {
+function normalizeReviewOutput(
+  value: unknown,
+): AppServerReviewOutput | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -2626,11 +2739,11 @@ function normalizeReviewOutput(value: unknown): AppServerReviewOutput | undefine
   const record = value as Record<string, unknown>;
   const findings = Array.isArray(record.findings) ? record.findings : undefined;
   if (
-    !findings ||
-    (record.overall_correctness !== "patch is correct" &&
-      record.overall_correctness !== "patch is incorrect") ||
-    typeof record.overall_explanation !== "string" ||
-    typeof record.overall_confidence_score !== "number"
+    !findings
+    || (record.overall_correctness !== "patch is correct"
+      && record.overall_correctness !== "patch is incorrect")
+    || typeof record.overall_explanation !== "string"
+    || typeof record.overall_confidence_score !== "number"
   ) {
     return undefined;
   }
@@ -2669,7 +2782,10 @@ function reviewEntryFromCompletedItem(params: {
     text?: unknown;
     data?: Record<string, unknown>;
   };
-  if (record.type !== "enteredReviewMode" && record.type !== "exitedReviewMode") {
+  if (
+    record.type !== "enteredReviewMode"
+    && record.type !== "exitedReviewMode"
+  ) {
     return undefined;
   }
 
@@ -2700,9 +2816,9 @@ function reviewEntryFromCompletedItem(params: {
     ...(output ? { output } : {}),
     ...(turn ? { turn } : {}),
     createdAt:
-      normalizeNotificationTimestamp(record.createdAt) ??
-      normalizeNotificationTimestamp(record.created_at) ??
-      Date.now(),
+      normalizeNotificationTimestamp(record.createdAt)
+      ?? normalizeNotificationTimestamp(record.created_at)
+      ?? Date.now(),
   };
 }
 
@@ -2730,10 +2846,10 @@ function messageContentFromUserItem(item: Record<string, unknown>): {
             ? record.image_url
             : undefined;
       if (
-        imageUrl &&
-        (record.type === "image" ||
-          record.type === "input_image" ||
-          record.type === "image_url")
+        imageUrl
+        && (record.type === "image"
+          || record.type === "input_image"
+          || record.type === "image_url")
       ) {
         const alt =
           typeof record.alt === "string"
@@ -2753,11 +2869,13 @@ function messageContentFromUserItem(item: Record<string, unknown>): {
     .filter((part): part is MessagePart => Boolean(part));
   const text =
     parts
-      .filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
+      .filter(
+        (part): part is Extract<MessagePart, { type: "text" }> =>
+          part.type === "text",
+      )
       .map((part) => part.text.trim())
       .filter(Boolean)
-      .join("\n\n") ||
-    (typeof item.text === "string" ? item.text.trim() : "");
+      .join("\n\n") || (typeof item.text === "string" ? item.text.trim() : "");
 
   return {
     ...(parts.length > 0 ? { parts } : {}),
@@ -2821,9 +2939,9 @@ function assistantMessageEntryFromCompletedItem(params: {
       ? record.type.replace(/[-_\s]/g, "").toLowerCase()
       : undefined;
   if (
-    itemType !== "agentmessage" &&
-    itemType !== "assistantmessage" &&
-    itemType !== "assistant"
+    itemType !== "agentmessage"
+    && itemType !== "assistantmessage"
+    && itemType !== "assistant"
   ) {
     return undefined;
   }
@@ -2858,20 +2976,20 @@ function assistantMessageEntryFromCompletedItem(params: {
 
 function hasReviewEntryForTurn(
   response: AppServerReadThreadResponse | undefined,
-  turnId: string | undefined
+  turnId: string | undefined,
 ): boolean {
   if (!response || !turnId) {
     return false;
   }
 
   return response.replay.entries.some(
-    (entry) => entry.type === "review" && entry.turn?.id === turnId
+    (entry) => entry.type === "review" && entry.turn?.id === turnId,
   );
 }
 
 function retainSessionCache(
   sessions: ThreadSessionState,
-  selectedThreadKey?: string
+  selectedThreadKey?: string,
 ): ThreadSessionState {
   const interactedEntries: Array<[string, ThreadSessionEntry]> = [];
   const viewOnlyEntries: Array<[string, ThreadSessionEntry]> = [];
@@ -2885,7 +3003,9 @@ function retainSessionCache(
     }
   }
 
-  viewOnlyEntries.sort((left, right) => right[1].lastTouchedAt - left[1].lastTouchedAt);
+  viewOnlyEntries.sort(
+    (left, right) => right[1].lastTouchedAt - left[1].lastTouchedAt,
+  );
 
   return Object.fromEntries([
     ...interactedEntries,
@@ -2893,52 +3013,62 @@ function retainSessionCache(
   ]);
 }
 
-function isApprovalRequestNotification(
-  notification: { method: string; params: Record<string, unknown> }
-): notification is AppServerPendingRequestNotification {
+function isApprovalRequestNotification(notification: {
+  method: string;
+  params: Record<string, unknown>;
+}): notification is AppServerPendingRequestNotification {
   return (
-    SUPPORTED_APPROVAL_REQUEST_METHODS.has(notification.method) &&
-    typeof notification.params.requestId === "string"
+    SUPPORTED_APPROVAL_REQUEST_METHODS.has(notification.method)
+    && typeof notification.params.requestId === "string"
   );
 }
 
-function isRequestUserInputNotification(
-  notification: { method: string; params: Record<string, unknown> }
-): notification is AppServerToolRequestUserInputNotification {
+function isRequestUserInputNotification(notification: {
+  method: string;
+  params: Record<string, unknown>;
+}): notification is AppServerToolRequestUserInputNotification {
   return (
-    notification.method === "item/tool/requestUserInput" &&
-    typeof notification.params.threadId === "string" &&
-    typeof notification.params.requestId === "string" &&
-    Array.isArray(notification.params.questions)
+    notification.method === "item/tool/requestUserInput"
+    && typeof notification.params.threadId === "string"
+    && typeof notification.params.requestId === "string"
+    && Array.isArray(notification.params.questions)
   );
 }
 
-function isMcpElicitationNotification(
-  notification: { method: string; params: Record<string, unknown> }
-): notification is AppServerMcpElicitationRequestNotification {
+function isMcpElicitationNotification(notification: {
+  method: string;
+  params: Record<string, unknown>;
+}): notification is AppServerMcpElicitationRequestNotification {
   return (
-    notification.method === "mcpServer/elicitation/request" &&
-    typeof notification.params.threadId === "string" &&
-    typeof notification.params.requestId === "string" &&
-    typeof notification.params.serverName === "string" &&
-    typeof notification.params.message === "string" &&
-    (notification.params.mode === "form" || notification.params.mode === "url")
+    notification.method === "mcpServer/elicitation/request"
+    && typeof notification.params.threadId === "string"
+    && typeof notification.params.requestId === "string"
+    && typeof notification.params.serverName === "string"
+    && typeof notification.params.message === "string"
+    && (notification.params.mode === "form"
+      || notification.params.mode === "url")
   );
 }
 
 function readCompletedTurnText(
-  notification: AppServerPendingRequestNotification | AppServerReadThreadResponse["backend"] | unknown
+  notification:
+    | AppServerPendingRequestNotification
+    | AppServerReadThreadResponse["backend"]
+    | unknown,
 ): string | undefined {
   if (
-    typeof notification !== "object" ||
-    notification === null ||
-    !("turn" in notification)
+    typeof notification !== "object"
+    || notification === null
+    || !("turn" in notification)
   ) {
     return undefined;
   }
 
-  const turnRecord = (notification as { turn?: { output?: Array<{ type: string; text?: string }> } })
-    .turn;
+  const turnRecord = (
+    notification as {
+      turn?: { output?: Array<{ type: string; text?: string }> };
+    }
+  ).turn;
   const text = turnRecord?.output
     ?.filter((part) => part.type === "text" && typeof part.text === "string")
     .map((part) => part.text!.trim())
@@ -2950,16 +3080,16 @@ function readCompletedTurnText(
 
 function didHydrateCompletedTurn(
   previousResponse: AppServerReadThreadResponse | undefined,
-  nextResponse: AppServerReadThreadResponse
+  nextResponse: AppServerReadThreadResponse,
 ): boolean {
   const previousMessages = previousResponse?.replay.messages.length ?? 0;
   const previousEntries = previousResponse?.replay.entries.length ?? 0;
 
   return (
-    nextResponse.replay.messages.length > previousMessages ||
-    nextResponse.replay.entries.length > previousEntries ||
-    nextResponse.replay.lastAssistantMessage !==
-      previousResponse?.replay.lastAssistantMessage
+    nextResponse.replay.messages.length > previousMessages
+    || nextResponse.replay.entries.length > previousEntries
+    || nextResponse.replay.lastAssistantMessage
+      !== previousResponse?.replay.lastAssistantMessage
   );
 }
 
@@ -2973,7 +3103,7 @@ export function useThreadSessionState(params: {
   activeTurnStartedAt?: number;
   addOptimisticUserMessage: (
     text: string,
-    imageParts?: AppServerThreadImagePart[]
+    imageParts?: AppServerThreadImagePart[],
   ) => string;
   addOptimisticReviewEntry: (displayText: string) => string;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
@@ -2998,11 +3128,11 @@ export function useThreadSessionState(params: {
   upsertLiveTranscriptEntry: (entry: AppServerThreadEntry) => void;
   updatePendingUserInput: (
     requestId: string,
-    updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+    updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState,
   ) => void;
   updatePendingMcpInteraction: (
     requestId: string,
-    updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
+    updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState,
   ) => void;
   setPendingStatusText: (status?: string) => void;
   threadBusy: boolean;
@@ -3026,10 +3156,11 @@ export function useThreadSessionState(params: {
   const updateSession = useCallback(
     (
       targetThreadKey: string,
-      updater: (current: ThreadSessionEntry) => ThreadSessionEntry
+      updater: (current: ThreadSessionEntry) => ThreadSessionEntry,
     ): void => {
       setSessions((current) => {
-        const previous = current[targetThreadKey] ?? createEmptyThreadSessionEntry();
+        const previous =
+          current[targetThreadKey] ?? createEmptyThreadSessionEntry();
         const previousThinking = hasThinkingState(previous);
         let next = updater(previous);
         const nextThinking = hasThinkingState(next);
@@ -3037,7 +3168,7 @@ export function useThreadSessionState(params: {
           next = {
             ...next,
             thinkingSinceAt: nextThinking
-              ? previous.thinkingSinceAt ?? Date.now()
+              ? (previous.thinkingSinceAt ?? Date.now())
               : undefined,
           };
         }
@@ -3050,11 +3181,11 @@ export function useThreadSessionState(params: {
             ...current,
             [targetThreadKey]: next,
           },
-          selectedThreadKeyRef.current
+          selectedThreadKeyRef.current,
         );
       });
     },
-    []
+    [],
   );
 
   const logStaleThinkingState = useCallback(
@@ -3078,7 +3209,9 @@ export function useThreadSessionState(params: {
             reason.entryStatus,
             reason.turnId,
             reason.turnStatus,
-          ].filter(Boolean).join(":")
+          ]
+            .filter(Boolean)
+            .join(":"),
         )
         .join("|");
       const logKey = `${params.targetThreadKey}:${params.response.fetchedAt}:${reasonSignature}`;
@@ -3093,7 +3226,7 @@ export function useThreadSessionState(params: {
           expectOwnUpdate: params.current.expectOwnUpdate,
           lastTouchedAt: params.current.lastTouchedAt,
           optimisticEntries: summarizeOptimisticEntries(
-            params.current.optimisticEntries
+            params.current.optimisticEntries,
           ),
           pendingAssistantMessageId: params.current.pendingAssistantMessage?.id,
           pendingMcpInteraction: Boolean(params.current.pendingMcpInteraction),
@@ -3111,7 +3244,7 @@ export function useThreadSessionState(params: {
         message: "stale thinking state cleared after idle thread read",
       }).catch(() => undefined);
     },
-    [desktopApi?.logRendererDiagnostic]
+    [desktopApi?.logRendererDiagnostic],
   );
 
   const initialHistoryLimit = params.initialHistoryLimit;
@@ -3119,7 +3252,10 @@ export function useThreadSessionState(params: {
   const loadLatest = useCallback(
     async (targetThread: NavigationThreadSummary): Promise<void> => {
       const readThread = desktopApi?.readThread;
-      const targetThreadKey = buildThreadIdentityKey(targetThread.source, targetThread.id);
+      const targetThreadKey = buildThreadIdentityKey(
+        targetThread.source,
+        targetThread.id,
+      );
       const hydrationVersion = getThreadHydrationVersion(targetThread);
 
       if (!readThread) {
@@ -3134,7 +3270,8 @@ export function useThreadSessionState(params: {
         return;
       }
 
-      const requestVersion = (requestVersionsRef.current[targetThreadKey] ?? 0) + 1;
+      const requestVersion =
+        (requestVersionsRef.current[targetThreadKey] ?? 0) + 1;
       requestVersionsRef.current[targetThreadKey] = requestVersion;
 
       updateSession(targetThreadKey, (current) => ({
@@ -3150,13 +3287,15 @@ export function useThreadSessionState(params: {
           backend: targetThread.source,
           threadId: targetThread.id,
         });
-        const response = normalizeResponseImageBoundaryText(await readThread({
-          backend: targetThread.source,
-          ...(initialHistoryLimit !== undefined
-            ? { limit: initialHistoryLimit }
-            : {}),
-          threadId: targetThread.id,
-        }));
+        const response = normalizeResponseImageBoundaryText(
+          await readThread({
+            backend: targetThread.source,
+            ...(initialHistoryLimit !== undefined
+              ? { limit: initialHistoryLimit }
+              : {}),
+            threadId: targetThread.id,
+          }),
+        );
         desktopApi?.recordStartupProfileEvent?.("thread-hydration:response", {
           backend: targetThread.source,
           entryCount: response.replay.entries.length,
@@ -3170,21 +3309,26 @@ export function useThreadSessionState(params: {
         updateSession(targetThreadKey, (current) => {
           const liveTranscriptSources = [
             ...current.optimisticEntries,
-            ...(current.pendingAssistantMessage ? [current.pendingAssistantMessage] : []),
+            ...(current.pendingAssistantMessage
+              ? [current.pendingAssistantMessage]
+              : []),
           ];
           const orderedResponse = carryForwardTranscriptEntryOrder(
             response,
-            [...(current.response?.replay.entries ?? []), ...liveTranscriptSources],
-            liveTranscriptSources
+            [
+              ...(current.response?.replay.entries ?? []),
+              ...liveTranscriptSources,
+            ],
+            liveTranscriptSources,
           );
           const responseWithLoadedHistory = preserveLoadedTranscriptHistory(
             orderedResponse,
             current.response,
-            current.loadedOlderHistory
+            current.loadedOlderHistory,
           );
           const hydratedCompletedTurn = didHydrateCompletedTurn(
             current.response,
-            responseWithLoadedHistory
+            responseWithLoadedHistory,
           );
           const needsHydrationAfterCompletion =
             current.needsHydrationAfterCompletion && !hydratedCompletedTurn;
@@ -3193,15 +3337,18 @@ export function useThreadSessionState(params: {
             : 0;
           const thinkingReasons = describeThinkingState(current);
           const shouldClearStaleThinking =
-            readResponseThreadStatus(response) === "idle" &&
-            thinkingReasons.length > 0 &&
-            !hasPendingInteraction(current) &&
-            !responseHasInProgressTurn(responseWithLoadedHistory, current.activeTurnId);
+            readResponseThreadStatus(response) === "idle"
+            && thinkingReasons.length > 0
+            && !hasPendingInteraction(current)
+            && !responseHasInProgressTurn(
+              responseWithLoadedHistory,
+              current.activeTurnId,
+            );
 
           if (shouldClearStaleThinking) {
             if (targetThread.optimisticActiveTurn) {
               consumedOptimisticActiveTurnKeysRef.current.add(
-                `${targetThreadKey}:${targetThread.optimisticActiveTurn.id}`
+                `${targetThreadKey}:${targetThread.optimisticActiveTurn.id}`,
               );
             }
             logStaleThinkingState({
@@ -3234,7 +3381,7 @@ export function useThreadSessionState(params: {
             needsHydrationAfterCompletion,
             optimisticEntries: pruneOptimisticEntries(
               current.optimisticEntries,
-              responseWithLoadedHistory
+              responseWithLoadedHistory,
             ),
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
@@ -3270,7 +3417,7 @@ export function useThreadSessionState(params: {
       initialHistoryLimit,
       logStaleThinkingState,
       updateSession,
-    ]
+    ],
   );
 
   useEffect(() => {
@@ -3306,16 +3453,18 @@ export function useThreadSessionState(params: {
       };
 
       updateSession(threadKey, (current) => {
-        const persistedMessageExists = current.response?.replay.messages.some((message) =>
-          messageMatchesOptimisticEntry(message, optimisticEntry, {
-            allowImageUrlMismatch: true,
-          })
+        const persistedMessageExists = current.response?.replay.messages.some(
+          (message) =>
+            messageMatchesOptimisticEntry(message, optimisticEntry, {
+              allowImageUrlMismatch: true,
+            }),
         );
-        const persistedTextMessageExists = current.response?.replay.messages.some(
-          (message) => messageTextMatchesOptimisticEntry(message, optimisticEntry)
-        );
+        const persistedTextMessageExists =
+          current.response?.replay.messages.some((message) =>
+            messageTextMatchesOptimisticEntry(message, optimisticEntry),
+          );
         const optimisticMessageExists = optimisticMessageEntries(
-          current.optimisticEntries
+          current.optimisticEntries,
         ).some((entry) =>
           messageMatchesOptimisticEntry(
             {
@@ -3326,12 +3475,18 @@ export function useThreadSessionState(params: {
               createdAt: entry.createdAt,
             },
             optimisticEntry,
-            { allowImageUrlMismatch: true }
-          )
+            { allowImageUrlMismatch: true },
+          ),
         );
 
-        if (persistedMessageExists || optimisticMessageExists || persistedTextMessageExists) {
-          const response = mergeImagePartsIntoResponse(current.response, [optimisticEntry]);
+        if (
+          persistedMessageExists
+          || optimisticMessageExists
+          || persistedTextMessageExists
+        ) {
+          const response = mergeImagePartsIntoResponse(current.response, [
+            optimisticEntry,
+          ]);
           return response && response !== current.response
             ? {
                 ...current,
@@ -3346,10 +3501,7 @@ export function useThreadSessionState(params: {
           expectOwnUpdate: true,
           interacted: true,
           lastTouchedAt: Date.now(),
-          optimisticEntries: [
-            ...current.optimisticEntries,
-            optimisticEntry,
-          ],
+          optimisticEntries: [...current.optimisticEntries, optimisticEntry],
         };
       });
     }
@@ -3358,12 +3510,18 @@ export function useThreadSessionState(params: {
     if (optimisticActiveTurn) {
       updateSession(threadKey, (current) => {
         const optimisticActiveTurnKey = `${threadKey}:${optimisticActiveTurn.id}`;
-        if (consumedOptimisticActiveTurnKeysRef.current.has(optimisticActiveTurnKey)) {
+        if (
+          consumedOptimisticActiveTurnKeysRef.current.has(
+            optimisticActiveTurnKey,
+          )
+        ) {
           return current;
         }
 
         const activeTurnStartedAt =
-          optimisticActiveTurn.startedAt ?? current.activeTurnStartedAt ?? Date.now();
+          optimisticActiveTurn.startedAt
+          ?? current.activeTurnStartedAt
+          ?? Date.now();
         const optimisticReviewEntry: AppServerThreadReviewEntry | undefined =
           optimisticActiveTurn.reviewDisplayText
             ? {
@@ -3380,32 +3538,32 @@ export function useThreadSessionState(params: {
               }
             : undefined;
         const responseReviewExists =
-          optimisticReviewEntry &&
-          current.response?.replay.entries.some(
+          optimisticReviewEntry
+          && current.response?.replay.entries.some(
             (entry) =>
-              entry.type === "review" &&
-              reviewEntriesMatch(entry, optimisticReviewEntry)
+              entry.type === "review"
+              && reviewEntriesMatch(entry, optimisticReviewEntry),
           );
         const optimisticReviewExists =
-          optimisticReviewEntry &&
-          current.optimisticEntries.some(
+          optimisticReviewEntry
+          && current.optimisticEntries.some(
             (entry) =>
-              entry.type === "review" &&
-              reviewEntriesMatch(entry, optimisticReviewEntry)
+              entry.type === "review"
+              && reviewEntriesMatch(entry, optimisticReviewEntry),
           );
         const nextOptimisticEntries =
-          optimisticReviewEntry &&
-          !responseReviewExists &&
-          !optimisticReviewExists
+          optimisticReviewEntry
+          && !responseReviewExists
+          && !optimisticReviewExists
             ? [...current.optimisticEntries, optimisticReviewEntry]
             : current.optimisticEntries;
         const nextPendingStatusText =
           current.pendingStatusText ?? optimisticActiveTurn.statusText;
 
         if (
-          current.activeTurnId === optimisticActiveTurn.id &&
-          current.pendingStatusText === nextPendingStatusText &&
-          nextOptimisticEntries === current.optimisticEntries
+          current.activeTurnId === optimisticActiveTurn.id
+          && current.pendingStatusText === nextPendingStatusText
+          && nextOptimisticEntries === current.optimisticEntries
         ) {
           return current;
         }
@@ -3428,8 +3586,8 @@ export function useThreadSessionState(params: {
     const hydrationVersion = getThreadHydrationVersion(thread);
     if (!session?.response) {
       if (
-        !session?.loading &&
-        session?.failedHydrationVersion !== hydrationVersion
+        !session?.loading
+        && session?.failedHydrationVersion !== hydrationVersion
       ) {
         void loadLatest(thread);
       }
@@ -3441,14 +3599,17 @@ export function useThreadSessionState(params: {
     }
 
     if (
-      session.needsHydrationAfterCompletion &&
-      session.completionHydrationRetries < 2
+      session.needsHydrationAfterCompletion
+      && session.completionHydrationRetries < 2
     ) {
       void loadLatest(thread);
       return;
     }
 
-    if (thread.updatedAt == null || session.hydratedUpdatedAt === thread.updatedAt) {
+    if (
+      thread.updatedAt == null
+      || session.hydratedUpdatedAt === thread.updatedAt
+    ) {
       if (session.hydratedInitialHistoryLimit !== initialHistoryLimit) {
         void loadLatest(thread);
       }
@@ -3461,7 +3622,10 @@ export function useThreadSessionState(params: {
     }
 
     if (session.expectOwnUpdate) {
-      if (!hasThinkingState(session) || !hasHydratedTranscriptContent(session)) {
+      if (
+        !hasThinkingState(session)
+        || !hasHydratedTranscriptContent(session)
+      ) {
         void loadLatest(thread);
         return;
       }
@@ -3486,7 +3650,14 @@ export function useThreadSessionState(params: {
     }
 
     void loadLatest(thread);
-  }, [initialHistoryLimit, loadLatest, sessions, thread, threadKey, updateSession]);
+  }, [
+    initialHistoryLimit,
+    loadLatest,
+    sessions,
+    thread,
+    threadKey,
+    updateSession,
+  ]);
 
   useEffect(() => {
     if (!desktopApi?.onAgentEvent) {
@@ -3495,8 +3666,8 @@ export function useThreadSessionState(params: {
 
     return desktopApi.onAgentEvent((event) => {
       const notificationThreadId =
-        "threadId" in event.notification.params &&
-        typeof event.notification.params.threadId === "string"
+        "threadId" in event.notification.params
+        && typeof event.notification.params.threadId === "string"
           ? event.notification.params.threadId
           : undefined;
 
@@ -3504,12 +3675,16 @@ export function useThreadSessionState(params: {
         return;
       }
 
-      const targetThreadKey = buildThreadIdentityKey(event.backend, notificationThreadId);
-      const isUnfocusedThread = targetThreadKey !== selectedThreadKeyRef.current;
+      const targetThreadKey = buildThreadIdentityKey(
+        event.backend,
+        notificationThreadId,
+      );
+      const isUnfocusedThread =
+        targetThreadKey !== selectedThreadKeyRef.current;
       if (
-        liveTranscriptEventFiltering &&
-        isUnfocusedThread &&
-        isThreadLocalTranscriptNotification(event.notification)
+        liveTranscriptEventFiltering
+        && isUnfocusedThread
+        && isThreadLocalTranscriptNotification(event.notification)
       ) {
         return;
       }
@@ -3521,10 +3696,14 @@ export function useThreadSessionState(params: {
           threadId: notificationThreadId,
         });
         if (liveActivitySignature) {
-          if (lastLiveActivitySignatureRef.current[targetThreadKey] === liveActivitySignature) {
+          if (
+            lastLiveActivitySignatureRef.current[targetThreadKey]
+            === liveActivitySignature
+          ) {
             return;
           }
-          lastLiveActivitySignatureRef.current[targetThreadKey] = liveActivitySignature;
+          lastLiveActivitySignatureRef.current[targetThreadKey] =
+            liveActivitySignature;
         }
       }
 
@@ -3561,7 +3740,9 @@ export function useThreadSessionState(params: {
         }
 
         if (isMcpElicitationNotification(event.notification)) {
-          const pendingMcpInteraction = createMcpElicitationState(event.notification);
+          const pendingMcpInteraction = createMcpElicitationState(
+            event.notification,
+          );
           if (!pendingMcpInteraction) {
             return current;
           }
@@ -3578,8 +3759,8 @@ export function useThreadSessionState(params: {
         }
 
         if (
-          event.notification.method === "item/started" &&
-          isContextCompactionItemNotification(event.notification)
+          event.notification.method === "item/started"
+          && isContextCompactionItemNotification(event.notification)
         ) {
           return {
             ...current,
@@ -3615,31 +3796,35 @@ export function useThreadSessionState(params: {
         }
 
         if (
-          event.notification.method === "item/agentMessage/delta" &&
-          typeof event.notification.params.itemId === "string" &&
-          typeof event.notification.params.delta === "string"
+          event.notification.method === "item/agentMessage/delta"
+          && typeof event.notification.params.itemId === "string"
+          && typeof event.notification.params.delta === "string"
         ) {
           const { itemId, delta } = event.notification.params;
-          const isSamePendingMessage = current.pendingAssistantMessage?.id === itemId;
+          const isSamePendingMessage =
+            current.pendingAssistantMessage?.id === itemId;
           const turn = buildTurnMetadata({
-            fallbackId: event.notification.params.turnId ?? current.activeTurnId,
+            fallbackId:
+              event.notification.params.turnId ?? current.activeTurnId,
             fallbackStartedAt: current.activeTurnStartedAt,
             fallbackStatus: "in_progress",
           });
           const phase =
-            event.notification.params.phase ??
-            (isSamePendingMessage ? current.pendingAssistantMessage?.phase : undefined);
+            event.notification.params.phase
+            ?? (isSamePendingMessage
+              ? current.pendingAssistantMessage?.phase
+              : undefined);
           const pendingText = current.pendingAssistantMessage?.text ?? "";
           const flushedResponse = isSamePendingMessage
             ? current.response
-              : appendPendingAssistantMessage(
+            : appendPendingAssistantMessage(
                 current.response,
                 {
                   backend: event.backend,
                   threadId: notificationThreadId,
                 },
                 optimisticMessageEntries(current.optimisticEntries),
-                current.pendingAssistantMessage
+                current.pendingAssistantMessage,
               );
           const carriedSequence = isSamePendingMessage
             ? readRendererSequence(current.pendingAssistantMessage)
@@ -3659,10 +3844,7 @@ export function useThreadSessionState(params: {
               ? current.pendingAssistantMessage?.createdAt
               : Date.now(),
             ...(turn ? { turn } : {}),
-            text:
-              isSamePendingMessage
-                ? `${pendingText}${delta}`
-                : delta,
+            text: isSamePendingMessage ? `${pendingText}${delta}` : delta,
           };
 
           return {
@@ -3673,7 +3855,7 @@ export function useThreadSessionState(params: {
             nextLiveEntrySequence: nextEntrySequence,
             pendingAssistantMessage: withRendererSequence(
               nextPendingAssistantMessage,
-              allocatedSequence
+              allocatedSequence,
             ),
             response: flushedResponse,
           };
@@ -3703,11 +3885,12 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "item/commandExecution/outputDelta") {
-          const notifParams = event.notification.params as Record<string, unknown>;
+          const notifParams = event.notification.params as Record<
+            string,
+            unknown
+          >;
           const delta =
-            typeof notifParams.delta === "string"
-              ? notifParams.delta
-              : "";
+            typeof notifParams.delta === "string" ? notifParams.delta : "";
           const itemId =
             typeof notifParams.itemId === "string"
               ? notifParams.itemId
@@ -3726,8 +3909,12 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "item/fileChange/outputDelta") {
-          const notifParams = event.notification.params as Record<string, unknown>;
-          const delta = typeof notifParams.delta === "string" ? notifParams.delta : "";
+          const notifParams = event.notification.params as Record<
+            string,
+            unknown
+          >;
+          const delta =
+            typeof notifParams.delta === "string" ? notifParams.delta : "";
           if (!delta) {
             return current;
           }
@@ -3758,8 +3945,8 @@ export function useThreadSessionState(params: {
 
         if (event.notification.method === "turn/started") {
           const startedTurnRecord =
-            typeof event.notification.params.turn === "object" &&
-            event.notification.params.turn !== null
+            typeof event.notification.params.turn === "object"
+            && event.notification.params.turn !== null
               ? (event.notification.params.turn as {
                   id?: unknown;
                   status?: unknown;
@@ -3773,7 +3960,8 @@ export function useThreadSessionState(params: {
               ? startedTurnRecord.id
               : event.notification.params.turnId;
           const startedAt =
-            normalizeNotificationTimestamp(startedTurnRecord?.startedAt) ?? Date.now();
+            normalizeNotificationTimestamp(startedTurnRecord?.startedAt)
+            ?? Date.now();
 
           if (!shouldAdoptStartedTurn(current, turnId)) {
             return current;
@@ -3791,28 +3979,36 @@ export function useThreadSessionState(params: {
         }
 
         if (
-          event.notification.method === "serverRequest/resolved" &&
-          "requestId" in event.notification.params
+          event.notification.method === "serverRequest/resolved"
+          && "requestId" in event.notification.params
         ) {
           const pendingRequestResolved =
-            current.pendingRequest?.params.requestId === event.notification.params.requestId;
+            current.pendingRequest?.params.requestId
+            === event.notification.params.requestId;
           const pendingMcpResolved =
-            current.pendingMcpInteraction?.requestId === event.notification.params.requestId;
+            current.pendingMcpInteraction?.requestId
+            === event.notification.params.requestId;
           const pendingUserInputResolved =
-            current.pendingUserInput?.requestId === event.notification.params.requestId;
+            current.pendingUserInput?.requestId
+            === event.notification.params.requestId;
           const hasActiveTurnAfterResolve = Boolean(current.activeTurnId);
           const resolvedKnownRequest =
-            pendingRequestResolved || pendingMcpResolved || pendingUserInputResolved;
+            pendingRequestResolved
+            || pendingMcpResolved
+            || pendingUserInputResolved;
 
           return {
             ...current,
             lastTouchedAt: nextLastTouchedAt,
-            pendingRequest:
-              pendingRequestResolved ? undefined : current.pendingRequest,
-            pendingMcpInteraction:
-              pendingMcpResolved ? undefined : current.pendingMcpInteraction,
-            pendingUserInput:
-              pendingUserInputResolved ? undefined : current.pendingUserInput,
+            pendingRequest: pendingRequestResolved
+              ? undefined
+              : current.pendingRequest,
+            pendingMcpInteraction: pendingMcpResolved
+              ? undefined
+              : current.pendingMcpInteraction,
+            pendingUserInput: pendingUserInputResolved
+              ? undefined
+              : current.pendingUserInput,
             pendingStatusText:
               hasActiveTurnAfterResolve && resolvedKnownRequest
                 ? "Thinking"
@@ -3824,27 +4020,27 @@ export function useThreadSessionState(params: {
 
         if (event.notification.method === "item/completed") {
           const userMessageEntry = userMessageEntryFromCompletedItem(
-            event.notification.params
+            event.notification.params,
           );
           if (userMessageEntry) {
             const completedUserMessageEntry =
               mergeCompletedUserMessageWithPromotedOptimisticEntry(
                 mergeCompletedUserMessageWithOptimisticEntry(
                   userMessageEntry,
-                  current.optimisticEntries
+                  current.optimisticEntries,
                 ),
-                current.response
+                current.response,
               );
             const nextResponse = appendMessageEntries(
               removePromotedOptimisticUserMessage(
                 current.response,
-                completedUserMessageEntry
+                completedUserMessageEntry,
               ),
               {
                 backend: event.backend,
                 threadId: notificationThreadId,
               },
-              [completedUserMessageEntry]
+              [completedUserMessageEntry],
             );
 
             return {
@@ -3854,8 +4050,11 @@ export function useThreadSessionState(params: {
               lastTouchedAt: nextLastTouchedAt,
               optimisticEntries: current.optimisticEntries.filter(
                 (entry) =>
-                  entry.type !== "message" ||
-                  !messageTextMatchesOptimisticEntry(completedUserMessageEntry, entry)
+                  entry.type !== "message"
+                  || !messageTextMatchesOptimisticEntry(
+                    completedUserMessageEntry,
+                    entry,
+                  ),
               ),
               response: nextResponse,
             };
@@ -3889,7 +4088,7 @@ export function useThreadSessionState(params: {
                     backend: event.backend,
                     threadId: notificationThreadId,
                   },
-                  [taskMonitorUsageEntry]
+                  [taskMonitorUsageEntry],
                 )
               : current.response;
             const nextResponse = appendMessageEntries(
@@ -3900,10 +4099,11 @@ export function useThreadSessionState(params: {
               },
               [
                 ...current.optimisticEntries.filter(
-                  (entry): entry is AppServerThreadMessageEntry => entry.type === "message"
+                  (entry): entry is AppServerThreadMessageEntry =>
+                    entry.type === "message",
                 ),
                 assistantMessageEntry,
-              ]
+              ],
             );
 
             return {
@@ -3912,7 +4112,7 @@ export function useThreadSessionState(params: {
               interacted: true,
               lastTouchedAt: nextLastTouchedAt,
               optimisticEntries: current.optimisticEntries.filter(
-                (entry) => entry.type !== "message"
+                (entry) => entry.type !== "message",
               ),
               pendingAssistantMessage:
                 current.pendingAssistantMessage?.id === assistantMessageEntry.id
@@ -3935,7 +4135,7 @@ export function useThreadSessionState(params: {
                 backend: event.backend,
                 threadId: notificationThreadId,
               },
-              [taskMonitorUsageEntry]
+              [taskMonitorUsageEntry],
             );
 
             return {
@@ -3950,7 +4150,8 @@ export function useThreadSessionState(params: {
           if (isContextCompactionItemNotification(event.notification)) {
             return {
               ...current,
-              activeTurnId: current.activeTurnId ?? event.notification.params.turnId,
+              activeTurnId:
+                current.activeTurnId ?? event.notification.params.turnId,
               expectOwnUpdate: true,
               interacted: true,
               lastTouchedAt: nextLastTouchedAt,
@@ -3961,7 +4162,9 @@ export function useThreadSessionState(params: {
             };
           }
 
-          const reviewEntry = reviewEntryFromCompletedItem(event.notification.params);
+          const reviewEntry = reviewEntryFromCompletedItem(
+            event.notification.params,
+          );
           if (reviewEntry) {
             const nextResponse = appendThreadEntries(
               current.response,
@@ -3969,26 +4172,28 @@ export function useThreadSessionState(params: {
                 backend: event.backend,
                 threadId: notificationThreadId,
               },
-              [reviewEntry]
+              [reviewEntry],
             );
 
             return {
               ...current,
               activeTurnId:
-                reviewEntry.turn?.status === "in_progress" && reviewEntry.turn.id
+                reviewEntry.turn?.status === "in_progress"
+                && reviewEntry.turn.id
                   ? reviewEntry.turn.id
                   : current.activeTurnId,
               activeTurnStartedAt:
-                reviewEntry.turn?.status === "in_progress" && reviewEntry.turn.id
-                  ? current.activeTurnStartedAt ?? Date.now()
+                reviewEntry.turn?.status === "in_progress"
+                && reviewEntry.turn.id
+                  ? (current.activeTurnStartedAt ?? Date.now())
                   : current.activeTurnStartedAt,
               expectOwnUpdate: true,
               interacted: true,
               lastTouchedAt: nextLastTouchedAt,
               optimisticEntries: current.optimisticEntries.filter(
                 (entry) =>
-                  entry.type !== "review" ||
-                  !reviewEntriesMatch(reviewEntry, entry)
+                  entry.type !== "review"
+                  || !reviewEntriesMatch(reviewEntry, entry),
               ),
               response: nextResponse,
             };
@@ -4007,7 +4212,8 @@ export function useThreadSessionState(params: {
             return upsertLiveActivityEntry(current, {
               details,
               now: nextLastTouchedAt,
-              suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
+              suppressDuplicateLiveActivityUpdates:
+                liveTranscriptEventFiltering,
               threadId: notificationThreadId,
               turn,
             });
@@ -4016,7 +4222,8 @@ export function useThreadSessionState(params: {
 
         if (event.notification.method === "turn/completed") {
           const completedTurn = buildTurnMetadata({
-            fallbackId: event.notification.params.turnId ?? current.activeTurnId,
+            fallbackId:
+              event.notification.params.turnId ?? current.activeTurnId,
             fallbackStartedAt: current.activeTurnStartedAt,
             fallbackStatus: "completed",
             turn: event.notification.params.turn,
@@ -4027,7 +4234,7 @@ export function useThreadSessionState(params: {
           );
           if (completedTurnMatchesActive && completedTurn?.id) {
             consumedOptimisticActiveTurnKeysRef.current.add(
-              `${targetThreadKey}:${completedTurn.id}`
+              `${targetThreadKey}:${completedTurn.id}`,
             );
           }
           if (liveTranscriptEventFiltering && isUnfocusedThread) {
@@ -4064,29 +4271,34 @@ export function useThreadSessionState(params: {
 
           const completedTurnHasReview = hasReviewEntryForTurn(
             current.response,
-            completedTurn?.id
+            completedTurn?.id,
           );
-          const completedTurnText = readCompletedTurnText(event.notification.params);
-          const completedText =
-            completedTurnHasReview
-              ? undefined
-              : completedTurnText ?? current.pendingAssistantMessage?.text;
+          const completedTurnText = readCompletedTurnText(
+            event.notification.params,
+          );
+          const completedText = completedTurnHasReview
+            ? undefined
+            : (completedTurnText ?? current.pendingAssistantMessage?.text);
           const shouldAppendFinalMessage = Boolean(
-            completedText &&
-              current.pendingAssistantMessage?.text !== completedText
+            completedText
+            && current.pendingAssistantMessage?.text !== completedText,
           );
-          const unphasedAssistantCompletionPhase =
-            shouldAppendFinalMessage ? "commentary" : undefined;
+          const unphasedAssistantCompletionPhase = shouldAppendFinalMessage
+            ? "commentary"
+            : undefined;
           const shouldHydrateUnknownPhaseAssistant =
-            !completedTurnText &&
-            Boolean(
-              !completedTurnHasReview &&
-              current.pendingAssistantMessage &&
-                current.pendingAssistantMessage.phase === undefined
+            !completedTurnText
+            && Boolean(
+              !completedTurnHasReview
+              && current.pendingAssistantMessage
+              && current.pendingAssistantMessage.phase === undefined,
             );
           const nextEntries = [
             ...current.optimisticEntries
-              .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
+              .filter(
+                (entry): entry is AppServerThreadMessageEntry =>
+                  entry.type === "message",
+              )
               .map((entry) => {
                 if (entry.turn?.id !== completedTurn?.id) {
                   return entry;
@@ -4097,32 +4309,34 @@ export function useThreadSessionState(params: {
                   withTurnMetadataAndPhase(
                     entry,
                     completedTurn,
-                    unphasedAssistantCompletionPhase
+                    unphasedAssistantCompletionPhase,
                   ),
                   {
-                    completedAt: completedTurn?.completedAt ?? nextLastTouchedAt,
+                    completedAt:
+                      completedTurn?.completedAt ?? nextLastTouchedAt,
                     phase,
-                  }
+                  },
                 );
               }),
             ...(current.pendingAssistantMessage && completedTurnMatchesActive
               ? completedTurnHasReview
                 ? []
                 : [
-                  withCompletedAssistantTimestamp(
-                    withTurnMetadataAndPhase(
-                      current.pendingAssistantMessage,
-                      completedTurn,
-                      unphasedAssistantCompletionPhase
+                    withCompletedAssistantTimestamp(
+                      withTurnMetadataAndPhase(
+                        current.pendingAssistantMessage,
+                        completedTurn,
+                        unphasedAssistantCompletionPhase,
+                      ),
+                      {
+                        completedAt:
+                          completedTurn?.completedAt ?? nextLastTouchedAt,
+                        phase:
+                          unphasedAssistantCompletionPhase
+                          ?? current.pendingAssistantMessage.phase,
+                      },
                     ),
-                    {
-                      completedAt: completedTurn?.completedAt ?? nextLastTouchedAt,
-                      phase:
-                        unphasedAssistantCompletionPhase ??
-                        current.pendingAssistantMessage.phase,
-                    }
-                  ),
-                ]
+                  ]
               : []),
           ];
 
@@ -4139,15 +4353,15 @@ export function useThreadSessionState(params: {
                   text: completedText,
                   createdAt: completedTurn?.completedAt ?? nextLastTouchedAt,
                 },
-                syntheticFinalSequence
-              )
+                syntheticFinalSequence,
+              ),
             );
           }
 
           const responseWithCompletedTurn = withCompletedResponseTurnMetadata(
             current.response,
             completedTurn,
-            unphasedAssistantCompletionPhase
+            unphasedAssistantCompletionPhase,
           );
           const nextResponse =
             nextEntries.length > 0
@@ -4157,12 +4371,12 @@ export function useThreadSessionState(params: {
                     backend: event.backend,
                     threadId: notificationThreadId,
                   },
-                  nextEntries
+                  nextEntries,
                 )
-              : responseWithCompletedTurn ?? current.response;
+              : (responseWithCompletedTurn ?? current.response);
           const shouldInvalidateHydration =
-            (!completedText || shouldHydrateUnknownPhaseAssistant) &&
-            !hasHydratedTranscriptContent({
+            (!completedText || shouldHydrateUnknownPhaseAssistant)
+            && !hasHydratedTranscriptContent({
               ...current,
               optimisticEntries: [],
               pendingAssistantMessage: undefined,
@@ -4176,12 +4390,12 @@ export function useThreadSessionState(params: {
             .map((entry) =>
               entry.turn?.id === completedTurn?.id && completedTurn
                 ? { ...entry, turn: completedTurn }
-                : entry
+                : entry,
             );
           const completedUsageActivity =
-            current.pendingUsageActivityEntry &&
-            completedTurn &&
-            completedTurnMatchesActive
+            current.pendingUsageActivityEntry
+            && completedTurn
+            && completedTurnMatchesActive
               ? { ...current.pendingUsageActivityEntry, turn: completedTurn }
               : undefined;
           persistFinalizedUsageEntry({
@@ -4205,19 +4419,18 @@ export function useThreadSessionState(params: {
             error: undefined,
             expectOwnUpdate: true,
             hydratedUpdatedAt:
-              !completedText ||
-              shouldInvalidateHydration ||
-              shouldHydrateUnknownPhaseAssistant
+              !completedText
+              || shouldInvalidateHydration
+              || shouldHydrateUnknownPhaseAssistant
                 ? undefined
                 : current.hydratedUpdatedAt,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
-            needsHydrationAfterCompletion:
-              completedTurnMatchesActive
-                ? !completedText || shouldHydrateUnknownPhaseAssistant
-                : current.needsHydrationAfterCompletion ||
-                  !completedText ||
-                  shouldHydrateUnknownPhaseAssistant,
+            needsHydrationAfterCompletion: completedTurnMatchesActive
+              ? !completedText || shouldHydrateUnknownPhaseAssistant
+              : current.needsHydrationAfterCompletion
+                || !completedText
+                || shouldHydrateUnknownPhaseAssistant,
             nextLiveEntrySequence:
               shouldAppendFinalMessage && completedText
                 ? current.nextLiveEntrySequence + 1
@@ -4226,7 +4439,7 @@ export function useThreadSessionState(params: {
               completedTurnMatchesActive && completedUsageActivity
                 ? mergeFinalizedUsageEntry(
                     remainingOptimisticEntries,
-                    completedUsageActivity
+                    completedUsageActivity,
                   )
                 : remainingOptimisticEntries,
             pendingAssistantMessage: completedTurnMatchesActive
@@ -4265,7 +4478,7 @@ export function useThreadSessionState(params: {
           }
           if (event.notification.params.turnId) {
             consumedOptimisticActiveTurnKeysRef.current.add(
-              `${targetThreadKey}:${event.notification.params.turnId}`
+              `${targetThreadKey}:${event.notification.params.turnId}`,
             );
           }
 
@@ -4305,7 +4518,7 @@ export function useThreadSessionState(params: {
           }
           if (event.notification.params.turnId) {
             consumedOptimisticActiveTurnKeysRef.current.add(
-              `${targetThreadKey}:${event.notification.params.turnId}`
+              `${targetThreadKey}:${event.notification.params.turnId}`,
             );
           }
 
@@ -4330,9 +4543,9 @@ export function useThreadSessionState(params: {
 
         if (event.notification.method === "thread/status/changed") {
           const statusType =
-            typeof event.notification.params.status === "object" &&
-            event.notification.params.status !== null &&
-            "type" in event.notification.params.status
+            typeof event.notification.params.status === "object"
+            && event.notification.params.status !== null
+            && "type" in event.notification.params.status
               ? event.notification.params.status.type
               : undefined;
 
@@ -4383,16 +4596,20 @@ export function useThreadSessionState(params: {
 
         if (event.notification.method === "thread/tokenUsage/updated") {
           const contextWindow = normalizeThreadContextWindowState(
-            event.notification.params.tokenUsage
+            event.notification.params.tokenUsage,
           );
           const notificationTurnId =
             typeof event.notification.params.turnId === "string"
               ? event.notification.params.turnId
               : undefined;
-          const knownTurnUsage = findKnownTurnUsageMetadata(current, notificationTurnId);
+          const knownTurnUsage = findKnownTurnUsageMetadata(
+            current,
+            notificationTurnId,
+          );
           const usageBelongsToActiveTurn = Boolean(
-            current.activeTurnId &&
-              (!notificationTurnId || notificationTurnId === current.activeTurnId)
+            current.activeTurnId
+            && (!notificationTurnId
+              || notificationTurnId === current.activeTurnId),
           );
           const turn = buildTurnMetadata({
             fallbackId: notificationTurnId ?? current.activeTurnId,
@@ -4401,8 +4618,8 @@ export function useThreadSessionState(params: {
                 ? knownTurnUsage.turn?.startedAt
                 : current.activeTurnStartedAt,
             fallbackStatus:
-              knownTurnUsage.turn?.status ??
-              (usageBelongsToActiveTurn ? "in_progress" : "completed"),
+              knownTurnUsage.turn?.status
+              ?? (usageBelongsToActiveTurn ? "in_progress" : "completed"),
             turn: knownTurnUsage.turn,
           });
           const model = resolveTokenUsageModel({
@@ -4424,10 +4641,10 @@ export function useThreadSessionState(params: {
             threadId: notificationThreadId,
           });
           const knownCompletedTurnUsage = Boolean(
-            notificationTurnId &&
-              notificationTurnId !== current.activeTurnId &&
-              knownTurnUsage.isTurnUsage &&
-              knownTurnUsage.turn?.status === "completed"
+            notificationTurnId
+            && notificationTurnId !== current.activeTurnId
+            && knownTurnUsage.isTurnUsage
+            && knownTurnUsage.turn?.status === "completed",
           );
           const usageEntryId = knownCompletedTurnUsage
             ? `live-turn-usage-${turn?.id ?? notificationThreadId}`
@@ -4452,10 +4669,10 @@ export function useThreadSessionState(params: {
           }
           let pendingTurnUsage = current.pendingTurnUsage;
           const activeTurnUsage = Boolean(
-            usageEntry &&
-              current.activeTurnId &&
-              turn?.id === current.activeTurnId &&
-              turn.status !== "completed"
+            usageEntry
+            && current.activeTurnId
+            && turn?.id === current.activeTurnId
+            && turn.status !== "completed",
           );
           if (activeTurnUsage) {
             const turnUsage = buildPendingTurnUsage({
@@ -4467,7 +4684,8 @@ export function useThreadSessionState(params: {
               tokenUsage: event.notification.params.tokenUsage,
               turn,
             });
-            pendingTurnUsage = turnUsage.accumulator ?? current.pendingTurnUsage;
+            pendingTurnUsage =
+              turnUsage.accumulator ?? current.pendingTurnUsage;
             usageEntry = turnUsage.entry ?? usageEntry;
           }
           if (!contextWindow && !usageEntry) {
@@ -4475,10 +4693,10 @@ export function useThreadSessionState(params: {
           }
 
           const holdUsageUntilTurnCompletes = Boolean(
-            usageEntry &&
-              current.activeTurnId &&
-              turn?.id === current.activeTurnId &&
-              turn.status !== "completed"
+            usageEntry
+            && current.activeTurnId
+            && turn?.id === current.activeTurnId
+            && turn.status !== "completed",
           );
           const suppressUsageEntry =
             usageEntry && shouldSuppressLiveUsageEntry(current, usageEntry);
@@ -4503,11 +4721,15 @@ export function useThreadSessionState(params: {
                 ? true
                 : current.interacted,
             lastTouchedAt: nextLastTouchedAt,
-            optimisticEntries: usageEntry && !holdUsageUntilTurnCompletes
-              ? suppressUsageEntry
-                ? current.optimisticEntries
-                : mergeFinalizedUsageEntry(current.optimisticEntries, usageEntry)
-              : current.optimisticEntries,
+            optimisticEntries:
+              usageEntry && !holdUsageUntilTurnCompletes
+                ? suppressUsageEntry
+                  ? current.optimisticEntries
+                  : mergeFinalizedUsageEntry(
+                      current.optimisticEntries,
+                      usageEntry,
+                    )
+                : current.optimisticEntries,
             pendingUsageActivityEntry: holdUsageUntilTurnCompletes
               ? usageEntry
               : current.pendingUsageActivityEntry,
@@ -4532,12 +4754,12 @@ export function useThreadSessionState(params: {
 
   const loadOlder = useCallback(async (): Promise<void> => {
     if (
-      !thread ||
-      !threadKey ||
-      !desktopApi?.readThread ||
-      !selectedSession?.response?.replay.pagination.supportsPagination ||
-      !selectedSession.response.replay.pagination.hasPreviousPage ||
-      !selectedSession.response.replay.pagination.previousCursor
+      !thread
+      || !threadKey
+      || !desktopApi?.readThread
+      || !selectedSession?.response?.replay.pagination.supportsPagination
+      || !selectedSession.response.replay.pagination.hasPreviousPage
+      || !selectedSession.response.replay.pagination.previousCursor
     ) {
       return;
     }
@@ -4572,11 +4794,11 @@ export function useThreadSessionState(params: {
                 ...olderResponse.replay,
                 entries: mergeItems(
                   olderResponse.replay.entries,
-                  current.response.replay.entries
+                  current.response.replay.entries,
                 ),
                 messages: mergeItems(
                   olderResponse.replay.messages,
-                  current.response.replay.messages
+                  current.response.replay.messages,
                 ),
               },
             }
@@ -4627,7 +4849,7 @@ export function useThreadSessionState(params: {
       }));
       return id;
     },
-    [thread, threadKey, updateSession]
+    [thread, threadKey, updateSession],
   );
 
   const removeOptimisticMessage = useCallback(
@@ -4639,10 +4861,12 @@ export function useThreadSessionState(params: {
       updateSession(threadKey, (current) => ({
         ...current,
         lastTouchedAt: Date.now(),
-        optimisticEntries: current.optimisticEntries.filter((entry) => entry.id !== id),
+        optimisticEntries: current.optimisticEntries.filter(
+          (entry) => entry.id !== id,
+        ),
       }));
     },
-    [threadKey, updateSession]
+    [threadKey, updateSession],
   );
 
   const addOptimisticReviewEntry = useCallback(
@@ -4670,7 +4894,7 @@ export function useThreadSessionState(params: {
       }));
       return id;
     },
-    [thread, threadKey, updateSession]
+    [thread, threadKey, updateSession],
   );
 
   const upsertLiveTranscriptEntry = useCallback(
@@ -4687,7 +4911,7 @@ export function useThreadSessionState(params: {
         optimisticEntries: mergeItems(current.optimisticEntries, [entry]),
       }));
     },
-    [threadKey, updateSession]
+    [threadKey, updateSession],
   );
 
   const setPendingStatusText = useCallback(
@@ -4702,7 +4926,7 @@ export function useThreadSessionState(params: {
         pendingStatusText: status,
       }));
     },
-    [threadKey, updateSession]
+    [threadKey, updateSession],
   );
 
   const setActiveTurnId = useCallback(
@@ -4721,7 +4945,7 @@ export function useThreadSessionState(params: {
         pendingTurnUsage: undefined,
       }));
     },
-    [threadKey, updateSession]
+    [threadKey, updateSession],
   );
 
   const clearPendingRequest = useCallback(
@@ -4748,13 +4972,13 @@ export function useThreadSessionState(params: {
         pendingStatusText: nextStatus,
       }));
     },
-    [threadKey, updateSession]
+    [threadKey, updateSession],
   );
 
   const updatePendingUserInput = useCallback(
     (
       requestId: string,
-      updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+      updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState,
     ): void => {
       if (!threadKey) {
         return;
@@ -4772,13 +4996,15 @@ export function useThreadSessionState(params: {
         };
       });
     },
-    [threadKey, updateSession]
+    [threadKey, updateSession],
   );
 
   const updatePendingMcpInteraction = useCallback(
     (
       requestId: string,
-      updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
+      updater: (
+        state: PendingMcpInteractionState,
+      ) => PendingMcpInteractionState,
     ): void => {
       if (!threadKey) {
         return;
@@ -4796,7 +5022,7 @@ export function useThreadSessionState(params: {
         };
       });
     },
-    [threadKey, updateSession]
+    [threadKey, updateSession],
   );
 
   const setViewport = useCallback(
@@ -4807,9 +5033,9 @@ export function useThreadSessionState(params: {
 
       updateSession(threadKey, (current) => {
         const nextViewport =
-          viewport &&
-          Number.isFinite(viewport.scrollTop) &&
-          Number.isFinite(viewport.distanceFromBottom)
+          viewport
+          && Number.isFinite(viewport.scrollTop)
+          && Number.isFinite(viewport.distanceFromBottom)
             ? {
                 distanceFromBottom: Math.max(0, viewport.distanceFromBottom),
                 isGluedToBottom: viewport.isGluedToBottom,
@@ -4818,9 +5044,10 @@ export function useThreadSessionState(params: {
             : undefined;
 
         if (
-          current.viewport?.scrollTop === nextViewport?.scrollTop &&
-          current.viewport?.distanceFromBottom === nextViewport?.distanceFromBottom &&
-          current.viewport?.isGluedToBottom === nextViewport?.isGluedToBottom
+          current.viewport?.scrollTop === nextViewport?.scrollTop
+          && current.viewport?.distanceFromBottom
+            === nextViewport?.distanceFromBottom
+          && current.viewport?.isGluedToBottom === nextViewport?.isGluedToBottom
         ) {
           return current;
         }
@@ -4832,80 +5059,83 @@ export function useThreadSessionState(params: {
         };
       });
     },
-    [threadKey, updateSession]
+    [threadKey, updateSession],
   );
 
   const visibleOptimisticEntries = useMemo(
     () =>
       pruneOptimisticEntries(
         selectedSession?.optimisticEntries ?? [],
-        selectedSession?.response
+        selectedSession?.response,
       ),
-    [selectedSession?.optimisticEntries, selectedSession?.response]
+    [selectedSession?.optimisticEntries, selectedSession?.response],
   );
 
-  const entries = useMemo(
-    () => {
-      const mergedEntries = mergeTranscriptEntries(
-        selectedSession?.response?.replay.entries ?? [],
-        visibleOptimisticEntries
-      );
-      const coalescedEntries = coalesceReviewAssistantMessages(mergedEntries);
-      return suppressReviewDuplicateMessages(
-        coalescedEntries,
-        reviewResultTexts(coalescedEntries)
-      );
-    },
-    [selectedSession?.response?.replay.entries, visibleOptimisticEntries]
-  );
+  const entries = useMemo(() => {
+    const mergedEntries = mergeTranscriptEntries(
+      selectedSession?.response?.replay.entries ?? [],
+      visibleOptimisticEntries,
+    );
+    const coalescedEntries = coalesceReviewAssistantMessages(mergedEntries);
+    return suppressReviewDuplicateMessages(
+      coalescedEntries,
+      reviewResultTexts(coalescedEntries),
+    );
+  }, [selectedSession?.response?.replay.entries, visibleOptimisticEntries]);
 
-  const messages = useMemo(
-    () => {
-      const mergedMessages = mergeTranscriptMessages(
-        selectedSession?.response?.replay.messages ?? [],
-        visibleOptimisticEntries
-          .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
-          .map(({ type: _type, ...message }) => message)
-      );
-      return suppressReviewDuplicateMessages(
-        mergedMessages,
-        reviewResultTexts(entries)
-      );
-    },
-    [entries, selectedSession?.response?.replay.messages, visibleOptimisticEntries]
-  );
+  const messages = useMemo(() => {
+    const mergedMessages = mergeTranscriptMessages(
+      selectedSession?.response?.replay.messages ?? [],
+      visibleOptimisticEntries
+        .filter(
+          (entry): entry is AppServerThreadMessageEntry =>
+            entry.type === "message",
+        )
+        .map(({ type: _type, ...message }) => message),
+    );
+    return suppressReviewDuplicateMessages(
+      mergedMessages,
+      reviewResultTexts(entries),
+    );
+  }, [
+    entries,
+    selectedSession?.response?.replay.messages,
+    visibleOptimisticEntries,
+  ]);
 
   const thinkingThreadKeys = useMemo(
     () =>
       Object.fromEntries(
         Object.entries(sessions)
           .filter(([, session]) => hasThinkingState(session))
-          .map(([sessionThreadKey]) => [sessionThreadKey, true])
+          .map(([sessionThreadKey]) => [sessionThreadKey, true]),
       ),
-    [sessions]
+    [sessions],
   );
   const approvalRequestThreadKeys = useMemo(
     () =>
       Object.fromEntries(
         Object.entries(sessions)
           .filter(([, session]) => Boolean(session.pendingRequest))
-          .map(([sessionThreadKey]) => [sessionThreadKey, true])
+          .map(([sessionThreadKey]) => [sessionThreadKey, true]),
       ),
-    [sessions]
+    [sessions],
   );
   const inputRequestThreadKeys = useMemo(
     () =>
       Object.fromEntries(
         Object.entries(sessions)
           .filter(([, session]) => Boolean(session.pendingUserInput))
-          .map(([sessionThreadKey]) => [sessionThreadKey, true])
+          .map(([sessionThreadKey]) => [sessionThreadKey, true]),
       ),
-    [sessions]
+    [sessions],
   );
   const pendingStatusText =
-    selectedSession?.pendingStatusText ??
-    (selectedSession?.activeTurnId ? "Thinking" : undefined);
-  const threadBusy = selectedSession ? hasThinkingState(selectedSession) : false;
+    selectedSession?.pendingStatusText
+    ?? (selectedSession?.activeTurnId ? "Thinking" : undefined);
+  const threadBusy = selectedSession
+    ? hasThinkingState(selectedSession)
+    : false;
 
   return {
     activeTurnId: selectedSession?.activeTurnId,
@@ -4926,7 +5156,7 @@ export function useThreadSessionState(params: {
     pendingUserInput: selectedSession?.pendingUserInput,
     pendingStatusText,
     runningTurnUsageText: runningTurnUsageTextFromEntry(
-      selectedSession?.pendingUsageActivityEntry
+      selectedSession?.pendingUsageActivityEntry,
     ),
     approvalRequestThreadKeys,
     inputRequestThreadKeys,

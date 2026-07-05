@@ -23,16 +23,20 @@ const TERMINAL_TURN_METHODS = new Set([
 const BACKGROUND_QUEUE_RELEASE_INTERVAL_MS = 30_000;
 const globalInFlightScopeKeys = new Set<string>();
 
-function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
+function getDefaultModelOption(
+  backend?: BackendSummary,
+): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
   return (
-    models.find((model) => model.current) ??
-    models.find((model) => model.supportsReasoning) ??
-    models[0]
+    models.find((model) => model.current)
+    ?? models.find((model) => model.supportsReasoning)
+    ?? models[0]
   );
 }
 
-function getDefaultReasoningEffort(backend?: BackendSummary): string | undefined {
+function getDefaultReasoningEffort(
+  backend?: BackendSummary,
+): string | undefined {
   const reasoningEfforts = backend?.launchpadOptions?.reasoningEfforts ?? [];
   return reasoningEfforts.includes("medium") ? "medium" : reasoningEfforts[0];
 }
@@ -92,14 +96,16 @@ function isIdleStatusNotification(event: AgentEvent): boolean {
 
   const status = event.notification.params.status;
   return (
-    typeof status === "object" &&
-    status !== null &&
-    "type" in status &&
-    status.type === "idle"
+    typeof status === "object"
+    && status !== null
+    && "type" in status
+    && status.type === "idle"
   );
 }
 
-function getThreadScopeKey(thread: Pick<NavigationThreadSummary, "id" | "source">): string {
+function getThreadScopeKey(
+  thread: Pick<NavigationThreadSummary, "id" | "source">,
+): string {
   return `thread:${thread.source}:${thread.id}`;
 }
 
@@ -108,8 +114,8 @@ function isThreadSelected(
   thread: Pick<NavigationThreadSummary, "id" | "source">,
 ): boolean {
   return (
-    current.selectedThread?.source === thread.source &&
-    current.selectedThread.id === thread.id
+    current.selectedThread?.source === thread.source
+    && current.selectedThread.id === thread.id
   );
 }
 
@@ -130,8 +136,8 @@ function isRetainedBranchDrift(
 
   return (thread.retainedBranchDriftPairs ?? []).some(
     (pair) =>
-      pair.expectedBranch === expectedBranch &&
-      pair.observedBranch === observedBranch,
+      pair.expectedBranch === expectedBranch
+      && pair.observedBranch === observedBranch,
   );
 }
 
@@ -153,8 +159,8 @@ export function useQueuedTurnRelease(params: {
     const current = paramsRef.current;
     const scopeKey = getThreadScopeKey(thread);
     if (
-      inFlightScopeKeysRef.current.has(scopeKey) ||
-      globalInFlightScopeKeys.has(scopeKey)
+      inFlightScopeKeysRef.current.has(scopeKey)
+      || globalInFlightScopeKeys.has(scopeKey)
     ) {
       return;
     }
@@ -179,8 +185,8 @@ export function useQueuedTurnRelease(params: {
 
       const releaseThread = releaseState.threads.find(
         (candidate) =>
-          candidate.source === candidateThread.source &&
-          candidate.id === candidateThread.id,
+          candidate.source === candidateThread.source
+          && candidate.id === candidateThread.id,
       );
       if (!releaseThread) {
         return undefined;
@@ -232,8 +238,8 @@ export function useQueuedTurnRelease(params: {
       }
 
       if (
-        releaseCandidate.releaseThread.gitBranch &&
-        releaseCandidate.desktopApi?.checkThreadBranchDrift
+        releaseCandidate.releaseThread.gitBranch
+        && releaseCandidate.desktopApi?.checkThreadBranchDrift
       ) {
         const drift = await releaseCandidate.desktopApi.checkThreadBranchDrift({
           backend: releaseCandidate.releaseThread.source,
@@ -241,8 +247,8 @@ export function useQueuedTurnRelease(params: {
           threadId: releaseCandidate.releaseThread.id,
         });
         if (
-          drift.drifted &&
-          !isRetainedBranchDrift(
+          drift.drifted
+          && !isRetainedBranchDrift(
             releaseCandidate.releaseThread,
             drift.expectedBranch,
             drift.observedBranch,
@@ -289,7 +295,8 @@ export function useQueuedTurnRelease(params: {
           return;
         }
         const reviewFastMode =
-          releaseThread.source === "codex" && typeof releaseThread.fastMode === "boolean"
+          releaseThread.source === "codex"
+          && typeof releaseThread.fastMode === "boolean"
             ? releaseThread.fastMode
             : undefined;
 
@@ -303,8 +310,12 @@ export function useQueuedTurnRelease(params: {
             ...(releaseThread.reasoningEffort
               ? { reasoningEffort: releaseThread.reasoningEffort }
               : {}),
-            ...(releaseThread.serviceTier ? { serviceTier: releaseThread.serviceTier } : {}),
-            ...(reviewFastMode !== undefined ? { fastMode: reviewFastMode } : {}),
+            ...(releaseThread.serviceTier
+              ? { serviceTier: releaseThread.serviceTier }
+              : {}),
+            ...(reviewFastMode !== undefined
+              ? { fastMode: reviewFastMode }
+              : {}),
           });
         } catch (error) {
           restoreQueuedTurn(
@@ -344,16 +355,15 @@ export function useQueuedTurnRelease(params: {
       const selectedModelOption =
         backend.launchpadOptions?.models?.find(
           (option) => option.id === releaseThread.model,
-        ) ??
-        getDefaultModelOption(backend);
+        ) ?? getDefaultModelOption(backend);
       const supportsReasoning =
-        selectedModelOption?.supportsReasoning ??
-        Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
+        selectedModelOption?.supportsReasoning
+        ?? Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
       const supportsFast =
         backend.kind === "codex"
-          ? selectedModelOption?.supportsFast ??
-            backend.launchpadOptions?.supportsFastMode ??
-            false
+          ? (selectedModelOption?.supportsFast
+            ?? backend.launchpadOptions?.supportsFastMode
+            ?? false)
           : false;
 
       try {
@@ -367,7 +377,8 @@ export function useQueuedTurnRelease(params: {
             ? getReasoningEffortValue(backend, releaseThread.reasoningEffort)
             : undefined,
           serviceTier:
-            releaseThread.serviceTier ?? backend.launchpadOptions?.serviceTiers?.[0],
+            releaseThread.serviceTier
+            ?? backend.launchpadOptions?.serviceTiers?.[0],
           fastMode:
             releaseThread.source === "codex" && supportsFast
               ? Boolean(releaseThread.fastMode)
@@ -399,8 +410,8 @@ export function useQueuedTurnRelease(params: {
     return desktopApi.onAgentEvent((event) => {
       const current = paramsRef.current;
       if (
-        !TERMINAL_TURN_METHODS.has(event.notification.method) &&
-        !isIdleStatusNotification(event)
+        !TERMINAL_TURN_METHODS.has(event.notification.method)
+        && !isIdleStatusNotification(event)
       ) {
         return;
       }
@@ -411,8 +422,8 @@ export function useQueuedTurnRelease(params: {
       }
 
       if (
-        current.selectedThread?.source === event.backend &&
-        current.selectedThread.id === threadId
+        current.selectedThread?.source === event.backend
+        && current.selectedThread.id === threadId
       ) {
         return;
       }
@@ -434,8 +445,8 @@ export function useQueuedTurnRelease(params: {
       const current = paramsRef.current;
       for (const thread of current.threads) {
         if (
-          current.selectedThread?.source === thread.source &&
-          current.selectedThread.id === thread.id
+          current.selectedThread?.source === thread.source
+          && current.selectedThread.id === thread.id
         ) {
           continue;
         }

@@ -17,9 +17,13 @@ export const MESSAGING_TOOL_UPDATE_MODES = [
   "show_all",
 ] as const;
 
-export type MessagingToolUpdateMode = (typeof MESSAGING_TOOL_UPDATE_MODES)[number];
+export type MessagingToolUpdateMode =
+  (typeof MESSAGING_TOOL_UPDATE_MODES)[number];
 
-export const MESSAGING_BINDING_TARGET_KINDS = ["thread", "agent_thread"] as const;
+export const MESSAGING_BINDING_TARGET_KINDS = [
+  "thread",
+  "agent_thread",
+] as const;
 
 export type MessagingBindingTargetKind =
   (typeof MESSAGING_BINDING_TARGET_KINDS)[number];
@@ -28,8 +32,10 @@ export function isMessagingBindingTargetKind(
   value: unknown,
 ): value is MessagingBindingTargetKind {
   return (
-    typeof value === "string" &&
-    MESSAGING_BINDING_TARGET_KINDS.includes(value as MessagingBindingTargetKind)
+    typeof value === "string"
+    && MESSAGING_BINDING_TARGET_KINDS.includes(
+      value as MessagingBindingTargetKind,
+    )
   );
 }
 
@@ -114,17 +120,19 @@ export type MessagingRateLimitedDegradationReason = MessagingDegradationBase & {
   expiresAt: number;
 };
 
-export type MessagingReconnectingDegradationReason = MessagingDegradationBase & {
-  kind: "reconnecting";
-  attemptCount?: number;
-  lastFailureReason?: string;
-};
+export type MessagingReconnectingDegradationReason =
+  MessagingDegradationBase & {
+    kind: "reconnecting";
+    attemptCount?: number;
+    lastFailureReason?: string;
+  };
 
-export type MessagingMissingPermissionDegradationReason = MessagingDegradationBase & {
-  kind: "missing-permission";
-  bindingId?: string;
-  permission?: string;
-};
+export type MessagingMissingPermissionDegradationReason =
+  MessagingDegradationBase & {
+    kind: "missing-permission";
+    bindingId?: string;
+    permission?: string;
+  };
 
 export type MessagingWarningDegradationReason = MessagingDegradationBase & {
   kind: "warning";
@@ -293,7 +301,11 @@ export type SetMessagingEnabledResponse = {
   };
 };
 
-export type MessagingPairingScope = "user_dm" | "bucket" | "user_in_group" | "observed";
+export type MessagingPairingScope =
+  | "user_dm"
+  | "bucket"
+  | "user_in_group"
+  | "observed";
 
 export type MessagingPairingStatus =
   | "pending"

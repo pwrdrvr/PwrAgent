@@ -30,7 +30,8 @@ export function createListFilesTool(): ToolDefinition<ListFilesArguments> {
       properties: {
         path: {
           type: "string",
-          description: "Optional directory path inside the workspace to scope the listing.",
+          description:
+            "Optional directory path inside the workspace to scope the listing.",
         },
         limit: {
           type: "integer",
@@ -47,7 +48,11 @@ export function createListFilesTool(): ToolDefinition<ListFilesArguments> {
       };
     },
     async execute(arguments_, context) {
-      const root = resolveWorkspaceScopePath(context, TOOL_NAME, arguments_.path);
+      const root = resolveWorkspaceScopePath(
+        context,
+        TOOL_NAME,
+        arguments_.path,
+      );
       const limit = Math.min(arguments_.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
       const listResult = await listWorkspaceFiles(
         root.workspacePath,
@@ -222,13 +227,14 @@ async function walk(
 function isCommandMissing(result: ProcessRunResult): boolean {
   const error = result.error;
   return Boolean(
-    error &&
-      "code" in error &&
-      (error as { code?: string }).code === "ENOENT",
+    error && "code" in error && (error as { code?: string }).code === "ENOENT",
   );
 }
 
-function processFailureMessage(prefix: string, result: ProcessRunResult): string {
+function processFailureMessage(
+  prefix: string,
+  result: ProcessRunResult,
+): string {
   return [
     prefix,
     result.output || result.error?.message,

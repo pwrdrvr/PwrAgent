@@ -38,7 +38,10 @@ function buildThreadSummary(
   };
 }
 
-async function addTestReactions(target: SqliteOverlayStore, threadId = "thread-1") {
+async function addTestReactions(
+  target: SqliteOverlayStore,
+  threadId = "thread-1",
+) {
   await target.setThreadReaction({
     backend: "codex",
     threadId,

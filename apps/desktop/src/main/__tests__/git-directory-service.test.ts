@@ -32,19 +32,37 @@ function runGit(cwd: string, args: string[]): string {
 }
 
 async function createFixtureRepo(): Promise<string> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-git-directory-service-"));
+  const rootDir = await mkdtemp(
+    path.join(os.tmpdir(), "pwragent-git-directory-service-"),
+  );
   execFileSync("git", ["init", rootDir], { stdio: "ignore" });
-  execFileSync("git", ["-C", rootDir, "checkout", "-B", "main"], { stdio: "ignore" });
-  execFileSync("git", ["-C", rootDir, "config", "user.name", "PwrAgent Tests"], {
+  execFileSync("git", ["-C", rootDir, "checkout", "-B", "main"], {
     stdio: "ignore",
   });
-  execFileSync("git", ["-C", rootDir, "config", "user.email", "pwragent-tests@example.invalid"], {
+  execFileSync(
+    "git",
+    ["-C", rootDir, "config", "user.name", "PwrAgent Tests"],
+    {
+      stdio: "ignore",
+    },
+  );
+  execFileSync(
+    "git",
+    ["-C", rootDir, "config", "user.email", "pwragent-tests@example.invalid"],
+    {
+      stdio: "ignore",
+    },
+  );
+  execFileSync(
+    "git",
+    ["-C", rootDir, "commit", "--allow-empty", "-m", "Seed fixture repo"],
+    {
+      stdio: "ignore",
+    },
+  );
+  execFileSync("git", ["-C", rootDir, "branch", "release"], {
     stdio: "ignore",
   });
-  execFileSync("git", ["-C", rootDir, "commit", "--allow-empty", "-m", "Seed fixture repo"], {
-    stdio: "ignore",
-  });
-  execFileSync("git", ["-C", rootDir, "branch", "release"], { stdio: "ignore" });
   return rootDir;
 }
 
@@ -57,9 +75,12 @@ describe("capRecentBranchDetails", () => {
 
   it("returns the input unchanged when at or below the limit", () => {
     const details = makeDetails(MAX_TRACKED_BRANCHES);
-    expect(capRecentBranchDetails(details, { keep: [], limit: MAX_TRACKED_BRANCHES })).toBe(
-      details,
-    );
+    expect(
+      capRecentBranchDetails(details, {
+        keep: [],
+        limit: MAX_TRACKED_BRANCHES,
+      }),
+    ).toBe(details);
   });
 
   it("keeps only the most recent `limit` branches when over the cap", () => {
@@ -90,11 +111,14 @@ describe("GitDirectoryService", () => {
 
   afterEach(async () => {
     await Promise.all(
-      cleanupPaths
-        .splice(0)
-        .map((target) =>
-          rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
-        ),
+      cleanupPaths.splice(0).map((target) =>
+        rm(target, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 100,
+        }),
+      ),
     );
   });
 
@@ -117,7 +141,9 @@ describe("GitDirectoryService", () => {
   });
 
   it("falls back to local mode when a worktree launchpad targets a non-git directory", async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "pwragent-non-git-directory-"));
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-non-git-directory-"),
+    );
     cleanupPaths.push(directory);
     const service = new GitDirectoryService();
 
@@ -136,7 +162,9 @@ describe("GitDirectoryService", () => {
   });
 
   it("falls back to local mode when a worktree launchpad targets an unborn git HEAD", async () => {
-    const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-git-directory-"));
+    const repoDir = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-unborn-git-directory-"),
+    );
     cleanupPaths.push(repoDir);
     execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
     const service = new GitDirectoryService();
@@ -155,12 +183,16 @@ describe("GitDirectoryService", () => {
   });
 
   it("reports unborn git directories without surfacing raw HEAD errors", async () => {
-    const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-status-"));
+    const repoDir = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-unborn-status-"),
+    );
     cleanupPaths.push(repoDir);
     execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
     const service = new GitDirectoryService();
 
-    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+    await expect(
+      service.readDirectoryStatus({ path: repoDir }),
+    ).resolves.toMatchObject({
       branches: [],
       handoffBranches: [],
       syncState: "untracked",
@@ -191,9 +223,13 @@ describe("GitDirectoryService", () => {
     });
 
     expect(workspace.workMode).toBe("worktree");
-    await expect(realpath(workspace.repositoryPath!)).resolves.toBe(await realpath(repoDir));
+    await expect(realpath(workspace.repositoryPath!)).resolves.toBe(
+      await realpath(repoDir),
+    );
     expect(workspace.cwd).toBeDefined();
-    expect(runGit(workspace.cwd!, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
+    expect(runGit(workspace.cwd!, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(
+      "HEAD",
+    );
     expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(mainRevision);
   });
 
@@ -223,14 +259,18 @@ describe("GitDirectoryService", () => {
     cleanupPaths.push(repoDir);
     runGit(repoDir, ["branch", "older"]);
     runGit(repoDir, ["checkout", "-B", "recent"]);
-    execFileSync("git", ["-C", repoDir, "commit", "--allow-empty", "-m", "Recent branch"], {
-      env: {
-        ...process.env,
-        GIT_AUTHOR_DATE: "2030-01-01T00:00:00Z",
-        GIT_COMMITTER_DATE: "2030-01-01T00:00:00Z",
+    execFileSync(
+      "git",
+      ["-C", repoDir, "commit", "--allow-empty", "-m", "Recent branch"],
+      {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_DATE: "2030-01-01T00:00:00Z",
+          GIT_COMMITTER_DATE: "2030-01-01T00:00:00Z",
+        },
+        stdio: "ignore",
       },
-      stdio: "ignore",
-    });
+    );
     runGit(repoDir, ["checkout", "main"]);
     const occupiedPath = path.join(repoDir, ".worktrees", "release");
     await mkdir(path.dirname(occupiedPath), { recursive: true });
@@ -262,7 +302,9 @@ describe("GitDirectoryService", () => {
     }
     // `branchDetails` mirrors the recency-ordered `branches` list; `recent`
     // (committed in 2030) sorts ahead of `older`.
-    const detailNames = (status?.branchDetails ?? []).map((detail) => detail.name);
+    const detailNames = (status?.branchDetails ?? []).map(
+      (detail) => detail.name,
+    );
     expect(detailNames).toEqual(status?.branches);
     expect(detailNames.indexOf("recent")).toBeLessThan(
       detailNames.indexOf("older"),
@@ -305,15 +347,26 @@ describe("GitDirectoryService", () => {
     runGit(repoDir, ["checkout", "release"]);
     runGit(repoDir, ["push", "-u", "origin", "release"]);
     runGit(repoDir, ["checkout", "main"]);
-    runGit(repoDir, ["update-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+    runGit(repoDir, [
+      "update-ref",
+      "refs/remotes/origin/HEAD",
+      "refs/remotes/origin/main",
+    ]);
     const service = new GitDirectoryService();
 
     const status = await service.readDirectoryStatus({ path: repoDir });
 
-    expect(status?.branches).toEqual(expect.arrayContaining(["main", "release"]));
+    expect(status?.branches).toEqual(
+      expect.arrayContaining(["main", "release"]),
+    );
     expect(status?.branches).not.toContain("origin/main");
     expect(status?.baseBranches).toEqual(
-      expect.arrayContaining(["main", "release", "origin/main", "origin/release"]),
+      expect.arrayContaining([
+        "main",
+        "release",
+        "origin/main",
+        "origin/release",
+      ]),
     );
     expect(status?.baseBranches).not.toContain("origin");
     expect(status?.baseBranches).not.toContain("origin/HEAD");
@@ -385,7 +438,10 @@ describe("GitDirectoryService", () => {
     const service = new GitDirectoryService({
       resolveWorktreeStorage: () => "in-repo",
     });
-    const branchesBefore = runGit(repoDir, ["branch", "--format=%(refname:short)"])
+    const branchesBefore = runGit(repoDir, [
+      "branch",
+      "--format=%(refname:short)",
+    ])
       .split("\n")
       .filter(Boolean);
     const releaseRevision = runGit(repoDir, ["rev-parse", "release"]);
@@ -413,11 +469,16 @@ describe("GitDirectoryService", () => {
     expect(hashSegment).toMatch(/^[0-9a-z]+(?:-\d+)?$/);
     expect(workspace.cwd).not.toContain("launchpad-");
 
-    expect(runGit(workspace.cwd!, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
+    expect(runGit(workspace.cwd!, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(
+      "HEAD",
+    );
     expect(runGit(workspace.cwd!, ["branch", "--show-current"])).toBe("");
     expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(releaseRevision);
 
-    const branchesAfter = runGit(repoDir, ["branch", "--format=%(refname:short)"])
+    const branchesAfter = runGit(repoDir, [
+      "branch",
+      "--format=%(refname:short)",
+    ])
       .split("\n")
       .filter(Boolean);
     expect(branchesAfter).toEqual(branchesBefore);
@@ -442,11 +503,19 @@ describe("GitDirectoryService", () => {
     );
     const featureRevision = runGit(repoDir, ["rev-parse", "HEAD"]);
     const sourceWorktree = path.join(
-      await mkdtemp(path.join(os.tmpdir(), "pwragent-source-detached-worktree-")),
+      await mkdtemp(
+        path.join(os.tmpdir(), "pwragent-source-detached-worktree-"),
+      ),
       "fixture",
     );
     cleanupPaths.push(path.dirname(sourceWorktree));
-    runGit(repoDir, ["worktree", "add", "--detach", sourceWorktree, releaseRevision]);
+    runGit(repoDir, [
+      "worktree",
+      "add",
+      "--detach",
+      sourceWorktree,
+      releaseRevision,
+    ]);
     const service = new GitDirectoryService({
       resolveWorktreeStorage: () => "in-repo",
     });
@@ -461,17 +530,25 @@ describe("GitDirectoryService", () => {
 
     expect(workspace.workMode).toBe("worktree");
     const repoRealPath = await realpath(repoDir);
-    await expect(realpath(workspace.repositoryPath!)).resolves.toBe(repoRealPath);
+    await expect(realpath(workspace.repositoryPath!)).resolves.toBe(
+      repoRealPath,
+    );
     expect(workspace.cwd).toBeDefined();
     expect(
       toForwardSlashes(workspace.cwd!).startsWith(
         `${toForwardSlashes(path.join(repoRealPath, ".worktrees"))}/`,
       ),
     ).toBe(true);
-    expect(runGit(workspace.cwd!, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
+    expect(runGit(workspace.cwd!, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(
+      "HEAD",
+    );
     expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(mainRevision);
-    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).not.toBe(releaseRevision);
-    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).not.toBe(featureRevision);
+    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).not.toBe(
+      releaseRevision,
+    );
+    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).not.toBe(
+      featureRevision,
+    );
   });
 
   it("creates an attached branch worktree and reuses it for the same branch", async () => {
@@ -491,7 +568,9 @@ describe("GitDirectoryService", () => {
     });
 
     expect(workspace.workMode).toBe("worktree");
-    expect(await realpath(workspace.repositoryPath!)).toBe(await realpath(repoDir));
+    expect(await realpath(workspace.repositoryPath!)).toBe(
+      await realpath(repoDir),
+    );
     expect(runGit(repoDir, ["branch", "--show-current"])).toBe("");
     expect(runGit(workspace.cwd!, ["branch", "--show-current"])).toBe("main");
 
@@ -538,7 +617,9 @@ describe("GitDirectoryService", () => {
     expect(workspace.workMode).toBe("worktree");
     const repoRealPath = await realpath(repoDir);
     expect(await realpath(workspace.repositoryPath!)).toBe(repoRealPath);
-    expect(await realpath(workspace.cwd!)).not.toBe(await realpath(sourceWorktree));
+    expect(await realpath(workspace.cwd!)).not.toBe(
+      await realpath(sourceWorktree),
+    );
     expect(
       (await realpath(workspace.cwd!)).startsWith(
         `${path.join(repoRealPath, ".worktrees")}${path.sep}`,
@@ -546,14 +627,18 @@ describe("GitDirectoryService", () => {
     ).toBe(true);
     expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("");
     expect(runGit(sourceWorktree, ["rev-parse", "HEAD"])).toBe(releaseRevision);
-    expect(runGit(workspace.cwd!, ["branch", "--show-current"])).toBe("release");
+    expect(runGit(workspace.cwd!, ["branch", "--show-current"])).toBe(
+      "release",
+    );
   });
 
   it("rolls back an attached branch transfer to an excluded source worktree", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
     const sourceWorktree = path.join(
-      await mkdtemp(path.join(os.tmpdir(), "pwragent-rollback-source-worktree-")),
+      await mkdtemp(
+        path.join(os.tmpdir(), "pwragent-rollback-source-worktree-"),
+      ),
       "fixture",
     );
     cleanupPaths.push(path.dirname(sourceWorktree));
@@ -574,12 +659,18 @@ describe("GitDirectoryService", () => {
 
     expect(workspace.rollback).toEqual(expect.any(Function));
     expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("");
-    expect(runGit(workspace.cwd!, ["branch", "--show-current"])).toBe("release");
+    expect(runGit(workspace.cwd!, ["branch", "--show-current"])).toBe(
+      "release",
+    );
 
     await workspace.rollback?.();
 
-    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("release");
-    await expect(stat(workspace.cwd!)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe(
+      "release",
+    );
+    await expect(stat(workspace.cwd!)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("restores an excluded source branch when destination worktree creation fails", async () => {
@@ -619,7 +710,9 @@ describe("GitDirectoryService", () => {
       }),
     ).rejects.toThrow("simulated worktree add failure");
 
-    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("release");
+    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe(
+      "release",
+    );
   });
 
   it("rolls back a detached destination worktree", async () => {
@@ -642,7 +735,9 @@ describe("GitDirectoryService", () => {
 
     await workspace.rollback?.();
 
-    await expect(stat(workspace.cwd!)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(workspace.cwd!)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("blocks branch transfer when the excluded source worktree is dirty", async () => {
@@ -675,7 +770,9 @@ describe("GitDirectoryService", () => {
       // (no-op on POSIX) so the substring match holds on every platform.
       `Cannot move branch release to a destination worktree because ${(await realpath(sourceWorktree)).replace(/\\/g, "/")} has uncommitted changes.`,
     );
-    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("release");
+    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe(
+      "release",
+    );
   });
 
   it("passes the prepared git environment to worktree creation commands", async () => {
@@ -741,7 +838,9 @@ describe("GitDirectoryService", () => {
   it("creates a worktree under a user-home root when storage is user-home", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
-    const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-home-"));
+    const homeDir = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-worktree-home-"),
+    );
     cleanupPaths.push(homeDir);
     const service = new GitDirectoryService({
       resolveWorktreeStorage: () => "user-home",
@@ -768,7 +867,9 @@ describe("GitDirectoryService", () => {
   it("creates Codex user-home worktrees under the Codex worktree root", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
-    const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-codex-home-"));
+    const homeDir = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-codex-home-"),
+    );
     cleanupPaths.push(homeDir);
     const service = new GitDirectoryService({
       resolveWorktreeStorage: () => "user-home",
@@ -796,7 +897,9 @@ describe("GitDirectoryService", () => {
   it("creates Codex user-home worktrees under the selected Codex profile home", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
-    const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-codex-home-"));
+    const homeDir = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-codex-home-"),
+    );
     cleanupPaths.push(homeDir);
     const codexHome = path.join(homeDir, "codex", "profiles", "work");
     const service = new GitDirectoryService({
@@ -847,10 +950,12 @@ describe("GitDirectoryService", () => {
       "--git-path",
       "codex-thread.json",
     ]);
-    await expect(readFile(ownerFile, "utf8").then(JSON.parse)).resolves.toEqual({
-      version: 1,
-      ownerThreadId: "thread-1",
-    });
+    await expect(readFile(ownerFile, "utf8").then(JSON.parse)).resolves.toEqual(
+      {
+        version: 1,
+        ownerThreadId: "thread-1",
+      },
+    );
   });
 
   it("computeWorktreePath suffixes the hash when the path already exists", async () => {

@@ -132,8 +132,8 @@ export function resolveHotCpuProfileConfig(options?: {
     slowburnThresholdPercent: clampPercent(
       parsePositiveNumber(
         env.PWRAGENT_HOT_CPU_PROFILING_SLOWBURN_THRESHOLD_PERCENT,
-        options?.slowburnThresholdPercent ??
-          DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
+        options?.slowburnThresholdPercent
+          ?? DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
       ),
     ),
     consecutiveSamples: parsePositiveInteger(
@@ -154,7 +154,7 @@ export function resolveHotCpuProfileConfig(options?: {
     ),
     captureHeapSnapshot:
       env.PWRAGENT_HOT_CPU_PROFILING_HEAP_SNAPSHOT === undefined
-        ? options?.captureHeapSnapshot ?? DEFAULT_HEAP_SNAPSHOT
+        ? (options?.captureHeapSnapshot ?? DEFAULT_HEAP_SNAPSHOT)
         : isEnabled(env.PWRAGENT_HOT_CPU_PROFILING_HEAP_SNAPSHOT),
     heapSnapshotLimit: clampHeapSnapshotLimit(
       parsePositiveInteger(

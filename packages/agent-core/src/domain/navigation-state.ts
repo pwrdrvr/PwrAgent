@@ -13,7 +13,10 @@ import type {
   NavigationLaunchpadDefaults,
   ThreadOverlayState,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey, isToolManagedWorktreePath } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  isToolManagedWorktreePath,
+} from "@pwragent/shared";
 import { deriveInboxState, rankInboxThreadKeys } from "./inbox";
 import { buildDirectorySummaries } from "./directory-navigation";
 
@@ -24,8 +27,8 @@ type AppServerThreadSummaryWithEnvironmentOptions = AppServerThreadSummary & {
 /** Check whether a linked directory was created by the handoff service. */
 function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
   return (
-    directory.id.startsWith("pwragent-handoff:") ||
-    directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
+    directory.id.startsWith("pwragent-handoff:")
+    || directory.id.startsWith("pwragnt-handoff:") // legacy prefix from pre-rebrand data
   );
 }
 
@@ -42,8 +45,8 @@ function dedupeLinkedDirectories(
   const filteredDirectories = overlayWorkspace
     ? normalizedDirectories.filter(
         (directory) =>
-          directory.id === overlayWorkspace.id ||
-          (directory.kind !== "local" && directory.kind !== "worktree"),
+          directory.id === overlayWorkspace.id
+          || (directory.kind !== "local" && directory.kind !== "worktree"),
       )
     : normalizedDirectories;
   const byId = new Map<string, LinkedDirectorySummary>();
@@ -59,8 +62,9 @@ function normalizeLinkedDirectoryKind(
   directory: LinkedDirectorySummary,
 ): LinkedDirectorySummary {
   if (
-    directory.kind === "local" &&
-    (directory.worktreePath?.trim() || isToolManagedWorktreePath(directory.path))
+    directory.kind === "local"
+    && (directory.worktreePath?.trim()
+      || isToolManagedWorktreePath(directory.path))
   ) {
     const worktreePath = directory.worktreePath?.trim() || directory.path;
     return {
@@ -89,16 +93,16 @@ function resolveNavigationGitBranch(params: {
   const overlayObservedBranch = params.overlay?.observedGitBranch?.trim();
   const threadObservedBranch = params.thread.observedGitBranch?.trim();
   if (
-    overlayObservedBranch &&
-    threadObservedBranch &&
-    overlayObservedBranch !== threadObservedBranch
+    overlayObservedBranch
+    && threadObservedBranch
+    && overlayObservedBranch !== threadObservedBranch
   ) {
     return overlayObservedBranch;
   }
 
   if (
-    overlayObservedBranch &&
-    hasHandoffWorkspace(params.overlay?.extraLinkedDirectories ?? [])
+    overlayObservedBranch
+    && hasHandoffWorkspace(params.overlay?.extraLinkedDirectories ?? [])
   ) {
     return overlayObservedBranch;
   }
@@ -130,7 +134,10 @@ export function materializeNavigationThreads(params: {
    * threads have no `messagingBindings` field — non-desktop callers
    * (tests, server-side use) don't need to wire it.
    */
-  messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
+  messagingBindingsByThreadKey?: Record<
+    string,
+    MessagingThreadBindingSummary[] | undefined
+  >;
   automationsByThreadKey?: Record<string, AutomationThreadSummary | undefined>;
   previousKnownThreadKeys: string[];
   threads: AppServerThreadSummaryWithEnvironmentOptions[];
@@ -145,7 +152,10 @@ export function materializeNavigationThreads(params: {
       ...(overlay?.extraLinkedDirectories ?? []),
     ]);
     const gitBranch = resolveNavigationGitBranch({ overlay, thread });
-    const observedGitBranch = resolveNavigationObservedBranch({ overlay, thread });
+    const observedGitBranch = resolveNavigationObservedBranch({
+      overlay,
+      thread,
+    });
     const messagingBindings = params.messagingBindingsByThreadKey?.[threadKey];
     const automationSummary = params.automationsByThreadKey?.[threadKey];
 
@@ -155,7 +165,8 @@ export function materializeNavigationThreads(params: {
       gitBranch,
       observedGitBranch,
       retainedBranchDriftPairs: overlay?.retainedBranchDriftPairs,
-      executionMode: overlay?.executionMode ?? thread.executionMode ?? "default",
+      executionMode:
+        overlay?.executionMode ?? thread.executionMode ?? "default",
       queuedExecutionMode: overlay?.queuedExecutionMode,
       queuedExecutionModeAt: overlay?.queuedExecutionModeAt,
       permissionTransitionLog: overlay?.permissionTransitionLog,
@@ -169,7 +180,8 @@ export function materializeNavigationThreads(params: {
         overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
       codexEnvironmentOptions: thread.codexEnvironmentOptions,
       linkedDirectories,
-      worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
+      worktreeSnapshots:
+        overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
       subAgents: overlay?.subAgents ?? [],
       pinnedRank: overlay?.pinnedRank,
@@ -177,9 +189,10 @@ export function materializeNavigationThreads(params: {
       subthreadOrder: overlay?.subthreadOrder,
       subthreadsCollapsed: overlay?.subthreadsCollapsed,
       prs: overlay?.prs ?? [],
-      messagingBindings: messagingBindings && messagingBindings.length > 0
-        ? messagingBindings
-        : undefined,
+      messagingBindings:
+        messagingBindings && messagingBindings.length > 0
+          ? messagingBindings
+          : undefined,
       automationSummary,
       inbox: deriveInboxState({
         firstSnapshot: params.firstSnapshot,
@@ -197,7 +210,10 @@ export function buildNavigationSnapshot(params: {
   fetchedAt: number;
   firstSnapshot: boolean;
   now?: number;
-  gitStatusByDirectoryKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
+  gitStatusByDirectoryKey?: Record<
+    string,
+    NavigationDirectoryGitStatus | undefined
+  >;
   launchpadDefaults?: NavigationLaunchpadDefaults;
   launchpadsByKey?: Record<string, DirectoryLaunchpadOverlayState | undefined>;
   /**
@@ -207,7 +223,10 @@ export function buildNavigationSnapshot(params: {
    * doesn't have to call the builder twice.
    */
   directoryOverlayByKey?: Record<string, DirectoryOverlayState | undefined>;
-  messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
+  messagingBindingsByThreadKey?: Record<
+    string,
+    MessagingThreadBindingSummary[] | undefined
+  >;
   automationsByThreadKey?: Record<string, AutomationThreadSummary | undefined>;
   overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
   previousKnownThreadKeys: string[];
@@ -273,11 +292,13 @@ export function buildNavigationSnapshotHash(params: {
       gitBranch: thread.gitBranch ?? null,
       gitOriginUrl: thread.gitOriginUrl ?? null,
       observedGitBranch: thread.observedGitBranch ?? null,
-      retainedBranchDriftPairs: (thread.retainedBranchDriftPairs ?? []).map((pair) => ({
-        expectedBranch: pair.expectedBranch,
-        observedBranch: pair.observedBranch,
-        retainedAt: pair.retainedAt,
-      })),
+      retainedBranchDriftPairs: (thread.retainedBranchDriftPairs ?? []).map(
+        (pair) => ({
+          expectedBranch: pair.expectedBranch,
+          observedBranch: pair.observedBranch,
+          retainedAt: pair.retainedAt,
+        }),
+      ),
       subAgents: (thread.subAgents ?? []).map((subAgent) => ({
         monitorId: subAgent.monitorId,
         task: subAgent.task,
@@ -341,13 +362,15 @@ export function buildNavigationSnapshotHash(params: {
             environmentName: thread.codexEnvironmentRuntime.environmentName,
             executionTarget: thread.codexEnvironmentRuntime.executionTarget,
             selectedActionIdByEnvironmentId:
-              thread.codexEnvironmentRuntime.selectedActionIdByEnvironmentId ?? null,
+              thread.codexEnvironmentRuntime.selectedActionIdByEnvironmentId
+              ?? null,
             cwd: thread.codexEnvironmentRuntime.cwd ?? null,
             setupStatus: thread.codexEnvironmentRuntime.setupStatus ?? null,
             setupCommand: thread.codexEnvironmentRuntime.setupCommand ?? null,
             setupOutput: thread.codexEnvironmentRuntime.setupOutput ?? null,
             setupExitCode: thread.codexEnvironmentRuntime.setupExitCode ?? null,
-            setupDurationMs: thread.codexEnvironmentRuntime.setupDurationMs ?? null,
+            setupDurationMs:
+              thread.codexEnvironmentRuntime.setupDurationMs ?? null,
             actions: (thread.codexEnvironmentRuntime.actions ?? []).map(
               (action) => ({
                 id: action.id,
@@ -471,19 +494,21 @@ export function buildNavigationSnapshotHash(params: {
             coalescedWindowCount: thread.automationSummary.coalescedWindowCount,
             skippedSinceLastCompletedCount:
               thread.automationSummary.skippedSinceLastCompletedCount,
-            automations: thread.automationSummary.automations.map((automation) => ({
-              id: automation.id,
-              name: automation.name,
-              status: automation.status,
-              scheduleSummary: automation.scheduleSummary,
-              backlogPolicy: automation.backlogPolicy,
-              nextRunAt: automation.nextRunAt ?? null,
-              lastRunAt: automation.lastRunAt ?? null,
-              lastRunStatus: automation.lastRunStatus ?? null,
-              pendingRunCount: automation.pendingRunCount ?? null,
-              coalescedWindowCount: automation.coalescedWindowCount ?? null,
-              updatedAt: automation.updatedAt,
-            })),
+            automations: thread.automationSummary.automations.map(
+              (automation) => ({
+                id: automation.id,
+                name: automation.name,
+                status: automation.status,
+                scheduleSummary: automation.scheduleSummary,
+                backlogPolicy: automation.backlogPolicy,
+                nextRunAt: automation.nextRunAt ?? null,
+                lastRunAt: automation.lastRunAt ?? null,
+                lastRunStatus: automation.lastRunStatus ?? null,
+                pendingRunCount: automation.pendingRunCount ?? null,
+                coalescedWindowCount: automation.coalescedWindowCount ?? null,
+                updatedAt: automation.updatedAt,
+              }),
+            ),
           }
         : null,
     })),
@@ -505,20 +530,21 @@ export function buildNavigationSnapshotHash(params: {
             backend: directory.launchpad.backend,
             executionMode: directory.launchpad.executionMode,
             prompt: directory.launchpad.prompt,
-            imageAttachments: (directory.launchpad.imageAttachments ?? []).map((attachment) => ({
-              id: attachment.id,
-              height: attachment.height ?? null,
-              name: attachment.name,
-              size: attachment.size,
-              type: attachment.type,
-              url: attachment.url,
-              width: attachment.width ?? null,
-            })),
+            imageAttachments: (directory.launchpad.imageAttachments ?? []).map(
+              (attachment) => ({
+                id: attachment.id,
+                height: attachment.height ?? null,
+                name: attachment.name,
+                size: attachment.size,
+                type: attachment.type,
+                url: attachment.url,
+                width: attachment.width ?? null,
+              }),
+            ),
             workMode: directory.launchpad.workMode,
             branchName: directory.launchpad.branchName ?? null,
             registeredAt: directory.launchpad.registeredAt ?? null,
-            codexEnvironmentId:
-              directory.launchpad.codexEnvironmentId ?? null,
+            codexEnvironmentId: directory.launchpad.codexEnvironmentId ?? null,
             codexEnvironmentExecutionTarget:
               directory.launchpad.codexEnvironmentExecutionTarget ?? null,
             codexEnvironmentActionId:

@@ -39,7 +39,7 @@ const ELIGIBLE_DIFF = [
   "+  // linted",
   " }",
   " ",
-  " export const six = 6;"
+  " export const six = 6;",
 ].join("\n");
 
 const DETAIL = {
@@ -51,8 +51,8 @@ const DETAIL = {
     kind: "update" as const,
     additions: 4,
     removals: 4,
-    diff: ELIGIBLE_DIFF
-  }
+    diff: ELIGIBLE_DIFF,
+  },
 };
 
 describe("TranscriptDiff", () => {
@@ -67,10 +67,10 @@ describe("TranscriptDiff", () => {
       source: "grok" as const,
       hiddenHunkIndices: [1],
       hiddenHunkCount: 1,
-      decisions: []
+      decisions: [],
     }));
     (window as Window & { pwragent?: unknown }).pwragent = {
-      analyzeFocusedDiff
+      analyzeFocusedDiff,
     };
 
     render(<TranscriptDiff detail={DETAIL} />);
@@ -81,7 +81,9 @@ describe("TranscriptDiff", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
 
-    expect(screen.getByRole("button", { name: "Zoom out" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Zoom out" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("// refreshed comment")).toBeInTheDocument();
     expect(analyzeFocusedDiff).toHaveBeenCalledTimes(1);
   });
@@ -91,7 +93,7 @@ describe("TranscriptDiff", () => {
       throw new Error("network down");
     });
     (window as Window & { pwragent?: unknown }).pwragent = {
-      analyzeFocusedDiff
+      analyzeFocusedDiff,
     };
 
     render(<TranscriptDiff detail={DETAIL} />);
@@ -111,7 +113,7 @@ describe("TranscriptDiff", () => {
   it("renders omitted large diffs without focused analysis", () => {
     const analyzeFocusedDiff = vi.fn();
     (window as Window & { pwragent?: unknown }).pwragent = {
-      analyzeFocusedDiff
+      analyzeFocusedDiff,
     };
 
     render(
@@ -123,31 +125,36 @@ describe("TranscriptDiff", () => {
             additions: 0,
             removals: 3,
             diff: "",
-            omittedReason: "Large file diff omitted from transcript view (518 KB).",
-            originalLength: 530_180
-          }
+            omittedReason:
+              "Large file diff omitted from transcript view (518 KB).",
+            originalLength: 530_180,
+          },
         }}
-      />
+      />,
     );
 
     expect(
-      screen.getByText("Large file diff omitted from transcript view (518 KB).")
+      screen.getByText(
+        "Large file diff omitted from transcript view (518 KB).",
+      ),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Zoom in" }),
+    ).not.toBeInTheDocument();
     expect(analyzeFocusedDiff).not.toHaveBeenCalled();
   });
 
   it("fetches referenced live diff text only when the diff component renders", async () => {
     const getThreadFileDiff = vi.fn(async () => ({ diff: ELIGIBLE_DIFF }));
     (window as Window & { pwragent?: unknown }).pwragent = {
-      getThreadFileDiff
+      getThreadFileDiff,
     };
     const diffRef = {
       source: "live" as const,
       key: "live:thread-1:entry-1:detail-1",
       threadId: "thread-1",
       entryId: "entry-1",
-      detailId: "detail-1"
+      detailId: "detail-1",
     };
 
     render(
@@ -157,10 +164,10 @@ describe("TranscriptDiff", () => {
           fileDiff: {
             ...DETAIL.fileDiff,
             diff: "",
-            diffRef
-          }
+            diffRef,
+          },
         }}
-      />
+      />,
     );
 
     expect(screen.getByText("Loading diff...")).toBeInTheDocument();
@@ -169,16 +176,8 @@ describe("TranscriptDiff", () => {
   });
 
   it("fetches and stacks multiple referenced diff chunks for merged rows", async () => {
-    const firstDiff = [
-      "@@ -1,1 +1,2 @@",
-      " alpha",
-      "+beta",
-    ].join("\n");
-    const secondDiff = [
-      "@@ -4,1 +5,2 @@",
-      " gamma",
-      "+delta",
-    ].join("\n");
+    const firstDiff = ["@@ -1,1 +1,2 @@", " alpha", "+beta"].join("\n");
+    const secondDiff = ["@@ -4,1 +5,2 @@", " gamma", "+delta"].join("\n");
     const refs: AppServerThreadFileDiffRef[] = [
       {
         source: "thread" as const,
@@ -199,8 +198,9 @@ describe("TranscriptDiff", () => {
     ];
     const getThreadFileDiff = vi.fn(
       async ({ ref }: { ref: AppServerThreadFileDiffRef }) => ({
-      diff: ref.key.endsWith("entry-1:detail-1") ? firstDiff : secondDiff,
-    }));
+        diff: ref.key.endsWith("entry-1:detail-1") ? firstDiff : secondDiff,
+      }),
+    );
     (window as Window & { pwragent?: unknown }).pwragent = {
       getThreadFileDiff,
     };
@@ -218,7 +218,7 @@ describe("TranscriptDiff", () => {
             removals: 0,
           },
         }}
-      />
+      />,
     );
 
     await screen.findByText("beta");

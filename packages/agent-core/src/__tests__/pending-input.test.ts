@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createTestHarness, Deferred, FakeProvider } from "../testing/test-harness.js";
+import {
+  createTestHarness,
+  Deferred,
+  FakeProvider,
+} from "../testing/test-harness.js";
 
 async function flushAsync(): Promise<void> {
   await Promise.resolve();
@@ -51,7 +55,9 @@ describe("Codex pending input", () => {
       providerResponseId: "resp_approval",
     });
     await waitFor(async () => {
-      expect(provider.runs[0]?.eventResponses).toEqual([{ decision: "approve" }]);
+      expect(provider.runs[0]?.eventResponses).toEqual([
+        { decision: "approve" },
+      ]);
       expect(notifications).toEqual([
         {
           method: "turn/started",
@@ -140,7 +146,9 @@ describe("Codex pending input", () => {
       providerResponseId: "resp_steer",
     });
     await waitFor(async () => {
-      expect(provider.runs[0]?.eventResponses).toEqual([{ decision: "approve" }]);
+      expect(provider.runs[0]?.eventResponses).toEqual([
+        { decision: "approve" },
+      ]);
     });
 
     expect(steered).toEqual({ threadId: "thread-1", turnId: "turn-1" });

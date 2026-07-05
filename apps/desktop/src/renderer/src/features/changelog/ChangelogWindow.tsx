@@ -5,7 +5,9 @@ import { ThreadMarkdown } from "../thread-detail/ThreadMarkdown";
 
 export function ChangelogWindow() {
   const desktopApi = useDesktopApi();
-  const [changelog, setChangelog] = useState<AppChangelogDocument | undefined>();
+  const [changelog, setChangelog] = useState<
+    AppChangelogDocument | undefined
+  >();
   const [error, setError] = useState<string | undefined>();
 
   useEffect(() => {

@@ -6,7 +6,7 @@ export type ThreadRowStatusKind = "thinking" | "unread";
 
 export function getThreadRowStatus(
   thread: NavigationThreadSummary,
-  thinkingThreadKeys?: Record<string, boolean>
+  thinkingThreadKeys?: Record<string, boolean>,
 ): ThreadRowStatusKind | undefined {
   const threadKey = buildThreadIdentityKey(thread.source, thread.id);
   if (thinkingThreadKeys?.[threadKey]) {

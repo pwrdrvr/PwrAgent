@@ -16,10 +16,7 @@ import {
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
-import {
-  SettingsPathRow,
-  type SettingsPathRowChip,
-} from "./SettingsPathRow";
+import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 
 export function ApplicationsSettings(props: {
   desktopApi?: DesktopApi;
@@ -33,7 +30,10 @@ export function ApplicationsSettings(props: {
   onSaveGhPath: (path: string) => Promise<void>;
 }) {
   return (
-    <SettingsSectionStack paneId="applications" aria-label="Application settings">
+    <SettingsSectionStack
+      paneId="applications"
+      aria-label="Application settings"
+    >
       <SettingsPanelHead
         eyebrow="Applications"
         title="Editor & terminal"
@@ -85,13 +85,17 @@ function GitStatusPanel(props: {
   const [loading, setLoading] = useState(false);
   const discovery = props.snapshot.applications.git.discovery;
   const selected = discovery.candidates.find((candidate) => candidate.selected);
-  const hasWorkingGit = discovery.candidates.some((candidate) => candidate.executable);
+  const hasWorkingGit = discovery.candidates.some(
+    (candidate) => candidate.executable,
+  );
   const visibleCandidates = discovery.candidates.filter(
     (candidate) =>
-      candidate.executable || isXcodeLicenseCandidate(candidate) || !hasWorkingGit,
+      candidate.executable
+      || isXcodeLicenseCandidate(candidate)
+      || !hasWorkingGit,
   );
   const xcodeLicenseCandidate = discovery.candidates.find((candidate) =>
-    isXcodeLicenseCandidate(candidate)
+    isXcodeLicenseCandidate(candidate),
   );
   const pill = describeGitStatusPill(discovery, xcodeLicenseCandidate);
 
@@ -138,8 +142,9 @@ function GitStatusPanel(props: {
               {xcodeLicenseCandidate ? (
                 <div className="settings-gh-status">
                   <span className="settings-pathrow__path settings-error">
-                    Apple&apos;s Git at <code>{xcodeLicenseCandidate.command}</code>{" "}
-                    is blocked by the Xcode license check.
+                    Apple&apos;s Git at{" "}
+                    <code>{xcodeLicenseCandidate.command}</code> is blocked by
+                    the Xcode license check.
                   </span>
                   <span className="settings-pathrow__path">
                     Run this in Terminal, then follow the prompts:
@@ -255,8 +260,8 @@ function GhStatusPanel(props: {
       title="GitHub CLI (gh)"
       description={
         <>
-          PwrAgent uses <code>gh</code> to read pull request status for thread chips.
-          It never opens, comments on, or merges PRs.
+          PwrAgent uses <code>gh</code> to read pull request status for thread
+          chips. It never opens, comments on, or merges PRs.
         </>
       }
     >
@@ -297,7 +302,9 @@ function GhStatusPanel(props: {
                 <span className="settings-pathrow__path">{status.reason}</span>
               ) : null}
               {error ? (
-                <span className="settings-pathrow__path settings-error">{error}</span>
+                <span className="settings-pathrow__path settings-error">
+                  {error}
+                </span>
               ) : null}
               <div className="settings-inline-actions">
                 <button
@@ -360,7 +367,9 @@ function GhStatusPanel(props: {
             <div className="settings-inline-actions">
               <button
                 className="button button--secondary"
-                disabled={props.saving || envForced || !desktopApi?.pickGhCommand}
+                disabled={
+                  props.saving || envForced || !desktopApi?.pickGhCommand
+                }
                 type="button"
                 onClick={() => {
                   void (async () => {
@@ -386,9 +395,7 @@ function GhStatusPanel(props: {
   );
 }
 
-function GitCandidateRow(props: {
-  candidate: DesktopGitDiscoveryCandidate;
-}) {
+function GitCandidateRow(props: { candidate: DesktopGitDiscoveryCandidate }) {
   const candidate = props.candidate;
   const failureLabel = describeCommandDiscoveryFailure(candidate.failureReason);
   const chips: SettingsPathRowChip[] = [
@@ -422,7 +429,9 @@ function GhCandidateRow(props: {
   onUse: (command: string) => void;
 }) {
   const candidate = props.candidate;
-  const unavailableLabel = describeCommandDiscoveryFailure(candidate.failureReason);
+  const unavailableLabel = describeCommandDiscoveryFailure(
+    candidate.failureReason,
+  );
   const chips: SettingsPathRowChip[] = [
     { label: candidate.source, tone: "muted" },
   ];
@@ -453,7 +462,9 @@ function GhCandidateRow(props: {
       chips={chips}
       selected={candidate.selected}
       disabled={props.disabled || !candidate.executable}
-      onUse={candidate.executable ? () => props.onUse(candidate.command) : undefined}
+      onUse={
+        candidate.executable ? () => props.onUse(candidate.command) : undefined
+      }
     />
   );
 }
@@ -498,15 +509,19 @@ function describeCommandDiscoveryFailure(reason?: string): string | undefined {
 function isXcodeLicenseCandidate(
   candidate: DesktopGitDiscoveryCandidate,
 ): boolean {
-  return candidate.command === "/usr/bin/git"
-    && isXcodeLicenseFailure(candidate.failureReason ?? candidate.versionFailureReason);
+  return (
+    candidate.command === "/usr/bin/git"
+    && isXcodeLicenseFailure(
+      candidate.failureReason ?? candidate.versionFailureReason,
+    )
+  );
 }
 
 function isXcodeLicenseFailure(reason?: string): boolean {
   return Boolean(
     reason?.includes("Xcode license")
-      || reason?.includes("license agreements")
-      || reason?.includes("xcodebuild -license"),
+    || reason?.includes("license agreements")
+    || reason?.includes("xcodebuild -license"),
   );
 }
 

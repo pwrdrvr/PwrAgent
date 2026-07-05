@@ -1,6 +1,10 @@
 import path from "node:path";
 import type { HeapMonitorConfig } from "./heap-monitor-config";
-import type { HeapSession, HeapSessionEvent, HeapSessionSample } from "./heap-session";
+import type {
+  HeapSession,
+  HeapSessionEvent,
+  HeapSessionSample,
+} from "./heap-session";
 import { getMainLogger } from "../log";
 
 const CHROME_DEBUGGER_PROTOCOL_VERSION = "1.3";
@@ -18,8 +22,14 @@ type RendererHeapDebugger = {
   detach: () => void;
   isAttached: () => boolean;
   sendCommand: (method: string) => Promise<RendererHeapUsage>;
-  on: (event: "detach", listener: (event: unknown, reason: string) => void) => void;
-  off?: (event: "detach", listener: (event: unknown, reason: string) => void) => void;
+  on: (
+    event: "detach",
+    listener: (event: unknown, reason: string) => void,
+  ) => void;
+  off?: (
+    event: "detach",
+    listener: (event: unknown, reason: string) => void,
+  ) => void;
 };
 
 type RendererHeapTarget = {
@@ -160,10 +170,13 @@ export class RendererHeapMonitor {
           throw error;
         }
 
-        this.logger.warn("[pwragent:heap] renderer target destroyed during stop", {
-          reason,
-          sessionDirectory: this.session.directoryPath,
-        });
+        this.logger.warn(
+          "[pwragent:heap] renderer target destroyed during stop",
+          {
+            reason,
+            sessionDirectory: this.session.directoryPath,
+          },
+        );
       }
     }
     this.debuggerAttached = false;
@@ -215,10 +228,14 @@ export class RendererHeapMonitor {
     const capturedAt = this.now().toISOString();
 
     try {
-      const heapUsage = await this.target.debugger.sendCommand("Runtime.getHeapUsage");
+      const heapUsage = await this.target.debugger.sendCommand(
+        "Runtime.getHeapUsage",
+      );
       const previousUsedSize = this.previousSample?.usedSize ?? null;
       const deltaBytes =
-        previousUsedSize === null ? null : heapUsage.usedSize - previousUsedSize;
+        previousUsedSize === null
+          ? null
+          : heapUsage.usedSize - previousUsedSize;
       const isBaseline = forceBaseline || this.previousSample === null;
       const sample: HeapSessionSample = {
         source: "renderer",
@@ -235,9 +252,9 @@ export class RendererHeapMonitor {
       this.previousSample = sample;
 
       if (
-        !isBaseline &&
-        deltaBytes !== null &&
-        deltaBytes >= this.config.deltaThresholdBytes
+        !isBaseline
+        && deltaBytes !== null
+        && deltaBytes >= this.config.deltaThresholdBytes
       ) {
         await this.handleThresholdCrossing(sample, deltaBytes);
       }
@@ -262,14 +279,18 @@ export class RendererHeapMonitor {
     }
 
     if (this.snapshotCount >= this.config.maxSnapshots) {
-      await this.logSnapshotSkip("max-snapshots", deltaBytes, sample.capturedAt);
+      await this.logSnapshotSkip(
+        "max-snapshots",
+        deltaBytes,
+        sample.capturedAt,
+      );
       return;
     }
 
     const nowMs = Date.parse(sample.capturedAt);
     if (
-      this.lastSnapshotAtMs !== null &&
-      nowMs - this.lastSnapshotAtMs < this.config.snapshotCooldownMs
+      this.lastSnapshotAtMs !== null
+      && nowMs - this.lastSnapshotAtMs < this.config.snapshotCooldownMs
     ) {
       await this.logSnapshotSkip("cooldown", deltaBytes, sample.capturedAt);
       return;
@@ -366,7 +387,9 @@ export class RendererHeapMonitor {
   }
 
   private isTargetDestroyed(): boolean {
-    return typeof this.target.isDestroyed === "function" && this.target.isDestroyed();
+    return (
+      typeof this.target.isDestroyed === "function" && this.target.isDestroyed()
+    );
   }
 
   private isDestroyedError(error: unknown): boolean {

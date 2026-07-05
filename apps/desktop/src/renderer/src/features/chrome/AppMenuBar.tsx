@@ -172,8 +172,8 @@ export function AppMenuBar(): ReactElement | null {
             else btnRefs.current.set(it.index, el);
           }}
           className={
-            "app-titlebar__menu-item" +
-            (focusedPos === pos ? " is-focused" : "")
+            "app-titlebar__menu-item"
+            + (focusedPos === pos ? " is-focused" : "")
           }
           onClick={() => openMenu(it.index)}
         >

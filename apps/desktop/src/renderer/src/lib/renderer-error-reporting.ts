@@ -48,7 +48,9 @@ export function createRendererErrorReport(
 }
 
 export function reportRendererError(report: RendererErrorReport): void {
-  void getDesktopApi()?.reportRendererError?.(report).catch(() => undefined);
+  void getDesktopApi()
+    ?.reportRendererError?.(report)
+    .catch(() => undefined);
 }
 
 export function installGlobalRendererErrorHandlers(): () => void {

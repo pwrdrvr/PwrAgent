@@ -8,7 +8,9 @@ import {
 } from "../testing/fixture-derivation";
 
 async function createTempDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-fixture-derivation-"));
+  return await fs.mkdtemp(
+    path.join(os.tmpdir(), "pwragent-fixture-derivation-"),
+  );
 }
 
 async function writeJsonl(filePath: string, records: unknown[]): Promise<void> {
@@ -16,7 +18,7 @@ async function writeJsonl(filePath: string, records: unknown[]): Promise<void> {
   await fs.writeFile(
     filePath,
     `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-    "utf8"
+    "utf8",
   );
 }
 
@@ -27,7 +29,7 @@ describe("fixture derivation", () => {
     await Promise.all(
       cleanupPaths.splice(0).map(async (target) => {
         await fs.rm(target, { recursive: true, force: true });
-      })
+      }),
     );
   });
 
@@ -51,8 +53,8 @@ describe("fixture derivation", () => {
           jsonrpc: "2.0",
           id: "rpc-1",
           method: "initialize",
-          params: {}
-        })
+          params: {},
+        }),
       },
       {
         backend: "codex",
@@ -69,10 +71,10 @@ describe("fixture derivation", () => {
           result: {
             serverInfo: {
               name: "Replay Codex",
-              version: "1.0.0"
-            }
-          }
-        })
+              version: "1.0.0",
+            },
+          },
+        }),
       },
       {
         backend: "codex",
@@ -90,9 +92,9 @@ describe("fixture derivation", () => {
           method: "thread/read",
           params: {
             includeTurns: true,
-            threadId: "thread-1"
-          }
-        })
+            threadId: "thread-1",
+          },
+        }),
       },
       {
         backend: "codex",
@@ -109,10 +111,10 @@ describe("fixture derivation", () => {
           result: {
             thread: {
               id: "thread-1",
-              title: "Synthetic thread"
-            }
-          }
-        })
+              title: "Synthetic thread",
+            },
+          },
+        }),
       },
       {
         backend: "codex",
@@ -129,12 +131,12 @@ describe("fixture derivation", () => {
           params: {
             item: {
               id: "item-1",
-              type: "commandExecution"
+              type: "commandExecution",
             },
-            threadId: "thread-1"
-          }
-        })
-      }
+            threadId: "thread-1",
+          },
+        }),
+      },
     ]);
 
     const derived = await deriveReplayFixtureFromCapture({
@@ -148,7 +150,7 @@ describe("fixture derivation", () => {
         backend: "codex",
         scenario: "synthetic-derive",
         sourceCaptureId: "derive-test",
-        threadId: "thread-1"
+        threadId: "thread-1",
       },
       steps: [
         {
@@ -158,9 +160,9 @@ describe("fixture derivation", () => {
           result: {
             serverInfo: {
               name: "Replay Codex",
-              version: "1.0.0"
-            }
-          }
+              version: "1.0.0",
+            },
+          },
         },
         {
           id: "thread-read-1",
@@ -169,9 +171,9 @@ describe("fixture derivation", () => {
           result: {
             thread: {
               id: "thread-1",
-              title: "Synthetic thread"
-            }
-          }
+              title: "Synthetic thread",
+            },
+          },
         },
         {
           id: "item-started-1",
@@ -181,13 +183,13 @@ describe("fixture derivation", () => {
             params: {
               item: {
                 id: "item-1",
-                type: "commandExecution"
+                type: "commandExecution",
               },
-              threadId: "thread-1"
-            }
-          }
-        }
-      ]
+              threadId: "thread-1",
+            },
+          },
+        },
+      ],
     });
     expect(derived.rawCaptureRecords).toHaveLength(5);
   });
@@ -212,8 +214,8 @@ describe("fixture derivation", () => {
           jsonrpc: "2.0",
           id: "rpc-1",
           method: "initialize",
-          params: {}
-        })
+          params: {},
+        }),
       },
       {
         backend: "codex",
@@ -230,10 +232,10 @@ describe("fixture derivation", () => {
           result: {
             serverInfo: {
               name: "Replay Codex",
-              version: "1.0.0"
-            }
-          }
-        })
+              version: "1.0.0",
+            },
+          },
+        }),
       },
       {
         backend: "codex",
@@ -249,9 +251,9 @@ describe("fixture derivation", () => {
           method: "item/unknownEvent",
           params: {
             threadId: "thread-1",
-            label: "keep me"
-          }
-        })
+            label: "keep me",
+          },
+        }),
       },
       {
         backend: "codex",
@@ -269,10 +271,10 @@ describe("fixture derivation", () => {
           method: "turn/requestApproval",
           params: {
             threadId: "thread-1",
-            requestId: "approval-1"
-          }
-        })
-      }
+            requestId: "approval-1",
+          },
+        }),
+      },
     ]);
 
     const derived = await deriveReplayFixtureFromCapture({
@@ -282,8 +284,8 @@ describe("fixture derivation", () => {
       endSequence: 4,
       stepLabels: {
         3: "unknown-event-1",
-        4: "approval-1"
-      }
+        4: "approval-1",
+      },
     });
 
     expect(derived.fixture.steps).toEqual([
@@ -294,9 +296,9 @@ describe("fixture derivation", () => {
         result: {
           serverInfo: {
             name: "Replay Codex",
-            version: "1.0.0"
-          }
-        }
+            version: "1.0.0",
+          },
+        },
       },
       {
         id: "unknown-event-1",
@@ -305,9 +307,9 @@ describe("fixture derivation", () => {
           method: "item/unknownEvent",
           params: {
             threadId: "thread-1",
-            label: "keep me"
-          }
-        }
+            label: "keep me",
+          },
+        },
       },
       {
         id: "approval-1",
@@ -316,10 +318,10 @@ describe("fixture derivation", () => {
           method: "turn/requestApproval",
           params: {
             threadId: "thread-1",
-            requestId: "approval-1"
-          }
-        }
-      }
+            requestId: "approval-1",
+          },
+        },
+      },
     ]);
   });
 
@@ -343,8 +345,8 @@ describe("fixture derivation", () => {
           jsonrpc: "2.0",
           id: "rpc-1",
           method: "initialize",
-          params: {}
-        })
+          params: {},
+        }),
       },
       {
         backend: "codex",
@@ -361,10 +363,10 @@ describe("fixture derivation", () => {
           result: {
             serverInfo: {
               name: "Replay Codex",
-              version: "1.0.0"
-            }
-          }
-        })
+              version: "1.0.0",
+            },
+          },
+        }),
       },
       {
         backend: "codex",
@@ -380,9 +382,9 @@ describe("fixture derivation", () => {
           method: "thread/status/changed",
           params: {
             threadId: "thread-1",
-            status: { type: "active" }
-          }
-        })
+            status: { type: "active" },
+          },
+        }),
       },
       {
         backend: "codex",
@@ -398,19 +400,21 @@ describe("fixture derivation", () => {
           method: "thread/status/changed",
           params: {
             threadId: "thread-2",
-            status: { type: "idle" }
-          }
-        })
-      }
+            status: { type: "idle" },
+          },
+        }),
+      },
     ]);
 
     const derived = await deriveReplayFixtureFromCapture({
       capturePath,
       scenario: "thread-filter",
-      threadId: "thread-1"
+      threadId: "thread-1",
     });
 
-    expect(derived.rawCaptureRecords.map((record) => record.sequence)).toEqual([1, 2, 3]);
+    expect(derived.rawCaptureRecords.map((record) => record.sequence)).toEqual([
+      1, 2, 3,
+    ]);
     expect(derived.fixture.metadata.threadId).toBe("thread-1");
     expect(derived.fixture.steps).toEqual([
       {
@@ -420,9 +424,9 @@ describe("fixture derivation", () => {
         result: {
           serverInfo: {
             name: "Replay Codex",
-            version: "1.0.0"
-          }
-        }
+            version: "1.0.0",
+          },
+        },
       },
       {
         id: "thread-status-changed-1",
@@ -431,10 +435,10 @@ describe("fixture derivation", () => {
           method: "thread/status/changed",
           params: {
             threadId: "thread-1",
-            status: { type: "active" }
-          }
-        }
-      }
+            status: { type: "active" },
+          },
+        },
+      },
     ]);
   });
 
@@ -443,7 +447,11 @@ describe("fixture derivation", () => {
     cleanupPaths.push(rootDir);
     const oldCapturePath = path.join(rootDir, "old.jsonl");
     const newCapturePath = path.join(rootDir, "new.jsonl");
-    const outputPath = path.join(rootDir, "exports", "thread.raw.capture.jsonl");
+    const outputPath = path.join(
+      rootDir,
+      "exports",
+      "thread.raw.capture.jsonl",
+    );
 
     await fs.writeFile(oldCapturePath, '{"capture":"old"}\n', "utf8");
     await fs.writeFile(newCapturePath, '{"capture":"new"}\n', "utf8");
@@ -457,7 +465,7 @@ describe("fixture derivation", () => {
             createdAt: 1,
             path: oldCapturePath,
             threadIds: ["thread-1"],
-            updatedAt: 1
+            updatedAt: 1,
           },
           "capture-new": {
             backend: "codex",
@@ -465,31 +473,33 @@ describe("fixture derivation", () => {
             createdAt: 2,
             path: newCapturePath,
             threadIds: ["thread-1"],
-            updatedAt: 2
-          }
+            updatedAt: 2,
+          },
         },
         null,
-        2
+        2,
       ),
-      "utf8"
+      "utf8",
     );
 
     const exported = await exportSessionCapture({
       captureRoot: rootDir,
       sessionId: "codex:thread-1",
-      outputPath
+      outputPath,
     });
 
     expect(exported.captureId).toBe("capture-new");
-    await expect(fs.readFile(outputPath, "utf8")).resolves.toBe('{"capture":"new"}\n');
+    await expect(fs.readFile(outputPath, "utf8")).resolves.toBe(
+      '{"capture":"new"}\n',
+    );
     await expect(
       exportSessionCapture({
         captureRoot: rootDir,
         sessionId: "codex:missing-thread",
-        outputPath: path.join(rootDir, "exports", "missing.jsonl")
-      })
+        outputPath: path.join(rootDir, "exports", "missing.jsonl"),
+      }),
     ).rejects.toThrow(
-      `No recorded capture for codex:missing-thread in ${path.join(rootDir, "index.json")}`
+      `No recorded capture for codex:missing-thread in ${path.join(rootDir, "index.json")}`,
     );
   });
 
@@ -500,16 +510,16 @@ describe("fixture derivation", () => {
     await fs.writeFile(
       capturePath,
       '{"backend":"codex","captureId":"capture-1","direction":"inbound","kind":"notification","sequence":1,"timestamp":1,"threadIds":[],"raw":"{bad json}"}\n',
-      "utf8"
+      "utf8",
     );
 
     await expect(
       deriveReplayFixtureFromCapture({
         capturePath,
-        scenario: "broken"
-      })
+        scenario: "broken",
+      }),
     ).rejects.toThrow(
-      `Invalid JSON-RPC envelope for sequence 1 in ${capturePath}`
+      `Invalid JSON-RPC envelope for sequence 1 in ${capturePath}`,
     );
   });
 });

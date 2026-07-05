@@ -48,7 +48,9 @@ describe("SettingsLayout", () => {
     fireEvent.click(alpha);
 
     expect(alpha).toHaveAttribute("aria-expanded", "false");
-    const body = document.querySelector("#settings-section-collapse-pane-alpha-body");
+    const body = document.querySelector(
+      "#settings-section-collapse-pane-alpha-body",
+    );
     expect(body).toHaveAttribute("aria-hidden", "true");
     expect(body).toHaveAttribute("inert");
 
@@ -127,7 +129,9 @@ describe("SettingsLayout", () => {
     const paneId = `persistent-pane-${paneIndex++}`;
     const firstRender = renderSectionStack(paneId);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Collapse all" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Collapse all" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Beta" }));
 
     expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute(

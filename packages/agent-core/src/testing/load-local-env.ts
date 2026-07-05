@@ -10,9 +10,7 @@ export type LocalEnvLoadResult = {
   skippedReason?: string;
 };
 
-export function defaultLocalEnvPath(options?: {
-  currentDir?: string;
-}): string {
+export function defaultLocalEnvPath(options?: { currentDir?: string }): string {
   const currentDir =
     options?.currentDir ?? path.dirname(fileURLToPath(import.meta.url));
   const candidatePaths = [
@@ -20,8 +18,10 @@ export function defaultLocalEnvPath(options?: {
     path.resolve(currentDir, "../../.env.local"),
   ];
 
-  return candidatePaths.find((candidatePath) => fs.existsSync(candidatePath))
-    ?? candidatePaths[0];
+  return (
+    candidatePaths.find((candidatePath) => fs.existsSync(candidatePath))
+    ?? candidatePaths[0]
+  );
 }
 
 export function defaultGrokAppServerConfigDir(options?: {
@@ -29,8 +29,12 @@ export function defaultGrokAppServerConfigDir(options?: {
   xdgConfigHome?: string;
 }): string {
   const homeDir = options?.homeDir ?? os.homedir();
-  const xdgConfigHome = options?.xdgConfigHome?.trim() || process.env.XDG_CONFIG_HOME?.trim();
-  return path.join(xdgConfigHome || path.join(homeDir, ".config"), "grok-app-server");
+  const xdgConfigHome =
+    options?.xdgConfigHome?.trim() || process.env.XDG_CONFIG_HOME?.trim();
+  return path.join(
+    xdgConfigHome || path.join(homeDir, ".config"),
+    "grok-app-server",
+  );
 }
 
 export function defaultGrokAppServerConfigPaths(options?: {
@@ -75,10 +79,7 @@ export function loadGrokAppServerConfig(options?: {
   };
 }
 
-function loadEnvFile(
-  envPath: string,
-  override = false,
-): LocalEnvLoadResult {
+function loadEnvFile(envPath: string, override = false): LocalEnvLoadResult {
   if (!fs.existsSync(envPath)) {
     return {
       path: envPath,

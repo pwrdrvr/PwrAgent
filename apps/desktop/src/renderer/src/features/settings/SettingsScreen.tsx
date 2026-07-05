@@ -120,15 +120,17 @@ export function SettingsScreen(props: {
       const scrollX = window.scrollX;
       const scrollY = window.scrollY;
       window.scrollTo(0, 0);
-      void props.desktopApi?.logRendererDiagnostic?.({
-        level: "warn",
-        message: "Settings document scroll clamped.",
-        details: {
-          section,
-          scrollX,
-          scrollY,
-        },
-      })?.catch(() => undefined);
+      void props.desktopApi
+        ?.logRendererDiagnostic?.({
+          level: "warn",
+          message: "Settings document scroll clamped.",
+          details: {
+            section,
+            scrollX,
+            scrollY,
+          },
+        })
+        ?.catch(() => undefined);
     };
     const scheduleClamp = () => {
       if (scrollClampFrameRef.current !== undefined) {

@@ -1,4 +1,7 @@
-import type { JsonRpcObserver, JsonRpcObserverEvent } from "@pwrdrvr/agent-transport";
+import type {
+  JsonRpcObserver,
+  JsonRpcObserverEvent,
+} from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
 
 const PROTOCOL_LOG_ENV = "PWRAGENT_APP_SERVER_PROTOCOL_LOG";
@@ -112,10 +115,10 @@ export function createProtocolLogObserver(
   function flushDeltaBuffersFor(envelope: JsonRpcEnvelope): void {
     const method = envelope.method;
     if (
-      method !== "item/completed" &&
-      method !== "turn/completed" &&
-      method !== "turn/failed" &&
-      method !== "turn/cancelled"
+      method !== "item/completed"
+      && method !== "turn/completed"
+      && method !== "turn/failed"
+      && method !== "turn/cancelled"
     ) {
       return;
     }
@@ -128,9 +131,9 @@ export function createProtocolLogObserver(
 
     for (const [key, buffer] of deltaBuffers) {
       if (
-        (threadId && !key.includes(`thread:${threadId}`)) ||
-        (turnId && !key.includes(`turn:${turnId}`)) ||
-        (itemId && !key.includes(`item:${itemId}`))
+        (threadId && !key.includes(`thread:${threadId}`))
+        || (turnId && !key.includes(`turn:${turnId}`))
+        || (itemId && !key.includes(`item:${itemId}`))
       ) {
         continue;
       }
@@ -206,7 +209,9 @@ export function createProtocolLogObserver(
       const id = envelope.id == null ? undefined : String(envelope.id);
       const kind = classifyEnvelope(envelope);
       const method =
-        envelope.method ?? (id ? requestMethodsById.get(id) : undefined) ?? "response";
+        envelope.method
+        ?? (id ? requestMethodsById.get(id) : undefined)
+        ?? "response";
       const updateKind = pickString(
         update,
         "sessionUpdate",
@@ -217,8 +222,8 @@ export function createProtocolLogObserver(
       const diagnostics =
         event.diagnostics ?? (id ? requestDiagnosticsById.get(id) : undefined);
       const delta =
-        pickRawString(params, "delta") ??
-        pickAcpStreamingSessionUpdateText(method, updateKind, update);
+        pickRawString(params, "delta")
+        ?? pickAcpStreamingSessionUpdateText(method, updateKind, update);
       const deltaKey = delta
         ? buildDeltaKey({
             backend: options.backend,
@@ -230,16 +235,14 @@ export function createProtocolLogObserver(
 
       if (delta && deltaKey) {
         const timestamp = now();
-        const buffer =
-          deltaBuffers.get(deltaKey) ??
-          {
-            chars: 0,
-            count: 0,
-            firstAt: timestamp,
-            lastAt: timestamp,
-            lastLoggedAt: 0,
-            preview: "",
-          };
+        const buffer = deltaBuffers.get(deltaKey) ?? {
+          chars: 0,
+          count: 0,
+          firstAt: timestamp,
+          lastAt: timestamp,
+          lastLoggedAt: 0,
+          preview: "",
+        };
         buffer.chars += delta.length;
         buffer.count += 1;
         buffer.lastAt = timestamp;
@@ -311,7 +314,9 @@ function isEnabled(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
-function classifyEnvelope(envelope: JsonRpcEnvelope): "notification" | "request" | "response" {
+function classifyEnvelope(
+  envelope: JsonRpcEnvelope,
+): "notification" | "request" | "response" {
   if (envelope.method && envelope.id != null) {
     return "request";
   }
@@ -321,11 +326,15 @@ function classifyEnvelope(envelope: JsonRpcEnvelope): "notification" | "request"
   return "response";
 }
 
-function compactDirection(direction: JsonRpcObserverEvent["direction"]): "in" | "out" {
+function compactDirection(
+  direction: JsonRpcObserverEvent["direction"],
+): "in" | "out" {
   return direction === "inbound" ? "in" : "out";
 }
 
-function compactFields<T extends Record<string, unknown>>(fields: T): Partial<T> {
+function compactFields<T extends Record<string, unknown>>(
+  fields: T,
+): Partial<T> {
   return Object.fromEntries(
     Object.entries(fields).filter(([, value]) => value !== undefined),
   ) as Partial<T>;
@@ -378,9 +387,9 @@ function pickAcpStreamingSessionUpdateText(
   update: Record<string, unknown> | undefined,
 ): string | undefined {
   if (
-    method !== "session/update" ||
-    (updateKind !== "agent_message_chunk" &&
-      updateKind !== "agent_thought_chunk")
+    method !== "session/update"
+    || (updateKind !== "agent_message_chunk"
+      && updateKind !== "agent_thought_chunk")
   ) {
     return undefined;
   }
@@ -398,7 +407,10 @@ function pickNumberOrString(
 
   for (const key of keys) {
     const value = record[key];
-    if (typeof value === "number" || (typeof value === "string" && value.trim())) {
+    if (
+      typeof value === "number"
+      || (typeof value === "string" && value.trim())
+    ) {
       return value;
     }
   }
@@ -411,9 +423,9 @@ function shouldCoalesceMessage(params: {
   updateKind: string | undefined;
 }): boolean {
   return (
-    params.backend.startsWith("acp:") &&
-    params.method === "session/update" &&
-    params.updateKind === "tool_call_update"
+    params.backend.startsWith("acp:")
+    && params.method === "session/update"
+    && params.updateKind === "tool_call_update"
   );
 }
 
@@ -444,9 +456,9 @@ function buildDeltaKey(params: {
     `turn:${pickString(params.params, "turnId") ?? "unknown"}`,
     `item:${pickString(params.params, "itemId") ?? pickString(item, "id") ?? "unknown"}`,
     `stream:${
-      pickString(params.params, "stream") ??
-      pickString(update, "sessionUpdate", "session_update", "kind", "type") ??
-      "text"
+      pickString(params.params, "stream")
+      ?? pickString(update, "sessionUpdate", "session_update", "kind", "type")
+      ?? "text"
     }`,
   ].join(" ");
 }
@@ -464,8 +476,8 @@ function buildCoalescedMessageKey(params: {
     `method:${params.method}`,
     `session:${pickString(params.params, "sessionId") ?? "unknown"}`,
     `update:${
-      pickString(update, "sessionUpdate", "session_update", "kind", "type") ??
-      "unknown"
+      pickString(update, "sessionUpdate", "session_update", "kind", "type")
+      ?? "unknown"
     }`,
     `tool:${pickString(update, "toolCallId", "tool_call_id", "id") ?? "unknown"}`,
     `status:${pickString(update, "status") ?? "unknown"}`,

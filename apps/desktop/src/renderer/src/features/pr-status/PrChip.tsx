@@ -104,13 +104,17 @@ export function PrChip(props: PrChipProps) {
             anchorTop: rect.top,
           });
         }}
-        onFocus={(event) => tooltipController.show(event.currentTarget, tooltip)}
+        onFocus={(event) =>
+          tooltipController.show(event.currentTarget, tooltip)
+        }
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             handleActivate(event);
           }
         }}
-        onMouseEnter={(event) => tooltipController.show(event.currentTarget, tooltip)}
+        onMouseEnter={(event) =>
+          tooltipController.show(event.currentTarget, tooltip)
+        }
         onMouseLeave={tooltipController.hide}
       >
         <span className="pr-chip__dot" aria-hidden="true" />
@@ -132,7 +136,9 @@ export function PrChip(props: PrChipProps) {
             <CloseIcon size={11} aria-hidden="true" />
           </span>
         ) : null}
-        {isDraft ? <span className="pr-chip__draft-bar" aria-hidden="true" /> : null}
+        {isDraft ? (
+          <span className="pr-chip__draft-bar" aria-hidden="true" />
+        ) : null}
       </span>
       {tooltipController.tooltipNode}
     </>
@@ -172,7 +178,9 @@ function resolveChipState(
   return resolveCheckState(pr);
 }
 
-function resolveLifecycleState(pr: PrSummary): NonNullable<PrSummary["lifecycleState"]> {
+function resolveLifecycleState(
+  pr: PrSummary,
+): NonNullable<PrSummary["lifecycleState"]> {
   if (pr.lifecycleState) {
     return pr.lifecycleState;
   }
@@ -182,11 +190,15 @@ function resolveLifecycleState(pr: PrSummary): NonNullable<PrSummary["lifecycleS
   return "open";
 }
 
-function resolveCheckState(pr: PrSummary): NonNullable<PrSummary["checkState"]> {
+function resolveCheckState(
+  pr: PrSummary,
+): NonNullable<PrSummary["checkState"]> {
   return pr.checkState ?? normalizeLegacyCheckState(pr.state);
 }
 
-function normalizeLegacyCheckState(state: PrSummary["state"]): NonNullable<PrSummary["checkState"]> {
+function normalizeLegacyCheckState(
+  state: PrSummary["state"],
+): NonNullable<PrSummary["checkState"]> {
   if (
     state === "passing"
     || state === "failing"
@@ -198,7 +210,9 @@ function normalizeLegacyCheckState(state: PrSummary["state"]): NonNullable<PrSum
   return "unknown";
 }
 
-function checkStateTooltipLabel(state: NonNullable<PrSummary["checkState"]>): string {
+function checkStateTooltipLabel(
+  state: NonNullable<PrSummary["checkState"]>,
+): string {
   switch (state) {
     case "passing":
       return "checks passing";

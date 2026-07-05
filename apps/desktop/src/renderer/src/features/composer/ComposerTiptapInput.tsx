@@ -83,16 +83,16 @@ const SkillMention = Mention.extend({
       id: {
         default: null,
         parseHTML: (element) =>
-          element.getAttribute("data-composer-skill-token-id") ??
-          element.getAttribute("data-id"),
+          element.getAttribute("data-composer-skill-token-id")
+          ?? element.getAttribute("data-id"),
       },
       name: {
         default: null,
         parseHTML: (element) =>
-          element.getAttribute("data-skill-name") ??
-          element.getAttribute("data-label") ??
-          element.textContent?.replace(/^\$/, "") ??
-          null,
+          element.getAttribute("data-skill-name")
+          ?? element.getAttribute("data-label")
+          ?? element.textContent?.replace(/^\$/, "")
+          ?? null,
       },
       path: {
         default: null,
@@ -138,7 +138,8 @@ const SkillMention = Mention.extend({
       `$${skill.name}`,
     ];
   },
-  renderText: ({ node }) => `$${String(node.attrs.name ?? node.attrs.id ?? "")}`,
+  renderText: ({ node }) =>
+    `$${String(node.attrs.name ?? node.attrs.id ?? "")}`,
   suggestion: {
     char: "\uFFFF",
     items: () => [],
@@ -297,10 +298,10 @@ function isMarkdownThematicBreak(line: string): boolean {
 
 function isMarkdownBlockStart(line: string): boolean {
   return (
-    parseBacktickFenceLine(line) !== undefined ||
-    isMarkdownThematicBreak(line) ||
-    matchMarkdownOrderedListItem(line) !== null ||
-    matchMarkdownBulletListItem(line) !== null
+    parseBacktickFenceLine(line) !== undefined
+    || isMarkdownThematicBreak(line)
+    || matchMarkdownOrderedListItem(line) !== null
+    || matchMarkdownBulletListItem(line) !== null
   );
 }
 
@@ -389,41 +390,44 @@ function parseHtmlInlineContent(
 function isHtmlStructuredBlockElement(element: HTMLElement): boolean {
   const tagName = element.tagName.toLowerCase();
   return (
-    isHtmlListElement(element) ||
-    tagName === "blockquote" ||
-    tagName === "hr" ||
-    tagName === "pre" ||
-    tagName === "p" ||
-    tagName === "div" ||
-    tagName === "section" ||
-    tagName === "article" ||
-    tagName === "main" ||
-    tagName === "header" ||
-    tagName === "footer" ||
-    /^h[1-6]$/.test(tagName)
+    isHtmlListElement(element)
+    || tagName === "blockquote"
+    || tagName === "hr"
+    || tagName === "pre"
+    || tagName === "p"
+    || tagName === "div"
+    || tagName === "section"
+    || tagName === "article"
+    || tagName === "main"
+    || tagName === "header"
+    || tagName === "footer"
+    || /^h[1-6]$/.test(tagName)
   );
 }
 
 function hasUnsupportedHtmlStructuredBlocks(element: HTMLElement): boolean {
-  return element.querySelector(
-    [
-      "table",
-      "thead",
-      "tbody",
-      "tfoot",
-      "tr",
-      "th",
-      "td",
-      "dl",
-      "dt",
-      "dd",
-    ].join(","),
-  ) !== null;
+  return (
+    element.querySelector(
+      [
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "th",
+        "td",
+        "dl",
+        "dt",
+        "dd",
+      ].join(","),
+    ) !== null
+  );
 }
 
 function hasDirectHtmlStructuredBlockChild(element: HTMLElement): boolean {
   return Array.from(element.children).some(
-    (child) => child instanceof HTMLElement && isHtmlStructuredBlockElement(child),
+    (child) =>
+      child instanceof HTMLElement && isHtmlStructuredBlockElement(child),
   );
 }
 
@@ -431,7 +435,9 @@ function htmlInlineContentHasText(nodes: Node[]): boolean {
   return nodes.some((node) => (node.textContent ?? "").trim().length > 0);
 }
 
-function parseHtmlParagraphContent(element: HTMLElement): JSONContent | undefined {
+function parseHtmlParagraphContent(
+  element: HTMLElement,
+): JSONContent | undefined {
   const content = Array.from(element.childNodes).flatMap((child) =>
     child instanceof HTMLElement && isHtmlStructuredBlockElement(child)
       ? []
@@ -476,7 +482,9 @@ function isHtmlListElement(element: HTMLElement): boolean {
   return tagName === "ul" || tagName === "ol";
 }
 
-function parseHtmlListElement(listElement: HTMLElement): JSONContent | undefined {
+function parseHtmlListElement(
+  listElement: HTMLElement,
+): JSONContent | undefined {
   const tagName = listElement.tagName.toLowerCase();
   const items = Array.from(listElement.children)
     .filter((item): item is HTMLElement => item instanceof HTMLElement)
@@ -562,7 +570,9 @@ function parseHtmlStructuredContent(nodes: Iterable<Node>): JSONContent[] {
       inlineNodes = [];
       return;
     }
-    const inlineContent = inlineNodes.flatMap((node) => parseHtmlInlineContent(node));
+    const inlineContent = inlineNodes.flatMap((node) =>
+      parseHtmlInlineContent(node),
+    );
     if (inlineContent.length > 0) {
       content.push({
         type: "paragraph",
@@ -650,7 +660,9 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
   // Repair malformed nested language fences the same way the transcript renderer
   // does, so a pasted code block that contains an inner ```lang fence parses
   // into ONE code block on both surfaces instead of splitting at the inner close.
-  const lines = repairNestedLanguageFences(value.replace(/\r\n/g, "\n")).split("\n");
+  const lines = repairNestedLanguageFences(value.replace(/\r\n/g, "\n")).split(
+    "\n",
+  );
   const content: JSONContent[] = [];
   let index = 0;
 
@@ -667,9 +679,9 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
         // content — this is what keeps an inner ```ts inside a repaired outer
         // ```` block rather than ending the block early.
         if (
-          closeFence &&
-          closeFence.length >= openFence.length &&
-          closeFence.info === ""
+          closeFence
+          && closeFence.length >= openFence.length
+          && closeFence.info === ""
         ) {
           break;
         }
@@ -682,9 +694,10 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
       content.push({
         type: "codeBlock",
         attrs: { language: openFence.info.split(/\s+/)[0] || null },
-        content: codeLines.length > 0
-          ? [{ type: "text", text: codeLines.join("\n") }]
-          : undefined,
+        content:
+          codeLines.length > 0
+            ? [{ type: "text", text: codeLines.join("\n") }]
+            : undefined,
       });
       continue;
     }
@@ -705,8 +718,8 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
         if (!currentItem) {
           const nextIndex = nextNonBlankLineIndex(lines, index);
           if (
-            nextIndex !== index &&
-            matchMarkdownOrderedListItem(lines[nextIndex] ?? "") !== null
+            nextIndex !== index
+            && matchMarkdownOrderedListItem(lines[nextIndex] ?? "") !== null
           ) {
             index = nextIndex;
             continue;
@@ -733,8 +746,8 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
         if (!currentItem) {
           const nextIndex = nextNonBlankLineIndex(lines, index);
           if (
-            nextIndex !== index &&
-            matchMarkdownBulletListItem(lines[nextIndex] ?? "") !== null
+            nextIndex !== index
+            && matchMarkdownBulletListItem(lines[nextIndex] ?? "") !== null
           ) {
             index = nextIndex;
             continue;
@@ -761,14 +774,17 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
 
     const paragraphLines: string[] = [];
     while (
-      index < lines.length &&
-      (lines[index] ?? "").trim().length > 0 &&
-      !isMarkdownBlockStart(lines[index] ?? "")
+      index < lines.length
+      && (lines[index] ?? "").trim().length > 0
+      && !isMarkdownBlockStart(lines[index] ?? "")
     ) {
       const paragraphLine = lines[index] ?? "";
       paragraphLines.push(paragraphLine);
       index += 1;
-      if (paragraphLines.length === 1 && isMarkdownSectionLabelLine(paragraphLine)) {
+      if (
+        paragraphLines.length === 1
+        && isMarkdownSectionLabelLine(paragraphLine)
+      ) {
         break;
       }
     }
@@ -788,7 +804,8 @@ function mentionAttrsToSkill(
   attrs: Record<string, unknown>,
   index: number,
 ): ComposerSkillToken {
-  const name = typeof attrs.name === "string" ? attrs.name : String(attrs.id ?? "skill");
+  const name =
+    typeof attrs.name === "string" ? attrs.name : String(attrs.id ?? "skill");
   return {
     id: typeof attrs.id === "string" ? attrs.id : `${name}:${index}`,
     index,
@@ -803,9 +820,10 @@ function mentionAttrsToSkill(
   };
 }
 
-function getMarkdownMarkDelimiters(
-  node: ProseMirrorNode,
-): { prefix: string; suffix: string } {
+function getMarkdownMarkDelimiters(node: ProseMirrorNode): {
+  prefix: string;
+  suffix: string;
+} {
   return node.marks.reduce(
     (delimiters, mark) => {
       if (mark.type.name === "bold") {
@@ -909,11 +927,11 @@ function getMarkdownDraftOffsetAtTextOffset(
     return parts.leading.length + parts.prefix.length + (offset - coreStart);
   }
   return (
-    parts.leading.length +
-    parts.prefix.length +
-    parts.core.length +
-    parts.suffix.length +
-    (offset - coreEnd)
+    parts.leading.length
+    + parts.prefix.length
+    + parts.core.length
+    + parts.suffix.length
+    + (offset - coreEnd)
   );
 }
 
@@ -935,18 +953,21 @@ function getTextOffsetAtMarkdownDraftOffset(
     markedStart + parts.prefix.length + parts.core.length + parts.suffix.length;
   if (draftOffset <= markedEnd) {
     return (
-      parts.leading.length +
-      Math.max(
+      parts.leading.length
+      + Math.max(
         0,
-        Math.min(parts.core.length, draftOffset - markedStart - parts.prefix.length),
+        Math.min(
+          parts.core.length,
+          draftOffset - markedStart - parts.prefix.length,
+        ),
       )
     );
   }
 
   return (
-    parts.leading.length +
-    parts.core.length +
-    Math.max(0, Math.min(parts.trailing.length, draftOffset - markedEnd))
+    parts.leading.length
+    + parts.core.length
+    + Math.max(0, Math.min(parts.trailing.length, draftOffset - markedEnd))
   );
 }
 
@@ -966,7 +987,9 @@ function appendMarkdownInlineContent(
     }
 
     if (child.type.name === "mention") {
-      state.skillTokens.push(mentionAttrsToSkill(child.attrs, state.value.length));
+      state.skillTokens.push(
+        mentionAttrsToSkill(child.attrs, state.value.length),
+      );
       return;
     }
 
@@ -1014,7 +1037,8 @@ function appendMarkdownBlock(
   }
 
   if (node.type.name === "codeBlock") {
-    const language = typeof node.attrs.language === "string" ? node.attrs.language : "";
+    const language =
+      typeof node.attrs.language === "string" ? node.attrs.language : "";
     state.value += `\`\`\`${language}\n${node.textContent}\n\`\`\``;
     return;
   }
@@ -1079,9 +1103,9 @@ function readTiptapMarkdownContent(
   });
   let lastContentIndex = nodes.length - 1;
   while (
-    lastContentIndex >= 0 &&
-    nodes[lastContentIndex]?.type.name === "paragraph" &&
-    nodes[lastContentIndex]?.content.size === 0
+    lastContentIndex >= 0
+    && nodes[lastContentIndex]?.type.name === "paragraph"
+    && nodes[lastContentIndex]?.content.size === 0
   ) {
     lastContentIndex -= 1;
   }
@@ -1091,7 +1115,9 @@ function readTiptapMarkdownContent(
   return state;
 }
 
-function readTiptapTextContent(editor: NonNullable<ReturnType<typeof useEditor>>): {
+function readTiptapTextContent(
+  editor: NonNullable<ReturnType<typeof useEditor>>,
+): {
   skillTokens: ComposerSkillToken[];
   value: string;
 } {
@@ -1202,8 +1228,8 @@ function insertPlainSpaceAtTextblockEnd(editor: TiptapEditor): boolean {
   );
   const trailingToken = getTrailingComposerToken(textBeforeCursor);
   if (
-    currentMarks.length === 0 &&
-    (!trailingToken || !isLinkLikeComposerToken(trailingToken))
+    currentMarks.length === 0
+    && (!trailingToken || !isLinkLikeComposerToken(trailingToken))
   ) {
     return false;
   }
@@ -1225,10 +1251,10 @@ function insertParagraphBeforeInitialCodeBlock(editor: TiptapEditor): boolean {
 
   const currentPos = selection.$from;
   if (
-    currentPos.depth !== 1 ||
-    currentPos.parent.type.name !== "codeBlock" ||
-    currentPos.parentOffset !== 0 ||
-    currentPos.before(currentPos.depth) !== 0
+    currentPos.depth !== 1
+    || currentPos.parent.type.name !== "codeBlock"
+    || currentPos.parentOffset !== 0
+    || currentPos.before(currentPos.depth) !== 0
   ) {
     return false;
   }
@@ -1245,7 +1271,9 @@ function insertParagraphBeforeInitialCodeBlock(editor: TiptapEditor): boolean {
 }
 
 function getPlainTextFromPaste(event: ClipboardEvent<HTMLDivElement>): string {
-  return event.clipboardData?.getData("text/plain").replace(/\r\n?/g, "\n") ?? "";
+  return (
+    event.clipboardData?.getData("text/plain").replace(/\r\n?/g, "\n") ?? ""
+  );
 }
 
 function normalizeClipboardText(text: string): string {
@@ -1309,7 +1337,10 @@ function clipboardHtmlHasStructuredBlocks(
   return /<(?:pre|ul|ol|blockquote|h[1-6])[\s>]/i.test(html);
 }
 
-function selectionIsInsideNode(editor: TiptapEditor, nodeTypeName: string): boolean {
+function selectionIsInsideNode(
+  editor: TiptapEditor,
+  nodeTypeName: string,
+): boolean {
   const { $from, $to } = editor.state.selection;
   const isInside = ($pos: typeof $from): boolean => {
     for (let depth = $pos.depth; depth >= 0; depth -= 1) {
@@ -1333,12 +1364,14 @@ function pastePlainTextIntoActiveBlock(
   }
 
   if (
-    editor.state.selection.$from.parent.type.name === "codeBlock" &&
-    editor.state.selection.$to.parent.type.name === "codeBlock"
+    editor.state.selection.$from.parent.type.name === "codeBlock"
+    && editor.state.selection.$to.parent.type.name === "codeBlock"
   ) {
     event.preventDefault();
     const { from, to } = editor.state.selection;
-    editor.view.dispatch(editor.state.tr.insertText(text, from, to).scrollIntoView());
+    editor.view.dispatch(
+      editor.state.tr.insertText(text, from, to).scrollIntoView(),
+    );
     return true;
   }
 
@@ -1411,7 +1444,8 @@ function getCodeBlockMarkdownParts(node: ProseMirrorNode): {
   prefixLength: number;
   totalLength: number;
 } {
-  const language = typeof node.attrs.language === "string" ? node.attrs.language : "";
+  const language =
+    typeof node.attrs.language === "string" ? node.attrs.language : "";
   const prefixLength = `\`\`\`${language}\n`.length;
   const contentLength = node.textContent.length;
   const suffixLength = "\n```".length;
@@ -1437,7 +1471,8 @@ function getMarkdownBlockPrefixLength(
   }
 
   if (parent?.type.name === "orderedList" && node.type.name === "listItem") {
-    const start = typeof parent.attrs.start === "number" ? parent.attrs.start : 1;
+    const start =
+      typeof parent.attrs.start === "number" ? parent.attrs.start : 1;
     return `${childIndex > 0 ? "\n" : ""}${start + childIndex}. `.length;
   }
 
@@ -1496,7 +1531,11 @@ function getDraftIndexAtPosition(
     }
 
     if (mode === "markdown") {
-      const prefixLength = getMarkdownBlockPrefixLength(node, parent, childIndex);
+      const prefixLength = getMarkdownBlockPrefixLength(
+        node,
+        parent,
+        childIndex,
+      );
       if (prefixLength > 0) {
         if (position <= pos + 1) {
           index += prefixLength;
@@ -1512,22 +1551,25 @@ function getDraftIndexAtPosition(
       const end = pos + text.length;
       if (position < end) {
         const textOffset = Math.max(0, position - pos);
-        index += mode === "markdown"
-          ? getMarkdownDraftOffsetAtTextOffset(node, textOffset)
-          : textOffset;
+        index +=
+          mode === "markdown"
+            ? getMarkdownDraftOffsetAtTextOffset(node, textOffset)
+            : textOffset;
         found = true;
         return false;
       }
       if (position === end) {
-        index += mode === "markdown"
-          ? getMarkdownTextSerialization(node).serialized.length
-          : text.length;
+        index +=
+          mode === "markdown"
+            ? getMarkdownTextSerialization(node).serialized.length
+            : text.length;
         found = true;
         return false;
       }
-      index += mode === "markdown"
-        ? getMarkdownTextSerialization(node).serialized.length
-        : text.length;
+      index +=
+        mode === "markdown"
+          ? getMarkdownTextSerialization(node).serialized.length
+          : text.length;
       return false;
     }
 
@@ -1603,7 +1645,11 @@ function getPositionAtDraftIndex(
     }
 
     if (mode === "markdown") {
-      const prefixLength = getMarkdownBlockPrefixLength(node, parent, childIndex);
+      const prefixLength = getMarkdownBlockPrefixLength(
+        node,
+        parent,
+        childIndex,
+      );
       if (prefixLength > 0) {
         if (draftIndex <= index + prefixLength) {
           position = pos + 1;
@@ -1616,13 +1662,15 @@ function getPositionAtDraftIndex(
 
     if (node.isText) {
       const textLength = node.text?.length ?? 0;
-      const totalLength = mode === "markdown"
-        ? getMarkdownTextSerialization(node).serialized.length
-        : textLength;
+      const totalLength =
+        mode === "markdown"
+          ? getMarkdownTextSerialization(node).serialized.length
+          : textLength;
       if (draftIndex <= index + totalLength) {
-        const textIndex = mode === "markdown"
-          ? getTextOffsetAtMarkdownDraftOffset(node, draftIndex - index)
-          : draftIndex - index;
+        const textIndex =
+          mode === "markdown"
+            ? getTextOffsetAtMarkdownDraftOffset(node, draftIndex - index)
+            : draftIndex - index;
         position = pos + Math.max(0, Math.min(textLength, textIndex));
         found = true;
         return false;
@@ -1656,8 +1704,11 @@ function getPositionAtDraftIndex(
   return Math.max(1, position);
 }
 
-function getSkillSummary(attrs: Record<string, unknown>): AppServerSkillSummary {
-  const name = typeof attrs.name === "string" ? attrs.name : String(attrs.id ?? "skill");
+function getSkillSummary(
+  attrs: Record<string, unknown>,
+): AppServerSkillSummary {
+  const name =
+    typeof attrs.name === "string" ? attrs.name : String(attrs.id ?? "skill");
   return {
     name,
     path: typeof attrs.path === "string" ? attrs.path : undefined,
@@ -1670,7 +1721,9 @@ function getSkillSummary(attrs: Record<string, unknown>): AppServerSkillSummary 
   };
 }
 
-function getSkillMentionAttrs(skill: ComposerSkillToken): Record<string, unknown> {
+function getSkillMentionAttrs(
+  skill: ComposerSkillToken,
+): Record<string, unknown> {
   return {
     id: skill.id,
     name: skill.name,
@@ -1721,8 +1774,8 @@ function applyExternalSkillInsertion(params: {
   }
 
   const trigger =
-    findSkillTrigger(params.current.value, params.selectionIndex) ??
-    findSkillTrigger(params.current.value, params.current.value.length);
+    findSkillTrigger(params.current.value, params.selectionIndex)
+    ?? findSkillTrigger(params.current.value, params.current.value.length);
   if (!trigger || trigger.start !== insertedSkill.index) {
     return false;
   }
@@ -1740,7 +1793,11 @@ function applyExternalSkillInsertion(params: {
     trigger.start,
     params.readMode,
   );
-  const to = getPositionAtDraftIndex(params.editor, trigger.end, params.readMode);
+  const to = getPositionAtDraftIndex(
+    params.editor,
+    trigger.end,
+    params.readMode,
+  );
   const insertedContent: JSONContent[] = [
     {
       type: "mention",
@@ -1780,7 +1837,9 @@ export const ComposerTiptapInput = forwardRef<
   const controlledRedoStackRef = useRef<ControlledHistoryEntry[]>([]);
   const applyingControlledHistoryRef = useRef(false);
   const controlledChangeInProgressRef = useRef(false);
-  const readMode: TiptapReadMode = props.markdownConversion ? "markdown" : "text";
+  const readMode: TiptapReadMode = props.markdownConversion
+    ? "markdown"
+    : "text";
   const propsSignature = getContentSignature({
     value: props.value,
     skillTokens: props.skillTokens,
@@ -1809,8 +1868,8 @@ export const ComposerTiptapInput = forwardRef<
     const stack = controlledUndoStackRef.current;
     const previous = stack.at(-1);
     if (
-      previous &&
-      getContentSignature(previous) === getContentSignature(entry)
+      previous
+      && getContentSignature(previous) === getContentSignature(entry)
     ) {
       return;
     }
@@ -1825,7 +1884,9 @@ export const ComposerTiptapInput = forwardRef<
   ): void => {
     applyingControlledHistoryRef.current = true;
     closeEditorHistory(currentEditor);
-    currentEditor.commands.setContent(entry.editorDocument, { emitUpdate: false });
+    currentEditor.commands.setContent(entry.editorDocument, {
+      emitUpdate: false,
+    });
     closeEditorHistory(currentEditor);
     selectionIndexRef.current = entry.selectionIndex;
     flushSync(() => {
@@ -1841,7 +1902,11 @@ export const ComposerTiptapInput = forwardRef<
         }
         currentEditor.commands.focus();
         currentEditor.commands.setTextSelection(
-          getPositionAtDraftIndex(currentEditor, entry.selectionIndex, readMode),
+          getPositionAtDraftIndex(
+            currentEditor,
+            entry.selectionIndex,
+            readMode,
+          ),
         );
       } catch {
         // jsdom and detached editor states can fail selection mapping.
@@ -1899,8 +1964,8 @@ export const ComposerTiptapInput = forwardRef<
   };
   const initialContent = useMemo(
     () =>
-      props.editorDocument ??
-      buildTiptapContent(props.value, props.skillTokens, {
+      props.editorDocument
+      ?? buildTiptapContent(props.value, props.skillTokens, {
         markdownConversion: props.markdownConversion,
       }),
     [],
@@ -1922,9 +1987,7 @@ export const ComposerTiptapInput = forwardRef<
         ...(props.ariaActiveDescendant
           ? { "aria-activedescendant": props.ariaActiveDescendant }
           : {}),
-        ...(props.ariaControls
-          ? { "aria-controls": props.ariaControls }
-          : {}),
+        ...(props.ariaControls ? { "aria-controls": props.ariaControls } : {}),
         "aria-autocomplete": "list",
         "aria-label": props.label,
         class: `composer-tiptap-input__editor${props.disabled ? " is-disabled" : ""}`,
@@ -1933,25 +1996,31 @@ export const ComposerTiptapInput = forwardRef<
         role: "textbox",
       },
       handleClick: (_view, _pos, event) => {
-        propsRef.current.onClick?.(event as unknown as MouseEvent<HTMLDivElement>);
+        propsRef.current.onClick?.(
+          event as unknown as MouseEvent<HTMLDivElement>,
+        );
         return false;
       },
       handleDOMEvents: {
         dragover: (_view, event) => {
-          propsRef.current.onDragOver?.(event as unknown as DragEvent<HTMLDivElement>);
+          propsRef.current.onDragOver?.(
+            event as unknown as DragEvent<HTMLDivElement>,
+          );
           return event.defaultPrevented;
         },
         drop: (_view, event) => {
-          propsRef.current.onDrop?.(event as unknown as DragEvent<HTMLDivElement>);
+          propsRef.current.onDrop?.(
+            event as unknown as DragEvent<HTMLDivElement>,
+          );
           return event.defaultPrevented;
         },
         keydown: (_view, event) => {
           const macPlatform = isMacPlatform();
           if (
-            event.key.toLowerCase() === "y" &&
-            (event.metaKey || event.ctrlKey) &&
-            !event.altKey &&
-            !event.shiftKey
+            event.key.toLowerCase() === "y"
+            && (event.metaKey || event.ctrlKey)
+            && !event.altKey
+            && !event.shiftKey
           ) {
             const currentEditor = editorRef.current;
             if (!currentEditor) {
@@ -1962,10 +2031,10 @@ export const ComposerTiptapInput = forwardRef<
           }
 
           if (
-            event.key.toLowerCase() === "z" &&
-            (event.metaKey || event.ctrlKey) &&
-            !event.altKey &&
-            event.shiftKey
+            event.key.toLowerCase() === "z"
+            && (event.metaKey || event.ctrlKey)
+            && !event.altKey
+            && event.shiftKey
           ) {
             const currentEditor = editorRef.current;
             if (!currentEditor) {
@@ -1976,11 +2045,11 @@ export const ComposerTiptapInput = forwardRef<
           }
 
           if (
-            event.key.toLowerCase() === "z" &&
-            (event.metaKey || event.ctrlKey) &&
-            !event.altKey &&
-            !event.shiftKey &&
-            deletedSingleSkillRef.current
+            event.key.toLowerCase() === "z"
+            && (event.metaKey || event.ctrlKey)
+            && !event.altKey
+            && !event.shiftKey
+            && deletedSingleSkillRef.current
           ) {
             const deleted = deletedSingleSkillRef.current;
             deletedSingleSkillRef.current = undefined;
@@ -2001,17 +2070,21 @@ export const ComposerTiptapInput = forwardRef<
               });
             });
             currentEditor.commands.setTextSelection(
-              getPositionAtDraftIndex(currentEditor, deleted.selectionIndex, readMode),
+              getPositionAtDraftIndex(
+                currentEditor,
+                deleted.selectionIndex,
+                readMode,
+              ),
             );
             return true;
           }
 
           if (
-            event.key.toLowerCase() === "a" &&
-            ((macPlatform && event.metaKey && !event.ctrlKey) ||
-              (!macPlatform && event.ctrlKey && !event.metaKey)) &&
-            !event.altKey &&
-            !event.shiftKey
+            event.key.toLowerCase() === "a"
+            && ((macPlatform && event.metaKey && !event.ctrlKey)
+              || (!macPlatform && event.ctrlKey && !event.metaKey))
+            && !event.altKey
+            && !event.shiftKey
           ) {
             event.preventDefault();
             editorRef.current?.commands.selectAll();
@@ -2019,20 +2092,20 @@ export const ComposerTiptapInput = forwardRef<
           }
 
           if (
-            macPlatform &&
-            event.key.toLowerCase() === "a" &&
-            event.ctrlKey &&
-            !event.metaKey &&
-            !event.altKey &&
-            !event.shiftKey
+            macPlatform
+            && event.key.toLowerCase() === "a"
+            && event.ctrlKey
+            && !event.metaKey
+            && !event.altKey
+            && !event.shiftKey
           ) {
             return true;
           }
 
           if (
-            (event.key === "Backspace" || event.key === "Delete") &&
-            propsRef.current.value.trim().length === 0 &&
-            propsRef.current.skillTokens.length === 1
+            (event.key === "Backspace" || event.key === "Delete")
+            && propsRef.current.value.trim().length === 0
+            && propsRef.current.skillTokens.length === 1
           ) {
             event.preventDefault();
             const currentEditor = editorRef.current;
@@ -2059,10 +2132,10 @@ export const ComposerTiptapInput = forwardRef<
           }
 
           if (
-            event.key.toLowerCase() === "z" &&
-            (event.metaKey || event.ctrlKey) &&
-            !event.altKey &&
-            !event.shiftKey
+            event.key.toLowerCase() === "z"
+            && (event.metaKey || event.ctrlKey)
+            && !event.altKey
+            && !event.shiftKey
           ) {
             const currentEditor = editorRef.current;
             if (!currentEditor) {
@@ -2073,39 +2146,45 @@ export const ComposerTiptapInput = forwardRef<
           }
 
           if (
-            propsRef.current.markdownConversion &&
-            (event.key === "ArrowLeft" || event.key === "ArrowUp") &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.altKey &&
-            !event.shiftKey
+            propsRef.current.markdownConversion
+            && (event.key === "ArrowLeft" || event.key === "ArrowUp")
+            && !event.metaKey
+            && !event.ctrlKey
+            && !event.altKey
+            && !event.shiftKey
           ) {
             const currentEditor = editorRef.current;
-            if (currentEditor && insertParagraphBeforeInitialCodeBlock(currentEditor)) {
+            if (
+              currentEditor
+              && insertParagraphBeforeInitialCodeBlock(currentEditor)
+            ) {
               event.preventDefault();
               return true;
             }
           }
 
           if (
-            propsRef.current.markdownConversion &&
-            event.key === "ArrowRight" &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.altKey &&
-            !event.shiftKey
+            propsRef.current.markdownConversion
+            && event.key === "ArrowRight"
+            && !event.metaKey
+            && !event.ctrlKey
+            && !event.altKey
+            && !event.shiftKey
           ) {
             const currentEditor = editorRef.current;
-            if (currentEditor && insertPlainSpaceAtTextblockEnd(currentEditor)) {
+            if (
+              currentEditor
+              && insertPlainSpaceAtTextblockEnd(currentEditor)
+            ) {
               event.preventDefault();
               return true;
             }
           }
 
           if (
-            propsRef.current.markdownConversion &&
-            event.key === "Enter" &&
-            (event.shiftKey || event.altKey)
+            propsRef.current.markdownConversion
+            && event.key === "Enter"
+            && (event.shiftKey || event.altKey)
           ) {
             event.preventDefault();
             const currentEditor = editorRef.current;
@@ -2116,11 +2195,15 @@ export const ComposerTiptapInput = forwardRef<
               ? insertWysiwygSoftBreak(currentEditor)
               : insertWysiwygLineBreak(currentEditor);
           }
-          propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
+          propsRef.current.onKeyDown?.(
+            event as unknown as KeyboardEvent<HTMLDivElement>,
+          );
           return event.defaultPrevented;
         },
         paste: (_view, event) => {
-          propsRef.current.onPaste?.(event as unknown as ClipboardEvent<HTMLDivElement>);
+          propsRef.current.onPaste?.(
+            event as unknown as ClipboardEvent<HTMLDivElement>,
+          );
           if (event.defaultPrevented) {
             return true;
           }
@@ -2128,12 +2211,15 @@ export const ComposerTiptapInput = forwardRef<
           if (!currentEditor || !propsRef.current.markdownConversion) {
             return false;
           }
-          return pastePlainTextIntoActiveBlock(
-            currentEditor,
-            event as unknown as ClipboardEvent<HTMLDivElement>,
-          ) || pastePlainMarkdownText(
-            currentEditor,
-            event as unknown as ClipboardEvent<HTMLDivElement>,
+          return (
+            pastePlainTextIntoActiveBlock(
+              currentEditor,
+              event as unknown as ClipboardEvent<HTMLDivElement>,
+            )
+            || pastePlainMarkdownText(
+              currentEditor,
+              event as unknown as ClipboardEvent<HTMLDivElement>,
+            )
           );
         },
       },
@@ -2145,8 +2231,8 @@ export const ComposerTiptapInput = forwardRef<
       const next = readTiptapContent(nextEditor, readMode);
       const pendingSignature = pendingExternalSignatureRef.current;
       if (
-        pendingSignature &&
-        getContentSignature({
+        pendingSignature
+        && getContentSignature({
           value: next.value,
           skillTokens: next.skillTokens,
         }) !== pendingSignature
@@ -2155,9 +2241,9 @@ export const ComposerTiptapInput = forwardRef<
       }
       pendingExternalSignatureRef.current = undefined;
       if (
-        !pendingSignature &&
-        !controlledChangeInProgressRef.current &&
-        !applyingControlledHistoryRef.current
+        !pendingSignature
+        && !controlledChangeInProgressRef.current
+        && !applyingControlledHistoryRef.current
       ) {
         controlledUndoStackRef.current = [];
         controlledRedoStackRef.current = [];
@@ -2196,7 +2282,10 @@ export const ComposerTiptapInput = forwardRef<
     // popup state to screen readers under the ARIA 1.2 textbox +
     // autocomplete pattern.
     if (props.ariaActiveDescendant) {
-      editor.view.dom.setAttribute("aria-activedescendant", props.ariaActiveDescendant);
+      editor.view.dom.setAttribute(
+        "aria-activedescendant",
+        props.ariaActiveDescendant,
+      );
     } else {
       editor.view.dom.removeAttribute("aria-activedescendant");
     }
@@ -2293,8 +2382,8 @@ export const ComposerTiptapInput = forwardRef<
       : undefined;
     if (currentSignature === propsSignature) {
       if (
-        !nextEditorDocumentSignature ||
-        currentEditorDocumentSignature === nextEditorDocumentSignature
+        !nextEditorDocumentSignature
+        || currentEditorDocumentSignature === nextEditorDocumentSignature
       ) {
         pendingExternalSignatureRef.current = undefined;
         return;
@@ -2302,8 +2391,8 @@ export const ComposerTiptapInput = forwardRef<
     }
 
     if (
-      nextEditorDocumentSignature &&
-      currentEditorDocumentSignature !== nextEditorDocumentSignature
+      nextEditorDocumentSignature
+      && currentEditorDocumentSignature !== nextEditorDocumentSignature
     ) {
       pendingExternalSignatureRef.current = propsSignature;
       pushControlledUndoEntry(editor);
@@ -2366,9 +2455,9 @@ export const ComposerTiptapInput = forwardRef<
 
   useLayoutEffect(() => {
     if (
-      !editor ||
-      !props.selectionRequest ||
-      appliedSelectionRequestIdRef.current === props.selectionRequest.id
+      !editor
+      || !props.selectionRequest
+      || appliedSelectionRequestIdRef.current === props.selectionRequest.id
     ) {
       return;
     }
@@ -2413,8 +2502,9 @@ export const ComposerTiptapInput = forwardRef<
     },
     focus: () => {
       if (
-        editor &&
-        getContentSignature(readTiptapContent(editor, readMode)) !== propsSignature
+        editor
+        && getContentSignature(readTiptapContent(editor, readMode))
+          !== propsSignature
       ) {
         pendingExternalSignatureRef.current = propsSignature;
       }
@@ -2446,7 +2536,9 @@ export const ComposerTiptapInput = forwardRef<
         return;
       }
       selectionIndexRef.current = start;
-      editor.commands.setTextSelection(getPositionAtDraftIndex(editor, start, readMode));
+      editor.commands.setTextSelection(
+        getPositionAtDraftIndex(editor, start, readMode),
+      );
     },
   }));
 
@@ -2462,45 +2554,49 @@ export const ComposerTiptapInput = forwardRef<
         }
         if (event.key === "ArrowUp" || event.key === "ArrowDown") {
           if (
-            props.markdownConversion &&
-            event.key === "ArrowUp" &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.altKey &&
-            !event.shiftKey &&
-            insertParagraphBeforeInitialCodeBlock(editor)
+            props.markdownConversion
+            && event.key === "ArrowUp"
+            && !event.metaKey
+            && !event.ctrlKey
+            && !event.altKey
+            && !event.shiftKey
+            && insertParagraphBeforeInitialCodeBlock(editor)
           ) {
             event.preventDefault();
             event.stopPropagation();
             return;
           }
-          propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
+          propsRef.current.onKeyDown?.(
+            event as unknown as KeyboardEvent<HTMLDivElement>,
+          );
           if (event.defaultPrevented) {
             event.stopPropagation();
           }
           return;
         }
         if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
-          propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
+          propsRef.current.onKeyDown?.(
+            event as unknown as KeyboardEvent<HTMLDivElement>,
+          );
           if (event.defaultPrevented) {
             event.stopPropagation();
           }
           return;
         }
         if (
-          event.key.toLowerCase() === "z" &&
-          (event.metaKey || event.ctrlKey) &&
-          !event.altKey &&
-          !event.shiftKey &&
-          deletedSingleSkillRef.current
+          event.key.toLowerCase() === "z"
+          && (event.metaKey || event.ctrlKey)
+          && !event.altKey
+          && !event.shiftKey
+          && deletedSingleSkillRef.current
         ) {
           return;
         }
         if (
-          event.key.toLowerCase() === "y" &&
-          (event.metaKey || event.ctrlKey) &&
-          !event.altKey &&
-          !event.shiftKey
+          event.key.toLowerCase() === "y"
+          && (event.metaKey || event.ctrlKey)
+          && !event.altKey
+          && !event.shiftKey
         ) {
           event.preventDefault();
           event.stopPropagation();
@@ -2508,9 +2604,9 @@ export const ComposerTiptapInput = forwardRef<
           return;
         }
         if (
-          event.key.toLowerCase() === "z" &&
-          (event.metaKey || event.ctrlKey) &&
-          !event.altKey
+          event.key.toLowerCase() === "z"
+          && (event.metaKey || event.ctrlKey)
+          && !event.altKey
         ) {
           event.preventDefault();
           event.stopPropagation();

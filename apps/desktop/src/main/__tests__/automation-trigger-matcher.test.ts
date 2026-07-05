@@ -179,7 +179,9 @@ function slackTextEvent(
   overrides: Partial<MessagingInboundTextEvent> & {
     actor?: Partial<MessagingInboundTextEvent["actor"]>;
     channel?: {
-      conversation?: Partial<MessagingInboundTextEvent["channel"]["conversation"]>;
+      conversation?: Partial<
+        MessagingInboundTextEvent["channel"]["conversation"]
+      >;
     };
   } = {},
 ): MessagingInboundTextEvent {
@@ -203,12 +205,12 @@ function slackTextEvent(
     routingState:
       overrides.routingState === undefined && "routingState" in overrides
         ? undefined
-        : overrides.routingState ?? {
+        : (overrides.routingState ?? {
             opaque: {
               channelId: "C123",
               ts: "1710000000.000100",
             },
-          },
+          }),
     text: overrides.text ?? "ERROR api latency high",
   };
 }

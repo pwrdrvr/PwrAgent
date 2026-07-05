@@ -220,7 +220,9 @@ async function createRepoWithBranch(branch: string): Promise<string> {
 }
 
 async function createNonGitDirectory(): Promise<string> {
-  const directory = await mkdtemp(path.join(tmpdir(), "pwragent-pr-detection-"));
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "pwragent-pr-detection-"),
+  );
   tempDirs.push(directory);
   await mkdir(path.join(directory, "nested"));
   return directory;

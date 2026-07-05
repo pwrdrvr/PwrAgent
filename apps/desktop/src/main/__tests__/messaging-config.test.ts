@@ -57,7 +57,9 @@ afterEach(() => {
 
 describe("desktop messaging config", () => {
   it("classifies every desktop messaging config field explicitly", () => {
-    expect(Object.keys(DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS).sort()).toEqual([
+    expect(
+      Object.keys(DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS).sort(),
+    ).toEqual([
       "attachmentPolicy",
       "discord",
       "enabled",
@@ -70,7 +72,11 @@ describe("desktop messaging config", () => {
       "telegram",
       "toolUpdateDefaultMode",
     ]);
-    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.telegram).sort()).toEqual([
+    expect(
+      Object.keys(
+        DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.telegram,
+      ).sort(),
+    ).toEqual([
       "authorizedActorIds",
       "authorizedSupergroupIds",
       "botToken",
@@ -79,7 +85,11 @@ describe("desktop messaging config", () => {
       "responseMode",
       "streamingResponses",
     ]);
-    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.discord).sort()).toEqual([
+    expect(
+      Object.keys(
+        DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.discord,
+      ).sort(),
+    ).toEqual([
       "applicationId",
       "authorizedActorIds",
       "authorizedGuildIds",
@@ -88,7 +98,11 @@ describe("desktop messaging config", () => {
       "enabled",
       "streamingResponses",
     ]);
-    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.mattermost).sort()).toEqual([
+    expect(
+      Object.keys(
+        DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.mattermost,
+      ).sort(),
+    ).toEqual([
       "authorizedActorIds",
       "authorizedConversationIds",
       "authorizedTeamIds",
@@ -102,7 +116,9 @@ describe("desktop messaging config", () => {
       "slashCommandPrefix",
       "streamingResponses",
     ]);
-    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.slack).sort()).toEqual([
+    expect(
+      Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.slack).sort(),
+    ).toEqual([
       "appToken",
       "authorizedActorIds",
       "authorizedConversationIds",
@@ -123,7 +139,9 @@ describe("desktop messaging config", () => {
       "teamAuthorizationMode",
       "workspaceUrl",
     ]);
-    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.feishu).sort()).toEqual([
+    expect(
+      Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.feishu).sort(),
+    ).toEqual([
       "appId",
       "appSecret",
       "authorizedActorIds",
@@ -141,7 +159,9 @@ describe("desktop messaging config", () => {
       "tenantUrl",
       "verificationToken",
     ]);
-    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.line).sort()).toEqual([
+    expect(
+      Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.line).sort(),
+    ).toEqual([
       "authorizedActorIds",
       "authorizedGroupIds",
       "authorizedRoomIds",
@@ -181,20 +201,21 @@ describe("desktop messaging config", () => {
       },
     };
 
-    expect(classifyDesktopMessagingChannelConfigUpdate(previous, next, "telegram"))
-      .toEqual({
-        action: "hot",
-        changedFields: [
-          "telegram.authorizedActorIds",
-          "telegram.authorizedSupergroupIds",
-        ],
-        authorization: {
-          authorizedActorIds: ["user-1", "user-2"],
-          authorizedConversationIds: ["-1001", "-1002"],
-          conversationResponseModes: [],
-          responseMode: undefined,
-        },
-      });
+    expect(
+      classifyDesktopMessagingChannelConfigUpdate(previous, next, "telegram"),
+    ).toEqual({
+      action: "hot",
+      changedFields: [
+        "telegram.authorizedActorIds",
+        "telegram.authorizedSupergroupIds",
+      ],
+      authorization: {
+        authorizedActorIds: ["user-1", "user-2"],
+        authorizedConversationIds: ["-1001", "-1002"],
+        conversationResponseModes: [],
+        responseMode: undefined,
+      },
+    });
   });
 
   it("classifies credential changes as restart-required", () => {
@@ -213,12 +234,13 @@ describe("desktop messaging config", () => {
       },
     };
 
-    expect(classifyDesktopMessagingChannelConfigUpdate(previous, next, "discord"))
-      .toEqual({
-        action: "restart",
-        changedFields: ["discord.botToken"],
-        restartFields: ["discord.botToken"],
-      });
+    expect(
+      classifyDesktopMessagingChannelConfigUpdate(previous, next, "discord"),
+    ).toEqual({
+      action: "restart",
+      changedFields: ["discord.botToken"],
+      restartFields: ["discord.botToken"],
+    });
   });
 
   it("enables configured channels when credentials are present before actor discovery", () => {
@@ -289,11 +311,9 @@ describe("desktop messaging config", () => {
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(
       configPath,
-      [
-        "[messaging.slack]",
-        "enabled = true",
-        'inbound_mode = "socket"',
-      ].join("\n"),
+      ["[messaging.slack]", "enabled = true", 'inbound_mode = "socket"'].join(
+        "\n",
+      ),
       "utf8",
     );
     const secretStore = new MemoryDesktopSecretStore();
@@ -355,11 +375,9 @@ describe("desktop messaging config", () => {
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(
       configPath,
-      [
-        "[messaging.slack]",
-        "enabled = true",
-        'inbound_mode = "events"',
-      ].join("\n"),
+      ["[messaging.slack]", "enabled = true", 'inbound_mode = "events"'].join(
+        "\n",
+      ),
       "utf8",
     );
     const secretStore = new MemoryDesktopSecretStore();
@@ -572,9 +590,13 @@ describe("desktop messaging config", () => {
       secretStore,
     });
 
-    const config = await loadDesktopMessagingConfigFromSettings(service, {}, {
-      logStartupEligibility: true,
-    });
+    const config = await loadDesktopMessagingConfigFromSettings(
+      service,
+      {},
+      {
+        logStartupEligibility: true,
+      },
+    );
 
     expect(config).toMatchObject({
       telegram: {
@@ -713,7 +735,11 @@ describe("desktop messaging config", () => {
   it("does not offer persistent Full Access warning dismissal for env-sourced contacts", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
-    fs.writeFileSync(configPath, "[messaging.telegram]\nenabled = true\n", "utf8");
+    fs.writeFileSync(
+      configPath,
+      "[messaging.telegram]\nenabled = true\n",
+      "utf8",
+    );
     const service = new DesktopSettingsService({
       configPath,
       env: {
@@ -767,9 +793,13 @@ describe("desktop messaging config", () => {
       secretStore,
     });
 
-    const config = await loadDesktopMessagingConfigFromSettings(service, {}, {
-      logStartupEligibility: true,
-    });
+    const config = await loadDesktopMessagingConfigFromSettings(
+      service,
+      {},
+      {
+        logStartupEligibility: true,
+      },
+    );
 
     expect(config.line).toMatchObject({
       channel: "line",
@@ -927,7 +957,9 @@ describe("desktop messaging config", () => {
 });
 
 function createTempRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-messaging-config-"));
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pwragent-messaging-config-"),
+  );
   tempRoots.push(root);
   return root;
 }
@@ -979,18 +1011,10 @@ describe("normalizeMattermostUrl", () => {
         warns.push({ msg, data }),
     };
     expect(
-      normalizeMattermostUrl(
-        "ftp://chat.example.com",
-        "serverUrl",
-        log,
-      ),
+      normalizeMattermostUrl("ftp://chat.example.com", "serverUrl", log),
     ).toBeUndefined();
     expect(
-      normalizeMattermostUrl(
-        "ws://chat.example.com/",
-        "serverUrl",
-        log,
-      ),
+      normalizeMattermostUrl("ws://chat.example.com/", "serverUrl", log),
     ).toBeUndefined();
     expect(warns).toHaveLength(2);
     expect(warns[0]?.msg).toContain("unsupported protocol");

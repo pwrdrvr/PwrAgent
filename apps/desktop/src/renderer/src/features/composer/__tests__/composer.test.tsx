@@ -1,5 +1,13 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { StrictMode } from "react";
 import type {
   BackendSummary,
@@ -300,13 +308,15 @@ const autocompleteRegressionSkills = [
   },
   {
     name: "ce:compound",
-    description: "Document a recently solved problem to compound your team's knowledge.",
+    description:
+      "Document a recently solved problem to compound your team's knowledge.",
     path: "/Users/huntharo/.codex/skills/ce-compound/SKILL.md",
     enabled: true,
   },
   {
     name: "ce:plan",
-    description: "Transform feature descriptions or requirements into structured implementation plans.",
+    description:
+      "Transform feature descriptions or requirements into structured implementation plans.",
     path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
     enabled: true,
   },
@@ -335,7 +345,7 @@ function renderComposerWithRegressionSkills(
         linkedDirectories: [],
         inbox: { inInbox: false },
       }}
-    />
+    />,
   );
 
   return { startTurn };
@@ -367,12 +377,14 @@ describe("Composer", () => {
         }}
         launchpadError={launchpadError}
         skills={[]}
-      />
+      />,
     );
 
     expect(screen.getByText(launchpadError)).toHaveClass("composer__meta-text");
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy launchpad error" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy launchpad error" }),
+    );
 
     await waitFor(() => {
       expect(copyText).toHaveBeenCalledWith(launchpadError);
@@ -380,7 +392,8 @@ describe("Composer", () => {
   });
 
   it("renders unavailable reason when provided", async () => {
-    const unavailableReason = "Codex profile not logged in. Please check your settings.";
+    const unavailableReason =
+      "Codex profile not logged in. Please check your settings.";
     render(
       <Composer
         backends={[backendSummary("codex")]}
@@ -400,11 +413,13 @@ describe("Composer", () => {
         }}
         unavailableReason={unavailableReason}
         skills={[]}
-      />
+      />,
     );
 
     expect(screen.getByText(unavailableReason)).toBeInTheDocument();
-    expect(screen.getByText(unavailableReason)).toHaveClass("composer__meta--error");
+    expect(screen.getByText(unavailableReason)).toHaveClass(
+      "composer__meta--error",
+    );
   });
 
   it("opens the current workspace in discovered applications", async () => {
@@ -556,7 +571,12 @@ describe("Composer", () => {
           {
             ...backendSummary("codex"),
             executionModes: [
-              { mode: "default", label: "Default Access", available: true, isDefault: true },
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
               { mode: "full-access", label: "Full Access", available: true },
             ],
           },
@@ -635,8 +655,12 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: "VS Code" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Ghostty" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "VS Code" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Ghostty" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows thread environment commands from refreshed environment options", async () => {
@@ -814,7 +838,10 @@ describe("Composer", () => {
       };
     }>();
     const runCodexEnvironmentAction = vi.fn(() => startDeferred.promise);
-    const buildThread = (id: string, actionId: string): NavigationThreadSummary => ({
+    const buildThread = (
+      id: string,
+      actionId: string,
+    ): NavigationThreadSummary => ({
       id,
       title: id,
       titleSource: "explicit",
@@ -936,7 +963,9 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Test");
+    expect(screen.getByLabelText("Environment command")).toHaveTextContent(
+      "Test",
+    );
 
     rerender(
       <Composer
@@ -948,7 +977,9 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Dev");
+    expect(screen.getByLabelText("Environment command")).toHaveTextContent(
+      "Dev",
+    );
 
     rerender(
       <Composer
@@ -960,7 +991,9 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Test");
+    expect(screen.getByLabelText("Environment command")).toHaveTextContent(
+      "Test",
+    );
   });
 
   it("persists thread environment command changes without running the action", async () => {
@@ -1112,8 +1145,12 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Environment")).toHaveTextContent(
       "No environment",
     );
-    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Environment command"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Run" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not show environment commands on a launchpad", () => {
@@ -1163,60 +1200,65 @@ describe("Composer", () => {
 
     expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
     expect(screen.queryByText("Run setup")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Environment command"),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
   });
 
   it.each([
     ["acp:gemini", acpGeminiBackendSummary()],
     ["acp:kimi", backendSummary("acp:kimi")],
-  ] as const)("shows the launchpad environment picker for %s", (_backendId, backend) => {
-    const updateLaunchpad = vi.fn(async () => undefined);
-    render(
-      <Composer
-        backends={[backend]}
-        disabled={false}
-        launchpad={{
-          directoryKey: "directory:/repo/PwrAgent",
-          directoryKind: "directory",
-          directoryLabel: "PwrAgent",
-          directoryPath: "/repo/PwrAgent",
-          backend: backend.kind,
-          executionMode: "default",
-          prompt: "",
-          workMode: "local",
-          codexEnvironmentOptions: [
-            {
-              id: "environment",
-              name: "PwrAgnt",
-              sourcePath: "/repo/.codex/environments/environment.toml",
-              setupScript: "pnpm install",
-              actions: [],
-            },
-          ],
-          createdAt: 1,
-          updatedAt: 1,
-        }}
-        onUpdateLaunchpad={updateLaunchpad}
-        skills={[]}
-      />,
-    );
+  ] as const)(
+    "shows the launchpad environment picker for %s",
+    (_backendId, backend) => {
+      const updateLaunchpad = vi.fn(async () => undefined);
+      render(
+        <Composer
+          backends={[backend]}
+          disabled={false}
+          launchpad={{
+            directoryKey: "directory:/repo/PwrAgent",
+            directoryKind: "directory",
+            directoryLabel: "PwrAgent",
+            directoryPath: "/repo/PwrAgent",
+            backend: backend.kind,
+            executionMode: "default",
+            prompt: "",
+            workMode: "local",
+            codexEnvironmentOptions: [
+              {
+                id: "environment",
+                name: "PwrAgnt",
+                sourcePath: "/repo/.codex/environments/environment.toml",
+                setupScript: "pnpm install",
+                actions: [],
+              },
+            ],
+            createdAt: 1,
+            updatedAt: 1,
+          }}
+          onUpdateLaunchpad={updateLaunchpad}
+          skills={[]}
+        />,
+      );
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent(
-      "No environment",
-    );
+      expect(screen.getByLabelText("Environment")).toHaveTextContent(
+        "No environment",
+      );
 
-    chooseDropdownOption("Environment", "PwrAgnt");
+      chooseDropdownOption("Environment", "PwrAgnt");
 
-    expect(updateLaunchpad).toHaveBeenCalledWith(
-      "directory:/repo/PwrAgent",
-      expect.objectContaining({
-        codexEnvironmentId: "environment",
-        codexEnvironmentExecutionTarget: "local",
-      }),
-      expect.any(Object),
-    );
-  });
+      expect(updateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo/PwrAgent",
+        expect.objectContaining({
+          codexEnvironmentId: "environment",
+          codexEnvironmentExecutionTarget: "local",
+        }),
+        expect.any(Object),
+      );
+    },
+  );
 
   it("does not show launchpad environment commands", () => {
     const updateLaunchpad = vi.fn(async () => undefined);
@@ -1279,7 +1321,9 @@ describe("Composer", () => {
     );
 
     expect(screen.getByLabelText("Environment")).toHaveTextContent("Lunch");
-    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Environment command"),
+    ).not.toBeInTheDocument();
 
     chooseDropdownOption("Environment", "Dinner");
 
@@ -1324,13 +1368,13 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     expect(
       screen.getByRole("img", {
         name: "Context window 50% full, 64k/128k tokens, full moon",
-      })
+      }),
     ).toBeInTheDocument();
     expect(screen.getByRole("img")).toHaveAttribute(
       "data-tooltip",
@@ -1342,7 +1386,7 @@ describe("Composer", () => {
         "Cumulative usage reported: 80k tokens",
         "Cumulative cached input: 48k (66.7%)",
         "Cumulative output: 8k output, 4k reasoning",
-      ].join("\n")
+      ].join("\n"),
     );
     expect(screen.getByRole("img")).not.toHaveAttribute("title");
     expect(screen.getByText("50%")).toBeInTheDocument();
@@ -1387,12 +1431,14 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={async () => undefined}
         skills={[]}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.5");
     expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
-    expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "Default" }),
+    ).not.toBeInTheDocument();
   });
 
   it("hides reasoning controls for Grok 4.20 models", () => {
@@ -1430,12 +1476,14 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={async () => undefined}
         skills={[]}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("Model")).toHaveValue("grok-4.20-reasoning");
     expect(screen.queryByLabelText("Reasoning")).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "Default" }),
+    ).not.toBeInTheDocument();
   });
 
   it("sends effective model defaults for threads without saved model settings", async () => {
@@ -1475,7 +1523,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -1490,7 +1538,7 @@ describe("Composer", () => {
       expect.objectContaining({
         model: "gpt-5.5",
         reasoningEffort: "medium",
-      })
+      }),
     );
   });
 
@@ -1500,7 +1548,7 @@ describe("Composer", () => {
       (request: StartTurnRequest) =>
         new Promise<StartTurnResponse>((resolve) => {
           resolveStartTurn = resolve;
-        })
+        }),
     );
 
     render(
@@ -1520,7 +1568,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -1562,7 +1610,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -1596,7 +1644,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -1626,7 +1674,7 @@ describe("Composer", () => {
               threadId: request.threadId,
               turnId: "turn-1",
             });
-        })
+        }),
     );
 
     render(
@@ -1646,7 +1694,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -1656,7 +1704,9 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(startTurn).toHaveBeenCalledTimes(1);
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent("follow up next");
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "follow up next",
+    );
 
     await act(async () => {
       resolveStartTurn?.({
@@ -1693,17 +1743,19 @@ describe("Composer", () => {
               threadId: request.threadId,
               turnId: "turn-1",
             });
-        })
+        }),
     );
 
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
-        onAgentEvent: (callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
-          listener: infer Listener,
-        ) => unknown
-          ? Listener
-          : never) => {
+        onAgentEvent: (
+          callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
+            listener: infer Listener,
+          ) => unknown
+            ? Listener
+            : never,
+        ) => {
           agentEventHandler = callback as typeof agentEventHandler;
           return () => undefined;
         },
@@ -1734,7 +1786,7 @@ describe("Composer", () => {
     expect(startTurn).toHaveBeenCalledTimes(1);
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Review changes against main"
+      "Review changes against main",
     );
 
     await act(async () => {
@@ -1774,7 +1826,7 @@ describe("Composer", () => {
       (request: StartTurnRequest) =>
         new Promise<StartTurnResponse>(() => {
           void request;
-        })
+        }),
     );
 
     render(
@@ -1796,7 +1848,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -1806,7 +1858,9 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(startReview).not.toHaveBeenCalled();
-    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Review target" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
   });
 
@@ -1836,10 +1890,7 @@ describe("Composer", () => {
     };
 
     const { rerender } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-      />
+      <Composer {...baseProps} activeTurnId="turn-1" />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -1859,7 +1910,7 @@ describe("Composer", () => {
           backend: "codex",
           threadId: "thread-1",
           input: [{ type: "text", text: "Follow up next" }],
-        })
+        }),
       );
     });
   });
@@ -1889,20 +1940,17 @@ describe("Composer", () => {
       },
     };
 
-    const { rerender } = render(
-      <Composer
-        {...baseProps}
-        threadBusy
-      />
-    );
+    const { rerender } = render(<Composer {...baseProps} threadBusy />);
 
     const textarea = screen.getByLabelText("Reply");
-    fireEvent.change(textarea, { target: { value: "Follow up after thinking" } });
+    fireEvent.change(textarea, {
+      target: { value: "Follow up after thinking" },
+    });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Follow up after thinking"
+      "Follow up after thinking",
     );
     expect(textarea).toHaveValue("");
 
@@ -1914,7 +1962,7 @@ describe("Composer", () => {
           backend: "codex",
           threadId: "thread-1",
           input: [{ type: "text", text: "Follow up after thinking" }],
-        })
+        }),
       );
     });
   });
@@ -1945,10 +1993,7 @@ describe("Composer", () => {
     };
 
     const { rerender } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-      />
+      <Composer {...baseProps} activeTurnId="turn-1" />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -1958,12 +2003,14 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "First queued reply"
+      "First queued reply",
     );
     expect(screen.getByLabelText("Queued message 2")).toHaveTextContent(
-      "Second queued reply"
+      "Second queued reply",
     );
-    expect(screen.queryByText("A message is already queued.")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("A message is already queued."),
+    ).not.toBeInTheDocument();
 
     rerender(<Composer {...baseProps} activeTurnId={undefined} />);
 
@@ -1973,11 +2020,11 @@ describe("Composer", () => {
           backend: "codex",
           threadId: "thread-1",
           input: [{ type: "text", text: "First queued reply" }],
-        })
+        }),
       );
     });
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Second queued reply"
+      "Second queued reply",
     );
   });
 
@@ -1999,11 +2046,13 @@ describe("Composer", () => {
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
-        onAgentEvent: (callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
-          listener: infer Listener,
-        ) => unknown
-          ? Listener
-          : never) => {
+        onAgentEvent: (
+          callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
+            listener: infer Listener,
+          ) => unknown
+            ? Listener
+            : never,
+        ) => {
           agentEventHandler = callback as typeof agentEventHandler;
           return () => undefined;
         },
@@ -2025,7 +2074,7 @@ describe("Composer", () => {
     const { rerender } = render(
       <StrictMode>
         <Composer {...baseProps} activeTurnId="turn-1" />
-      </StrictMode>
+      </StrictMode>,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -2035,16 +2084,16 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "First queued turn"
+      "First queued turn",
     );
     expect(screen.getByLabelText("Queued message 2")).toHaveTextContent(
-      "Second queued turn"
+      "Second queued turn",
     );
 
     rerender(
       <StrictMode>
         <Composer {...baseProps} activeTurnId={undefined} />
-      </StrictMode>
+      </StrictMode>,
     );
 
     await waitFor(() => {
@@ -2054,7 +2103,7 @@ describe("Composer", () => {
 
     expect(startTurn).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Second queued turn"
+      "Second queued turn",
     );
 
     await act(async () => {
@@ -2073,7 +2122,7 @@ describe("Composer", () => {
 
     expect(startTurn).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Second queued turn"
+      "Second queued turn",
     );
   });
 
@@ -2130,7 +2179,7 @@ describe("Composer", () => {
       <>
         <Composer {...baseProps} />
         <Composer {...baseProps} />
-      </>
+      </>,
     );
 
     await waitFor(() => {
@@ -2139,10 +2188,9 @@ describe("Composer", () => {
     await flushReactUpdates();
 
     expect(startTurn).toHaveBeenCalledTimes(1);
-    expect(draftStore.getQueuedTurns(scopeKey).map((entry) => entry.text)).toEqual([
-      "Second duplicate-owned turn",
-      "Third duplicate-owned turn",
-    ]);
+    expect(
+      draftStore.getQueuedTurns(scopeKey).map((entry) => entry.text),
+    ).toEqual(["Second duplicate-owned turn", "Third duplicate-owned turn"]);
   });
 
   it("releases the queued-turn lock when a queued review start fails", async () => {
@@ -2203,7 +2251,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -2217,7 +2265,7 @@ describe("Composer", () => {
       expect(startTurn).toHaveBeenCalledWith(
         expect.objectContaining({
           input: [{ type: "text", text: "Run after failed review" }],
-        })
+        }),
       );
     });
   });
@@ -2248,11 +2296,13 @@ describe("Composer", () => {
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
-        onAgentEvent: (callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
-          listener: infer Listener,
-        ) => unknown
-          ? Listener
-          : never) => {
+        onAgentEvent: (
+          callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
+            listener: infer Listener,
+          ) => unknown
+            ? Listener
+            : never,
+        ) => {
           agentEventHandler = callback as typeof agentEventHandler;
           return () => undefined;
         },
@@ -2273,10 +2323,7 @@ describe("Composer", () => {
     };
 
     const { rerender } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-      />
+      <Composer {...baseProps} activeTurnId="turn-1" />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -2286,10 +2333,10 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "make a branch and PR"
+      "make a branch and PR",
     );
     expect(screen.getByLabelText("Queued message 2")).toHaveTextContent(
-      "Review changes against main"
+      "Review changes against main",
     );
 
     rerender(<Composer {...baseProps} activeTurnId={undefined} />);
@@ -2300,14 +2347,14 @@ describe("Composer", () => {
           backend: "codex",
           threadId: "thread-1",
           input: [{ type: "text", text: "make a branch and PR" }],
-        })
+        }),
       );
     });
     await flushReactUpdates();
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Review changes against main"
+      "Review changes against main",
     );
 
     await act(async () => {
@@ -2400,22 +2447,14 @@ describe("Composer", () => {
     };
 
     const { rerender } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-        thread={threadA}
-      />
+      <Composer {...baseProps} activeTurnId="turn-1" thread={threadA} />,
     );
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "make a branch and PR" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
     rerender(
-      <Composer
-        {...baseProps}
-        activeTurnId={undefined}
-        thread={threadA}
-      />
+      <Composer {...baseProps} activeTurnId={undefined} thread={threadA} />,
     );
 
     await waitFor(() => {
@@ -2423,17 +2462,13 @@ describe("Composer", () => {
         expect.objectContaining({
           threadId: "thread-1",
           input: [{ type: "text", text: "make a branch and PR" }],
-        })
+        }),
       );
     });
     await flushReactUpdates();
 
     rerender(
-      <Composer
-        {...baseProps}
-        activeTurnId={undefined}
-        thread={threadB}
-      />
+      <Composer {...baseProps} activeTurnId={undefined} thread={threadB} />,
     );
 
     const nextTextarea = screen.getByLabelText("Reply");
@@ -2445,7 +2480,7 @@ describe("Composer", () => {
         expect.objectContaining({
           threadId: "thread-2",
           input: [{ type: "text", text: "work on thread two" }],
-        })
+        }),
       );
     });
   });
@@ -2492,11 +2527,7 @@ describe("Composer", () => {
     };
 
     const { rerender } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-        thread={threadA}
-      />
+      <Composer {...baseProps} activeTurnId="turn-1" thread={threadA} />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -2506,11 +2537,7 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     rerender(
-      <Composer
-        {...baseProps}
-        activeTurnId={undefined}
-        thread={threadA}
-      />
+      <Composer {...baseProps} activeTurnId={undefined} thread={threadA} />,
     );
 
     await waitFor(() => {
@@ -2518,34 +2545,26 @@ describe("Composer", () => {
         expect.objectContaining({
           threadId: "thread-1",
           input: [{ type: "text", text: "make a branch and PR" }],
-        })
+        }),
       );
     });
     await flushReactUpdates();
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Review changes against main"
+      "Review changes against main",
     );
 
     rerender(
-      <Composer
-        {...baseProps}
-        activeTurnId={undefined}
-        thread={threadB}
-      />
+      <Composer {...baseProps} activeTurnId={undefined} thread={threadB} />,
     );
     rerender(
-      <Composer
-        {...baseProps}
-        activeTurnId={undefined}
-        thread={threadA}
-      />
+      <Composer {...baseProps} activeTurnId={undefined} thread={threadA} />,
     );
     await flushReactUpdates();
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Queue" })).toBeInTheDocument();
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Review changes against main"
+      "Review changes against main",
     );
   });
 
@@ -2586,11 +2605,7 @@ describe("Composer", () => {
     };
 
     const { rerender } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-        thread={thread}
-      />
+      <Composer {...baseProps} activeTurnId="turn-1" thread={thread} />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -2600,11 +2615,7 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     rerender(
-      <Composer
-        {...baseProps}
-        activeTurnId={undefined}
-        thread={thread}
-      />
+      <Composer {...baseProps} activeTurnId={undefined} thread={thread} />,
     );
 
     await waitFor(() => {
@@ -2612,7 +2623,7 @@ describe("Composer", () => {
         expect.objectContaining({
           threadId: "thread-1",
           input: [{ type: "text", text: "make a branch and PR" }],
-        })
+        }),
       );
     });
     await flushReactUpdates();
@@ -2620,11 +2631,7 @@ describe("Composer", () => {
 
     rerender(<Composer {...baseProps} activeTurnId={undefined} />);
     rerender(
-      <Composer
-        {...baseProps}
-        activeTurnId={undefined}
-        thread={thread}
-      />
+      <Composer {...baseProps} activeTurnId={undefined} thread={thread} />,
     );
 
     await waitFor(() => {
@@ -2660,11 +2667,13 @@ describe("Composer", () => {
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
-        onAgentEvent: (callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
-          listener: infer Listener,
-        ) => unknown
-          ? Listener
-          : never) => {
+        onAgentEvent: (
+          callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
+            listener: infer Listener,
+          ) => unknown
+            ? Listener
+            : never,
+        ) => {
           agentEventHandler = callback as typeof agentEventHandler;
           return () => undefined;
         },
@@ -2687,10 +2696,7 @@ describe("Composer", () => {
     };
 
     const { rerender } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-      />
+      <Composer {...baseProps} activeTurnId="turn-1" />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -2703,7 +2709,7 @@ describe("Composer", () => {
     });
     expect(addOptimisticUserMessage).toHaveBeenCalledWith(
       "make a branch and PR",
-      []
+      [],
     );
     expect(onPendingStatusChange).toHaveBeenCalledWith("Thinking");
 
@@ -2739,7 +2745,7 @@ describe("Composer", () => {
               threadId: request.threadId,
               turnId: "turn-2",
             });
-        })
+        }),
     );
     const baseProps = {
       backends: [backendSummary("codex")],
@@ -2761,10 +2767,7 @@ describe("Composer", () => {
     };
 
     const { rerender } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-      />
+      <Composer {...baseProps} activeTurnId="turn-1" />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -2779,12 +2782,12 @@ describe("Composer", () => {
       expect(startTurn).toHaveBeenCalledWith(
         expect.objectContaining({
           input: [{ type: "text", text: "First queued reply" }],
-        })
+        }),
       );
     });
 
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Second queued reply"
+      "Second queued reply",
     );
 
     await act(async () => {
@@ -2796,7 +2799,7 @@ describe("Composer", () => {
     });
 
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Second queued reply"
+      "Second queued reply",
     );
   });
 
@@ -2833,11 +2836,7 @@ describe("Composer", () => {
     };
 
     const { unmount } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-        thread={threadA}
-      />
+      <Composer {...baseProps} activeTurnId="turn-1" thread={threadA} />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -2846,30 +2845,22 @@ describe("Composer", () => {
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Keep this queued reply"
+      "Keep this queued reply",
     );
 
     unmount();
     const { unmount: unmountThreadB } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId={undefined}
-        thread={threadB}
-      />
+      <Composer {...baseProps} activeTurnId={undefined} thread={threadB} />,
     );
     expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
 
     unmountThreadB();
     const { unmount: unmountRestoredThreadA } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-        thread={threadA}
-      />
+      <Composer {...baseProps} activeTurnId="turn-1" thread={threadA} />,
     );
 
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Keep this queued reply"
+      "Keep this queued reply",
     );
     expect(startTurn).not.toHaveBeenCalled();
 
@@ -2877,13 +2868,7 @@ describe("Composer", () => {
     expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
 
     unmountRestoredThreadA();
-    render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-        thread={threadA}
-      />
-    );
+    render(<Composer {...baseProps} activeTurnId="turn-1" thread={threadA} />);
     expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
   });
 
@@ -2915,7 +2900,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.paste(screen.getByLabelText("Reply"), {
@@ -2938,7 +2923,7 @@ describe("Composer", () => {
     expect(screen.getByText("Queued next")).toBeInTheDocument();
     expect(screen.getByText("1 image")).toBeInTheDocument();
     expect(
-      screen.getByLabelText("Queued image attachments: 1")
+      screen.getByLabelText("Queued image attachments: 1"),
     ).toBeInTheDocument();
     expect(screen.getByAltText("queued.png")).toBeInTheDocument();
   });
@@ -3001,7 +2986,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -3119,7 +3104,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -3140,7 +3125,7 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 
     expect(screen.getByLabelText("Pending steer message")).toHaveTextContent(
-      "1 image"
+      "1 image",
     );
 
     await act(async () => {
@@ -3197,7 +3182,7 @@ describe("Composer", () => {
     });
 
     expect(
-      screen.queryByLabelText("Pending steer message")
+      screen.queryByLabelText("Pending steer message"),
     ).not.toBeInTheDocument();
   });
 
@@ -3264,42 +3249,32 @@ describe("Composer", () => {
       title: "Another thread",
     };
 
-    const { unmount } = render(
-      <Composer
-        {...baseProps}
-        thread={threadA}
-      />
-    );
+    const { unmount } = render(<Composer {...baseProps} thread={threadA} />);
 
     const textarea = screen.getByLabelText("Reply");
-    fireEvent.change(textarea, { target: { value: "Keep steering direction" } });
+    fireEvent.change(textarea, {
+      target: { value: "Keep steering direction" },
+    });
     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 
     expect(screen.getByLabelText("Pending steer message")).toHaveTextContent(
-      "Keep steering direction"
+      "Keep steering direction",
     );
     expect(steerTurn).not.toHaveBeenCalled();
 
     unmount();
     const { unmount: unmountThreadB } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId={undefined}
-        thread={threadB}
-      />
+      <Composer {...baseProps} activeTurnId={undefined} thread={threadB} />,
     );
-    expect(screen.queryByLabelText("Pending steer message")).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Pending steer message"),
+    ).not.toBeInTheDocument();
 
     unmountThreadB();
-    render(
-      <Composer
-        {...baseProps}
-        thread={threadA}
-      />
-    );
+    render(<Composer {...baseProps} thread={threadA} />);
 
     expect(screen.getByLabelText("Pending steer message")).toHaveTextContent(
-      "Keep steering direction"
+      "Keep steering direction",
     );
     expect(steerTurn).not.toHaveBeenCalled();
 
@@ -3380,40 +3355,31 @@ describe("Composer", () => {
       title: "Another thread",
     };
 
-    const { rerender } = render(
-      <Composer
-        {...baseProps}
-        thread={threadA}
-      />
-    );
+    const { rerender } = render(<Composer {...baseProps} thread={threadA} />);
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "Keep steering through prop navigation" },
     });
-    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter", metaKey: true });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), {
+      key: "Enter",
+      metaKey: true,
+    });
 
     expect(screen.getByLabelText("Pending steer message")).toHaveTextContent(
-      "Keep steering through prop navigation"
+      "Keep steering through prop navigation",
     );
 
     rerender(
-      <Composer
-        {...baseProps}
-        activeTurnId={undefined}
-        thread={threadB}
-      />
+      <Composer {...baseProps} activeTurnId={undefined} thread={threadB} />,
     );
-    expect(screen.queryByLabelText("Pending steer message")).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Pending steer message"),
+    ).not.toBeInTheDocument();
 
-    rerender(
-      <Composer
-        {...baseProps}
-        thread={threadA}
-      />
-    );
+    rerender(<Composer {...baseProps} thread={threadA} />);
 
     expect(screen.getByLabelText("Pending steer message")).toHaveTextContent(
-      "Keep steering through prop navigation"
+      "Keep steering through prop navigation",
     );
     expect(steerTurn).not.toHaveBeenCalled();
   });
@@ -3470,30 +3436,25 @@ describe("Composer", () => {
     };
 
     const { unmount } = render(
-      <Composer
-        {...baseProps}
-        activeTurnId="turn-1"
-      />
+      <Composer {...baseProps} activeTurnId="turn-1" />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "Continue after active turn" },
     });
-    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter", metaKey: true });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), {
+      key: "Enter",
+      metaKey: true,
+    });
 
     expect(screen.getByLabelText("Pending steer message")).toHaveTextContent(
-      "Continue after active turn"
+      "Continue after active turn",
     );
     expect(startTurn).not.toHaveBeenCalled();
     expect(steerTurn).not.toHaveBeenCalled();
 
     unmount();
-    render(
-      <Composer
-        {...baseProps}
-        activeTurnId={undefined}
-      />
-    );
+    render(<Composer {...baseProps} activeTurnId={undefined} />);
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith(
@@ -3501,10 +3462,12 @@ describe("Composer", () => {
           backend: "codex",
           threadId: "thread-1",
           input: [{ type: "text", text: "Continue after active turn" }],
-        })
+        }),
       );
     });
-    expect(screen.queryByLabelText("Pending steer message")).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Pending steer message"),
+    ).not.toBeInTheDocument();
   });
 
   it("lets pending steers be edited before they are injected", async () => {
@@ -3551,7 +3514,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -3620,13 +3583,16 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "Change direction" },
     });
-    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter", metaKey: true });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), {
+      key: "Enter",
+      metaKey: true,
+    });
 
     await act(async () => {
       agentEventHandler?.({
@@ -3637,7 +3603,8 @@ describe("Composer", () => {
             threadId: "thread-1",
             item: {
               type: "tool_call",
-              output: "tool output mentioning Change direction before injection",
+              output:
+                "tool output mentioning Change direction before injection",
             },
           },
         },
@@ -3714,13 +3681,16 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "Send after stale steer" },
     });
-    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter", metaKey: true });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), {
+      key: "Enter",
+      metaKey: true,
+    });
 
     await act(async () => {
       agentEventHandler?.({
@@ -3750,7 +3720,9 @@ describe("Composer", () => {
     });
     expect(onActiveTurnIdChange).toHaveBeenCalledWith(undefined);
     expect(screen.queryByText("Pending steer")).not.toBeInTheDocument();
-    expect(screen.queryByText("no active turn to steer")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("no active turn to steer"),
+    ).not.toBeInTheDocument();
   });
 
   it("queues a stale pending steer behind the active turn Codex reports", async () => {
@@ -3817,13 +3789,16 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "Queue after the real active turn" },
     });
-    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter", metaKey: true });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), {
+      key: "Enter",
+      metaKey: true,
+    });
 
     await act(async () => {
       agentEventHandler?.({
@@ -3944,7 +3919,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -3980,7 +3955,7 @@ describe("Composer", () => {
           backend: "codex",
           threadId: "thread-1",
           input: [{ type: "text", text: "Queued follow-up" }],
-        })
+        }),
       );
     });
     expect(textarea).toHaveValue("Pending steer draft");
@@ -4014,12 +3989,7 @@ describe("Composer", () => {
       skills: [],
       thread,
     };
-    const { rerender } = render(
-      <Composer
-        {...props}
-        activeTurnId="turn-1"
-      />,
-    );
+    const { rerender } = render(<Composer {...props} activeTurnId="turn-1" />);
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Queued elsewhere" } });
@@ -4031,12 +4001,7 @@ describe("Composer", () => {
     expect(queued?.text).toBe("Queued elsewhere");
     draftStore.removeQueuedTurnById(scopeKey, queued!.id);
 
-    rerender(
-      <Composer
-        {...props}
-        activeTurnId={undefined}
-      />,
-    );
+    rerender(<Composer {...props} activeTurnId={undefined} />);
 
     await waitFor(() => {
       expect(screen.queryByText("Queued elsewhere")).not.toBeInTheDocument();
@@ -4073,24 +4038,14 @@ describe("Composer", () => {
       skills: [],
       thread,
     };
-    const { rerender } = render(
-      <Composer
-        {...props}
-        activeTurnId="turn-1"
-      />,
-    );
+    const { rerender } = render(<Composer {...props} activeTurnId="turn-1" />);
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Queued preflight block" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
     expect(screen.getByText("Queued next")).toBeInTheDocument();
 
-    rerender(
-      <Composer
-        {...props}
-        activeTurnId={undefined}
-      />,
-    );
+    rerender(<Composer {...props} activeTurnId={undefined} />);
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith(
@@ -4098,15 +4053,15 @@ describe("Composer", () => {
           backend: "codex",
           threadId: "thread-1",
           input: [{ type: "text", text: "Queued preflight block" }],
-        })
+        }),
       );
     });
     await waitFor(() => {
-      expect(screen.queryByText("Queued preflight block")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Queued preflight block"),
+      ).not.toBeInTheDocument();
     });
-    expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1"),
-    ).toBeUndefined();
+    expect(draftStore.getQueuedTurn("thread:codex:thread-1")).toBeUndefined();
     expect(onBeforeStartTurn).not.toHaveBeenCalled();
   });
 
@@ -4150,7 +4105,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("Fast mode")).toBeInTheDocument();
@@ -4195,7 +4150,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -4211,7 +4166,9 @@ describe("Composer", () => {
         delivery: "inline",
       });
     });
-    expect(addOptimisticReviewEntry).toHaveBeenCalledWith("Review changes against main");
+    expect(addOptimisticReviewEntry).toHaveBeenCalledWith(
+      "Review changes against main",
+    );
     expect(startTurn).not.toHaveBeenCalled();
   });
 
@@ -4264,7 +4221,7 @@ describe("Composer", () => {
           serviceTier: "priority",
           fastMode: true,
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -4316,7 +4273,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -4376,7 +4333,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -4427,7 +4384,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -4458,13 +4415,15 @@ describe("Composer", () => {
   });
 
   it("keeps review completion tied to the review/start turn id", async () => {
-    let agentEventHandler: ((event: {
-      backend: "codex";
-      notification: {
-        method: string;
-        params: Record<string, unknown>;
-      };
-    }) => void) | undefined;
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -4493,7 +4452,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -4501,7 +4460,9 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Stop" }),
+    ).toBeInTheDocument();
 
     await act(async () => {
       agentEventHandler?.({
@@ -4549,7 +4510,9 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Stop" }),
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -4589,7 +4552,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -4597,7 +4560,9 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "Review target" }),
+    ).not.toBeInTheDocument();
     expect(startReview).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith(
@@ -4659,7 +4624,9 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/review" } });
     await clickButton("Send");
-    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Review target" }),
+    ).toBeInTheDocument();
 
     rerender(<Composer {...baseProps} activeTurnId="turn-1" />);
     fireEvent.click(
@@ -4672,7 +4639,9 @@ describe("Composer", () => {
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByText("Queued next")).toBeInTheDocument();
     expect(screen.getByText("Review changes against main")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Steer" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Steer" }),
+    ).not.toBeInTheDocument();
 
     rerender(<Composer {...baseProps} activeTurnId={undefined} />);
 
@@ -4708,7 +4677,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -4717,7 +4686,9 @@ describe("Composer", () => {
     await clickButton("Queue");
 
     expect(startReview).not.toHaveBeenCalled();
-    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Review target" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
   });
 
@@ -4749,7 +4720,9 @@ describe("Composer", () => {
       },
     };
 
-    const { rerender } = render(<Composer {...baseProps} activeTurnId="turn-1" />);
+    const { rerender } = render(
+      <Composer {...baseProps} activeTurnId="turn-1" />,
+    );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "/review main" },
@@ -4784,7 +4757,7 @@ describe("Composer", () => {
       });
     });
     expect(
-      screen.queryByText("/review does not accept image attachments.")
+      screen.queryByText("/review does not accept image attachments."),
     ).not.toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toHaveValue("keep this next draft");
     expect(screen.getByAltText("next-draft.png")).toBeInTheDocument();
@@ -4792,9 +4765,13 @@ describe("Composer", () => {
 
   it("rejects review queue attempts with live image attachments", async () => {
     const startReview = vi.fn();
-    const imageFile = new File([new Uint8Array([1, 2, 3])], "review-image.png", {
-      type: "image/png",
-    });
+    const imageFile = new File(
+      [new Uint8Array([1, 2, 3])],
+      "review-image.png",
+      {
+        type: "image/png",
+      },
+    );
 
     render(
       <Composer
@@ -4814,7 +4791,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.paste(screen.getByLabelText("Reply"), {
@@ -4838,7 +4815,9 @@ describe("Composer", () => {
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
-    expect(screen.getByText("/review does not accept image attachments.")).toBeInTheDocument();
+    expect(
+      screen.getByText("/review does not accept image attachments."),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toHaveValue("/review main");
     expect(screen.getByAltText("review-image.png")).toBeInTheDocument();
   });
@@ -4869,37 +4848,35 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/review" } });
 
-    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("listbox", { name: "Commands" }),
+    ).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Review target" }),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Reply")).not.toBeInTheDocument();
     const baseBranchTarget = screen.getByRole("button", {
       name: /Compare this branch with a base branch/i,
     });
-    expect(baseBranchTarget).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(baseBranchTarget).toHaveAttribute("aria-pressed", "true");
     expect(baseBranchTarget).toHaveAttribute("tabindex", "0");
-    expect(screen.getByRole("button", { name: /Current changes/i })).toHaveAttribute(
-      "tabindex",
-      "-1",
-    );
-    expect(screen.getByRole("button", { name: /Review one commit by SHA/i })).toHaveAttribute(
-      "tabindex",
-      "-1",
-    );
-    expect(screen.getByRole("button", { name: /Review using custom instructions/i })).toHaveAttribute(
-      "tabindex",
-      "-1",
-    );
+    expect(
+      screen.getByRole("button", { name: /Current changes/i }),
+    ).toHaveAttribute("tabindex", "-1");
+    expect(
+      screen.getByRole("button", { name: /Review one commit by SHA/i }),
+    ).toHaveAttribute("tabindex", "-1");
+    expect(
+      screen.getByRole("button", { name: /Review using custom instructions/i }),
+    ).toHaveAttribute("tabindex", "-1");
     expect(screen.getByLabelText("Base branch")).not.toHaveAttribute(
       "tabindex",
       "-1",
@@ -4949,7 +4926,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -4968,21 +4945,24 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Current changes/i })).toHaveFocus();
+      expect(
+        screen.getByRole("button", { name: /Current changes/i }),
+      ).toHaveFocus();
     });
-    expect(screen.getByRole("button", { name: /Current changes/i })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(
+      screen.getByRole("button", { name: /Current changes/i }),
+    ).toHaveAttribute("aria-pressed", "true");
     expect(baseBranchTarget).toHaveAttribute("tabindex", "-1");
-    expect(screen.getByRole("button", { name: /Current changes/i })).toHaveAttribute(
-      "tabindex",
-      "0",
-    );
+    expect(
+      screen.getByRole("button", { name: /Current changes/i }),
+    ).toHaveAttribute("tabindex", "0");
 
-    fireEvent.keyDown(screen.getByRole("button", { name: /Current changes/i }), {
-      key: "Enter",
-    });
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: /Current changes/i }),
+      {
+        key: "Enter",
+      },
+    );
 
     await waitFor(() => {
       expect(startReview).toHaveBeenCalledWith({
@@ -5019,7 +4999,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -5073,7 +5053,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -5086,7 +5066,9 @@ describe("Composer", () => {
       }),
       { key: "Escape" },
     );
-    expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "Review target" }),
+    ).not.toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByLabelText("Reply")).toHaveFocus();
     });
@@ -5108,14 +5090,16 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "/review" },
     });
     await clickButton("Send");
-    fireEvent.click(screen.getByRole("button", { name: /Review one commit by SHA/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Review one commit by SHA/i }),
+    );
     const commitInput = await screen.findByRole("combobox", {
       name: "Commit SHA",
     });
@@ -5123,7 +5107,9 @@ describe("Composer", () => {
       expect(commitInput).toHaveFocus();
     });
     fireEvent.keyDown(commitInput, { key: "Escape" });
-    expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "Review target" }),
+    ).not.toBeInTheDocument();
   });
 
   it("uses the branch picker to override the selected base branch", async () => {
@@ -5166,7 +5152,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -5233,7 +5219,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -5313,7 +5299,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -5365,7 +5351,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -5422,14 +5408,16 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "/review" },
     });
     await clickButton("Send");
-    fireEvent.click(screen.getByRole("button", { name: /Review one commit by SHA/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Review one commit by SHA/i }),
+    );
     const commitInput = await screen.findByRole("combobox", {
       name: "Commit SHA",
     });
@@ -5438,20 +5426,24 @@ describe("Composer", () => {
     });
 
     expect(screen.getAllByRole("option")).toHaveLength(20);
-    expect(screen.getAllByRole("option").map((option) => option.getAttribute("tabindex"))).toEqual(
-      Array.from({ length: 20 }, () => "-1"),
-    );
-    expect(screen.getByRole("option", { name: /c00 Commit subject 0/i })).toHaveClass(
-      "is-active",
-    );
+    expect(
+      screen
+        .getAllByRole("option")
+        .map((option) => option.getAttribute("tabindex")),
+    ).toEqual(Array.from({ length: 20 }, () => "-1"));
+    expect(
+      screen.getByRole("option", { name: /c00 Commit subject 0/i }),
+    ).toHaveClass("is-active");
     fireEvent.keyDown(commitInput, { key: "ArrowDown" });
-    expect(screen.getByRole("option", { name: /c00 Commit subject 0/i })).not.toHaveClass(
-      "is-active",
+    expect(
+      screen.getByRole("option", { name: /c00 Commit subject 0/i }),
+    ).not.toHaveClass("is-active");
+    expect(
+      screen.getByRole("option", { name: /c01 Commit subject 1/i }),
+    ).toHaveClass("is-active");
+    fireEvent.click(
+      screen.getByRole("option", { name: /c03 Commit subject 3/i }),
     );
-    expect(screen.getByRole("option", { name: /c01 Commit subject 1/i })).toHaveClass(
-      "is-active",
-    );
-    fireEvent.click(screen.getByRole("option", { name: /c03 Commit subject 3/i }));
     expect(commitInput).toHaveValue(recentCommits[3]!.sha);
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
@@ -5506,28 +5498,38 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "/review" },
     });
     await clickButton("Send");
-    fireEvent.click(screen.getByRole("button", { name: /Review one commit by SHA/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Review one commit by SHA/i }),
+    );
     const commitInput = await screen.findByRole("combobox", {
       name: "Commit SHA",
     });
     await waitFor(() => {
-      expect(screen.getByRole("listbox", { name: "Recent commits" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("listbox", { name: "Recent commits" }),
+      ).toBeInTheDocument();
     });
 
     fireEvent.keyDown(commitInput, { key: "Escape" });
 
-    expect(screen.queryByRole("listbox", { name: "Recent commits" })).not.toBeInTheDocument();
-    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("listbox", { name: "Recent commits" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Review target" }),
+    ).toBeInTheDocument();
 
     fireEvent.keyDown(commitInput, { key: "Escape" });
-    expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "Review target" }),
+    ).not.toBeInTheDocument();
   });
 
   it("still accepts a pasted raw commit SHA", async () => {
@@ -5555,14 +5557,16 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "/review" },
     });
     await clickButton("Send");
-    fireEvent.click(screen.getByRole("button", { name: /Review one commit by SHA/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Review one commit by SHA/i }),
+    );
     const commitInput = await screen.findByRole("combobox", {
       name: "Commit SHA",
     });
@@ -5622,7 +5626,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -5634,10 +5638,7 @@ describe("Composer", () => {
       screen.getByRole("button", {
         name: /Compare this branch with a base branch/i,
       }),
-    ).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    ).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
@@ -5700,7 +5701,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -5712,10 +5713,7 @@ describe("Composer", () => {
       screen.getByRole("button", {
         name: /Compare this branch with a base branch/i,
       }),
-    ).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    ).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Base branch")).toHaveValue("main");
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
@@ -5758,7 +5756,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -5800,19 +5798,23 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/r" } });
 
     expect(screen.getByRole("listbox", { name: "Commands" })).toHaveClass(
-      "composer__autocomplete"
+      "composer__autocomplete",
     );
     fireEvent.click(screen.getByRole("button", { name: /\/review/i }));
 
-    expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
-    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("listbox", { name: "Commands" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Review target" }),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Reply")).not.toBeInTheDocument();
   });
 
@@ -5838,18 +5840,22 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/revie" } });
-    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("listbox", { name: "Commands" }),
+    ).toBeInTheDocument();
 
     fireEvent.change(textarea, { target: { value: "/review" } });
 
     const commands = screen.getByRole("listbox", { name: "Commands" });
     expect(commands).toBeInTheDocument();
-    expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
+    expect(
+      within(commands).getByRole("button", { name: /\/review/i }),
+    ).toBeInTheDocument();
   });
 
   it("keeps slash review autocomplete visible while editing the prefix", async () => {
@@ -5874,7 +5880,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -5883,7 +5889,9 @@ describe("Composer", () => {
 
       const commands = screen.getByRole("listbox", { name: "Commands" });
       expect(commands).toBeInTheDocument();
-      expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
+      expect(
+        within(commands).getByRole("button", { name: /\/review/i }),
+      ).toBeInTheDocument();
     }
   });
 
@@ -5909,20 +5917,26 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/re" } });
     fireEvent.keyDown(textarea, { key: "Escape", code: "Escape" });
-    expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("listbox", { name: "Commands" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.change(textarea, { target: { value: "/r" } });
-    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("listbox", { name: "Commands" }),
+    ).toBeInTheDocument();
 
     fireEvent.change(textarea, { target: { value: "/re" } });
     const commands = screen.getByRole("listbox", { name: "Commands" });
-    expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
+    expect(
+      within(commands).getByRole("button", { name: /\/review/i }),
+    ).toBeInTheDocument();
   });
 
   it("keeps duplicate local and provider slash commands labeled by source", async () => {
@@ -5956,14 +5970,16 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/r" } });
 
     const commands = screen.getByRole("listbox", { name: "Commands" });
-    expect(within(commands).getAllByRole("button", { name: /\/review/i })).toHaveLength(2);
+    expect(
+      within(commands).getAllByRole("button", { name: /\/review/i }),
+    ).toHaveLength(2);
     expect(within(commands).getByText("PwrAgent")).toBeInTheDocument();
     expect(within(commands).getByText("OpenAI")).toBeInTheDocument();
   });
@@ -6007,7 +6023,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -6067,7 +6083,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -6081,11 +6097,12 @@ describe("Composer", () => {
 
     fireEvent.change(textarea, { target: { value: "/co" } });
     const commands = screen.getByRole("listbox", { name: "Commands" });
-    expect(within(commands).queryByRole("button", { name: /\/review/i })).not.toBeInTheDocument();
-    expect(within(commands).getByRole("button", { name: /\/compact/i })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(
+      within(commands).queryByRole("button", { name: /\/review/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(commands).getByRole("button", { name: /\/compact/i }),
+    ).toHaveAttribute("aria-selected", "true");
 
     fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
 
@@ -6096,7 +6113,9 @@ describe("Composer", () => {
       });
     });
     await waitFor(() => {
-      expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("listbox", { name: "Commands" }),
+      ).not.toBeInTheDocument();
       expect(screen.getByLabelText("Reply")).toHaveValue("");
     });
     expect(startReview).not.toHaveBeenCalled();
@@ -6140,7 +6159,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -6148,11 +6167,15 @@ describe("Composer", () => {
 
     const commands = screen.getByRole("listbox", { name: "Commands" });
     fireEvent.click(
-      within(commands).getByRole("button", { name: /\/skill:frontend-design/i }),
+      within(commands).getByRole("button", {
+        name: /\/skill:frontend-design/i,
+      }),
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Reply")).toHaveValue("/skill:frontend-design ");
+      expect(screen.getByLabelText("Reply")).toHaveValue(
+        "/skill:frontend-design ",
+      );
     });
   });
 
@@ -6178,17 +6201,23 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/r" } });
 
-    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("listbox", { name: "Commands" }),
+    ).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
-    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("listbox", { name: "Commands" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Review target" }),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Reply")).not.toBeInTheDocument();
   });
 
@@ -6206,20 +6235,26 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/r" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Review target" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "Review target" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toHaveValue("");
-    expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("listbox", { name: "Commands" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows thread access in the composer and opens workspace handoff", async () => {
@@ -6308,7 +6343,7 @@ describe("Composer", () => {
           ],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("Access mode")).toHaveValue("default");
@@ -6316,19 +6351,27 @@ describe("Composer", () => {
     expect(screen.getByRole("separator")).toBeInTheDocument();
     fireEvent.pointerDown(screen.getByLabelText("Reply"));
     expect(
-      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
+      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" }),
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Workspace mode"));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
-    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Handoff to New Worktree" }),
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "Handoff to New Worktree",
+    });
     expect(dialog).toBeInTheDocument();
     expect(dialog.closest(".workspace-handoff-modal")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("feat/thread-workspace-handoff-plan");
     expect(
-      screen.getByRole("radio", { name: /Handoff to Detached HEAD/ })
+      screen.getByRole("radio", { name: /Handoff to Detached HEAD/ }),
     ).toHaveAttribute("aria-checked", "true");
-    expect(screen.queryByLabelText("Leave current checkout on")).not.toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Handoff to New Branch/ })).toBeEnabled();
+    expect(
+      screen.queryByLabelText("Leave current checkout on"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: /Handoff to New Branch/ }),
+    ).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
@@ -6438,12 +6481,16 @@ describe("Composer", () => {
           ],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByLabelText("Workspace mode"));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
-    fireEvent.click(screen.getByRole("radio", { name: /Handoff to New Branch/ }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Handoff to New Worktree" }),
+    );
+    fireEvent.click(
+      screen.getByRole("radio", { name: /Handoff to New Branch/ }),
+    );
 
     const newBranchInput = screen.getByLabelText("New branch name");
     expect(newBranchInput).toHaveValue("pwragent/main-handoff");
@@ -6501,7 +6548,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     chooseDropdownOption("Access mode", "Full Access");
@@ -6565,7 +6612,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     chooseDropdownOption("Access mode", "Full Access");
@@ -6606,7 +6653,7 @@ describe("Composer", () => {
         onHandoffThreadWorkspace={onHandoffThreadWorkspace}
         skills={[]}
         thread={thread}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("Workspace mode")).toBeDisabled();
@@ -6619,7 +6666,7 @@ describe("Composer", () => {
         onHandoffThreadWorkspace={onHandoffThreadWorkspace}
         skills={[]}
         thread={thread}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("Workspace mode")).toBeEnabled();
@@ -6654,7 +6701,7 @@ describe("Composer", () => {
           },
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const workspaceMode = screen.getByLabelText("Workspace mode");
@@ -6662,12 +6709,13 @@ describe("Composer", () => {
     expect(workspaceMode).toHaveValue("local");
     fireEvent.click(workspaceMode);
     expect(
-      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
+      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" }),
     ).not.toBeInTheDocument();
   });
 
   it("does not offer existing thread workspace handoff for non-git Workspaces", () => {
-    const projectPath = "/Users/test/.pwragent/profiles/dev/projects/2026-05-23-885b8f";
+    const projectPath =
+      "/Users/test/.pwragent/profiles/dev/projects/2026-05-23-885b8f";
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
     const openApplication = vi.fn(async () => ({ opened: true as const }));
     const runCodexEnvironmentAction = vi.fn(async () => ({
@@ -6731,7 +6779,7 @@ describe("Composer", () => {
           },
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const workspaceMode = screen.queryByLabelText("Workspace mode");
@@ -6740,7 +6788,7 @@ describe("Composer", () => {
     }
 
     expect(
-      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
+      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" }),
     ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
@@ -6800,14 +6848,20 @@ describe("Composer", () => {
           ],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByLabelText("Workspace mode"));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
-    fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Handoff to New Worktree" }),
+    );
+    fireEvent.click(
+      screen.getByRole("radio", { name: /Handoff Current Branch/ }),
+    );
 
-    expect(screen.getByLabelText("Leave current checkout on")).toHaveValue("HEAD");
+    expect(screen.getByLabelText("Leave current checkout on")).toHaveValue(
+      "HEAD",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
@@ -6885,15 +6939,19 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     const workspaceMode = screen.getByLabelText("Workspace mode");
     expect(workspaceMode).toBeEnabled();
     expect(workspaceMode).toHaveValue("local");
     fireEvent.click(workspaceMode);
-    expect(screen.getByRole("option", { name: "Local (main)" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "New worktree" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Local (main)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "New worktree" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("option", { name: "New worktree" }));
 
@@ -6901,7 +6959,7 @@ describe("Composer", () => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
         "directory:/Users/huntharo/pwrdrvr/PwrAgent",
         expect.objectContaining({ workMode: "worktree" }),
-        { stickySettingsChanged: true }
+        { stickySettingsChanged: true },
       );
     });
   });
@@ -6937,7 +6995,7 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     const workspaceMode = screen.getByLabelText("Workspace mode");
@@ -6978,14 +7036,16 @@ describe("Composer", () => {
         launchpad={launchpad}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     const input = screen.getByLabelText("New thread");
     fireEvent.change(input, { target: { value: "/review" } });
     await clickButton("Start thread");
     expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
-    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Review target" }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     rerender(
@@ -7002,11 +7062,13 @@ describe("Composer", () => {
         launchpad={{ ...launchpad, prompt: "/review", updatedAt: 2 }}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
-    expect(screen.getByLabelText("Workspace mode")).toHaveTextContent("New worktree");
+    expect(screen.getByLabelText("Workspace mode")).toHaveTextContent(
+      "New worktree",
+    );
   });
 
   it("locks same-worktree sub-thread launchpads to the shared worktree", () => {
@@ -7038,22 +7100,22 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={async () => undefined}
         skills={[]}
-      />
+      />,
     );
 
     const workspaceMode = screen.getByLabelText("Workspace mode");
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
     expect(workspaceMode).toHaveTextContent("Same worktree");
-    expect(screen.queryByRole("option", { name: "New worktree" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "New worktree" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not offer worktree launchpad mode for non-git directories", () => {
     render(
       <Composer
-        backends={[
-          backendSummary("codex"),
-        ]}
+        backends={[backendSummary("codex")]}
         directory={{
           key: "directory:/Users/huntharo/.pwragent/projects",
           kind: "directory",
@@ -7077,7 +7139,7 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={async () => undefined}
         skills={[]}
-      />
+      />,
     );
 
     const workspaceMode = screen.getByLabelText("Workspace mode");
@@ -7085,7 +7147,9 @@ describe("Composer", () => {
     expect(workspaceMode).toHaveValue("local");
     expect(workspaceMode).toHaveTextContent("Local");
     fireEvent.click(workspaceMode);
-    expect(screen.queryByRole("option", { name: "New worktree" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "New worktree" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders the worktree base branch menu as a branch chooser", () => {
@@ -7124,16 +7188,16 @@ describe("Composer", () => {
           updatedAt: 1,
         }}
         skills={[]}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByLabelText("Base branch"));
 
-    expect(screen.getByRole("listbox").closest(".composer-dropdown")).toHaveClass(
-      "composer-dropdown--branch"
-    );
     expect(
-      screen.getByRole("option", { name: "feat/desktop-settings-config" })
+      screen.getByRole("listbox").closest(".composer-dropdown"),
+    ).toHaveClass("composer-dropdown--branch");
+    expect(
+      screen.getByRole("option", { name: "feat/desktop-settings-config" }),
     ).toHaveAttribute("aria-selected", "true");
   });
 
@@ -7179,7 +7243,7 @@ describe("Composer", () => {
           updatedAt: 1,
         }}
         skills={[]}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByLabelText("Base branch"));
@@ -7198,7 +7262,7 @@ describe("Composer", () => {
       .getAllByRole("option")
       .map((option) => option.getAttribute("aria-label"));
     expect(optionNames.indexOf("feat/telegram-integration")).toBeLessThan(
-      optionNames.indexOf("chore/old")
+      optionNames.indexOf("chore/old"),
     );
 
     // Typing in the search field filters the list.
@@ -7206,11 +7270,13 @@ describe("Composer", () => {
       target: { value: "tele" },
     });
     expect(
-      screen.getByRole("option", { name: "feat/telegram-integration" })
+      screen.getByRole("option", { name: "feat/telegram-integration" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "main" })).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("option", { name: "chore/old" })
+      screen.queryByRole("option", { name: "main" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "chore/old" }),
     ).not.toBeInTheDocument();
   });
 
@@ -7262,7 +7328,8 @@ describe("Composer", () => {
           directoryKey: "subthread:codex:thread-parent:new-worktree",
           directoryKind: "directory",
           directoryLabel: "GifGrabber",
-          directoryPath: "/Users/huntharo/.codex/profiles/sstk/worktrees/mqs3ew3f/GifGrabber",
+          directoryPath:
+            "/Users/huntharo/.codex/profiles/sstk/worktrees/mqs3ew3f/GifGrabber",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -7275,17 +7342,19 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByLabelText("Base branch"));
 
     expect(
-      screen.getByRole("option", { name: "fix/upload-mp4-compression" })
+      screen.getByRole("option", { name: "fix/upload-mp4-compression" }),
     ).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("option", { name: "origin/main" })).toBeInTheDocument();
     expect(
-      screen.getByRole("option", { name: "origin/releases/4.3" })
+      screen.getByRole("option", { name: "origin/main" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "origin/releases/4.3" }),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("option", { name: "origin/main" }));
@@ -7294,7 +7363,7 @@ describe("Composer", () => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
         "subthread:codex:thread-parent:new-worktree",
         expect.objectContaining({ branchName: "origin/main" }),
-        { stickySettingsChanged: true }
+        { stickySettingsChanged: true },
       );
     });
   });
@@ -7314,7 +7383,13 @@ describe("Composer", () => {
           gitStatus: {
             currentBranch: "develop",
             defaultBranch: "main",
-            branches: ["chore/recent", "feat/x", "develop", "main", "chore/old"],
+            branches: [
+              "chore/recent",
+              "feat/x",
+              "develop",
+              "main",
+              "chore/old",
+            ],
             branchDetails: [
               { name: "chore/recent", lastCommitAt: nowSeconds - 60 },
               { name: "feat/x", lastCommitAt: nowSeconds - 5 * 86400 },
@@ -7339,7 +7414,7 @@ describe("Composer", () => {
           updatedAt: 1,
         }}
         skills={[]}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByLabelText("Base branch"));
@@ -7352,14 +7427,17 @@ describe("Composer", () => {
     // ...then the remaining branches in recency order.
     expect(optionNames.slice(3)).toEqual(["chore/recent", "chore/old"]);
 
+    expect(screen.getByRole("option", { name: "feat/x" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(
-      screen.getByRole("option", { name: "feat/x" })
-    ).toHaveAttribute("aria-selected", "true");
-    expect(
-      within(screen.getByRole("option", { name: "main" })).getByText("Default")
+      within(screen.getByRole("option", { name: "main" })).getByText("Default"),
     ).toBeInTheDocument();
     expect(
-      within(screen.getByRole("option", { name: "develop" })).getByText("Current")
+      within(screen.getByRole("option", { name: "develop" })).getByText(
+        "Current",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -7396,12 +7474,14 @@ describe("Composer", () => {
           updatedAt: 1,
         }}
         skills={[]}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("Base branch")).toHaveValue("main");
     fireEvent.click(screen.getByLabelText("Base branch"));
-    expect(screen.queryByRole("option", { name: "HEAD" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "HEAD" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows handoff to local for existing worktree threads", async () => {
@@ -7467,7 +7547,7 @@ describe("Composer", () => {
           ],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
@@ -7548,7 +7628,7 @@ describe("Composer", () => {
           ],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
@@ -7625,7 +7705,7 @@ describe("Composer", () => {
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("New thread"), {
@@ -7654,13 +7734,13 @@ describe("Composer", () => {
             expect.objectContaining({ name: "mockup.png" }),
           ]),
           prompt: "Review the pasted mockup",
-        })
+        }),
       );
     });
 
     await waitFor(() => {
       expect(launchpads.get("directory:/repo-a")?.prompt).toBe(
-        "Review the pasted mockup"
+        "Review the pasted mockup",
       );
     });
 
@@ -7678,7 +7758,7 @@ describe("Composer", () => {
         launchpad={launchpads.get("directory:/repo-b")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
     expect(screen.queryByAltText("mockup.png")).not.toBeInTheDocument();
 
@@ -7696,11 +7776,11 @@ describe("Composer", () => {
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("New thread")).toHaveValue(
-      "Review the pasted mockup"
+      "Review the pasted mockup",
     );
     expect(screen.getByAltText("mockup.png")).toBeInTheDocument();
   });
@@ -7727,7 +7807,7 @@ describe("Composer", () => {
               width: 32,
             });
           };
-        })
+        }),
     );
 
     const launchpads = new Map<string, NavigationLaunchpadDraft>([
@@ -7793,7 +7873,7 @@ describe("Composer", () => {
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("New thread"), {
@@ -7826,7 +7906,7 @@ describe("Composer", () => {
         launchpad={launchpads.get("directory:/repo-b")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     await act(async () => {
@@ -7837,11 +7917,11 @@ describe("Composer", () => {
       expect(launchpads.get("directory:/repo-a")?.imageAttachments).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ name: "slow-mockup.png" }),
-        ])
+        ]),
       );
     });
     expect(launchpads.get("directory:/repo-a")?.prompt).toBe(
-      "Review the slow mockup"
+      "Review the slow mockup",
     );
 
     rerender(
@@ -7858,11 +7938,11 @@ describe("Composer", () => {
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("New thread")).toHaveValue(
-      "Review the slow mockup"
+      "Review the slow mockup",
     );
     expect(screen.getByAltText("slow-mockup.png")).toBeInTheDocument();
   });
@@ -7895,14 +7975,16 @@ describe("Composer", () => {
         launchpad={launchpad}
         onUpdateLaunchpad={async () => undefined}
         skills={[]}
-      />
+      />,
     );
     const textarea = screen.getByLabelText("New thread") as HTMLElement & {
       selectionStart: number;
       setSelectionRange: (start: number, end: number) => void;
     };
 
-    fireEvent.change(textarea, { target: { value: "Line one edited\nLine two" } });
+    fireEvent.change(textarea, {
+      target: { value: "Line one edited\nLine two" },
+    });
     textarea.setSelectionRange(8, 8);
     rerender(
       <Composer
@@ -7921,7 +8003,7 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={async () => undefined}
         skills={[]}
-      />
+      />,
     );
 
     expect(textarea).toHaveValue("Line one edited\nLine two");
@@ -7930,9 +8012,13 @@ describe("Composer", () => {
 
   it("restores a thread reply draft with pasted images after the composer remounts", async () => {
     const draftStore = createComposerDraftStore();
-    const imageFile = new File([new Uint8Array([1, 2, 3])], "reply-mockup.png", {
-      type: "image/png",
-    });
+    const imageFile = new File(
+      [new Uint8Array([1, 2, 3])],
+      "reply-mockup.png",
+      {
+        type: "image/png",
+      },
+    );
     const thread = {
       id: "thread-1",
       title: "Build Codex client",
@@ -7956,7 +8042,7 @@ describe("Composer", () => {
         disabled={false}
         skills={[]}
         thread={thread}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -7991,7 +8077,7 @@ describe("Composer", () => {
         disabled={false}
         skills={[]}
         thread={thread}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("Reply")).toHaveValue("Keep this reply draft");
@@ -8030,7 +8116,7 @@ describe("Composer", () => {
         launchpad={launchpad}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("New thread"), {
@@ -8043,7 +8129,7 @@ describe("Composer", () => {
         "directory:/repo",
         expect.objectContaining({
           prompt: "Persist this launchpad before navigation",
-        })
+        }),
       );
     });
   });
@@ -8084,7 +8170,7 @@ describe("Composer", () => {
         onMaterializeLaunchpad={onMaterializeLaunchpad}
         onUpdateLaunchpad={async () => undefined}
         skills={[]}
-      />
+      />,
     );
     unmountComposer = unmount;
 
@@ -8097,7 +8183,7 @@ describe("Composer", () => {
       expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
         "directory:/repo",
         [{ type: "text", text: "Submitted launchpad should not come back" }],
-        undefined
+        undefined,
       );
     });
 
@@ -8116,7 +8202,7 @@ describe("Composer", () => {
         launchpad={launchpad}
         onUpdateLaunchpad={async () => undefined}
         skills={[]}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("New thread")).toHaveValue("");
@@ -8158,7 +8244,7 @@ describe("Composer", () => {
         onMaterializeLaunchpad={onMaterializeLaunchpad}
         onUpdateLaunchpad={async () => undefined}
         skills={[]}
-      />
+      />,
     );
     unmountComposer = unmount;
 
@@ -8172,7 +8258,7 @@ describe("Composer", () => {
         "directory:/repo",
         undefined,
         undefined,
-        { type: "baseBranch", branch: "main" }
+        { type: "baseBranch", branch: "main" },
       );
     });
 
@@ -8191,7 +8277,7 @@ describe("Composer", () => {
         launchpad={launchpad}
         onUpdateLaunchpad={async () => undefined}
         skills={[]}
-      />
+      />,
     );
 
     expect(screen.getByLabelText("New thread")).toHaveValue("");
@@ -8199,9 +8285,13 @@ describe("Composer", () => {
 
   it("preserves launchpad prompt and pasted images when sticky settings change", async () => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
-    const imageFile = new File([new Uint8Array([1, 2, 3])], "sticky-mockup.png", {
-      type: "image/png",
-    });
+    const imageFile = new File(
+      [new Uint8Array([1, 2, 3])],
+      "sticky-mockup.png",
+      {
+        type: "image/png",
+      },
+    );
 
     render(
       <Composer
@@ -8237,7 +8327,7 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("New thread"), {
@@ -8304,7 +8394,7 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     chooseDropdownOption("Agent mode", "Yolo");
@@ -8353,7 +8443,7 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     chooseDropdownOption("Agent mode", "Auto Edit");
@@ -8402,7 +8492,7 @@ describe("Composer", () => {
         }}
         onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
-      />
+      />,
     );
 
     chooseDropdownOption("Agent mode", "Auto");
@@ -8450,7 +8540,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -8460,7 +8550,9 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(textarea).toHaveValue("Use ");
-    expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("listbox", { name: "Skills" }),
+    ).not.toBeInTheDocument();
 
     await clickButton("Send");
 
@@ -8493,7 +8585,8 @@ describe("Composer", () => {
         skills={[
           {
             name: "adversarial-document-reviewer",
-            description: "Conditional reviewer used for CE document stress-testing.",
+            description:
+              "Conditional reviewer used for CE document stress-testing.",
             path: "/Users/huntharo/.codex/skills/adversarial-document-reviewer/SKILL.md",
             enabled: true,
           },
@@ -8524,7 +8617,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -8537,7 +8630,9 @@ describe("Composer", () => {
 
     expect(options[0]).toContain("$ce:plan");
     expect(options[1]).toContain("$ce:work");
-    expect(options.slice(2).join(" ")).toContain("$adversarial-document-reviewer");
+    expect(options.slice(2).join(" ")).toContain(
+      "$adversarial-document-reviewer",
+    );
   });
 
   it("filters skill autocomplete from the reported multi-line draft body", () => {
@@ -8635,13 +8730,16 @@ describe("Composer", () => {
       target: {
         value: `${reportedSkillAutocompleteDraftPrefix}${longBody.replace(
           "small accidental deletion",
-          "small accidental"
+          "small accidental",
         )}`,
       },
     });
 
     const richInput = screen.getByTestId("composer-tiptap-input");
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "z", metaKey: true });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), {
+      key: "z",
+      metaKey: true,
+    });
 
     await waitFor(() => {
       expect(richInput.getAttribute("data-value")).toContain(
@@ -8649,10 +8747,13 @@ describe("Composer", () => {
       );
     });
     expect(richInput).toHaveTextContent(
-      "This is the second paragraph with enough text"
+      "This is the second paragraph with enough text",
     );
 
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "y", metaKey: true });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), {
+      key: "y",
+      metaKey: true,
+    });
 
     await waitFor(() => {
       expect(richInput.getAttribute("data-value")).toContain(
@@ -8660,7 +8761,7 @@ describe("Composer", () => {
       );
     });
     expect(richInput).toHaveTextContent(
-      "This is the second paragraph with enough text"
+      "This is the second paragraph with enough text",
     );
   });
 
@@ -8722,7 +8823,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const input = screen.getByLabelText("Reply");
@@ -8789,7 +8890,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const input = screen.getByLabelText("Reply");
@@ -8862,7 +8963,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const input = screen.getByLabelText("Reply");
@@ -8878,13 +8979,10 @@ describe("Composer", () => {
         scopeKey: "thread:codex:thread-1",
       }),
     );
-    expect(draftStore.listRecoveryCandidates).toHaveBeenNthCalledWith(
-      2,
-      {
-        includeSent: true,
-        limit: 20,
-      },
-    );
+    expect(draftStore.listRecoveryCandidates).toHaveBeenNthCalledWith(2, {
+      includeSent: true,
+      limit: 20,
+    });
   });
 
   it("recovers a meaningful unsent draft after the user deletes it", async () => {
@@ -8909,9 +9007,9 @@ describe("Composer", () => {
     });
     draftStore.listRecoveryCandidates = vi.fn(async () => recoveryCandidates);
     const deletedDraft =
-      "This is a long unsent draft that the user accidentally deleted. " +
-      "It has enough detail to be worth recovering from ArrowUp history " +
-      "instead of disappearing when the composer becomes empty.";
+      "This is a long unsent draft that the user accidentally deleted. "
+      + "It has enough detail to be worth recovering from ArrowUp history "
+      + "instead of disappearing when the composer becomes empty.";
 
     render(
       <Composer
@@ -8930,7 +9028,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const input = screen.getByLabelText("Reply");
@@ -8977,11 +9075,11 @@ describe("Composer", () => {
     });
     draftStore.listRecoveryCandidates = vi.fn(async () => recoveryCandidates);
     const deletedDraft =
-      "Somebody once told me\n\n\n\n" +
-      "The world is gonna roll me\n\n\n\n" +
-      "I ain't the sharpest tool in the shed\n\n\n\n" +
-      "```\n// This is a tool\n```\n\n\n\n" +
-      "- This is\n- Not exactly a tool";
+      "Somebody once told me\n\n\n\n"
+      + "The world is gonna roll me\n\n\n\n"
+      + "I ain't the sharpest tool in the shed\n\n\n\n"
+      + "```\n// This is a tool\n```\n\n\n\n"
+      + "- This is\n- Not exactly a tool";
 
     render(
       <Composer
@@ -8992,7 +9090,7 @@ describe("Composer", () => {
         disabled={false}
         draftStore={draftStore}
         skills={[]}
-      />
+      />,
     );
 
     const input = screen.getByLabelText("Reply");
@@ -9102,13 +9200,22 @@ describe("Composer", () => {
         { type: "paragraph", content: [{ type: "text", text: url }] },
         { type: "paragraph" },
         { type: "paragraph" },
-        { type: "paragraph", content: [{ type: "text", text: firstParagraph }] },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: firstParagraph }],
+        },
         { type: "paragraph" },
         { type: "paragraph" },
-        { type: "paragraph", content: [{ type: "text", text: secondParagraph }] },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: secondParagraph }],
+        },
         { type: "paragraph" },
         { type: "paragraph" },
-        { type: "paragraph", content: [{ type: "text", text: finalParagraph }] },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: finalParagraph }],
+        },
         { type: "paragraph" },
         { type: "paragraph" },
       ],
@@ -9139,13 +9246,13 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
-    const blankParagraphsBefore = Array.from(textbox.querySelectorAll("p")).filter(
-      (paragraph) => paragraph.textContent === "",
-    );
+    const blankParagraphsBefore = Array.from(
+      textbox.querySelectorAll("p"),
+    ).filter((paragraph) => paragraph.textContent === "");
     expect(blankParagraphsBefore.length).toBeGreaterThan(1);
 
     const lastBlankParagraph = blankParagraphsBefore.at(-1);
@@ -9161,10 +9268,12 @@ describe("Composer", () => {
     fireEvent.keyDown(textbox, { key: "Backspace" });
 
     await waitFor(() => {
-      const blankParagraphsAfter = Array.from(textbox.querySelectorAll("p")).filter(
-        (paragraph) => paragraph.textContent === "",
+      const blankParagraphsAfter = Array.from(
+        textbox.querySelectorAll("p"),
+      ).filter((paragraph) => paragraph.textContent === "");
+      expect(blankParagraphsAfter).toHaveLength(
+        blankParagraphsBefore.length - 1,
       );
-      expect(blankParagraphsAfter).toHaveLength(blankParagraphsBefore.length - 1);
     });
   });
 
@@ -9197,14 +9306,16 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Use $ce:pl" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan")).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan"),
+    ).toBeInTheDocument();
     expect(textarea).toHaveValue("Use ");
 
     await clickButton("Send");
@@ -9246,7 +9357,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -9293,7 +9404,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -9309,7 +9420,9 @@ describe("Composer", () => {
         ],
       },
     });
-    fireEvent.change(textarea, { target: { value: "Describe this screenshot" } });
+    fireEvent.change(textarea, {
+      target: { value: "Describe this screenshot" },
+    });
 
     expect(await screen.findByAltText("screenshot.jpeg")).toBeInTheDocument();
     expect(normalizeImageFile).toHaveBeenCalledWith(
@@ -9341,7 +9454,7 @@ describe("Composer", () => {
           url: expect.stringMatching(/^data:image\/jpeg;base64,/),
           alt: "screenshot.jpeg",
         },
-      ]
+      ],
     );
     expect(recordImageUploadNormalization).toHaveBeenCalledWith({
       fileName: "screenshot.jpeg",
@@ -9386,7 +9499,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
@@ -9447,16 +9560,28 @@ describe("Composer", () => {
     });
     const files = [
       new File([new Uint8Array([1])], "small.png", { type: "image/png" }),
-      new File([new Uint8Array([1])], "one-megabyte.png", { type: "image/png" }),
-      new File([new Uint8Array([1])], "mid-megabyte.png", { type: "image/png" }),
+      new File([new Uint8Array([1])], "one-megabyte.png", {
+        type: "image/png",
+      }),
+      new File([new Uint8Array([1])], "mid-megabyte.png", {
+        type: "image/png",
+      }),
       new File([new Uint8Array([1])], "large.png", { type: "image/png" }),
     ];
 
     vi.mocked(normalizeImageFile)
-      .mockImplementationOnce(async (file) => normalizedImage(file, 23.7 * 1024))
-      .mockImplementationOnce(async (file) => normalizedImage(file, 1 * 1024 * 1024))
-      .mockImplementationOnce(async (file) => normalizedImage(file, 1.2 * 1024 * 1024))
-      .mockImplementationOnce(async (file) => normalizedImage(file, 10.4 * 1024 * 1024));
+      .mockImplementationOnce(async (file) =>
+        normalizedImage(file, 23.7 * 1024),
+      )
+      .mockImplementationOnce(async (file) =>
+        normalizedImage(file, 1 * 1024 * 1024),
+      )
+      .mockImplementationOnce(async (file) =>
+        normalizedImage(file, 1.2 * 1024 * 1024),
+      )
+      .mockImplementationOnce(async (file) =>
+        normalizedImage(file, 10.4 * 1024 * 1024),
+      );
 
     render(
       <Composer
@@ -9474,7 +9599,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.paste(screen.getByLabelText("Reply"), {
@@ -9513,7 +9638,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.paste(screen.getByLabelText("Reply"), {
@@ -9531,15 +9656,15 @@ describe("Composer", () => {
     const strip = screen.getByLabelText("Pasted images");
     const input = screen.getByLabelText("Reply");
     expect(
-      strip.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING
+      strip.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     // The circular control removes the attachment.
     fireEvent.click(screen.getByRole("button", { name: "Remove shot.png" }));
     await waitFor(() =>
       expect(
-        container.querySelectorAll(".composer__attachment-preview")
-      ).toHaveLength(0)
+        container.querySelectorAll(".composer__attachment-preview"),
+      ).toHaveLength(0),
     );
   });
 
@@ -9550,7 +9675,7 @@ describe("Composer", () => {
       (_, index) =>
         new File([new Uint8Array([1])], `shot-${index}.png`, {
           type: "image/png",
-        })
+        }),
     );
     // Distinct content per file so the cap (not the duplicate guard) is what
     // clamps the batch — identical pastes are de-duplicated separately. The
@@ -9590,7 +9715,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.paste(screen.getByLabelText("Reply"), {
@@ -9606,11 +9731,11 @@ describe("Composer", () => {
 
     await waitFor(() =>
       expect(
-        container.querySelectorAll(".composer__attachment-preview")
-      ).toHaveLength(5)
+        container.querySelectorAll(".composer__attachment-preview"),
+      ).toHaveLength(5),
     );
     expect(onShowNotice).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Attachment limit reached" })
+      expect.objectContaining({ title: "Attachment limit reached" }),
     );
   });
 
@@ -9634,7 +9759,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const pasteOnce = () =>
@@ -9652,18 +9777,18 @@ describe("Composer", () => {
     pasteOnce();
     await waitFor(() =>
       expect(
-        container.querySelectorAll(".composer__attachment-preview")
-      ).toHaveLength(1)
+        container.querySelectorAll(".composer__attachment-preview"),
+      ).toHaveLength(1),
     );
 
     pasteOnce();
     await waitFor(() =>
       expect(onShowNotice).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Image already attached" })
-      )
+        expect.objectContaining({ title: "Image already attached" }),
+      ),
     );
     expect(
-      container.querySelectorAll(".composer__attachment-preview")
+      container.querySelectorAll(".composer__attachment-preview"),
     ).toHaveLength(1);
   });
 
@@ -9699,7 +9824,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.paste(screen.getByLabelText("Reply"), {
@@ -9713,10 +9838,10 @@ describe("Composer", () => {
       expect.objectContaining({
         title: "Images not supported",
         message: expect.stringContaining("GPT-5.3-Codex-Spark"),
-      })
+      }),
     );
     expect(
-      container.querySelectorAll(".composer__attachment-preview")
+      container.querySelectorAll(".composer__attachment-preview"),
     ).toHaveLength(0);
     expect(normalizeImageFile).not.toHaveBeenCalled();
   });
@@ -9760,7 +9885,7 @@ describe("Composer", () => {
             },
           ],
         }}
-      />
+      />,
     );
 
     // The thumbnail still renders (non-blocking), but a warning naming the
@@ -9790,7 +9915,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.paste(screen.getByLabelText("Reply"), {
@@ -9801,7 +9926,7 @@ describe("Composer", () => {
     });
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Expand shot.png" })
+      await screen.findByRole("button", { name: "Expand shot.png" }),
     );
 
     const dialog = screen.getByRole("dialog", { name: "Expanded image" });
@@ -9810,8 +9935,8 @@ describe("Composer", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     await waitFor(() =>
       expect(
-        screen.queryByRole("dialog", { name: "Expanded image" })
-      ).not.toBeInTheDocument()
+        screen.queryByRole("dialog", { name: "Expanded image" }),
+      ).not.toBeInTheDocument(),
     );
   });
 
@@ -9841,7 +9966,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -9859,7 +9984,10 @@ describe("Composer", () => {
     });
 
     const preview = await screen.findByAltText("demo.gif");
-    expect(preview).toHaveAttribute("src", expect.stringMatching(/^data:image\/gif;base64,/));
+    expect(preview).toHaveAttribute(
+      "src",
+      expect.stringMatching(/^data:image\/gif;base64,/),
+    );
     expect(normalizeImageFile).not.toHaveBeenCalled();
 
     await clickButton("Send");
@@ -9885,14 +10013,22 @@ describe("Composer", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     }));
-    const itemImageFile = new File([new Uint8Array([1, 2, 3])], "clipboard-item.png", {
-      type: "image/png",
-      lastModified: 111,
-    });
-    const filesImageFile = new File([new Uint8Array([1, 2, 3])], "clipboard-files.png", {
-      type: "image/png",
-      lastModified: 222,
-    });
+    const itemImageFile = new File(
+      [new Uint8Array([1, 2, 3])],
+      "clipboard-item.png",
+      {
+        type: "image/png",
+        lastModified: 111,
+      },
+    );
+    const filesImageFile = new File(
+      [new Uint8Array([1, 2, 3])],
+      "clipboard-files.png",
+      {
+        type: "image/png",
+        lastModified: 222,
+      },
+    );
 
     render(
       <Composer
@@ -9910,7 +10046,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.paste(screen.getByLabelText("Reply"), {
@@ -9970,7 +10106,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -10017,7 +10153,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -10027,9 +10163,13 @@ describe("Composer", () => {
     option.focus();
     fireEvent.keyDown(option, { key: "Enter" });
 
-    expect(within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan")).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan"),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toHaveValue("");
-    expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("listbox", { name: "Skills" }),
+    ).not.toBeInTheDocument();
   });
 
   it("moves skill autocomplete by a page with PageDown and PageUp", () => {
@@ -10061,7 +10201,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const input = screen.getByLabelText("Reply");
@@ -10118,7 +10258,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     const textarea = screen.getByLabelText("Reply");
@@ -10128,7 +10268,9 @@ describe("Composer", () => {
     option.focus();
     fireEvent.keyDown(option, { key: "Escape" });
 
-    expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("listbox", { name: "Skills" }),
+    ).not.toBeInTheDocument();
     expect(textarea).toHaveValue("$ce:pl");
   });
 
@@ -10179,7 +10321,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -10187,7 +10329,9 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Stop" }),
+    ).toBeInTheDocument();
 
     await clickButton("Stop");
 
@@ -10217,7 +10361,9 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Stop" }),
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -10231,10 +10377,12 @@ describe("Composer", () => {
                 params: {
                   threadId: string;
                   turnId?: string;
-                  turn: {
-                    id: string;
-                    status: string;
-                  } | undefined;
+                  turn:
+                    | {
+                        id: string;
+                        status: string;
+                      }
+                    | undefined;
                 };
               }
             | {
@@ -10289,7 +10437,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -10297,7 +10445,9 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Stop" }),
+    ).toBeInTheDocument();
 
     await act(async () => {
       agentEventHandler?.({
@@ -10342,7 +10492,9 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Stop" }),
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -10376,7 +10528,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
@@ -10389,12 +10541,14 @@ describe("Composer", () => {
         threadId: "thread-1",
         turnId: "turn-stale",
       });
-      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Stop" }),
+      ).not.toBeInTheDocument();
     });
     expect(onActiveTurnIdChange).toHaveBeenCalledWith(undefined);
     expect(onPendingStatusChange).toHaveBeenCalledWith(undefined);
     expect(
-      screen.queryByText(/no active turn to interrupt/i)
+      screen.queryByText(/no active turn to interrupt/i),
     ).not.toBeInTheDocument();
   });
 
@@ -10450,7 +10604,9 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Stop" }),
+      ).not.toBeInTheDocument();
     });
     expect(onActiveTurnIdChange).toHaveBeenCalledWith(undefined);
     expect(onPendingStatusChange).toHaveBeenCalledWith(undefined);
@@ -10501,7 +10657,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -10510,7 +10666,7 @@ describe("Composer", () => {
     expect(startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         input: [{ type: "text", text: "First queued stale turn" }],
-      })
+      }),
     );
 
     await waitFor(() => {
@@ -10529,7 +10685,7 @@ describe("Composer", () => {
     expect(startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         input: [{ type: "text", text: "Second queued follow-up" }],
-      })
+      }),
     );
   });
 
@@ -10586,7 +10742,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -10594,7 +10750,9 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Stop" }),
+    ).toBeInTheDocument();
 
     await act(async () => {
       agentEventHandler?.({
@@ -10687,7 +10845,7 @@ describe("Composer", () => {
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -10758,7 +10916,9 @@ describe("Composer", () => {
       const indicator = screen.getByLabelText("Queued permissions change");
       expect(indicator).toBeInTheDocument();
       expect(indicator.className).toMatch(/composer__queued--permissions/);
-      expect(within(indicator).getByText("Permissions queued")).toBeInTheDocument();
+      expect(
+        within(indicator).getByText("Permissions queued"),
+      ).toBeInTheDocument();
       expect(
         within(indicator).getByText(/will switch to full access/i),
       ).toBeInTheDocument();
@@ -10782,7 +10942,9 @@ describe("Composer", () => {
       );
 
       const indicator = screen.getByLabelText("Queued permissions change");
-      fireEvent.click(within(indicator).getByRole("button", { name: "Cancel" }));
+      fireEvent.click(
+        within(indicator).getByRole("button", { name: "Cancel" }),
+      );
       await waitFor(() => {
         expect(onCancel).toHaveBeenCalledTimes(1);
       });

@@ -34,7 +34,9 @@ describe("discord formatting", () => {
 
   it("preserves markdown while neutralizing broad mentions", () => {
     expect(
-      sanitizeDiscordContent("Run `pnpm test`\n```ts\nexpect(true)\n```\n@everyone <@123> <@&456>"),
+      sanitizeDiscordContent(
+        "Run `pnpm test`\n```ts\nexpect(true)\n```\n@everyone <@123> <@&456>",
+      ),
     ).toBe(
       "Run `pnpm test`\n```ts\nexpect(true)\n```\n@ everyone @user:123 @role:456",
     );
@@ -50,13 +52,15 @@ describe("discord formatting", () => {
   });
 
   it("splits long content with continuation markers", () => {
-    const chunks = splitDiscordContent("A".repeat(DISCORD_MESSAGE_CONTENT_LIMIT + 50));
+    const chunks = splitDiscordContent(
+      "A".repeat(DISCORD_MESSAGE_CONTENT_LIMIT + 50),
+    );
 
     expect(chunks).toHaveLength(2);
     expect(chunks[0]).toContain("[continued]");
-    expect(chunks.every((chunk) => chunk.length <= DISCORD_MESSAGE_CONTENT_LIMIT)).toBe(
-      true,
-    );
+    expect(
+      chunks.every((chunk) => chunk.length <= DISCORD_MESSAGE_CONTENT_LIMIT),
+    ).toBe(true);
   });
 
   it("builds button components with opaque custom IDs", () => {
@@ -84,9 +88,9 @@ describe("discord formatting", () => {
         type: 1,
       },
     ]);
-    expect(Buffer.byteLength(components![0]!.components[0]!.custom_id, "utf8")).toBeLessThanOrEqual(
-      DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES,
-    );
+    expect(
+      Buffer.byteLength(components![0]!.components[0]!.custom_id, "utf8"),
+    ).toBeLessThanOrEqual(DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES);
   });
 
   it("honors channel-neutral button row hints", () => {
@@ -123,11 +127,9 @@ describe("discord formatting", () => {
       () => "dc:abcdefghijklmnopqrstuvwx",
     );
 
-    expect(components?.map((row) => row.components.map((button) => button.label))).toEqual([
-      ["1. Thread", "2. Thread"],
-      ["Next"],
-      ["Projects", "Cancel"],
-    ]);
+    expect(
+      components?.map((row) => row.components.map((button) => button.label)),
+    ).toEqual([["1. Thread", "2. Thread"], ["Next"], ["Projects", "Cancel"]]);
   });
 
   it("honors channel-neutral automatic column hints", () => {
@@ -141,10 +143,9 @@ describe("discord formatting", () => {
       { columns: 2 },
     );
 
-    expect(components?.map((row) => row.components.map((button) => button.label))).toEqual([
-      ["One", "Two"],
-      ["Three"],
-    ]);
+    expect(
+      components?.map((row) => row.components.map((button) => button.label)),
+    ).toEqual([["One", "Two"], ["Three"]]);
   });
 
   it("renders workspace handoff choices inside component limits", () => {
@@ -239,7 +240,9 @@ describe("discord formatting", () => {
       ],
     });
 
-    expect(rendered).toBe("Tool updates: ran 2 tools\n- pnpm test\n- Failed: tsc");
+    expect(rendered).toBe(
+      "Tool updates: ran 2 tools\n- pnpm test\n- Failed: tsc",
+    );
   });
 
   it("renders status actions with caller-provided opaque custom IDs", () => {
@@ -281,6 +284,8 @@ describe("discord formatting", () => {
         ],
         (action) => `dc:${action.id}`,
       ),
-    ).toThrow("Discord component custom_id must be an opaque persisted handle.");
+    ).toThrow(
+      "Discord component custom_id must be an opaque persisted handle.",
+    );
   });
 });

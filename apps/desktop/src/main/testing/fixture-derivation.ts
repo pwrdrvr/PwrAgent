@@ -71,21 +71,19 @@ export type ExportedSessionCapture = {
 };
 
 export async function deriveReplayFixtureFromCapture(
-  options: DeriveReplayFixtureOptions
+  options: DeriveReplayFixtureOptions,
 ): Promise<DerivedReplayFixtureArtifacts> {
   const allRecords = await readProtocolCaptureFile(
     options.capturePath,
-    options.redactions ?? []
+    options.redactions ?? [],
   );
   const threadScopedRecords = filterCaptureRecordsByThread(
     allRecords,
-    options.threadId
+    options.threadId,
   );
   const selectedRecords = selectCaptureWindow(threadScopedRecords, options);
   if (selectedRecords.length === 0) {
-    throw new Error(
-      `No capture records selected from ${options.capturePath}`
-    );
+    throw new Error(`No capture records selected from ${options.capturePath}`);
   }
 
   const requestsById = new Map<string, CapturedEnvelopeRecord>();
@@ -114,14 +112,14 @@ export async function deriveReplayFixtureFromCapture(
           : String(entry.envelope.id);
       if (!requestId) {
         throw new Error(
-          `Response capture record ${entry.record.sequence} is missing an id`
+          `Response capture record ${entry.record.sequence} is missing an id`,
         );
       }
 
       const requestEntry = requestsById.get(requestId);
       if (!requestEntry?.envelope.method?.trim()) {
         throw new Error(
-          `Could not match response sequence ${entry.record.sequence} to an outbound request`
+          `Could not match response sequence ${entry.record.sequence} to an outbound request`,
         );
       }
 
@@ -147,7 +145,7 @@ export async function deriveReplayFixtureFromCapture(
 
     if (!entry.envelope.method?.trim()) {
       throw new Error(
-        `Inbound capture record ${entry.record.sequence} is missing method`
+        `Inbound capture record ${entry.record.sequence} is missing method`,
       );
     }
 
@@ -178,7 +176,8 @@ export async function deriveReplayFixtureFromCapture(
       kind: "request",
       request: {
         method: entry.envelope.method,
-        params: (entry.envelope.params ?? {}) as ReplayRequestStep["request"]["params"],
+        params: (entry.envelope.params
+          ?? {}) as ReplayRequestStep["request"]["params"],
       },
     };
     steps.push(requestStep);
@@ -187,9 +186,9 @@ export async function deriveReplayFixtureFromCapture(
   const fixture: ReplayFixture = {
     metadata: {
       backend:
-        options.backend ??
-        toReplayBackend(selectedRecords[0]?.record.backend) ??
-        "codex",
+        options.backend
+        ?? toReplayBackend(selectedRecords[0]?.record.backend)
+        ?? "codex",
       scenario: options.scenario,
       sourceCaptureId:
         options.sourceCaptureId ?? selectedRecords[0]?.record.captureId,
@@ -212,12 +211,14 @@ export async function deriveReplayFixtureFromCapture(
   };
 }
 
-function toReplayBackend(value: string | undefined): "codex" | "grok" | undefined {
+function toReplayBackend(
+  value: string | undefined,
+): "codex" | "grok" | undefined {
   return value === "codex" || value === "grok" ? value : undefined;
 }
 
 export async function writeReplayFixtureArtifacts(
-  options: WriteReplayFixtureArtifactsOptions
+  options: WriteReplayFixtureArtifactsOptions,
 ): Promise<{
   fixturePath: string;
   rawCapturePath: string;
@@ -230,14 +231,14 @@ export async function writeReplayFixtureArtifacts(
   await fs.writeFile(
     fixturePath,
     `${JSON.stringify(options.fixture, null, 2)}\n`,
-    "utf8"
+    "utf8",
   );
   await fs.writeFile(
     rawCapturePath,
     `${options.rawCaptureRecords
       .map((record) => JSON.stringify(record))
       .join("\n")}\n`,
-    "utf8"
+    "utf8",
   );
 
   return {
@@ -247,7 +248,7 @@ export async function writeReplayFixtureArtifacts(
 }
 
 export async function exportSessionCapture(
-  options: ExportSessionCaptureOptions
+  options: ExportSessionCaptureOptions,
 ): Promise<ExportedSessionCapture> {
   const indexPath = path.join(options.captureRoot, "index.json");
   const index = await readCaptureIndex(indexPath);
@@ -256,9 +257,7 @@ export async function exportSessionCapture(
   try {
     await fs.access(entry.path);
   } catch {
-    throw new Error(
-      `Recorded capture file is missing: ${entry.path}`
-    );
+    throw new Error(`Recorded capture file is missing: ${entry.path}`);
   }
 
   await fs.mkdir(path.dirname(options.outputPath), { recursive: true });
@@ -272,7 +271,7 @@ export async function exportSessionCapture(
 }
 
 async function readCaptureIndex(
-  indexPath: string
+  indexPath: string,
 ): Promise<Record<string, CaptureIndexEntry>> {
   let contents: string;
   try {
@@ -301,14 +300,16 @@ async function readCaptureIndex(
 function resolveCaptureIndexEntry(
   index: Record<string, CaptureIndexEntry>,
   indexPath: string,
-  options: ExportSessionCaptureOptions
+  options: ExportSessionCaptureOptions,
 ): CaptureIndexEntry {
   if (options.captureId?.trim()) {
-    const normalizedCaptureId = options.captureId.trim().replace(/\.jsonl$/, "");
+    const normalizedCaptureId = options.captureId
+      .trim()
+      .replace(/\.jsonl$/, "");
     const entry = index[normalizedCaptureId];
     if (!entry) {
       throw new Error(
-        `No recorded capture ${normalizedCaptureId} in ${indexPath}`
+        `No recorded capture ${normalizedCaptureId} in ${indexPath}`,
       );
     }
     return entry;
@@ -317,7 +318,7 @@ function resolveCaptureIndexEntry(
   const selector = parseSessionSelector(options);
   if (!selector) {
     throw new Error(
-      "Expected --capture-id or a backend-qualified --session/--thread selector"
+      "Expected --capture-id or a backend-qualified --session/--thread selector",
     );
   }
 
@@ -325,25 +326,25 @@ function resolveCaptureIndexEntry(
     .filter(
       (entry) =>
         entry.backend === selector.backend
-        && entry.threadIds.includes(selector.threadId)
+        && entry.threadIds.includes(selector.threadId),
     )
     .sort((left, right) => right.updatedAt - left.updatedAt);
 
   if (matches.length === 0) {
     throw new Error(
-      `No recorded capture for ${selector.backend}:${selector.threadId} in ${indexPath}`
+      `No recorded capture for ${selector.backend}:${selector.threadId} in ${indexPath}`,
     );
   }
 
   return matches[0];
 }
 
-function parseSessionSelector(
-  options: ExportSessionCaptureOptions
-): {
-  backend: "codex" | "grok";
-  threadId: string;
-} | undefined {
+function parseSessionSelector(options: ExportSessionCaptureOptions):
+  | {
+      backend: "codex" | "grok";
+      threadId: string;
+    }
+  | undefined {
   const rawSelector = options.sessionId?.trim() || options.threadId?.trim();
   if (!rawSelector) {
     return undefined;
@@ -352,10 +353,7 @@ function parseSessionSelector(
   if (rawSelector.includes(":")) {
     const [backend, ...threadParts] = rawSelector.split(":");
     const threadId = threadParts.join(":").trim();
-    if (
-      (backend === "codex" || backend === "grok")
-      && threadId
-    ) {
+    if ((backend === "codex" || backend === "grok") && threadId) {
       return {
         backend,
         threadId,
@@ -365,7 +363,7 @@ function parseSessionSelector(
 
   if (!options.backend) {
     throw new Error(
-      `Thread selector ${rawSelector} is missing a backend prefix and no --backend was provided`
+      `Thread selector ${rawSelector} is missing a backend prefix and no --backend was provided`,
     );
   }
 
@@ -377,7 +375,7 @@ function parseSessionSelector(
 
 function selectCaptureWindow(
   records: CapturedEnvelopeRecord[],
-  options: Pick<DeriveReplayFixtureOptions, "startSequence" | "endSequence">
+  options: Pick<DeriveReplayFixtureOptions, "startSequence" | "endSequence">,
 ): CapturedEnvelopeRecord[] {
   return records.filter((entry) => {
     if (
@@ -398,7 +396,7 @@ function selectCaptureWindow(
 
 function filterCaptureRecordsByThread(
   records: CapturedEnvelopeRecord[],
-  threadId?: string
+  threadId?: string,
 ): CapturedEnvelopeRecord[] {
   const normalizedThreadId = threadId?.trim();
   if (!normalizedThreadId) {

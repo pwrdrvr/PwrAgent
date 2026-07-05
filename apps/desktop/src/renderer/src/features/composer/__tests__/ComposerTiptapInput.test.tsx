@@ -1,9 +1,18 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { createRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerTiptapInput } from "../ComposerTiptapInput";
-import type { ComposerInputHandle, ComposerSkillToken } from "../ComposerInputTypes";
+import type {
+  ComposerInputHandle,
+  ComposerSkillToken,
+} from "../ComposerInputTypes";
 
 afterEach(() => {
   cleanup();
@@ -49,7 +58,7 @@ function setComposerSelection(textbox: HTMLElement, index: number): void {
 }
 
 const copiedHandoffText = [
-  "We reproduced and fixed the \"Upload to GIPHY does nothing after clicking through several reel videos\" bug.",
+  'We reproduced and fixed the "Upload to GIPHY does nothing after clicking through several reel videos" bug.',
   "",
   "Root cause:",
   "",
@@ -60,7 +69,7 @@ const copiedHandoffText = [
   "In `GGEditorOptionsViewController.giphyButtonClicked(_:)`, handle upload by command/title as well as object identity:",
   "",
   "```swift",
-  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+  '} else if button === uploadButton || button.titleText == "UPLOAD TO GIPHY" {',
   "    uploadButtonClicked()",
   "}",
   "```",
@@ -97,7 +106,7 @@ const canonicalCopiedHandoffText = copiedHandoffText
   .trimEnd();
 
 const handoffPrefixWithoutCodeBlock = [
-  "We reproduced and fixed the \"Upload to GIPHY does nothing after clicking through several reel videos\" bug.",
+  'We reproduced and fixed the "Upload to GIPHY does nothing after clicking through several reel videos" bug.',
   "",
   "Root cause:",
   "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO GIPHY` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.giphyButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGGIPHYButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
@@ -110,14 +119,14 @@ const handoffPrefixWithCodeBlock = [
   handoffPrefixWithoutCodeBlock,
   "",
   "```swift",
-  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+  '} else if button === uploadButton || button.titleText == "UPLOAD TO GIPHY" {',
   "    uploadButtonClicked()",
   "}",
   "```",
 ].join("\n");
 
 const canonicalHandoffPrefix = [
-  "We reproduced and fixed the \"Upload to GIPHY does nothing after clicking through several reel videos\" bug.",
+  'We reproduced and fixed the "Upload to GIPHY does nothing after clicking through several reel videos" bug.',
   "",
   "Root cause:",
   "",
@@ -132,7 +141,7 @@ const canonicalHandoffPrefixWithCodeBlock = [
   canonicalHandoffPrefix,
   "",
   "```swift",
-  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+  '} else if button === uploadButton || button.titleText == "UPLOAD TO GIPHY" {',
   "    uploadButtonClicked()",
   "}",
   "```",
@@ -141,7 +150,7 @@ const canonicalHandoffPrefixWithCodeBlock = [
 const pastedSearchSql = [
   "SELECT a.api_key, m.company, endpoint, SUM(count) AS _count",
   "",
-  "FROM \"spectrumdb\".\"api_aggregates_by_endpoint\" a",
+  'FROM "spectrumdb"."api_aggregates_by_endpoint" a',
   "",
   "  LEFT JOIN api_key_metadata m",
   "",
@@ -169,7 +178,7 @@ describe("ComposerTiptapInput", () => {
         placeholder="Ask anything"
         skillTokens={[]}
         value="- Some item\n- Second item"
-      />
+      />,
     );
 
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
@@ -189,8 +198,8 @@ describe("ComposerTiptapInput", () => {
     expect(container.querySelector("a")).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        /docs\/plans\/2026-05-02-001-feat-messaging-tool-update-verbosity-plan\.md/
-      )
+        /docs\/plans\/2026-05-02-001-feat-messaging-tool-update-verbosity-plan\.md/,
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText(/https:\/\/example\.com/)).toBeInTheDocument();
   });
@@ -225,7 +234,7 @@ describe("ComposerTiptapInput", () => {
     await waitFor(() => {
       expect(onChange).toHaveBeenCalledWith(
         "docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md",
-        []
+        [],
       );
     });
     expect(container.querySelector("a")).not.toBeInTheDocument();
@@ -238,7 +247,8 @@ describe("ComposerTiptapInput", () => {
     fireEvent.paste(textbox, {
       clipboardData: {
         files: [],
-        getData: (type: string) => type === "text/plain" ? copiedHandoffText : "",
+        getData: (type: string) =>
+          type === "text/plain" ? copiedHandoffText : "",
         items: [],
         types: ["text/plain"],
       },
@@ -251,16 +261,18 @@ describe("ComposerTiptapInput", () => {
     const codeBlock = container.querySelector("pre code");
     expect(codeBlock?.textContent).toBe(
       [
-        "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+        '} else if button === uploadButton || button.titleText == "UPLOAD TO GIPHY" {',
         "    uploadButtonClicked()",
         "}",
-      ].join("\n")
+      ].join("\n"),
     );
     expect(codeBlock?.textContent).not.toContain("\n\n");
 
     const orderedItems = [...container.querySelectorAll("ol > li")];
     expect(orderedItems).toHaveLength(8);
-    expect(orderedItems[0]).toHaveTextContent("Creates several ready recordings.");
+    expect(orderedItems[0]).toHaveTextContent(
+      "Creates several ready recordings.",
+    );
     expect(orderedItems[7]).toHaveTextContent(
       "Asserts representedRecording is the currently selected recording.",
     );
@@ -270,10 +282,14 @@ describe("ComposerTiptapInput", () => {
     expect(bulletItems[0]).toHaveTextContent(
       "Add diagnostic logs for upload button mouseUp",
     );
-    const paragraphs = [...container.querySelectorAll(".composer-tiptap-input__editor > p")];
+    const paragraphs = [
+      ...container.querySelectorAll(".composer-tiptap-input__editor > p"),
+    ];
     expect(
       paragraphs.some((paragraph) =>
-        paragraph.textContent?.startsWith("1. Creates several ready recordings.")
+        paragraph.textContent?.startsWith(
+          "1. Creates several ready recordings.",
+        ),
       ),
     ).toBe(false);
   });
@@ -290,7 +306,7 @@ describe("ComposerTiptapInput", () => {
           if (type === "text/html") {
             return pastedSearchSql
               .split("\n")
-              .map((line) => line ? `<div>${line}</div>` : "<div><br></div>")
+              .map((line) => (line ? `<div>${line}</div>` : "<div><br></div>"))
               .join("");
           }
           return "";
@@ -306,15 +322,16 @@ describe("ComposerTiptapInput", () => {
         [],
       );
     });
-    expect(container.querySelectorAll(".composer-tiptap-input__editor > pre"))
-      .toHaveLength(1);
     expect(
-      [...container.querySelectorAll(".composer-tiptap-input__editor > p")]
-        .filter((paragraph) => /SELECT|FROM|WHERE|ORDER BY/.test(
-          paragraph.textContent ?? "",
-        )),
-    )
-      .toHaveLength(0);
+      container.querySelectorAll(".composer-tiptap-input__editor > pre"),
+    ).toHaveLength(1);
+    expect(
+      [
+        ...container.querySelectorAll(".composer-tiptap-input__editor > p"),
+      ].filter((paragraph) =>
+        /SELECT|FROM|WHERE|ORDER BY/.test(paragraph.textContent ?? ""),
+      ),
+    ).toHaveLength(0);
   });
 
   it("keeps HTML-only double-blank-line SQL paste inside an active blockquote", async () => {
@@ -354,7 +371,7 @@ describe("ComposerTiptapInput", () => {
           if (type === "text/html") {
             return pastedSearchSql
               .split("\n")
-              .map((line) => line ? `<div>${line}</div>` : "<div><br></div>")
+              .map((line) => (line ? `<div>${line}</div>` : "<div><br></div>"))
               .join("");
           }
           return "";
@@ -426,18 +443,16 @@ describe("ComposerTiptapInput", () => {
 
     await waitFor(() => {
       expect(onChange).toHaveBeenLastCalledWith(
-        [
-          "> Source:",
-          "> ",
-          "> **Note**",
-          "> ",
-          "> Follow-up paragraph",
-        ].join("\n"),
+        ["> Source:", "> ", "> **Note**", "> ", "> Follow-up paragraph"].join(
+          "\n",
+        ),
         [],
         expect.any(Object),
       );
     });
-    expect(container.querySelector("blockquote strong")).toHaveTextContent("Note");
+    expect(container.querySelector("blockquote strong")).toHaveTextContent(
+      "Note",
+    );
     expect(container.querySelectorAll("blockquote > p")).toHaveLength(3);
   });
 
@@ -568,11 +583,7 @@ describe("ComposerTiptapInput", () => {
 
     await waitFor(() => {
       expect(onChange).toHaveBeenLastCalledWith(
-        [
-          "> Checklist:",
-          "> ",
-          "> - Use **bold** text",
-        ].join("\n"),
+        ["> Checklist:", "> ", "> - Use **bold** text"].join("\n"),
         [],
         expect.any(Object),
       );
@@ -639,12 +650,7 @@ describe("ComposerTiptapInput", () => {
 
     await waitFor(() => {
       expect(onChange).toHaveBeenLastCalledWith(
-        [
-          "> Tasks:",
-          "> ",
-          "> - Parent task",
-          ">   - Nested task",
-        ].join("\n"),
+        ["> Tasks:", "> ", "> - Parent task", ">   - Nested task"].join("\n"),
         [],
         expect.any(Object),
       );
@@ -854,7 +860,10 @@ describe("ComposerTiptapInput", () => {
     });
 
     await waitFor(() => {
-      expect(onChange).toHaveBeenLastCalledWith(canonicalHandoffPrefixWithCodeBlock, []);
+      expect(onChange).toHaveBeenLastCalledWith(
+        canonicalHandoffPrefixWithCodeBlock,
+        [],
+      );
     });
   });
 
@@ -869,7 +878,9 @@ describe("ComposerTiptapInput", () => {
     // paragraph SEPARATOR, not its own empty <p>. If we created an empty
     // paragraph node for it, every round trip would double-space the doc
     // (1 → 3 → 7 blank lines after each reopen).
-    const paragraphs = container.querySelectorAll(".composer-tiptap-input__editor > p");
+    const paragraphs = container.querySelectorAll(
+      ".composer-tiptap-input__editor > p",
+    );
     expect(paragraphs).toHaveLength(2);
     expect(paragraphs[0]?.textContent).toContain("Hi Mom!");
     expect(paragraphs[1]?.textContent).toContain("abc123");
@@ -882,7 +893,9 @@ describe("ComposerTiptapInput", () => {
 
     await screen.findByRole("textbox", { name: "Reply" });
 
-    expect(container.querySelector("strong")).toHaveTextContent("this bold word");
+    expect(container.querySelector("strong")).toHaveTextContent(
+      "this bold word",
+    );
     expect(container.querySelector("em")).toHaveTextContent("this italic");
     expect(container.querySelector("code")).toHaveTextContent("inline code");
   });
@@ -942,7 +955,12 @@ describe("ComposerTiptapInput", () => {
               content: [
                 {
                   type: "listItem",
-                  content: [{ type: "paragraph", content: [{ type: "text", text: "One" }] }],
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "One" }],
+                    },
+                  ],
                 },
               ],
             },
@@ -1054,7 +1072,9 @@ describe("ComposerTiptapInput", () => {
     await waitFor(() => {
       expect(onChange).toHaveBeenCalledWith(`${original} `, []);
     });
-    expect(container.querySelector("strong")).toHaveTextContent("GitHub PR title");
+    expect(container.querySelector("strong")).toHaveTextContent(
+      "GitHub PR title",
+    );
     expect(container.querySelector("strong")).not.toHaveTextContent(
       "GitHub PR title ",
     );
@@ -1094,7 +1114,10 @@ describe("ComposerTiptapInput", () => {
     setComposerSelection(textbox, "```md\n".length + codeContent.length);
     fireEvent.keyDown(textbox, { key: "ArrowRight" });
 
-    expect(onChange).not.toHaveBeenCalledWith(`\`\`\`md\n${codeContent} \n\`\`\``, []);
+    expect(onChange).not.toHaveBeenCalledWith(
+      `\`\`\`md\n${codeContent} \n\`\`\``,
+      [],
+    );
     expect(container.querySelector("pre code")).toHaveTextContent(codeContent);
     expect(container.querySelector("pre code")).not.toHaveTextContent(
       `${codeContent} `,
@@ -1113,7 +1136,8 @@ describe("ComposerTiptapInput", () => {
       expect(onChange).toHaveBeenLastCalledWith(`\n\n${value}`, []);
     });
     const editorChildren = [
-      ...(container.querySelector(".composer-tiptap-input__editor")?.children ?? []),
+      ...(container.querySelector(".composer-tiptap-input__editor")?.children
+        ?? []),
     ];
     expect(editorChildren[0]?.tagName).toBe("P");
     expect(editorChildren[1]?.tagName).toBe("PRE");
@@ -1131,7 +1155,8 @@ describe("ComposerTiptapInput", () => {
       expect(onChange).toHaveBeenLastCalledWith(`\n\n${value}`, []);
     });
     const editorChildren = [
-      ...(container.querySelector(".composer-tiptap-input__editor")?.children ?? []),
+      ...(container.querySelector(".composer-tiptap-input__editor")?.children
+        ?? []),
     ];
     expect(editorChildren[0]?.tagName).toBe("P");
     expect(editorChildren[1]?.tagName).toBe("PRE");

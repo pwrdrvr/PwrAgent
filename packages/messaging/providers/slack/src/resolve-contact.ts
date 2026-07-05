@@ -48,7 +48,9 @@ export async function resolveContact(
     }
 
     if (request.kind === "channel") {
-      const conversation = await api.conversationsInfo?.({ channel: request.id });
+      const conversation = await api.conversationsInfo?.({
+        channel: request.id,
+      });
       if (!conversation) {
         return {
           status: "not_found",
@@ -92,7 +94,9 @@ export async function resolveContact(
   }
 }
 
-function sanitizeOptionalContactLabel(value: string | undefined): string | undefined {
+function sanitizeOptionalContactLabel(
+  value: string | undefined,
+): string | undefined {
   const sanitized = sanitizeMessagingContactLabel(value);
   return sanitized || undefined;
 }
@@ -102,11 +106,15 @@ function formatContactHandle(value: string | undefined): string | undefined {
   return sanitized ? `@${sanitized}` : undefined;
 }
 
-function lookupFailure(id: string, error: unknown): MessagingContactLookupResult {
+function lookupFailure(
+  id: string,
+  error: unknown,
+): MessagingContactLookupResult {
   const message = error instanceof Error ? error.message : String(error);
   const status =
-    /missing_scope|not_allowed_token_type|user_not_found|team_not_found|not_authed|invalid_auth/i
-      .test(message)
+    /missing_scope|not_allowed_token_type|user_not_found|team_not_found|not_authed|invalid_auth/i.test(
+      message,
+    )
       ? "not_found"
       : "failed";
   return {

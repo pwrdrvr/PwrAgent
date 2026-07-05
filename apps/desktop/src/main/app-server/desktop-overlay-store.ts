@@ -11,6 +11,8 @@ export function resetDesktopOverlayStoreForTests(): void {
   overlayStoreOverride = null;
 }
 
-export function setDesktopOverlayStoreForTests(store: SqliteOverlayStore): void {
+export function setDesktopOverlayStoreForTests(
+  store: SqliteOverlayStore,
+): void {
   overlayStoreOverride = store;
 }

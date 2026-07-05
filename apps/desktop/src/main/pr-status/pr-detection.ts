@@ -173,7 +173,7 @@ export function resolveFetchableDirectoryPaths(
   for (const directory of linkedDirectories) {
     const candidate =
       directory.kind === "worktree"
-        ? directory.worktreePath ?? directory.path
+        ? (directory.worktreePath ?? directory.path)
         : directory.path;
     if (!candidate) continue;
     if (seen.has(candidate)) continue;

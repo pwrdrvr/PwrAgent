@@ -8,12 +8,16 @@ import { OverlayStore } from "../persistence/overlay-store";
 const tempDirs: string[] = [];
 
 async function createStore(): Promise<OverlayStore> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-refresh-reconcile-"));
+  const tempDir = await mkdtemp(
+    path.join(os.tmpdir(), "pwragent-refresh-reconcile-"),
+  );
   tempDirs.push(tempDir);
   return new OverlayStore(path.join(tempDir, "overlay-state.json"));
 }
 
-function buildThread(overrides: Partial<AppServerThreadSummary> = {}): AppServerThreadSummary {
+function buildThread(
+  overrides: Partial<AppServerThreadSummary> = {},
+): AppServerThreadSummary {
   return {
     id: "thread-1",
     title: "Desktop App",
@@ -128,7 +132,9 @@ describe("refresh reconciliation", () => {
 
     expect(snapshot.unchanged).toBe(false);
     expect(snapshot.threads[0]?.gitBranch).toBe("fix/testing-detached-head");
-    expect(snapshot.threads[0]?.observedGitBranch).toBe("fix/testing-detached-head");
+    expect(snapshot.threads[0]?.observedGitBranch).toBe(
+      "fix/testing-detached-head",
+    );
   });
 
   it("treats prior observed branch metadata as expected when the live checkout changes", async () => {
@@ -152,7 +158,9 @@ describe("refresh reconciliation", () => {
     });
 
     expect(snapshot.threads[0]?.gitBranch).toBe("HEAD");
-    expect(snapshot.threads[0]?.observedGitBranch).toBe("fix/testing-detached-head");
+    expect(snapshot.threads[0]?.observedGitBranch).toBe(
+      "fix/testing-detached-head",
+    );
   });
 
   it("prefers persisted observed branch metadata over stale thread cache after drift handling", async () => {
@@ -182,7 +190,9 @@ describe("refresh reconciliation", () => {
     });
 
     expect(snapshot.threads[0]?.gitBranch).toBe("HEAD");
-    expect(snapshot.threads[0]?.observedGitBranch).toBe("fix/testing-detached-head");
+    expect(snapshot.threads[0]?.observedGitBranch).toBe(
+      "fix/testing-detached-head",
+    );
   });
 
   it("uses overlay expected branch metadata when a workspace handoff updates the checkout", async () => {
@@ -212,7 +222,9 @@ describe("refresh reconciliation", () => {
       ],
     });
 
-    expect(snapshot.threads[0]?.gitBranch).toBe("feat/thread-workspace-handoff-plan");
+    expect(snapshot.threads[0]?.gitBranch).toBe(
+      "feat/thread-workspace-handoff-plan",
+    );
     expect(snapshot.threads[0]?.observedGitBranch).toBe(
       "feat/thread-workspace-handoff-plan",
     );
@@ -249,7 +261,9 @@ describe("refresh reconciliation", () => {
       ],
     });
 
-    expect(snapshot.threads[0]?.gitBranch).toBe("feat/thread-workspace-handoff-plan");
+    expect(snapshot.threads[0]?.gitBranch).toBe(
+      "feat/thread-workspace-handoff-plan",
+    );
     expect(snapshot.threads[0]?.observedGitBranch).toBe(
       "feat/thread-workspace-handoff-plan",
     );
@@ -291,7 +305,9 @@ describe("refresh reconciliation", () => {
       ],
     });
 
-    expect(snapshot.threads[0]?.gitBranch).toBe("feat/thread-workspace-handoff-plan");
+    expect(snapshot.threads[0]?.gitBranch).toBe(
+      "feat/thread-workspace-handoff-plan",
+    );
     expect(snapshot.threads[0]?.observedGitBranch).toBe(
       "fix/context-rail-slide-reflow",
     );
@@ -328,9 +344,8 @@ describe("refresh reconciliation", () => {
 
     expect(snapshot.inboxThreadKeys).toEqual(["codex:thread-1"]);
     expect(snapshot.threads).toHaveLength(2);
-    expect(snapshot.threads.map((thread) => `${thread.source}:${thread.id}`)).toEqual([
-      "codex:thread-1",
-      "grok:thread-1",
-    ]);
+    expect(
+      snapshot.threads.map((thread) => `${thread.source}:${thread.id}`),
+    ).toEqual(["codex:thread-1", "grok:thread-1"]);
   });
 });

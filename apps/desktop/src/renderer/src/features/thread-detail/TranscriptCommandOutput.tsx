@@ -12,7 +12,10 @@ const PREVIEW_CHARACTER_LIMIT = 3_000;
 export function TranscriptCommandOutput(props: TranscriptCommandOutputProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const command = props.detail.command;
-  const output = useMemo(() => sanitizeCommandOutput(command?.output), [command?.output]);
+  const output = useMemo(
+    () => sanitizeCommandOutput(command?.output),
+    [command?.output],
+  );
   if (!command) {
     return null;
   }
@@ -59,8 +62,17 @@ export function TranscriptCommandOutput(props: TranscriptCommandOutputProps) {
       <pre className="transcript-command__block">
         <code>{`$ ${command.displayCommand}`}</code>
       </pre>
-      <div className="transcript-command__output" aria-label={`${props.detail.label} output`}>
-        {preview.text ? <pre><code>{preview.text}</code></pre> : <p>No output captured.</p>}
+      <div
+        className="transcript-command__output"
+        aria-label={`${props.detail.label} output`}
+      >
+        {preview.text ? (
+          <pre>
+            <code>{preview.text}</code>
+          </pre>
+        ) : (
+          <p>No output captured.</p>
+        )}
       </div>
       {preview.isTruncated ? (
         <button
@@ -79,11 +91,13 @@ export function TranscriptCommandOutput(props: TranscriptCommandOutputProps) {
 }
 
 function isAgentCommand(rawCommand: string | undefined): boolean {
-  return rawCommand === "spawnAgent" ||
-    rawCommand === "wait" ||
-    rawCommand === "sendInput" ||
-    rawCommand === "resumeAgent" ||
-    rawCommand === "closeAgent";
+  return (
+    rawCommand === "spawnAgent"
+    || rawCommand === "wait"
+    || rawCommand === "sendInput"
+    || rawCommand === "resumeAgent"
+    || rawCommand === "closeAgent"
+  );
 }
 
 function sanitizeCommandOutput(value: string | undefined): string {
@@ -111,23 +125,33 @@ function buildOutputPreview(
     ? lines.slice(0, PREVIEW_LINE_LIMIT).join("\n")
     : output.slice(0, PREVIEW_CHARACTER_LIMIT);
   const omittedLines = lineLimited ? lines.length - PREVIEW_LINE_LIMIT : 0;
-  const omittedChars = characterLimited ? output.length - visibleText.length : 0;
+  const omittedChars = characterLimited
+    ? output.length - visibleText.length
+    : 0;
   const summary = lineLimited
     ? `Show ${omittedLines.toLocaleString()} more line${omittedLines === 1 ? "" : "s"}`
     : `Show ${omittedChars.toLocaleString()} more character${omittedChars === 1 ? "" : "s"}`;
   return {
     isTruncated: true,
     summary,
-    text: `${visibleText}\n... ${lineLimited
-      ? `${omittedLines.toLocaleString()} line${omittedLines === 1 ? "" : "s"} omitted`
-      : `${omittedChars.toLocaleString()} character${omittedChars === 1 ? "" : "s"} omitted`}`,
+    text: `${visibleText}\n... ${
+      lineLimited
+        ? `${omittedLines.toLocaleString()} line${omittedLines === 1 ? "" : "s"} omitted`
+        : `${omittedChars.toLocaleString()} character${omittedChars === 1 ? "" : "s"} omitted`
+    }`,
   };
 }
 
-function formatCommandStatus(detail: AppServerThreadActivityDetail): string | undefined {
+function formatCommandStatus(
+  detail: AppServerThreadActivityDetail,
+): string | undefined {
   const parts: string[] = [];
   if (detail.status === "completed") {
-    parts.push(detail.command?.exitCode && detail.command.exitCode !== 0 ? "Failed" : "Success");
+    parts.push(
+      detail.command?.exitCode && detail.command.exitCode !== 0
+        ? "Failed"
+        : "Success",
+    );
   } else if (detail.status === "failed") {
     parts.push("Failed");
   } else if (detail.status === "in_progress") {

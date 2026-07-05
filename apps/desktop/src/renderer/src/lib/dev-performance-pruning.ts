@@ -1,7 +1,4 @@
-type PerformanceTimeline = Pick<
-  Performance,
-  "clearMarks" | "clearMeasures"
-> & {
+type PerformanceTimeline = Pick<Performance, "clearMarks" | "clearMeasures"> & {
   getEntriesByType: (type: "mark" | "measure") => ArrayLike<unknown>;
 };
 
@@ -22,14 +19,15 @@ export function installDevPerformancePruning(
     maxMeasures?: number;
     performance?: PerformanceTimeline;
     timerApi?: TimerApi;
-  } = {}
+  } = {},
 ): DevPerformancePruningHandle {
   const performanceApi = options.performance ?? window.performance;
   const timerApi: TimerApi = options.timerApi ?? {
-    setInterval: (callback, intervalMs) => window.setInterval(callback, intervalMs),
+    setInterval: (callback, intervalMs) =>
+      window.setInterval(callback, intervalMs),
     clearInterval: (intervalId) => {
       window.clearInterval(intervalId as number);
-    }
+    },
   };
   const maxMarks = options.maxMarks ?? 10_000;
   const maxMeasures = options.maxMeasures ?? 10_000;
@@ -53,6 +51,6 @@ export function installDevPerformancePruning(
     prune,
     stop: () => {
       timerApi.clearInterval(intervalId);
-    }
+    },
   };
 }

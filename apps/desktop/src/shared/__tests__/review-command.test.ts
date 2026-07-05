@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeReviewDisplayText, parseReviewCommand } from "../review-command";
+import {
+  normalizeReviewDisplayText,
+  parseReviewCommand,
+} from "../review-command";
 
 describe("parseReviewCommand", () => {
   it("parses bare review as uncommitted changes", () => {
@@ -17,7 +20,9 @@ describe("parseReviewCommand", () => {
   });
 
   it("parses explicit custom review instructions", () => {
-    expect(parseReviewCommand("/review --custom focus on API compatibility")).toEqual({
+    expect(
+      parseReviewCommand("/review --custom focus on API compatibility"),
+    ).toEqual({
       target: { type: "custom", instructions: "focus on API compatibility" },
       displayText: "Review custom instructions",
     });
@@ -40,13 +45,13 @@ describe("parseReviewCommand", () => {
 describe("normalizeReviewDisplayText", () => {
   it("normalizes Codex review hints to the composer display text", () => {
     expect(normalizeReviewDisplayText("changes against 'main'")).toBe(
-      "Review changes against main"
+      "Review changes against main",
     );
-    expect(normalizeReviewDisplayText("Review changes against \"develop\"")).toBe(
-      "Review changes against develop"
+    expect(normalizeReviewDisplayText('Review changes against "develop"')).toBe(
+      "Review changes against develop",
     );
     expect(normalizeReviewDisplayText("current changes")).toBe(
-      "Review current changes"
+      "Review current changes",
     );
   });
 });

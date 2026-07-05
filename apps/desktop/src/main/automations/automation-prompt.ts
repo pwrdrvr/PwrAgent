@@ -21,9 +21,9 @@ export function buildAutomationTurnInput(params: {
       ? "manual Run Now"
       : run.trigger === "inbound_message"
         ? "inbound message"
-      : coalescedCount > 0
-        ? "scheduled catch-up"
-        : "scheduled";
+        : coalescedCount > 0
+          ? "scheduled catch-up"
+          : "scheduled";
   const coalescedLine =
     coalescedCount > 0
       ? `Coalesced missed windows: ${coalescedCount}`
@@ -82,22 +82,23 @@ function formatBatchedSources(
   batched: AutomationRunSourceMetadata["batchedEvents"],
 ): string[] {
   if (!batched || batched.length === 0) return [];
-  const lines = [
-    "",
-    `Additional messages in this batch (${batched.length}):`,
-  ];
+  const lines = ["", `Additional messages in this batch (${batched.length}):`];
   for (const entry of batched) {
     const sender =
-      entry.actor.displayName ??
-      entry.actor.username ??
-      entry.actor.platformUserId;
+      entry.actor.displayName
+      ?? entry.actor.username
+      ?? entry.actor.platformUserId;
     const text = entry.message?.text ?? "(no text)";
-    lines.push(`- [${new Date(entry.receivedAt).toISOString()}] ${sender}: ${text}`);
+    lines.push(
+      `- [${new Date(entry.receivedAt).toISOString()}] ${sender}: ${text}`,
+    );
   }
   return lines;
 }
 
-function formatGateOutput(gateResult: AutomationGateRunResult | undefined): string[] {
+function formatGateOutput(
+  gateResult: AutomationGateRunResult | undefined,
+): string[] {
   if (!gateResult || gateResult.status !== "proceed") {
     return [];
   }

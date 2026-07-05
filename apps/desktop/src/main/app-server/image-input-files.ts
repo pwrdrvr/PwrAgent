@@ -26,7 +26,8 @@ export type ImageInputFileDependencies = {
 
 const defaultDependencies: ImageInputFileDependencies = {
   now: () => Date.now(),
-  resolveRoot: () => resolveActiveProfilePath(path.join("state", "image-inputs")),
+  resolveRoot: () =>
+    resolveActiveProfilePath(path.join("state", "image-inputs")),
   writeFile,
   mkdir,
   readdir,
@@ -93,13 +94,18 @@ export async function materializeLocalImageInputs(
 
 function parseSupportedImageDataUrl(
   url: string,
-): { buffer: Buffer; mimeType: "image/jpeg" | "image/png"; sha256: string } | undefined {
-  const match = /^data:(image\/(?:jpeg|jpg|png));base64,([a-z0-9+/=]+)$/iu.exec(url);
+):
+  | { buffer: Buffer; mimeType: "image/jpeg" | "image/png"; sha256: string }
+  | undefined {
+  const match = /^data:(image\/(?:jpeg|jpg|png));base64,([a-z0-9+/=]+)$/iu.exec(
+    url,
+  );
   if (!match) {
     return undefined;
   }
 
-  const mimeType = match[1]?.toLowerCase() === "image/png" ? "image/png" : "image/jpeg";
+  const mimeType =
+    match[1]?.toLowerCase() === "image/png" ? "image/png" : "image/jpeg";
   const payload = match[2] ?? "";
   const buffer = Buffer.from(payload, "base64");
   if (buffer.byteLength === 0) {
@@ -116,7 +122,9 @@ function parseSupportedImageDataUrl(
 function filePathFromFileUrl(url: string): string | undefined {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "file:" ? decodeURIComponent(parsed.pathname) : undefined;
+    return parsed.protocol === "file:"
+      ? decodeURIComponent(parsed.pathname)
+      : undefined;
   } catch {
     return undefined;
   }
@@ -164,7 +172,9 @@ function sanitizeImageBasename(
   return `${stem}.${extension}`;
 }
 
-function extensionForMimeType(mimeType: "image/jpeg" | "image/png"): "jpg" | "png" {
+function extensionForMimeType(
+  mimeType: "image/jpeg" | "image/png",
+): "jpg" | "png" {
   return mimeType === "image/png" ? "png" : "jpg";
 }
 
@@ -189,8 +199,13 @@ async function cleanupOldImageInputs(
       const info = await deps.stat(filePath).catch(() => undefined);
       if (info?.isDirectory?.()) {
         if (
-          info.mtimeMs < cutoff &&
-          !(await containsFreshImageInput(filePath, deps, cutoff, excludedFilePaths))
+          info.mtimeMs < cutoff
+          && !(await containsFreshImageInput(
+            filePath,
+            deps,
+            cutoff,
+            excludedFilePaths,
+          ))
         ) {
           await deps
             .rm(filePath, { recursive: true, force: true })
@@ -242,7 +257,10 @@ function isExcludedImageInputPath(
   excludedFilePaths: ReadonlySet<string>,
 ): boolean {
   for (const excludedPath of excludedFilePaths) {
-    if (excludedPath === filePath || excludedPath.startsWith(`${filePath}${path.sep}`)) {
+    if (
+      excludedPath === filePath
+      || excludedPath.startsWith(`${filePath}${path.sep}`)
+    ) {
       return true;
     }
   }

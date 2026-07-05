@@ -45,7 +45,9 @@ describe("automation contracts", () => {
       unit: "minutes",
     };
 
-    expect(validateAutomationScheduleDefinition(schedule)).toEqual({ ok: true });
+    expect(validateAutomationScheduleDefinition(schedule)).toEqual({
+      ok: true,
+    });
     expect(formatAutomationScheduleSummary(schedule)).toBe("every 5 minutes");
     expect(
       formatAutomationScheduleSummary({
@@ -66,7 +68,9 @@ describe("automation contracts", () => {
       },
     };
 
-    expect(validateAutomationScheduleDefinition(schedule)).toEqual({ ok: true });
+    expect(validateAutomationScheduleDefinition(schedule)).toEqual({
+      ok: true,
+    });
     expect(formatAutomationScheduleSummary(schedule)).toBe("Fridays at 4 PM");
     expect(
       formatAutomationScheduleSummary({
@@ -89,7 +93,9 @@ describe("automation contracts", () => {
       },
     };
 
-    expect(validateAutomationScheduleDefinition(schedule)).toEqual({ ok: true });
+    expect(validateAutomationScheduleDefinition(schedule)).toEqual({
+      ok: true,
+    });
     expect(formatAutomationScheduleSummary(schedule)).toBe("weekdays at 9 AM");
   });
 
@@ -102,7 +108,8 @@ describe("automation contracts", () => {
       }),
     ).toEqual({
       ok: false,
-      error: "Interval schedules must run every whole number greater than zero.",
+      error:
+        "Interval schedules must run every whole number greater than zero.",
     });
     expect(
       validateAutomationScheduleDefinition({

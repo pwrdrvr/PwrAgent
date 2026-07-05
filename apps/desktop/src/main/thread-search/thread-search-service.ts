@@ -33,11 +33,15 @@ export class ThreadSearchService {
     private readonly contentAdapter?: ProviderTranscriptThreadSearchAdapter,
   ) {}
 
-  async search(request: ThreadSearchRequest = {}): Promise<ThreadSearchResponse> {
+  async search(
+    request: ThreadSearchRequest = {},
+  ): Promise<ThreadSearchResponse> {
     const filters = normalizeFilters(request.filters);
     const backend = filters.backend ?? "all";
     const contentMode = normalizeThreadSearchContentMode(request.contentMode);
-    const semanticMode = normalizeThreadSearchSemanticMode(request.semanticMode);
+    const semanticMode = normalizeThreadSearchSemanticMode(
+      request.semanticMode,
+    );
     const limit = normalizeThreadSearchLimit(request.limit);
     const query = request.query?.trim() ?? "";
 
@@ -88,10 +92,10 @@ export class ThreadSearchService {
             limit,
             query,
           });
-    const results = mergeSearchResults(metadataResults, contentResults.results).slice(
-      0,
-      limit,
-    );
+    const results = mergeSearchResults(
+      metadataResults,
+      contentResults.results,
+    ).slice(0, limit);
 
     return {
       backend,
@@ -116,7 +120,9 @@ export class ThreadSearchService {
   }
 }
 
-function dedupeThreads(threads: AppServerThreadSummary[]): AppServerThreadSummary[] {
+function dedupeThreads(
+  threads: AppServerThreadSummary[],
+): AppServerThreadSummary[] {
   const seen = new Set<string>();
   const deduped: AppServerThreadSummary[] = [];
   for (const thread of threads) {
@@ -130,7 +136,9 @@ function dedupeThreads(threads: AppServerThreadSummary[]): AppServerThreadSummar
   return deduped;
 }
 
-function normalizeFilters(filters: ThreadSearchFilters | undefined): ThreadSearchFilters {
+function normalizeFilters(
+  filters: ThreadSearchFilters | undefined,
+): ThreadSearchFilters {
   return {
     ...filters,
     backend: filters?.backend ?? "all",
@@ -226,13 +234,15 @@ function matchesFilters(
   filters: ThreadSearchFilters,
 ): boolean {
   if (
-    filters.projectKeys?.length &&
-    (!result.projectKey || !filters.projectKeys.includes(result.projectKey))
+    filters.projectKeys?.length
+    && (!result.projectKey || !filters.projectKeys.includes(result.projectKey))
   ) {
     return false;
   }
   if (filters.directoryIds?.length) {
-    const ids = new Set(result.linkedDirectories.map((directory) => directory.id));
+    const ids = new Set(
+      result.linkedDirectories.map((directory) => directory.id),
+    );
     if (!filters.directoryIds.some((id) => ids.has(id))) {
       return false;
     }
@@ -243,17 +253,28 @@ function matchesFilters(
         [directory.path, directory.worktreePath].filter(Boolean),
       ),
     );
-    if (!filters.directoryPaths.some((directoryPath) => paths.has(directoryPath))) {
+    if (
+      !filters.directoryPaths.some((directoryPath) => paths.has(directoryPath))
+    ) {
       return false;
     }
   }
-  if (filters.models?.length && (!result.model || !filters.models.includes(result.model))) {
+  if (
+    filters.models?.length
+    && (!result.model || !filters.models.includes(result.model))
+  ) {
     return false;
   }
-  if (filters.dateRange?.from && (result.updatedAt ?? result.createdAt ?? 0) < filters.dateRange.from) {
+  if (
+    filters.dateRange?.from
+    && (result.updatedAt ?? result.createdAt ?? 0) < filters.dateRange.from
+  ) {
     return false;
   }
-  if (filters.dateRange?.to && (result.updatedAt ?? result.createdAt ?? 0) > filters.dateRange.to) {
+  if (
+    filters.dateRange?.to
+    && (result.updatedAt ?? result.createdAt ?? 0) > filters.dateRange.to
+  ) {
     return false;
   }
   return true;

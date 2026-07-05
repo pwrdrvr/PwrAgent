@@ -40,9 +40,7 @@ export interface CodexEnvironmentHydrationStoreLike {
   }): CodexEnvironmentHydrationCacheEntry;
 }
 
-export class CodexEnvironmentHydrationStore
-  implements CodexEnvironmentHydrationStoreLike
-{
+export class CodexEnvironmentHydrationStore implements CodexEnvironmentHydrationStoreLike {
   constructor(private readonly stateDb: StateDb) {}
 
   get(
@@ -126,12 +124,12 @@ function isValidCacheEntry(
   }
   const candidate = value as Partial<CodexEnvironmentHydrationCacheEntry>;
   return (
-    typeof candidate.key === "string" &&
-    typeof candidate.environmentId === "string" &&
-    typeof candidate.setupScriptHash === "string" &&
-    typeof candidate.updatedAt === "number" &&
-    Boolean(candidate.shellEnvironment) &&
-    typeof candidate.shellEnvironment === "object"
+    typeof candidate.key === "string"
+    && typeof candidate.environmentId === "string"
+    && typeof candidate.setupScriptHash === "string"
+    && typeof candidate.updatedAt === "number"
+    && Boolean(candidate.shellEnvironment)
+    && typeof candidate.shellEnvironment === "object"
   );
 }
 

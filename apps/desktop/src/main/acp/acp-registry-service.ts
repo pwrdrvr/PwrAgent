@@ -48,8 +48,8 @@ export class AcpRegistryService {
   constructor(options: AcpRegistryServiceOptions = {}) {
     this.allowlist = options.allowlist ?? defaultAcpAgentAllowlist;
     this.fetcher =
-      options.fetch ??
-      (async (input, init) => {
+      options.fetch
+      ?? (async (input, init) => {
         const response = await globalThis.fetch(input, init);
         return {
           ok: response.ok,
@@ -86,7 +86,9 @@ export class AcpRegistryService {
       const distributionPolicies = agent.distributions.map((distribution) =>
         this.evaluateDistribution(agent, distribution),
       );
-      const installablePolicy = distributionPolicies.find((policy) => policy.installable);
+      const installablePolicy = distributionPolicies.find(
+        (policy) => policy.installable,
+      );
       const firstBlockedAllowedPolicy = distributionPolicies.find(
         (policy) => policy.allowlist.allowed,
       );
@@ -97,13 +99,15 @@ export class AcpRegistryService {
         allowlist,
         installable,
         verificationStatus:
-          installablePolicy?.verificationStatus ??
-          firstBlockedAllowedPolicy?.verificationStatus ??
-          "not-applicable",
+          installablePolicy?.verificationStatus
+          ?? firstBlockedAllowedPolicy?.verificationStatus
+          ?? "not-applicable",
         unavailableReason: installable
           ? undefined
-          : firstBlockedAllowedPolicy?.unavailableReason ??
-            (allowlist.allowed ? "distribution-not-installable" : allowlist.reason),
+          : (firstBlockedAllowedPolicy?.unavailableReason
+            ?? (allowlist.allowed
+              ? "distribution-not-installable"
+              : allowlist.reason)),
       };
     });
   }
@@ -170,7 +174,11 @@ export function normalizeRegistry(raw: unknown): AcpRegistryAgent[] {
 
 function normalizeAgent(raw: unknown): AcpRegistryAgent | undefined {
   const record = asRecord(raw);
-  if (!record || typeof record.id !== "string" || typeof record.name !== "string") {
+  if (
+    !record
+    || typeof record.id !== "string"
+    || typeof record.name !== "string"
+  ) {
     return undefined;
   }
 
@@ -186,14 +194,18 @@ function normalizeAgent(raw: unknown): AcpRegistryAgent | undefined {
     version: stringValue(record.version),
     description: stringValue(record.description),
     authors: Array.isArray(record.authors)
-      ? record.authors.filter((author): author is string => typeof author === "string")
+      ? record.authors.filter(
+          (author): author is string => typeof author === "string",
+        )
       : [],
     license: stringValue(record.license),
     repositoryUrl: stringValue(record.repository),
     websiteUrl: stringValue(record.website),
     iconUrl: stringValue(record.icon),
     distributions,
-    distributionKinds: [...new Set(distributions.map((distribution) => distribution.kind))],
+    distributionKinds: [
+      ...new Set(distributions.map((distribution) => distribution.kind)),
+    ],
     auth: normalizeAuth(record.auth),
     raw,
   };
@@ -245,9 +257,9 @@ function normalizeBinaryDistribution(
 ): AcpBinaryPlatformDistribution | undefined {
   const record = asRecord(raw);
   if (
-    !record ||
-    typeof record.archive !== "string" ||
-    typeof record.cmd !== "string"
+    !record
+    || typeof record.archive !== "string"
+    || typeof record.cmd !== "string"
   ) {
     return undefined;
   }
@@ -260,7 +272,8 @@ function normalizeBinaryDistribution(
     args: stringArray(record.args),
     env: stringRecord(record.env),
     checksum: stringValue(record.checksum) ?? stringValue(record.sha256),
-    signatureUrl: stringValue(record.signature) ?? stringValue(record.signatureUrl),
+    signatureUrl:
+      stringValue(record.signature) ?? stringValue(record.signatureUrl),
   };
 }
 

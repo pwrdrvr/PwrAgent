@@ -88,7 +88,10 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
     const reopenedDb = StateDb.open(path.join(tempDir, "state.db"));
     const reopenedStore = new SqliteOverlayStore(reopenedDb);
     await expect(
-      reopenedStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+      reopenedStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
     ).resolves.toMatchObject({
       agent: {
         name: "Daily Planner",

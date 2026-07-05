@@ -11,7 +11,10 @@ type ActivePendingInput = {
 };
 
 type PendingInputCoordinatorOptions = {
-  requestClient?: (method: string, params: Record<string, unknown>) => Promise<unknown> | unknown;
+  requestClient?: (
+    method: string,
+    params: Record<string, unknown>,
+  ) => Promise<unknown> | unknown;
   onResolved?: (requestId: string) => Promise<void> | void;
 };
 
@@ -37,7 +40,9 @@ export class PendingInputCoordinator {
     return this.currentRequest !== null || this.queue.length > 0;
   }
 
-  async cancelPending(response: unknown = { decision: "cancel" }): Promise<void> {
+  async cancelPending(
+    response: unknown = { decision: "cancel" },
+  ): Promise<void> {
     const pending: PendingInputRequest[] = [];
     const active = this.currentRequest;
     if (active && !active.settled) {

@@ -75,7 +75,9 @@ describe("Telegram validateCredentials", () => {
   });
 
   it("returns failed with the SDK error message on rejection", async () => {
-    getMeMock.mockRejectedValue(new Error("Call to 'getMe' failed: 401 Unauthorized"));
+    getMeMock.mockRejectedValue(
+      new Error("Call to 'getMe' failed: 401 Unauthorized"),
+    );
     const result = await validateCredentials({ botToken: "bad-token" });
     expect(result.status).toBe("failed");
     expect(result.errorMessage).toContain("401 Unauthorized");
@@ -126,9 +128,7 @@ describe("scrubBotToken (Telegram URL token redaction)", () => {
 
   it("redacts multiple occurrences in one message", () => {
     expect(
-      scrubBotToken(
-        "tried /bot111:zzz then fell back to /bot222:yyy/getMe",
-      ),
+      scrubBotToken("tried /bot111:zzz then fell back to /bot222:yyy/getMe"),
     ).toBe("tried /bot<redacted> then fell back to /bot<redacted>/getMe");
   });
 

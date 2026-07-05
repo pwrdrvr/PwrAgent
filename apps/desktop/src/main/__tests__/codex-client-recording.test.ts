@@ -41,10 +41,10 @@ class MockTransport implements JsonRpcTransport {
           result: {
             serverInfo: {
               name: "Codex App Server",
-              version: "1.0.0"
-            }
-          }
-        })
+              version: "1.0.0",
+            },
+          },
+        }),
       );
       return;
     }
@@ -67,7 +67,7 @@ vi.mock("../codex-app-server/stdio-transport", () => {
   }
 
   return {
-    StdioJsonRpcTransport: MockStdioJsonRpcTransport
+    StdioJsonRpcTransport: MockStdioJsonRpcTransport,
   };
 });
 
@@ -99,7 +99,7 @@ describe("CodexAppServerClient recording", () => {
     await Promise.all(
       cleanupPaths.splice(0).map(async (target) => {
         await fs.rm(target, { recursive: true, force: true });
-      })
+      }),
     );
   });
 
@@ -109,15 +109,15 @@ describe("CodexAppServerClient recording", () => {
     const store = new ProtocolCaptureStore({
       backend: "codex",
       captureId: "capture-client",
-      rootDir
+      rootDir,
     });
 
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({
       connectionObserver: createProtocolCaptureObserver({
         backend: "codex",
-        store
-      })
+        store,
+      }),
     });
 
     client.onRequest(async () => ({ decision: "approve" }));
@@ -135,24 +135,27 @@ describe("CodexAppServerClient recording", () => {
         method: "turn/requestApproval",
         params: {
           threadId: "thread-77",
-          requestId: "approval-1"
-        }
-      })
+          requestId: "approval-1",
+        },
+      }),
     );
 
-    await waitFor(() =>
-      transport?.sentMessages.some((message) => {
-        const payload = JSON.parse(message) as {
-          id?: string;
-          result?: unknown;
-        };
-        return payload.id === "request-1" && Object.hasOwn(payload, "result");
-      }) ?? false
+    await waitFor(
+      () =>
+        transport?.sentMessages.some((message) => {
+          const payload = JSON.parse(message) as {
+            id?: string;
+            result?: unknown;
+          };
+          return payload.id === "request-1" && Object.hasOwn(payload, "result");
+        }) ?? false,
     );
     await store.close();
     await client.close();
 
-    const lines = (await fs.readFile(path.join(rootDir, "capture-client.jsonl"), "utf8"))
+    const lines = (
+      await fs.readFile(path.join(rootDir, "capture-client.jsonl"), "utf8")
+    )
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -161,35 +164,35 @@ describe("CodexAppServerClient recording", () => {
     expect(
       lines.some(
         (line) =>
-          line.direction === "outbound" &&
-          line.kind === "request" &&
-          line.method === "initialize"
-      )
+          line.direction === "outbound"
+          && line.kind === "request"
+          && line.method === "initialize",
+      ),
     ).toBe(true);
     expect(
       lines.some(
         (line) =>
-          line.direction === "inbound" &&
-          line.kind === "response" &&
-          line.id === "rpc-1"
-      )
+          line.direction === "inbound"
+          && line.kind === "response"
+          && line.id === "rpc-1",
+      ),
     ).toBe(true);
     expect(
       lines.some(
         (line) =>
-          line.direction === "inbound" &&
-          line.kind === "request" &&
-          line.method === "turn/requestApproval" &&
-          JSON.stringify(line.threadIds) === JSON.stringify(["thread-77"])
-      )
+          line.direction === "inbound"
+          && line.kind === "request"
+          && line.method === "turn/requestApproval"
+          && JSON.stringify(line.threadIds) === JSON.stringify(["thread-77"]),
+      ),
     ).toBe(true);
     expect(
       lines.some(
         (line) =>
-          line.direction === "outbound" &&
-          line.kind === "response" &&
-          line.id === "request-1"
-      )
+          line.direction === "outbound"
+          && line.kind === "response"
+          && line.id === "request-1",
+      ),
     ).toBe(true);
     expect(lines.some((line) => line.raw === "{not-json")).toBe(false);
   });

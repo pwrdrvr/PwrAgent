@@ -103,18 +103,21 @@ const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
   "pwragent",
   "codex-title-helper",
 );
-const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
-  web_search: "disabled",
-  include_permissions_instructions: false,
-  include_apps_instructions: false,
-  include_collaboration_mode_instructions: false,
-  include_environment_context: false,
-  skills: {
-    include_instructions: false,
-    bundled: { enabled: false },
-  },
-};
-const LEGACY_CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
+const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> =
+  {
+    web_search: "disabled",
+    include_permissions_instructions: false,
+    include_apps_instructions: false,
+    include_collaboration_mode_instructions: false,
+    include_environment_context: false,
+    skills: {
+      include_instructions: false,
+      bundled: { enabled: false },
+    },
+  };
+const LEGACY_CODEX_THREAD_TITLE_CONFIG: NonNullable<
+  CodexThreadStartParams["config"]
+> = {
   web_search: "disabled",
   include_permissions_instructions: false,
   include_apps_instructions: false,
@@ -143,10 +146,10 @@ type CodexClientOptions = {
   resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   directoryResolver?: (
-    projectKey?: string
+    projectKey?: string,
   ) => Promise<LinkedDirectorySummary[]>;
   threadDirectoryEnricher?: (
-    projectKey?: string
+    projectKey?: string,
   ) => Promise<ThreadDirectoryEnrichment>;
   connectionObserver?: JsonRpcObserver;
   requestTimeoutMs?: number;
@@ -290,20 +293,24 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "item/fileChange/outputDelta",
   "mcpServer/startupStatus/updated",
 ]);
-const GENERATED_CODEX_SERVER_REQUEST_METHODS = new Set<CodexServerRequestMethod>([
-  "item/commandExecution/requestApproval",
-  "item/fileChange/requestApproval",
-  "item/tool/requestUserInput",
-  "mcpServer/elicitation/request",
-  "item/permissions/requestApproval",
-  "item/tool/call",
-  "account/chatgptAuthTokens/refresh",
-  "applyPatchApproval",
-  "execCommandApproval",
-]);
+const GENERATED_CODEX_SERVER_REQUEST_METHODS =
+  new Set<CodexServerRequestMethod>([
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/tool/requestUserInput",
+    "mcpServer/elicitation/request",
+    "item/permissions/requestApproval",
+    "item/tool/call",
+    "account/chatgptAuthTokens/refresh",
+    "applyPatchApproval",
+    "execCommandApproval",
+  ]);
 const codexClientLog = getMainLogger("pwragent:codex-client");
 
-function logCodexClientDebug(event: string, payload: Record<string, unknown>): void {
+function logCodexClientDebug(
+  event: string,
+  payload: Record<string, unknown>,
+): void {
   if (process.env.NODE_ENV === "production") {
     return;
   }
@@ -317,29 +324,27 @@ function isApprovalLikeMethod(method: string): boolean {
 
 function isHandledServerRequestMethod(method: string): boolean {
   return (
-    isApprovalLikeMethod(method) ||
-    method === "applyPatchApproval" ||
-    method === "execCommandApproval" ||
-    method === "item/tool/requestUserInput" ||
-    method === "mcpServer/elicitation/request" ||
-    method === "item/tool/call"
+    isApprovalLikeMethod(method)
+    || method === "applyPatchApproval"
+    || method === "execCommandApproval"
+    || method === "item/tool/requestUserInput"
+    || method === "mcpServer/elicitation/request"
+    || method === "item/tool/call"
   );
 }
 
-function isKnownCodexNotificationMethod(
-  method: string
-): boolean {
+function isKnownCodexNotificationMethod(method: string): boolean {
   return (
-    GENERATED_CODEX_NOTIFICATION_METHODS.has(method) ||
-    method === "thread/settings/updated"
+    GENERATED_CODEX_NOTIFICATION_METHODS.has(method)
+    || method === "thread/settings/updated"
   );
 }
 
 function isKnownCodexServerRequestMethod(
-  method: string
+  method: string,
 ): method is CodexServerRequestMethod {
   return GENERATED_CODEX_SERVER_REQUEST_METHODS.has(
-    method as CodexServerRequestMethod
+    method as CodexServerRequestMethod,
   );
 }
 
@@ -390,7 +395,10 @@ function logUnhandledCodexMessage(params: {
     return;
   }
 
-  if (isApprovalLikeMethod(params.method) || isRequestLikeMethod(params.method)) {
+  if (
+    isApprovalLikeMethod(params.method)
+    || isRequestLikeMethod(params.method)
+  ) {
     codexClientLog.error("unhandled inbound codex notification", {
       method: params.method,
       payload: params.payload,
@@ -417,7 +425,8 @@ function logSkillsChangedNotification(params: {
     listenerCount: params.listenerCount,
     initialized: params.initialized,
     serverAdvertisesSkillsList: params.serverAdvertisesSkillsList,
-    expectedFollowup: "call skills/list when refreshed skill metadata is needed",
+    expectedFollowup:
+      "call skills/list when refreshed skill metadata is needed",
     payload: params.payload,
   });
 }
@@ -431,7 +440,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function pickString(
   record: Record<string, unknown>,
-  keys: string[]
+  keys: string[],
 ): string | undefined {
   for (const key of keys) {
     const value = record[key];
@@ -462,16 +471,18 @@ function readHelperTokenUsage(params: unknown): unknown {
   }
   const turn = asRecord(record.turn);
   return (
-    record.tokenUsage ??
-    record.token_usage ??
-    record.usage ??
-    turn?.tokenUsage ??
-    turn?.token_usage ??
-    turn?.usage
+    record.tokenUsage
+    ?? record.token_usage
+    ?? record.usage
+    ?? turn?.tokenUsage
+    ?? turn?.token_usage
+    ?? turn?.usage
   );
 }
 
-function extractTurnIdFromNotificationParams(params: unknown): string | undefined {
+function extractTurnIdFromNotificationParams(
+  params: unknown,
+): string | undefined {
   const directTurnId = readStringFromRecord(params, "turnId");
   if (directTurnId) {
     return directTurnId;
@@ -483,11 +494,11 @@ function extractTurnIdFromNotificationParams(params: unknown): string | undefine
 
 function extractThreadIdFromNotification(
   notification: AppServerNotification,
-  rawParams: unknown
+  rawParams: unknown,
 ): string | undefined {
   return (
-    readStringFromRecord(notification.params, "threadId") ??
-    extractThreadIdFromValue(rawParams)
+    readStringFromRecord(notification.params, "threadId")
+    ?? extractThreadIdFromValue(rawParams)
   );
 }
 
@@ -557,7 +568,7 @@ function isThreadTitleObject(value: unknown): value is { title: string } {
 
 function pickRawString(
   record: Record<string, unknown>,
-  keys: string[]
+  keys: string[],
 ): string | undefined {
   for (const key of keys) {
     const value = record[key];
@@ -570,7 +581,7 @@ function pickRawString(
 
 function pickStringAllowEmpty(
   record: Record<string, unknown> | null | undefined,
-  keys: string[]
+  keys: string[],
 ): string | undefined {
   if (!record) {
     return undefined;
@@ -587,7 +598,7 @@ function pickStringAllowEmpty(
 
 function pickNumber(
   record: Record<string, unknown>,
-  keys: string[]
+  keys: string[],
 ): number | undefined {
   for (const key of keys) {
     const value = record[key];
@@ -606,7 +617,7 @@ function pickNumber(
 
 function pickFiniteNumber(
   record: Record<string, unknown>,
-  keys: string[]
+  keys: string[],
 ): number | undefined {
   for (const key of keys) {
     const value = record[key];
@@ -619,7 +630,7 @@ function pickFiniteNumber(
 
 function pickBoolean(
   record: Record<string, unknown>,
-  keys: string[]
+  keys: string[],
 ): boolean | undefined {
   for (const key of keys) {
     const value = record[key];
@@ -645,11 +656,27 @@ function extractRequestMetadata(value: unknown): {
 
   return {
     threadId:
-      pickString(record, ["threadId", "thread_id", "conversationId", "conversation_id"]) ??
-      pickString(threadRecord ?? {}, ["id", "threadId", "thread_id", "conversationId"]),
+      pickString(record, [
+        "threadId",
+        "thread_id",
+        "conversationId",
+        "conversation_id",
+      ])
+      ?? pickString(threadRecord ?? {}, [
+        "id",
+        "threadId",
+        "thread_id",
+        "conversationId",
+      ]),
     turnId:
-      pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
-      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"]),
+      pickString(record, ["turnId", "turn_id", "runId", "run_id"])
+      ?? pickString(turnRecord ?? {}, [
+        "id",
+        "turnId",
+        "turn_id",
+        "runId",
+        "run_id",
+      ]),
     requestId:
       pickString(record, [
         "requestId",
@@ -660,8 +687,12 @@ function extractRequestMetadata(value: unknown): {
         "callId",
         "call_id",
         "id",
-      ]) ??
-      pickString(asRecord(record.serverRequest) ?? {}, ["id", "requestId", "request_id"]),
+      ])
+      ?? pickString(asRecord(record.serverRequest) ?? {}, [
+        "id",
+        "requestId",
+        "request_id",
+      ]),
   };
 }
 
@@ -704,7 +735,8 @@ function normalizeFailedTurnCompletedNotification(
     return undefined;
   }
 
-  const turnId = pickString(turn, ["id", "turnId", "turn_id"]) ?? metadata.turnId;
+  const turnId =
+    pickString(turn, ["id", "turnId", "turn_id"]) ?? metadata.turnId;
   const threadId =
     metadata.threadId ?? pickString(record, ["threadId", "thread_id"]);
   if (!turnId || !threadId) {
@@ -794,20 +826,25 @@ function normalizeThreadSettingsUpdatedNotification(
   params: unknown,
 ): AppServerNotification {
   const record = asRecord(params) ?? {};
-  const settings = asRecord(record.threadSettings) ?? asRecord(record.thread_settings) ?? {};
+  const settings =
+    asRecord(record.threadSettings) ?? asRecord(record.thread_settings) ?? {};
   const rawServiceTier =
-    readNullableString(settings, ["serviceTier", "service_tier"]) ??
-    readNullableString(record, ["serviceTier", "service_tier"]);
-  const normalizedServiceTier = normalizeObservedCodexServiceTier(rawServiceTier);
+    readNullableString(settings, ["serviceTier", "service_tier"])
+    ?? readNullableString(record, ["serviceTier", "service_tier"]);
+  const normalizedServiceTier =
+    normalizeObservedCodexServiceTier(rawServiceTier);
   const threadId =
-    pickString(record, ["threadId", "thread_id"]) ??
-    pickString(settings, ["threadId", "thread_id"]);
+    pickString(record, ["threadId", "thread_id"])
+    ?? pickString(settings, ["threadId", "thread_id"]);
   return {
     method: "thread/codexSettings/observed",
     params: {
       ...(threadId ? { threadId } : {}),
       ...pickOptionalString(settings, "model", ["model"]),
-      ...pickOptionalString(settings, "reasoningEffort", ["reasoningEffort", "effort"]),
+      ...pickOptionalString(settings, "reasoningEffort", [
+        "reasoningEffort",
+        "effort",
+      ]),
       ...(rawServiceTier !== undefined ? { rawServiceTier } : {}),
       ...(normalizedServiceTier !== undefined
         ? { serviceTier: normalizedServiceTier }
@@ -903,32 +940,41 @@ function extractConfigWarningMetadata(
 }
 
 function normalizeLiveNotificationItem(
-  item: Record<string, unknown>
+  item: Record<string, unknown>,
 ): Record<string, unknown> {
   const normalized = { ...item };
   const functionName =
-    pickString(item, ["toolName", "tool_name", "name"]) ??
-    undefined;
+    pickString(item, ["toolName", "tool_name", "name"]) ?? undefined;
   if (functionName && typeof normalized.toolName !== "string") {
     normalized.toolName = functionName;
   }
 
   const parsedArguments = parseStructuredValue(item.arguments);
-  if (parsedArguments && typeof parsedArguments === "object" && !Array.isArray(parsedArguments)) {
+  if (
+    parsedArguments
+    && typeof parsedArguments === "object"
+    && !Array.isArray(parsedArguments)
+  ) {
     normalized.arguments = parsedArguments;
   }
 
   return normalized;
 }
 
-function normalizeEpochTimestamp(value: number | undefined): number | undefined {
+function normalizeEpochTimestamp(
+  value: number | undefined,
+): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
   return value < 1_000_000_000_000 ? value * 1_000 : value;
 }
 
-function findFirstNestedValue(value: unknown, keys: string[], depth = 0): unknown {
+function findFirstNestedValue(
+  value: unknown,
+  keys: string[],
+  depth = 0,
+): unknown {
   if (depth > 8) {
     return undefined;
   }
@@ -980,7 +1026,8 @@ function formatRateLimitWindowName(params: {
       windowLabel = `${minutes}m limit`;
     }
   } else {
-    windowLabel = params.windowKey === "primary" ? "Primary limit" : "Secondary limit";
+    windowLabel =
+      params.windowKey === "primary" ? "Primary limit" : "Secondary limit";
   }
   if (!rawId || rawId.toLowerCase() === "codex") {
     return windowLabel;
@@ -992,13 +1039,20 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
   const out = new Map<string, BackendRateLimitSummary>();
   const addWindow = (
     windowValue: unknown,
-    params: { limitId?: string; limitName?: string; windowKey: "primary" | "secondary" }
+    params: {
+      limitId?: string;
+      limitName?: string;
+      windowKey: "primary" | "secondary";
+    },
   ): void => {
     const window = asRecord(windowValue);
     if (!window) {
       return;
     }
-    const usedPercent = pickFiniteNumber(window, ["usedPercent", "used_percent"]);
+    const usedPercent = pickFiniteNumber(window, [
+      "usedPercent",
+      "used_percent",
+    ]);
     const windowMinutes = pickFiniteNumber(window, [
       "windowDurationMins",
       "window_duration_mins",
@@ -1016,11 +1070,16 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
       limitId: params.limitId,
       usedPercent,
       remaining:
-        typeof usedPercent === "number" ? Math.max(0, Math.round(100 - usedPercent)) : undefined,
+        typeof usedPercent === "number"
+          ? Math.max(0, Math.round(100 - usedPercent))
+          : undefined,
       resetAt: normalizeEpochTimestamp(
-        pickNumber(window, ["resetsAt", "resets_at", "resetAt", "reset_at"])
+        pickNumber(window, ["resetsAt", "resets_at", "resetAt", "reset_at"]),
       ),
-      windowSeconds: typeof windowMinutes === "number" ? Math.round(windowMinutes * 60) : undefined,
+      windowSeconds:
+        typeof windowMinutes === "number"
+          ? Math.round(windowMinutes * 60)
+          : undefined,
       windowMinutes,
     });
   };
@@ -1035,20 +1094,44 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
     }
     if ("primary" in record || "secondary" in record) {
       const limitId = pickString(record, ["limitId", "limit_id", "id"]);
-      const limitName = pickString(record, ["limitName", "limit_name", "name", "label"]);
+      const limitName = pickString(record, [
+        "limitName",
+        "limit_name",
+        "name",
+        "label",
+      ]);
       addWindow(record.primary, { limitId, limitName, windowKey: "primary" });
-      addWindow(record.secondary, { limitId, limitName, windowKey: "secondary" });
+      addWindow(record.secondary, {
+        limitId,
+        limitName,
+        windowKey: "secondary",
+      });
     }
-    const byLimitId = asRecord(record.rateLimitsByLimitId ?? record.rate_limits_by_limit_id);
+    const byLimitId = asRecord(
+      record.rateLimitsByLimitId ?? record.rate_limits_by_limit_id,
+    );
     if (byLimitId) {
       for (const [limitId, snapshot] of Object.entries(byLimitId)) {
         const snapshotRecord = asRecord(snapshot);
         if (!snapshotRecord) {
           continue;
         }
-        const limitName = pickString(snapshotRecord, ["limitName", "limit_name", "name", "label"]);
-        addWindow(snapshotRecord.primary, { limitId, limitName, windowKey: "primary" });
-        addWindow(snapshotRecord.secondary, { limitId, limitName, windowKey: "secondary" });
+        const limitName = pickString(snapshotRecord, [
+          "limitName",
+          "limit_name",
+          "name",
+          "label",
+        ]);
+        addWindow(snapshotRecord.primary, {
+          limitId,
+          limitName,
+          windowKey: "primary",
+        });
+        addWindow(snapshotRecord.secondary, {
+          limitId,
+          limitName,
+          windowKey: "secondary",
+        });
       }
     }
     const remaining = pickFiniteNumber(record, [
@@ -1057,7 +1140,12 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
       "remaining_count",
       "available",
     ]);
-    const limit = pickFiniteNumber(record, ["limit", "max", "quota", "capacity"]);
+    const limit = pickFiniteNumber(record, [
+      "limit",
+      "max",
+      "quota",
+      "capacity",
+    ]);
     const used = pickFiniteNumber(record, ["used", "consumed", "count"]);
     const resetAt = pickNumber(record, [
       "resetAt",
@@ -1073,11 +1161,11 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
       "retryAfterSeconds",
     ]);
     const name =
-      pickString(record, ["name", "label", "scope", "resource", "model", "id"]) ??
-      (typeof remaining === "number" ||
-      typeof limit === "number" ||
-      typeof used === "number" ||
-      typeof resetAt === "number"
+      pickString(record, ["name", "label", "scope", "resource", "model", "id"])
+      ?? (typeof remaining === "number"
+      || typeof limit === "number"
+      || typeof used === "number"
+      || typeof resetAt === "number"
         ? `limit-${out.size + 1}`
         : undefined);
     if (name) {
@@ -1110,19 +1198,26 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
     }
   };
   visit(value);
-  return [...out.values()].sort((left, right) => left.name.localeCompare(right.name));
+  return [...out.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
 }
 
 function extractAccountSummary(value: unknown): BackendAccountSummary {
   const root = asRecord(value) ?? {};
   const account =
-    asRecord(findFirstNestedValue(value, ["account"])) ?? asRecord(root.account) ?? undefined;
+    asRecord(findFirstNestedValue(value, ["account"]))
+    ?? asRecord(root.account)
+    ?? undefined;
   const type = pickString(account ?? {}, ["type"]);
   return {
     type: type === "apiKey" || type === "chatgpt" ? type : undefined,
     email: pickString(account ?? {}, ["email"]),
     planType: pickString(account ?? {}, ["planType", "plan_type"]),
-    requiresOpenaiAuth: pickBoolean(root, ["requiresOpenaiAuth", "requires_openai_auth"]),
+    requiresOpenaiAuth: pickBoolean(root, [
+      "requiresOpenaiAuth",
+      "requires_openai_auth",
+    ]),
   };
 }
 
@@ -1146,7 +1241,7 @@ function collectText(value: unknown): string[] {
     "title",
     "content",
     "description",
-    "reason"
+    "reason",
   ];
 
   const output = directKeys.flatMap((key) => collectText(record[key]));
@@ -1157,7 +1252,9 @@ function collectText(value: unknown): string[] {
 }
 
 function dedupeJoinedText(parts: string[]): string | undefined {
-  const unique = [...new Set(parts.map((value) => value.trim()).filter(Boolean))];
+  const unique = [
+    ...new Set(parts.map((value) => value.trim()).filter(Boolean)),
+  ];
   if (unique.length === 0) {
     return undefined;
   }
@@ -1176,10 +1273,10 @@ function normalizeThreadSummary(value: string | undefined): string | undefined {
   }
 
   if (
-    trimmed.length > 160 ||
-    trimmed.startsWith("[$") ||
-    trimmed.includes("](/") ||
-    trimmed.includes("/Users/")
+    trimmed.length > 160
+    || trimmed.startsWith("[$")
+    || trimmed.includes("](/")
+    || trimmed.includes("/Users/")
   ) {
     return undefined;
   }
@@ -1202,7 +1299,9 @@ function measureThreadPreviewBytes(thread: RawCodexThreadSummary): number {
   return preview ? Buffer.byteLength(preview) : 0;
 }
 
-function normalizeSessionOriginator(value: string | undefined): string | undefined {
+function normalizeSessionOriginator(
+  value: string | undefined,
+): string | undefined {
   const normalized = value?.trim().toLowerCase();
   return normalized || undefined;
 }
@@ -1214,19 +1313,24 @@ function isAllowedCodexSessionOriginator(value: string | undefined): boolean {
   }
 
   return (
-    normalized.startsWith("codex") ||
-    normalized === "pwragent-desktop" ||
-    normalized === "pwragnt-desktop"
+    normalized.startsWith("codex")
+    || normalized === "pwragent-desktop"
+    || normalized === "pwragnt-desktop"
   );
 }
 
-function normalizeComparableFilesystemPath(value: string | undefined): string | undefined {
+function normalizeComparableFilesystemPath(
+  value: string | undefined,
+): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
     return undefined;
   }
 
-  return path.resolve(trimmed).replace(/[\\/]+$/, "").replaceAll("\\", "/");
+  return path
+    .resolve(trimmed)
+    .replace(/[\\/]+$/, "")
+    .replaceAll("\\", "/");
 }
 
 function isPwrSnapChatWorkspacePath(value: string | undefined): boolean {
@@ -1238,7 +1342,9 @@ function isPwrSnapRuntimeContext(value: string | undefined): boolean {
   return Boolean(value?.trim().startsWith('<runtime_context source="pwrsnap"'));
 }
 
-function isKnownCompanionAppCodexThread(thread: RawCodexThreadSummary): boolean {
+function isKnownCompanionAppCodexThread(
+  thread: RawCodexThreadSummary,
+): boolean {
   if (isPwrSnapChatWorkspacePath(thread.projectKey)) {
     return true;
   }
@@ -1247,16 +1353,19 @@ function isKnownCompanionAppCodexThread(thread: RawCodexThreadSummary): boolean 
     return true;
   }
 
-  return isPwrSnapRuntimeContext(thread.title) || isPwrSnapRuntimeContext(thread.summary);
+  return (
+    isPwrSnapRuntimeContext(thread.title)
+    || isPwrSnapRuntimeContext(thread.summary)
+  );
 }
 
 function filterVisibleCodexThreads(
-  threads: RawCodexThreadSummary[]
+  threads: RawCodexThreadSummary[],
 ): RawCodexThreadSummary[] {
   return threads.filter(
     (thread) =>
-      isAllowedCodexSessionOriginator(thread.originator) &&
-      !isKnownCompanionAppCodexThread(thread),
+      isAllowedCodexSessionOriginator(thread.originator)
+      && !isKnownCompanionAppCodexThread(thread),
   );
 }
 
@@ -1274,26 +1383,33 @@ function getThreadTitleInfo(record: Record<string, unknown>): {
 } {
   const sessionRecord = asRecord(record.session);
   const explicitTitle = normalizeExplicitThreadName(
-    pickString(record, ["title", "name", "headline"]) ??
-      pickString(sessionRecord ?? {}, ["title", "name", "headline"])
+    pickString(record, ["title", "name", "headline"])
+      ?? pickString(sessionRecord ?? {}, ["title", "name", "headline"]),
   );
   const derivedTitle =
-    pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
-    pickString(sessionRecord ?? {}, [
+    pickString(record, [
+      "preview",
+      "snippet",
+      "firstUserMessage",
+      "first_user_message",
+    ])
+    ?? pickString(sessionRecord ?? {}, [
       "preview",
       "snippet",
       "firstUserMessage",
       "first_user_message",
     ]);
-  const shortenedDerivedTitle = shortenDerivedThreadTitle(derivedTitle) ?? derivedTitle;
+  const shortenedDerivedTitle =
+    shortenDerivedThreadTitle(derivedTitle) ?? derivedTitle;
 
   if (explicitTitle && !isPlaceholderThreadTitle(explicitTitle)) {
     if (
-      derivedTitle &&
-      (normalizeTitleForComparison(explicitTitle) === normalizeTitleForComparison(derivedTitle) ||
-        (shortenedDerivedTitle &&
-          normalizeTitleForComparison(explicitTitle) ===
-            normalizeTitleForComparison(shortenedDerivedTitle)))
+      derivedTitle
+      && (normalizeTitleForComparison(explicitTitle)
+        === normalizeTitleForComparison(derivedTitle)
+        || (shortenedDerivedTitle
+          && normalizeTitleForComparison(explicitTitle)
+            === normalizeTitleForComparison(shortenedDerivedTitle)))
     ) {
       return {
         title: shortenedDerivedTitle ?? explicitTitle,
@@ -1320,7 +1436,9 @@ function getThreadTitleInfo(record: Record<string, unknown>): {
   };
 }
 
-function normalizeExplicitThreadName(value: string | undefined): string | undefined {
+function normalizeExplicitThreadName(
+  value: string | undefined,
+): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed || isPlaceholderThreadTitle(trimmed)) {
     return undefined;
@@ -1332,9 +1450,14 @@ function isPlaceholderThreadName(value: string | undefined): boolean {
   return isPlaceholderThreadTitle(value);
 }
 
-function deriveThreadNameFromInput(input: AppServerTurnInputItem[]): string | undefined {
+function deriveThreadNameFromInput(
+  input: AppServerTurnInputItem[],
+): string | undefined {
   const text = input
-    .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")
+    .filter(
+      (item): item is Extract<AppServerTurnInputItem, { type: "text" }> =>
+        item.type === "text",
+    )
     .map((item) => item.text.trim())
     .filter(Boolean)
     .join("\n");
@@ -1343,14 +1466,14 @@ function deriveThreadNameFromInput(input: AppServerTurnInputItem[]): string | un
 }
 
 async function resolveThreadProjectKey(
-  thread: RawCodexThreadSummary
+  thread: RawCodexThreadSummary,
 ): Promise<string | undefined> {
   const projectKey = thread.projectKey?.trim();
   return projectKey || undefined;
 }
 
 function buildProjectKeyLinkedDirectories(
-  projectKey: string | undefined
+  projectKey: string | undefined,
 ): LinkedDirectorySummary[] {
   const directoryPath = projectKey?.trim();
   if (!directoryPath) {
@@ -1374,16 +1497,19 @@ function buildProjectKeyLinkedDirectories(
 }
 
 function normalizeConversationRole(
-  value: string | undefined
+  value: string | undefined,
 ): "user" | "assistant" | undefined {
-  const normalized = value?.trim().replace(/[-_\s]/g, "").toLowerCase();
+  const normalized = value
+    ?.trim()
+    .replace(/[-_\s]/g, "")
+    .toLowerCase();
   if (normalized === "user" || normalized === "usermessage") {
     return "user";
   }
   if (
-    normalized === "assistant" ||
-    normalized === "agentmessage" ||
-    normalized === "assistantmessage"
+    normalized === "assistant"
+    || normalized === "agentmessage"
+    || normalized === "assistantmessage"
   ) {
     return "assistant";
   }
@@ -1391,7 +1517,7 @@ function normalizeConversationRole(
 }
 
 function normalizeAgentMessagePhase(
-  value: string | undefined
+  value: string | undefined,
 ): "commentary" | "final" | undefined {
   if (value === "commentary") {
     return "commentary";
@@ -1411,19 +1537,21 @@ function collectLegacyMessageText(record: Record<string, unknown>): string {
       ...collectText(record.messages),
       ...collectText(record.input),
       ...collectText(record.output),
-      ...collectText(record.parts)
+      ...collectText(record.parts),
     ]) ?? ""
   );
 }
 
 function isReviewActionText(text: string): boolean {
-  return text.includes("<user_action>") && text.includes("<action>review</action>");
+  return (
+    text.includes("<user_action>") && text.includes("<action>review</action>")
+  );
 }
 
 function isPlainReviewFindingText(text: string): boolean {
   return (
-    /\b(?:full\s+)?review comments?:/i.test(text) &&
-    /(?:^|\n)\s*-\s*\[P[0-3]\]\s+.+(?:\s+—\s+|\s+-\s+).+:\d+/u.test(text)
+    /\b(?:full\s+)?review comments?:/i.test(text)
+    && /(?:^|\n)\s*-\s*\[P[0-3]\]\s+.+(?:\s+—\s+|\s+-\s+).+:\d+/u.test(text)
   );
 }
 
@@ -1438,25 +1566,25 @@ function shouldUseAssistantReviewText(params: {
   const normalizedAssistant = normalizeSuppressionText(params.assistantText);
   const normalizedReview = normalizeSuppressionText(params.reviewText);
   return (
-    !normalizedReview ||
-    normalizedAssistant === normalizedReview ||
-    normalizedAssistant.startsWith(normalizedReview) ||
-    normalizedAssistant.includes(normalizedReview)
+    !normalizedReview
+    || normalizedAssistant === normalizedReview
+    || normalizedAssistant.startsWith(normalizedReview)
+    || normalizedAssistant.includes(normalizedReview)
   );
 }
 
 function isCodexInternalReviewPrompt(
   record: Record<string, unknown>,
-  text: string
+  text: string,
 ): boolean {
   const normalizedType = normalizeItemType(pickString(record, ["type"]));
   const normalizedText = text.trim().toLowerCase();
   return (
-    normalizedType === "usermessage" &&
-    normalizedText.startsWith("review ") &&
-    normalizedText.includes("code changes") &&
-    normalizedText.includes("prioritized") &&
-    normalizedText.includes("findings")
+    normalizedType === "usermessage"
+    && normalizedText.startsWith("review ")
+    && normalizedText.includes("code changes")
+    && normalizedText.includes("prioritized")
+    && normalizedText.includes("findings")
   );
 }
 
@@ -1479,7 +1607,7 @@ function collectReviewSuppressionTexts(value: unknown): Set<string> {
     }
 
     const role = normalizeConversationRole(
-      pickString(record, ["role", "author", "speaker", "source", "type"])
+      pickString(record, ["role", "author", "speaker", "source", "type"]),
     );
     if (role === "assistant") {
       const text = collectLegacyMessageText(record);
@@ -1515,7 +1643,7 @@ function collectReviewSuppressionTexts(value: unknown): Set<string> {
       "message",
       "thread",
       "response",
-      "result"
+      "result",
     ]) {
       visit(record[key]);
     }
@@ -1525,13 +1653,15 @@ function collectReviewSuppressionTexts(value: unknown): Set<string> {
   return output;
 }
 
-function collectAssistantReviewTexts(items: Record<string, unknown>[]): string[] {
+function collectAssistantReviewTexts(
+  items: Record<string, unknown>[],
+): string[] {
   const output: string[] = [];
   const seen = new Set<string>();
 
   for (const item of items) {
     const role = normalizeConversationRole(
-      pickString(item, ["role", "author", "speaker", "source", "type"])
+      pickString(item, ["role", "author", "speaker", "source", "type"]),
     );
     if (role !== "assistant") {
       continue;
@@ -1554,30 +1684,33 @@ function collectAssistantReviewTexts(items: Record<string, unknown>[]): string[]
 
 function shouldSuppressConversationMessage(
   record: Record<string, unknown>,
-  suppressedAssistantTexts = new Set<string>()
+  suppressedAssistantTexts = new Set<string>(),
 ): boolean {
   const text = collectLegacyMessageText(record);
   const role = normalizeConversationRole(
-    pickString(record, ["role", "author", "speaker", "source", "type"])
+    pickString(record, ["role", "author", "speaker", "source", "type"]),
   );
   return (
-    isReviewActionText(text) ||
-    isCodexInternalReviewPrompt(record, text) ||
-    (role === "assistant" && suppressedAssistantTexts.has(normalizeSuppressionText(text)))
+    isReviewActionText(text)
+    || isCodexInternalReviewPrompt(record, text)
+    || (role === "assistant"
+      && suppressedAssistantTexts.has(normalizeSuppressionText(text)))
   );
 }
 
-function normalizeRenderableImageUrl(value: string | undefined): string | undefined {
+function normalizeRenderableImageUrl(
+  value: string | undefined,
+): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
     return undefined;
   }
 
   if (
-    trimmed.startsWith("http://") ||
-    trimmed.startsWith("https://") ||
-    trimmed.startsWith("file://") ||
-    trimmed.startsWith("data:image/")
+    trimmed.startsWith("http://")
+    || trimmed.startsWith("https://")
+    || trimmed.startsWith("file://")
+    || trimmed.startsWith("data:image/")
   ) {
     return trimmed;
   }
@@ -1589,12 +1722,16 @@ function normalizeRenderableImageUrl(value: string | undefined): string | undefi
   return undefined;
 }
 
-function buildImagePartFromUrl(value: string | undefined): AppServerThreadImagePart | undefined {
+function buildImagePartFromUrl(
+  value: string | undefined,
+): AppServerThreadImagePart | undefined {
   const url = normalizeRenderableImageUrl(value);
   return url ? { type: "image", url } : undefined;
 }
 
-function extractImagePartsFromValue(value: unknown): AppServerThreadImagePart[] {
+function extractImagePartsFromValue(
+  value: unknown,
+): AppServerThreadImagePart[] {
   if (typeof value === "string") {
     const part = buildImagePartFromUrl(value);
     return part ? [part] : [];
@@ -1618,31 +1755,41 @@ function extractImagePartsFromValue(value: unknown): AppServerThreadImagePart[] 
       "uri",
       "path",
       "localPath",
-      "local_path"
-    ])
+      "local_path",
+    ]),
   );
   if (!part) {
     return [];
   }
 
-  const alt = pickString(record, ["alt", "altText", "alt_text", "title", "name"]);
+  const alt = pickString(record, [
+    "alt",
+    "altText",
+    "alt_text",
+    "title",
+    "name",
+  ]);
   if (alt) {
     part.alt = alt;
   }
   return [part];
 }
 
-function extractDirectImageParts(record: Record<string, unknown>): AppServerThreadImagePart[] {
+function extractDirectImageParts(
+  record: Record<string, unknown>,
+): AppServerThreadImagePart[] {
   return [
     ...extractImagePartsFromValue(record.local_images),
     ...extractImagePartsFromValue(record.localImages),
     ...extractImagePartsFromValue(record.images),
     ...extractImagePartsFromValue(record.image_urls),
-    ...extractImagePartsFromValue(record.imageUrls)
+    ...extractImagePartsFromValue(record.imageUrls),
   ];
 }
 
-function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePart[] {
+function extractStructuredMessageParts(
+  value: unknown,
+): AppServerThreadMessagePart[] {
   if (Array.isArray(value)) {
     return value.flatMap((entry) => extractStructuredMessageParts(entry));
   }
@@ -1652,14 +1799,18 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
     return [];
   }
 
-  const normalizedType = pickString(record, ["type", "contentType", "content_type"])
+  const normalizedType = pickString(record, [
+    "type",
+    "contentType",
+    "content_type",
+  ])
     ?.trim()
     .toLowerCase();
 
   if (
-    normalizedType === "text" ||
-    normalizedType === "input_text" ||
-    normalizedType === "output_text"
+    normalizedType === "text"
+    || normalizedType === "input_text"
+    || normalizedType === "output_text"
   ) {
     const text = pickString(record, ["text", "value", "content"]);
     if (text && isCodexImageBoundaryText(text)) {
@@ -1677,21 +1828,27 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
       "uri",
       "path",
       "localPath",
-      "local_path"
-    ])
+      "local_path",
+    ]),
   );
   if (
-    imagePart &&
-    (normalizedType === "image" ||
-      normalizedType === "input_image" ||
-      normalizedType === "localimage" ||
-      normalizedType === "local_image" ||
-      normalizedType === "output_image" ||
-      normalizedType === "image_url" ||
-      "image_url" in record ||
-      "imageUrl" in record)
+    imagePart
+    && (normalizedType === "image"
+      || normalizedType === "input_image"
+      || normalizedType === "localimage"
+      || normalizedType === "local_image"
+      || normalizedType === "output_image"
+      || normalizedType === "image_url"
+      || "image_url" in record
+      || "imageUrl" in record)
   ) {
-    const alt = pickString(record, ["alt", "altText", "alt_text", "title", "name"]);
+    const alt = pickString(record, [
+      "alt",
+      "altText",
+      "alt_text",
+      "title",
+      "name",
+    ]);
     if (alt) {
       imagePart.alt = alt;
     }
@@ -1715,13 +1872,15 @@ function buildMessageContent(record: Record<string, unknown>): {
   const structuredParts = [
     ...extractStructuredMessageParts(record.content),
     ...extractStructuredMessageParts(record.parts),
-    ...extractDirectImageParts(record)
+    ...extractDirectImageParts(record),
   ];
 
   if (structuredParts.length > 0) {
     const text =
       dedupeJoinedText(
-        structuredParts.flatMap((part) => (part.type === "text" ? [part.text] : []))
+        structuredParts.flatMap((part) =>
+          part.type === "text" ? [part.text] : [],
+        ),
       ) ?? collectLegacyMessageText(record);
     const parts =
       structuredParts.some((part) => part.type === "text") || !text
@@ -1730,7 +1889,7 @@ function buildMessageContent(record: Record<string, unknown>): {
 
     return {
       parts,
-      text
+      text,
     };
   }
 
@@ -1739,25 +1898,31 @@ function buildMessageContent(record: Record<string, unknown>): {
 }
 
 function hasThreadMessageImages(
-  message: Pick<AppServerThreadMessageEntry, "parts">
+  message: Pick<AppServerThreadMessageEntry, "parts">,
 ): boolean {
   return threadMessageImageUrls(message).length > 0;
 }
 
 function threadMessageImageUrls(
-  message: Pick<AppServerThreadMessageEntry, "parts">
+  message: Pick<AppServerThreadMessageEntry, "parts">,
 ): string[] {
   return (
     message.parts
-      ?.filter((part): part is Extract<AppServerThreadMessagePart, { type: "image" }> =>
-        part.type === "image"
+      ?.filter(
+        (
+          part,
+        ): part is Extract<AppServerThreadMessagePart, { type: "image" }> =>
+          part.type === "image",
       )
       .map((part) => part.url) ?? []
   );
 }
 
 function imageUrlsMatch(left: string[], right: string[]): boolean {
-  return left.length === right.length && left.every((url, index) => url === right[index]);
+  return (
+    left.length === right.length
+    && left.every((url, index) => url === right[index])
+  );
 }
 
 function imageUrlsAreRawEventMirror(left: string[], right: string[]): boolean {
@@ -1776,9 +1941,12 @@ function imageUrlsAreRawEventMirror(left: string[], right: string[]): boolean {
 function messageTimestampsAreWithin(
   left: AppServerThreadReplay["messages"][number],
   right: AppServerThreadReplay["messages"][number],
-  windowMs: number
+  windowMs: number,
 ): boolean {
-  if (typeof left.createdAt !== "number" || typeof right.createdAt !== "number") {
+  if (
+    typeof left.createdAt !== "number"
+    || typeof right.createdAt !== "number"
+  ) {
     return false;
   }
 
@@ -1787,7 +1955,7 @@ function messageTimestampsAreWithin(
 
 function messagesAreNearDuplicateImagePrompts(
   left: AppServerThreadReplay["messages"][number],
-  right: AppServerThreadReplay["messages"][number]
+  right: AppServerThreadReplay["messages"][number],
 ): boolean {
   if (left.role !== right.role || left.text !== right.text) {
     return false;
@@ -1803,7 +1971,10 @@ function messagesAreNearDuplicateImagePrompts(
       return false;
     }
 
-    if (typeof left.createdAt !== "number" || typeof right.createdAt !== "number") {
+    if (
+      typeof left.createdAt !== "number"
+      || typeof right.createdAt !== "number"
+    ) {
       return true;
     }
 
@@ -1813,19 +1984,22 @@ function messagesAreNearDuplicateImagePrompts(
   if (leftHasImages && rightHasImages) {
     if (imageUrlsMatch(leftImageUrls, rightImageUrls)) {
       return (
-        typeof left.createdAt !== "number" ||
-        typeof right.createdAt !== "number" ||
-        messageTimestampsAreWithin(left, right, 1_000)
+        typeof left.createdAt !== "number"
+        || typeof right.createdAt !== "number"
+        || messageTimestampsAreWithin(left, right, 1_000)
       );
     }
 
     return (
-      imageUrlsAreRawEventMirror(leftImageUrls, rightImageUrls) &&
-      messageTimestampsAreWithin(left, right, 100)
+      imageUrlsAreRawEventMirror(leftImageUrls, rightImageUrls)
+      && messageTimestampsAreWithin(left, right, 100)
     );
   }
 
-  if (typeof left.createdAt !== "number" || typeof right.createdAt !== "number") {
+  if (
+    typeof left.createdAt !== "number"
+    || typeof right.createdAt !== "number"
+  ) {
     return true;
   }
 
@@ -1834,10 +2008,10 @@ function messagesAreNearDuplicateImagePrompts(
 
 function appendConversationMessage(
   output: AppServerThreadReplay["messages"],
-  message: AppServerThreadReplay["messages"][number]
+  message: AppServerThreadReplay["messages"][number],
 ): void {
   const existingIndex = output.findIndex((candidate) =>
-    messagesAreNearDuplicateImagePrompts(candidate, message)
+    messagesAreNearDuplicateImagePrompts(candidate, message),
   );
   if (existingIndex === -1) {
     output.push(message);
@@ -1845,12 +2019,18 @@ function appendConversationMessage(
   }
 
   const existing = output[existingIndex];
-  if (existing && !hasThreadMessageImages(existing) && hasThreadMessageImages(message)) {
+  if (
+    existing
+    && !hasThreadMessageImages(existing)
+    && hasThreadMessageImages(message)
+  ) {
     output[existingIndex] = message;
   }
 }
 
-function extractConversationMessages(value: unknown): AppServerThreadReplay["messages"] {
+function extractConversationMessages(
+  value: unknown,
+): AppServerThreadReplay["messages"] {
   const output: AppServerThreadReplay["messages"] = [];
   const suppressedAssistantTexts = collectReviewSuppressionTexts(value);
   const timestampKeys = [
@@ -1873,27 +2053,32 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
       return;
     }
     const recordCreatedAt = normalizeEpochTimestamp(
-      pickNumber(record, timestampKeys)
+      pickNumber(record, timestampKeys),
     );
     const createdAt = recordCreatedAt ?? inheritedCreatedAt;
 
     const role = normalizeConversationRole(
-      pickString(record, ["role", "author", "speaker", "source", "type"])
+      pickString(record, ["role", "author", "speaker", "source", "type"]),
     );
     const content = buildMessageContent(record);
     if (
-      role &&
-      (content.text || content.parts?.length) &&
-      !shouldSuppressConversationMessage(record, suppressedAssistantTexts)
+      role
+      && (content.text || content.parts?.length)
+      && !shouldSuppressConversationMessage(record, suppressedAssistantTexts)
     ) {
       appendConversationMessage(output, {
         id:
-          pickString(record, ["id", "messageId", "message_id", "itemId", "item_id"]) ??
-          `message-${output.length + 1}`,
+          pickString(record, [
+            "id",
+            "messageId",
+            "message_id",
+            "itemId",
+            "item_id",
+          ]) ?? `message-${output.length + 1}`,
         role,
         text: content.text,
         ...(content.parts ? { parts: content.parts } : {}),
-        createdAt
+        createdAt,
       });
     }
 
@@ -1912,7 +2097,7 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
       "message",
       "thread",
       "response",
-      "result"
+      "result",
     ]) {
       visit(record[key], createdAt);
     }
@@ -1923,42 +2108,49 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
 }
 
 function normalizeActivityStatus(
-  value: string | undefined
+  value: string | undefined,
 ): AppServerThreadActivityStatus | undefined {
   const normalized = value?.trim().toLowerCase();
   if (normalized === "inprogress") {
     return "in_progress";
   }
   if (
-    normalized === "in_progress" ||
-    normalized === "completed" ||
-    normalized === "failed" ||
-    normalized === "cancelled"
+    normalized === "in_progress"
+    || normalized === "completed"
+    || normalized === "failed"
+    || normalized === "cancelled"
   ) {
     return normalized;
   }
   return undefined;
 }
 
-function normalizeTurnStatus(value: string | undefined): AppServerThreadTurnStatus | undefined {
+function normalizeTurnStatus(
+  value: string | undefined,
+): AppServerThreadTurnStatus | undefined {
   const normalized = value?.trim().toLowerCase();
   if (normalized === "inprogress") {
     return "in_progress";
   }
   if (
-    normalized === "in_progress" ||
-    normalized === "completed" ||
-    normalized === "failed" ||
-    normalized === "cancelled" ||
-    normalized === "interrupted"
+    normalized === "in_progress"
+    || normalized === "completed"
+    || normalized === "failed"
+    || normalized === "cancelled"
+    || normalized === "interrupted"
   ) {
     return normalized;
   }
   return undefined;
 }
 
-function normalizeThreadStatus(value: string | undefined): AppServerThreadStatus | undefined {
-  const normalized = value?.trim().replace(/[-_\s]/g, "").toLowerCase();
+function normalizeThreadStatus(
+  value: string | undefined,
+): AppServerThreadStatus | undefined {
+  const normalized = value
+    ?.trim()
+    .replace(/[-_\s]/g, "")
+    .toLowerCase();
   if (normalized === "active") {
     return "active";
   }
@@ -1989,15 +2181,15 @@ function readThreadStatus(value: unknown): AppServerThreadStatus | undefined {
   const threadStatusRecord = asRecord(threadRecord?.status);
 
   return normalizeThreadStatus(
-    pickString(statusRecord ?? {}, ["type", "status", "state"]) ??
-      pickString(threadStatusRecord ?? {}, ["type", "status", "state"]) ??
-      pickString(record, ["status", "state"]) ??
-      pickString(threadRecord ?? {}, ["status", "state"])
+    pickString(statusRecord ?? {}, ["type", "status", "state"])
+      ?? pickString(threadStatusRecord ?? {}, ["type", "status", "state"])
+      ?? pickString(record, ["status", "state"])
+      ?? pickString(threadRecord ?? {}, ["status", "state"]),
   );
 }
 
 function extractTurnMetadata(
-  turn: Record<string, unknown>
+  turn: Record<string, unknown>,
 ): AppServerThreadTurnMetadata | undefined {
   const id = pickString(turn, ["id", "turnId", "turn_id", "runId", "run_id"]);
   if (!id) {
@@ -2005,10 +2197,16 @@ function extractTurnMetadata(
   }
 
   const startedAt = normalizeEpochTimestamp(
-    pickNumber(turn, ["startedAt", "started_at", "createdAt", "timestamp", "time"])
+    pickNumber(turn, [
+      "startedAt",
+      "started_at",
+      "createdAt",
+      "timestamp",
+      "time",
+    ]),
   );
   const completedAt = normalizeEpochTimestamp(
-    pickNumber(turn, ["completedAt", "completed_at"])
+    pickNumber(turn, ["completedAt", "completed_at"]),
   );
   const durationMs = pickNumber(turn, ["durationMs", "duration_ms"]);
   const status = normalizeTurnStatus(pickString(turn, ["status"]));
@@ -2023,16 +2221,16 @@ function extractTurnMetadata(
 }
 
 function normalizePlanStepStatus(
-  value: string | undefined
+  value: string | undefined,
 ): AppServerThreadPlanStepStatus | undefined {
   const normalized = value?.trim().toLowerCase();
   if (normalized === "inprogress") {
     return "in_progress";
   }
   if (
-    normalized === "pending" ||
-    normalized === "in_progress" ||
-    normalized === "completed"
+    normalized === "pending"
+    || normalized === "in_progress"
+    || normalized === "completed"
   ) {
     return normalized;
   }
@@ -2083,7 +2281,9 @@ function normalizePlanSteps(value: unknown): AppServerThreadPlanStep[] {
     }
 
     const step = pickString(record, ["step", "title", "text", "label"]);
-    const status = normalizePlanStepStatus(pickString(record, ["status", "state"]));
+    const status = normalizePlanStepStatus(
+      pickString(record, ["status", "state"]),
+    );
     if (!step || !status) {
       return [];
     }
@@ -2092,11 +2292,13 @@ function normalizePlanSteps(value: unknown): AppServerThreadPlanStep[] {
   });
 }
 
-function normalizePlanPayload(value: unknown): {
-  explanation?: string;
-  markdown?: string;
-  steps: AppServerThreadPlanStep[];
-} | undefined {
+function normalizePlanPayload(value: unknown):
+  | {
+      explanation?: string;
+      markdown?: string;
+      steps: AppServerThreadPlanStep[];
+    }
+  | undefined {
   const record = asRecord(value);
   if (!record) {
     return undefined;
@@ -2113,12 +2315,12 @@ function normalizePlanPayload(value: unknown): {
         ? nestedPlanSteps
         : nestedRecordSteps;
   const explanation =
-    pickString(record, ["explanation", "summary"]) ??
-    pickString(nestedPlanRecord ?? {}, ["explanation", "summary"]);
+    pickString(record, ["explanation", "summary"])
+    ?? pickString(nestedPlanRecord ?? {}, ["explanation", "summary"]);
   const markdown =
-    pickRawString(record, ["markdown"]) ??
-    pickRawString(nestedPlanRecord ?? {}, ["markdown"]) ??
-    collectLegacyMessageText(record);
+    pickRawString(record, ["markdown"])
+    ?? pickRawString(nestedPlanRecord ?? {}, ["markdown"])
+    ?? collectLegacyMessageText(record);
 
   if (steps.length === 0 && !explanation && !markdown.trim()) {
     return undefined;
@@ -2151,7 +2353,7 @@ function parseStructuredValue(value: unknown): unknown {
 function extractNestedPlanEntryFromItem(
   item: Record<string, unknown>,
   createdAt?: number,
-  turn?: AppServerThreadTurnMetadata
+  turn?: AppServerThreadTurnMetadata,
 ): AppServerThreadPlanEntry | undefined {
   for (const key of ["payload", "item", "responseItem", "response_item"]) {
     const nestedItem = asRecord(item[key]);
@@ -2163,11 +2365,11 @@ function extractNestedPlanEntryFromItem(
       {
         ...nestedItem,
         id:
-          pickString(item, ["id", "itemId", "item_id"]) ??
-          pickString(nestedItem, ["id", "itemId", "item_id", "call_id"])
+          pickString(item, ["id", "itemId", "item_id"])
+          ?? pickString(nestedItem, ["id", "itemId", "item_id", "call_id"]),
       },
       createdAt,
-      turn
+      turn,
     );
     if (nestedPlanEntry) {
       return nestedPlanEntry;
@@ -2180,12 +2382,13 @@ function extractNestedPlanEntryFromItem(
 function extractPlanEntryFromItem(
   item: Record<string, unknown>,
   createdAt?: number,
-  turn?: AppServerThreadTurnMetadata
+  turn?: AppServerThreadTurnMetadata,
 ): AppServerThreadPlanEntry | undefined {
   const itemType = pickString(item, ["type"]);
   const normalizedItemType = itemType?.trim().toLowerCase();
   const itemId =
-    pickString(item, ["id", "itemId", "item_id", "call_id"]) ?? `plan-${createdAt ?? 0}`;
+    pickString(item, ["id", "itemId", "item_id", "call_id"])
+    ?? `plan-${createdAt ?? 0}`;
   const nestedPlanEntry = extractNestedPlanEntryFromItem(item, createdAt, turn);
   if (nestedPlanEntry) {
     return nestedPlanEntry;
@@ -2209,7 +2412,9 @@ function extractPlanEntryFromItem(
       createdAt,
       ...(turn ? { turn } : {}),
       ...(explanation ? { explanation } : {}),
-      ...(normalizedPayload?.markdown ? { markdown: normalizedPayload.markdown } : {}),
+      ...(normalizedPayload?.markdown
+        ? { markdown: normalizedPayload.markdown }
+        : {}),
       steps,
     };
   }
@@ -2221,22 +2426,30 @@ function extractPlanEntryFromItem(
     "dynamic_tool_call",
   ]);
   const normalizedCollapsedType = normalizedItemType?.replace(/[-_\s]/g, "");
-  if (!normalizedCollapsedType || !functionLikeTypes.has(normalizedCollapsedType)) {
+  if (
+    !normalizedCollapsedType
+    || !functionLikeTypes.has(normalizedCollapsedType)
+  ) {
     return undefined;
   }
 
-  const functionName = pickString(item, ["name", "toolName", "tool_name", "text"]);
+  const functionName = pickString(item, [
+    "name",
+    "toolName",
+    "tool_name",
+    "text",
+  ]);
   if (functionName !== "update_plan") {
     return undefined;
   }
 
   const payload =
-    parseStructuredValue(item.arguments) ??
-    parseStructuredValue(item.input) ??
-    parseStructuredValue(item.output) ??
-    asRecord(item.arguments) ??
-    asRecord(item.input) ??
-    asRecord(item.output);
+    parseStructuredValue(item.arguments)
+    ?? parseStructuredValue(item.input)
+    ?? parseStructuredValue(item.output)
+    ?? asRecord(item.arguments)
+    ?? asRecord(item.input)
+    ?? asRecord(item.output);
   const normalizedPayload = normalizePlanPayload(payload);
   if (!normalizedPayload) {
     return undefined;
@@ -2250,7 +2463,9 @@ function extractPlanEntryFromItem(
     ...(normalizedPayload.explanation
       ? { explanation: normalizedPayload.explanation }
       : {}),
-    ...(normalizedPayload.markdown ? { markdown: normalizedPayload.markdown } : {}),
+    ...(normalizedPayload.markdown
+      ? { markdown: normalizedPayload.markdown }
+      : {}),
     steps: normalizedPayload.steps,
   };
 }
@@ -2270,21 +2485,23 @@ function extractReviewEntryFromItem(
 
   const { event, item: reviewItem, parent } = reviewEvent;
   const createdAt =
-    timestamps.itemCreatedAt ??
-    (event === "exitedreviewmode" ? turn?.completedAt : undefined) ??
-    timestamps.turnCreatedAt;
+    timestamps.itemCreatedAt
+    ?? (event === "exitedreviewmode" ? turn?.completedAt : undefined)
+    ?? timestamps.turnCreatedAt;
   const reviewOutput = normalizeReviewOutput(reviewItem);
   const review =
-    pickRawString(reviewItem, ["review", "text"]) ??
-    (event === "exitedreviewmode" ? reviewOutput?.overall_explanation : undefined) ??
-    "";
+    pickRawString(reviewItem, ["review", "text"])
+    ?? (event === "exitedreviewmode"
+      ? reviewOutput?.overall_explanation
+      : undefined)
+    ?? "";
 
   return {
     type: "review",
     id:
-      pickString(parent, ["id", "itemId", "item_id"]) ??
-      pickString(reviewItem, ["id", "itemId", "item_id"]) ??
-      `review-${event}`,
+      pickString(parent, ["id", "itemId", "item_id"])
+      ?? pickString(reviewItem, ["id", "itemId", "item_id"])
+      ?? `review-${event}`,
     review,
     displayText:
       event === "enteredreviewmode"
@@ -2296,16 +2513,16 @@ function extractReviewEntryFromItem(
   };
 }
 
-function normalizeReviewEventItem(
-  item: Record<string, unknown>
-): {
-  event: "enteredreviewmode" | "exitedreviewmode";
-  item: Record<string, unknown>;
-  parent: Record<string, unknown>;
-} | undefined {
+function normalizeReviewEventItem(item: Record<string, unknown>):
+  | {
+      event: "enteredreviewmode" | "exitedreviewmode";
+      item: Record<string, unknown>;
+      parent: Record<string, unknown>;
+    }
+  | undefined {
   if (
-    normalizeItemType(pickString(item, ["type"])) === "enteredreviewmode" ||
-    normalizeItemType(pickString(item, ["type"])) === "exitedreviewmode"
+    normalizeItemType(pickString(item, ["type"])) === "enteredreviewmode"
+    || normalizeItemType(pickString(item, ["type"])) === "exitedreviewmode"
   ) {
     return {
       event: normalizeItemType(pickString(item, ["type"])) as
@@ -2316,10 +2533,20 @@ function normalizeReviewEventItem(
     };
   }
 
-  for (const key of ["payload", "item", "responseItem", "response_item", "data"]) {
+  for (const key of [
+    "payload",
+    "item",
+    "responseItem",
+    "response_item",
+    "data",
+  ]) {
     const nested = asRecord(item[key]);
     const nestedType = normalizeItemType(pickString(nested ?? {}, ["type"]));
-    if (nested && (nestedType === "enteredreviewmode" || nestedType === "exitedreviewmode")) {
+    if (
+      nested
+      && (nestedType === "enteredreviewmode"
+        || nestedType === "exitedreviewmode")
+    ) {
       return {
         event: nestedType,
         item: nested,
@@ -2332,31 +2559,33 @@ function normalizeReviewEventItem(
 }
 
 function normalizeReviewOutput(
-  item: Record<string, unknown>
+  item: Record<string, unknown>,
 ): AppServerThreadReviewEntry["output"] | undefined {
   const data = asRecord(item.data);
   const reviewOutput =
-    asRecord(data?.reviewOutput) ??
-    asRecord(data?.review_output) ??
-    asRecord(item.reviewOutput) ??
-    asRecord(item.review_output);
+    asRecord(data?.reviewOutput)
+    ?? asRecord(data?.review_output)
+    ?? asRecord(item.reviewOutput)
+    ?? asRecord(item.review_output);
   const findings = Array.isArray(reviewOutput?.findings)
     ? reviewOutput.findings
     : undefined;
 
   if (
-    !reviewOutput ||
-    !findings ||
-    (reviewOutput.overall_correctness !== "patch is correct" &&
-      reviewOutput.overall_correctness !== "patch is incorrect") ||
-    typeof reviewOutput.overall_explanation !== "string" ||
-    typeof reviewOutput.overall_confidence_score !== "number"
+    !reviewOutput
+    || !findings
+    || (reviewOutput.overall_correctness !== "patch is correct"
+      && reviewOutput.overall_correctness !== "patch is incorrect")
+    || typeof reviewOutput.overall_explanation !== "string"
+    || typeof reviewOutput.overall_confidence_score !== "number"
   ) {
     return undefined;
   }
 
   return {
-    findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
+    findings: findings as NonNullable<
+      AppServerThreadReviewEntry["output"]
+    >["findings"],
     overall_correctness: reviewOutput.overall_correctness,
     overall_explanation: reviewOutput.overall_explanation,
     overall_confidence_score: reviewOutput.overall_confidence_score,
@@ -2376,11 +2605,18 @@ function reviewDisplayText(item: Record<string, unknown>): string | undefined {
 
   const target = asRecord(item.target);
   const targetType = pickString(target ?? {}, ["type"]);
-  if (targetType === "uncommittedChanges" || targetType === "uncommitted_changes") {
+  if (
+    targetType === "uncommittedChanges"
+    || targetType === "uncommitted_changes"
+  ) {
     return "Review current changes";
   }
   if (targetType === "baseBranch" || targetType === "base_branch") {
-    const branch = pickString(target ?? {}, ["branch", "baseBranch", "base_branch"]);
+    const branch = pickString(target ?? {}, [
+      "branch",
+      "baseBranch",
+      "base_branch",
+    ]);
     return branch
       ? normalizeReviewDisplayText(`changes against ${branch}`)
       : "Review changes";
@@ -2395,9 +2631,11 @@ function reviewDisplayText(item: Record<string, unknown>): string | undefined {
 
 function pushActivityDetail(
   details: AppServerThreadActivityDetail[],
-  detail: AppServerThreadActivityDetail
+  detail: AppServerThreadActivityDetail,
 ): void {
-  const existing = details.find((candidate) => candidate.label === detail.label);
+  const existing = details.find(
+    (candidate) => candidate.label === detail.label,
+  );
   if (existing) {
     if (!existing.status || existing.status === "completed") {
       existing.status = detail.status ?? existing.status;
@@ -2408,24 +2646,39 @@ function pushActivityDetail(
 }
 
 function normalizeFileChangeKind(
-  value: string | undefined
+  value: string | undefined,
 ): "add" | "delete" | "update" {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "add" || normalized === "delete" || normalized === "update") {
+  if (
+    normalized === "add"
+    || normalized === "delete"
+    || normalized === "update"
+  ) {
     return normalized;
   }
   return "update";
 }
 
 function extractDiffText(change: Record<string, unknown>): string | undefined {
-  const directDiff = pickString(change, ["diff", "patch", "unifiedDiff", "unified_diff"]);
+  const directDiff = pickString(change, [
+    "diff",
+    "patch",
+    "unifiedDiff",
+    "unified_diff",
+  ]);
   if (directDiff) {
     return directDiff;
   }
 
   const diffRecord = asRecord(change.diff);
   if (diffRecord) {
-    return pickString(diffRecord, ["text", "patch", "diff", "unifiedDiff", "unified_diff"]);
+    return pickString(diffRecord, [
+      "text",
+      "patch",
+      "diff",
+      "unifiedDiff",
+      "unified_diff",
+    ]);
   }
 
   return undefined;
@@ -2443,8 +2696,8 @@ function extractFileChangeText(params: {
 }): FileChangeText | undefined {
   if (params.changeType === "add" || params.changeType === "delete") {
     const content =
-      pickStringAllowEmpty(params.changeKind, ["content"]) ??
-      pickStringAllowEmpty(params.change, ["content"]);
+      pickStringAllowEmpty(params.changeKind, ["content"])
+      ?? pickStringAllowEmpty(params.change, ["content"]);
     if (content !== undefined) {
       return { source: "content", text: content };
     }
@@ -2459,8 +2712,8 @@ function extractFileChangeText(params: {
   }
 
   const diff =
-    pickStringAllowEmpty(params.changeKind, ["unified_diff", "unifiedDiff"]) ??
-    extractDiffText(params.change);
+    pickStringAllowEmpty(params.changeKind, ["unified_diff", "unifiedDiff"])
+    ?? extractDiffText(params.change);
   return diff !== undefined ? { source: "diff", text: diff } : undefined;
 }
 
@@ -2476,9 +2729,9 @@ function looksLikeUnifiedDiff(text: string): boolean {
     }
 
     if (
-      line.startsWith("diff --git ") ||
-      line.startsWith("--- ") ||
-      line.startsWith("@@ ")
+      line.startsWith("diff --git ")
+      || line.startsWith("--- ")
+      || line.startsWith("@@ ")
     ) {
       return true;
     }
@@ -2495,21 +2748,21 @@ function looksLikeUnifiedDiff(text: string): boolean {
 
 function isUnifiedDiffMetadataLine(line: string): boolean {
   return (
-    line.startsWith("Index: ") ||
-    line.startsWith("index ") ||
-    line.startsWith("new file mode ") ||
-    line.startsWith("deleted file mode ") ||
-    line.startsWith("old mode ") ||
-    line.startsWith("new mode ") ||
-    line.startsWith("similarity index ") ||
-    line.startsWith("dissimilarity index ") ||
-    line.startsWith("rename from ") ||
-    line.startsWith("rename to ") ||
-    line.startsWith("copy from ") ||
-    line.startsWith("copy to ") ||
-    line.startsWith("Binary files ") ||
-    line === "GIT binary patch" ||
-    /^=+$/.test(line)
+    line.startsWith("Index: ")
+    || line.startsWith("index ")
+    || line.startsWith("new file mode ")
+    || line.startsWith("deleted file mode ")
+    || line.startsWith("old mode ")
+    || line.startsWith("new mode ")
+    || line.startsWith("similarity index ")
+    || line.startsWith("dissimilarity index ")
+    || line.startsWith("rename from ")
+    || line.startsWith("rename to ")
+    || line.startsWith("copy from ")
+    || line.startsWith("copy to ")
+    || line.startsWith("Binary files ")
+    || line === "GIT binary patch"
+    || /^=+$/.test(line)
   );
 }
 
@@ -2526,11 +2779,11 @@ function summarizeDiff(diff: string): { additions: number; removals: number } {
     }
 
     if (
-      end === lineStart ||
-      diff.startsWith("+++", lineStart) ||
-      diff.startsWith("---", lineStart) ||
-      diff.startsWith("@@", lineStart) ||
-      diff.startsWith("\\", lineStart)
+      end === lineStart
+      || diff.startsWith("+++", lineStart)
+      || diff.startsWith("---", lineStart)
+      || diff.startsWith("@@", lineStart)
+      || diff.startsWith("\\", lineStart)
     ) {
       lineStart = lineEnd === -1 ? diff.length + 1 : lineEnd + 1;
       continue;
@@ -2575,7 +2828,7 @@ function splitFileContentLines(content: string): string[] {
 }
 
 function summarizeFileChangeText(params: {
-  changeType: "add" | "delete" | "update",
+  changeType: "add" | "delete" | "update";
   text: FileChangeText;
 }): { additions: number; removals: number } {
   if (params.text.source === "diff") {
@@ -2622,9 +2875,9 @@ function buildFileChangeDiff(params: {
     return {
       diff: "",
       omittedReason: `Large file diff omitted from transcript view (${formatByteSize(
-        params.text.text.length
+        params.text.text.length,
       )}).`,
-      originalLength: params.text.text.length
+      originalLength: params.text.text.length,
     };
   }
 
@@ -2636,8 +2889,8 @@ function buildFileChangeDiff(params: {
     diff: buildContentDiff({
       changeType: params.changeType,
       content: params.text.text,
-      path: params.path
-    })
+      path: params.path,
+    }),
   };
 }
 
@@ -2713,7 +2966,7 @@ type TokenUsagePricingContext = {
 };
 
 function readTokenUsageBreakdown(
-  record: Record<string, unknown>
+  record: Record<string, unknown>,
 ): TokenUsageBreakdown | undefined {
   const explicitTotal = pickNumber(record, ["totalTokens", "total_tokens"]);
   const inputTokens = pickNumber(record, ["inputTokens", "input_tokens"]);
@@ -2728,14 +2981,15 @@ function readTokenUsageBreakdown(
   ]);
   const derivedTotal =
     (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningOutputTokens ?? 0);
-  const totalTokens = explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
+  const totalTokens =
+    explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
 
   if (
-    totalTokens === undefined &&
-    inputTokens === undefined &&
-    cachedInputTokens === undefined &&
-    outputTokens === undefined &&
-    reasoningOutputTokens === undefined
+    totalTokens === undefined
+    && inputTokens === undefined
+    && cachedInputTokens === undefined
+    && outputTokens === undefined
+    && reasoningOutputTokens === undefined
   ) {
     return undefined;
   }
@@ -2750,19 +3004,15 @@ function readTokenUsageBreakdown(
 }
 
 function normalizeTokenUsagePayload(
-  record: Record<string, unknown>
+  record: Record<string, unknown>,
 ): NormalizedTokenUsage | undefined {
   const root =
-    asRecord(record.tokenUsage) ??
-    asRecord(record.token_usage) ??
-    asRecord(record.info) ??
-    record;
-  const latestUsage =
-    asRecord(root.last) ??
-    asRecord(root.last_token_usage);
-  const totalUsage =
-    asRecord(root.total) ??
-    asRecord(root.total_token_usage);
+    asRecord(record.tokenUsage)
+    ?? asRecord(record.token_usage)
+    ?? asRecord(record.info)
+    ?? record;
+  const latestUsage = asRecord(root.last) ?? asRecord(root.last_token_usage);
+  const totalUsage = asRecord(root.total) ?? asRecord(root.total_token_usage);
   const currentUsage = latestUsage ?? totalUsage ?? root;
   const tokens = readTokenUsageBreakdown(currentUsage);
   if (!tokens) {
@@ -2779,37 +3029,39 @@ function formatTokenCount(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
-function readTokenUsageFastMode(record: Record<string, unknown>): boolean | undefined {
+function readTokenUsageFastMode(
+  record: Record<string, unknown>,
+): boolean | undefined {
   const value = record.fastMode ?? record.fast_mode;
   return typeof value === "boolean" ? value : undefined;
 }
 
 function readTokenUsagePricingContext(
-  record: Record<string, unknown>
+  record: Record<string, unknown>,
 ): TokenUsagePricingContext {
   const payload = asRecord(record.payload);
   const settings =
-    asRecord(asRecord(record.collaboration_mode)?.settings) ??
-    asRecord(asRecord(payload?.collaboration_mode)?.settings);
+    asRecord(asRecord(record.collaboration_mode)?.settings)
+    ?? asRecord(asRecord(payload?.collaboration_mode)?.settings);
   return {
     fastMode:
-      readTokenUsageFastMode(record) ??
-      readTokenUsageFastMode(payload ?? {}) ??
-      readTokenUsageFastMode(settings ?? {}),
+      readTokenUsageFastMode(record)
+      ?? readTokenUsageFastMode(payload ?? {})
+      ?? readTokenUsageFastMode(settings ?? {}),
     model:
-      pickString(record, ["model", "modelId", "model_id"]) ??
-      pickString(payload ?? {}, ["model", "modelId", "model_id"]) ??
-      pickString(settings ?? {}, ["model", "modelId", "model_id"]),
+      pickString(record, ["model", "modelId", "model_id"])
+      ?? pickString(payload ?? {}, ["model", "modelId", "model_id"])
+      ?? pickString(settings ?? {}, ["model", "modelId", "model_id"]),
     serviceTier:
-      pickString(record, ["serviceTier", "service_tier"]) ??
-      pickString(payload ?? {}, ["serviceTier", "service_tier"]) ??
-      pickString(settings ?? {}, ["serviceTier", "service_tier"]),
+      pickString(record, ["serviceTier", "service_tier"])
+      ?? pickString(payload ?? {}, ["serviceTier", "service_tier"])
+      ?? pickString(settings ?? {}, ["serviceTier", "service_tier"]),
   };
 }
 
 function mergeTokenUsagePricingContext(
   primary: TokenUsagePricingContext,
-  fallback?: TokenUsagePricingContext
+  fallback?: TokenUsagePricingContext,
 ): TokenUsagePricingContext {
   return {
     fastMode: primary.fastMode ?? fallback?.fastMode,
@@ -2818,11 +3070,17 @@ function mergeTokenUsagePricingContext(
   };
 }
 
-function hasTokenUsagePricingContext(context: TokenUsagePricingContext): boolean {
-  return Boolean(context.model || context.serviceTier || context.fastMode !== undefined);
+function hasTokenUsagePricingContext(
+  context: TokenUsagePricingContext,
+): boolean {
+  return Boolean(
+    context.model || context.serviceTier || context.fastMode !== undefined,
+  );
 }
 
-function extractTokenUsagePricingContext(value: unknown): TokenUsagePricingContext | undefined {
+function extractTokenUsagePricingContext(
+  value: unknown,
+): TokenUsagePricingContext | undefined {
   const visit = (node: unknown): TokenUsagePricingContext | undefined => {
     if (Array.isArray(node)) {
       for (const entry of node) {
@@ -2873,7 +3131,7 @@ function summarizeTokenUsageActivity(
   createdAt?: number,
   turn?: AppServerThreadTurnMetadata,
   pricingContext?: TokenUsagePricingContext,
-  threadId?: string
+  threadId?: string,
 ): AppServerThreadActivityEntry | undefined {
   const normalizedType = normalizeItemType(pickString(record, ["type"]));
   if (normalizedType !== "tokencount" && normalizedType !== "tokenusage") {
@@ -2894,7 +3152,7 @@ function summarizeTokenUsageActivity(
   const billedOutputTokens = outputTokens + reasoningOutputTokens;
   const resolvedPricingContext = mergeTokenUsagePricingContext(
     readTokenUsagePricingContext(record),
-    pricingContext
+    pricingContext,
   );
   const cost = estimateOpenAiTokenUsageCost({
     cachedInputTokens,
@@ -2906,7 +3164,8 @@ function summarizeTokenUsageActivity(
     serviceTier: resolvedPricingContext.serviceTier,
     uncachedInputTokens,
   });
-  const idSuffix = typeof createdAt === "number" ? Math.round(createdAt) : "unknown";
+  const idSuffix =
+    typeof createdAt === "number" ? Math.round(createdAt) : "unknown";
   const summaryParts = [
     `${formatTokenCount(uncachedInputTokens)} uncached in`,
     `${formatTokenCount(cachedInputTokens)} cached`,
@@ -2915,43 +3174,53 @@ function summarizeTokenUsageActivity(
       : `${formatTokenCount(outputTokens)} out`,
     cost ? `${formatTokenUsageUsd(cost.totalUsd)} list price` : undefined,
   ];
-  const summaryPrefix = scope === "latest-request" ? "Latest request usage" : "Usage";
+  const summaryPrefix =
+    scope === "latest-request" ? "Latest request usage" : "Usage";
   const totalTokens = Math.max(
     0,
     tokens.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
   );
   const sourceItemId =
-    pickString(record, ["id", "itemId", "item_id", "callId", "call_id"]) ??
-    `${idSuffix}`;
-  const pricingServiceTier = resolveOpenAiPricingServiceTier(resolvedPricingContext);
-  const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
-    cost
-      ? undefined
-      : !resolvedPricingContext.model
-        ? "missing-model"
-        : pricingServiceTier === undefined
-          ? "unsupported-service-tier"
-          : "missing-rate";
+    pickString(record, ["id", "itemId", "item_id", "callId", "call_id"])
+    ?? `${idSuffix}`;
+  const pricingServiceTier = resolveOpenAiPricingServiceTier(
+    resolvedPricingContext,
+  );
+  const priceUnavailableReason:
+    | ThreadUsageLineRecord["priceUnavailableReason"]
+    | undefined = cost
+    ? undefined
+    : !resolvedPricingContext.model
+      ? "missing-model"
+      : pricingServiceTier === undefined
+        ? "unsupported-service-tier"
+        : "missing-rate";
   const usageLine: ThreadUsageLineRecord | undefined = threadId
     ? {
         backend: "codex",
         cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
         cachedInputTokens,
-        ...(typeof turn?.completedAt === "number" ? { completedAt: turn.completedAt } : {}),
+        ...(typeof turn?.completedAt === "number"
+          ? { completedAt: turn.completedAt }
+          : {}),
         createdAt: createdAt ?? turn?.completedAt ?? Date.now(),
         currency: cost?.currency ?? "USD",
         ...(resolvedPricingContext.fastMode !== undefined
           ? { fastMode: resolvedPricingContext.fastMode }
           : {}),
         inputTokens,
-        ...(resolvedPricingContext.model ? { model: resolvedPricingContext.model } : {}),
+        ...(resolvedPricingContext.model
+          ? { model: resolvedPricingContext.model }
+          : {}),
         outputCostMicros: cost?.outputCostMicros ?? 0,
         outputTokens,
         priceStatus: cost ? "priced" : "unpriced",
         ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
         provider: cost?.provider ?? "openai",
         ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
-        ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
+        ...(cost?.catalogVersion
+          ? { pricingCatalogVersion: cost.catalogVersion }
+          : {}),
         ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
         reasoningOutputTokens,
         scope: scope === "latest-request" ? "latest-request" : "total",
@@ -2985,7 +3254,7 @@ function summarizeTokenUsageActivity(
       id: `token-usage-${idSuffix}-input`,
       kind: "read",
       label: `Input: ${formatTokenCount(inputTokens)} tokens (${formatTokenCount(
-        uncachedInputTokens
+        uncachedInputTokens,
       )} uncached, ${formatTokenCount(cachedInputTokens)} cached)`,
       status: "completed",
     },
@@ -3006,11 +3275,11 @@ function summarizeTokenUsageActivity(
         id: `token-usage-${idSuffix}-uncached-input-cost`,
         kind: "read",
         label: `Uncached input cost: ${formatTokenCount(
-          uncachedInputTokens
+          uncachedInputTokens,
         )} tokens at ${formatTokenUsageUsdPerMillion(
-          cost.inputUsdPerMillion
+          cost.inputUsdPerMillion,
         )}/M${formatTokenUsageStandardRateSuffix(
-          cost.standardInputRateMultiplier
+          cost.standardInputRateMultiplier,
         )} = ${formatTokenUsageUsd(cost.uncachedInputUsd)}`,
         status: "completed",
       },
@@ -3018,15 +3287,15 @@ function summarizeTokenUsageActivity(
         id: `token-usage-${idSuffix}-cached-input-cost`,
         kind: "read",
         label: `Cached input cost: ${formatTokenCount(
-          cachedInputTokens
+          cachedInputTokens,
         )} tokens at ${formatTokenUsageUsdPerMillion(
-          cost.cachedInputUsdPerMillion
+          cost.cachedInputUsdPerMillion,
         )}/M (${formatTokenUsagePriceFactor(
           cost.cachedInputUsdPerMillion,
-          cost.inputUsdPerMillion
+          cost.inputUsdPerMillion,
         )} uncached${formatTokenUsageStandardRateSuffix(
           cost.standardCachedInputRateMultiplier,
-          ", "
+          ", ",
         )}) = ${formatTokenUsageUsd(cost.cachedInputUsd)}`,
         status: "completed",
       },
@@ -3034,9 +3303,9 @@ function summarizeTokenUsageActivity(
         id: `token-usage-${idSuffix}-output-cost`,
         kind: "read",
         label: `Output cost: ${formatTokenCount(billedOutputTokens)} tokens at ${formatTokenUsageUsdPerMillion(
-          cost.outputUsdPerMillion
+          cost.outputUsdPerMillion,
         )}/M${formatTokenUsageStandardRateSuffix(
-          cost.standardOutputRateMultiplier
+          cost.standardOutputRateMultiplier,
         )} = ${formatTokenUsageUsd(cost.outputUsd)}`,
         status: "completed",
       },
@@ -3045,14 +3314,14 @@ function summarizeTokenUsageActivity(
         kind: "read",
         label: `Cost: ${formatTokenUsageUsd(cost.totalUsd)} list price for ${cost.displayName}`,
         status: "completed",
-      }
+      },
     );
   } else if (resolvedPricingContext.model) {
     details.push({
       id: `token-usage-${idSuffix}-cost-unavailable`,
       kind: "read",
       label: `Cost unavailable: no local pricing entry for ${formatUnpricedTokenUsageModelName(
-        resolvedPricingContext
+        resolvedPricingContext,
       )}`,
       status: "completed",
     });
@@ -3070,7 +3339,9 @@ function summarizeTokenUsageActivity(
   };
 }
 
-function formatUnpricedTokenUsageModelName(context: TokenUsagePricingContext): string {
+function formatUnpricedTokenUsageModelName(
+  context: TokenUsagePricingContext,
+): string {
   const serviceTier = resolveOpenAiPricingServiceTier(context);
   return [
     context.model,
@@ -3083,30 +3354,42 @@ function formatUnpricedTokenUsageModelName(context: TokenUsagePricingContext): s
     .join(" ");
 }
 
-function readActivityElapsedMs(item: Record<string, unknown>): number | undefined {
+function readActivityElapsedMs(
+  item: Record<string, unknown>,
+): number | undefined {
   const data = asRecord(item.data);
   const direct =
-    pickNumber(item, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"]) ??
-    pickNumber(data ?? {}, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"]);
+    pickNumber(item, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"])
+    ?? pickNumber(data ?? {}, [
+      "durationMs",
+      "duration_ms",
+      "elapsedMs",
+      "elapsed_ms",
+    ]);
   if (typeof direct === "number") {
     return direct;
   }
 
   const startedAt = normalizeEpochTimestamp(
-    pickNumber(item, ["startedAt", "started_at"])
+    pickNumber(item, ["startedAt", "started_at"]),
   );
   const completedAt = normalizeEpochTimestamp(
-    pickNumber(item, ["completedAt", "completed_at"])
+    pickNumber(item, ["completedAt", "completed_at"]),
   );
-  return typeof startedAt === "number" &&
-    typeof completedAt === "number" &&
-    completedAt >= startedAt
+  return typeof startedAt === "number"
+    && typeof completedAt === "number"
+    && completedAt >= startedAt
     ? completedAt - startedAt
     : undefined;
 }
 
-function appendElapsedLabel(label: string, elapsedMs: number | undefined): string {
-  return typeof elapsedMs === "number" ? `${label} (${formatElapsedMs(elapsedMs)})` : label;
+function appendElapsedLabel(
+  label: string,
+  elapsedMs: number | undefined,
+): string {
+  return typeof elapsedMs === "number"
+    ? `${label} (${formatElapsedMs(elapsedMs)})`
+    : label;
 }
 
 function normalizeItemType(value: string | undefined): string | undefined {
@@ -3116,20 +3399,20 @@ function normalizeItemType(value: string | undefined): string | undefined {
 function isActivityItemType(itemType: string | undefined): boolean {
   const normalized = normalizeItemType(itemType);
   return (
-    normalized === "commandexecution" ||
-    normalized === "filechange" ||
-    normalized === "functioncall" ||
-    normalized === "mcptoolcall" ||
-    normalized === "dynamictoolcall" ||
-    normalized === "collabagenttoolcall" ||
-    normalized === "websearch" ||
-    normalized === "imageview" ||
-    normalized === "imagegeneration"
+    normalized === "commandexecution"
+    || normalized === "filechange"
+    || normalized === "functioncall"
+    || normalized === "mcptoolcall"
+    || normalized === "dynamictoolcall"
+    || normalized === "collabagenttoolcall"
+    || normalized === "websearch"
+    || normalized === "imageview"
+    || normalized === "imagegeneration"
   );
 }
 
 function extractActivityItemFromReplayItem(
-  item: Record<string, unknown>
+  item: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
   if (isActivityItemType(pickString(item, ["type"]))) {
     return item;
@@ -3141,15 +3424,27 @@ function extractActivityItemFromReplayItem(
       continue;
     }
 
-    const normalizedNestedItemType = normalizeItemType(pickString(nestedItem, ["type"]));
+    const normalizedNestedItemType = normalizeItemType(
+      pickString(nestedItem, ["type"]),
+    );
     return {
       ...nestedItem,
       id:
         normalizedNestedItemType === "functioncall"
-          ? pickString(nestedItem, ["call_id", "callId", "id", "itemId", "item_id"]) ??
-            pickString(item, ["id", "itemId", "item_id"])
-          : pickString(nestedItem, ["id", "itemId", "item_id", "call_id", "callId"]) ??
-            pickString(item, ["id", "itemId", "item_id"])
+          ? (pickString(nestedItem, [
+              "call_id",
+              "callId",
+              "id",
+              "itemId",
+              "item_id",
+            ]) ?? pickString(item, ["id", "itemId", "item_id"]))
+          : (pickString(nestedItem, [
+              "id",
+              "itemId",
+              "item_id",
+              "call_id",
+              "callId",
+            ]) ?? pickString(item, ["id", "itemId", "item_id"])),
     };
   }
 
@@ -3157,7 +3452,7 @@ function extractActivityItemFromReplayItem(
 }
 
 function extractFunctionCallOutputFromReplayItem(
-  item: Record<string, unknown>
+  item: Record<string, unknown>,
 ): { callId: string; output: string } | undefined {
   const candidates = [item];
   for (const key of ["payload", "item", "responseItem", "response_item"]) {
@@ -3168,13 +3463,26 @@ function extractFunctionCallOutputFromReplayItem(
   }
 
   for (const candidate of candidates) {
-    if (normalizeItemType(pickString(candidate, ["type"])) !== "functioncalloutput") {
+    if (
+      normalizeItemType(pickString(candidate, ["type"]))
+      !== "functioncalloutput"
+    ) {
       continue;
     }
-    const callId = pickString(candidate, ["call_id", "callId", "id", "itemId", "item_id"]);
+    const callId = pickString(candidate, [
+      "call_id",
+      "callId",
+      "id",
+      "itemId",
+      "item_id",
+    ]);
     const output =
-      pickString(candidate, ["output", "text", "result"]) ??
-      pickString(asRecord(candidate.data) ?? {}, ["output", "text", "result"]);
+      pickString(candidate, ["output", "text", "result"])
+      ?? pickString(asRecord(candidate.data) ?? {}, [
+        "output",
+        "text",
+        "result",
+      ]);
     if (callId && output !== undefined) {
       return { callId, output };
     }
@@ -3185,7 +3493,7 @@ function extractFunctionCallOutputFromReplayItem(
 
 function attachFunctionCallOutput(
   items: Record<string, unknown>[],
-  output: { callId: string; output: string }
+  output: { callId: string; output: string },
 ): boolean {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
@@ -3208,17 +3516,21 @@ function attachFunctionCallOutput(
   return false;
 }
 
-function parseToolArguments(item: Record<string, unknown>): Record<string, unknown> | undefined {
+function parseToolArguments(
+  item: Record<string, unknown>,
+): Record<string, unknown> | undefined {
   return (
-    asRecord(parseStructuredValue(item.arguments)) ??
-    asRecord(parseStructuredValue(item.input)) ??
-    asRecord(item.arguments) ??
-    asRecord(item.input) ??
-    undefined
+    asRecord(parseStructuredValue(item.arguments))
+    ?? asRecord(parseStructuredValue(item.input))
+    ?? asRecord(item.arguments)
+    ?? asRecord(item.input)
+    ?? undefined
   );
 }
 
-function readActivityOutputText(item: Record<string, unknown>): string | undefined {
+function readActivityOutputText(
+  item: Record<string, unknown>,
+): string | undefined {
   const data = asRecord(item.data);
   return (
     pickString(item, [
@@ -3227,16 +3539,23 @@ function readActivityOutputText(item: Record<string, unknown>): string | undefin
       "functionCallOutput",
       "output",
       "text",
-    ]) ??
-    pickString(data ?? {}, ["aggregatedOutput", "aggregated_output", "output", "text"])
+    ])
+    ?? pickString(data ?? {}, [
+      "aggregatedOutput",
+      "aggregated_output",
+      "output",
+      "text",
+    ])
   );
 }
 
-function readActivityExitCode(item: Record<string, unknown>): number | undefined {
+function readActivityExitCode(
+  item: Record<string, unknown>,
+): number | undefined {
   const data = asRecord(item.data);
   return (
-    pickNumber(item, ["exitCode", "exit_code"]) ??
-    pickNumber(data ?? {}, ["exitCode", "exit_code"])
+    pickNumber(item, ["exitCode", "exit_code"])
+    ?? pickNumber(data ?? {}, ["exitCode", "exit_code"])
   );
 }
 
@@ -3250,7 +3569,11 @@ function buildCommandDetail(params: {
     return undefined;
   }
 
-  const cwd = pickString(params.item, ["cwd", "workingDirectory", "working_directory"]);
+  const cwd = pickString(params.item, [
+    "cwd",
+    "workingDirectory",
+    "working_directory",
+  ]);
   const output = readActivityOutputText(params.item);
   const exitCode = readActivityExitCode(params.item);
   return {
@@ -3259,14 +3582,16 @@ function buildCommandDetail(params: {
     ...(cwd ? { cwd } : {}),
     ...(output ? { output } : {}),
     ...(typeof exitCode === "number" ? { exitCode } : {}),
-    ...(typeof params.elapsedMs === "number" ? { durationMs: params.elapsedMs } : {}),
+    ...(typeof params.elapsedMs === "number"
+      ? { durationMs: params.elapsedMs }
+      : {}),
   };
 }
 
 function summarizeActivityItems(
   items: Record<string, unknown>[],
   createdAt?: number,
-  turn?: AppServerThreadTurnMetadata
+  turn?: AppServerThreadTurnMetadata,
 ): AppServerThreadActivityEntry | undefined {
   if (items.length === 0) {
     return undefined;
@@ -3286,7 +3611,8 @@ function summarizeActivityItems(
 
   for (const item of items) {
     const itemId =
-      pickString(item, ["id", "itemId", "item_id"]) ?? `activity-${details.length + 1}`;
+      pickString(item, ["id", "itemId", "item_id"])
+      ?? `activity-${details.length + 1}`;
     const itemStatus = normalizeActivityStatus(pickString(item, ["status"]));
     if (itemStatus === "failed") {
       status = "failed";
@@ -3312,7 +3638,7 @@ function summarizeActivityItems(
           kind: "command",
           label: appendElapsedLabel(formatCommandLabel(command), elapsedMs),
           command: buildCommandDetail({ item, command, elapsedMs }),
-          status: itemStatus
+          status: itemStatus,
         });
         continue;
       }
@@ -3330,10 +3656,10 @@ function summarizeActivityItems(
             kind: "read",
             label: appendElapsedLabel(
               `Read ${path.basename(actionPath) || actionPath}`,
-              elapsedMs
+              elapsedMs,
             ),
             path: actionPath,
-            status: itemStatus
+            status: itemStatus,
           });
           continue;
         }
@@ -3345,10 +3671,10 @@ function summarizeActivityItems(
             kind: "read",
             label: appendElapsedLabel(
               `Searched ${path.basename(actionPath) || actionPath}`,
-              elapsedMs
+              elapsedMs,
             ),
             path: actionPath,
-            status: itemStatus
+            status: itemStatus,
           });
           continue;
         }
@@ -3366,7 +3692,7 @@ function summarizeActivityItems(
             kind: "read",
             label: appendElapsedLabel(label, elapsedMs),
             ...(actionPath ? { path: actionPath } : {}),
-            status: itemStatus
+            status: itemStatus,
           });
           continue;
         }
@@ -3379,7 +3705,7 @@ function summarizeActivityItems(
           label: appendElapsedLabel(label, elapsedMs),
           ...(actionPath ? { path: actionPath } : {}),
           command: buildCommandDetail({ item, command, elapsedMs }),
-          status: itemStatus
+          status: itemStatus,
         });
       }
       continue;
@@ -3396,9 +3722,14 @@ function summarizeActivityItems(
         const changePath = pickString(change, ["path"]);
         const changeKind = asRecord(change.kind);
         const changeType = normalizeFileChangeKind(
-          pickString(changeKind ?? {}, ["type"]) ?? pickString(change, ["kind"])
+          pickString(changeKind ?? {}, ["type"])
+            ?? pickString(change, ["kind"]),
         );
-        const changeText = extractFileChangeText({ change, changeKind, changeType });
+        const changeText = extractFileChangeText({
+          change,
+          changeKind,
+          changeType,
+        });
         const diffSummary =
           changeText !== undefined
             ? summarizeFileChangeText({ changeType, text: changeText })
@@ -3408,7 +3739,7 @@ function summarizeActivityItems(
             ? buildFileChangeDiff({
                 changeType,
                 text: changeText,
-                path: changePath
+                path: changePath,
               })
             : undefined;
         changedFiles += 1;
@@ -3434,10 +3765,10 @@ function summarizeActivityItems(
                     : {}),
                   ...(diffPayload.originalLength !== undefined
                     ? { originalLength: diffPayload.originalLength }
-                    : {})
-                }
+                    : {}),
+                },
               }
-            : {})
+            : {}),
         });
       }
       continue;
@@ -3446,21 +3777,27 @@ function summarizeActivityItems(
     if (normalizedItemType === "functioncall") {
       toolCalls += 1;
       const functionName =
-        pickString(item, ["name", "toolName", "tool_name", "tool", "text"]) ?? "Used tool";
+        pickString(item, ["name", "toolName", "tool_name", "tool", "text"])
+        ?? "Used tool";
       const args = parseToolArguments(item);
-      const command = args ? pickString(args, ["cmd", "command", "displayCommand"]) : undefined;
-      const commandDetail = functionName === "exec_command"
-        ? buildCommandDetail({ item, command, elapsedMs })
+      const command = args
+        ? pickString(args, ["cmd", "command", "displayCommand"])
         : undefined;
+      const commandDetail =
+        functionName === "exec_command"
+          ? buildCommandDetail({ item, command, elapsedMs })
+          : undefined;
       pushActivityDetail(details, {
         id: itemId,
         kind: "command",
         label: appendElapsedLabel(
-          functionName === "exec_command" ? formatCommandLabel(command) : functionName,
-          elapsedMs
+          functionName === "exec_command"
+            ? formatCommandLabel(command)
+            : functionName,
+          elapsedMs,
         ),
         ...(commandDetail ? { command: commandDetail } : {}),
-        status: itemStatus
+        status: itemStatus,
       });
       continue;
     }
@@ -3477,7 +3814,11 @@ function summarizeActivityItems(
         failedCollabCalls += 1;
       }
 
-      const label = formatCollabAgentToolLabel({ tool, receiverThreadIds, status: itemStatus });
+      const label = formatCollabAgentToolLabel({
+        tool,
+        receiverThreadIds,
+        status: itemStatus,
+      });
       const commandDetail = buildCollabAgentCommandDetail({
         item,
         label,
@@ -3489,22 +3830,22 @@ function summarizeActivityItems(
         kind: "command",
         label: appendElapsedLabel(label, elapsedMs),
         command: commandDetail,
-        status: itemStatus
+        status: itemStatus,
       });
       continue;
     }
 
     if (
-      normalizedItemType === "mcptoolcall" ||
-      normalizedItemType === "dynamictoolcall" ||
-      normalizedItemType === "websearch" ||
-      normalizedItemType === "imageview" ||
-      normalizedItemType === "imagegeneration"
+      normalizedItemType === "mcptoolcall"
+      || normalizedItemType === "dynamictoolcall"
+      || normalizedItemType === "websearch"
+      || normalizedItemType === "imageview"
+      || normalizedItemType === "imagegeneration"
     ) {
       toolCalls += 1;
       const toolName =
-        pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
-        (normalizedItemType === "websearch" ? "web search" : undefined);
+        pickString(item, ["tool", "toolName", "tool_name", "name"])
+        ?? (normalizedItemType === "websearch" ? "web search" : undefined);
       const query = pickString(item, ["query"]);
       pushActivityDetail(details, {
         id: itemId,
@@ -3513,7 +3854,7 @@ function summarizeActivityItems(
           appendElapsedLabel(toolName ?? "Used tool", elapsedMs),
           query ? `: ${query}` : "",
         ].join(""),
-        status: itemStatus
+        status: itemStatus,
       });
     }
   }
@@ -3521,11 +3862,13 @@ function summarizeActivityItems(
   const summaryParts: string[] = [];
   if (inspectedFiles > 0) {
     summaryParts.push(
-      `Explored ${inspectedFiles} file${inspectedFiles === 1 ? "" : "s"}`
+      `Explored ${inspectedFiles} file${inspectedFiles === 1 ? "" : "s"}`,
     );
   }
   if (commandsRun > 0) {
-    summaryParts.push(`Ran ${commandsRun} command${commandsRun === 1 ? "" : "s"}`);
+    summaryParts.push(
+      `Ran ${commandsRun} command${commandsRun === 1 ? "" : "s"}`,
+    );
   }
   if (changedFiles > 0) {
     summaryParts.push(
@@ -3534,21 +3877,27 @@ function summarizeActivityItems(
         changedFileAdditions > 0 || changedFileRemovals > 0
           ? `+${changedFileAdditions.toLocaleString()}, -${changedFileRemovals.toLocaleString()}`
           : "",
-      ].filter(Boolean).join(", ")
+      ]
+        .filter(Boolean)
+        .join(", "),
     );
   }
   if (toolCalls > 0) {
     summaryParts.push(`Used ${toolCalls} tool${toolCalls === 1 ? "" : "s"}`);
   }
   if (spawnedAgents > 0) {
-    summaryParts.push(`Spawned ${spawnedAgents} agent${spawnedAgents === 1 ? "" : "s"}`);
+    summaryParts.push(
+      `Spawned ${spawnedAgents} agent${spawnedAgents === 1 ? "" : "s"}`,
+    );
   }
   if (waitedAgents > 0) {
-    summaryParts.push(`Waited on ${waitedAgents} agent${waitedAgents === 1 ? "" : "s"}`);
+    summaryParts.push(
+      `Waited on ${waitedAgents} agent${waitedAgents === 1 ? "" : "s"}`,
+    );
   }
   if (failedCollabCalls > 0) {
     summaryParts.push(
-      `${failedCollabCalls} collaboration tool${failedCollabCalls === 1 ? "" : "s"} failed`
+      `${failedCollabCalls} collaboration tool${failedCollabCalls === 1 ? "" : "s"} failed`,
     );
   }
 
@@ -3566,13 +3915,16 @@ function summarizeActivityItems(
     createdAt,
     status,
     details,
-    ...(turn ? { turn } : {})
+    ...(turn ? { turn } : {}),
   };
 }
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    ? value.filter(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.trim() !== "",
+      )
     : [];
 }
 
@@ -3631,8 +3983,13 @@ function buildCollabAgentCommandDetail(params: {
 }): AppServerThreadCommandDetail {
   const prompt = pickString(params.item, ["prompt"]);
   const model = pickString(params.item, ["model"]);
-  const reasoningEffort = pickString(params.item, ["reasoningEffort", "reasoning_effort"]);
-  const stateSummary = formatCollabAgentStates(asRecord(params.item.agentsStates));
+  const reasoningEffort = pickString(params.item, [
+    "reasoningEffort",
+    "reasoning_effort",
+  ]);
+  const stateSummary = formatCollabAgentStates(
+    asRecord(params.item.agentsStates),
+  );
   const output = [
     params.receiverThreadIds.length > 0
       ? `Agents: ${params.receiverThreadIds.join(", ")}`
@@ -3641,7 +3998,9 @@ function buildCollabAgentCommandDetail(params: {
     reasoningEffort ? `Reasoning effort: ${reasoningEffort}` : undefined,
     prompt ? `Prompt: ${truncateActivityText(prompt, 1_000)}` : undefined,
     stateSummary ? `Agent states:\n${stateSummary}` : undefined,
-  ].filter((entry): entry is string => Boolean(entry)).join("\n\n");
+  ]
+    .filter((entry): entry is string => Boolean(entry))
+    .join("\n\n");
 
   const displayCommand =
     params.receiverThreadIds.length > 0
@@ -3655,7 +4014,7 @@ function buildCollabAgentCommandDetail(params: {
 }
 
 function formatCollabAgentStates(
-  states: Record<string, unknown> | null
+  states: Record<string, unknown> | null,
 ): string | undefined {
   if (!states) {
     return undefined;
@@ -3692,27 +4051,29 @@ function shortAgentId(agentId: string): string {
 
 function truncateActivityText(text: string, maxLength: number): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 3)}...`
+    : normalized;
 }
 
 function extractTokenUsageEntries(
   value: unknown,
   pricingContext?: TokenUsagePricingContext,
-  threadId?: string
+  threadId?: string,
 ): AppServerThreadActivityEntry[] {
   const output: AppServerThreadActivityEntry[] = [];
 
   const visit = (
     node: unknown,
     inheritedCreatedAt?: number,
-    inheritedPricingContext?: TokenUsagePricingContext
+    inheritedPricingContext?: TokenUsagePricingContext,
   ): TokenUsagePricingContext | undefined => {
     if (Array.isArray(node)) {
       let activePricingContext = inheritedPricingContext;
       for (const entry of node) {
         activePricingContext =
-          visit(entry, inheritedCreatedAt, activePricingContext) ??
-          activePricingContext;
+          visit(entry, inheritedCreatedAt, activePricingContext)
+          ?? activePricingContext;
       }
       return activePricingContext;
     }
@@ -3723,7 +4084,7 @@ function extractTokenUsageEntries(
     }
 
     const recordCreatedAt = normalizeEpochTimestamp(
-      pickNumber(record, ["createdAt", "created_at", "timestamp", "time"])
+      pickNumber(record, ["createdAt", "created_at", "timestamp", "time"]),
     );
     const createdAt = recordCreatedAt ?? inheritedCreatedAt;
     const normalizedType = normalizeItemType(pickString(record, ["type"]));
@@ -3731,7 +4092,7 @@ function extractTokenUsageEntries(
       normalizedType === "turncontext"
         ? mergeTokenUsagePricingContext(
             readTokenUsagePricingContext(record),
-            inheritedPricingContext
+            inheritedPricingContext,
           )
         : inheritedPricingContext;
     const tokenUsageActivity = summarizeTokenUsageActivity(
@@ -3739,7 +4100,7 @@ function extractTokenUsageEntries(
       createdAt,
       undefined,
       recordPricingContext,
-      threadId
+      threadId,
     );
     if (tokenUsageActivity) {
       output.push(tokenUsageActivity);
@@ -3757,8 +4118,8 @@ function extractTokenUsageEntries(
       "result",
     ]) {
       activePricingContext =
-        visit(record[key], createdAt, activePricingContext) ??
-        activePricingContext;
+        visit(record[key], createdAt, activePricingContext)
+        ?? activePricingContext;
     }
     return activePricingContext;
   };
@@ -3767,23 +4128,31 @@ function extractTokenUsageEntries(
   return output;
 }
 
-function sortEntriesByCreatedAt(entries: AppServerThreadEntry[]): AppServerThreadEntry[] {
+function sortEntriesByCreatedAt(
+  entries: AppServerThreadEntry[],
+): AppServerThreadEntry[] {
   return entries
     .map((entry, index) => ({ entry, index }))
     .sort((left, right) => {
       const leftCreatedAt = left.entry.createdAt;
       const rightCreatedAt = right.entry.createdAt;
       if (
-        typeof leftCreatedAt === "number" &&
-        typeof rightCreatedAt === "number" &&
-        leftCreatedAt !== rightCreatedAt
+        typeof leftCreatedAt === "number"
+        && typeof rightCreatedAt === "number"
+        && leftCreatedAt !== rightCreatedAt
       ) {
         return leftCreatedAt - rightCreatedAt;
       }
-      if (typeof leftCreatedAt === "number" && typeof rightCreatedAt !== "number") {
+      if (
+        typeof leftCreatedAt === "number"
+        && typeof rightCreatedAt !== "number"
+      ) {
         return -1;
       }
-      if (typeof leftCreatedAt !== "number" && typeof rightCreatedAt === "number") {
+      if (
+        typeof leftCreatedAt !== "number"
+        && typeof rightCreatedAt === "number"
+      ) {
         return 1;
       }
       return left.index - right.index;
@@ -3791,9 +4160,11 @@ function sortEntriesByCreatedAt(entries: AppServerThreadEntry[]): AppServerThrea
     .map((item) => item.entry);
 }
 
-function timestampFromRecord(record: Record<string, unknown>): number | undefined {
+function timestampFromRecord(
+  record: Record<string, unknown>,
+): number | undefined {
   return normalizeEpochTimestamp(
-    pickNumber(record, ["createdAt", "created_at", "timestamp", "time"])
+    pickNumber(record, ["createdAt", "created_at", "timestamp", "time"]),
   );
 }
 
@@ -3815,7 +4186,7 @@ function extractThreadEntries(
       ...extractConversationMessages(value).map(
         (message): AppServerThreadMessageEntry => ({
           type: "message",
-          ...message
+          ...message,
         }),
       ),
       ...extractTokenUsageEntries(value, undefined, threadId),
@@ -3828,7 +4199,7 @@ function extractThreadEntries(
     const turnMetadata = extractTurnMetadata(turn);
     const turnPricingContext = extractTokenUsagePricingContext(turn);
     const createdAt = normalizeEpochTimestamp(
-      pickNumber(turn, ["startedAt", "createdAt", "timestamp", "time"])
+      pickNumber(turn, ["startedAt", "createdAt", "timestamp", "time"]),
     );
     const rawItems = Array.isArray(turn.items)
       ? turn.items
@@ -3846,7 +4217,7 @@ function extractThreadEntries(
       const activity = summarizeActivityItems(
         pendingActivityItems,
         createdAt,
-        turnMetadata
+        turnMetadata,
       );
       pendingActivityItems.length = 0;
       if (activity) {
@@ -3869,22 +4240,27 @@ function extractThreadEntries(
         }
         const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
         const messageCreatedAt =
-          itemCreatedAt ??
-          (role === "assistant" && phase === "final"
+          itemCreatedAt
+          ?? (role === "assistant" && phase === "final"
             ? turnMetadata?.completedAt
-            : undefined) ??
-          createdAt;
+            : undefined)
+          ?? createdAt;
         entries.push({
           type: "message",
           id:
-            pickString(item, ["id", "messageId", "message_id", "itemId", "item_id"]) ??
-            `message-${entries.length + 1}`,
+            pickString(item, [
+              "id",
+              "messageId",
+              "message_id",
+              "itemId",
+              "item_id",
+            ]) ?? `message-${entries.length + 1}`,
           role,
           text: content.text,
           ...(content.parts ? { parts: content.parts } : {}),
           createdAt: messageCreatedAt,
           ...(turnMetadata ? { turn: turnMetadata } : {}),
-          ...(phase ? { phase } : {})
+          ...(phase ? { phase } : {}),
         });
         continue;
       }
@@ -3899,7 +4275,7 @@ function extractThreadEntries(
       const reviewEntry = extractReviewEntryFromItem(
         item,
         { itemCreatedAt, turnCreatedAt: createdAt },
-        turnMetadata
+        turnMetadata,
       );
       if (reviewEntry) {
         flushActivityItems();
@@ -3909,7 +4285,7 @@ function extractThreadEntries(
                 shouldUseAssistantReviewText({
                   assistantText: text,
                   reviewText: reviewEntry.review,
-                })
+                }),
               )
             : undefined;
         entries.push(
@@ -3918,7 +4294,7 @@ function extractThreadEntries(
                 ...reviewEntry,
                 review: assistantReviewText,
               }
-            : reviewEntry
+            : reviewEntry,
         );
         continue;
       }
@@ -3929,9 +4305,9 @@ function extractThreadEntries(
         turnMetadata,
         mergeTokenUsagePricingContext(
           readTokenUsagePricingContext(item),
-          turnPricingContext
+          turnPricingContext,
         ),
-        threadId
+        threadId,
       );
       if (tokenUsageActivity) {
         flushActivityItems();
@@ -3957,32 +4333,54 @@ function extractThreadEntries(
   return entries;
 }
 
-function extractReplayPagination(value: unknown): AppServerThreadReplayPagination {
+function extractReplayPagination(
+  value: unknown,
+): AppServerThreadReplayPagination {
   const record = asRecord(value);
   const supportsPagination = Boolean(
-    record &&
-      (pickBoolean(record, ["supportsPagination", "supports_pagination"]) ||
-        pickString(record, ["previousCursor", "previous_cursor", "before", "cursor"]))
+    record
+    && (pickBoolean(record, ["supportsPagination", "supports_pagination"])
+      || pickString(record, [
+        "previousCursor",
+        "previous_cursor",
+        "before",
+        "cursor",
+      ])),
   );
   const hasPreviousPage = Boolean(
-    record &&
-      (pickBoolean(record, ["hasPreviousPage", "has_previous_page", "hasMore", "has_more"]) ||
-        pickString(record, ["previousCursor", "previous_cursor", "before", "cursor"]))
+    record
+    && (pickBoolean(record, [
+      "hasPreviousPage",
+      "has_previous_page",
+      "hasMore",
+      "has_more",
+    ])
+      || pickString(record, [
+        "previousCursor",
+        "previous_cursor",
+        "before",
+        "cursor",
+      ])),
   );
   const previousCursor = record
-    ? pickString(record, ["previousCursor", "previous_cursor", "before", "cursor"])
+    ? pickString(record, [
+        "previousCursor",
+        "previous_cursor",
+        "before",
+        "cursor",
+      ])
     : undefined;
 
   return {
     supportsPagination,
     hasPreviousPage,
-    previousCursor
+    previousCursor,
   };
 }
 
 export function extractThreadReplayFromReadResult(
   value: unknown,
-  options: { threadId?: string } = {}
+  options: { threadId?: string } = {},
 ): AppServerThreadReplay {
   const entries = extractThreadEntries(value, options);
   const messages = extractConversationMessages(value);
@@ -4009,7 +4407,7 @@ export function extractThreadReplayFromReadResult(
     lastUserMessage,
     lastAssistantMessage,
     pagination: extractReplayPagination(value),
-    ...(threadStatus ? { threadStatus } : {})
+    ...(threadStatus ? { threadStatus } : {}),
   };
 }
 
@@ -4021,8 +4419,18 @@ function extractThreadIdFromValue(value: unknown): string | undefined {
 
   const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
   return (
-    pickString(record, ["threadId", "thread_id", "conversationId", "conversation_id"]) ??
-    pickString(threadRecord ?? {}, ["id", "threadId", "thread_id", "conversationId"])
+    pickString(record, [
+      "threadId",
+      "thread_id",
+      "conversationId",
+      "conversation_id",
+    ])
+    ?? pickString(threadRecord ?? {}, [
+      "id",
+      "threadId",
+      "thread_id",
+      "conversationId",
+    ])
   );
 }
 
@@ -4036,32 +4444,48 @@ function extractThreadNameRecordFromValue(
 
   const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
   const threadId = extractThreadIdFromValue(value);
-  if (!threadId || record.ephemeral === true || threadRecord?.ephemeral === true) {
+  if (
+    !threadId
+    || record.ephemeral === true
+    || threadRecord?.ephemeral === true
+  ) {
     return undefined;
   }
 
   const preview =
-    pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
-    pickString(threadRecord ?? {}, [
+    pickString(record, [
+      "preview",
+      "snippet",
+      "firstUserMessage",
+      "first_user_message",
+    ])
+    ?? pickString(threadRecord ?? {}, [
       "preview",
       "snippet",
       "firstUserMessage",
       "first_user_message",
     ]);
-  const rawName =
-    normalizeExplicitThreadName(
-      pickString(record, ["threadName", "thread_name", "name", "title"]) ??
-        pickString(threadRecord ?? {}, ["threadName", "thread_name", "name", "title"])
-    );
+  const rawName = normalizeExplicitThreadName(
+    pickString(record, ["threadName", "thread_name", "name", "title"])
+      ?? pickString(threadRecord ?? {}, [
+        "threadName",
+        "thread_name",
+        "name",
+        "title",
+      ]),
+  );
   const indexName =
-    rawName ?? (preview ? shortenDerivedThreadTitle(preview) ?? preview : undefined);
+    rawName
+    ?? (preview ? (shortenDerivedThreadTitle(preview) ?? preview) : undefined);
   return {
     id: threadId,
     threadName: indexName?.trim() || "Untitled thread",
   };
 }
 
-function extractSkillSummary(value: unknown): AppServerSkillSummary | undefined {
+function extractSkillSummary(
+  value: unknown,
+): AppServerSkillSummary | undefined {
   const record = asRecord(value);
   if (!record) {
     return undefined;
@@ -4075,10 +4499,13 @@ function extractSkillSummary(value: unknown): AppServerSkillSummary | undefined 
   return {
     name,
     description: pickString(record, ["description", "summary"]),
-    shortDescription: pickString(record, ["shortDescription", "short_description"]),
+    shortDescription: pickString(record, [
+      "shortDescription",
+      "short_description",
+    ]),
     path: pickString(record, ["path", "skillPath", "skill_path"]),
     enabled: pickBoolean(record, ["enabled"]),
-    scope: pickString(record, ["scope"])
+    scope: pickString(record, ["scope"]),
   };
 }
 
@@ -4141,8 +4568,8 @@ function extractSkillCatalog(value: unknown): SkillCatalogEntry[] {
       {
         ...(commands.length > 0 ? { commands } : {}),
         cwd: pickString(entryRecord, ["cwd"]),
-        skills
-      }
+        skills,
+      },
     ];
   });
 }
@@ -4189,7 +4616,10 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
           "supportsReasoning",
           "supports_reasoning",
         ]),
-        supportsFast: pickBoolean(modelRecord, ["supportsFast", "supports_fast"]),
+        supportsFast: pickBoolean(modelRecord, [
+          "supportsFast",
+          "supports_fast",
+        ]),
         supportsSteering: pickBoolean(modelRecord, [
           "supportsSteering",
           "supports_steering",
@@ -4230,12 +4660,15 @@ function summarizeRawModelList(value: unknown): Array<Record<string, unknown>> {
       {
         id: pickString(modelRecord, ["id", "name", "model"]) ?? null,
         displayName:
-          pickString(modelRecord, ["displayName", "display_name", "label"]) ?? null,
+          pickString(modelRecord, ["displayName", "display_name", "label"])
+          ?? null,
         current: pickBoolean(modelRecord, ["current", "default"]) ?? null,
         hidden: pickBoolean(modelRecord, ["hidden"]) ?? null,
         supportsReasoning:
-          pickBoolean(modelRecord, ["supportsReasoning", "supports_reasoning"]) ?? null,
-        supportsFast: pickBoolean(modelRecord, ["supportsFast", "supports_fast"]) ?? null,
+          pickBoolean(modelRecord, ["supportsReasoning", "supports_reasoning"])
+          ?? null,
+        supportsFast:
+          pickBoolean(modelRecord, ["supportsFast", "supports_fast"]) ?? null,
       },
     ];
   });
@@ -4250,8 +4683,8 @@ function shouldHideCodexModel(
   modelRecord: Record<string, unknown>,
 ): boolean {
   return (
-    pickBoolean(modelRecord, ["hidden"]) === true ||
-    !SUPPORTED_CODEX_MODELS.has(id.toLowerCase())
+    pickBoolean(modelRecord, ["hidden"]) === true
+    || !SUPPORTED_CODEX_MODELS.has(id.toLowerCase())
   );
 }
 
@@ -4265,7 +4698,10 @@ function formatCodexModelLabel(id: string): string {
   const suffix = match[2]
     ?.split("-")
     .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1).toLowerCase())
+    .map(
+      (segment) =>
+        segment.charAt(0).toUpperCase() + segment.slice(1).toLowerCase(),
+    )
     .join("-");
 
   return suffix ? `GPT-${version}-${suffix}` : `GPT-${version}`;
@@ -4277,8 +4713,10 @@ function sortCodexModels(models: BackendModelOption[]): BackendModelOption[] {
   );
 
   return [...models].sort((left, right) => {
-    const leftOrder = order.get(left.id.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
-    const rightOrder = order.get(right.id.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+    const leftOrder =
+      order.get(left.id.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder =
+      order.get(right.id.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
     return leftOrder - rightOrder;
   });
 }
@@ -4291,8 +4729,14 @@ function extractTurnIdFromValue(value: unknown): string | undefined {
 
   const turnRecord = asRecord(record.turn);
   return (
-    pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
-    pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"])
+    pickString(record, ["turnId", "turn_id", "runId", "run_id"])
+    ?? pickString(turnRecord ?? {}, [
+      "id",
+      "turnId",
+      "turn_id",
+      "runId",
+      "run_id",
+    ])
   );
 }
 
@@ -4306,8 +4750,17 @@ function extractThreadRecords(value: unknown): Record<string, unknown>[] {
     return [];
   }
 
-  const directId = pickString(record, ["id", "threadId", "thread_id", "conversationId"]);
-  if (directId && !Array.isArray(record.items) && !Array.isArray(record.threads)) {
+  const directId = pickString(record, [
+    "id",
+    "threadId",
+    "thread_id",
+    "conversationId",
+  ]);
+  if (
+    directId
+    && !Array.isArray(record.items)
+    && !Array.isArray(record.threads)
+  ) {
     return [record];
   }
 
@@ -4325,7 +4778,10 @@ function isMethodUnavailableError(error: unknown, method?: string): boolean {
   const text = error instanceof Error ? error.message : String(error);
   const normalized = text.toLowerCase();
 
-  if (normalized.includes("method not found") || normalized.includes("unknown method")) {
+  if (
+    normalized.includes("method not found")
+    || normalized.includes("unknown method")
+  ) {
     return true;
   }
 
@@ -4349,14 +4805,18 @@ function isUnmaterializedThreadError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   const normalized = text.toLowerCase();
   return (
-    normalized.includes("not materialized yet") &&
-    normalized.includes("includeturns is unavailable before first user message")
+    normalized.includes("not materialized yet")
+    && normalized.includes(
+      "includeturns is unavailable before first user message",
+    )
   );
 }
 
 function isRequestTimeoutError(error: unknown, method: string): boolean {
   const text = error instanceof Error ? error.message : String(error);
-  return text.toLowerCase().includes(`json-rpc timeout: ${method.toLowerCase()}`);
+  return text
+    .toLowerCase()
+    .includes(`json-rpc timeout: ${method.toLowerCase()}`);
 }
 
 function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
@@ -4365,8 +4825,18 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
 
   for (const record of items) {
     const threadId =
-      pickString(record, ["threadId", "thread_id", "id", "conversationId", "conversation_id"]) ??
-      pickString(asRecord(record.thread) ?? {}, ["id", "threadId", "thread_id"]);
+      pickString(record, [
+        "threadId",
+        "thread_id",
+        "id",
+        "conversationId",
+        "conversation_id",
+      ])
+      ?? pickString(asRecord(record.thread) ?? {}, [
+        "id",
+        "threadId",
+        "thread_id",
+      ]);
 
     if (!threadId) {
       continue;
@@ -4374,23 +4844,27 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
 
     const sessionRecord = asRecord(record.session);
     const gitInfoRecord =
-      asRecord(record.gitInfo) ??
-      asRecord(record.git_info) ??
-      asRecord(sessionRecord?.gitInfo) ??
-      asRecord(sessionRecord?.git_info);
+      asRecord(record.gitInfo)
+      ?? asRecord(record.git_info)
+      ?? asRecord(sessionRecord?.gitInfo)
+      ?? asRecord(sessionRecord?.git_info);
     const projectKey =
-      pickString(record, ["projectKey", "project_key", "cwd"]) ??
-      pickString(sessionRecord ?? {}, ["cwd", "projectKey", "project_key"]);
+      pickString(record, ["projectKey", "project_key", "cwd"])
+      ?? pickString(sessionRecord ?? {}, ["cwd", "projectKey", "project_key"]);
     const originator =
-      pickString(record, ["originator"]) ??
-      pickString(sessionRecord ?? {}, ["originator"]);
+      pickString(record, ["originator"])
+      ?? pickString(sessionRecord ?? {}, ["originator"]);
     const rolloutPath =
-      pickString(record, ["path"]) ??
-      pickString(sessionRecord ?? {}, ["path"]);
+      pickString(record, ["path"]) ?? pickString(sessionRecord ?? {}, ["path"]);
     const titleInfo = getThreadTitleInfo(record);
     const rawDerivedTitle =
-      pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
-      pickString(sessionRecord ?? {}, [
+      pickString(record, [
+        "preview",
+        "snippet",
+        "firstUserMessage",
+        "first_user_message",
+      ])
+      ?? pickString(sessionRecord ?? {}, [
         "preview",
         "snippet",
         "firstUserMessage",
@@ -4403,14 +4877,14 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
         "snippet",
         "firstUserMessage",
         "first_user_message",
-      ]) ??
-        pickString(sessionRecord ?? {}, [
+      ])
+        ?? pickString(sessionRecord ?? {}, [
           "summary",
           "preview",
           "snippet",
           "firstUserMessage",
           "first_user_message",
-        ])
+        ]),
     );
 
     summaries.set(threadId, {
@@ -4418,42 +4892,54 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
       title: titleInfo.title,
       titleSource: titleInfo.titleSource,
       summary:
-        summary === titleInfo.title ||
-        (titleInfo.titleSource === "derived" &&
-          summary === normalizeThreadSummary(rawDerivedTitle))
+        summary === titleInfo.title
+        || (titleInfo.titleSource === "derived"
+          && summary === normalizeThreadSummary(rawDerivedTitle))
           ? undefined
           : summary,
       originator,
       path: rolloutPath,
       projectKey,
       model:
-        pickString(record, ["model"]) ??
-        pickString(sessionRecord ?? {}, ["model"]),
+        pickString(record, ["model"])
+        ?? pickString(sessionRecord ?? {}, ["model"]),
       serviceTier:
-        pickString(record, ["serviceTier", "service_tier"]) ??
-        pickString(sessionRecord ?? {}, ["serviceTier", "service_tier"]),
+        pickString(record, ["serviceTier", "service_tier"])
+        ?? pickString(sessionRecord ?? {}, ["serviceTier", "service_tier"]),
       reasoningEffort:
-        pickString(record, ["reasoningEffort", "reasoning_effort"]) ??
-        pickString(sessionRecord ?? {}, ["reasoningEffort", "reasoning_effort"]),
+        pickString(record, ["reasoningEffort", "reasoning_effort"])
+        ?? pickString(sessionRecord ?? {}, [
+          "reasoningEffort",
+          "reasoning_effort",
+        ]),
       fastMode:
-        pickBoolean(record, ["fastMode", "fast_mode"]) ??
-        pickBoolean(sessionRecord ?? {}, ["fastMode", "fast_mode"]),
+        pickBoolean(record, ["fastMode", "fast_mode"])
+        ?? pickBoolean(sessionRecord ?? {}, ["fastMode", "fast_mode"]),
       createdAt: normalizeEpochTimestamp(
-        pickNumber(record, ["createdAt", "created_at"]) ??
-          pickNumber(sessionRecord ?? {}, ["createdAt", "created_at"])
+        pickNumber(record, ["createdAt", "created_at"])
+          ?? pickNumber(sessionRecord ?? {}, ["createdAt", "created_at"]),
       ),
       updatedAt: normalizeEpochTimestamp(
-        pickNumber(record, ["updatedAt", "updated_at", "lastActivityAt", "createdAt"]) ??
-          pickNumber(sessionRecord ?? {}, ["updatedAt", "updated_at", "lastActivityAt"])
+        pickNumber(record, [
+          "updatedAt",
+          "updated_at",
+          "lastActivityAt",
+          "createdAt",
+        ])
+          ?? pickNumber(sessionRecord ?? {}, [
+            "updatedAt",
+            "updated_at",
+            "lastActivityAt",
+          ]),
       ),
       archivedAt: normalizeEpochTimestamp(
-        pickNumber(record, ["archivedAt", "archived_at"]) ??
-          pickNumber(sessionRecord ?? {}, ["archivedAt", "archived_at"])
+        pickNumber(record, ["archivedAt", "archived_at"])
+          ?? pickNumber(sessionRecord ?? {}, ["archivedAt", "archived_at"]),
       ),
       gitBranch:
-        pickString(gitInfoRecord ?? {}, ["branch"]) ??
-        pickString(asRecord(sessionRecord?.gitInfo) ?? {}, ["branch"]) ??
-        pickString(asRecord(sessionRecord?.git_info) ?? {}, ["branch"]),
+        pickString(gitInfoRecord ?? {}, ["branch"])
+        ?? pickString(asRecord(sessionRecord?.gitInfo) ?? {}, ["branch"])
+        ?? pickString(asRecord(sessionRecord?.git_info) ?? {}, ["branch"]),
       gitOriginUrl: pickString(gitInfoRecord ?? {}, [
         "originUrl",
         "origin_url",
@@ -4464,7 +4950,7 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
   }
 
   return [...summaries.values()].sort(
-    (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+    (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
   );
 }
 
@@ -4482,7 +4968,7 @@ function buildThreadDiscoveryPayloads(
   filter?: string,
   archived?: boolean,
   cursor?: string,
-  limit = 50
+  limit = 50,
 ): CodexThreadListParams[] {
   const searchTerm = filter?.trim() || undefined;
   const baseParams: CodexThreadListParams = {
@@ -4502,12 +4988,12 @@ function buildThreadDiscoveryPayloads(
     {
       ...baseParams,
     },
-    cursor ? { cursor } : {}
+    cursor ? { cursor } : {},
   ];
 }
 
 function threadTitleSourcePriority(
-  titleSource: AppServerThreadTitleSource
+  titleSource: AppServerThreadTitleSource,
 ): number {
   switch (titleSource) {
     case "explicit":
@@ -4521,7 +5007,7 @@ function threadTitleSourcePriority(
 }
 
 function mergeThreadSummaries(
-  threads: RawCodexThreadSummary[]
+  threads: RawCodexThreadSummary[],
 ): RawCodexThreadSummary[] {
   const merged = new Map<string, RawCodexThreadSummary>();
 
@@ -4535,15 +5021,15 @@ function mergeThreadSummaries(
     const currentPriority = threadTitleSourcePriority(current.titleSource);
     const nextPriority = threadTitleSourcePriority(thread.titleSource);
     const preferNext =
-      nextPriority > currentPriority ||
-      (nextPriority === currentPriority &&
-        (thread.updatedAt ?? 0) > (current.updatedAt ?? 0));
+      nextPriority > currentPriority
+      || (nextPriority === currentPriority
+        && (thread.updatedAt ?? 0) > (current.updatedAt ?? 0));
 
     merged.set(thread.id, preferNext ? thread : current);
   }
 
   return [...merged.values()].sort(
-    (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+    (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
   );
 }
 
@@ -4552,7 +5038,7 @@ function mergeArchivedThreadMetadata(params: {
   archivedThreads: RawCodexThreadSummary[];
 }): RawCodexThreadSummary[] {
   const archivedById = new Map(
-    params.archivedThreads.map((thread) => [thread.id, thread] as const)
+    params.archivedThreads.map((thread) => [thread.id, thread] as const),
   );
 
   return params.activeThreads
@@ -4600,7 +5086,7 @@ const THREAD_DIRECTORY_ENRICHMENT_CONCURRENCY = 8;
 const THREAD_DIRECTORY_ENRICHMENT_MAX_UNREAD = 16;
 
 function hydrateMissingLinkedDirectoriesFromSiblingRepos(
-  threads: EnrichedCodexThread[]
+  threads: EnrichedCodexThread[],
 ): EnrichedCodexThread[] {
   const donorDirectoriesByOrigin = new Map<string, LinkedDirectorySummary[]>();
 
@@ -4615,11 +5101,11 @@ function hydrateMissingLinkedDirectoriesFromSiblingRepos(
     }
 
     const rootDirectories = thread.linkedDirectories.filter(
-      (directory) => !directory.worktreePath
+      (directory) => !directory.worktreePath,
     );
     donorDirectoriesByOrigin.set(
       normalizedOrigin,
-      rootDirectories.length > 0 ? rootDirectories : thread.linkedDirectories
+      rootDirectories.length > 0 ? rootDirectories : thread.linkedDirectories,
     );
   }
 
@@ -4658,14 +5144,14 @@ function hydrateMissingLinkedDirectoriesFromSiblingRepos(
 }
 
 function normalizeCodexApprovalPolicy(
-  value?: string
+  value?: string,
 ): CodexAskForApproval | undefined {
   const normalized = value?.trim();
   if (
-    normalized === "untrusted" ||
-    normalized === "on-failure" ||
-    normalized === "on-request" ||
-    normalized === "never"
+    normalized === "untrusted"
+    || normalized === "on-failure"
+    || normalized === "on-request"
+    || normalized === "never"
   ) {
     return normalized;
   }
@@ -4673,13 +5159,13 @@ function normalizeCodexApprovalPolicy(
 }
 
 function normalizeCodexSandboxMode(
-  value?: string
+  value?: string,
 ): CodexSandboxMode | undefined {
   const normalized = value?.trim();
   if (
-    normalized === "read-only" ||
-    normalized === "workspace-write" ||
-    normalized === "danger-full-access"
+    normalized === "read-only"
+    || normalized === "workspace-write"
+    || normalized === "danger-full-access"
   ) {
     return normalized;
   }
@@ -4687,7 +5173,7 @@ function normalizeCodexSandboxMode(
 }
 
 function buildCodexSandboxPolicy(
-  value?: string
+  value?: string,
 ): CodexSandboxPolicy | undefined {
   const mode = normalizeCodexSandboxMode(value);
   if (!mode) {
@@ -4709,7 +5195,7 @@ function buildCodexSandboxPolicy(
 }
 
 function normalizeCodexServiceTier(
-  value?: string | null
+  value?: string | null,
 ): string | null | undefined {
   if (value === null) {
     return null;
@@ -4732,9 +5218,9 @@ function resolveCodexServiceTier(params: {
     return "priority";
   }
   if (params.fastMode === false) {
-    return params.serviceTier &&
-      params.serviceTier !== "fast" &&
-      params.serviceTier !== "priority"
+    return params.serviceTier
+      && params.serviceTier !== "fast"
+      && params.serviceTier !== "priority"
       ? params.serviceTier
       : null;
   }
@@ -4742,16 +5228,16 @@ function resolveCodexServiceTier(params: {
 }
 
 function normalizeCodexReasoningEffort(
-  value?: string
+  value?: string,
 ): CodexReasoningEffort | undefined {
   const normalized = value?.trim();
   if (
-    normalized === "none" ||
-    normalized === "minimal" ||
-    normalized === "low" ||
-    normalized === "medium" ||
-    normalized === "high" ||
-    normalized === "xhigh"
+    normalized === "none"
+    || normalized === "minimal"
+    || normalized === "low"
+    || normalized === "medium"
+    || normalized === "high"
+    || normalized === "xhigh"
   ) {
     return normalized;
   }
@@ -4798,7 +5284,9 @@ function buildThreadStartPayload(params: {
     base.sandbox = sandbox;
   }
 
-  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  const serviceTier = normalizeCodexServiceTier(
+    resolveCodexServiceTier(params),
+  );
   if (serviceTier !== undefined) {
     base.serviceTier = serviceTier;
   }
@@ -4822,9 +5310,9 @@ function buildThreadStartPayload(params: {
     base.dynamicTools = params.dynamicTools;
   }
   if (
-    params.codexEnvironmentRuntime?.executionTarget === "remote" &&
-    params.codexEnvironmentRuntime.environmentId &&
-    params.cwd?.trim()
+    params.codexEnvironmentRuntime?.executionTarget === "remote"
+    && params.codexEnvironmentRuntime.environmentId
+    && params.cwd?.trim()
   ) {
     base.environments = [
       {
@@ -4847,9 +5335,9 @@ function mergeCodexShellEnvironmentPolicyConfig(
   const shellEnvironment = Object.fromEntries(
     Object.entries(runtime.shellEnvironment).filter(
       (entry): entry is [string, string] =>
-        typeof entry[0] === "string" &&
-        entry[0].length > 0 &&
-        typeof entry[1] === "string",
+        typeof entry[0] === "string"
+        && entry[0].length > 0
+        && typeof entry[1] === "string",
     ),
   );
   if (!Object.keys(shellEnvironment).length) {
@@ -4983,7 +5471,9 @@ function buildThreadResumePayloads(params: {
     base.sandbox = sandbox;
   }
 
-  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  const serviceTier = normalizeCodexServiceTier(
+    resolveCodexServiceTier(params),
+  );
   if (serviceTier !== undefined) {
     base.serviceTier = serviceTier;
   }
@@ -5017,7 +5507,10 @@ function buildThreadResumePayloads(params: {
   return [base];
 }
 
-function extractStringProperty(value: unknown, ...keys: string[]): string | undefined {
+function extractStringProperty(
+  value: unknown,
+  ...keys: string[]
+): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -5044,13 +5537,13 @@ function buildCollaborationModeOverrides(params: {
 
   const settings = params.collaborationMode.settings ?? {};
   const model =
-    settings.model?.trim() ||
-    params.fallbackModel?.trim() ||
-    DEFAULT_CODEX_COLLABORATION_MODEL;
+    settings.model?.trim()
+    || params.fallbackModel?.trim()
+    || DEFAULT_CODEX_COLLABORATION_MODEL;
   const reasoningEffort =
-    normalizeCodexReasoningEffort(settings.reasoningEffort) ??
-    normalizeCodexReasoningEffort(params.fallbackReasoningEffort) ??
-    null;
+    normalizeCodexReasoningEffort(settings.reasoningEffort)
+    ?? normalizeCodexReasoningEffort(params.fallbackReasoningEffort)
+    ?? null;
   return {
     model,
     effort: reasoningEffort,
@@ -5111,7 +5604,9 @@ function buildTurnStartPayload(params: {
   if (reasoningEffort) {
     base.effort = reasoningEffort;
   }
-  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  const serviceTier = normalizeCodexServiceTier(
+    resolveCodexServiceTier(params),
+  );
   if (serviceTier !== undefined) {
     base.serviceTier = serviceTier;
   }
@@ -5171,7 +5666,9 @@ function buildThreadSettingsUpdatePayload(params: {
     payload.model = params.model.trim();
   }
 
-  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  const serviceTier = normalizeCodexServiceTier(
+    resolveCodexServiceTier(params),
+  );
   if (serviceTier !== undefined) {
     payload.serviceTier = serviceTier;
   }
@@ -5181,9 +5678,9 @@ function buildThreadSettingsUpdatePayload(params: {
     payload.effort = effort;
   }
 
-  return payload.model !== undefined ||
-    payload.serviceTier !== undefined ||
-    payload.effort !== undefined
+  return payload.model !== undefined
+    || payload.serviceTier !== undefined
+    || payload.effort !== undefined
     ? payload
     : undefined;
 }
@@ -5262,7 +5759,11 @@ async function requestThreadListPages(params: {
   let pageCount = 0;
   let previewBytes = 0;
   let rawThreadCount = 0;
-  let terminalReason: "max-pages" | "no-next-cursor" | "repeated-cursor" | undefined;
+  let terminalReason:
+    | "max-pages"
+    | "no-next-cursor"
+    | "repeated-cursor"
+    | undefined;
   let cursor: string | undefined;
   const requestedLimit = params.limit ?? 50;
   const maxPagesLimit =
@@ -5354,7 +5855,7 @@ async function ensureCodexThreadTitleWorkspace(): Promise<string> {
 export class CodexAppServerClient {
   private readonly connection: JsonRpcConnection;
   private readonly threadDirectoryEnricher: (
-    projectKey?: string
+    projectKey?: string,
   ) => Promise<ThreadDirectoryEnrichment>;
   private readonly archivedThreadMetadataByFilter = new Map<
     string,
@@ -5364,7 +5865,10 @@ export class CodexAppServerClient {
     string,
     Promise<RawCodexThreadSummary[]>
   >();
-  private readonly archivedThreadMetadataLastRefreshByFilter = new Map<string, number>();
+  private readonly archivedThreadMetadataLastRefreshByFilter = new Map<
+    string,
+    number
+  >();
   private initialized = false;
   private initializationPromise: Promise<void> | null = null;
   private initializeResult: InitializeResult | null = null;
@@ -5373,9 +5877,7 @@ export class CodexAppServerClient {
   >();
   private readonly recordedThreadNames = new Map<string, string>();
   private readonly requestListeners = new Set<
-    (
-      request: AppServerPendingRequestNotification
-    ) => Promise<unknown> | unknown
+    (request: AppServerPendingRequestNotification) => Promise<unknown> | unknown
   >();
   private readonly pendingFirstTurnThreadResults = new Map<string, unknown>();
   private readonly helperThreadIds = new Set<string>();
@@ -5387,7 +5889,10 @@ export class CodexAppServerClient {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
-  private readonly completedHelperTurnResults = new Map<string, HelperTurnResult>();
+  private readonly completedHelperTurnResults = new Map<
+    string,
+    HelperTurnResult
+  >();
   private readonly helperTurnTitleObjects = new Map<string, unknown>();
   private readonly helperTurnTokenUsage = new Map<string, unknown>();
   /** Per-helper-thread output-shape predicate (defaults to the title shape). */
@@ -5407,12 +5912,15 @@ export class CodexAppServerClient {
       }),
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options.connectionObserver,
-      { logContext: { backend: "codex" }, logger: getMainLogger("pwragent:json-rpc") },
+      {
+        logContext: { backend: "codex" },
+        logger: getMainLogger("pwragent:json-rpc"),
+      },
     );
     const directoryResolver = options.directoryResolver;
     this.threadDirectoryEnricher =
-      options.threadDirectoryEnricher ??
-      (directoryResolver
+      options.threadDirectoryEnricher
+      ?? (directoryResolver
         ? async (projectKey?: string) => ({
             linkedDirectories: await directoryResolver(projectKey),
           })
@@ -5436,11 +5944,11 @@ export class CodexAppServerClient {
         });
       }
 
-      const normalized = normalizeServerNotification(
-        method,
+      const normalized = normalizeServerNotification(method, params);
+      const helperThreadId = extractThreadIdFromNotification(
+        normalized,
         params,
       );
-      const helperThreadId = extractThreadIdFromNotification(normalized, params);
       if (helperThreadId && this.helperThreadIds.has(helperThreadId)) {
         this.handleHelperThreadNotification(method, normalized);
         return;
@@ -5465,7 +5973,7 @@ export class CodexAppServerClient {
       const request = normalizePendingRequestNotification(
         wireRequest?.method ?? method,
         wireRequest?.params ?? params,
-        rpcId
+        rpcId,
       );
 
       const listeners = [...this.requestListeners];
@@ -5510,7 +6018,7 @@ export class CodexAppServerClient {
   }
 
   onNotification(
-    listener: (notification: AppServerNotification) => void | Promise<void>
+    listener: (notification: AppServerNotification) => void | Promise<void>,
   ): () => void {
     this.notificationListeners.add(listener);
     return () => {
@@ -5520,8 +6028,8 @@ export class CodexAppServerClient {
 
   onRequest(
     listener: (
-      request: AppServerPendingRequestNotification
-    ) => Promise<unknown> | unknown
+      request: AppServerPendingRequestNotification,
+    ) => Promise<unknown> | unknown,
   ): () => void {
     this.requestListeners.add(listener);
     return () => {
@@ -5576,10 +6084,10 @@ export class CodexAppServerClient {
     const entry = extractThreadNameRecordFromValue(value);
     const previous = entry ? this.recordedThreadNames.get(entry.id) : undefined;
     if (
-      !entry ||
-      (previous &&
-        (previous === entry.threadName ||
-          !isPlaceholderThreadName(previous)))
+      !entry
+      || (previous
+        && (previous === entry.threadName
+          || !isPlaceholderThreadName(previous)))
     ) {
       return;
     }
@@ -5636,13 +6144,13 @@ export class CodexAppServerClient {
 
   private handleHelperThreadNotification(
     method: string,
-    notification: AppServerNotification
+    notification: AppServerNotification,
   ): void {
     if (
-      method !== "item/completed" &&
-      method !== "turn/completed" &&
-      method !== "turn/failed" &&
-      method !== "thread/tokenUsage/updated"
+      method !== "item/completed"
+      && method !== "turn/completed"
+      && method !== "turn/failed"
+      && method !== "thread/tokenUsage/updated"
     ) {
       return;
     }
@@ -5690,10 +6198,11 @@ export class CodexAppServerClient {
     }
 
     const object =
-      findStructuredRecord(notification.params, predicate) ??
-      this.helperTurnTitleObjects.get(key);
+      findStructuredRecord(notification.params, predicate)
+      ?? this.helperTurnTitleObjects.get(key);
     const tokenUsage =
-      readHelperTokenUsage(notification.params) ?? this.helperTurnTokenUsage.get(key);
+      readHelperTokenUsage(notification.params)
+      ?? this.helperTurnTokenUsage.get(key);
     this.helperTurnTitleObjects.delete(key);
     this.helperTurnTokenUsage.delete(key);
     if (!object) {
@@ -5745,10 +6254,13 @@ export class CodexAppServerClient {
     }
 
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.helperTurnWaiters.delete(key);
-        reject(new Error("codex_title_turn_timeout"));
-      }, Math.max(100, params.timeoutMs));
+      const timer = setTimeout(
+        () => {
+          this.helperTurnWaiters.delete(key);
+          reject(new Error("codex_title_turn_timeout"));
+        },
+        Math.max(100, params.timeoutMs),
+      );
       this.helperTurnWaiters.set(key, {
         resolve,
         reject,
@@ -5765,21 +6277,24 @@ export class CodexAppServerClient {
     }
   }
 
-  async listThreads(params?: {
-    archived?: boolean;
-    enrichDirectories?: boolean;
-    filter?: string;
-    limit?: number;
-    maxPages?: number;
-    skipArchivedMetadataRefresh?: boolean;
-  }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
+  async listThreads(
+    params?: {
+      archived?: boolean;
+      enrichDirectories?: boolean;
+      filter?: string;
+      limit?: number;
+      maxPages?: number;
+      skipArchivedMetadataRefresh?: boolean;
+    },
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
     const requestParams = {
       client: this.connection,
       diagnostics,
       methods: ["thread/list"] as CodexClientRequestMethod[],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     };
     if (params?.archived === true) {
       const archivedThreads = await requestThreadListPages({
@@ -5791,9 +6306,12 @@ export class CodexAppServerClient {
         maxPages: params?.maxPages,
         requestTimeoutMs: requestParams.timeoutMs,
       });
-      return await this.enrichThreads(filterVisibleCodexThreads(archivedThreads), {
-        enrichDirectories: params?.enrichDirectories ?? true,
-      });
+      return await this.enrichThreads(
+        filterVisibleCodexThreads(archivedThreads),
+        {
+          enrichDirectories: params?.enrichDirectories ?? true,
+        },
+      );
     }
 
     const activeThreads = filterVisibleCodexThreads(
@@ -5833,7 +6351,8 @@ export class CodexAppServerClient {
         archived: params?.archived === true,
         client: this.connection,
         filter: params?.filter,
-        requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        requestTimeoutMs:
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       }),
     );
     const enrichedThreads = await this.enrichThreads(rawThreads, {
@@ -5849,8 +6368,14 @@ export class CodexAppServerClient {
     }));
   }
 
-  private getCachedArchivedThreadMetadata(filter?: string): RawCodexThreadSummary[] {
-    return this.archivedThreadMetadataByFilter.get(buildThreadMetadataCacheKey(filter)) ?? [];
+  private getCachedArchivedThreadMetadata(
+    filter?: string,
+  ): RawCodexThreadSummary[] {
+    return (
+      this.archivedThreadMetadataByFilter.get(
+        buildThreadMetadataCacheKey(filter),
+      ) ?? []
+    );
   }
 
   private scheduleArchivedThreadMetadataRefresh(
@@ -5858,23 +6383,27 @@ export class CodexAppServerClient {
     diagnostics?: JsonRpcObserverDiagnostics,
   ): void {
     const cacheKey = buildThreadMetadataCacheKey(filter);
-    const lastRefreshAt = this.archivedThreadMetadataLastRefreshByFilter.get(cacheKey) ?? 0;
+    const lastRefreshAt =
+      this.archivedThreadMetadataLastRefreshByFilter.get(cacheKey) ?? 0;
     const hasCachedMetadata = this.archivedThreadMetadataByFilter.has(cacheKey);
     if (
-      this.archivedThreadMetadataInFlightByFilter.has(cacheKey) ||
-      (hasCachedMetadata &&
-        Date.now() - lastRefreshAt < ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS)
+      this.archivedThreadMetadataInFlightByFilter.has(cacheKey)
+      || (hasCachedMetadata
+        && Date.now() - lastRefreshAt
+          < ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS)
     ) {
       return;
     }
 
     setTimeout(() => {
-      void this.refreshArchivedThreadMetadata(filter, diagnostics).catch((error) => {
-        codexClientLog.warn("archived thread metadata refresh failed", {
-          error: error instanceof Error ? error.message : String(error),
-          filter: filter?.trim() || null,
-        });
-      });
+      void this.refreshArchivedThreadMetadata(filter, diagnostics).catch(
+        (error) => {
+          codexClientLog.warn("archived thread metadata refresh failed", {
+            error: error instanceof Error ? error.message : String(error),
+            filter: filter?.trim() || null,
+          });
+        },
+      );
     }, 0);
   }
 
@@ -5898,12 +6427,16 @@ export class CodexAppServerClient {
           }
         : undefined,
       filter,
-      requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      requestTimeoutMs:
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     })
       .then(filterVisibleCodexThreads)
       .then((threads) => {
         this.archivedThreadMetadataByFilter.set(cacheKey, threads);
-        this.archivedThreadMetadataLastRefreshByFilter.set(cacheKey, Date.now());
+        this.archivedThreadMetadataLastRefreshByFilter.set(
+          cacheKey,
+          Date.now(),
+        );
         return threads;
       })
       .finally(() => {
@@ -5958,7 +6491,10 @@ export class CodexAppServerClient {
 
     for await (const enrichedThread of new IterableMapper(
       threads.map((thread, index) => ({ index, thread })),
-      async ({ index, thread }): Promise<{
+      async ({
+        index,
+        thread,
+      }): Promise<{
         index: number;
         thread: EnrichedCodexThread;
       }> => {
@@ -5989,8 +6525,8 @@ export class CodexAppServerClient {
       enrichedThreads[enrichedThread.index] = enrichedThread.thread;
     }
 
-    return enrichedThreads.filter(
-      (thread): thread is EnrichedCodexThread => Boolean(thread),
+    return enrichedThreads.filter((thread): thread is EnrichedCodexThread =>
+      Boolean(thread),
     );
   }
 
@@ -6003,8 +6539,9 @@ export class CodexAppServerClient {
     const cwds = [
       ...new Set(
         [...(params?.cwds ?? []), params?.cwd].filter(
-          (cwd): cwd is string => typeof cwd === "string" && cwd.trim().length > 0
-        )
+          (cwd): cwd is string =>
+            typeof cwd === "string" && cwd.trim().length > 0,
+        ),
       ),
     ];
     const payload: CodexSkillsListParams = { cwds };
@@ -6012,7 +6549,7 @@ export class CodexAppServerClient {
       client: this.connection,
       methods: ["skills/list"],
       payloads: [payload],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
     return extractSkillCatalog(result);
@@ -6029,7 +6566,7 @@ export class CodexAppServerClient {
       diagnostics,
       methods: ["model/list"],
       payloads: [payload],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
     const models = extractModelOptions(result);
@@ -6048,7 +6585,7 @@ export class CodexAppServerClient {
       client: this.connection,
       methods: ["account/read"],
       payloads: [{ refreshToken: false }, { refresh_token: false }, {}],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
     return extractAccountSummary(result);
@@ -6061,7 +6598,7 @@ export class CodexAppServerClient {
       client: this.connection,
       methods: ["account/rateLimits/read"],
       payloads: [{}],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
     return extractRateLimitSummaries(result);
@@ -6082,7 +6619,7 @@ export class CodexAppServerClient {
         client: this.connection,
         methods: ["thread/read"],
         payloads: [payload],
-        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
     } catch (error) {
       if (!isUnmaterializedThreadError(error)) {
@@ -6094,12 +6631,14 @@ export class CodexAppServerClient {
         messages: [],
         pagination: {
           supportsPagination: false,
-          hasPreviousPage: false
-        }
+          hasPreviousPage: false,
+        },
       };
     }
 
-    return extractThreadReplayFromReadResult(result, { threadId: params.threadId });
+    return extractThreadReplayFromReadResult(result, {
+      threadId: params.threadId,
+    });
   }
 
   async injectThreadItems(params: {
@@ -6210,14 +6749,16 @@ export class CodexAppServerClient {
   }> {
     await this.ensureInitialized();
 
-    const pendingFirstTurnResult = this.pendingFirstTurnThreadResults.get(params.threadId);
+    const pendingFirstTurnResult = this.pendingFirstTurnThreadResults.get(
+      params.threadId,
+    );
     // thread/resume primes the per-thread permission profile in codex
     // before later turn/start calls. A just-created thread has no rollout
     // yet, so resume is guaranteed to be too early; turn/start already
     // carries the permission/model overrides needed for the first turn.
     const resumeResult =
-      pendingFirstTurnResult ??
-      (await requestWithFallbacks({
+      pendingFirstTurnResult
+      ?? (await requestWithFallbacks({
         client: this.connection,
         methods: ["thread/resume"],
         payloads: buildThreadResumePayloads({
@@ -6233,7 +6774,7 @@ export class CodexAppServerClient {
           defaultModeRequestUserInput: params.defaultModeRequestUserInput,
           dynamicTools: params.dynamicTools,
         }),
-        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       }).catch((error: unknown) => {
         codexClientLog.warn("thread/resume failed before turn/start", {
           threadId: params.threadId,
@@ -6260,11 +6801,12 @@ export class CodexAppServerClient {
           sandbox: params.sandbox,
           collaborationMode: params.collaborationMode,
           collaborationFallbackModel:
-            params.model?.trim() || extractStringProperty(resumeResult, "model"),
+            params.model?.trim()
+            || extractStringProperty(resumeResult, "model"),
           collaborationFallbackReasoningEffort: extractStringProperty(
             resumeResult,
             "reasoningEffort",
-            "reasoning_effort"
+            "reasoning_effort",
           ),
           dynamicTools: params.dynamicTools,
         }),
@@ -6283,7 +6825,9 @@ export class CodexAppServerClient {
     return { threadId, turnId };
   }
 
-  async generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult> {
+  async generateTitle(
+    params: ThreadTitleAdapterParams,
+  ): Promise<ThreadTitleAdapterResult> {
     return await this.runHelperStructuredTurn({
       prompt: params.prompt,
       schema: params.schema,
@@ -6387,7 +6931,10 @@ export class CodexAppServerClient {
         ],
         timeoutMs,
       });
-      const immediateObject = findStructuredRecord(turnStartResult, params.isMatch);
+      const immediateObject = findStructuredRecord(
+        turnStartResult,
+        params.isMatch,
+      );
       if (immediateObject) {
         const immediateTurnId = extractTurnIdFromValue(turnStartResult);
         const tokenUsage = readHelperTokenUsage(turnStartResult);
@@ -6488,11 +7035,12 @@ export class CodexAppServerClient {
     });
     const record = asRecord(result);
     const reviewThreadId =
-      pickString(record ?? {}, ["reviewThreadId", "review_thread_id"]) ?? params.threadId;
+      pickString(record ?? {}, ["reviewThreadId", "review_thread_id"])
+      ?? params.threadId;
     const turnRecord = asRecord(record?.turn);
     const turnId =
-      extractTurnIdFromValue(result) ??
-      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"]);
+      extractTurnIdFromValue(result)
+      ?? pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"]);
     if (!turnId) {
       throw new Error("codex app server review/start did not return turnId");
     }
@@ -6520,7 +7068,7 @@ export class CodexAppServerClient {
       client: this.connection,
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads(params),
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
     return {
@@ -6528,7 +7076,9 @@ export class CodexAppServerClient {
     };
   }
 
-  async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
+  async archiveThread(params: {
+    threadId: string;
+  }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
     const result = await requestWithFallbacks({
@@ -6543,7 +7093,9 @@ export class CodexAppServerClient {
     };
   }
 
-  async restoreThread(params: { threadId: string }): Promise<{ threadId: string }> {
+  async restoreThread(params: {
+    threadId: string;
+  }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
     const result = await requestWithFallbacks({
@@ -6612,7 +7164,7 @@ export class CodexAppServerClient {
       payloads: buildThreadResumePayloads({
         threadId: params.threadId,
       }),
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     }).catch(() => undefined);
 
     try {
@@ -6641,7 +7193,7 @@ export class CodexAppServerClient {
         {
           threadId: params.threadId,
           turnId: params.turnId,
-        }
+        },
       );
 
       return {
@@ -6750,9 +7302,12 @@ export class CodexAppServerClient {
             title: "PwrAgent",
             version: this.options.clientVersion ?? "0.0.0",
           },
-          capabilities: { experimentalApi: true, requestAttestation: false }
+          capabilities: { experimentalApi: true, requestAttestation: false },
         };
-        const result = await this.connection.request("initialize", initializeParams);
+        const result = await this.connection.request(
+          "initialize",
+          initializeParams,
+        );
         this.initializeResult = (asRecord(result) ?? {}) as InitializeResult;
       } catch (error) {
         if (!isAlreadyInitializedError(error)) {

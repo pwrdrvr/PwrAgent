@@ -159,11 +159,16 @@ async function convertWithSips(params: {
   }
 }
 
-function bufferToDataUrl(buffer: Buffer, mimeType: "image/png" | "image/jpeg"): string {
+function bufferToDataUrl(
+  buffer: Buffer,
+  mimeType: "image/png" | "image/jpeg",
+): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
-function extensionForFileName(fileName: string | undefined): ".heic" | ".heif" | undefined {
+function extensionForFileName(
+  fileName: string | undefined,
+): ".heic" | ".heif" | undefined {
   const extension = path.extname(fileName ?? "").toLowerCase();
   return extension === ".heic" || extension === ".heif" ? extension : undefined;
 }

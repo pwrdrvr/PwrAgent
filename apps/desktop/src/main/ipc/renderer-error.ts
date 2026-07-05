@@ -19,4 +19,3 @@ export function registerRendererErrorIpcHandlers(): void {
 export function disposeRendererErrorIpcHandlers(): void {
   ipcMain.removeHandler(RENDERER_ERROR_REPORT_CHANNEL);
 }
-

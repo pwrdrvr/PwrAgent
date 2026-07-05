@@ -27,12 +27,15 @@ export function buildAutomationInspectionToolRouter(
   handler: AutomationInspectionHandler | undefined,
   options: { namespace?: string; unsupportedMessage?: string } = {},
 ): AgentToolRouter {
-  return new AgentToolRouter(buildAutomationInspectionToolDefinitions(handler, {
-    namespace: options.namespace,
-  }), {
-    unsupportedMessage:
-      options.unsupportedMessage ?? "Unsupported PwrAgent automation tool.",
-  });
+  return new AgentToolRouter(
+    buildAutomationInspectionToolDefinitions(handler, {
+      namespace: options.namespace,
+    }),
+    {
+      unsupportedMessage:
+        options.unsupportedMessage ?? "Unsupported PwrAgent automation tool.",
+    },
+  );
 }
 
 export function buildAutomationInspectionToolDefinitions(

@@ -45,11 +45,13 @@ export type PendingQuestionnaireState = {
 };
 
 export function createQuestionnaireState(
-  request: AppServerToolRequestUserInputNotification
+  request: AppServerToolRequestUserInputNotification,
 ): PendingQuestionnaireState | undefined {
   const questions = request.params.questions
     .map((question) => {
-      const rawOptions = Array.isArray(question.options) ? question.options : [];
+      const rawOptions = Array.isArray(question.options)
+        ? question.options
+        : [];
       const options: PendingQuestionnaireOption[] = [];
       for (const option of rawOptions) {
         const label = trimString(option.label);
@@ -86,7 +88,9 @@ export function createQuestionnaireState(
         secret: question.isSecret === true,
       };
     })
-    .filter((question): question is PendingQuestionnaireQuestion => Boolean(question));
+    .filter((question): question is PendingQuestionnaireQuestion =>
+      Boolean(question),
+    );
 
   if (questions.length === 0) {
     return undefined;
@@ -107,17 +111,19 @@ export function createQuestionnaireState(
 
 export function answerQuestionnaireOptionAndAdvance(
   state: PendingQuestionnaireState,
-  optionKey: string
+  optionKey: string,
 ): PendingQuestionnaireState {
   return advanceAfterAnswer(answerQuestionnaireOption(state, optionKey));
 }
 
 export function answerQuestionnaireOption(
   state: PendingQuestionnaireState,
-  optionKey: string
+  optionKey: string,
 ): PendingQuestionnaireState {
   const question = state.questions[state.currentIndex];
-  const option = question?.options.find((candidate) => candidate.key === optionKey);
+  const option = question?.options.find(
+    (candidate) => candidate.key === optionKey,
+  );
   if (!question || !option) {
     return state;
   }
@@ -131,7 +137,7 @@ export function answerQuestionnaireOption(
 
 export function answerQuestionnaireText(
   state: PendingQuestionnaireState,
-  value: string
+  value: string,
 ): PendingQuestionnaireState {
   const question = state.questions[state.currentIndex];
   if (!question?.allowFreeform) {
@@ -145,7 +151,7 @@ export function answerQuestionnaireText(
 }
 
 export function goToNextQuestion(
-  state: PendingQuestionnaireState
+  state: PendingQuestionnaireState,
 ): PendingQuestionnaireState {
   if (!canAdvanceQuestionnaire(state)) {
     return state;
@@ -158,7 +164,7 @@ export function goToNextQuestion(
 }
 
 export function goToPreviousQuestion(
-  state: PendingQuestionnaireState
+  state: PendingQuestionnaireState,
 ): PendingQuestionnaireState {
   if (state.phase === "review" || state.phase === "submitted") {
     return {
@@ -179,20 +185,24 @@ export function goToPreviousQuestion(
   };
 }
 
-export function canAdvanceQuestionnaire(state: PendingQuestionnaireState): boolean {
+export function canAdvanceQuestionnaire(
+  state: PendingQuestionnaireState,
+): boolean {
   return (
-    state.phase === "answering" &&
-    state.currentIndex < state.questions.length - 1 &&
-    isAnswerComplete(state.answers[state.currentIndex])
+    state.phase === "answering"
+    && state.currentIndex < state.questions.length - 1
+    && isAnswerComplete(state.answers[state.currentIndex])
   );
 }
 
-export function canSubmitQuestionnaire(state: PendingQuestionnaireState): boolean {
+export function canSubmitQuestionnaire(
+  state: PendingQuestionnaireState,
+): boolean {
   return state.answers.every(isAnswerComplete);
 }
 
 export function buildQuestionnaireResponse(
-  state: PendingQuestionnaireState
+  state: PendingQuestionnaireState,
 ): AppServerToolRequestUserInputResponse {
   return {
     answers: Object.fromEntries(
@@ -201,13 +211,13 @@ export function buildQuestionnaireResponse(
         {
           answers: answerValue(state.answers[index]),
         },
-      ])
+      ]),
     ),
   };
 }
 
 function advanceAfterAnswer(
-  state: PendingQuestionnaireState
+  state: PendingQuestionnaireState,
 ): PendingQuestionnaireState {
   if (state.currentIndex < state.questions.length - 1) {
     return {
@@ -222,7 +232,7 @@ function advanceAfterAnswer(
 
 function answerCurrentQuestion(
   state: PendingQuestionnaireState,
-  answer: PendingQuestionnaireAnswer
+  answer: PendingQuestionnaireAnswer,
 ): PendingQuestionnaireState {
   const answers = [...state.answers];
   answers[state.currentIndex] = answer;
@@ -234,12 +244,14 @@ function answerCurrentQuestion(
 }
 
 function isAnswerComplete(
-  answer: PendingQuestionnaireAnswer | null | undefined
+  answer: PendingQuestionnaireAnswer | null | undefined,
 ): boolean {
   return Boolean(answer && answerValue(answer).length > 0);
 }
 
-function answerValue(answer: PendingQuestionnaireAnswer | null | undefined): string[] {
+function answerValue(
+  answer: PendingQuestionnaireAnswer | null | undefined,
+): string[] {
   if (!answer) {
     return [];
   }

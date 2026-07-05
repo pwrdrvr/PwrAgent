@@ -48,11 +48,14 @@ export function resolveMessagingThreadState(params: {
   binding: MessagingBindingRecord;
   navigation: NavigationSnapshot;
 }): MessagingResolvedThreadState {
-  const threadKey = buildThreadIdentityKey(params.binding.backend, params.binding.threadId);
+  const threadKey = buildThreadIdentityKey(
+    params.binding.backend,
+    params.binding.threadId,
+  );
   const thread = params.navigation.threads.find(
     (candidate) =>
-      candidate.source === params.binding.backend &&
-      candidate.id === params.binding.threadId,
+      candidate.source === params.binding.backend
+      && candidate.id === params.binding.threadId,
   );
 
   if (!thread) {
@@ -66,15 +69,17 @@ export function resolveMessagingThreadState(params: {
 
   const directory = primaryDirectoryForThread(params.navigation, threadKey);
   const linkedDirectory =
-    thread.linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
-    thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
-    thread.linkedDirectories[0];
+    thread.linkedDirectories.find((candidate) => candidate.kind === "worktree")
+    ?? thread.linkedDirectories.find((candidate) => candidate.kind === "local")
+    ?? thread.linkedDirectories[0];
   const worktreeDirectory = thread.linkedDirectories.find(
     (candidate) => candidate.kind === "worktree" || candidate.worktreePath,
   );
   const worktreePath =
-    worktreeDirectory?.worktreePath ??
-    (worktreeDirectory?.kind === "worktree" ? worktreeDirectory.path : undefined);
+    worktreeDirectory?.worktreePath
+    ?? (worktreeDirectory?.kind === "worktree"
+      ? worktreeDirectory.path
+      : undefined);
 
   return {
     activeTurn: params.activeTurn,

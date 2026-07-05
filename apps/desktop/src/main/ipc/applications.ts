@@ -108,7 +108,8 @@ export function registerApplicationIpcHandlers(): void {
     async (
       _event,
       request: OpenDesktopApplicationRequest,
-    ): Promise<OpenDesktopApplicationResponse> => openDesktopApplication(request),
+    ): Promise<OpenDesktopApplicationResponse> =>
+      openDesktopApplication(request),
   );
 
   ipcMain.removeHandler(PATH_OPEN_CHANNEL);

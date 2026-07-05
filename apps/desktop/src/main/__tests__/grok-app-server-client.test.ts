@@ -63,7 +63,8 @@ describe("GrokAppServerClient", () => {
       // forward slashes (toDirectoryId) so they read identically across hosts.
       // fs.realpath returns native separators (backslashes on Windows), so
       // normalize the expectations the same way (no-op on POSIX).
-      const toDirectoryId = (value: string): string => value.replace(/\\/g, "/");
+      const toDirectoryId = (value: string): string =>
+        value.replace(/\\/g, "/");
       const repoRealPath = toDirectoryId(await fs.realpath(repoPath));
       const worktreeRealPath = toDirectoryId(await fs.realpath(worktreePath));
 
@@ -152,7 +153,10 @@ describe("GrokAppServerClient", () => {
   it("forwards metadata-only and bounded read options to the Grok app server", async () => {
     const readParams: Record<string, unknown>[] = [];
     const server = {
-      request: async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+      request: async (
+        method: string,
+        params: Record<string, unknown>,
+      ): Promise<unknown> => {
         if (method === "initialize") {
           return {
             serverInfo: { name: "@pwragent/grok-app-server", version: "1.0.0" },
@@ -415,7 +419,9 @@ describe("GrokAppServerClient", () => {
     });
     expect(provider.runs[0]?.input[0]).toEqual({
       type: "text",
-      text: expect.stringContaining("Review the code changes against the base branch 'main'"),
+      text: expect.stringContaining(
+        "Review the code changes against the base branch 'main'",
+      ),
     });
 
     provider.runs[0]?.deferred.resolve({
@@ -429,7 +435,9 @@ describe("GrokAppServerClient", () => {
     });
     await flushAsync();
 
-    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+    await expect(
+      client.readThread({ threadId: "thread-1" }),
+    ).resolves.toMatchObject({
       entries: [
         {
           type: "review",
@@ -533,7 +541,10 @@ describe("GrokAppServerClient", () => {
       notifications.push(notification.method);
     });
 
-    await client.startThread({ cwd: "/repo/workspace", model: "grok-4.20-reasoning" });
+    await client.startThread({
+      cwd: "/repo/workspace",
+      model: "grok-4.20-reasoning",
+    });
     const startedTurn = await client.startTurn({
       threadId: "thread-1",
       input: [{ type: "text", text: "Return a visible answer" }],
@@ -572,7 +583,9 @@ describe("GrokAppServerClient", () => {
       "item/completed",
       "turn/failed",
     ]);
-    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+    await expect(
+      client.readThread({ threadId: "thread-1" }),
+    ).resolves.toMatchObject({
       entries: [
         {
           type: "message",
@@ -621,7 +634,9 @@ describe("GrokAppServerClient", () => {
     });
     await flushAsync();
 
-    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+    await expect(
+      client.readThread({ threadId: "thread-1" }),
+    ).resolves.toMatchObject({
       entries: [
         {
           type: "message",
@@ -716,7 +731,9 @@ describe("GrokAppServerClient", () => {
     };
     const client = new GrokAppServerClient({ server });
 
-    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+    await expect(
+      client.readThread({ threadId: "thread-1" }),
+    ).resolves.toMatchObject({
       entries: [
         {
           type: "message",
@@ -844,13 +861,21 @@ describe("GrokAppServerClient", () => {
     ]);
     expect(replay.entries).toMatchObject([
       { type: "message", role: "user", text: "Replay restored rollout order." },
-      { type: "message", role: "assistant", text: "I am checking the first file." },
+      {
+        type: "message",
+        role: "assistant",
+        text: "I am checking the first file.",
+      },
       {
         type: "activity",
         summary: "Ran 1 command",
         details: [{ label: "sed -n 1,40p src/a.ts (1.2s)" }],
       },
-      { type: "message", role: "assistant", text: "Now I am checking the second file." },
+      {
+        type: "message",
+        role: "assistant",
+        text: "Now I am checking the second file.",
+      },
       {
         type: "activity",
         summary: "Ran 1 command",
@@ -897,7 +922,9 @@ describe("GrokAppServerClient", () => {
     };
     const client = new GrokAppServerClient({ server });
 
-    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+    await expect(
+      client.readThread({ threadId: "thread-1" }),
+    ).resolves.toMatchObject({
       entries: [
         {
           type: "message",
@@ -976,7 +1003,8 @@ describe("GrokAppServerClient", () => {
         success: true,
         arguments: { query: "Matt Van Horn" },
         data: {
-          output: "Matt Van Horn co-founded Zimride and works on startup investing.",
+          output:
+            "Matt Van Horn co-founded Zimride and works on startup investing.",
           sources: [
             {
               title: "Matt Van Horn profile",
@@ -1046,12 +1074,16 @@ describe("GrokAppServerClient", () => {
     });
 
     await client.startThread({ cwd: "/repo/workspace" });
-    await expect(client.archiveThread({ threadId: "thread-1" })).resolves.toEqual({
+    await expect(
+      client.archiveThread({ threadId: "thread-1" }),
+    ).resolves.toEqual({
       threadId: "thread-1",
     });
 
     await expect(client.listThreads()).resolves.toEqual([]);
-    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+    await expect(
+      client.readThread({ threadId: "thread-1" }),
+    ).resolves.toMatchObject({
       messages: [],
       pagination: {
         supportsPagination: false,
@@ -1079,14 +1111,18 @@ describe("GrokAppServerClient", () => {
     await client.startThread({ cwd: "/repo/workspace" });
     await client.archiveThread({ threadId: "thread-1" });
     await expect(client.listThreads()).resolves.toEqual([]);
-    await expect(client.listThreads({ archived: true })).resolves.toMatchObject([
-      {
-        id: "thread-1",
-        source: "grok",
-      },
-    ]);
+    await expect(client.listThreads({ archived: true })).resolves.toMatchObject(
+      [
+        {
+          id: "thread-1",
+          source: "grok",
+        },
+      ],
+    );
 
-    await expect(client.restoreThread({ threadId: "thread-1" })).resolves.toEqual({
+    await expect(
+      client.restoreThread({ threadId: "thread-1" }),
+    ).resolves.toEqual({
       threadId: "thread-1",
     });
     await expect(client.listThreads()).resolves.toMatchObject([
@@ -1135,16 +1171,18 @@ describe("GrokAppServerClient", () => {
     };
     const client = new GrokAppServerClient({ server });
 
-    await expect(client.listThreads({ archived: true })).resolves.toMatchObject([
-      {
-        id: "thread-snake",
-        archivedAt: Date.parse("2026-05-16T23:00:00.000Z"),
-      },
-      {
-        id: "thread-camel",
-        archivedAt: 2000,
-      },
-    ]);
+    await expect(client.listThreads({ archived: true })).resolves.toMatchObject(
+      [
+        {
+          id: "thread-snake",
+          archivedAt: Date.parse("2026-05-16T23:00:00.000Z"),
+        },
+        {
+          id: "thread-camel",
+          archivedAt: 2000,
+        },
+      ],
+    );
 
     await client.close();
   });
@@ -1166,7 +1204,7 @@ describe("GrokAppServerClient", () => {
       client.renameThread({
         threadId: "thread-1",
         name: "Renamed Grok thread",
-      })
+      }),
     ).resolves.toEqual({
       threadId: "thread-1",
     });
@@ -1276,7 +1314,9 @@ describe("GrokAppServerClient", () => {
 
     const temp = await createTemporaryTestDirectory();
     process.env.HOME = temp.path;
-    const [configPath] = defaultGrokAppServerConfigPaths({ homeDir: temp.path });
+    const [configPath] = defaultGrokAppServerConfigPaths({
+      homeDir: temp.path,
+    });
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
       configPath,
@@ -1453,7 +1493,9 @@ describe("GrokAppServerClient", () => {
           source: "grok",
         },
       ]);
-      await expect(secondClient.readThread({ threadId: "thread-1" })).resolves.toEqual({
+      await expect(
+        secondClient.readThread({ threadId: "thread-1" }),
+      ).resolves.toEqual({
         entries: [],
         messages: [],
         pagination: {
@@ -1516,7 +1558,9 @@ describe("GrokAppServerClient", () => {
           source: "grok",
         },
       ]);
-      await expect(secondClient.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      await expect(
+        secondClient.readThread({ threadId: "thread-1" }),
+      ).resolves.toMatchObject({
         entries: [],
         messages: [],
       });
@@ -1529,7 +1573,9 @@ describe("GrokAppServerClient", () => {
   });
 
   it("records Grok boundary traffic for requests, notifications, and inbound requests", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-grok-recording-"));
+    const rootDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-grok-recording-"),
+    );
 
     try {
       const notificationListeners = new Set<
@@ -1538,7 +1584,7 @@ describe("GrokAppServerClient", () => {
       let requestHandler:
         | ((
             method: string,
-            params?: Record<string, unknown>
+            params?: Record<string, unknown>,
           ) => Promise<unknown> | unknown)
         | undefined;
 
@@ -1548,9 +1594,9 @@ describe("GrokAppServerClient", () => {
             return {
               serverInfo: {
                 name: "@pwragent/grok-app-server",
-                version: "1.0.0"
+                version: "1.0.0",
               },
-              methods: ["thread/list"]
+              methods: ["thread/list"],
             };
           }
 
@@ -1558,11 +1604,15 @@ describe("GrokAppServerClient", () => {
             return { threads: [] };
           }
 
-          throw new Error(`unexpected request ${method} ${JSON.stringify(params)}`);
+          throw new Error(
+            `unexpected request ${method} ${JSON.stringify(params)}`,
+          );
         },
         notify: async () => undefined,
         onNotification: (
-          handler: (notification: AppServerNotification) => void | Promise<void>
+          handler: (
+            notification: AppServerNotification,
+          ) => void | Promise<void>,
         ) => {
           notificationListeners.add(handler);
           return () => {
@@ -1572,27 +1622,27 @@ describe("GrokAppServerClient", () => {
         onRequest: (
           handler: (
             method: string,
-            params?: Record<string, unknown>
-          ) => Promise<unknown> | unknown
+            params?: Record<string, unknown>,
+          ) => Promise<unknown> | unknown,
         ) => {
           requestHandler = handler;
           return () => {
             requestHandler = undefined;
           };
-        }
+        },
       };
 
       const store = new ProtocolCaptureStore({
         backend: "grok",
         captureId: "grok-capture-1",
-        rootDir
+        rootDir,
       });
       const client = new GrokAppServerClient({
         server,
         connectionObserver: createProtocolCaptureObserver({
           backend: "grok",
-          store
-        })
+          store,
+        }),
       });
 
       client.onRequest(async () => ({ decision: "approve" }));
@@ -1609,22 +1659,24 @@ describe("GrokAppServerClient", () => {
             turn: {
               id: "turn-1",
               status: "completed",
-              output: [{ type: "text", text: "Done." }]
-            }
-          }
+              output: [{ type: "text", text: "Done." }],
+            },
+          },
         });
       }
 
       await requestHandler?.("turn/requestApproval", {
         threadId: "thread-1",
         turnId: "turn-1",
-        requestId: "approval-1"
+        requestId: "approval-1",
       });
 
       await store.close();
       await client.close();
 
-      const lines = (await fs.readFile(path.join(rootDir, "grok-capture-1.jsonl"), "utf8"))
+      const lines = (
+        await fs.readFile(path.join(rootDir, "grok-capture-1.jsonl"), "utf8")
+      )
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -1632,44 +1684,44 @@ describe("GrokAppServerClient", () => {
       expect(
         lines.some(
           (line) =>
-            line.backend === "grok" &&
-            line.direction === "outbound" &&
-            line.kind === "request" &&
-            line.method === "initialize"
-        )
+            line.backend === "grok"
+            && line.direction === "outbound"
+            && line.kind === "request"
+            && line.method === "initialize",
+        ),
       ).toBe(true);
       expect(
         lines.some(
           (line) =>
-            line.direction === "inbound" &&
-            line.kind === "response" &&
-            line.id === "rpc-1"
-        )
+            line.direction === "inbound"
+            && line.kind === "response"
+            && line.id === "rpc-1",
+        ),
       ).toBe(true);
       expect(
         lines.some(
           (line) =>
-            line.direction === "inbound" &&
-            line.kind === "notification" &&
-            line.method === "turn/completed"
-        )
+            line.direction === "inbound"
+            && line.kind === "notification"
+            && line.method === "turn/completed",
+        ),
       ).toBe(true);
       expect(
         lines.some(
           (line) =>
-            line.direction === "inbound" &&
-            line.kind === "request" &&
-            line.method === "turn/requestApproval" &&
-            line.id === "approval-1"
-        )
+            line.direction === "inbound"
+            && line.kind === "request"
+            && line.method === "turn/requestApproval"
+            && line.id === "approval-1",
+        ),
       ).toBe(true);
       expect(
         lines.some(
           (line) =>
-            line.direction === "outbound" &&
-            line.kind === "response" &&
-            line.id === "approval-1"
-        )
+            line.direction === "outbound"
+            && line.kind === "response"
+            && line.id === "approval-1",
+        ),
       ).toBe(true);
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });

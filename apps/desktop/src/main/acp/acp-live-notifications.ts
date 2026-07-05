@@ -1,5 +1,8 @@
 import type { AppServerNotification } from "@pwragent/shared";
-import { readAcpContentText, readAcpTopicTitle } from "./acp-session-normalizer";
+import {
+  readAcpContentText,
+  readAcpTopicTitle,
+} from "./acp-session-normalizer";
 import {
   isGenericShellToolTitle,
   readAcpToolCommand,
@@ -24,7 +27,9 @@ export function acpToolUpdateNotifications(params: {
     return [];
   }
 
-  const method = isTerminalToolStatus(item.status) ? "item/completed" : "item/started";
+  const method = isTerminalToolStatus(item.status)
+    ? "item/completed"
+    : "item/started";
   return [
     {
       method,
@@ -42,17 +47,17 @@ function liveItemForAcpToolUpdate(
 ): Record<string, unknown> | undefined {
   const toolKind = readString(update, "kind") ?? "tool";
   const id =
-    readString(update, "toolCallId") ??
-    readString(update, "tool_call_id") ??
-    readString(update, "id") ??
-    readString(update, "itemId") ??
-    readString(update, "item_id");
+    readString(update, "toolCallId")
+    ?? readString(update, "tool_call_id")
+    ?? readString(update, "id")
+    ?? readString(update, "itemId")
+    ?? readString(update, "item_id");
   const title =
-    readString(update, "title") ??
-    readString(update, "command") ??
-    readString(update, "name") ??
-    readFirstLocationPath(update) ??
-    toolKind;
+    readString(update, "title")
+    ?? readString(update, "command")
+    ?? readString(update, "name")
+    ?? readFirstLocationPath(update)
+    ?? toolKind;
   if (!id && !title) {
     return undefined;
   }
@@ -114,36 +119,40 @@ function acpCommandActions(params: {
 }
 
 function normalizeAcpToolStatus(status: string | undefined): string {
-  return status === "completed" ||
-    status === "failed" ||
-    status === "cancelled" ||
-    status === "in_progress"
+  return status === "completed"
+    || status === "failed"
+    || status === "cancelled"
+    || status === "in_progress"
     ? status
     : "in_progress";
 }
 
 function isTerminalToolStatus(status: unknown): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
+  return (
+    status === "completed" || status === "failed" || status === "cancelled"
+  );
 }
 
-function readAcpToolOutput(record: Record<string, unknown>): string | undefined {
+function readAcpToolOutput(
+  record: Record<string, unknown>,
+): string | undefined {
   const contentText = readAcpContentText(record.content);
   return (
-    readString(record, "output") ??
-    readString(record, "stdout") ??
-    readString(record, "stderr") ??
-    readString(record, "result") ??
-    (readAcpToolContentCommand(record) ? undefined : contentText)
+    readString(record, "output")
+    ?? readString(record, "stdout")
+    ?? readString(record, "stderr")
+    ?? readString(record, "result")
+    ?? (readAcpToolContentCommand(record) ? undefined : contentText)
   );
 }
 
 function readKind(update: Record<string, unknown>): string {
   return (
-    readString(update, "sessionUpdate") ??
-    readString(update, "session_update") ??
-    readString(update, "kind") ??
-    readString(update, "type") ??
-    "unknown"
+    readString(update, "sessionUpdate")
+    ?? readString(update, "session_update")
+    ?? readString(update, "kind")
+    ?? readString(update, "type")
+    ?? "unknown"
   );
 }
 
@@ -155,7 +164,9 @@ function readString(
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function readFirstLocationPath(record: Record<string, unknown>): string | undefined {
+function readFirstLocationPath(
+  record: Record<string, unknown>,
+): string | undefined {
   const locations = record.locations;
   if (!Array.isArray(locations)) {
     return undefined;

@@ -14,9 +14,10 @@ const { resolveCodexCommandMock, spawnMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>(
-    "node:child_process",
-  );
+  const actual =
+    await vi.importActual<typeof import("node:child_process")>(
+      "node:child_process",
+    );
   return {
     ...actual,
     spawn: spawnMock,
@@ -24,9 +25,9 @@ vi.mock("node:child_process", async () => {
 });
 
 vi.mock("@pwrdrvr/codex-discovery", async () => {
-  const actual = await vi.importActual<typeof import("@pwrdrvr/codex-discovery")>(
-    "@pwrdrvr/codex-discovery",
-  );
+  const actual = await vi.importActual<
+    typeof import("@pwrdrvr/codex-discovery")
+  >("@pwrdrvr/codex-discovery");
   return {
     ...actual,
     resolveCodexCommand: resolveCodexCommandMock,
@@ -58,12 +59,18 @@ beforeEach(() => {
 
 describe("stdio transport Codex CLI resolution", () => {
   it("orders stable Codex CLI releases ahead of prereleases with the same version", () => {
-    expect(compareCodexCliVersions("0.125.0", "0.125.0-alpha.3")).toBeGreaterThan(0);
-    expect(compareCodexCliVersions("0.125.0-alpha.4", "0.125.0-alpha.3")).toBeGreaterThan(0);
+    expect(
+      compareCodexCliVersions("0.125.0", "0.125.0-alpha.3"),
+    ).toBeGreaterThan(0);
+    expect(
+      compareCodexCliVersions("0.125.0-alpha.4", "0.125.0-alpha.3"),
+    ).toBeGreaterThan(0);
   });
 
   it("orders newer Codex.app prereleases ahead of older stable PATH releases", () => {
-    expect(compareCodexCliVersions("0.126.0-alpha.1", "0.125.0")).toBeGreaterThan(0);
+    expect(
+      compareCodexCliVersions("0.126.0-alpha.1", "0.125.0"),
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -77,14 +84,18 @@ describe("StdioJsonRpcTransport", () => {
     });
 
     await transport.connect();
-    transport.send(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } }));
+    transport.send(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } }),
+    );
     expect(child.writes).toHaveLength(1);
 
     await transport.close();
 
     expect(child.killCalled).toBe(true);
     expect(() =>
-      transport.send(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { ok: true } })),
+      transport.send(
+        JSON.stringify({ jsonrpc: "2.0", id: 2, result: { ok: true } }),
+      ),
     ).not.toThrow();
     expect(child.writes).toHaveLength(1);
   });
@@ -101,7 +112,9 @@ describe("StdioJsonRpcTransport", () => {
     await transport.close();
 
     expect(() =>
-      transport.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "thread/list" })),
+      transport.send(
+        JSON.stringify({ jsonrpc: "2.0", id: 2, method: "thread/list" }),
+      ),
     ).toThrow("codex app server stdio not connected");
     expect(child.writes).toHaveLength(0);
   });
@@ -118,7 +131,9 @@ describe("StdioJsonRpcTransport", () => {
     child.emit("close");
 
     expect(() =>
-      transport.send(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } })),
+      transport.send(
+        JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } }),
+      ),
     ).toThrow("codex app server stdio not connected");
   });
 });

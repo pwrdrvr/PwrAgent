@@ -2,9 +2,9 @@ export function readAcpToolCommand(
   record: Record<string, unknown>,
 ): string | undefined {
   return (
-    readDirectCommand(record) ??
-    readDirectCommand(asRecord(record.rawInput)) ??
-    readAcpToolContentCommand(record)
+    readDirectCommand(record)
+    ?? readDirectCommand(asRecord(record.rawInput))
+    ?? readAcpToolContentCommand(record)
   );
 }
 
@@ -34,14 +34,16 @@ export function readAcpToolText(value: unknown): string | undefined {
   }
 
   return (
-    readAcpToolText(record.text) ??
-    readAcpToolText(record.content) ??
-    readAcpToolText(record.output) ??
-    readAcpToolText(record.result)
+    readAcpToolText(record.text)
+    ?? readAcpToolText(record.content)
+    ?? readAcpToolText(record.output)
+    ?? readAcpToolText(record.result)
   );
 }
 
-export function extractCommandFromText(text: string | undefined): string | undefined {
+export function extractCommandFromText(
+  text: string | undefined,
+): string | undefined {
   if (!text) {
     return undefined;
   }
@@ -57,13 +59,15 @@ export function extractCommandFromText(text: string | undefined): string | undef
       return JSON.parse(`"${quotedMatch[1]}"`);
     } catch {
       return (
-        quotedMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\").trim() ||
-        undefined
+        quotedMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\").trim()
+        || undefined
       );
     }
   }
 
-  const runningMatch = /^Requesting approval to Running:\s*(.+)$/imu.exec(trimmed);
+  const runningMatch = /^Requesting approval to Running:\s*(.+)$/imu.exec(
+    trimmed,
+  );
   return runningMatch?.[1]?.trim() || undefined;
 }
 
@@ -73,11 +77,11 @@ export function isGenericShellToolTitle(value: string | undefined): boolean {
 
 function isShellLikeAcpTool(record: Record<string, unknown>): boolean {
   return (
-    isShellLikeToolKind(readString(record, "kind")) ||
-    isShellLikeToolKind(readString(record, "toolKind")) ||
-    isShellLikeToolKind(readString(record, "toolName")) ||
-    isShellLikeToolKind(readString(record, "name")) ||
-    isShellToolTitle(readString(record, "title"))
+    isShellLikeToolKind(readString(record, "kind"))
+    || isShellLikeToolKind(readString(record, "toolKind"))
+    || isShellLikeToolKind(readString(record, "toolName"))
+    || isShellLikeToolKind(readString(record, "name"))
+    || isShellToolTitle(readString(record, "title"))
   );
 }
 

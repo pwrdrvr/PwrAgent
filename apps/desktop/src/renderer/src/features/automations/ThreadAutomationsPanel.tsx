@@ -54,7 +54,9 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
     [automations.automations, expandedAutomationId],
   );
 
-  const submitEditor = async (submission: AutomationEditorSubmit): Promise<void> => {
+  const submitEditor = async (
+    submission: AutomationEditorSubmit,
+  ): Promise<void> => {
     setSaving(true);
     try {
       if (submission.kind === "create") {
@@ -114,7 +116,9 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
       ) : null}
 
       {automations.error ? (
-        <p className="context-empty context-empty--error">{automations.error}</p>
+        <p className="context-empty context-empty--error">
+          {automations.error}
+        </p>
       ) : null}
 
       {!isAgentThread ? (
@@ -135,7 +139,9 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
                 automation={automation}
                 expanded={automation.id === expandedAutomationId}
                 onDelete={async () => {
-                  await automations.deleteAutomation({ automationId: automation.id });
+                  await automations.deleteAutomation({
+                    automationId: automation.id,
+                  });
                   await props.onRefreshNavigation?.();
                 }}
                 onEdit={() => setEditorMode({ automation, kind: "edit" })}
@@ -146,14 +152,20 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
                 }
                 onPauseResume={async () => {
                   if (automation.status === "paused") {
-                    await automations.resumeAutomation({ automationId: automation.id });
+                    await automations.resumeAutomation({
+                      automationId: automation.id,
+                    });
                   } else {
-                    await automations.pauseAutomation({ automationId: automation.id });
+                    await automations.pauseAutomation({
+                      automationId: automation.id,
+                    });
                   }
                   await props.onRefreshNavigation?.();
                 }}
                 onRunNow={async () => {
-                  await automations.runAutomationNow({ automationId: automation.id });
+                  await automations.runAutomationNow({
+                    automationId: automation.id,
+                  });
                   setExpandedAutomationId(automation.id);
                   await props.onRefreshNavigation?.();
                 }}
@@ -199,16 +211,21 @@ function AutomationSummary(props: {
       <div className="automation-row__main">
         <div className="automation-row__title-line">
           <h4>{props.automation.name}</h4>
-          <span className={`automation-status automation-status--${props.automation.status}`}>
+          <span
+            className={`automation-status automation-status--${props.automation.status}`}
+          >
             {formatAutomationStatus(props.automation.status)}
           </span>
         </div>
-        <p className="automation-row__schedule">{props.automation.scheduleSummary}</p>
+        <p className="automation-row__schedule">
+          {props.automation.scheduleSummary}
+        </p>
         <p className="automation-row__meta">
           next {formatAutomationRelative(props.automation.nextRunAt)} -{" "}
           {formatBacklogPolicy(props.automation.backlogPolicy)}
         </p>
-        {props.automation.pendingRunCount || props.automation.coalescedWindowCount ? (
+        {props.automation.pendingRunCount
+        || props.automation.coalescedWindowCount ? (
           <p className="automation-row__meta">
             {props.automation.pendingRunCount ?? 0} queued -{" "}
             {props.automation.coalescedWindowCount ?? 0} coalesced
@@ -224,7 +241,11 @@ function AutomationSummary(props: {
         >
           Run
         </button>
-        <button className="context-list__action" type="button" onClick={props.onEdit}>
+        <button
+          className="context-list__action"
+          type="button"
+          onClick={props.onEdit}
+        >
           Edit
         </button>
         <button
@@ -235,7 +256,11 @@ function AutomationSummary(props: {
         >
           {props.automation.status === "paused" ? "Resume" : "Pause"}
         </button>
-        <button className="context-list__action" type="button" onClick={props.onExpand}>
+        <button
+          className="context-list__action"
+          type="button"
+          onClick={props.onExpand}
+        >
           {props.expanded ? "Hide" : "History"}
         </button>
         <button
@@ -259,7 +284,9 @@ export function AutomationRunHistory(props: {
   const [expandedRunId, setExpandedRunId] = useState<string>();
 
   if (runs.loading) {
-    return <p className="automation-run-history__empty">Loading run history...</p>;
+    return (
+      <p className="automation-run-history__empty">Loading run history...</p>
+    );
   }
 
   if (runs.error) {
@@ -279,7 +306,9 @@ export function AutomationRunHistory(props: {
           expanded={expandedRunId === run.id}
           run={run}
           onToggle={() =>
-            setExpandedRunId((current) => (current === run.id ? undefined : run.id))
+            setExpandedRunId((current) =>
+              current === run.id ? undefined : run.id,
+            )
           }
         />
       ))}
@@ -299,7 +328,9 @@ export function AutomationRunHistoryItem(props: {
   );
   return (
     <li className="automation-run-history__item">
-      <span className={`automation-run-status automation-run-status--${props.run.status}`}>
+      <span
+        className={`automation-run-status automation-run-status--${props.run.status}`}
+      >
         {formatRunStatus(props.run.status)}
       </span>
       <span>
@@ -319,9 +350,15 @@ export function AutomationRunHistoryItem(props: {
         </span>
       ) : null}
       {props.run.errorMessage ? (
-        <span className="automation-run-history__error">{props.run.errorMessage}</span>
+        <span className="automation-run-history__error">
+          {props.run.errorMessage}
+        </span>
       ) : null}
-      <button className="context-list__action" type="button" onClick={props.onToggle}>
+      <button
+        className="context-list__action"
+        type="button"
+        onClick={props.onToggle}
+      >
         {props.expanded ? "Hide details" : "Details"}
       </button>
       {props.expanded ? (
@@ -361,17 +398,17 @@ function AutomationRunArtifactDetails(props: {
     return <p className="automation-run-history__error">{props.error}</p>;
   }
   const hasRollout =
-    Boolean(props.rollout?.replay?.entries.length) ||
-    Boolean(props.rollout?.errorMessage) ||
-    Boolean(props.backendThreadId);
+    Boolean(props.rollout?.replay?.entries.length)
+    || Boolean(props.rollout?.errorMessage)
+    || Boolean(props.backendThreadId);
   const hasScheduledWindows = props.scheduledWindows.length > 0;
   const hasTranscriptEvents = props.transcriptEvents.length > 0;
   if (
-    !props.finalText &&
-    !props.outputDecision &&
-    !hasRollout &&
-    !hasScheduledWindows &&
-    !hasTranscriptEvents
+    !props.finalText
+    && !props.outputDecision
+    && !hasRollout
+    && !hasScheduledWindows
+    && !hasTranscriptEvents
   ) {
     return (
       <p className="automation-run-history__time">
@@ -422,7 +459,9 @@ function AutomationRunTranscriptEvents(props: {
 }) {
   return (
     <div className="automation-run-history__section">
-      <p className="automation-run-history__section-title">Captured automation events</p>
+      <p className="automation-run-history__section-title">
+        Captured automation events
+      </p>
       <ol className="automation-run-history__rollout">
         {props.events.map((event) => (
           <li className="automation-run-history__rollout-entry" key={event.id}>
@@ -457,7 +496,9 @@ function AutomationRunRolloutDetails(props: {
         </p>
       ) : null}
       {props.rollout?.errorMessage ? (
-        <p className="automation-run-history__error">{props.rollout.errorMessage}</p>
+        <p className="automation-run-history__error">
+          {props.rollout.errorMessage}
+        </p>
       ) : null}
       {entries.length > 0 ? (
         <ol className="automation-run-history__rollout">
@@ -503,8 +544,12 @@ function AutomationRunRolloutEntry(props: { entry: AppServerThreadEntry }) {
                 {detail.command?.displayCommand ? (
                   <pre>{detail.command.displayCommand}</pre>
                 ) : null}
-                {detail.command?.output ? <pre>{detail.command.output}</pre> : null}
-                {detail.fileDiff?.diff ? <pre>{detail.fileDiff.diff}</pre> : null}
+                {detail.command?.output ? (
+                  <pre>{detail.command.output}</pre>
+                ) : null}
+                {detail.fileDiff?.diff ? (
+                  <pre>{detail.fileDiff.diff}</pre>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -555,10 +600,14 @@ function formatAutomationTranscriptEventKind(
   }
 }
 
-function formatThreadAutomationSummary(thread: NavigationThreadSummary): string {
+function formatThreadAutomationSummary(
+  thread: NavigationThreadSummary,
+): string {
   const summary = thread.automationSummary;
   if (!summary || summary.totalCount === 0) {
-    return thread.agent ? "One serial queue per Agent." : "No Agent automation queue.";
+    return thread.agent
+      ? "One serial queue per Agent."
+      : "No Agent automation queue.";
   }
   const queued = summary.pendingRunCount
     ? ` - ${summary.pendingRunCount} queued`

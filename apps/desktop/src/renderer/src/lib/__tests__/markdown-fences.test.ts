@@ -6,11 +6,17 @@ import {
 
 describe("parseBacktickFenceLine", () => {
   it("parses an opening fence with a language", () => {
-    expect(parseBacktickFenceLine("```ts")).toMatchObject({ length: 3, info: "ts" });
+    expect(parseBacktickFenceLine("```ts")).toMatchObject({
+      length: 3,
+      info: "ts",
+    });
   });
 
   it("parses a longer bare fence", () => {
-    expect(parseBacktickFenceLine("````")).toMatchObject({ length: 4, info: "" });
+    expect(parseBacktickFenceLine("````")).toMatchObject({
+      length: 4,
+      info: "",
+    });
   });
 
   it("rejects non-fence lines and short runs", () => {
@@ -22,7 +28,9 @@ describe("parseBacktickFenceLine", () => {
 describe("repairNestedLanguageFences", () => {
   it("lengthens the outer fence around a nested language fence", () => {
     const input = ["```", "```ts", "const value = 1;", "```", "```"].join("\n");
-    const expected = ["````", "```ts", "const value = 1;", "```", "````"].join("\n");
+    const expected = ["````", "```ts", "const value = 1;", "```", "````"].join(
+      "\n",
+    );
     expect(repairNestedLanguageFences(input)).toBe(expected);
   });
 

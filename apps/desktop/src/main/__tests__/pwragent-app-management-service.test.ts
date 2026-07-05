@@ -37,9 +37,8 @@ describe("PwrAgent app management service", () => {
   });
 
   it("reports current version, local start time fields, and uptime", async () => {
-    const { createPwrAgentAppManagementHandler } = await import(
-      "../agent-tools/pwragent-app-management-service"
-    );
+    const { createPwrAgentAppManagementHandler } =
+      await import("../agent-tools/pwragent-app-management-service");
     const handler = createPwrAgentAppManagementHandler({
       now: () => 121_000,
       startedAt: 1_000,
@@ -80,9 +79,8 @@ describe("PwrAgent app management service", () => {
       status: "downloaded",
       version: "1.2.4",
     });
-    const { createPwrAgentAppManagementHandler } = await import(
-      "../agent-tools/pwragent-app-management-service"
-    );
+    const { createPwrAgentAppManagementHandler } =
+      await import("../agent-tools/pwragent-app-management-service");
     const handler = createPwrAgentAppManagementHandler({
       now: () => 2_000,
       startedAt: 1_000,
@@ -119,9 +117,8 @@ describe("PwrAgent app management service", () => {
       performRestart();
       return true;
     });
-    const { createPwrAgentAppManagementHandler } = await import(
-      "../agent-tools/pwragent-app-management-service"
-    );
+    const { createPwrAgentAppManagementHandler } =
+      await import("../agent-tools/pwragent-app-management-service");
     const handler = createPwrAgentAppManagementHandler({
       now: () => 2_000,
       requestRestart,
@@ -158,9 +155,8 @@ describe("PwrAgent app management service", () => {
       version: "1.2.4",
     });
     installDownloadedAppUpdateMock.mockResolvedValue({ status: "restarting" });
-    const { createPwrAgentAppManagementHandler } = await import(
-      "../agent-tools/pwragent-app-management-service"
-    );
+    const { createPwrAgentAppManagementHandler } =
+      await import("../agent-tools/pwragent-app-management-service");
     const handler = createPwrAgentAppManagementHandler({
       now: () => 2_000,
       startedAt: 1_000,

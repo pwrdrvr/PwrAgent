@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type ReactElement,
-} from "react";
+import { useEffect, useId, useRef, useState, type ReactElement } from "react";
 import { NewThreadIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 

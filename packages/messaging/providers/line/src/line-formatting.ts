@@ -103,7 +103,8 @@ export function buildLineActionBubble(params: {
   const maxActions = profile.actions?.maxActions ?? LINE_QUICK_REPLY_ITEM_LIMIT;
   const maxColumns = profile.actions?.maxActionsPerRow ?? 4;
   const maxRows = profile.actions?.maxRows ?? 4;
-  const maxLabelLength = profile.actions?.maxLabelLength ?? LINE_ACTION_LABEL_LIMIT;
+  const maxLabelLength =
+    profile.actions?.maxLabelLength ?? LINE_ACTION_LABEL_LIMIT;
   const items = params.actions
     .filter((action) => !action.disabled)
     .slice(0, maxActions)
@@ -119,7 +120,10 @@ export function buildLineActionBubble(params: {
             type: "postback" as const,
             label: truncateLineText(action.label, maxLabelLength),
             data: postbackData,
-            displayText: truncateLineText(action.fallbackText ?? action.label, 300),
+            displayText: truncateLineText(
+              action.fallbackText ?? action.label,
+              300,
+            ),
           },
         },
       };
@@ -130,13 +134,14 @@ export function buildLineActionBubble(params: {
   }
 
   const rows = layoutMessagingActionRows(items, {
-    defaultColumns: params.layout?.columns
+    defaultColumns:
+      params.layout?.columns
       ?? resolveLineDefaultActionColumns(items.length, maxColumns),
     maxColumns,
     maxRows,
   }).map((row) => ({
     type: "box" as const,
-    layout: row.length > 1 ? "horizontal" as const : "vertical" as const,
+    layout: row.length > 1 ? ("horizontal" as const) : ("vertical" as const),
     contents: row,
     spacing: "sm" as const,
   }));
@@ -168,7 +173,10 @@ export function buildLineActionBubble(params: {
   };
 }
 
-function resolveLineDefaultActionColumns(actionCount: number, maxColumns: number): number {
+function resolveLineDefaultActionColumns(
+  actionCount: number,
+  maxColumns: number,
+): number {
   if (actionCount <= 1) {
     return 1;
   }
@@ -219,11 +227,13 @@ export function imageMessagesForLineIntent(
   if (intent.kind !== "message") return [];
   return intent.parts.flatMap((part) => {
     if (part.type !== "image" || !isHttpsUrl(part.url)) return [];
-    return [{
-      type: "image" as const,
-      originalContentUrl: part.url,
-      previewImageUrl: part.url,
-    }];
+    return [
+      {
+        type: "image" as const,
+        originalContentUrl: part.url,
+        previewImageUrl: part.url,
+      },
+    ];
   });
 }
 
@@ -281,13 +291,13 @@ function assertOpaqueLinePostbackData(data: string): void {
     v?: unknown;
   };
   if (
-    record.v !== 1 ||
-    typeof record.h !== "string" ||
-    !LINE_POSTBACK_HANDLE_PATTERN.test(record.h) ||
-    typeof record.t !== "number" ||
-    !Number.isFinite(record.t) ||
-    typeof record.s !== "string" ||
-    !LINE_POSTBACK_SIGNATURE_PATTERN.test(record.s)
+    record.v !== 1
+    || typeof record.h !== "string"
+    || !LINE_POSTBACK_HANDLE_PATTERN.test(record.h)
+    || typeof record.t !== "number"
+    || !Number.isFinite(record.t)
+    || typeof record.s !== "string"
+    || !LINE_POSTBACK_SIGNATURE_PATTERN.test(record.s)
   ) {
     throw new Error("LINE postback data must be an opaque persisted handle.");
   }

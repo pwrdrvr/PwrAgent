@@ -43,7 +43,9 @@ vi.mock("../log", () => ({
 const tempDirs: string[] = [];
 const activeRuntimes: DesktopMessagingRuntime[] = [];
 
-function trackRuntime(runtime: DesktopMessagingRuntime): DesktopMessagingRuntime {
+function trackRuntime(
+  runtime: DesktopMessagingRuntime,
+): DesktopMessagingRuntime {
   activeRuntimes.push(runtime);
   return runtime;
 }
@@ -76,33 +78,36 @@ afterEach(async () => {
 });
 
 describe("DesktopMessagingRuntime", () => {
-  it("starts configured adapters and routes inbound events through channel controllers", async () => {
-    const { runtime, adapter, bridge } = await createRuntimeHarness();
+  it(
+    "starts configured adapters and routes inbound events through channel controllers",
+    async () => {
+      const { runtime, adapter, bridge } = await createRuntimeHarness();
 
-    await runtime.start();
-    await adapter.listener?.(buildCommandEvent("/resume"));
+      await runtime.start();
+      await adapter.listener?.(buildCommandEvent("/resume"));
 
-    expect(adapter.start).toHaveBeenCalledTimes(1);
-    expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
-    });
-    expect(adapter.delivered.at(-1)).toMatchObject({
-      kind: "thread_picker",
-    });
-    // This integration-style startup test imports the runtime module graph and
-    // exercises the full adapter-start + inbound-routing path. On the slow
-    // shared Windows CI runner that cold path can exceed 15s — not a hang, just
-    // slow — so Windows gets the workspace default headroom (30_000; see
-    // vitest.workspace.ts). Other platforms keep the original tighter 15_000
-    // budget where the cold path is comfortably fast, so a genuine hang or
-    // regression there still fails fast instead of idling for the full 30s.
-  }, process.platform === "win32" ? 30_000 : 15_000);
+      expect(adapter.start).toHaveBeenCalledTimes(1);
+      expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
+        backend: "all",
+      });
+      expect(adapter.delivered.at(-1)).toMatchObject({
+        kind: "thread_picker",
+      });
+      // This integration-style startup test imports the runtime module graph and
+      // exercises the full adapter-start + inbound-routing path. On the slow
+      // shared Windows CI runner that cold path can exceed 15s — not a hang, just
+      // slow — so Windows gets the workspace default headroom (30_000; see
+      // vitest.workspace.ts). Other platforms keep the original tighter 15_000
+      // budget where the cold path is comfortably fast, so a genuine hang or
+      // regression there still fails fast instead of idling for the full 30s.
+    },
+    process.platform === "win32" ? 30_000 : 15_000,
+  );
 
   it("rehydrates enabled Monitor bindings after adapter startup", async () => {
     const { runtime, adapter } = await createRuntimeHarness();
-    const { getDesktopMessagingStore } = await import(
-      "../messaging/desktop-messaging-store"
-    );
+    const { getDesktopMessagingStore } =
+      await import("../messaging/desktop-messaging-store");
     await getDesktopMessagingStore().upsertBinding({
       id: "binding:telegram:dm::chat-1:codex:thread-1",
       channel: {
@@ -125,7 +130,9 @@ describe("DesktopMessagingRuntime", () => {
     });
 
     await runtime.start();
-    await waitFor(() => adapter.delivered.some((intent) => intent.kind === "status"));
+    await waitFor(() =>
+      adapter.delivered.some((intent) => intent.kind === "status"),
+    );
 
     expect(adapter.delivered.at(-1)).toMatchObject({
       kind: "status",
@@ -146,38 +153,42 @@ describe("DesktopMessagingRuntime", () => {
   // confirmed on a Windows box, skip it there rather than ship a speculative
   // product change beyond the dispose-guard. The binding twin above keeps the
   // rehydrate-on-startup path covered on every platform.
-  it.skipIf(process.platform === "win32")("rehydrates enabled channel Monitor subscriptions after adapter startup", async () => {
-    const { runtime, adapter } = await createRuntimeHarness();
-    const { getDesktopMessagingStore } = await import(
-      "../messaging/desktop-messaging-store"
-    );
-    await getDesktopMessagingStore().upsertMonitorSubscription({
-      id: "monitor:telegram:dm::chat-1",
-      channel: {
-        channel: "telegram",
-        conversation: {
-          id: "chat-1",
-          kind: "dm",
+  it.skipIf(process.platform === "win32")(
+    "rehydrates enabled channel Monitor subscriptions after adapter startup",
+    async () => {
+      const { runtime, adapter } = await createRuntimeHarness();
+      const { getDesktopMessagingStore } =
+        await import("../messaging/desktop-messaging-store");
+      await getDesktopMessagingStore().upsertMonitorSubscription({
+        id: "monitor:telegram:dm::chat-1",
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "chat-1",
+            kind: "dm",
+          },
         },
-      },
-      authorizedActorIds: ["user-1"],
-      createdAt: 1000,
-      updatedAt: 1000,
-      monitor: {
-        enabled: true,
-        intervalMs: 1,
+        authorizedActorIds: ["user-1"],
+        createdAt: 1000,
         updatedAt: 1000,
-      },
-    });
+        monitor: {
+          enabled: true,
+          intervalMs: 1,
+          updatedAt: 1000,
+        },
+      });
 
-    await runtime.start();
-    await waitFor(() => adapter.delivered.some((intent) => intent.kind === "status"));
+      await runtime.start();
+      await waitFor(() =>
+        adapter.delivered.some((intent) => intent.kind === "status"),
+      );
 
-    expect(adapter.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Monitor: Recent threads"),
-    });
-  });
+      expect(adapter.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining("Monitor: Recent threads"),
+      });
+    },
+  );
 
   it("surfaces adapter startup credential metadata in platform status", async () => {
     const { runtime } = await createRuntimeHarness({
@@ -225,10 +236,12 @@ describe("DesktopMessagingRuntime", () => {
         threadId: "thread-1",
       }),
     );
-    await adapter.listener?.(buildTextEvent(adversarialText, {
-      actorDisplayName: adversarialText,
-      conversationTitle: adversarialText,
-    }));
+    await adapter.listener?.(
+      buildTextEvent(adversarialText, {
+        actorDisplayName: adversarialText,
+        conversationTitle: adversarialText,
+      }),
+    );
 
     expect(bridge.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -274,9 +287,8 @@ describe("DesktopMessagingRuntime", () => {
       },
     }));
     const bridge = createBackendBridge();
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: () => [adapter],
       backendBridge: bridge,
@@ -319,9 +331,8 @@ describe("DesktopMessagingRuntime", () => {
       authorizedActorIds: ["driver-1"],
     });
     const bridge = createBackendBridge();
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: () => [adapter],
       backendBridge: bridge,
@@ -354,15 +365,13 @@ describe("DesktopMessagingRuntime", () => {
     automationInboundMatches: MessagingAutomationInboundMatcher;
   }): Promise<ReturnType<typeof createAdapter>> {
     await prepareRuntimeStore();
-    const { resetInboundPreview } = await import(
-      "../messaging/inbound-preview-bus"
-    );
+    const { resetInboundPreview } =
+      await import("../messaging/inbound-preview-bus");
     resetInboundPreview();
     const adapter = createAdapter("telegram");
     const bridge = createBackendBridge();
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = trackRuntime(
       new Runtime({
         adapterFactory: () => [adapter],
@@ -409,12 +418,15 @@ describe("DesktopMessagingRuntime", () => {
     await adapter.listener?.(ambientEvent);
 
     expect(automationInboundHandler).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "text", text: "ERROR something happened" }),
+      expect.objectContaining({
+        kind: "text",
+        text: "ERROR something happened",
+      }),
     );
     // @mention-only mode still suppresses a normal agent reply.
-    expect(
-      adapter.delivered.some((intent) => intent.kind === "message"),
-    ).toBe(false);
+    expect(adapter.delivered.some((intent) => intent.kind === "message")).toBe(
+      false,
+    );
   });
 
   it("drops ambient @mention-only messages no automation filter matches", async () => {
@@ -430,9 +442,9 @@ describe("DesktopMessagingRuntime", () => {
     // No automation matches and no preview is active: the message is dropped
     // before the controller, preserving @mention-only behavior for normal chat.
     expect(automationInboundHandler).not.toHaveBeenCalled();
-    expect(
-      adapter.delivered.some((intent) => intent.kind === "message"),
-    ).toBe(false);
+    expect(adapter.delivered.some((intent) => intent.kind === "message")).toBe(
+      false,
+    );
   });
 
   it("logs inbound controller failures without rejecting the adapter listener", async () => {
@@ -442,8 +454,9 @@ describe("DesktopMessagingRuntime", () => {
     );
 
     await runtime.start();
-    await expect(adapter.listener?.(buildCommandEvent("/resume"))).resolves
-      .toBeUndefined();
+    await expect(
+      adapter.listener?.(buildCommandEvent("/resume")),
+    ).resolves.toBeUndefined();
 
     expect(messagingLog.error).toHaveBeenCalledWith(
       "messaging controller failed to handle inbound event",
@@ -490,11 +503,14 @@ describe("DesktopMessagingRuntime", () => {
     });
     await Promise.resolve();
 
-    expect([...adapter.delivered].reverse().find((intent) => intent.kind === "message"))
-      .toMatchObject({
-        kind: "message",
-        role: "assistant",
-      });
+    expect(
+      [...adapter.delivered]
+        .reverse()
+        .find((intent) => intent.kind === "message"),
+    ).toMatchObject({
+      kind: "message",
+      role: "assistant",
+    });
     expect(adapter.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
@@ -528,25 +544,27 @@ describe("DesktopMessagingRuntime", () => {
       },
     });
 
-    expect(adapter.delivered.find((intent) => intent.kind === "approval"))
-      .toMatchObject({
-        kind: "approval",
-        requestContext: {
-          backend: "codex",
-          requestId: "approval-1",
-          threadId: "thread-1",
-          turnId: "turn-1",
-        },
-      });
+    expect(
+      adapter.delivered.find((intent) => intent.kind === "approval"),
+    ).toMatchObject({
+      kind: "approval",
+      requestContext: {
+        backend: "codex",
+        requestId: "approval-1",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+    });
     expect(adapter.delivered.at(-1)).toMatchObject({
       kind: "status",
       status: "waiting",
     });
 
-    const { getDesktopMessagingActivityLog } = await import(
-      "../messaging/desktop-messaging-activity-log"
-    );
-    expect(getDesktopMessagingActivityLog().getPlatformActivitySummary()).toEqual({
+    const { getDesktopMessagingActivityLog } =
+      await import("../messaging/desktop-messaging-activity-log");
+    expect(
+      getDesktopMessagingActivityLog().getPlatformActivitySummary(),
+    ).toEqual({
       summaries: [
         expect.objectContaining({
           platform: "telegram",
@@ -556,8 +574,8 @@ describe("DesktopMessagingRuntime", () => {
     });
 
     const { getAppStateDb } = await import("../state/app-state");
-    const outboundRowCount = getAppStateDb().raw
-      .prepare(
+    const outboundRowCount = getAppStateDb()
+      .raw.prepare(
         `SELECT COUNT(*) AS count
          FROM messaging_activity_log
          WHERE kind = ?`,
@@ -570,9 +588,8 @@ describe("DesktopMessagingRuntime", () => {
     await prepareRuntimeStore();
     const telegramAdapter = createAdapter("telegram");
     const discordAdapter = createAdapter("discord");
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const bridge = createBackendBridge();
     const runtime = new Runtime({
       adapterFactory: () => [telegramAdapter, discordAdapter],
@@ -615,10 +632,11 @@ describe("DesktopMessagingRuntime", () => {
       },
     });
 
-    expect(telegramAdapter.delivered.find((intent) => intent.kind === "approval"))
-      .toMatchObject({
-        kind: "approval",
-      });
+    expect(
+      telegramAdapter.delivered.find((intent) => intent.kind === "approval"),
+    ).toMatchObject({
+      kind: "approval",
+    });
     expect(discordAdapter.delivered).toEqual([]);
   });
 
@@ -626,9 +644,8 @@ describe("DesktopMessagingRuntime", () => {
     await prepareRuntimeStore();
     const telegramAdapter = createAdapter("telegram");
     const discordAdapter = createAdapter("discord");
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const bridge = createBackendBridge();
     const runtime = new Runtime({
       adapterFactory: () => [telegramAdapter, discordAdapter],
@@ -736,16 +753,17 @@ describe("DesktopMessagingRuntime", () => {
       },
     });
 
-    expect(adapter.delivered.find((intent) => intent.kind === "questionnaire"))
-      .toMatchObject({
-        kind: "questionnaire",
-        requestContext: {
-          backend: "codex",
-          requestId: "input-1",
-          threadId: "thread-1",
-          turnId: "turn-1",
-        },
-      });
+    expect(
+      adapter.delivered.find((intent) => intent.kind === "questionnaire"),
+    ).toMatchObject({
+      kind: "questionnaire",
+      requestContext: {
+        backend: "codex",
+        requestId: "input-1",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+    });
     expect(adapter.delivered.at(-1)).toMatchObject({
       kind: "status",
       status: "waiting",
@@ -793,9 +811,8 @@ describe("DesktopMessagingRuntime", () => {
       }),
     });
     const workingAdapter = createAdapter("discord");
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const bridge = createBackendBridge();
     const runtime = new Runtime({
       adapterFactory: () => [failingAdapter, workingAdapter],
@@ -842,9 +859,8 @@ describe("DesktopMessagingRuntime", () => {
     });
     const workingDiscordAdapter = createAdapter("discord");
     const bridge = createBackendBridge();
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: () => [slowTelegramAdapter, workingDiscordAdapter],
       backendBridge: bridge,
@@ -916,7 +932,9 @@ describe("DesktopMessagingRuntime", () => {
     });
 
     expect(
-      workingDiscordAdapter.delivered.find((intent) => intent.kind === "message"),
+      workingDiscordAdapter.delivered.find(
+        (intent) => intent.kind === "message",
+      ),
     ).toMatchObject({ kind: "message" });
 
     telegramStart.resolve();
@@ -941,9 +959,8 @@ describe("DesktopMessagingRuntime", () => {
       await telegramStart.promise;
     });
     const workingDiscordAdapter = createAdapter("discord");
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: () => [slowTelegramAdapter, workingDiscordAdapter],
       backendBridge: createBackendBridge(),
@@ -1007,9 +1024,8 @@ describe("DesktopMessagingRuntime", () => {
           : firstTelegramAdapter,
       ];
     });
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: factory,
       backendBridge: createBackendBridge(),
@@ -1052,24 +1068,25 @@ describe("DesktopMessagingRuntime", () => {
   it("isolates backend event delivery failures between adapters", async () => {
     await prepareRuntimeStore();
     const failingAdapter = createAdapter("telegram", {
-      deliver: vi.fn(async (
-        intent: MessagingSurfaceIntent,
-      ): Promise<MessagingDeliveryResult> => {
-        if (intent.kind === "message") {
-          throw new Error("telegram delivery failed");
-        }
-        failingAdapter.delivered.push(intent);
-        return {
-          channel: "telegram",
-          deliveredAt: 1000,
-          outcome: "presented",
-        };
-      }),
+      deliver: vi.fn(
+        async (
+          intent: MessagingSurfaceIntent,
+        ): Promise<MessagingDeliveryResult> => {
+          if (intent.kind === "message") {
+            throw new Error("telegram delivery failed");
+          }
+          failingAdapter.delivered.push(intent);
+          return {
+            channel: "telegram",
+            deliveredAt: 1000,
+            outcome: "presented",
+          };
+        },
+      ),
     });
     const workingAdapter = createAdapter("discord");
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const bridge = createBackendBridge();
     const runtime = new Runtime({
       adapterFactory: () => [failingAdapter, workingAdapter],
@@ -1096,10 +1113,14 @@ describe("DesktopMessagingRuntime", () => {
       }),
     );
     await workingAdapter.listener?.(
-      buildCallbackEvent("bind:codex:thread-1", {
-        backend: "codex",
-        threadId: "thread-1",
-      }, "discord"),
+      buildCallbackEvent(
+        "bind:codex:thread-1",
+        {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        "discord",
+      ),
     );
     failingAdapter.delivered.length = 0;
     workingAdapter.delivered.length = 0;
@@ -1132,10 +1153,11 @@ describe("DesktopMessagingRuntime", () => {
         method: "turn/completed",
       }),
     );
-    expect(workingAdapter.delivered.find((intent) => intent.kind === "message"))
-      .toMatchObject({
-        kind: "message",
-      });
+    expect(
+      workingAdapter.delivered.find((intent) => intent.kind === "message"),
+    ).toMatchObject({
+      kind: "message",
+    });
   });
 
   it("emits health=enabled for each adapter that successfully starts", async () => {
@@ -1166,9 +1188,8 @@ describe("DesktopMessagingRuntime", () => {
       }),
     });
     const bridge = createBackendBridge();
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: () => [failingAdapter],
       backendBridge: bridge,
@@ -1207,9 +1228,8 @@ describe("DesktopMessagingRuntime", () => {
       },
     });
     const bridge = createBackendBridge();
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: () => [adapter],
       backendBridge: bridge,
@@ -1273,9 +1293,8 @@ describe("DesktopMessagingRuntime", () => {
         };
       },
     });
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: () => [adapter],
       backendBridge: createBackendBridge(),
@@ -1377,9 +1396,8 @@ describe("DesktopMessagingRuntime", () => {
       },
     });
     const bridge = createBackendBridge();
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: () => [adapter],
       backendBridge: bridge,
@@ -1426,9 +1444,8 @@ describe("DesktopMessagingRuntime", () => {
       },
     });
     const bridge = createBackendBridge();
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: () => [adapter],
       backendBridge: bridge,
@@ -1464,8 +1481,8 @@ describe("DesktopMessagingRuntime", () => {
     await rejectedListener?.(rejectedEvent);
 
     const { getAppStateDb } = await import("../state/app-state");
-    const row = getAppStateDb().raw
-      .prepare(
+    const row = getAppStateDb()
+      .raw.prepare(
         `SELECT actor_id, conversation_id, payload
          FROM messaging_activity_log
          WHERE kind = ?
@@ -1473,8 +1490,8 @@ describe("DesktopMessagingRuntime", () => {
          LIMIT 1`,
       )
       .get("inbound-rejected") as
-        | { actor_id: string; conversation_id: string; payload: string }
-        | undefined;
+      | { actor_id: string; conversation_id: string; payload: string }
+      | undefined;
 
     expect(row).toMatchObject({
       actor_id: "1177378744822943744",
@@ -1506,9 +1523,8 @@ describe("DesktopMessagingRuntime", () => {
       },
     });
     const bridge = createBackendBridge();
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: () => [adapter],
       backendBridge: bridge,
@@ -1545,8 +1561,8 @@ describe("DesktopMessagingRuntime", () => {
     });
 
     const { getAppStateDb } = await import("../state/app-state");
-    const row = getAppStateDb().raw
-      .prepare(
+    const row = getAppStateDb()
+      .raw.prepare(
         `SELECT platform, kind, actor_id, conversation_id, summary, payload
          FROM messaging_activity_log
          WHERE kind = ?
@@ -1554,15 +1570,15 @@ describe("DesktopMessagingRuntime", () => {
          LIMIT 1`,
       )
       .get("diagnostic") as
-        | {
-            actor_id: string;
-            conversation_id: string;
-            kind: string;
-            payload: string;
-            platform: string;
-            summary: string;
-          }
-        | undefined;
+      | {
+          actor_id: string;
+          conversation_id: string;
+          kind: string;
+          payload: string;
+          platform: string;
+          summary: string;
+        }
+      | undefined;
 
     expect(row).toMatchObject({
       actor_id: "ou_user",
@@ -1636,13 +1652,17 @@ describe("DesktopMessagingRuntime", () => {
         health: "degraded",
         degradationReasons: expect.arrayContaining([
           expect.objectContaining({
-            message: expect.stringContaining("conversation PwrAgent Mini Dev Group / Test Thread"),
+            message: expect.stringContaining(
+              "conversation PwrAgent Mini Dev Group / Test Thread",
+            ),
             scope: expect.objectContaining({
               id: "telegram:group:-1003841603622",
             }),
           }),
           expect.objectContaining({
-            message: expect.stringContaining("conversation PwrAgent Mini Dev Group / Release Thread"),
+            message: expect.stringContaining(
+              "conversation PwrAgent Mini Dev Group / Release Thread",
+            ),
             scope: expect.objectContaining({
               id: "telegram:group:-1003841603622",
             }),
@@ -1650,38 +1670,43 @@ describe("DesktopMessagingRuntime", () => {
         ]),
       }),
     ]);
-    expect(runtime.getPlatformStatuses()[0]?.degradationReasons).toHaveLength(2);
+    expect(runtime.getPlatformStatuses()[0]?.degradationReasons).toHaveLength(
+      2,
+    );
 
     const { getAppStateDb } = await import("../state/app-state");
-    const rows = getAppStateDb().raw
-      .prepare(
+    const rows = getAppStateDb()
+      .raw.prepare(
         `SELECT binding_id, conversation_id, conversation_title, thread_id, summary, payload
          FROM messaging_activity_log
          WHERE kind = ?
          ORDER BY id DESC
          LIMIT 2`,
       )
-      .all("diagnostic") as
-        {
-            binding_id: string;
-            conversation_id: string | null;
-            conversation_title: string | null;
-            payload: string;
-            summary: string;
-            thread_id: string;
-          }[];
+      .all("diagnostic") as {
+      binding_id: string;
+      conversation_id: string | null;
+      conversation_title: string | null;
+      payload: string;
+      summary: string;
+      thread_id: string;
+    }[];
 
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
       binding_id: "binding:telegram:topic:-1003841603622:9387:codex:thread-2",
-      summary: expect.stringContaining("conversation PwrAgent Mini Dev Group / Release Thread"),
+      summary: expect.stringContaining(
+        "conversation PwrAgent Mini Dev Group / Release Thread",
+      ),
       thread_id: "thread-2",
     });
     expect(rows[1]).toMatchObject({
       binding_id: event.bindingId,
       conversation_id: "10345",
       conversation_title: "PwrAgent Mini Dev Group / Test Thread",
-      summary: expect.stringContaining("conversation PwrAgent Mini Dev Group / Test Thread"),
+      summary: expect.stringContaining(
+        "conversation PwrAgent Mini Dev Group / Test Thread",
+      ),
       thread_id: "thread-1",
     });
     expect(JSON.parse(rows[1]?.payload ?? "{}")).toMatchObject({
@@ -1750,8 +1775,8 @@ describe("DesktopMessagingRuntime", () => {
     ]);
 
     const { getAppStateDb } = await import("../state/app-state");
-    const rows = getAppStateDb().raw
-      .prepare(
+    const rows = getAppStateDb()
+      .raw.prepare(
         `SELECT summary FROM messaging_activity_log
          WHERE kind = ?
          ORDER BY id DESC
@@ -1800,7 +1825,8 @@ describe("DesktopMessagingRuntime", () => {
       },
     });
 
-    const observed = runtime.listPairingRequests({ platform: "telegram" }).entries[0];
+    const observed = runtime.listPairingRequests({ platform: "telegram" })
+      .entries[0];
     expect(observed).toMatchObject({
       status: "observed",
       observedChat: {
@@ -1812,8 +1838,8 @@ describe("DesktopMessagingRuntime", () => {
     });
 
     const { getAppStateDb } = await import("../state/app-state");
-    const row = getAppStateDb().raw
-      .prepare(
+    const row = getAppStateDb()
+      .raw.prepare(
         `SELECT conversation_id, actor_id, payload
          FROM messaging_activity_log
          WHERE kind = ? AND summary = ?
@@ -1821,8 +1847,8 @@ describe("DesktopMessagingRuntime", () => {
          LIMIT 1`,
       )
       .get("pairing", "Observed pairing token") as
-        | { actor_id: string; conversation_id: string; payload: string }
-        | undefined;
+      | { actor_id: string; conversation_id: string; payload: string }
+      | undefined;
 
     expect(row).toMatchObject({
       actor_id: "8460800771",
@@ -1876,9 +1902,8 @@ describe("DesktopMessagingRuntime", () => {
       }),
     );
 
-    const { getDesktopMessagingStore } = await import(
-      "../messaging/desktop-messaging-store"
-    );
+    const { getDesktopMessagingStore } =
+      await import("../messaging/desktop-messaging-store");
     const store = getDesktopMessagingStore();
     const binding = await store.findActiveBindingForChannel({
       channel: "telegram",
@@ -1913,9 +1938,8 @@ describe("DesktopMessagingRuntime", () => {
       }),
     );
 
-    const { getDesktopMessagingStore } = await import(
-      "../messaging/desktop-messaging-store"
-    );
+    const { getDesktopMessagingStore } =
+      await import("../messaging/desktop-messaging-store");
     const store = getDesktopMessagingStore();
     const binding = await store.findActiveBindingForChannel({
       channel: "telegram",
@@ -1954,9 +1978,8 @@ describe("DesktopMessagingRuntime", () => {
     const telegramAdapter = createAdapter("telegram");
     const discordAdapter = createAdapter("discord");
     const bridge = createBackendBridge();
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: () => [telegramAdapter, discordAdapter],
       backendBridge: bridge,
@@ -2016,9 +2039,8 @@ describe("DesktopMessagingRuntime", () => {
     await prepareRuntimeStore();
     const adapter = createAdapter("telegram");
     const factory = vi.fn<DesktopMessagingAdapterFactory>(() => [adapter]);
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: factory,
       backendBridge: createBackendBridge(),
@@ -2048,9 +2070,8 @@ describe("DesktopMessagingRuntime", () => {
       ...(config.discord ? [discordAdapter] : []),
       ...(config.slack ? [slackAdapter] : []),
     ]);
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: factory,
       backendBridge: createBackendBridge(),
@@ -2111,9 +2132,8 @@ describe("DesktopMessagingRuntime", () => {
           : firstSlackAdapter,
       ];
     });
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: factory,
       backendBridge: createBackendBridge(),
@@ -2168,9 +2188,8 @@ describe("DesktopMessagingRuntime", () => {
       ];
     });
     const bridge = createBackendBridge();
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: factory,
       backendBridge: bridge,
@@ -2243,9 +2262,8 @@ describe("DesktopMessagingRuntime", () => {
           : firstTelegramAdapter,
       ];
     });
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: factory,
       backendBridge: createBackendBridge(),
@@ -2292,9 +2310,8 @@ describe("DesktopMessagingRuntime", () => {
           : lineAdapter,
       ];
     });
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: factory,
       backendBridge: createBackendBridge(),
@@ -2306,8 +2323,12 @@ describe("DesktopMessagingRuntime", () => {
           channelSecret: "line-secret",
           callbackBaseUrl: "http://127.0.0.1:47822/",
           authorizedActorIds: [{ id: "user-1", displayName: "" }],
-          authorizedGroupIds: [{ id: "C0123456789abcdef0123456789abcdef", displayName: "" }],
-          authorizedRoomIds: [{ id: "R0123456789abcdef0123456789abcdef", displayName: "" }],
+          authorizedGroupIds: [
+            { id: "C0123456789abcdef0123456789abcdef", displayName: "" },
+          ],
+          authorizedRoomIds: [
+            { id: "R0123456789abcdef0123456789abcdef", displayName: "" },
+          ],
         },
       },
     });
@@ -2321,8 +2342,12 @@ describe("DesktopMessagingRuntime", () => {
         channelSecret: "line-secret",
         callbackBaseUrl: "http://127.0.0.1:47822/",
         authorizedActorIds: [{ id: "user-2", displayName: "" }],
-        authorizedGroupIds: [{ id: "C22222222222222222222222222222222", displayName: "" }],
-        authorizedRoomIds: [{ id: "R22222222222222222222222222222222", displayName: "" }],
+        authorizedGroupIds: [
+          { id: "C22222222222222222222222222222222", displayName: "" },
+        ],
+        authorizedRoomIds: [
+          { id: "R22222222222222222222222222222222", displayName: "" },
+        ],
       },
     });
 
@@ -2360,9 +2385,8 @@ describe("DesktopMessagingRuntime", () => {
           : firstTelegramAdapter,
       ];
     });
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: factory,
       backendBridge: createBackendBridge(),
@@ -2424,9 +2448,8 @@ describe("DesktopMessagingRuntime", () => {
           : firstTelegramAdapter,
       ];
     });
-    const { DesktopMessagingRuntime: Runtime } = await import(
-      "../messaging/messaging-runtime"
-    );
+    const { DesktopMessagingRuntime: Runtime } =
+      await import("../messaging/messaging-runtime");
     const runtime = new Runtime({
       adapterFactory: factory,
       backendBridge: createBackendBridge(),
@@ -2464,9 +2487,11 @@ describe("DesktopMessagingRuntime", () => {
   });
 });
 
-async function createRuntimeHarness(options: {
-  adapter?: ReturnType<typeof createAdapter>;
-} = {}): Promise<{
+async function createRuntimeHarness(
+  options: {
+    adapter?: ReturnType<typeof createAdapter>;
+  } = {},
+): Promise<{
   DesktopMessagingRuntime: typeof DesktopMessagingRuntime;
   adapter: ReturnType<typeof createAdapter>;
   bridge: ReturnType<typeof createBackendBridge>;
@@ -2477,9 +2502,8 @@ async function createRuntimeHarness(options: {
 
   const adapter = options.adapter ?? createAdapter("telegram");
   const bridge = createBackendBridge();
-  const { DesktopMessagingRuntime: Runtime } = await import(
-    "../messaging/messaging-runtime"
-  );
+  const { DesktopMessagingRuntime: Runtime } =
+    await import("../messaging/messaging-runtime");
   const runtime = trackRuntime(
     new Runtime({
       adapterFactory: () => [adapter],
@@ -2508,14 +2532,12 @@ async function prepareRuntimeStore(): Promise<void> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-runtime-"));
   tempDirs.push(tempDir);
   vi.stubEnv("PWRAGENT_HOME", tempDir);
-  const { initializeAppState, resetAppStateForTests } = await import(
-    "../state/app-state"
-  );
+  const { initializeAppState, resetAppStateForTests } =
+    await import("../state/app-state");
   resetAppStateForTests();
   initializeAppState();
-  const { resetDesktopMessagingStoreForTests } = await import(
-    "../messaging/desktop-messaging-store"
-  );
+  const { resetDesktopMessagingStoreForTests } =
+    await import("../messaging/desktop-messaging-store");
   resetDesktopMessagingStoreForTests();
 }
 
@@ -2564,21 +2586,27 @@ function createAdapter(
     capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
     channel,
     delivered,
-    deliver: vi.fn(async (intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> => {
-      delivered.push(intent);
-      return {
-        channel,
-        deliveredAt: 1000,
-        outcome: "presented",
-        surface: {
+    deliver: vi.fn(
+      async (
+        intent: MessagingSurfaceIntent,
+      ): Promise<MessagingDeliveryResult> => {
+        delivered.push(intent);
+        return {
           channel,
-          id: `${channel}:${intent.id}`,
-        },
-      };
-    }),
-    start: vi.fn(async (listener: (event: MessagingInboundEvent) => Promise<void>) => {
-      adapter.listener = listener;
-    }),
+          deliveredAt: 1000,
+          outcome: "presented",
+          surface: {
+            channel,
+            id: `${channel}:${intent.id}`,
+          },
+        };
+      },
+    ),
+    start: vi.fn(
+      async (listener: (event: MessagingInboundEvent) => Promise<void>) => {
+        adapter.listener = listener;
+      },
+    ),
     stop: vi.fn(async () => {}),
   } as DesktopMessagingAdapter & {
     delivered: MessagingSurfaceIntent[];
@@ -2593,9 +2621,13 @@ function createAdapter(
 
 function createBackendBridge(): MessagingBackendBridge & {
   emitBackendEvent: (event: AgentEvent) => Promise<void>;
-  onEvent: (listener: (event: AgentEvent) => void | Promise<void>) => () => void;
+  onEvent: (
+    listener: (event: AgentEvent) => void | Promise<void>,
+  ) => () => void;
 } {
-  const backendListeners = new Set<(event: AgentEvent) => void | Promise<void>>();
+  const backendListeners = new Set<
+    (event: AgentEvent) => void | Promise<void>
+  >();
 
   return {
     getNavigationSnapshot: vi.fn(async () => buildNavigationSnapshot()),
@@ -2646,7 +2678,9 @@ function buildNavigationSnapshot(): NavigationSnapshot {
   };
 }
 
-function buildCommandEvent(rawText: string): MessagingInboundEvent & { kind: "command" } {
+function buildCommandEvent(
+  rawText: string,
+): MessagingInboundEvent & { kind: "command" } {
   const command = rawText.replace(/^\//, "").split(/\s+/, 1)[0] ?? "";
   return {
     id: "event-command",
@@ -2670,7 +2704,9 @@ function buildCommandEvent(rawText: string): MessagingInboundEvent & { kind: "co
 
 function buildCallbackEvent(
   actionId: string,
-  value: NonNullable<Extract<MessagingInboundEvent, { kind: "callback" }>["value"]>,
+  value: NonNullable<
+    Extract<MessagingInboundEvent, { kind: "callback" }>["value"]
+  >,
   channel: MessagingChannelKind = "telegram",
 ): Extract<MessagingInboundEvent, { kind: "callback" }> {
   return {

@@ -6,23 +6,25 @@ describe("MessagingToolUpdatePolicy", () => {
   it("delivers the first three Show Some updates individually", () => {
     const policy = new MessagingToolUpdatePolicy({ now: () => 1000 });
 
-    expect(processTitles(policy, "show_some", ["one", "two", "three"]))
-      .toEqual([
+    expect(processTitles(policy, "show_some", ["one", "two", "three"])).toEqual(
+      [
         { kind: "individual", titles: ["one"] },
         { kind: "individual", titles: ["two"] },
         { kind: "individual", titles: ["three"] },
-      ]);
+      ],
+    );
   });
 
   it("batches Show Some updates after the quiet threshold", () => {
     const policy = new MessagingToolUpdatePolicy({ now: () => 1000 });
 
-    expect(processTitles(policy, "show_some", ["one", "two", "three", "four"]))
-      .toEqual([
-        { kind: "individual", titles: ["one"] },
-        { kind: "individual", titles: ["two"] },
-        { kind: "individual", titles: ["three"] },
-      ]);
+    expect(
+      processTitles(policy, "show_some", ["one", "two", "three", "four"]),
+    ).toEqual([
+      { kind: "individual", titles: ["one"] },
+      { kind: "individual", titles: ["two"] },
+      { kind: "individual", titles: ["three"] },
+    ]);
     expect(policy.flush()).toEqual([
       expect.objectContaining({
         kind: "batch",
@@ -41,8 +43,15 @@ describe("MessagingToolUpdatePolicy", () => {
       }),
     });
 
-    expect(processTitles(policy, "show_more", ["one", "two", "three", "four", "five"]))
-      .toHaveLength(5);
+    expect(
+      processTitles(policy, "show_more", [
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+      ]),
+    ).toHaveLength(5);
     expect(processTitles(policy, "show_more", ["six"])).toEqual([]);
     expect(timerDelay).toBe(15_000);
   });
@@ -132,15 +141,17 @@ function processTitles(
   bindingId = "binding-1",
 ) {
   return titles.flatMap((title, index) =>
-    policy.processActivity({
-      activity: activity(`${bindingId}-${title}-${index}`, title),
-      bindingId,
-      mode,
-      turnId: "turn-1",
-    }).map((delivery) => ({
-      kind: delivery.kind,
-      titles: delivery.activities.map((item) => item.title),
-    })),
+    policy
+      .processActivity({
+        activity: activity(`${bindingId}-${title}-${index}`, title),
+        bindingId,
+        mode,
+        turnId: "turn-1",
+      })
+      .map((delivery) => ({
+        kind: delivery.kind,
+        titles: delivery.activities.map((item) => item.title),
+      })),
   );
 }
 

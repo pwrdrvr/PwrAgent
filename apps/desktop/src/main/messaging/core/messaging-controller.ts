@@ -333,7 +333,10 @@ function resolveExecutionModeForBinding(
     return { mode: thread.executionMode, source: "thread" };
   }
   if (binding.preferences?.executionMode) {
-    return { mode: binding.preferences.executionMode, source: "binding-preferences" };
+    return {
+      mode: binding.preferences.executionMode,
+      source: "binding-preferences",
+    };
   }
   if (binding.preferences?.permissionsMode === "full-access") {
     return { mode: "full-access", source: "permissions-mode" };
@@ -366,7 +369,8 @@ function turnSettingsForBinding(
     executionMode: executionModeForBinding(binding, navigation),
     fastMode: thread?.fastMode ?? binding.preferences?.fastMode,
     model: thread?.model ?? binding.preferences?.model,
-    reasoningEffort: thread?.reasoningEffort ?? binding.preferences?.reasoningEffort,
+    reasoningEffort:
+      thread?.reasoningEffort ?? binding.preferences?.reasoningEffort,
     serviceTier: thread?.serviceTier ?? binding.preferences?.serviceTier,
   };
 }
@@ -376,7 +380,8 @@ function findThreadForBinding(
   binding: MessagingBindingRecord,
 ): NavigationThreadSummary | undefined {
   return navigation?.threads.find(
-    (thread) => thread.source === binding.backend && thread.id === binding.threadId,
+    (thread) =>
+      thread.source === binding.backend && thread.id === binding.threadId,
   );
 }
 
@@ -402,7 +407,9 @@ type MessagingFullAccessControls = {
   allowEscalation: boolean;
   allowThreadResume: boolean;
   warningPolicy: DesktopMessagingFullAccessWarningGlobalPolicy;
-  authorizedUsers?: Partial<Record<MessagingChannelKind, DesktopAuthorizedContact[]>>;
+  authorizedUsers?: Partial<
+    Record<MessagingChannelKind, DesktopAuthorizedContact[]>
+  >;
   dismissWarning?: (params: {
     actorId: string;
     channel: MessagingChannelKind;
@@ -579,7 +586,9 @@ export type MessagingControllerOptions = {
   deliveryBudget?: MessagingDeliveryBudget;
   sleepUntil?: (retryAt: number, now: () => number) => Promise<void>;
   activityLog?: () => MessagingActivityLog;
-  onDeliveryBudgetEvent?: (event: MessagingControllerDeliveryBudgetEvent) => void;
+  onDeliveryBudgetEvent?: (
+    event: MessagingControllerDeliveryBudgetEvent,
+  ) => void;
   onFullAccessPolicyViolation?: (event: {
     actorId: string;
     actorDisplayName?: string;
@@ -605,8 +614,14 @@ export class MessagingController {
   private readonly authorizedActorIds: Set<string>;
   private readonly capabilityProfile: MessagingCapabilityProfile;
   private readonly deliveredAssistantMessageKeys = new Set<string>();
-  private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
-  private readonly assistantStreamDeliveryQueues = new Map<string, Promise<void>>();
+  private readonly assistantStreamBuffers = new Map<
+    string,
+    AssistantStreamBuffer
+  >();
+  private readonly assistantStreamDeliveryQueues = new Map<
+    string,
+    Promise<void>
+  >();
   private readonly automationTurnsByTurnKey = new Map<
     string,
     AutomationTurnMessagingContext
@@ -620,9 +635,15 @@ export class MessagingController {
   private readonly now: () => number;
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
-  private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
+  private readonly activeTurnsByThreadKey = new Map<
+    string,
+    MessagingActiveTurnSummary
+  >();
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
-  private readonly planArtifactsByTurnKey = new Map<string, AppServerThreadPlanEntry>();
+  private readonly planArtifactsByTurnKey = new Map<
+    string,
+    AppServerThreadPlanEntry
+  >();
   private readonly markdownFileAttachmentSelector =
     new MessagingMarkdownFileAttachmentSelector();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
@@ -630,7 +651,10 @@ export class MessagingController {
   private readonly streamingResponsesDefault: boolean;
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
   private readonly turnAdmission: MessagingTurnAdmission;
-  private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
+  private readonly pendingNewThreadPrompts = new Map<
+    string,
+    PendingNewThreadPromptWindow
+  >();
   private readonly pendingFullAccessNewThreadPrompts = new Map<
     string,
     PendingNewThreadPromptBundle
@@ -671,7 +695,8 @@ export class MessagingController {
     this.now = options.now ?? Date.now;
     this.pendingIntentTtlMs =
       options.pendingIntentTtlMs ?? DEFAULT_PENDING_INTENT_TTL_MS;
-    this.interactionMapper = options.interactionMapper ?? new DeterministicInteractionMapper();
+    this.interactionMapper =
+      options.interactionMapper ?? new DeterministicInteractionMapper();
     this.deliveryBudget = options.deliveryBudget;
     this.logger = options.logger ?? messagingControllerLog;
     this.streamingResponsesDefault = options.streamingResponsesDefault ?? false;
@@ -804,9 +829,9 @@ export class MessagingController {
     }
 
     if (
-      (event.kind === "text" || event.kind === "media") &&
-      this.options.automationInboundHandler &&
-      (await this.options.automationInboundHandler(event))
+      (event.kind === "text" || event.kind === "media")
+      && this.options.automationInboundHandler
+      && (await this.options.automationInboundHandler(event))
     ) {
       return;
     }
@@ -827,10 +852,15 @@ export class MessagingController {
     intentId: string;
     source: AutomationRunSourceMetadata;
     text: string;
-  }): Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }> {
+  }): Promise<{
+    message?: string;
+    ok: boolean;
+    unsupported?: boolean;
+    errorMessage?: string;
+  }> {
     if (
-      this.options.channel &&
-      this.options.channel !== params.source.conversation.channel
+      this.options.channel
+      && this.options.channel !== params.source.conversation.channel
     ) {
       return {
         ok: false,
@@ -862,10 +892,10 @@ export class MessagingController {
     );
     return {
       ok:
-        result.outcome === "presented" ||
-        result.outcome === "presented_new" ||
-        result.outcome === "updated" ||
-        result.outcome === "signaled",
+        result.outcome === "presented"
+        || result.outcome === "presented_new"
+        || result.outcome === "updated"
+        || result.outcome === "signaled",
       unsupported: result.outcome === "unsupported",
       message: result.outcome,
       errorMessage: result.errorMessage,
@@ -882,8 +912,16 @@ export class MessagingController {
     intentId: string;
     target: AutomationMessagingConversationSnapshot;
     text: string;
-  }): Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }> {
-    if (this.options.channel && this.options.channel !== params.target.channel) {
+  }): Promise<{
+    message?: string;
+    ok: boolean;
+    unsupported?: boolean;
+    errorMessage?: string;
+  }> {
+    if (
+      this.options.channel
+      && this.options.channel !== params.target.channel
+    ) {
       return {
         ok: false,
         unsupported: true,
@@ -927,10 +965,10 @@ export class MessagingController {
     );
     return {
       ok:
-        result.outcome === "presented" ||
-        result.outcome === "presented_new" ||
-        result.outcome === "updated" ||
-        result.outcome === "signaled",
+        result.outcome === "presented"
+        || result.outcome === "presented_new"
+        || result.outcome === "updated"
+        || result.outcome === "signaled",
       unsupported: result.outcome === "unsupported",
       message: result.outcome,
       errorMessage: result.errorMessage,
@@ -946,11 +984,17 @@ export class MessagingController {
       );
       return;
     }
-    if (!threadId && event.notification.method === "account/rateLimits/updated") {
-      this.logger.debug?.("messaging skipped bound status refresh for backend rate limits", {
-        backend: event.backend,
-        method: event.notification.method,
-      });
+    if (
+      !threadId
+      && event.notification.method === "account/rateLimits/updated"
+    ) {
+      this.logger.debug?.(
+        "messaging skipped bound status refresh for backend rate limits",
+        {
+          backend: event.backend,
+          method: event.notification.method,
+        },
+      );
       return;
     }
     if (!threadId) {
@@ -973,9 +1017,14 @@ export class MessagingController {
       );
       return;
     }
-    const queueClearedParams = readExecutionModeQueueClearedParams(event.notification);
+    const queueClearedParams = readExecutionModeQueueClearedParams(
+      event.notification,
+    );
     if (queueClearedParams) {
-      await this.handleExecutionModeQueueCleared(event.backend, queueClearedParams);
+      await this.handleExecutionModeQueueCleared(
+        event.backend,
+        queueClearedParams,
+      );
       await this.refreshStatusSurfacesForThread(
         event.backend,
         threadId,
@@ -984,14 +1033,14 @@ export class MessagingController {
       return;
     }
     if (
-      event.notification.method === "thread/executionMode/updated" ||
-      event.notification.method === "thread/modelSettings/updated" ||
-      event.notification.method === "thread/codexEnvironment/updated" ||
-      event.notification.method === "thread/tokenUsage/updated" ||
-      event.notification.method === "thread/parent/set" ||
-      event.notification.method === "thread/parent/cleared" ||
-      event.notification.method === "thread/subthreadOrder/updated" ||
-      event.notification.method === "thread/subthreadsCollapsed/updated"
+      event.notification.method === "thread/executionMode/updated"
+      || event.notification.method === "thread/modelSettings/updated"
+      || event.notification.method === "thread/codexEnvironment/updated"
+      || event.notification.method === "thread/tokenUsage/updated"
+      || event.notification.method === "thread/parent/set"
+      || event.notification.method === "thread/parent/cleared"
+      || event.notification.method === "thread/subthreadOrder/updated"
+      || event.notification.method === "thread/subthreadsCollapsed/updated"
     ) {
       await this.refreshStatusSurfacesForThread(
         event.backend,
@@ -1023,9 +1072,9 @@ export class MessagingController {
     const turnQueueUpdate = turnQueueUpdateForBackendEvent(event);
     if (turnQueueUpdate) {
       if (
-        turnQueueUpdate.origin === "automation" &&
-        turnQueueUpdate.status === "started" &&
-        turnQueueUpdate.turnId
+        turnQueueUpdate.origin === "automation"
+        && turnQueueUpdate.status === "started"
+        && turnQueueUpdate.turnId
       ) {
         await this.handleAutomationTurnStarted({
           automationName: turnQueueUpdate.automationName,
@@ -1038,9 +1087,9 @@ export class MessagingController {
         });
       }
       if (
-        turnQueueUpdate.origin === "automation" &&
-        turnQueueUpdate.status === "terminal" &&
-        turnQueueUpdate.turnId
+        turnQueueUpdate.origin === "automation"
+        && turnQueueUpdate.status === "terminal"
+        && turnQueueUpdate.turnId
       ) {
         await this.handleAutomationTurnTerminal({
           automationRunId: turnQueueUpdate.automationRunId,
@@ -1058,7 +1107,11 @@ export class MessagingController {
     const planUpdate = planEntryForBackendEvent(event, this.now());
     if (planUpdate) {
       this.planArtifactsByTurnKey.set(
-        artifactTurnKey(event.backend, threadId, planUpdate.turn?.id ?? planUpdate.id),
+        artifactTurnKey(
+          event.backend,
+          threadId,
+          planUpdate.turn?.id ?? planUpdate.id,
+        ),
         planUpdate,
       );
     }
@@ -1066,9 +1119,12 @@ export class MessagingController {
     const markdownFileArtifactSelection =
       this.markdownFileAttachmentSelector.selectFromBackendEvent(event);
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
-    const completedPlan = lifecycle && isTerminalTurnLifecycle(lifecycle)
-      ? this.planArtifactsByTurnKey.get(artifactTurnKey(event.backend, threadId, lifecycle.turnId))
-      : undefined;
+    const completedPlan =
+      lifecycle && isTerminalTurnLifecycle(lifecycle)
+        ? this.planArtifactsByTurnKey.get(
+            artifactTurnKey(event.backend, threadId, lifecycle.turnId),
+          )
+        : undefined;
     for (const binding of bindings) {
       let activeTurn = this.getActiveTurn(binding);
       let turnStateChanged = false;
@@ -1116,9 +1172,9 @@ export class MessagingController {
         activeTurn?.turnId,
       );
       if (
-        turnStateChanged &&
-        (isTerminalTurnLifecycle(lifecycle) ||
-          (isThreadStatusIdleEvent(event) && activeTurn))
+        turnStateChanged
+        && (isTerminalTurnLifecycle(lifecycle)
+          || (isThreadStatusIdleEvent(event) && activeTurn))
       ) {
         await this.flushToolUpdatesForBinding(binding, {
           clear: true,
@@ -1164,7 +1220,10 @@ export class MessagingController {
         // the (growing) buffer as a brand-new message every time — the
         // multi-message channel flood (and the budget starvation it caused).
         await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
-        await this.flushBufferedAssistantStreamsForTerminalEvent(event, binding);
+        await this.flushBufferedAssistantStreamsForTerminalEvent(
+          event,
+          binding,
+        );
       }
 
       // Automation turns surface their own terminal output (incl. errors) via
@@ -1194,7 +1253,9 @@ export class MessagingController {
 
       if (markdownFileArtifactSelection && !automationTurnEvent) {
         await this.deliverArtifactForBinding({
-          artifact: artifactFromMarkdownFileSelection(markdownFileArtifactSelection),
+          artifact: artifactFromMarkdownFileSelection(
+            markdownFileArtifactSelection,
+          ),
           binding,
           intentId: `artifact:markdown-file:${markdownFileArtifactSelection.path}:${binding.id}`,
         });
@@ -1209,7 +1270,10 @@ export class MessagingController {
         continue;
       }
 
-      if (turnStateChanged && (lifecycle || (isThreadStatusIdleEvent(event) && activeTurn))) {
+      if (
+        turnStateChanged
+        && (lifecycle || (isThreadStatusIdleEvent(event) && activeTurn))
+      ) {
         await this.signalTurnActivity(binding, activeTurn!, {
           reason: event.notification.method,
           force: true,
@@ -1218,7 +1282,10 @@ export class MessagingController {
           await this.renderBindingStatus(binding);
         }
         await this.startNextQueuedTurn(binding);
-      } else if (activeTurn?.status === "waiting" && isTurnWorkActivityEvent(event, activeTurn)) {
+      } else if (
+        activeTurn?.status === "waiting"
+        && isTurnWorkActivityEvent(event, activeTurn)
+      ) {
         const previousTurn = activeTurn;
         activeTurn = {
           ...activeTurn,
@@ -1252,8 +1319,14 @@ export class MessagingController {
     }
     if (lifecycle && isTerminalTurnLifecycle(lifecycle)) {
       this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
-      this.forgetAgentMessagingOrigin(event.backend, threadId, lifecycle.turnId);
-      this.planArtifactsByTurnKey.delete(artifactTurnKey(event.backend, threadId, lifecycle.turnId));
+      this.forgetAgentMessagingOrigin(
+        event.backend,
+        threadId,
+        lifecycle.turnId,
+      );
+      this.planArtifactsByTurnKey.delete(
+        artifactTurnKey(event.backend, threadId, lifecycle.turnId),
+      );
     }
   }
 
@@ -1420,9 +1493,13 @@ export class MessagingController {
       ...stored,
       title: incoming.title ?? stored.title ?? managedConversation?.title,
       parentTitle:
-        incoming.parentTitle ?? stored.parentTitle ?? managedConversation?.parentTitle,
+        incoming.parentTitle
+        ?? stored.parentTitle
+        ?? managedConversation?.parentTitle,
       ancestorTitle:
-        incoming.ancestorTitle ?? stored.ancestorTitle ?? managedConversation?.ancestorTitle,
+        incoming.ancestorTitle
+        ?? stored.ancestorTitle
+        ?? managedConversation?.ancestorTitle,
     };
     const routingState = event.routingState ?? binding.routingState;
     const changed =
@@ -1442,7 +1519,9 @@ export class MessagingController {
     this.notifyBindingChanged("refresh-from-inbound");
   }
 
-  private async handleCommand(event: MessagingInboundCommandEvent): Promise<void> {
+  private async handleCommand(
+    event: MessagingInboundCommandEvent,
+  ): Promise<void> {
     const verb = matchMessagingCommandVerb(event.command);
     if (verb === "status") {
       await this.presentStatus(event);
@@ -1507,8 +1586,8 @@ export class MessagingController {
       pageIndex: options?.pageIndex,
     });
     const actions = buildHelpActions({ page });
-    const titleSuffix
-      = page.totalPages > 1
+    const titleSuffix =
+      page.totalPages > 1
         ? ` (page ${page.pageIndex + 1}/${page.totalPages})`
         : "";
     await this.deliver(
@@ -1559,11 +1638,12 @@ export class MessagingController {
     }
 
     const pendingNewThread = await this.findPendingNewThreadSession(event);
-    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
+    const pendingIntent =
+      await this.options.store.findActivePendingIntentForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+        now: this.now(),
+      });
     if (pendingIntent) {
       if (isSkillsSearchIntent(pendingIntent.intent)) {
         const mapped = await this.interactionMapper.mapText({
@@ -1615,8 +1695,8 @@ export class MessagingController {
           return;
         }
         if (
-          pendingIntent.intent.kind === "questionnaire" &&
-          await this.handleQuestionnaireTextAnswer(pendingIntent, event)
+          pendingIntent.intent.kind === "questionnaire"
+          && (await this.handleQuestionnaireTextAnswer(pendingIntent, event))
         ) {
           return;
         }
@@ -1633,7 +1713,9 @@ export class MessagingController {
               capabilityProfile: this.capabilityProfile,
               createdAt: this.now(),
               title: "Choose an option",
-              body: pendingIntent.intent.fallbackText ?? "Reply with one of the shown options.",
+              body:
+                pendingIntent.intent.fallbackText
+                ?? "Reply with one of the shown options.",
               fallbackText: pendingIntent.intent.fallbackText,
             }),
             undefined,
@@ -1649,9 +1731,11 @@ export class MessagingController {
       return;
     }
 
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    const binding = await this.options.store.findActiveBindingForChannel(
+      event.channel,
+    );
     if (!binding) {
-      if (!await this.shouldHandleAmbientSharedMessage(event)) {
+      if (!(await this.shouldHandleAmbientSharedMessage(event))) {
         return;
       }
       await this.presentHelp(event);
@@ -1659,8 +1743,8 @@ export class MessagingController {
     }
 
     if (
-      binding.targetKind === "agent_thread" &&
-      !await this.shouldHandleAmbientSharedMessage(event, binding)
+      binding.targetKind === "agent_thread"
+      && !(await this.shouldHandleAmbientSharedMessage(event, binding))
     ) {
       return;
     }
@@ -1689,9 +1773,10 @@ export class MessagingController {
       });
       return;
     }
-    const mentionCommand = event.botMention && event.text
-      ? parseMentionCommand(event.text)
-      : undefined;
+    const mentionCommand =
+      event.botMention && event.text
+        ? parseMentionCommand(event.text)
+        : undefined;
     if (mentionCommand) {
       await this.handleCommand({
         ...event,
@@ -1709,9 +1794,11 @@ export class MessagingController {
       return;
     }
 
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    const binding = await this.options.store.findActiveBindingForChannel(
+      event.channel,
+    );
     if (!binding) {
-      if (!await this.shouldHandleAmbientSharedMessage(event)) {
+      if (!(await this.shouldHandleAmbientSharedMessage(event))) {
         return;
       }
       await this.deliver(
@@ -1738,8 +1825,8 @@ export class MessagingController {
     }
 
     if (
-      binding.targetKind === "agent_thread" &&
-      !await this.shouldHandleAmbientSharedMessage(event, binding)
+      binding.targetKind === "agent_thread"
+      && !(await this.shouldHandleAmbientSharedMessage(event, binding))
     ) {
       return;
     }
@@ -1764,16 +1851,24 @@ export class MessagingController {
   private async responseModeForConversation(
     channel: MessagingChannelRef,
   ): Promise<MessagingResponseMode> {
-    return await this.options.responseModeForConversation?.(channel) ?? "every_message";
+    return (
+      (await this.options.responseModeForConversation?.(channel))
+      ?? "every_message"
+    );
   }
 
   private async handleAdmittedTurnBundle(
     bundle: MessagingTurnAdmissionBundle,
   ): Promise<void> {
     const currentBinding = bundle.binding.pendingSkillSelection
-      ? await this.options.store.getBinding(bundle.binding.id) ?? bundle.binding
+      ? ((await this.options.store.getBinding(bundle.binding.id))
+        ?? bundle.binding)
       : bundle.binding;
-    const prepared = await this.prepareTurnInput(bundle.events, currentBinding, bundle.events[0]);
+    const prepared = await this.prepareTurnInput(
+      bundle.events,
+      currentBinding,
+      bundle.events[0],
+    );
     if (!prepared) {
       return;
     }
@@ -1807,7 +1902,8 @@ export class MessagingController {
       event: bundle.events[0],
     });
     if (startResult !== "failed" && currentBinding.pendingSkillSelection) {
-      const updatedBinding = await this.clearPendingSkillSelection(currentBinding);
+      const updatedBinding =
+        await this.clearPendingSkillSelection(currentBinding);
       await this.renderBindingStatus(updatedBinding, bundle.events[0]);
     }
   }
@@ -1840,11 +1936,11 @@ export class MessagingController {
       now: this.now(),
     });
     if (
-      session &&
-      isNewThreadLaunchAction(session.launchAction) &&
-      session.mode === "new_thread_options" &&
-      session.selectedProject &&
-      (session.textInputExpiresAt ?? session.expiresAt) > this.now()
+      session
+      && isNewThreadLaunchAction(session.launchAction)
+      && session.mode === "new_thread_options"
+      && session.selectedProject
+      && (session.textInputExpiresAt ?? session.expiresAt) > this.now()
     ) {
       return session;
     }
@@ -1939,9 +2035,10 @@ export class MessagingController {
     } catch (deliveryError) {
       this.logger.debug?.("messaging new-thread failure notice failed", {
         channel: pending.session.channel.channel,
-        deliveryError: deliveryError instanceof Error
-          ? deliveryError.message
-          : String(deliveryError),
+        deliveryError:
+          deliveryError instanceof Error
+            ? deliveryError.message
+            : String(deliveryError),
         sessionId: pending.session.id,
       });
     }
@@ -1959,7 +2056,9 @@ export class MessagingController {
     }
   }
 
-  private pendingNewThreadPromptKey(session: MessagingBrowseSessionRecord): string {
+  private pendingNewThreadPromptKey(
+    session: MessagingBrowseSessionRecord,
+  ): string {
     return [
       buildMessagingConversationKey(session.channel),
       session.allowedActorIds.join(","),
@@ -2063,17 +2162,19 @@ export class MessagingController {
     let turnStarted = false;
 
     try {
-      const navigation = params.navigation ?? await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
+      const navigation =
+        params.navigation
+        ?? (await this.options.backend.getNavigationSnapshot({
+          backend: "all",
+        }));
       const turnSettings = turnSettingsForBinding(params.binding, navigation);
       const executionResolution = resolveExecutionModeForBinding(
         params.binding,
         navigation,
       );
       if (
-        turnSettings.executionMode === "full-access" &&
-        !(await this.canUseFullAccessThread(params.binding, navigation))
+        turnSettings.executionMode === "full-access"
+        && !(await this.canUseFullAccessThread(params.binding, navigation))
       ) {
         await this.deliverFullAccessPolicyError(
           params.binding,
@@ -2208,10 +2309,14 @@ export class MessagingController {
   }): Promise<void> {
     const currentTurn = this.getActiveTurn(params.binding);
     if (
-      currentTurn?.turnId === params.turnId &&
-      isTerminalTurnLifecycle(currentTurn)
+      currentTurn?.turnId === params.turnId
+      && isTerminalTurnLifecycle(currentTurn)
     ) {
-      await this.renderBindingStatus(params.binding, undefined, params.navigation);
+      await this.renderBindingStatus(
+        params.binding,
+        undefined,
+        params.navigation,
+      );
       return;
     }
     const activeTurn: MessagingActiveTurnSummary = {
@@ -2229,7 +2334,11 @@ export class MessagingController {
     await this.signalTurnActivity(params.binding, activeTurn, {
       force: true,
     });
-    await this.renderBindingStatus(params.binding, undefined, params.navigation);
+    await this.renderBindingStatus(
+      params.binding,
+      undefined,
+      params.navigation,
+    );
   }
 
   private async queuePreparedInput(params: {
@@ -2243,7 +2352,9 @@ export class MessagingController {
     await this.deliverQueuedTurnNotice(queued);
   }
 
-  private async deliverQueuedTurnNotice(entry: MessagingQueuedTurnEntry): Promise<void> {
+  private async deliverQueuedTurnNotice(
+    entry: MessagingQueuedTurnEntry,
+  ): Promise<void> {
     const canSteer = this.canSteerQueuedTurn(entry);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("queued-turn"),
@@ -2276,9 +2387,9 @@ export class MessagingController {
   private canSteerQueuedTurn(entry: MessagingQueuedTurnEntry): boolean {
     const activeTurn = this.getActiveTurn(entry.binding);
     return Boolean(
-      this.options.backend.steerTurn &&
-        activeTurn &&
-        ["working", "waiting"].includes(activeTurn.status),
+      this.options.backend.steerTurn
+      && activeTurn
+      && ["working", "waiting"].includes(activeTurn.status),
     );
   }
 
@@ -2355,9 +2466,9 @@ export class MessagingController {
       "queued_turn_steer",
     );
     if (
-      !this.options.backend.steerTurn ||
-      !activeTurn ||
-      !["working", "waiting"].includes(activeTurn.status)
+      !this.options.backend.steerTurn
+      || !activeTurn
+      || !["working", "waiting"].includes(activeTurn.status)
     ) {
       await this.deliver(
         buildErrorIntent({
@@ -2406,7 +2517,9 @@ export class MessagingController {
     );
   }
 
-  private async startNextQueuedTurn(binding: MessagingBindingRecord): Promise<void> {
+  private async startNextQueuedTurn(
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
     const threadKey = this.threadKeyForBinding(binding);
     if (await this.isTurnOccupied(binding, threadKey)) {
       return;
@@ -2439,7 +2552,9 @@ export class MessagingController {
     );
   }
 
-  private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
+  private async handleCallback(
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
     const command = readCommandAction(event);
     if (command) {
       await this.handleCommand({
@@ -2464,7 +2579,8 @@ export class MessagingController {
       return;
     }
 
-    const permissionsQueueCancelAction = readPermissionsQueueCancelAction(event);
+    const permissionsQueueCancelAction =
+      readPermissionsQueueCancelAction(event);
     if (permissionsQueueCancelAction) {
       await this.handlePermissionsQueueCancelCallback(
         event,
@@ -2510,12 +2626,12 @@ export class MessagingController {
       });
       const targetThread = navigation.threads.find(
         (thread) =>
-          thread.source === bindingTarget.backend &&
-          thread.id === bindingTarget.threadId,
+          thread.source === bindingTarget.backend
+          && thread.id === bindingTarget.threadId,
       );
       if (
-        targetThread?.executionMode === "full-access" &&
-        !(await this.canResumeFullAccessThreads())
+        targetThread?.executionMode === "full-access"
+        && !(await this.canResumeFullAccessThreads())
       ) {
         await this.deliverFullAccessPolicyError(
           undefined,
@@ -2532,7 +2648,10 @@ export class MessagingController {
           createdAt: this.now(),
           title: "Thread bound",
           body: boundThreadConfirmationBody(binding, this.capabilityProfile),
-          fallbackText: boundThreadFallbackText(binding, this.capabilityProfile),
+          fallbackText: boundThreadFallbackText(
+            binding,
+            this.capabilityProfile,
+          ),
         }),
         binding,
       );
@@ -2541,17 +2660,21 @@ export class MessagingController {
       return;
     }
 
-    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
+    const pendingIntent =
+      await this.options.store.findActivePendingIntentForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+        now: this.now(),
+      });
     if (pendingIntent) {
       const action = actionsForIntent(pendingIntent.intent).find(
-        (candidate) => candidate.id === (event.actionId ?? event.interaction.id),
+        (candidate) =>
+          candidate.id === (event.actionId ?? event.interaction.id),
       );
       if (action && pendingIntent.intent.kind === "approval") {
-        if (await this.retireApprovalCallbackIfBackendIdle(pendingIntent, event)) {
+        if (
+          await this.retireApprovalCallbackIfBackendIdle(pendingIntent, event)
+        ) {
           return;
         }
         const decision = await this.submitApprovalAction(
@@ -2703,7 +2826,11 @@ export class MessagingController {
         return;
       }
 
-      await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
+      await this.updateQuestionnairePendingIntent(
+        pendingIntent,
+        updated,
+        event,
+      );
     }
   }
 
@@ -2716,7 +2843,9 @@ export class MessagingController {
     }
 
     const question = intent.questions[intent.currentIndex];
-    const option = question?.options.find((candidate) => candidate.id === optionId);
+    const option = question?.options.find(
+      (candidate) => candidate.id === optionId,
+    );
     if (!option) {
       return intent;
     }
@@ -2758,7 +2887,9 @@ export class MessagingController {
     if (intent.phase !== "answering") {
       return intent;
     }
-    if (!messagingQuestionnaireAnswerComplete(intent.answers[intent.currentIndex])) {
+    if (
+      !messagingQuestionnaireAnswerComplete(intent.answers[intent.currentIndex])
+    ) {
       return intent;
     }
     if (intent.currentIndex >= intent.questions.length - 1) {
@@ -2770,10 +2901,12 @@ export class MessagingController {
     };
   }
 
-  private questionnaireReadyToSubmit(intent: MessagingQuestionnaireIntent): boolean {
+  private questionnaireReadyToSubmit(
+    intent: MessagingQuestionnaireIntent,
+  ): boolean {
     return (
-      intent.currentIndex >= intent.questions.length - 1 &&
-      intent.answers.every(messagingQuestionnaireAnswerComplete)
+      intent.currentIndex >= intent.questions.length - 1
+      && intent.answers.every(messagingQuestionnaireAnswerComplete)
     );
   }
 
@@ -2787,7 +2920,11 @@ export class MessagingController {
       phase: "submitted",
     };
     await this.submitQuestionnaireIntent(submittedIntent);
-    await this.deliverQuestionnaireIntent(pendingIntent, submittedIntent, event);
+    await this.deliverQuestionnaireIntent(
+      pendingIntent,
+      submittedIntent,
+      event,
+    );
     await this.options.store.deletePendingIntent(pendingIntent.id);
     await this.resumeBindingForPendingIntent(
       pendingIntent,
@@ -2819,7 +2956,11 @@ export class MessagingController {
     intent: MessagingQuestionnaireIntent,
     event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
   ): Promise<void> {
-    const result = await this.deliverQuestionnaireIntent(pendingIntent, intent, event);
+    const result = await this.deliverQuestionnaireIntent(
+      pendingIntent,
+      intent,
+      event,
+    );
     await this.options.store.upsertPendingIntent({
       ...pendingIntent,
       intent,
@@ -2835,9 +2976,9 @@ export class MessagingController {
     const binding = pendingIntent.bindingId
       ? await this.options.store.getBinding(pendingIntent.bindingId)
       : undefined;
-    const targetSurface = pendingIntent.surface ?? (
-      event.kind === "callback" ? event.interaction : undefined
-    );
+    const targetSurface =
+      pendingIntent.surface
+      ?? (event.kind === "callback" ? event.interaction : undefined);
     const deliveryIntent: MessagingQuestionnaireIntent = targetSurface
       ? {
           ...intent,
@@ -2883,9 +3024,15 @@ export class MessagingController {
     actionId: string,
   ): Promise<MessagingApprovalDecision | undefined> {
     const requestContext = intent.requestContext;
-    const action = intent.decisions.find((candidate) => candidate.id === actionId);
+    const action = intent.decisions.find(
+      (candidate) => candidate.id === actionId,
+    );
     const decision = action?.decision;
-    if (!requestContext || !action || !this.options.backend.submitServerRequest) {
+    if (
+      !requestContext
+      || !action
+      || !this.options.backend.submitServerRequest
+    ) {
       return decision;
     }
 
@@ -3027,11 +3174,14 @@ export class MessagingController {
           tracking.surfaces.set(binding.id, result.surface);
         }
       } catch (error) {
-        this.logger.debug?.("messaging permissions-queue audit deliver failed", {
-          bindingId: binding.id,
-          threadId: params.threadId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        this.logger.debug?.(
+          "messaging permissions-queue audit deliver failed",
+          {
+            bindingId: binding.id,
+            threadId: params.threadId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
       }
     }
 
@@ -3060,17 +3210,14 @@ export class MessagingController {
     // edit silently fails (Telegram message-too-old, network blip,
     // adapter not honoring replaceMarkup), the previously-stored
     // surface stays visible with its button until next refresh.
-    this.logger.debug?.(
-      "messaging permissions-queue clearance",
-      {
-        backend,
-        threadId: params.threadId,
-        reason: params.reason,
-        hasTracking: !!tracking,
-        surfaceCount: tracking?.surfaces.size ?? 0,
-        queueId: tracking?.queueId,
-      },
-    );
+    this.logger.debug?.("messaging permissions-queue clearance", {
+      backend,
+      threadId: params.threadId,
+      reason: params.reason,
+      hasTracking: !!tracking,
+      surfaceCount: tracking?.surfaces.size ?? 0,
+      queueId: tracking?.queueId,
+    });
     if (!tracking) {
       return;
     }
@@ -3114,32 +3261,26 @@ export class MessagingController {
       });
       try {
         const result = await this.deliver(intent, binding);
-        this.logger.debug?.(
-          "messaging permissions-queue audit edit",
-          {
-            bindingId: binding.id,
-            threadId: params.threadId,
-            reason: params.reason,
-            outcome: result.outcome,
-            // If outcome is "presented_new" the adapter posted a
-            // fresh "submitted/cancelled" message but couldn't edit
-            // the original. The original message (with its Cancel
-            // button) stays visible in the chat — that's the user's
-            // observed bug. Stale-tap feedback in
-            // handlePermissionsQueueCancelCallback handles the
-            // recovery path.
-          },
-        );
+        this.logger.debug?.("messaging permissions-queue audit edit", {
+          bindingId: binding.id,
+          threadId: params.threadId,
+          reason: params.reason,
+          outcome: result.outcome,
+          // If outcome is "presented_new" the adapter posted a
+          // fresh "submitted/cancelled" message but couldn't edit
+          // the original. The original message (with its Cancel
+          // button) stays visible in the chat — that's the user's
+          // observed bug. Stale-tap feedback in
+          // handlePermissionsQueueCancelCallback handles the
+          // recovery path.
+        });
       } catch (error) {
-        this.logger.debug?.(
-          "messaging permissions-queue audit edit failed",
-          {
-            bindingId: binding.id,
-            threadId: params.threadId,
-            reason: params.reason,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        );
+        this.logger.debug?.("messaging permissions-queue audit edit failed", {
+          bindingId: binding.id,
+          threadId: params.threadId,
+          reason: params.reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
@@ -3196,7 +3337,10 @@ export class MessagingController {
       await this.deliver(
         {
           ...pendingIntent.intent,
-          body: approvalBodyWithResponse(pendingIntent.intent.body, responseLabel),
+          body: approvalBodyWithResponse(
+            pendingIntent.intent.body,
+            responseLabel,
+          ),
           decisions: [],
           delivery: {
             mode: "update",
@@ -3230,11 +3374,11 @@ export class MessagingController {
     const binding = await this.options.store.getBinding(bindingId);
     const activeTurn = binding ? this.getActiveTurn(binding) : undefined;
     if (
-      !binding ||
-      binding.revokedAt ||
-      !activeTurn ||
-      activeTurn.turnId !== turnId ||
-      activeTurn.status !== "waiting"
+      !binding
+      || binding.revokedAt
+      || !activeTurn
+      || activeTurn.turnId !== turnId
+      || activeTurn.status !== "waiting"
     ) {
       return undefined;
     }
@@ -3307,8 +3451,9 @@ export class MessagingController {
     }
 
     if (
-      buffer.text.trim().length === 0 ||
-      (buffer.lastEmittedAt > 0 && now - buffer.lastEmittedAt < STREAM_UPDATE_REFRESH_MS)
+      buffer.text.trim().length === 0
+      || (buffer.lastEmittedAt > 0
+        && now - buffer.lastEmittedAt < STREAM_UPDATE_REFRESH_MS)
     ) {
       return;
     }
@@ -3325,9 +3470,13 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     finalText: string,
   ): Promise<boolean> {
-    const streamingEnabled = this.isStreamingResponsesEnabledForBinding(binding);
+    const streamingEnabled =
+      this.isStreamingResponsesEnabledForBinding(binding);
     let deliveredFinalStream = false;
-    for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
+    for (const bufferKey of this.assistantStreamBufferKeysForEvent(
+      event,
+      binding,
+    )) {
       const buffer = this.assistantStreamBuffers.get(bufferKey);
       if (!buffer) {
         continue;
@@ -3348,7 +3497,11 @@ export class MessagingController {
         sequence: buffer.sequence + 1,
         text: finalText,
       });
-      const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true);
+      const result = await this.enqueueAssistantStreamBufferDelivery(
+        bufferKey,
+        binding,
+        true,
+      );
       deliveredFinalStream ||= isVisibleAssistantStreamDelivery(result);
       this.assistantStreamBuffers.delete(bufferKey);
       this.assistantStreamDeliveryQueues.delete(bufferKey);
@@ -3360,9 +3513,13 @@ export class MessagingController {
     event: AgentEvent,
     binding: MessagingBindingRecord,
   ): Promise<void> {
-    const streamingEnabled = this.isStreamingResponsesEnabledForBinding(binding);
+    const streamingEnabled =
+      this.isStreamingResponsesEnabledForBinding(binding);
     const fallbackTexts: string[] = [];
-    for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
+    for (const bufferKey of this.assistantStreamBufferKeysForEvent(
+      event,
+      binding,
+    )) {
       const buffer = this.assistantStreamBuffers.get(bufferKey);
       if (!buffer) {
         continue;
@@ -3389,7 +3546,11 @@ export class MessagingController {
         sequence: buffer.sequence + 1,
         text,
       });
-      const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true);
+      const result = await this.enqueueAssistantStreamBufferDelivery(
+        bufferKey,
+        binding,
+        true,
+      );
       if (!isVisibleAssistantStreamDelivery(result)) {
         fallbackTexts.push(text);
       }
@@ -3431,10 +3592,10 @@ export class MessagingController {
     }
     for (const [bufferKey, buffer] of this.assistantStreamBuffers) {
       if (
-        bufferKey.startsWith(`${binding.id}\0`) &&
-        buffer.streamKey.startsWith(`${event.backend}:`) &&
-        buffer.threadId === filter.threadId &&
-        (!filter.turnId || buffer.turnId === filter.turnId)
+        bufferKey.startsWith(`${binding.id}\0`)
+        && buffer.streamKey.startsWith(`${event.backend}:`)
+        && buffer.threadId === filter.threadId
+        && (!filter.turnId || buffer.turnId === filter.turnId)
       ) {
         keys.add(bufferKey);
       }
@@ -3448,7 +3609,8 @@ export class MessagingController {
     isFinal: boolean,
   ): Promise<MessagingDeliveryResult> {
     let result: MessagingDeliveryResult | undefined;
-    const previous = this.assistantStreamDeliveryQueues.get(bufferKey) ?? Promise.resolve();
+    const previous =
+      this.assistantStreamDeliveryQueues.get(bufferKey) ?? Promise.resolve();
     const delivery = previous
       .catch(() => undefined)
       .then(async () => {
@@ -3456,7 +3618,11 @@ export class MessagingController {
         if (!latest) {
           return;
         }
-        result = await this.deliverAssistantStreamBuffer(latest, binding, isFinal);
+        result = await this.deliverAssistantStreamBuffer(
+          latest,
+          binding,
+          isFinal,
+        );
       });
     this.assistantStreamDeliveryQueues.set(bufferKey, delivery);
     try {
@@ -3466,11 +3632,13 @@ export class MessagingController {
         this.assistantStreamDeliveryQueues.delete(bufferKey);
       }
     }
-    return result ?? {
-      channel: binding.channel.channel,
-      deliveredAt: this.now(),
-      outcome: "discarded",
-    };
+    return (
+      result ?? {
+        channel: binding.channel.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      }
+    );
   }
 
   private async deliverAssistantStreamBuffer(
@@ -3480,7 +3648,9 @@ export class MessagingController {
   ): Promise<MessagingDeliveryResult> {
     const now = this.now();
     const intent: MessagingStreamUpdateIntent = {
-      id: this.newIntentId(isFinal ? "assistant-stream-final" : "assistant-stream"),
+      id: this.newIntentId(
+        isFinal ? "assistant-stream-final" : "assistant-stream",
+      ),
       kind: "stream_update",
       bindingId: binding.id,
       createdAt: now,
@@ -3571,7 +3741,9 @@ export class MessagingController {
     event: AgentEvent,
     binding: MessagingBindingRecord,
   ): Promise<void> {
-    if (!this.markAssistantMessageDelivered(event, binding, `turn-failed:${text}`)) {
+    if (
+      !this.markAssistantMessageDelivered(event, binding, `turn-failed:${text}`)
+    ) {
       return;
     }
     this.logger.debug?.(
@@ -3593,8 +3765,10 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     options?: { important?: boolean },
   ): Promise<void> {
-    const readLastAssistantReply = this.options.backend.readThreadLastAssistantReply;
-    const readLastAssistantMessage = this.options.backend.readThreadLastAssistantMessage;
+    const readLastAssistantReply =
+      this.options.backend.readThreadLastAssistantReply;
+    const readLastAssistantMessage =
+      this.options.backend.readThreadLastAssistantMessage;
     if (!readLastAssistantReply && !readLastAssistantMessage) {
       return;
     }
@@ -3744,7 +3918,9 @@ export class MessagingController {
     });
   }
 
-  private async presentResumeBrowser(event: MessagingInboundCommandEvent): Promise<void> {
+  private async presentResumeBrowser(
+    event: MessagingInboundCommandEvent,
+  ): Promise<void> {
     const parsed = parseResumeCommandArgs(event.args);
     if (parsed.error) {
       await this.deliver(
@@ -3765,21 +3941,21 @@ export class MessagingController {
       backend: "all",
       filter: parsed.query,
     });
-    const selectedBackend =
-      isNewThreadLaunchAction(parsed.launchAction)
-        ? await this.resolveNewThreadBackendForSession(
-            {
-              launchpadBackend: navigation.launchpadDefaults.backend,
-            },
-            event,
-          )
-        : undefined;
+    const selectedBackend = isNewThreadLaunchAction(parsed.launchAction)
+      ? await this.resolveNewThreadBackendForSession(
+          {
+            launchpadBackend: navigation.launchpadDefaults.backend,
+          },
+          event,
+        )
+      : undefined;
     if (isNewThreadLaunchAction(parsed.launchAction) && !selectedBackend) {
       return;
     }
     const selectedDirectory = parsed.cwd
       ? navigation.directories.find(
-          (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
+          (directory) =>
+            directory.path === parsed.cwd || directory.key === parsed.cwd,
         )
       : undefined;
     const session: MessagingBrowseSessionRecord = {
@@ -3791,7 +3967,10 @@ export class MessagingController {
       updatedAt: this.now(),
       expiresAt: this.now() + this.pendingIntentTtlMs,
       launchAction: parsed.launchAction,
-      mode: selectedDirectory && parsed.mode === "recents" ? "project_threads" : parsed.mode,
+      mode:
+        selectedDirectory && parsed.mode === "recents"
+          ? "project_threads"
+          : parsed.mode,
       pageIndex: 0,
       pageSize: resumeBrowserPageSize(this.capabilityProfile),
       preferences: parsed.preferences
@@ -3812,7 +3991,9 @@ export class MessagingController {
     await this.renderResumeBrowser(session, navigation, event);
   }
 
-  private async presentAgentBrowser(event: MessagingInboundCommandEvent): Promise<void> {
+  private async presentAgentBrowser(
+    event: MessagingInboundCommandEvent,
+  ): Promise<void> {
     const parsed = parseResumeCommandArgs(event.args);
     if (parsed.error) {
       await this.deliver(
@@ -3847,7 +4028,8 @@ export class MessagingController {
     }
     const selectedDirectory = parsed.cwd
       ? navigation.directories.find(
-          (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
+          (directory) =>
+            directory.path === parsed.cwd || directory.key === parsed.cwd,
         )
       : undefined;
     const session: MessagingBrowseSessionRecord = {
@@ -3858,10 +4040,12 @@ export class MessagingController {
       createdAt: this.now(),
       updatedAt: this.now(),
       expiresAt: this.now() + this.pendingIntentTtlMs,
-      launchAction: parsed.launchAction === "start_new_thread"
-        ? "start_new_agent_thread"
-        : "resume_thread",
-      mode: parsed.launchAction === "start_new_thread" ? "new_project" : "agents",
+      launchAction:
+        parsed.launchAction === "start_new_thread"
+          ? "start_new_agent_thread"
+          : "resume_thread",
+      mode:
+        parsed.launchAction === "start_new_thread" ? "new_project" : "agents",
       pageIndex: 0,
       pageSize: resumeBrowserPageSize(this.capabilityProfile),
       preferences: parsed.preferences
@@ -3935,7 +4119,7 @@ export class MessagingController {
           mode: "projects",
           pageIndex: 0,
           returnTo: shouldStartNewAgentThreadFromSession(session)
-            ? session.returnTo ?? resumeReturnTargetForSession(session)
+            ? (session.returnTo ?? resumeReturnTargetForSession(session))
             : undefined,
           selectedProject: undefined,
         },
@@ -3952,7 +4136,7 @@ export class MessagingController {
           mode: "recents",
           pageIndex: 0,
           returnTo: shouldStartNewAgentThreadFromSession(session)
-            ? session.returnTo ?? resumeReturnTargetForSession(session)
+            ? (session.returnTo ?? resumeReturnTargetForSession(session))
             : undefined,
           selectedProject: undefined,
         },
@@ -3995,7 +4179,8 @@ export class MessagingController {
             : "start_new_thread",
           mode: "new_project",
           pageIndex: 0,
-          returnTo: session.returnTo ?? resumeReturnTargetForSession(nextSession),
+          returnTo:
+            session.returnTo ?? resumeReturnTargetForSession(nextSession),
           selectedProject: undefined,
         },
         navigation,
@@ -4052,7 +4237,12 @@ export class MessagingController {
         return;
       }
       if (isNewThreadLaunchAction(session.launchAction)) {
-        await this.startNewThreadFromProject(event, session, navigation, project);
+        await this.startNewThreadFromProject(
+          event,
+          session,
+          navigation,
+          project,
+        );
         return;
       }
       await this.renderResumeBrowser(
@@ -4073,19 +4263,20 @@ export class MessagingController {
         : undefined;
       const currentWorkMode = resolveNewThreadWorkMode({
         requestedWorkMode:
-          nextSession.workMode ??
-          directory?.launchpad?.workMode ??
-          navigation.launchpadDefaults.workMode ??
-          "local",
+          nextSession.workMode
+          ?? directory?.launchpad?.workMode
+          ?? navigation.launchpadDefaults.workMode
+          ?? "local",
         directory,
       });
       const nextWorkMode =
         currentWorkMode === "worktree" || !canCreateNewThreadWorktree(directory)
           ? "local"
           : "worktree";
-      const branchName = nextWorkMode === "worktree"
-        ? resolveNewThreadBaseBranch(nextSession, navigation, directory)
-        : undefined;
+      const branchName =
+        nextWorkMode === "worktree"
+          ? resolveNewThreadBaseBranch(nextSession, navigation, directory)
+          : undefined;
       await this.updateNewThreadStickySettings(nextSession, {
         branchName,
         workMode: nextWorkMode,
@@ -4169,8 +4360,8 @@ export class MessagingController {
       return;
     }
     if (
-      actionId === "browse:new:branches:next" ||
-      actionId === "browse:new:branches:previous"
+      actionId === "browse:new:branches:next"
+      || actionId === "browse:new:branches:previous"
     ) {
       await this.presentNewThreadBranchPicker(
         nextSession,
@@ -4220,7 +4411,10 @@ export class MessagingController {
       if (nextSession.backend && isAcpBackendId(nextSession.backend)) {
         const summary = await this.getBackendSummary(nextSession.backend);
         const directory = nextSession.selectedProject
-          ? directoryForProjectSelection(navigation, nextSession.selectedProject)
+          ? directoryForProjectSelection(
+              navigation,
+              nextSession.selectedProject,
+            )
           : undefined;
         const runtimeChoices = summary
           ? buildMessagingAcpRuntimeModeSummary({
@@ -4242,11 +4436,19 @@ export class MessagingController {
             navigation,
           );
         } else {
-          await this.presentNewThreadPermissionsPicker(nextSession, event, navigation);
+          await this.presentNewThreadPermissionsPicker(
+            nextSession,
+            event,
+            navigation,
+          );
         }
         return;
       }
-      await this.presentNewThreadPermissionsPicker(nextSession, event, navigation);
+      await this.presentNewThreadPermissionsPicker(
+        nextSession,
+        event,
+        navigation,
+      );
       return;
     }
     if (actionId === "browse:new:set-permissions") {
@@ -4254,7 +4456,11 @@ export class MessagingController {
       return;
     }
     if (actionId === "browse:new:environment") {
-      await this.presentNewThreadEnvironmentPicker(nextSession, event, navigation);
+      await this.presentNewThreadEnvironmentPicker(
+        nextSession,
+        event,
+        navigation,
+      );
       return;
     }
     if (actionId === "browse:new:environment:back") {
@@ -4280,9 +4486,9 @@ export class MessagingController {
     }
     if (actionId === "browse:new:fast") {
       const fastMode = !(
-        nextSession.preferences?.fastMode ??
-        navigation.launchpadDefaults.fastMode ??
-        false
+        nextSession.preferences?.fastMode
+        ?? navigation.launchpadDefaults.fastMode
+        ?? false
       );
       await this.updateNewThreadStickySettings(nextSession, {
         fastMode,
@@ -4429,15 +4635,16 @@ export class MessagingController {
         return;
       }
       const targetThread = navigation.threads.find(
-        (thread) => thread.source === target.backend && thread.id === target.threadId,
+        (thread) =>
+          thread.source === target.backend && thread.id === target.threadId,
       );
       if (session.mode === "agents" && !targetThread?.agent) {
         await this.deliverInvalidBrowseSelection(event);
         return;
       }
       if (
-        targetThread?.executionMode === "full-access" &&
-        !(await this.canResumeFullAccessThreads())
+        targetThread?.executionMode === "full-access"
+        && !(await this.canResumeFullAccessThreads())
       ) {
         await this.deliverFullAccessPolicyError(
           undefined,
@@ -4448,8 +4655,8 @@ export class MessagingController {
       }
       const requestedExecutionMode = session.preferences?.executionMode;
       const shouldEscalateTarget =
-        requestedExecutionMode === "full-access" &&
-        targetThread?.executionMode !== "full-access";
+        requestedExecutionMode === "full-access"
+        && targetThread?.executionMode !== "full-access";
       if (shouldEscalateTarget) {
         const allowed = await this.ensureFullAccessEscalationAllowed(
           {
@@ -4517,9 +4724,12 @@ export class MessagingController {
   ): Promise<MessagingBrowseSessionRecord | undefined> {
     const callbackHandle = await this.resolveCallbackHandleForEvent(event);
     if (callbackHandle?.browseSessionId) {
-      return await this.options.store.getBrowseSession(callbackHandle.browseSessionId, {
-        now: this.now(),
-      });
+      return await this.options.store.getBrowseSession(
+        callbackHandle.browseSessionId,
+        {
+          now: this.now(),
+        },
+      );
     }
     if (callbackHandle) {
       return undefined;
@@ -4543,18 +4753,24 @@ export class MessagingController {
         channel: session.channel,
       });
       if (removed.length > 0) {
-        this.logger.debug?.("messaging retired channel pending intents on browse close", {
-          channel: session.channel.channel,
-          removedCount: removed.length,
-          sessionId: session.id,
-        });
+        this.logger.debug?.(
+          "messaging retired channel pending intents on browse close",
+          {
+            channel: session.channel.channel,
+            removedCount: removed.length,
+            sessionId: session.id,
+          },
+        );
       }
     } catch (error) {
-      this.logger.debug?.("messaging pending-intent cleanup failed on browse close", {
-        channel: session.channel.channel,
-        error: error instanceof Error ? error.message : String(error),
-        sessionId: session.id,
-      });
+      this.logger.debug?.(
+        "messaging pending-intent cleanup failed on browse close",
+        {
+          channel: session.channel.channel,
+          error: error instanceof Error ? error.message : String(error),
+          sessionId: session.id,
+        },
+      );
     }
   }
 
@@ -4574,15 +4790,20 @@ export class MessagingController {
         stickySettingsChanged: true,
       });
     } catch (error) {
-      this.logger.debug?.("messaging new-thread sticky launchpad update failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      this.logger.debug?.(
+        "messaging new-thread sticky launchpad update failed",
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
     }
   }
 
   private async loadNewThreadBackendChoices(
     event: MessagingInboundEvent,
-  ): Promise<{ backends: BackendSummary[]; selectable: BackendSummary[] } | undefined> {
+  ): Promise<
+    { backends: BackendSummary[]; selectable: BackendSummary[] } | undefined
+  > {
     try {
       const response = await this.options.backend.listBackends?.({
         includeUnavailable: true,
@@ -4667,7 +4888,10 @@ export class MessagingController {
     directory?: NavigationDirectorySummary;
     navigation: NavigationSnapshot;
   }> {
-    if (!session.selectedProject || !this.options.backend.ensureDirectoryLaunchpad) {
+    if (
+      !session.selectedProject
+      || !this.options.backend.ensureDirectoryLaunchpad
+    ) {
       return {
         directory: session.selectedProject
           ? directoryForProjectSelection(navigation, session.selectedProject)
@@ -4676,12 +4900,15 @@ export class MessagingController {
       };
     }
 
-    const directory = directoryForProjectSelection(navigation, session.selectedProject);
+    const directory = directoryForProjectSelection(
+      navigation,
+      session.selectedProject,
+    );
     const directoryKey =
-      session.selectedProject.directoryKey ??
-      directory?.key ??
-      session.selectedProject.path ??
-      session.selectedProject.label;
+      session.selectedProject.directoryKey
+      ?? directory?.key
+      ?? session.selectedProject.path
+      ?? session.selectedProject.label;
     try {
       const response = await this.options.backend.ensureDirectoryLaunchpad({
         directoryKey,
@@ -4708,7 +4935,9 @@ export class MessagingController {
         directories: nextDirectories,
       };
       return {
-        directory: nextDirectories.find((candidate) => candidate.key === directoryKey),
+        directory: nextDirectories.find(
+          (candidate) => candidate.key === directoryKey,
+        ),
         navigation: nextNavigation,
       };
     } catch (error) {
@@ -4736,11 +4965,16 @@ export class MessagingController {
 
   private async renderResumeBrowser(
     session: MessagingBrowseSessionRecord,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    navigation: Awaited<
+      ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>
+    >,
     event: MessagingInboundEvent,
   ): Promise<void> {
     await this.options.store.upsertBrowseSession(session);
-    const browseNavigation = await this.navigationForResumeBrowser(session, navigation);
+    const browseNavigation = await this.navigationForResumeBrowser(
+      session,
+      navigation,
+    );
     const intent = buildResumeIntent({
       id: this.newIntentId("resume"),
       createdAt: this.now(),
@@ -4772,10 +5006,15 @@ export class MessagingController {
   private async startNewThreadFromProject(
     event: MessagingInboundCallbackEvent,
     session: MessagingBrowseSessionRecord,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    navigation: Awaited<
+      ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>
+    >,
     project: NonNullable<ReturnType<typeof selectProjectFromValue>>,
   ): Promise<void> {
-    if (!this.options.backend.materializeDirectoryLaunchpad && !this.options.backend.startThread) {
+    if (
+      !this.options.backend.materializeDirectoryLaunchpad
+      && !this.options.backend.startThread
+    ) {
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("new-thread-unavailable"),
@@ -4803,10 +5042,10 @@ export class MessagingController {
     }
     const workMode = resolveNewThreadWorkMode({
       requestedWorkMode:
-        session.workMode ??
-        directory?.launchpad?.workMode ??
-        navigation.launchpadDefaults.workMode ??
-        "local",
+        session.workMode
+        ?? directory?.launchpad?.workMode
+        ?? navigation.launchpadDefaults.workMode
+        ?? "local",
       directory,
     });
     await this.presentNewThreadPromptGate(
@@ -4834,9 +5073,9 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
   ): MessagingBrowseSessionRecord {
     if (
-      !isNewThreadLaunchAction(session.launchAction) ||
-      session.mode !== "new_thread_options" ||
-      !session.selectedProject
+      !isNewThreadLaunchAction(session.launchAction)
+      || session.mode !== "new_thread_options"
+      || !session.selectedProject
     ) {
       return session;
     }
@@ -4855,21 +5094,27 @@ export class MessagingController {
   private async presentNewThreadPromptGate(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation?: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    navigation?: Awaited<
+      ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>
+    >,
   ): Promise<void> {
-    let snapshot = navigation ?? await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    let snapshot =
+      navigation
+      ?? (await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      }));
     const backendChoices = await this.loadNewThreadBackendChoices(event);
     if (!backendChoices) {
       return;
     }
     const selectedBackend = session.backend
-      ? backendChoices.selectable.find((backend) => backend.kind === session.backend)
+      ? backendChoices.selectable.find(
+          (backend) => backend.kind === session.backend,
+        )
       : resolveNewThreadBackend(
           backendChoices.backends,
           snapshot.launchpadDefaults.backend,
-    );
+        );
     if (!selectedBackend) {
       await this.deliverSelectedNewThreadBackendUnavailable(event);
       return;
@@ -4888,9 +5133,14 @@ export class MessagingController {
       selectedBackend.kind,
     );
     snapshot = ensured.navigation;
-    const directory = ensured.directory ?? (effectiveSession.selectedProject
-      ? directoryForProjectSelection(snapshot, effectiveSession.selectedProject)
-      : undefined);
+    const directory =
+      ensured.directory
+      ?? (effectiveSession.selectedProject
+        ? directoryForProjectSelection(
+            snapshot,
+            effectiveSession.selectedProject,
+          )
+        : undefined);
     const options = newThreadOptionsForSession(
       effectiveSession,
       snapshot,
@@ -4901,22 +5151,25 @@ export class MessagingController {
     const canCreateWorktree = canCreateNewThreadWorktree(directory);
     const fullAccessControls = await this.resolveFullAccessControls();
     const hasMultipleBackends = backendChoices.selectable.length > 1;
-    const supportsModel = (selectedBackend.launchpadOptions?.models?.length ?? 0) > 0;
+    const supportsModel =
+      (selectedBackend.launchpadOptions?.models?.length ?? 0) > 0;
     const supportsReasoning =
-      (selectedBackend.launchpadOptions?.reasoningEfforts?.length ?? 0) > 0 ||
-      Boolean(
+      (selectedBackend.launchpadOptions?.reasoningEfforts?.length ?? 0) > 0
+      || Boolean(
         selectedBackend.launchpadOptions?.models?.some(
           (model) => model.supportsReasoning,
         ),
       );
     const supportsFast =
-      Boolean(selectedBackend.launchpadOptions?.supportsFastMode) ||
-      Boolean(
-        selectedBackend.launchpadOptions?.models?.some((model) => model.supportsFast),
+      Boolean(selectedBackend.launchpadOptions?.supportsFastMode)
+      || Boolean(
+        selectedBackend.launchpadOptions?.models?.some(
+          (model) => model.supportsFast,
+        ),
       );
     const supportsPermissionsControls =
-      !isAcpBackendId(selectedBackend.kind) ||
-      options.executionMode === "full-access";
+      !isAcpBackendId(selectedBackend.kind)
+      || options.executionMode === "full-access";
     const acpRuntimeMode = isAcpBackendId(selectedBackend.kind)
       ? buildMessagingAcpRuntimeModeSummary({
           backend: selectedBackend,
@@ -4929,8 +5182,8 @@ export class MessagingController {
     });
     const environmentLabel = formatNewThreadEnvironmentLabel(options);
     const supportsEnvironment =
-      options.codexEnvironmentOptions.length > 0 ||
-      Boolean(options.codexEnvironmentId);
+      options.codexEnvironmentOptions.length > 0
+      || Boolean(options.codexEnvironmentId);
     await this.options.store.upsertBrowseSession(effectiveSession);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
@@ -4945,7 +5198,8 @@ export class MessagingController {
         : undefined,
       title: "Ready to start",
       body: newThreadPromptGateBody(effectiveSession, options, selectedBackend),
-      fallbackText: "Send your first instruction, or use the option buttons before sending it.",
+      fallbackText:
+        "Send your first instruction, or use the option buttons before sending it.",
       targetSurface: effectiveSession.surface,
       actions: [
         ...(hasMultipleBackends
@@ -4980,10 +5234,10 @@ export class MessagingController {
               },
             ]
           : []),
-        ...(((supportsPermissionsControls &&
-          (options.executionMode === "full-access" ||
-            fullAccessControls.allowEscalation)) ||
-          (acpRuntimeMode && acpRuntimeMode.choices.length > 0))
+        ...((supportsPermissionsControls
+          && (options.executionMode === "full-access"
+            || fullAccessControls.allowEscalation))
+        || (acpRuntimeMode && acpRuntimeMode.choices.length > 0)
           ? [
               {
                 id: "browse:new:permissions",
@@ -5062,7 +5316,8 @@ export class MessagingController {
     const updatedSession = {
       ...effectiveSession,
       workMode: options.workMode,
-      branchName: options.workMode === "worktree" ? options.branchName : undefined,
+      branchName:
+        options.workMode === "worktree" ? options.branchName : undefined,
       surface: result.surface,
       updatedAt: this.now(),
     };
@@ -5081,15 +5336,20 @@ export class MessagingController {
   private async presentNewThreadBackendPicker(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    navigation: Awaited<
+      ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>
+    >,
   ): Promise<void> {
     const choices = await this.loadNewThreadBackendChoices(event);
     if (!choices) {
       return;
     }
     const selectedBackend =
-      choices.selectable.find((backend) => backend.kind === session.backend) ??
-      resolveNewThreadBackend(choices.backends, navigation.launchpadDefaults.backend);
+      choices.selectable.find((backend) => backend.kind === session.backend)
+      ?? resolveNewThreadBackend(
+        choices.backends,
+        navigation.launchpadDefaults.backend,
+      );
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-backend"),
       capabilityProfile: this.capabilityProfile,
@@ -5106,17 +5366,19 @@ export class MessagingController {
         ...choices.selectable.map((backend, index) => ({
           id: "browse:new:set-backend",
           label: `${backend.label}${backend.kind === selectedBackend?.kind ? " ✓" : ""}`,
-          style: backend.kind === selectedBackend?.kind
-            ? "primary" as const
-            : "secondary" as const,
+          style:
+            backend.kind === selectedBackend?.kind
+              ? ("primary" as const)
+              : ("secondary" as const),
           fallbackText: String(index + 1),
           priority: 10 + index,
           value: { backend: backend.kind },
         })),
         {
-          id: session.workMode === "worktree"
-            ? "browse:new:workspace:worktree"
-            : "browse:new:workspace:local",
+          id:
+            session.workMode === "worktree"
+              ? "browse:new:workspace:worktree"
+              : "browse:new:workspace:local",
           label: "Back",
           style: "secondary" as const,
           fallbackText: "back",
@@ -5153,7 +5415,9 @@ export class MessagingController {
 
   private async presentNewThreadBranchPicker(
     session: MessagingBrowseSessionRecord,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    navigation: Awaited<
+      ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>
+    >,
     event: MessagingInboundEvent,
     pageIndex = 0,
   ): Promise<void> {
@@ -5270,9 +5534,10 @@ export class MessagingController {
           value: { model: model.id },
         })),
         {
-          id: session.workMode === "worktree"
-            ? "browse:new:workspace:worktree"
-            : "browse:new:workspace:local",
+          id:
+            session.workMode === "worktree"
+              ? "browse:new:workspace:worktree"
+              : "browse:new:workspace:local",
           label: "Back",
           style: "secondary" as const,
           fallbackText: "back",
@@ -5367,9 +5632,10 @@ export class MessagingController {
           },
         })),
         {
-          id: session.workMode === "worktree"
-            ? "browse:new:workspace:worktree"
-            : "browse:new:workspace:local",
+          id:
+            session.workMode === "worktree"
+              ? "browse:new:workspace:worktree"
+              : "browse:new:workspace:local",
           label: "Back",
           style: "secondary" as const,
           fallbackText: "back",
@@ -5412,7 +5678,7 @@ export class MessagingController {
           this.streamingResponsesDefault,
           backend,
         ).executionMode
-      : session.preferences?.executionMode ?? "default";
+      : (session.preferences?.executionMode ?? "default");
     const choices: Array<{ label: string; mode: ThreadExecutionMode }> = [
       { label: "Default", mode: "default" },
       { label: "Full Access", mode: "full-access" },
@@ -5439,9 +5705,10 @@ export class MessagingController {
           value: { executionMode: choice.mode },
         })),
         {
-          id: session.workMode === "worktree"
-            ? "browse:new:workspace:worktree"
-            : "browse:new:workspace:local",
+          id:
+            session.workMode === "worktree"
+              ? "browse:new:workspace:worktree"
+              : "browse:new:workspace:local",
           label: "Back",
           style: "secondary" as const,
           fallbackText: "back",
@@ -5474,9 +5741,9 @@ export class MessagingController {
       ? directoryForProjectSelection(navigation, session.selectedProject)
       : undefined;
     const currentMode =
-      session.preferences?.executionMode ??
-      directory?.launchpad?.executionMode ??
-      navigation.launchpadDefaults.executionMode;
+      session.preferences?.executionMode
+      ?? directory?.launchpad?.executionMode
+      ?? navigation.launchpadDefaults.executionMode;
     if (executionMode === currentMode) {
       await this.presentNewThreadPromptGate(session, event, navigation);
       return;
@@ -5518,9 +5785,14 @@ export class MessagingController {
       navigation,
       session.backend ?? navigation.launchpadDefaults.backend,
     );
-    const directory = ensured.directory ?? (session.selectedProject
-      ? directoryForProjectSelection(ensured.navigation, session.selectedProject)
-      : undefined);
+    const directory =
+      ensured.directory
+      ?? (session.selectedProject
+        ? directoryForProjectSelection(
+            ensured.navigation,
+            session.selectedProject,
+          )
+        : undefined);
     const options = directory?.launchpad?.codexEnvironmentOptions ?? [];
     const currentEnvironmentId = resolveNewThreadCodexEnvironmentId(
       session,
@@ -5560,19 +5832,25 @@ export class MessagingController {
       navigation,
       session.backend ?? navigation.launchpadDefaults.backend,
     );
-    const directory = ensured.directory ?? (session.selectedProject
-      ? directoryForProjectSelection(ensured.navigation, session.selectedProject)
-      : undefined);
+    const directory =
+      ensured.directory
+      ?? (session.selectedProject
+        ? directoryForProjectSelection(
+            ensured.navigation,
+            session.selectedProject,
+          )
+        : undefined);
     const environmentId = readNullableStringValue(event.value, "environmentId");
     if (environmentId === undefined) {
       await this.deliverInvalidBrowseSelection(event);
       return;
     }
-    const environment = environmentId === null
-      ? undefined
-      : directory?.launchpad?.codexEnvironmentOptions?.find(
-          (candidate) => candidate.id === environmentId,
-        );
+    const environment =
+      environmentId === null
+        ? undefined
+        : directory?.launchpad?.codexEnvironmentOptions?.find(
+            (candidate) => candidate.id === environmentId,
+          );
     if (environmentId !== null && !environment) {
       await this.deliverInvalidBrowseSelection(event);
       return;
@@ -5638,9 +5916,9 @@ export class MessagingController {
     });
     const choice = currentRuntimeMode.choices.find(
       (candidate) =>
-        candidate.source === source &&
-        candidate.optionId === optionId &&
-        candidate.value === value,
+        candidate.source === source
+        && candidate.optionId === optionId
+        && candidate.value === value,
     );
     if (!choice) {
       await this.deliverInvalidBrowseSelection(event);
@@ -5656,8 +5934,10 @@ export class MessagingController {
       value,
     };
     if (
-      choice.privileged &&
-      !messagingAcpRuntimeValueLooksPrivileged(currentRuntimeMode.currentValue)
+      choice.privileged
+      && !messagingAcpRuntimeValueLooksPrivileged(
+        currentRuntimeMode.currentValue,
+      )
     ) {
       const allowed = await this.ensureAcpRuntimeModeAllowed(
         riskContext,
@@ -5668,7 +5948,12 @@ export class MessagingController {
       }
     }
 
-    await this.applyNewThreadAcpRuntimeMode(session, event, navigation, riskContext);
+    await this.applyNewThreadAcpRuntimeMode(
+      session,
+      event,
+      navigation,
+      riskContext,
+    );
   }
 
   private async applyNewThreadAcpRuntimeMode(
@@ -5700,12 +5985,15 @@ export class MessagingController {
               [selection.optionId]: selection.value,
             }
           : currentRuntime?.configValues,
-      currentModeId: selection.source === "mode" || selection.source === "configOption"
-        ? selection.value
-        : currentRuntime?.currentModeId,
+      currentModeId:
+        selection.source === "mode" || selection.source === "configOption"
+          ? selection.value
+          : currentRuntime?.currentModeId,
       updatedAt: this.now(),
     };
-    const executionMode = messagingAcpRuntimeValueLooksPrivileged(selection.value)
+    const executionMode = messagingAcpRuntimeValueLooksPrivileged(
+      selection.value,
+    )
       ? "full-access"
       : "default";
     await this.updateNewThreadStickySettings(session, {
@@ -5761,9 +6049,10 @@ export class MessagingController {
           value: { reasoningEffort: effort },
         })),
         {
-          id: session.workMode === "worktree"
-            ? "browse:new:workspace:worktree"
-            : "browse:new:workspace:local",
+          id:
+            session.workMode === "worktree"
+              ? "browse:new:workspace:worktree"
+              : "browse:new:workspace:local",
           label: "Back",
           style: "secondary" as const,
           fallbackText: "back",
@@ -5790,12 +6079,19 @@ export class MessagingController {
       return;
     }
 
-    const prepared = await this.prepareTurnInput(bundle.events, undefined, event);
+    const prepared = await this.prepareTurnInput(
+      bundle.events,
+      undefined,
+      event,
+    );
     if (!prepared) {
       return;
     }
 
-    if (!this.options.backend.materializeDirectoryLaunchpad && !this.options.backend.startThread) {
+    if (
+      !this.options.backend.materializeDirectoryLaunchpad
+      && !this.options.backend.startThread
+    ) {
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("new-thread-unavailable"),
@@ -5853,7 +6149,8 @@ export class MessagingController {
       selectedBackend.kind,
     );
     navigation = ensured.navigation;
-    const directory = ensured.directory ?? directoryForProjectSelection(navigation, project);
+    const directory =
+      ensured.directory ?? directoryForProjectSelection(navigation, project);
     const preferences = session.preferences;
     const options = newThreadOptionsForSession(
       session,
@@ -5887,8 +6184,8 @@ export class MessagingController {
     type StartedLaunchpadThread = Pick<
       MaterializedDirectoryLaunchpadThread,
       "backend" | "threadId" | "executionMode"
-    > &
-      Partial<
+    >
+      & Partial<
         Pick<
           MaterializedDirectoryLaunchpadThread,
           "codexEnvironmentRuntime" | "linkedDirectory" | "workMode"
@@ -5944,7 +6241,9 @@ export class MessagingController {
         navigation,
         now: this.now(),
         model: options.supportsModel ? options.model : undefined,
-        reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
+        reasoningEffort: options.supportsReasoning
+          ? options.reasoningEffort
+          : undefined,
         serviceTier: preferences?.serviceTier,
         fastMode: options.supportsFast ? options.fastMode : undefined,
         acpRuntime: options.acpRuntime,
@@ -5980,9 +6279,13 @@ export class MessagingController {
     const environmentSetupReporter = startFirstTurnAfterEnvironmentSetup
       ? this.createMessagingEnvironmentSetupReporter(event)
       : undefined;
-    let materialized: Awaited<
-      ReturnType<NonNullable<MessagingBackendBridge["materializeDirectoryLaunchpad"]>>
-    > | undefined;
+    let materialized:
+      | Awaited<
+          ReturnType<
+            NonNullable<MessagingBackendBridge["materializeDirectoryLaunchpad"]>
+          >
+        >
+      | undefined;
     try {
       materialized = this.options.backend.materializeDirectoryLaunchpad
         ? await this.options.backend.materializeDirectoryLaunchpad(
@@ -6013,27 +6316,29 @@ export class MessagingController {
     } finally {
       await environmentSetupReporter?.stop();
     }
-    const started = materialized ?? (await this.options.backend.startThread!({
-      backend: selectedBackend.kind,
-      cwd: directory?.path ?? project.path,
-      executionMode: options.executionMode,
-      fastMode: options.supportsFast ? options.fastMode : undefined,
-      model: options.supportsModel ? options.model : undefined,
-      reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
-      serviceTier: preferences?.serviceTier,
-      acpRuntime: options.acpRuntime,
-      agent: agentForNewThreadSession(session),
-      ...(options.workMode === "worktree"
-        ? {
-            workMode: "worktree" as const,
-            branchName: options.branchName,
-          }
-        : {}),
-    }));
-    const {
-      binding: updatedBinding,
-      navigation: optimisticNavigation,
-    } = await bindStartedThread(started);
+    const started =
+      materialized
+      ?? (await this.options.backend.startThread!({
+        backend: selectedBackend.kind,
+        cwd: directory?.path ?? project.path,
+        executionMode: options.executionMode,
+        fastMode: options.supportsFast ? options.fastMode : undefined,
+        model: options.supportsModel ? options.model : undefined,
+        reasoningEffort: options.supportsReasoning
+          ? options.reasoningEffort
+          : undefined,
+        serviceTier: preferences?.serviceTier,
+        acpRuntime: options.acpRuntime,
+        agent: agentForNewThreadSession(session),
+        ...(options.workMode === "worktree"
+          ? {
+              workMode: "worktree" as const,
+              branchName: options.branchName,
+            }
+          : {}),
+      }));
+    const { binding: updatedBinding, navigation: optimisticNavigation } =
+      await bindStartedThread(started);
     await retireBrowseSession();
     if (startFirstTurnAfterEnvironmentSetup && materialized) {
       await this.deliverMessagingEnvironmentSetupFinal({
@@ -6041,12 +6346,20 @@ export class MessagingController {
         event,
         materialized,
       });
-      await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+      await this.renderBindingStatus(
+        updatedBinding,
+        event,
+        optimisticNavigation,
+      );
     }
     if (materialized?.turnStartFailure) {
       const activeTurn = this.getActiveTurn(updatedBinding);
       if (activeTurn?.status === "failed") {
-        await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+        await this.renderBindingStatus(
+          updatedBinding,
+          event,
+          optimisticNavigation,
+        );
         return;
       }
       await this.deliver(
@@ -6060,7 +6373,11 @@ export class MessagingController {
         updatedBinding,
         event,
       );
-      await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+      await this.renderBindingStatus(
+        updatedBinding,
+        event,
+        optimisticNavigation,
+      );
       return;
     }
     if (materialized?.turnId) {
@@ -6115,7 +6432,9 @@ export class MessagingController {
     let deliveryQueue: Promise<void> = Promise.resolve();
     let stopped = false;
 
-    const deliverProgress = (setupEvent: CodexEnvironmentSetupProgressEvent) => {
+    const deliverProgress = (
+      setupEvent: CodexEnvironmentSetupProgressEvent,
+    ) => {
       deliveryQueue = deliveryQueue.then(async () => {
         try {
           await this.deliver(
@@ -6130,9 +6449,12 @@ export class MessagingController {
             event,
           );
         } catch (error) {
-          this.logger.debug?.("messaging environment setup progress deliver failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
+          this.logger.debug?.(
+            "messaging environment setup progress deliver failed",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
         }
       });
     };
@@ -6142,7 +6464,10 @@ export class MessagingController {
         return;
       }
       interval = setInterval(() => {
-        if (latestEvent && !isTerminalCodexEnvironmentSetupProgress(latestEvent)) {
+        if (
+          latestEvent
+          && !isTerminalCodexEnvironmentSetupProgress(latestEvent)
+        ) {
           deliverProgress(latestEvent);
         }
       }, MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS);
@@ -6188,10 +6513,14 @@ export class MessagingController {
         buildErrorIntent({
           id: this.newIntentId("environment-startup-failed"),
           createdAt: this.now(),
-          title: failure.phase === "action"
-            ? "Environment action failed"
-            : "Environment setup failed",
-          body: buildMessagingEnvironmentSetupFailureBody(runtime, failure.message),
+          title:
+            failure.phase === "action"
+              ? "Environment action failed"
+              : "Environment setup failed",
+          body: buildMessagingEnvironmentSetupFailureBody(
+            runtime,
+            failure.message,
+          ),
           recoverable: true,
         }),
         params.binding,
@@ -6205,9 +6534,10 @@ export class MessagingController {
         id: this.newIntentId("environment-startup-succeeded"),
         capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
-        title: runtime?.setupStatus === "skipped"
-          ? "Environment setup skipped"
-          : "Environment setup completed",
+        title:
+          runtime?.setupStatus === "skipped"
+            ? "Environment setup skipped"
+            : "Environment setup completed",
         body: buildMessagingEnvironmentSetupSuccessBody(runtime),
       }),
       params.binding,
@@ -6237,17 +6567,19 @@ export class MessagingController {
       directories: navigation.directories.map((directory) => ({
         ...directory,
         threadKeys: directory.threadKeys.filter((threadKey) =>
-          allowedThreadKeys.has(threadKey)
+          allowedThreadKeys.has(threadKey),
         ),
       })),
       inboxThreadKeys: navigation.inboxThreadKeys.filter((threadKey) =>
-        allowedThreadKeys.has(threadKey)
+        allowedThreadKeys.has(threadKey),
       ),
     };
   }
 
   private async presentStatus(event: MessagingInboundEvent): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    const binding = await this.options.store.findActiveBindingForChannel(
+      event.channel,
+    );
     if (!binding) {
       await this.deliver(
         buildConfirmationIntent({
@@ -6274,12 +6606,14 @@ export class MessagingController {
     await this.recreateBindingStatus(binding, event);
   }
 
-  private async handleMonitorCommand(event: MessagingInboundCommandEvent): Promise<void> {
+  private async handleMonitorCommand(
+    event: MessagingInboundCommandEvent,
+  ): Promise<void> {
     const action = normalizeMonitorCommandAction(event.args);
     if (
-      action.kind === "topics-adopt" ||
-      action.kind === "topics-cleanup" ||
-      action.kind === "topics-fanout"
+      action.kind === "topics-adopt"
+      || action.kind === "topics-cleanup"
+      || action.kind === "topics-fanout"
     ) {
       await this.handleMonitorTopicCommand(event, action);
       return;
@@ -6296,7 +6630,10 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
     actionId: string,
   ): Promise<void> {
-    if (actionId === "monitor:topics" || actionId.startsWith("monitor:topics:")) {
+    if (
+      actionId === "monitor:topics"
+      || actionId.startsWith("monitor:topics:")
+    ) {
       await this.handleMonitorTopicCallback(event, actionId);
       return;
     }
@@ -6305,7 +6642,10 @@ export class MessagingController {
       return;
     }
 
-    await this.enableAndRenderChannelMonitor(event, normalizeMonitorCallbackAction(actionId));
+    await this.enableAndRenderChannelMonitor(
+      event,
+      normalizeMonitorCallbackAction(actionId),
+    );
   }
 
   private async handleMonitorTopicCommand(
@@ -6356,8 +6696,11 @@ export class MessagingController {
   }
 
   private supportsMonitorTopicControls(channel: MessagingChannelRef): boolean {
-    return channel.channel === "telegram" &&
-      (channel.conversation.kind === "topic" || channel.conversation.kind === "channel");
+    return (
+      channel.channel === "telegram"
+      && (channel.conversation.kind === "topic"
+        || channel.conversation.kind === "channel")
+    );
   }
 
   private async resolveMonitorControlTopic(
@@ -6387,10 +6730,12 @@ export class MessagingController {
     }
 
     const supergroupId = event.channel.conversation.id;
-    const knownTopics = await this.options.store.findManagedTopicsForSupergroup({
-      channel: event.channel.channel,
-      supergroupId,
-    });
+    const knownTopics = await this.options.store.findManagedTopicsForSupergroup(
+      {
+        channel: event.channel.channel,
+        supergroupId,
+      },
+    );
     const existing = knownTopics.find(
       (topic) => topic.source === "owned" && topic.lifecycle !== "deleted",
     );
@@ -6425,7 +6770,9 @@ export class MessagingController {
           id: this.newIntentId("topics-create-failed"),
           createdAt: this.now(),
           title: "Topic creation failed",
-          body: result.errorMessage ?? "Telegram could not create the PwrAgent control topic.",
+          body:
+            result.errorMessage
+            ?? "Telegram could not create the PwrAgent control topic.",
           recoverable: true,
         }),
         undefined,
@@ -6510,13 +6857,16 @@ export class MessagingController {
 
     const approvalKey = actionId.slice(approvePrefix.length);
     const separatorIndex = approvalKey.lastIndexOf(":");
-    const proposalId = separatorIndex > 0 ? approvalKey.slice(0, separatorIndex) : "";
-    const itemId = separatorIndex > 0 ? approvalKey.slice(separatorIndex + 1) : "";
+    const proposalId =
+      separatorIndex > 0 ? approvalKey.slice(0, separatorIndex) : "";
+    const itemId =
+      separatorIndex > 0 ? approvalKey.slice(separatorIndex + 1) : "";
     if (!proposalId || !itemId) {
       await this.deliverInvalidTopicApproval(event);
       return;
     }
-    const proposal = await this.options.store.getTopicCleanupProposal(proposalId);
+    const proposal =
+      await this.options.store.getTopicCleanupProposal(proposalId);
     const item = proposal?.items.find((candidate) => candidate.id === itemId);
     if (!proposal || proposal.status !== "pending" || !item) {
       await this.deliverInvalidTopicApproval(event);
@@ -6550,7 +6900,9 @@ export class MessagingController {
           id: this.newIntentId("topics-approval-failed"),
           createdAt: now,
           title: "Topic action failed",
-          body: result?.errorMessage ?? "The Telegram adapter could not apply that topic action.",
+          body:
+            result?.errorMessage
+            ?? "The Telegram adapter could not apply that topic action.",
           recoverable: true,
         }),
         undefined,
@@ -6667,9 +7019,9 @@ export class MessagingController {
       .filter((topic) => topic.lifecycle !== "deleted")
       .map((topic): MessagingTopicCleanupProposalItem => {
         const action =
-          topic.id === controlTopic.id ||
-          topic.source === "owned" ||
-          topic.source === "linked"
+          topic.id === controlTopic.id
+          || topic.source === "owned"
+          || topic.source === "linked"
             ? "keep"
             : topic.lifecycle === "closed"
               ? "delete"
@@ -6705,7 +7057,10 @@ export class MessagingController {
       .map((item) => ({
         id: `monitor:topics:approve:${proposal.id}:${item.id}`,
         label: `${item.action === "delete" ? "Delete" : "Close"} ${item.title ?? item.id}`,
-        style: item.action === "delete" ? "danger" as const : "secondary" as const,
+        style:
+          item.action === "delete"
+            ? ("danger" as const)
+            : ("secondary" as const),
         fallbackText: `/monitor topics approve ${proposal.id} ${item.id}`,
       }));
     await this.deliver(
@@ -6741,8 +7096,12 @@ export class MessagingController {
       return;
     }
 
-    const snapshot = await this.options.backend.getNavigationSnapshot({ backend: "all" });
-    const selected = selectMonitorThreads({ navigation: snapshot }).threads.slice(0, 3);
+    const snapshot = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const selected = selectMonitorThreads({
+      navigation: snapshot,
+    }).threads.slice(0, 3);
     const created: string[] = [];
     const reused: string[] = [];
     const failed: string[] = [];
@@ -6754,7 +7113,9 @@ export class MessagingController {
         threadId: thread.id,
       });
       if (existing) {
-        const topic = await this.options.store.getManagedTopic(existing.topicRecordId);
+        const topic = await this.options.store.getManagedTopic(
+          existing.topicRecordId,
+        );
         if (topic) {
           await this.ensureManagedTopicBinding(event, topic, thread);
         }
@@ -6791,7 +7152,11 @@ export class MessagingController {
         topicRecordId: topic.id,
         updatedAt: this.now(),
       });
-      const bindingOutcome = await this.ensureManagedTopicBinding(event, topic, thread);
+      const bindingOutcome = await this.ensureManagedTopicBinding(
+        event,
+        topic,
+        thread,
+      );
       if (bindingOutcome === "conflict") {
         failed.push(thread.title);
         continue;
@@ -6824,8 +7189,7 @@ export class MessagingController {
     thread: NavigationThreadSummary,
   ): Promise<void> {
     const project =
-      thread.linkedDirectories[0]?.label ??
-      thread.linkedDirectories[0]?.path;
+      thread.linkedDirectories[0]?.label ?? thread.linkedDirectories[0]?.path;
     await this.deliver({
       id: this.newIntentId("topic-seed"),
       kind: "message",
@@ -6845,10 +7209,14 @@ export class MessagingController {
             `Monitoring: ${thread.title}`,
             `Backend: ${thread.source}`,
             project ? `Project: ${project}` : undefined,
-            thread.updatedAt ? `Updated: ${formatTimeOfDay(thread.updatedAt)}` : undefined,
+            thread.updatedAt
+              ? `Updated: ${formatTimeOfDay(thread.updatedAt)}`
+              : undefined,
             "",
             "This topic is attached to the thread for follow-up messages.",
-          ].filter(Boolean).join("\n"),
+          ]
+            .filter(Boolean)
+            .join("\n"),
         },
       ],
     });
@@ -6860,9 +7228,13 @@ export class MessagingController {
     thread: NavigationThreadSummary,
   ): Promise<"bound" | "existing" | "conflict"> {
     const channel = topicChannelRef(topic);
-    const existing = await this.options.store.findActiveBindingForChannel(channel);
+    const existing =
+      await this.options.store.findActiveBindingForChannel(channel);
     if (existing) {
-      if (existing.backend === thread.source && existing.threadId === thread.id) {
+      if (
+        existing.backend === thread.source
+        && existing.threadId === thread.id
+      ) {
         return "existing";
       }
       this.logger.debug?.("managed topic already bound to another thread", {
@@ -6898,8 +7270,8 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<void> {
     if (
-      event.channel.conversation.kind !== "topic" ||
-      !event.channel.conversation.parentId
+      event.channel.conversation.kind !== "topic"
+      || !event.channel.conversation.parentId
     ) {
       return;
     }
@@ -6939,9 +7311,10 @@ export class MessagingController {
       lifecycle: options.lifecycle,
       recommendation: options.recommendation ?? existing?.recommendation,
       routingState: event.routingState ?? existing?.routingState,
-      source: existing?.source === "owned" || existing?.source === "linked"
-        ? existing.source
-        : options.source,
+      source:
+        existing?.source === "owned" || existing?.source === "linked"
+          ? existing.source
+          : options.source,
       updatedAt: now,
     });
   }
@@ -6952,8 +7325,13 @@ export class MessagingController {
   ): Promise<MessagingMonitorSubscriptionRecord> {
     const now = this.now();
     const existing =
-      await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
-    const monitorOptions = resolveMonitorStateOptions(existing?.monitor, action);
+      await this.options.store.findActiveMonitorSubscriptionForChannel(
+        event.channel,
+      );
+    const monitorOptions = resolveMonitorStateOptions(
+      existing?.monitor,
+      action,
+    );
     const subscription = await this.options.store.upsertMonitorSubscription({
       id: existing?.id ?? buildMonitorSubscriptionId(event.channel),
       channel: event.channel,
@@ -6979,7 +7357,10 @@ export class MessagingController {
       this.clearMonitorSubscriptionTimer(existing.id);
     }
     try {
-      const rendered = await this.renderChannelMonitorStatus(subscription, event);
+      const rendered = await this.renderChannelMonitorStatus(
+        subscription,
+        event,
+      );
       this.scheduleMonitorSubscriptionTick(rendered);
       return rendered;
     } catch (error) {
@@ -6996,7 +7377,9 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<MessagingMonitorSubscriptionRecord | undefined> {
     const subscription =
-      await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
+      await this.options.store.findActiveMonitorSubscriptionForChannel(
+        event.channel,
+      );
     if (!subscription) {
       await this.deliver(
         buildConfirmationIntent({
@@ -7088,7 +7471,8 @@ export class MessagingController {
       ...binding,
       monitor: {
         enabled: true,
-        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
+        intervalMs:
+          binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
         lastRenderedAt: binding.monitor?.lastRenderedAt,
         updatedAt: this.now(),
       },
@@ -7165,7 +7549,8 @@ export class MessagingController {
       ...binding,
       monitor: {
         enabled: false,
-        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
+        intervalMs:
+          binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
         lastRenderedAt: binding.monitor?.lastRenderedAt,
         updatedAt: now,
       },
@@ -7230,7 +7615,9 @@ export class MessagingController {
       return;
     }
 
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    const binding = await this.options.store.findActiveBindingForChannel(
+      event.channel,
+    );
     if (!binding) {
       await this.deliver(
         buildErrorIntent({
@@ -7246,10 +7633,13 @@ export class MessagingController {
       return;
     }
 
-    if (actionId === "status:refresh" || actionId === "handoff:back-to-status") {
+    if (
+      actionId === "status:refresh"
+      || actionId === "handoff:back-to-status"
+    ) {
       if (
-        actionId === "status:refresh" &&
-        await this.dismissActiveSkillsWorkflow(binding, event)
+        actionId === "status:refresh"
+        && (await this.dismissActiveSkillsWorkflow(binding, event))
       ) {
         return;
       }
@@ -7295,7 +7685,10 @@ export class MessagingController {
       await this.renderBindingStatus(binding, event);
       return;
     }
-    if (actionId === "handoff:move-branch" || actionId === "handoff:local-to-worktree") {
+    if (
+      actionId === "handoff:move-branch"
+      || actionId === "handoff:local-to-worktree"
+    ) {
       await this.presentHandoffBranchPicker(binding, event);
       return;
     }
@@ -7304,8 +7697,8 @@ export class MessagingController {
       return;
     }
     if (
-      actionId === "handoff:branches:next" ||
-      actionId === "handoff:branches:previous"
+      actionId === "handoff:branches:next"
+      || actionId === "handoff:branches:previous"
     ) {
       await this.presentHandoffBranchPicker(
         binding,
@@ -7450,8 +7843,9 @@ export class MessagingController {
         backend: binding.backend,
         ...(cwds.length > 0 ? { cwds: [...new Set(cwds)] } : {}),
       });
-      const targetSurface = options.targetSurface ??
-        await this.findActiveSkillsWorkflowSurface(binding, event);
+      const targetSurface =
+        options.targetSurface
+        ?? (await this.findActiveSkillsWorkflowSurface(binding, event));
       await this.deliverAndStoreSkillsWorkflow(
         buildSkillsBrowserIntent({
           id: this.newIntentId("skills-browser"),
@@ -7485,7 +7879,10 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const targetSurface = await this.findActiveSkillsWorkflowSurface(binding, event);
+    const targetSurface = await this.findActiveSkillsWorkflowSurface(
+      binding,
+      event,
+    );
     await this.deliverAndStoreSkillsWorkflow(
       buildSkillsSearchPromptIntent({
         id: this.newIntentId("skills-search"),
@@ -7518,7 +7915,10 @@ export class MessagingController {
       pendingSkillSelection: selection,
       updatedAt: this.now(),
     });
-    const targetSurface = await this.findActiveSkillsWorkflowSurface(binding, event);
+    const targetSurface = await this.findActiveSkillsWorkflowSurface(
+      binding,
+      event,
+    );
     await this.deliverAndStoreSkillsWorkflow(
       buildSkillSelectedIntent({
         id: this.newIntentId("skill-selected"),
@@ -7539,7 +7939,10 @@ export class MessagingController {
   ): Promise<void> {
     const { pendingSkillSelection } = binding;
     const updatedBinding = await this.clearPendingSkillSelection(binding);
-    const targetSurface = await this.findActiveSkillsWorkflowSurface(binding, event);
+    const targetSurface = await this.findActiveSkillsWorkflowSurface(
+      binding,
+      event,
+    );
     await this.deliverAndStoreSkillsWorkflow(
       buildSkillRemovedIntent({
         id: this.newIntentId("skill-removed"),
@@ -7567,15 +7970,16 @@ export class MessagingController {
     event: MessagingInboundEvent,
     binding: MessagingBindingRecord,
   ): Promise<void> {
-    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
+    const pendingIntent =
+      await this.options.store.findActivePendingIntentForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+        now: this.now(),
+      });
     if (
-      pendingIntent &&
-      pendingIntent.bindingId === binding.id &&
-      !pendingIntent.intent.requestContext
+      pendingIntent
+      && pendingIntent.bindingId === binding.id
+      && !pendingIntent.intent.requestContext
     ) {
       await this.options.store.deletePendingIntent(pendingIntent.id);
     }
@@ -7586,18 +7990,22 @@ export class MessagingController {
     event: MessagingInboundEvent,
     options: { allowCallbackFallback?: boolean } = {},
   ): Promise<boolean> {
-    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
-    const activeSkillsIntent = pendingIntent &&
-      pendingIntent.bindingId === binding.id &&
-      isSkillsWorkflowIntent(pendingIntent.intent)
-      ? pendingIntent
-      : undefined;
-    const targetSurface = activeSkillsIntent?.surface ??
-      (event.kind === "callback" && (activeSkillsIntent || options.allowCallbackFallback)
+    const pendingIntent =
+      await this.options.store.findActivePendingIntentForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+        now: this.now(),
+      });
+    const activeSkillsIntent =
+      pendingIntent
+      && pendingIntent.bindingId === binding.id
+      && isSkillsWorkflowIntent(pendingIntent.intent)
+        ? pendingIntent
+        : undefined;
+    const targetSurface =
+      activeSkillsIntent?.surface
+      ?? (event.kind === "callback"
+      && (activeSkillsIntent || options.allowCallbackFallback)
         ? event.interaction
         : undefined);
 
@@ -7637,15 +8045,16 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<MessagingSurfaceRef | undefined> {
-    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
+    const pendingIntent =
+      await this.options.store.findActivePendingIntentForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+        now: this.now(),
+      });
     if (
-      pendingIntent?.bindingId === binding.id &&
-      pendingIntent.surface &&
-      isSkillsWorkflowIntent(pendingIntent.intent)
+      pendingIntent?.bindingId === binding.id
+      && pendingIntent.surface
+      && isSkillsWorkflowIntent(pendingIntent.intent)
     ) {
       return pendingIntent.surface;
     }
@@ -7657,19 +8066,33 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<void> {
     if (this.handoffBlockedByActiveTurn(binding)) {
-      await this.deliverHandoffUnavailable(binding, event, ACTIVE_TURN_HANDOFF_ERROR);
+      await this.deliverHandoffUnavailable(
+        binding,
+        event,
+        ACTIVE_TURN_HANDOFF_ERROR,
+      );
       return;
     }
 
     if (!this.options.backend.handoffThreadWorkspace) {
-      await this.deliverHandoffUnavailable(binding, event, "This runtime does not expose workspace handoff through messaging.");
+      await this.deliverHandoffUnavailable(
+        binding,
+        event,
+        "This runtime does not expose workspace handoff through messaging.",
+      );
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
     const context = handoffContextForBinding(binding, navigation);
     if (!context) {
-      await this.deliverHandoffUnavailable(binding, event, "This thread does not have enough Git workspace metadata for handoff.");
+      await this.deliverHandoffUnavailable(
+        binding,
+        event,
+        "This thread does not have enough Git workspace metadata for handoff.",
+      );
       return;
     }
 
@@ -7695,18 +8118,32 @@ export class MessagingController {
     pageIndex = 0,
   ): Promise<void> {
     if (this.handoffBlockedByActiveTurn(binding)) {
-      await this.deliverHandoffUnavailable(binding, event, ACTIVE_TURN_HANDOFF_ERROR);
+      await this.deliverHandoffUnavailable(
+        binding,
+        event,
+        ACTIVE_TURN_HANDOFF_ERROR,
+      );
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
     const context = handoffContextForBinding(binding, navigation);
     if (!context || context.workspaceKind !== "local") {
-      await this.deliverHandoffUnavailable(binding, event, "This thread is not currently in a Local workspace that can move to a worktree.");
+      await this.deliverHandoffUnavailable(
+        binding,
+        event,
+        "This thread is not currently in a Local workspace that can move to a worktree.",
+      );
       return;
     }
     if (context.leaveLocalBranches.length === 0) {
-      await this.deliverHandoffUnavailable(binding, event, "No safe branch choices are available to leave checked out in Local.");
+      await this.deliverHandoffUnavailable(
+        binding,
+        event,
+        "No safe branch choices are available to leave checked out in Local.",
+      );
       return;
     }
 
@@ -7732,11 +8169,17 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
   ): Promise<void> {
     if (this.handoffBlockedByActiveTurn(binding)) {
-      await this.deliverHandoffUnavailable(binding, event, ACTIVE_TURN_HANDOFF_ERROR);
+      await this.deliverHandoffUnavailable(
+        binding,
+        event,
+        ACTIVE_TURN_HANDOFF_ERROR,
+      );
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
     const context = handoffContextForBinding(binding, navigation);
     const request = handoffRequestFromValue(event.value);
     if (!context || !request) {
@@ -7777,12 +8220,20 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
   ): Promise<void> {
     if (this.handoffBlockedByActiveTurn(binding)) {
-      await this.deliverHandoffUnavailable(binding, event, ACTIVE_TURN_HANDOFF_ERROR);
+      await this.deliverHandoffUnavailable(
+        binding,
+        event,
+        ACTIVE_TURN_HANDOFF_ERROR,
+      );
       return;
     }
 
     if (!this.options.backend.handoffThreadWorkspace) {
-      await this.deliverHandoffUnavailable(binding, event, "This runtime does not expose workspace handoff through messaging.");
+      await this.deliverHandoffUnavailable(
+        binding,
+        event,
+        "This runtime does not expose workspace handoff through messaging.",
+      );
       return;
     }
 
@@ -7794,25 +8245,39 @@ export class MessagingController {
 
     const currentBinding = await this.options.store.getBinding(binding.id);
     if (
-      !currentBinding ||
-      currentBinding.revokedAt ||
-      currentBinding.backend !== binding.backend ||
-      currentBinding.threadId !== binding.threadId ||
-      !currentBinding.authorizedActorIds.includes(event.actor.platformUserId)
+      !currentBinding
+      || currentBinding.revokedAt
+      || currentBinding.backend !== binding.backend
+      || currentBinding.threadId !== binding.threadId
+      || !currentBinding.authorizedActorIds.includes(event.actor.platformUserId)
     ) {
-      await this.deliverHandoffUnavailable(binding, event, "That handoff prompt is stale. Use /status to refresh.");
+      await this.deliverHandoffUnavailable(
+        binding,
+        event,
+        "That handoff prompt is stale. Use /status to refresh.",
+      );
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
     const context = handoffContextForBinding(currentBinding, navigation);
     if (!context) {
-      await this.deliverHandoffUnavailable(currentBinding, event, "This thread no longer has enough Git workspace metadata for handoff.");
+      await this.deliverHandoffUnavailable(
+        currentBinding,
+        event,
+        "This thread no longer has enough Git workspace metadata for handoff.",
+      );
       return;
     }
     const validation = validateHandoffRequest(request, context);
     if (!validation.valid) {
-      await this.deliverHandoffUnavailable(currentBinding, event, validation.reason);
+      await this.deliverHandoffUnavailable(
+        currentBinding,
+        event,
+        validation.reason,
+      );
       return;
     }
 
@@ -7837,9 +8302,10 @@ export class MessagingController {
     try {
       const result = await this.options.backend.handoffThreadWorkspace(request);
       await this.clearActiveHandoffIntent(event);
-      const refreshedNavigation = await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
+      const refreshedNavigation =
+        await this.options.backend.getNavigationSnapshot({
+          backend: "all",
+        });
       const updatedBinding = await this.updateBindingAfterHandoff(
         currentBinding,
         result,
@@ -7861,7 +8327,11 @@ export class MessagingController {
         updatedBinding,
         event,
       );
-      await this.renderBindingStatus(updatedBinding, event, refreshedNavigation);
+      await this.renderBindingStatus(
+        updatedBinding,
+        event,
+        refreshedNavigation,
+      );
     } catch (error) {
       await this.deliver(
         {
@@ -7901,16 +8371,17 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const activeIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
+    const activeIntent =
+      await this.options.store.findActivePendingIntentForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+        now: this.now(),
+      });
     if (
-      activeIntent &&
-      activeIntent.id !== intent.id &&
-      activeIntent.bindingId === binding.id &&
-      !activeIntent.intent.requestContext
+      activeIntent
+      && activeIntent.id !== intent.id
+      && activeIntent.bindingId === binding.id
+      && !activeIntent.intent.requestContext
     ) {
       await this.options.store.deletePendingIntent(activeIntent.id);
     }
@@ -7935,16 +8406,17 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const activeIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
+    const activeIntent =
+      await this.options.store.findActivePendingIntentForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+        now: this.now(),
+      });
     if (
-      activeIntent &&
-      activeIntent.id !== intent.id &&
-      activeIntent.bindingId === binding.id &&
-      !activeIntent.intent.requestContext
+      activeIntent
+      && activeIntent.id !== intent.id
+      && activeIntent.bindingId === binding.id
+      && !activeIntent.intent.requestContext
     ) {
       await this.options.store.deletePendingIntent(activeIntent.id);
     }
@@ -7959,12 +8431,15 @@ export class MessagingController {
     });
   }
 
-  private async clearActiveHandoffIntent(event: MessagingInboundEvent): Promise<void> {
-    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
+  private async clearActiveHandoffIntent(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const pendingIntent =
+      await this.options.store.findActivePendingIntentForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+        now: this.now(),
+      });
     if (pendingIntent && pendingIntent.intent.id.includes("handoff")) {
       await this.options.store.deletePendingIntent(pendingIntent.id);
     }
@@ -7972,7 +8447,9 @@ export class MessagingController {
 
   private handoffBlockedByActiveTurn(binding: MessagingBindingRecord): boolean {
     const activeTurn = this.getActiveTurn(binding);
-    return Boolean(activeTurn && ["working", "waiting"].includes(activeTurn.status));
+    return Boolean(
+      activeTurn && ["working", "waiting"].includes(activeTurn.status),
+    );
   }
 
   private async deliverHandoffUnavailable(
@@ -8009,7 +8486,11 @@ export class MessagingController {
           body: "That handoff selection is no longer available. Use /status to refresh.",
           recoverable: true,
         }),
-        audit: this.buildHandoffAudit("handoff.invalid_selection", binding, event),
+        audit: this.buildHandoffAudit(
+          "handoff.invalid_selection",
+          binding,
+          event,
+        ),
       },
       binding,
       event,
@@ -8058,10 +8539,10 @@ export class MessagingController {
     });
     const thread = findThreadForBinding(navigation, binding);
     const currentModelId =
-      thread?.model ??
-      binding.preferences?.model ??
-      navigation.launchpadDefaults.model ??
-      models.find((model) => model.current)?.id;
+      thread?.model
+      ?? binding.preferences?.model
+      ?? navigation.launchpadDefaults.model
+      ?? models.find((model) => model.current)?.id;
 
     await this.deliver(
       buildStatusModelPickerIntent({
@@ -8096,9 +8577,9 @@ export class MessagingController {
     });
     const thread = findThreadForBinding(navigation, binding);
     const currentReasoningEffort =
-      thread?.reasoningEffort ??
-      binding.preferences?.reasoningEffort ??
-      navigation.launchpadDefaults.reasoningEffort;
+      thread?.reasoningEffort
+      ?? binding.preferences?.reasoningEffort
+      ?? navigation.launchpadDefaults.reasoningEffort;
 
     await this.deliver(
       buildStatusReasoningPickerIntent({
@@ -8165,9 +8646,9 @@ export class MessagingController {
     });
     const thread = findThreadForBinding(navigation, binding);
     const currentMode =
-      thread?.queuedExecutionMode ??
-      executionModeForBinding(binding, navigation) ??
-      "default";
+      thread?.queuedExecutionMode
+      ?? executionModeForBinding(binding, navigation)
+      ?? "default";
     await this.deliverAndStoreStatusSubmode(
       buildStatusPermissionsPickerIntent({
         id: this.newIntentId("status-permissions-picker"),
@@ -8229,7 +8710,8 @@ export class MessagingController {
     const optimisticNavigation: NavigationSnapshot = {
       ...navigation,
       threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend && candidate.id === binding.threadId
+        candidate.source === binding.backend
+        && candidate.id === binding.threadId
           ? { ...candidate, model }
           : candidate,
       ),
@@ -8275,7 +8757,8 @@ export class MessagingController {
     const optimisticNavigation: NavigationSnapshot = {
       ...navigation,
       threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend && candidate.id === binding.threadId
+        candidate.source === binding.backend
+        && candidate.id === binding.threadId
           ? { ...candidate, reasoningEffort }
           : candidate,
       ),
@@ -8295,7 +8778,10 @@ export class MessagingController {
       await this.deliverInvalidStatusSelection(event);
       return;
     }
-    if (!isAcpBackendId(binding.backend) || !this.options.backend.setAcpSessionRuntimeOption) {
+    if (
+      !isAcpBackendId(binding.backend)
+      || !this.options.backend.setAcpSessionRuntimeOption
+    ) {
       await this.renderBindingStatus(binding, event);
       return;
     }
@@ -8305,16 +8791,17 @@ export class MessagingController {
       backend: "all",
     });
     const thread = findThreadForBinding(navigation, binding);
-    const currentRuntime = thread?.acpRuntime ?? binding.preferences?.acpRuntime;
+    const currentRuntime =
+      thread?.acpRuntime ?? binding.preferences?.acpRuntime;
     const runtimeMode = buildMessagingAcpRuntimeModeSummary({
       backend: summary,
       runtime: currentRuntime,
     });
     const choice = runtimeMode.choices.find(
       (candidate) =>
-        candidate.source === source &&
-        candidate.optionId === optionId &&
-        candidate.value === value,
+        candidate.source === source
+        && candidate.optionId === optionId
+        && candidate.value === value,
     );
     if (!choice) {
       await this.deliverInvalidStatusSelection(event);
@@ -8331,8 +8818,8 @@ export class MessagingController {
       value,
     };
     if (
-      choice.privileged &&
-      !messagingAcpRuntimeValueLooksPrivileged(runtimeMode.currentValue)
+      choice.privileged
+      && !messagingAcpRuntimeValueLooksPrivileged(runtimeMode.currentValue)
     ) {
       const allowed = await this.ensureAcpRuntimeModeAllowed(
         riskContext,
@@ -8351,7 +8838,10 @@ export class MessagingController {
     event: MessagingInboundEvent,
     selection: AcpRuntimeRiskWarningContext & { kind: "thread" },
   ): Promise<void> {
-    if (!isAcpBackendId(binding.backend) || !this.options.backend.setAcpSessionRuntimeOption) {
+    if (
+      !isAcpBackendId(binding.backend)
+      || !this.options.backend.setAcpSessionRuntimeOption
+    ) {
       await this.renderBindingStatus(binding, event);
       return;
     }
@@ -8359,7 +8849,8 @@ export class MessagingController {
       backend: "all",
     });
     const thread = findThreadForBinding(navigation, binding);
-    const currentRuntime = thread?.acpRuntime ?? binding.preferences?.acpRuntime;
+    const currentRuntime =
+      thread?.acpRuntime ?? binding.preferences?.acpRuntime;
     const acpRuntime: BackendAcpSessionRuntimeState = {
       ...currentRuntime,
       configValues:
@@ -8369,9 +8860,10 @@ export class MessagingController {
               [selection.optionId]: selection.value,
             }
           : currentRuntime?.configValues,
-      currentModeId: selection.source === "mode" || selection.source === "configOption"
-        ? selection.value
-        : currentRuntime?.currentModeId,
+      currentModeId:
+        selection.source === "mode" || selection.source === "configOption"
+          ? selection.value
+          : currentRuntime?.currentModeId,
       updatedAt: this.now(),
     };
     const updatedBinding = await this.updateBindingPreferences(binding, {
@@ -8387,7 +8879,8 @@ export class MessagingController {
     const optimisticNavigation: NavigationSnapshot = {
       ...navigation,
       threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend && candidate.id === binding.threadId
+        candidate.source === binding.backend
+        && candidate.id === binding.threadId
           ? { ...candidate, acpRuntime }
           : candidate,
       ),
@@ -8402,8 +8895,9 @@ export class MessagingController {
   ): Promise<void> {
     const summary = await this.getBackendSummary(binding.backend);
     if (
-      summary &&
-      (summary.kind !== "codex" || summary.launchpadOptions?.supportsFastMode === false)
+      summary
+      && (summary.kind !== "codex"
+        || summary.launchpadOptions?.supportsFastMode === false)
     ) {
       await this.renderBindingStatus(binding, event);
       return;
@@ -8440,9 +8934,9 @@ export class MessagingController {
     // the currently-applied mode. The registry's setThreadExecutionMode
     // handles "toggle back to currently-applied during queue → cancel".
     const currentMode =
-      thread?.queuedExecutionMode ??
-      executionModeForBinding(binding, navigation) ??
-      "default";
+      thread?.queuedExecutionMode
+      ?? executionModeForBinding(binding, navigation)
+      ?? "default";
     const nextMode = currentMode === "full-access" ? "default" : "full-access";
     const executionMode = nextMode;
     if (executionMode === "full-access") {
@@ -8495,9 +8989,9 @@ export class MessagingController {
     });
     const thread = findThreadForBinding(navigation, binding);
     const currentMode =
-      thread?.queuedExecutionMode ??
-      executionModeForBinding(binding, navigation) ??
-      "default";
+      thread?.queuedExecutionMode
+      ?? executionModeForBinding(binding, navigation)
+      ?? "default";
     if (executionMode === currentMode) {
       await this.clearActiveBindingSubmodeIntent(event, binding);
       await this.renderBindingStatus(binding, event, navigation);
@@ -8572,7 +9066,7 @@ export class MessagingController {
         : undefined;
     const surface =
       context.kind === "thread"
-        ? binding?.statusSurface ?? binding?.pinnedStatusSurface
+        ? (binding?.statusSurface ?? binding?.pinnedStatusSurface)
         : session?.surface;
     const actions: MessagingConfirmationIntent["actions"] = [
       {
@@ -8690,18 +9184,18 @@ export class MessagingController {
           }
         : context.kind === "new-thread"
           ? {
-            kind: "new-thread",
-            ...(options.presentationMode === "message"
-              ? { pendingPrompt: true }
-              : {}),
-            sessionId: context.session.id,
-          }
+              kind: "new-thread",
+              ...(options.presentationMode === "message"
+                ? { pendingPrompt: true }
+                : {}),
+              sessionId: context.session.id,
+            }
           : {
               backend: context.backend,
               kind: "resume-thread",
               sessionId: context.session.id,
               threadId: context.threadId,
-          };
+            };
     const presentation = fullAccessRiskPresentationForContext(
       context,
       options.presentationMode ?? "surface",
@@ -8759,8 +9253,8 @@ export class MessagingController {
         ? this.now() + MESSAGING_CALLBACK_HANDLE_TTL_MS
         : undefined;
     if (
-      expiresAt !== undefined &&
-      (context.kind === "new-thread" || context.kind === "resume-thread")
+      expiresAt !== undefined
+      && (context.kind === "new-thread" || context.kind === "resume-thread")
     ) {
       await this.options.store.upsertBrowseSession({
         ...context.session,
@@ -8768,7 +9262,7 @@ export class MessagingController {
         textInputExpiresAt:
           options.presentationMode === "message"
             ? this.now()
-            : context.session.textInputExpiresAt ?? context.session.expiresAt,
+            : (context.session.textInputExpiresAt ?? context.session.expiresAt),
         updatedAt: this.now(),
       });
     }
@@ -8798,9 +9292,12 @@ export class MessagingController {
     }
     if (action === "cancel") {
       if (context.kind === "new-thread" || context.kind === "resume-thread") {
-        const session = await this.options.store.getBrowseSession(context.sessionId, {
-          now: this.now(),
-        });
+        const session = await this.options.store.getBrowseSession(
+          context.sessionId,
+          {
+            now: this.now(),
+          },
+        );
         if (!session) {
           await this.deliverStaleFullAccessWarning(event);
           return;
@@ -8846,12 +9343,19 @@ export class MessagingController {
       return;
     }
 
-    const escalationContext =
-      await this.resolveFullAccessRiskCallbackContext(context, event);
+    const escalationContext = await this.resolveFullAccessRiskCallbackContext(
+      context,
+      event,
+    );
     if (!escalationContext) {
       return;
     }
-    if (!(await this.ensureFullAccessRiskCallbackAllowed(escalationContext, event))) {
+    if (
+      !(await this.ensureFullAccessRiskCallbackAllowed(
+        escalationContext,
+        event,
+      ))
+    ) {
       return;
     }
 
@@ -8878,7 +9382,9 @@ export class MessagingController {
           updatedAt: this.now(),
         },
       };
-      const pendingPrompt = this.pendingFullAccessNewThreadPrompts.get(session.id);
+      const pendingPrompt = this.pendingFullAccessNewThreadPrompts.get(
+        session.id,
+      );
       if (escalationContext.pendingPrompt && !pendingPrompt) {
         await this.deliverMissingFullAccessPrompt(event);
         return;
@@ -8922,7 +9428,10 @@ export class MessagingController {
         permissionsMode: "full-access" as const,
         updatedAt: this.now(),
       };
-      const updatedBinding = await this.updateBindingPreferences(binding, preferences);
+      const updatedBinding = await this.updateBindingPreferences(
+        binding,
+        preferences,
+      );
       await this.options.backend.setThreadExecutionMode?.({
         backend: escalationContext.backend,
         threadId: escalationContext.threadId,
@@ -8981,9 +9490,12 @@ export class MessagingController {
 
     if (action === "cancel") {
       if (context.kind === "new-thread") {
-        const session = await this.options.store.getBrowseSession(context.sessionId, {
-          now: this.now(),
-        });
+        const session = await this.options.store.getBrowseSession(
+          context.sessionId,
+          {
+            now: this.now(),
+          },
+        );
         if (!session) {
           await this.deliverStaleFullAccessWarning(event);
           return;
@@ -9018,9 +9530,12 @@ export class MessagingController {
     }
 
     if (context.kind === "new-thread") {
-      const session = await this.options.store.getBrowseSession(context.sessionId, {
-        now: this.now(),
-      });
+      const session = await this.options.store.getBrowseSession(
+        context.sessionId,
+        {
+          now: this.now(),
+        },
+      );
       if (!session) {
         await this.deliverStaleFullAccessWarning(event);
         return;
@@ -9028,7 +9543,12 @@ export class MessagingController {
       const navigation = await this.options.backend.getNavigationSnapshot({
         backend: "all",
       });
-      await this.applyNewThreadAcpRuntimeMode(session, event, navigation, context);
+      await this.applyNewThreadAcpRuntimeMode(
+        session,
+        event,
+        navigation,
+        context,
+      );
       return;
     }
 
@@ -9053,7 +9573,7 @@ export class MessagingController {
         ? await this.options.store.getBinding(context.bindingId)
         : undefined,
       event,
-        `Permissions mode ${context.label} is disabled from messaging by Full Access settings.`,
+      `Permissions mode ${context.label} is disabled from messaging by Full Access settings.`,
     );
     return false;
   }
@@ -9063,9 +9583,12 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<FullAccessEscalationContext | undefined> {
     if (context.kind === "new-thread") {
-      const session = await this.options.store.getBrowseSession(context.sessionId, {
-        now: this.now(),
-      });
+      const session = await this.options.store.getBrowseSession(
+        context.sessionId,
+        {
+          now: this.now(),
+        },
+      );
       if (!session) {
         await this.deliverStaleFullAccessWarning(event);
         return undefined;
@@ -9078,9 +9601,12 @@ export class MessagingController {
     }
 
     if (context.kind === "resume-thread") {
-      const session = await this.options.store.getBrowseSession(context.sessionId, {
-        now: this.now(),
-      });
+      const session = await this.options.store.getBrowseSession(
+        context.sessionId,
+        {
+          now: this.now(),
+        },
+      );
       if (!session) {
         await this.deliverStaleFullAccessWarning(event);
         return undefined;
@@ -9161,8 +9687,8 @@ export class MessagingController {
     }
     const warning = await this.resolveFullAccessWarning(controls, event);
     if (
-      warning.policy === "dismissable" &&
-      options.executionModeSource !== "session"
+      warning.policy === "dismissable"
+      && options.executionModeSource !== "session"
     ) {
       return "accepted";
     }
@@ -9199,13 +9725,12 @@ export class MessagingController {
     if (effectivePolicy === "always") {
       return { canDismiss: false, policy: effectivePolicy, shouldWarn: true };
     }
-    const canPersistDismissal =
-      controls.canDismissWarning
-        ? await controls.canDismissWarning({
-            actorId: event.actor.platformUserId,
-            channel: event.channel.channel,
-          })
-        : Boolean(controls.dismissWarning);
+    const canPersistDismissal = controls.canDismissWarning
+      ? await controls.canDismissWarning({
+          actorId: event.actor.platformUserId,
+          channel: event.channel.channel,
+        })
+      : Boolean(controls.dismissWarning);
     return {
       canDismiss: Boolean(controls.dismissWarning) && canPersistDismissal,
       policy: effectivePolicy,
@@ -9289,7 +9814,9 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
     queueId: string,
   ): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    const binding = await this.options.store.findActiveBindingForChannel(
+      event.channel,
+    );
     if (!binding) {
       return;
     }
@@ -9460,8 +9987,8 @@ export class MessagingController {
           createdAt: this.now(),
           title: "Name sync unavailable",
           body:
-            result.errorMessage ??
-            `This ${conversationKindLabel(binding.channel.conversation.kind)} cannot be renamed from messaging.`,
+            result.errorMessage
+            ?? `This ${conversationKindLabel(binding.channel.conversation.kind)} cannot be renamed from messaging.`,
           recoverable: true,
         }),
         binding,
@@ -9600,9 +10127,13 @@ export class MessagingController {
   }
 
   private async detachBinding(event: MessagingInboundEvent): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    const binding = await this.options.store.findActiveBindingForChannel(
+      event.channel,
+    );
     const channelMonitor =
-      await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
+      await this.options.store.findActiveMonitorSubscriptionForChannel(
+        event.channel,
+      );
     const hasThread = Boolean(binding);
     const hasChannelMonitor = channelMonitor?.monitor.enabled === true;
     const hasBindingMonitor = binding?.monitor?.enabled === true;
@@ -9637,16 +10168,18 @@ export class MessagingController {
         id: this.newIntentId("detached"),
         capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
-        title: hasThread && hasMonitor
-          ? "Thread and Monitor detached"
-          : hasThread
-            ? "Thread detached"
-            : "Monitor detached",
-        body: hasThread && hasMonitor
-          ? "Messages in this conversation will no longer route to PwrAgent, and recent thread updates will no longer post here."
-          : hasThread
-            ? "Messages in this conversation will no longer route to PwrAgent."
-            : "Recent thread updates will no longer post to this conversation.",
+        title:
+          hasThread && hasMonitor
+            ? "Thread and Monitor detached"
+            : hasThread
+              ? "Thread detached"
+              : "Monitor detached",
+        body:
+          hasThread && hasMonitor
+            ? "Messages in this conversation will no longer route to PwrAgent, and recent thread updates will no longer post here."
+            : hasThread
+              ? "Messages in this conversation will no longer route to PwrAgent."
+              : "Recent thread updates will no longer post to this conversation.",
       }),
       binding,
       event,
@@ -9741,7 +10274,11 @@ export class MessagingController {
     const snapshot = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
-    const retiredBinding = await this.retireBindingStatus(binding, event, snapshot);
+    const retiredBinding = await this.retireBindingStatus(
+      binding,
+      event,
+      snapshot,
+    );
     return await this.renderBindingStatus(retiredBinding, event, snapshot);
   }
 
@@ -9847,8 +10384,8 @@ export class MessagingController {
     navigation?: NavigationSnapshot,
   ): Promise<MessagingBindingRecord> {
     const snapshot =
-      navigation ??
-      (await this.options.backend.getNavigationSnapshot({
+      navigation
+      ?? (await this.options.backend.getNavigationSnapshot({
         backend: "all",
       }));
     const activeTurn = await this.reconcileActiveTurnFromBackendStatus(
@@ -9908,9 +10445,9 @@ export class MessagingController {
       threadName?: unknown;
     };
     if (
-      typeof params.threadId !== "string" ||
-      typeof params.threadName !== "string" ||
-      !params.threadName.trim()
+      typeof params.threadId !== "string"
+      || typeof params.threadName !== "string"
+      || !params.threadName.trim()
     ) {
       return snapshot;
     }
@@ -9936,8 +10473,8 @@ export class MessagingController {
     navigation?: NavigationSnapshot,
   ): Promise<MessagingBindingRecord> {
     const snapshot =
-      navigation ??
-      (await this.options.backend.getNavigationSnapshot({
+      navigation
+      ?? (await this.options.backend.getNavigationSnapshot({
         backend: "all",
       }));
     const now = this.now();
@@ -9957,7 +10494,9 @@ export class MessagingController {
       id: this.newIntentId("monitor"),
       navigation: snapshot,
       snippetsByThreadKey,
-      topicControls: this.supportsMonitorTopicControls(event?.channel ?? binding.channel),
+      topicControls: this.supportsMonitorTopicControls(
+        event?.channel ?? binding.channel,
+      ),
     });
     const result = await this.deliver(intent, binding, event);
     const latestBinding = await this.options.store.getBinding(binding.id);
@@ -9990,8 +10529,8 @@ export class MessagingController {
     navigation?: NavigationSnapshot,
   ): Promise<MessagingMonitorSubscriptionRecord> {
     const snapshot =
-      navigation ??
-      (await this.options.backend.getNavigationSnapshot({
+      navigation
+      ?? (await this.options.backend.getNavigationSnapshot({
         backend: "all",
       }));
     const now = this.now();
@@ -10014,7 +10553,9 @@ export class MessagingController {
         monitorSurface: subscription.monitorSurface,
         navigation: snapshot,
         snippetsByThreadKey,
-        topicControls: this.supportsMonitorTopicControls(event?.channel ?? subscription.channel),
+        topicControls: this.supportsMonitorTopicControls(
+          event?.channel ?? subscription.channel,
+        ),
       }),
       allowedActorIds: subscription.authorizedActorIds,
       ...(event
@@ -10038,15 +10579,18 @@ export class MessagingController {
         revokedAt: now,
       });
       this.clearMonitorSubscriptionTimer(subscription.id);
-      return revoked ?? {
-        ...subscription,
-        revokedAt: now,
-        updatedAt: now,
-      };
+      return (
+        revoked ?? {
+          ...subscription,
+          revokedAt: now,
+          updatedAt: now,
+        }
+      );
     }
 
-    const latest =
-      await this.options.store.getMonitorSubscription(subscription.id);
+    const latest = await this.options.store.getMonitorSubscription(
+      subscription.id,
+    );
     if (latest?.revokedAt) {
       this.clearMonitorSubscriptionTimer(subscription.id);
       return latest;
@@ -10071,15 +10615,16 @@ export class MessagingController {
 
   private scheduleMonitorTick(binding: MessagingBindingRecord): void {
     if (
-      this.disposed ||
-      binding.revokedAt ||
-      !binding.monitor?.enabled ||
-      this.monitorTimersByBindingId.has(binding.id)
+      this.disposed
+      || binding.revokedAt
+      || !binding.monitor?.enabled
+      || this.monitorTimersByBindingId.has(binding.id)
     ) {
       return;
     }
 
-    const intervalMs = binding.monitor.intervalMs || MESSAGING_MONITOR_INTERVAL_MS;
+    const intervalMs =
+      binding.monitor.intervalMs || MESSAGING_MONITOR_INTERVAL_MS;
     const timer = setTimeout(() => {
       this.monitorTimersByBindingId.delete(binding.id);
       void this.runMonitorTick(binding.id);
@@ -10091,10 +10636,10 @@ export class MessagingController {
     subscription: MessagingMonitorSubscriptionRecord,
   ): void {
     if (
-      this.disposed ||
-      subscription.revokedAt ||
-      !subscription.monitor.enabled ||
-      this.monitorTimersBySubscriptionId.has(subscription.id)
+      this.disposed
+      || subscription.revokedAt
+      || !subscription.monitor.enabled
+      || this.monitorTimersBySubscriptionId.has(subscription.id)
     ) {
       return;
     }
@@ -10144,19 +10689,21 @@ export class MessagingController {
       });
     }
 
-    const latest = rendered ?? await this.options.store.getBinding(bindingId);
+    const latest = rendered ?? (await this.options.store.getBinding(bindingId));
     if (latest && !latest.revokedAt && latest.monitor?.enabled) {
       this.scheduleMonitorTick(latest);
     }
   }
 
-  private async runMonitorSubscriptionTick(subscriptionId: string): Promise<void> {
+  private async runMonitorSubscriptionTick(
+    subscriptionId: string,
+  ): Promise<void> {
     const subscription =
       await this.options.store.getMonitorSubscription(subscriptionId);
     if (
-      !subscription ||
-      subscription.revokedAt ||
-      !subscription.monitor.enabled
+      !subscription
+      || subscription.revokedAt
+      || !subscription.monitor.enabled
     ) {
       this.clearMonitorSubscriptionTimer(subscriptionId);
       return;
@@ -10173,7 +10720,8 @@ export class MessagingController {
     }
 
     const latest =
-      rendered ?? await this.options.store.getMonitorSubscription(subscriptionId);
+      rendered
+      ?? (await this.options.store.getMonitorSubscription(subscriptionId));
     if (latest && !latest.revokedAt && latest.monitor.enabled) {
       this.scheduleMonitorSubscriptionTick(latest);
     }
@@ -10205,9 +10753,9 @@ export class MessagingController {
               updatedAt: this.now(),
             });
           } else if (
-            status === "idle" &&
-            existing &&
-            (existing.status === "working" || existing.status === "waiting")
+            status === "idle"
+            && existing
+            && (existing.status === "working" || existing.status === "waiting")
           ) {
             activeTurns.set(threadKey, {
               ...existing,
@@ -10233,8 +10781,8 @@ export class MessagingController {
   ): Promise<ReadonlyMap<string, string>> {
     const snippets = new Map<string, string>();
     if (
-      monitor?.showLastResponseSnippet !== true ||
-      !this.options.backend.readThreadLastAssistantMessage
+      monitor?.showLastResponseSnippet !== true
+      || !this.options.backend.readThreadLastAssistantMessage
     ) {
       return snippets;
     }
@@ -10280,10 +10828,7 @@ export class MessagingController {
     reason: string,
   ): Promise<MessagingActiveTurnSummary | undefined> {
     const activeTurn = this.getActiveTurn(binding);
-    if (
-      !activeTurn ||
-      !["working", "waiting"].includes(activeTurn.status)
-    ) {
+    if (!activeTurn || !["working", "waiting"].includes(activeTurn.status)) {
       return activeTurn;
     }
 
@@ -10372,7 +10917,10 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     activeTurn: MessagingActiveTurnSummary,
   ): void {
-    this.activeTurnsByThreadKey.set(this.threadKeyForBinding(binding), activeTurn);
+    this.activeTurnsByThreadKey.set(
+      this.threadKeyForBinding(binding),
+      activeTurn,
+    );
   }
 
   private threadKeyForBinding(binding: MessagingBindingRecord): string {
@@ -10459,10 +11007,10 @@ export class MessagingController {
       return;
     }
     if (
-      params.status !== "completed" &&
-      params.status !== "failed" &&
-      params.status !== "cancelled" &&
-      params.status !== "skipped"
+      params.status !== "completed"
+      && params.status !== "failed"
+      && params.status !== "cancelled"
+      && params.status !== "skipped"
     ) {
       return;
     }
@@ -10499,7 +11047,11 @@ export class MessagingController {
       return;
     }
     rememberBoundedKey(this.deliveredAutomationFinalKeys, key);
-    await this.deliverAssistantMessage(messageText, params.event, params.binding);
+    await this.deliverAssistantMessage(
+      messageText,
+      params.event,
+      params.binding,
+    );
   }
 
   private rememberAutomationTurn(params: {
@@ -10509,13 +11061,10 @@ export class MessagingController {
     threadId: ThreadIdentifier;
     turnId: string;
   }): void {
-    this.automationTurnsByTurnKey.set(
-      automationTurnKey(params),
-      {
-        automationName: params.automationName,
-        automationRunId: params.automationRunId,
-      },
-    );
+    this.automationTurnsByTurnKey.set(automationTurnKey(params), {
+      automationName: params.automationName,
+      automationRunId: params.automationRunId,
+    });
   }
 
   private forgetAutomationTurn(
@@ -10631,10 +11180,10 @@ export class MessagingController {
     const lastSignaledAt = this.typingActivityLastSignaledAt.get(binding.id);
     const refreshMs = options?.refreshMs ?? TYPING_ACTIVITY_REFRESH_MS;
     if (
-      state === "active" &&
-      !options?.force &&
-      lastSignaledAt !== undefined &&
-      now - lastSignaledAt < refreshMs
+      state === "active"
+      && !options?.force
+      && lastSignaledAt !== undefined
+      && now - lastSignaledAt < refreshMs
     ) {
       return;
     }
@@ -10668,8 +11217,8 @@ export class MessagingController {
     reason: string,
   ): void {
     if (
-      previousTurn?.turnId === nextTurn?.turnId &&
-      previousTurn?.status === nextTurn?.status
+      previousTurn?.turnId === nextTurn?.turnId
+      && previousTurn?.status === nextTurn?.status
     ) {
       return;
     }
@@ -10789,9 +11338,8 @@ export class MessagingController {
     },
   ): Promise<MessagingBindingRecord> {
     const now = this.now();
-    const previousBinding = await this.options.store.findActiveBindingForChannel(
-      event.channel,
-    );
+    const previousBinding =
+      await this.options.store.findActiveBindingForChannel(event.channel);
     const binding: MessagingBindingRecord = {
       id: `binding:${buildMessagingConversationKey(event.channel)}:${target.backend}:${target.threadId}`,
       channel: event.channel,
@@ -10805,9 +11353,9 @@ export class MessagingController {
       displayName: event.actor.displayName ?? event.actor.username,
     };
     if (
-      previousBinding &&
-      (previousBinding.backend !== binding.backend ||
-        previousBinding.threadId !== binding.threadId)
+      previousBinding
+      && (previousBinding.backend !== binding.backend
+        || previousBinding.threadId !== binding.threadId)
     ) {
       await this.options.store.revokeBinding({
         bindingId: previousBinding.id,
@@ -10816,16 +11364,16 @@ export class MessagingController {
     }
     const upserted = await this.options.store.upsertBinding(binding);
     if (
-      previousBinding &&
-      (previousBinding.backend !== upserted.backend ||
-        previousBinding.threadId !== upserted.threadId)
+      previousBinding
+      && (previousBinding.backend !== upserted.backend
+        || previousBinding.threadId !== upserted.threadId)
     ) {
       await this.recordBindingTransition("unbound", previousBinding, now);
     }
     if (
-      !previousBinding ||
-      previousBinding.backend !== upserted.backend ||
-      previousBinding.threadId !== upserted.threadId
+      !previousBinding
+      || previousBinding.backend !== upserted.backend
+      || previousBinding.threadId !== upserted.threadId
     ) {
       await this.recordBindingTransition("bound", upserted, now);
     }
@@ -10850,11 +11398,14 @@ export class MessagingController {
         channel: event.channel,
       });
       if (removed.length > 0) {
-        this.logger.debug?.("messaging retired channel pending intents on bind", {
-          bindingId: upserted.id,
-          channel: event.channel.channel,
-          removedCount: removed.length,
-        });
+        this.logger.debug?.(
+          "messaging retired channel pending intents on bind",
+          {
+            bindingId: upserted.id,
+            channel: event.channel.channel,
+            removedCount: removed.length,
+          },
+        );
       }
     } catch (error) {
       this.logger.debug?.(
@@ -10993,9 +11544,10 @@ export class MessagingController {
     const priority = messagingDeliveryPriority(routedIntent, {
       userInitiated: isUserInitiatedDeliveryEvent(event),
     });
-    const channel = binding?.channel.channel ??
-      routedIntent.audit?.channel.channel ??
-      this.options.channel;
+    const channel =
+      binding?.channel.channel
+      ?? routedIntent.audit?.channel.channel
+      ?? this.options.channel;
     while (true) {
       if (this.deliveryBudget) {
         const budgetChannel = channel ?? scope?.platform ?? "telegram";
@@ -11032,7 +11584,10 @@ export class MessagingController {
             slowMode: admission.slowMode,
           });
           this.notifyDeliveryBudgetEvent(budgetEvent);
-          await (this.options.sleepUntil ?? sleepUntil)(admission.retryAt, this.now);
+          await (this.options.sleepUntil ?? sleepUntil)(
+            admission.retryAt,
+            this.now,
+          );
           admission = this.deliveryBudget.admit({
             consumeCapacity: consumeDeliveryBudget,
             priority,
@@ -11061,7 +11616,8 @@ export class MessagingController {
             intentKind: routedIntent.kind,
             outcome: admission.outcome,
             priority,
-            reason: admission.outcome === "dropped" ? admission.reason : undefined,
+            reason:
+              admission.outcome === "dropped" ? admission.reason : undefined,
             scopeId: scope?.id,
             slowMode: admission.slowMode,
           });
@@ -11079,24 +11635,30 @@ export class MessagingController {
         scope = result.rateLimit.scope;
         this.deliveryBudget.recordRateLimit(result.rateLimit);
         if (result.rateLimit.retryable === true) {
-          this.logger.debug?.("messaging delivery rate-limited; rechecking budget", {
+          this.logger.debug?.(
+            "messaging delivery rate-limited; rechecking budget",
+            {
+              bindingId: binding?.id ?? intent.bindingId,
+              intentId: routedIntent.id,
+              intentKind: routedIntent.kind,
+              priority,
+              retryAfterMs: result.rateLimit.retryAfterMs,
+              scopeId: result.rateLimit.scope.id,
+            },
+          );
+          continue;
+        }
+        this.logger.debug?.(
+          "messaging delivery rate-limited; not retrying non-replayable attempt",
+          {
             bindingId: binding?.id ?? intent.bindingId,
             intentId: routedIntent.id,
             intentKind: routedIntent.kind,
             priority,
             retryAfterMs: result.rateLimit.retryAfterMs,
             scopeId: result.rateLimit.scope.id,
-          });
-          continue;
-        }
-        this.logger.debug?.("messaging delivery rate-limited; not retrying non-replayable attempt", {
-          bindingId: binding?.id ?? intent.bindingId,
-          intentId: routedIntent.id,
-          intentKind: routedIntent.kind,
-          priority,
-          retryAfterMs: result.rateLimit.retryAfterMs,
-          scopeId: result.rateLimit.scope.id,
-        });
+          },
+        );
       }
       await this.options.store.recordDelivery({
         ...result,
@@ -11106,9 +11668,9 @@ export class MessagingController {
       });
       this.recordOutboundActivity(routedIntent, binding, result);
       if (
-        binding &&
-        result.channel === binding.channel.channel &&
-        isPermanentMessagingTargetFailure(result)
+        binding
+        && result.channel === binding.channel.channel
+        && isPermanentMessagingTargetFailure(result)
       ) {
         await this.options.store.revokeBinding({
           bindingId: binding.id,
@@ -11116,14 +11678,17 @@ export class MessagingController {
         });
         await this.recordBindingTransition("unbound", binding);
         this.notifyBindingChanged("permanent-delivery-failure");
-        this.logger.debug?.("messaging binding revoked after permanent delivery failure", {
-          bindingId: binding.id,
-          channel: binding.channel.channel,
-          conversationId: binding.channel.conversation.id,
-          errorMessage: result.errorMessage,
-          outcome: result.outcome,
-          threadId: binding.threadId,
-        });
+        this.logger.debug?.(
+          "messaging binding revoked after permanent delivery failure",
+          {
+            bindingId: binding.id,
+            channel: binding.channel.channel,
+            conversationId: binding.channel.conversation.id,
+            errorMessage: result.errorMessage,
+            outcome: result.outcome,
+            threadId: binding.threadId,
+          },
+        );
       }
       return result;
     }
@@ -11145,14 +11710,17 @@ export class MessagingController {
     if (!shouldRetryArtifactInline(intent, result)) {
       return;
     }
-    this.logger.debug?.("messaging artifact attachment delivery failed; retrying inline fallback", {
-      bindingId: params.binding.id,
-      errorMessage: result.errorMessage,
-      intentId: intent.id,
-      kind: params.artifact.kind,
-      outcome: result.outcome,
-      threadId: params.binding.threadId,
-    });
+    this.logger.debug?.(
+      "messaging artifact attachment delivery failed; retrying inline fallback",
+      {
+        bindingId: params.binding.id,
+        errorMessage: result.errorMessage,
+        intentId: intent.id,
+        kind: params.artifact.kind,
+        outcome: result.outcome,
+        threadId: params.binding.threadId,
+      },
+    );
     await this.deliver(
       buildArtifactInlineFallbackIntent({
         artifact: params.artifact,
@@ -11262,7 +11830,11 @@ export class MessagingController {
       knownBinding?.id === delivery.bindingId
         ? knownBinding
         : await this.options.store.getBinding(delivery.bindingId);
-    if (!binding || binding.revokedAt || !this.isChannelInScope(binding.channel)) {
+    if (
+      !binding
+      || binding.revokedAt
+      || !this.isChannelInScope(binding.channel)
+    ) {
       return;
     }
 
@@ -11284,14 +11856,17 @@ export class MessagingController {
   }
 
   private async attachThreadHereFromAgentMessagingOrigin(
-    request: Extract<PwrAgentMessagingRequest, { operation: "attach_thread_here" }>,
+    request: Extract<
+      PwrAgentMessagingRequest,
+      { operation: "attach_thread_here" }
+    >,
   ): Promise<PwrAgentMessagingResponse> {
     const { args } = request;
     if (
-      !args ||
-      !isAppServerBackendKind(args.backend) ||
-      typeof args.threadId !== "string" ||
-      args.threadId.trim().length === 0
+      !args
+      || !isAppServerBackendKind(args.backend)
+      || typeof args.threadId !== "string"
+      || args.threadId.trim().length === 0
     ) {
       return {
         ok: false,
@@ -11303,15 +11878,16 @@ export class MessagingController {
     }
     const placement = args.placement ?? "auto";
     if (
-      placement !== "auto" &&
-      placement !== "new_child" &&
-      placement !== "current_conversation"
+      placement !== "auto"
+      && placement !== "new_child"
+      && placement !== "current_conversation"
     ) {
       return {
         ok: false,
         error: {
           code: "invalid_arguments",
-          message: "placement must be auto, new_child, or current_conversation.",
+          message:
+            "placement must be auto, new_child, or current_conversation.",
         },
       };
     }
@@ -11360,22 +11936,25 @@ export class MessagingController {
           },
         };
       }
-      const createResult = await this.options.adapter.createManagedConversation({
-        actor: origin.origin.event.actor,
-        parent: origin.origin.event.channel,
-        routingState: origin.origin.event.routingState,
-        title: sanitizeMessagingChildTitle(args.title),
-      });
+      const createResult = await this.options.adapter.createManagedConversation(
+        {
+          actor: origin.origin.event.actor,
+          parent: origin.origin.event.channel,
+          routingState: origin.origin.event.routingState,
+          title: sanitizeMessagingChildTitle(args.title),
+        },
+      );
       if (createResult.outcome !== "created" || !createResult.conversation) {
         return {
           ok: false,
           error: {
-            code: createResult.outcome === "unsupported"
-              ? "unsupported_operation"
-              : "internal_error",
+            code:
+              createResult.outcome === "unsupported"
+                ? "unsupported_operation"
+                : "internal_error",
             message:
-              createResult.errorMessage ??
-              "The messaging provider could not create a native child conversation.",
+              createResult.errorMessage
+              ?? "The messaging provider could not create a native child conversation.",
           },
         };
       }
@@ -11411,14 +11990,17 @@ export class MessagingController {
           summarizeNavigationThreadForMessaging(target.thread),
         ),
         channel: visibleBinding.channel.channel,
-        conversation: summarizeMessagingConversation(visibleBinding.channel.conversation),
+        conversation: summarizeMessagingConversation(
+          visibleBinding.channel.conversation,
+        ),
         createdConversation: createdConversation
           ? summarizeMessagingConversation(createdConversation)
           : undefined,
         location,
-        outcome: resolvedPlacement.placement === "new_child"
-          ? "created_and_attached"
-          : "attached",
+        outcome:
+          resolvedPlacement.placement === "new_child"
+            ? "created_and_attached"
+            : "attached",
         placement: resolvedPlacement.placement,
       },
     };
@@ -11430,7 +12012,9 @@ export class MessagingController {
   ): Promise<AttachTargetResolution> {
     let navigation: NavigationSnapshot;
     try {
-      navigation = await this.options.backend.getNavigationSnapshot({ backend });
+      navigation = await this.options.backend.getNavigationSnapshot({
+        backend,
+      });
     } catch (error) {
       return {
         ok: false,
@@ -11453,8 +12037,8 @@ export class MessagingController {
         error: {
           code: "not_found",
           message:
-            `Thread ${backend}:${threadId} is not an active attachable thread. ` +
-            "It may be archived, deleted, or unavailable; restore it in PwrAgent or choose another thread.",
+            `Thread ${backend}:${threadId} is not an active attachable thread. `
+            + "It may be archived, deleted, or unavailable; restore it in PwrAgent or choose another thread.",
         },
       };
     }
@@ -11471,8 +12055,8 @@ export class MessagingController {
     | Extract<PwrAgentMessagingResponse, { ok: false }> {
     if (params.placement !== "auto") {
       if (
-        params.placement === "new_child" &&
-        !params.location.managedConversation.canCreateChild
+        params.placement === "new_child"
+        && !params.location.managedConversation.canCreateChild
       ) {
         return {
           ok: false,
@@ -11492,9 +12076,9 @@ export class MessagingController {
     }
 
     if (
-      params.origin.binding.targetKind !== "agent_thread" &&
-      (params.origin.event.channel.conversation.kind === "thread" ||
-        params.origin.event.channel.conversation.kind === "topic")
+      params.origin.binding.targetKind !== "agent_thread"
+      && (params.origin.event.channel.conversation.kind === "thread"
+        || params.origin.event.channel.conversation.kind === "topic")
     ) {
       return { ok: true, placement: "current_conversation" };
     }
@@ -11503,10 +12087,9 @@ export class MessagingController {
       ok: false,
       error: {
         code: "unsupported_operation",
-        message:
-          `${managedConversationUnavailableMessage(
-            params.location.managedConversation,
-          )} Pass placement=current_conversation only if replacing the current conversation binding is intended.`,
+        message: `${managedConversationUnavailableMessage(
+          params.location.managedConversation,
+        )} Pass placement=current_conversation only if replacing the current conversation binding is intended.`,
       },
     };
   }
@@ -11516,7 +12099,11 @@ export class MessagingController {
   ): Promise<AgentMessagingOriginResolution> {
     if (context.turnId) {
       const origin = this.activeAgentMessagingOriginsByTurnKey.get(
-        agentMessagingTurnKey(context.backend, context.threadId, context.turnId),
+        agentMessagingTurnKey(
+          context.backend,
+          context.threadId,
+          context.turnId,
+        ),
       );
       if (!origin || !this.isChannelInScope(origin.binding.channel)) {
         return {
@@ -11542,7 +12129,8 @@ export class MessagingController {
         ok: false,
         error: {
           code: "not_found",
-          message: "No active messaging binding is attached to this Agent thread.",
+          message:
+            "No active messaging binding is attached to this Agent thread.",
         },
       };
     }
@@ -11580,7 +12168,9 @@ export class MessagingController {
         ),
       ),
       channel: origin.event.channel.channel,
-      conversation: summarizeMessagingConversation(origin.event.channel.conversation),
+      conversation: summarizeMessagingConversation(
+        origin.event.channel.conversation,
+      ),
       managedConversation: await this.resolveManagedConversationSummary(origin),
     };
   }
@@ -11596,21 +12186,25 @@ export class MessagingController {
       return summarizeNavigationThreadForMessaging(existingThread);
     }
     try {
-      const refreshedNavigation = await this.options.backend.getNavigationSnapshot({
-        backend: binding.backend,
-      });
+      const refreshedNavigation =
+        await this.options.backend.getNavigationSnapshot({
+          backend: binding.backend,
+        });
       const thread = findThreadForBinding(refreshedNavigation, binding);
       if (!thread) {
         return undefined;
       }
       return summarizeNavigationThreadForMessaging(thread);
     } catch (error) {
-      this.logger.warn?.("failed to resolve messaging surface bound thread summary", {
-        backend: binding.backend,
-        bindingId: binding.id,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: binding.threadId,
-      });
+      this.logger.warn?.(
+        "failed to resolve messaging surface bound thread summary",
+        {
+          backend: binding.backend,
+          bindingId: binding.id,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: binding.threadId,
+        },
+      );
       return undefined;
     }
   }
@@ -11663,10 +12257,14 @@ export class MessagingController {
     if (!this.options.channel) {
       return bindings;
     }
-    return bindings.filter((binding) => binding.channel.channel === this.options.channel);
+    return bindings.filter(
+      (binding) => binding.channel.channel === this.options.channel,
+    );
   }
 
-  private isChannelInScope(channel: MessagingBindingRecord["channel"] | undefined): boolean {
+  private isChannelInScope(
+    channel: MessagingBindingRecord["channel"] | undefined,
+  ): boolean {
     return !this.options.channel || channel?.channel === this.options.channel;
   }
 
@@ -11675,9 +12273,9 @@ export class MessagingController {
     binding?: MessagingBindingRecord,
     event?: MessagingInboundEvent,
   ): MessagingSurfaceIntent {
-    const allowedActorIds = binding?.authorizedActorIds ?? (
-      event ? [event.actor.platformUserId] : undefined
-    );
+    const allowedActorIds =
+      binding?.authorizedActorIds
+      ?? (event ? [event.actor.platformUserId] : undefined);
 
     if (intent.audit || (!binding && !event)) {
       return allowedActorIds && !intent.allowedActorIds
@@ -11690,8 +12288,8 @@ export class MessagingController {
       return intent;
     }
     const targetRoutingState =
-      event?.routingState ??
-      (intent.kind === "activity" ? binding?.routingState : undefined);
+      event?.routingState
+      ?? (intent.kind === "activity" ? binding?.routingState : undefined);
 
     return {
       ...intent,
@@ -11730,7 +12328,9 @@ export class MessagingController {
   }
 }
 
-function readCommandAction(event: MessagingInboundCallbackEvent): string | undefined {
+function readCommandAction(
+  event: MessagingInboundCallbackEvent,
+): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
   const match = /^command:([a-z0-9_-]+)$/i.exec(actionId);
   return match?.[1]?.toLowerCase();
@@ -11745,7 +12345,11 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
 function readExecutionModeQueuedParams(
   notification: AgentEvent["notification"],
 ):
-  | { threadId: ThreadIdentifier; queuedExecutionMode: ThreadExecutionMode; queuedAt: number }
+  | {
+      threadId: ThreadIdentifier;
+      queuedExecutionMode: ThreadExecutionMode;
+      queuedAt: number;
+    }
   | undefined {
   if (notification.method !== "thread/executionMode/queued") {
     return undefined;
@@ -11756,9 +12360,10 @@ function readExecutionModeQueuedParams(
     queuedAt?: unknown;
   };
   if (
-    typeof params.threadId === "string" &&
-    (params.queuedExecutionMode === "default" || params.queuedExecutionMode === "full-access") &&
-    typeof params.queuedAt === "number"
+    typeof params.threadId === "string"
+    && (params.queuedExecutionMode === "default"
+      || params.queuedExecutionMode === "full-access")
+    && typeof params.queuedAt === "number"
   ) {
     return {
       threadId: params.threadId,
@@ -11780,8 +12385,8 @@ function readExecutionModeQueueClearedParams(
     reason?: unknown;
   };
   if (
-    typeof params.threadId === "string" &&
-    (params.reason === "applied" || params.reason === "cancelled")
+    typeof params.threadId === "string"
+    && (params.reason === "applied" || params.reason === "cancelled")
   ) {
     return { threadId: params.threadId, reason: params.reason };
   }
@@ -11802,12 +12407,16 @@ function formatTimeOfDay(epochMs: number): string {
   return `${displayHours}:${paddedMinutes} ${period}`;
 }
 
-function readBrowseAction(event: MessagingInboundCallbackEvent): string | undefined {
+function readBrowseAction(
+  event: MessagingInboundCallbackEvent,
+): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
   return actionId.startsWith("browse:") ? actionId : undefined;
 }
 
-function readHelpNavAction(event: MessagingInboundCallbackEvent): string | undefined {
+function readHelpNavAction(
+  event: MessagingInboundCallbackEvent,
+): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
   if (
     actionId === "help:page:next"
@@ -11830,14 +12439,20 @@ function readHelpPageIndex(event: MessagingInboundCallbackEvent): number {
   const value = event.value;
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const candidate = (value as Record<string, unknown>).pageIndex;
-    if (typeof candidate === "number" && Number.isInteger(candidate) && candidate >= 0) {
+    if (
+      typeof candidate === "number"
+      && Number.isInteger(candidate)
+      && candidate >= 0
+    ) {
       return candidate;
     }
   }
   return 0;
 }
 
-function readStatusAction(event: MessagingInboundCallbackEvent): string | undefined {
+function readStatusAction(
+  event: MessagingInboundCallbackEvent,
+): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
   return actionId.startsWith("status:")
     || actionId.startsWith("handoff:")
@@ -11846,7 +12461,9 @@ function readStatusAction(event: MessagingInboundCallbackEvent): string | undefi
     : undefined;
 }
 
-function readMonitorAction(event: MessagingInboundCallbackEvent): string | undefined {
+function readMonitorAction(
+  event: MessagingInboundCallbackEvent,
+): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
   return actionId.startsWith("monitor:") ? actionId : undefined;
 }
@@ -11855,7 +12472,11 @@ function normalizeMonitorCommandAction(
   args: readonly string[] | undefined,
 ): MonitorCommandAction {
   const normalized = args?.[0]?.trim().toLowerCase();
-  if (normalized === "stop" || normalized === "off" || normalized === "disable") {
+  if (
+    normalized === "stop"
+    || normalized === "off"
+    || normalized === "disable"
+  ) {
     return { kind: "stop" };
   }
   if (normalized === "refresh" || normalized === "now") {
@@ -11864,25 +12485,25 @@ function normalizeMonitorCommandAction(
   if (normalized === "topic" || normalized === "topics") {
     const topicAction = args?.[1]?.trim().toLowerCase();
     if (
-      topicAction === "cleanup" ||
-      topicAction === "clean" ||
-      topicAction === "sweep"
+      topicAction === "cleanup"
+      || topicAction === "clean"
+      || topicAction === "sweep"
     ) {
       return { kind: "topics-cleanup" };
     }
     if (
-      topicAction === "fanout" ||
-      topicAction === "fan-out" ||
-      topicAction === "attach"
+      topicAction === "fanout"
+      || topicAction === "fan-out"
+      || topicAction === "attach"
     ) {
       return { kind: "topics-fanout" };
     }
     return { kind: "topics-adopt" };
   }
   if (
-    normalized === "interval" ||
-    normalized === "every" ||
-    normalized === "frequency"
+    normalized === "interval"
+    || normalized === "every"
+    || normalized === "frequency"
   ) {
     const intervalMs = parseMonitorIntervalArg(args?.[1]);
     return typeof intervalMs === "number"
@@ -11896,9 +12517,9 @@ function normalizeMonitorCommandAction(
       : { kind: "cycle-pinned" };
   }
   if (
-    normalized === "recent" ||
-    normalized === "recents" ||
-    normalized === "threads"
+    normalized === "recent"
+    || normalized === "recents"
+    || normalized === "threads"
   ) {
     const count = parseMonitorCountArg(args?.[1]);
     return typeof count === "number"
@@ -11906,9 +12527,9 @@ function normalizeMonitorCommandAction(
       : { kind: "cycle-recent" };
   }
   if (
-    normalized === "status" ||
-    normalized === "details" ||
-    normalized === "detail"
+    normalized === "status"
+    || normalized === "details"
+    || normalized === "detail"
   ) {
     const enabled = parseMonitorStatusLineArg(args?.[1]);
     return typeof enabled === "boolean"
@@ -11916,9 +12537,9 @@ function normalizeMonitorCommandAction(
       : { kind: "toggle-status-line" };
   }
   if (
-    normalized === "snippet" ||
-    normalized === "snippets" ||
-    normalized === "response"
+    normalized === "snippet"
+    || normalized === "snippets"
+    || normalized === "response"
   ) {
     const enabled = parseMonitorBooleanArg(args?.[1]);
     return typeof enabled === "boolean"
@@ -11928,7 +12549,9 @@ function normalizeMonitorCommandAction(
   return { kind: "start" };
 }
 
-function normalizeMonitorCallbackAction(actionId: string): MonitorCommandAction {
+function normalizeMonitorCallbackAction(
+  actionId: string,
+): MonitorCommandAction {
   if (actionId === "monitor:interval") {
     return { kind: "cycle-interval" };
   }
@@ -12010,14 +12633,20 @@ function resolveMonitorStateOptions(
     case "set-pinned":
       return {
         intervalMs: currentIntervalMs,
-        pinnedThreadLimit: normalizeMonitorThreadLimit(action.count, currentPinned),
+        pinnedThreadLimit: normalizeMonitorThreadLimit(
+          action.count,
+          currentPinned,
+        ),
         recentThreadLimit: currentRecent,
         showLastResponseSnippet: currentShowSnippet,
         showStatusLine: currentShowStatusLine,
       };
     case "set-interval":
       return {
-        intervalMs: normalizeMonitorIntervalMs(action.intervalMs, currentIntervalMs),
+        intervalMs: normalizeMonitorIntervalMs(
+          action.intervalMs,
+          currentIntervalMs,
+        ),
         pinnedThreadLimit: currentPinned,
         recentThreadLimit: currentRecent,
         showLastResponseSnippet: currentShowSnippet,
@@ -12027,7 +12656,10 @@ function resolveMonitorStateOptions(
       return {
         intervalMs: currentIntervalMs,
         pinnedThreadLimit: currentPinned,
-        recentThreadLimit: normalizeMonitorThreadLimit(action.count, currentRecent),
+        recentThreadLimit: normalizeMonitorThreadLimit(
+          action.count,
+          currentRecent,
+        ),
         showLastResponseSnippet: currentShowSnippet,
         showStatusLine: currentShowStatusLine,
       };
@@ -12093,16 +12725,18 @@ function parseMonitorIntervalArg(arg: string | undefined): number | undefined {
   return value * 1000;
 }
 
-function parseMonitorStatusLineArg(arg: string | undefined): boolean | undefined {
+function parseMonitorStatusLineArg(
+  arg: string | undefined,
+): boolean | undefined {
   const normalized = arg?.trim().toLowerCase();
   if (!normalized) {
     return undefined;
   }
   if (
-    normalized === "line" ||
-    normalized === "lines" ||
-    normalized === "detail" ||
-    normalized === "details"
+    normalized === "line"
+    || normalized === "lines"
+    || normalized === "detail"
+    || normalized === "details"
   ) {
     return true;
   }
@@ -12139,9 +12773,8 @@ function managedTopicRecordFromConversation(params: {
   source: MessagingManagedTopicRecord["source"];
 }): MessagingManagedTopicRecord {
   const supergroupId = params.conversation.parentId ?? params.conversation.id;
-  const topicId = params.conversation.kind === "topic"
-    ? params.conversation.id
-    : "";
+  const topicId =
+    params.conversation.kind === "topic" ? params.conversation.id : "";
   return {
     id: `topic:${params.channel}:${supergroupId}:${topicId}`,
     authorizedActorIds: params.actorIds,
@@ -12159,7 +12792,9 @@ function managedTopicRecordFromConversation(params: {
   };
 }
 
-function topicChannelRef(topic: MessagingManagedTopicRecord): MessagingChannelRef {
+function topicChannelRef(
+  topic: MessagingManagedTopicRecord,
+): MessagingChannelRef {
   return {
     channel: topic.channel,
     conversation: topic.conversation,
@@ -12176,9 +12811,7 @@ function formatManagedTopicRights(
 ): string[] {
   return operations.map((operation) => {
     const label =
-      operation.operation === "create_child"
-        ? "create"
-        : operation.operation;
+      operation.operation === "create_child" ? "create" : operation.operation;
     if (operation.supported) {
       return `${label}: available`;
     }
@@ -12205,11 +12838,17 @@ function formatTopicCleanupProposalBody(
     "Dry run only. No topic will be closed or deleted until you approve one of the actions below.",
     "",
     `Keep: ${grouped.keep.length}`,
-    ...grouped.keep.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
+    ...grouped.keep
+      .slice(0, 5)
+      .map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
     `Close candidates: ${grouped.close.length}`,
-    ...grouped.close.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
+    ...grouped.close
+      .slice(0, 5)
+      .map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
     `Delete candidates: ${grouped.delete.length}`,
-    ...grouped.delete.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
+    ...grouped.delete
+      .slice(0, 5)
+      .map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
   ].join("\n");
 }
 
@@ -12272,18 +12911,18 @@ function readAcpRuntimeRiskContext(
     return undefined;
   }
   const source =
-    value.source === "mode" ||
-    value.source === "configOption" ||
-    value.source === "model"
+    value.source === "mode"
+    || value.source === "configOption"
+    || value.source === "model"
       ? value.source
       : undefined;
   if (
-    value.kind === "new-thread" &&
-    typeof value.sessionId === "string" &&
-    typeof value.optionId === "string" &&
-    typeof value.value === "string" &&
-    typeof value.label === "string" &&
-    source
+    value.kind === "new-thread"
+    && typeof value.sessionId === "string"
+    && typeof value.optionId === "string"
+    && typeof value.value === "string"
+    && typeof value.label === "string"
+    && source
   ) {
     return {
       kind: "new-thread",
@@ -12295,13 +12934,13 @@ function readAcpRuntimeRiskContext(
     };
   }
   if (
-    value.kind === "thread" &&
-    typeof value.bindingId === "string" &&
-    typeof value.threadId === "string" &&
-    typeof value.optionId === "string" &&
-    typeof value.value === "string" &&
-    typeof value.label === "string" &&
-    source
+    value.kind === "thread"
+    && typeof value.bindingId === "string"
+    && typeof value.threadId === "string"
+    && typeof value.optionId === "string"
+    && typeof value.value === "string"
+    && typeof value.label === "string"
+    && source
   ) {
     return {
       bindingId: value.bindingId,
@@ -12330,11 +12969,11 @@ function readFullAccessRiskContext(
     };
   }
   if (
-    value.kind === "resume-thread" &&
-    typeof value.backend === "string" &&
-    isAppServerBackendKind(value.backend) &&
-    typeof value.sessionId === "string" &&
-    typeof value.threadId === "string"
+    value.kind === "resume-thread"
+    && typeof value.backend === "string"
+    && isAppServerBackendKind(value.backend)
+    && typeof value.sessionId === "string"
+    && typeof value.threadId === "string"
   ) {
     return {
       backend: value.backend,
@@ -12344,9 +12983,9 @@ function readFullAccessRiskContext(
     };
   }
   if (
-    value.kind === "thread" &&
-    typeof value.bindingId === "string" &&
-    typeof value.threadId === "string"
+    value.kind === "thread"
+    && typeof value.bindingId === "string"
+    && typeof value.threadId === "string"
   ) {
     return {
       bindingId: value.bindingId,
@@ -12367,7 +13006,8 @@ function fullAccessRiskPresentationForContext(
   if (context.kind === "thread") {
     return {
       binding: context.binding,
-      surface: context.binding?.statusSurface ?? context.binding?.pinnedStatusSurface,
+      surface:
+        context.binding?.statusSurface ?? context.binding?.pinnedStatusSurface,
     };
   }
   return { surface: context.session.surface };
@@ -12406,11 +13046,13 @@ function handoffContextForBinding(
   }
 
   const worktreeDirectory = thread.linkedDirectories.find(
-    (directory) => directory.kind === "worktree" || Boolean(directory.worktreePath),
+    (directory) =>
+      directory.kind === "worktree" || Boolean(directory.worktreePath),
   );
   if (worktreeDirectory) {
     const repositoryPath = worktreeDirectory.path;
-    const workingDirectoryPath = worktreeDirectory.worktreePath ?? worktreeDirectory.path;
+    const workingDirectoryPath =
+      worktreeDirectory.worktreePath ?? worktreeDirectory.path;
     const branch = thread.observedGitBranch ?? thread.gitBranch;
     if (!repositoryPath || !workingDirectoryPath || !branch) {
       return undefined;
@@ -12429,26 +13071,30 @@ function handoffContextForBinding(
   }
 
   const localDirectory =
-    thread.linkedDirectories.find((directory) => directory.kind === "local") ??
-    thread.linkedDirectories[0];
+    thread.linkedDirectories.find((directory) => directory.kind === "local")
+    ?? thread.linkedDirectories[0];
   if (!localDirectory?.path) {
     return undefined;
   }
   const directorySummary = findNavigationDirectory(navigation, localDirectory);
   const branch =
-    thread.observedGitBranch ??
-    thread.gitBranch ??
-    directorySummary?.gitStatus?.currentBranch;
+    thread.observedGitBranch
+    ?? thread.gitBranch
+    ?? directorySummary?.gitStatus?.currentBranch;
   if (!branch) {
     return undefined;
   }
   const leaveLocalBranches = (
-    directorySummary?.gitStatus?.handoffBranches ??
-    directorySummary?.gitStatus?.branches?.filter((candidate) => candidate !== branch) ??
-    []
+    directorySummary?.gitStatus?.handoffBranches
+    ?? directorySummary?.gitStatus?.branches?.filter(
+      (candidate) => candidate !== branch,
+    )
+    ?? []
   ).filter(
     (candidate, index, branches) =>
-      candidate !== "HEAD" && candidate !== branch && branches.indexOf(candidate) === index,
+      candidate !== "HEAD"
+      && candidate !== branch
+      && branches.indexOf(candidate) === index,
   );
   const leaveLocalBranchChoices = ["HEAD", ...leaveLocalBranches];
 
@@ -12465,7 +13111,9 @@ function handoffContextForBinding(
   };
 }
 
-function branchPageIndexFromValue(value: MessagingJsonValue | undefined): number {
+function branchPageIndexFromValue(
+  value: MessagingJsonValue | undefined,
+): number {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return 0;
   }
@@ -12481,9 +13129,10 @@ function findNavigationDirectory(
 ): NavigationDirectorySummary | undefined {
   return navigation.directories.find(
     (directory) =>
-      directory.key === linkedDirectory.id ||
-      directory.path === linkedDirectory.path ||
-      (linkedDirectory.worktreePath && directory.path === linkedDirectory.worktreePath),
+      directory.key === linkedDirectory.id
+      || directory.path === linkedDirectory.path
+      || (linkedDirectory.worktreePath
+        && directory.path === linkedDirectory.worktreePath),
   );
 }
 
@@ -12492,13 +13141,15 @@ function validateHandoffRequest(
   context: MessagingWorkspaceHandoffContext,
 ): { valid: true } | { valid: false; reason: string } {
   const expectedDirection =
-    context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local";
+    context.workspaceKind === "local"
+      ? "local-to-worktree"
+      : "worktree-to-local";
   if (
-    request.backend !== context.backend ||
-    request.threadId !== context.threadId ||
-    request.direction !== expectedDirection ||
-    request.repositoryPath !== context.repositoryPath ||
-    request.sourcePath !== context.workingDirectoryPath
+    request.backend !== context.backend
+    || request.threadId !== context.threadId
+    || request.direction !== expectedDirection
+    || request.repositoryPath !== context.repositoryPath
+    || request.sourcePath !== context.workingDirectoryPath
   ) {
     return {
       valid: false,
@@ -12508,7 +13159,8 @@ function validateHandoffRequest(
   if (context.branch && request.sourceBranch !== context.branch) {
     return {
       valid: false,
-      reason: "The thread branch changed. Use /status to refresh before handoff.",
+      reason:
+        "The thread branch changed. Use /status to refresh before handoff.",
     };
   }
   if (request.direction === "local-to-worktree") {
@@ -12527,13 +13179,15 @@ function validateHandoffRequest(
     if (!request.leaveLocalBranch) {
       return {
         valid: false,
-        reason: "Choose the branch to leave checked out in Local before handoff.",
+        reason:
+          "Choose the branch to leave checked out in Local before handoff.",
       };
     }
     if (!context.leaveLocalBranches.includes(request.leaveLocalBranch)) {
       return {
         valid: false,
-        reason: "That Local branch choice is no longer available. Use /status to refresh.",
+        reason:
+          "That Local branch choice is no longer available. Use /status to refresh.",
       };
     }
   }
@@ -12586,8 +13240,8 @@ function normalizeNewThreadSessionForBackend(
   }
 
   const selectedModel =
-    models.find((model) => model.id === preferences.model) ??
-    defaultBackendModel(models);
+    models.find((model) => model.id === preferences.model)
+    ?? defaultBackendModel(models);
   const reasoningEfforts = backend.launchpadOptions?.reasoningEfforts ?? [];
   if (preferences.reasoningEffort !== undefined) {
     if (reasoningEfforts.length === 0) {
@@ -12598,8 +13252,8 @@ function normalizeNewThreadSessionForBackend(
   }
 
   const supportsFast =
-    Boolean(backend.launchpadOptions?.supportsFastMode) ||
-    Boolean(selectedModel?.supportsFast);
+    Boolean(backend.launchpadOptions?.supportsFastMode)
+    || Boolean(selectedModel?.supportsFast);
   if (!supportsFast) {
     delete preferences.fastMode;
   }
@@ -12613,7 +13267,9 @@ function normalizeNewThreadSessionForBackend(
     }
   }
 
-  const hasPreferences = Object.keys(preferences).some((key) => key !== "updatedAt");
+  const hasPreferences = Object.keys(preferences).some(
+    (key) => key !== "updatedAt",
+  );
   return {
     ...session,
     preferences: hasPreferences
@@ -12670,49 +13326,53 @@ function newThreadOptionsForSession(
     : undefined;
   const workMode = resolveNewThreadWorkMode({
     requestedWorkMode:
-      session.workMode ??
-      directoryLaunchpad?.workMode ??
-      launchpadDefaults.workMode ??
-      "local",
+      session.workMode
+      ?? directoryLaunchpad?.workMode
+      ?? launchpadDefaults.workMode
+      ?? "local",
     directory,
   });
   const streamingMode = session.preferences?.streamingResponses ?? "inherit";
   const models = backend.launchpadOptions?.models ?? [];
   const modelOption =
-    models.find((model) => model.id === session.preferences?.model) ??
-    models.find((model) => model.id === launchpadDefaults.model) ??
-    models.find((model) => model.current) ??
-    models[0];
+    models.find((model) => model.id === session.preferences?.model)
+    ?? models.find((model) => model.id === launchpadDefaults.model)
+    ?? models.find((model) => model.current)
+    ?? models[0];
   const reasoningEfforts = backend.launchpadOptions?.reasoningEfforts ?? [];
   const reasoningEffort =
-    session.preferences?.reasoningEffort &&
-    reasoningEfforts.includes(session.preferences.reasoningEffort)
+    session.preferences?.reasoningEffort
+    && reasoningEfforts.includes(session.preferences.reasoningEffort)
       ? session.preferences.reasoningEffort
-      : launchpadDefaults.reasoningEffort &&
-          reasoningEfforts.includes(launchpadDefaults.reasoningEffort)
+      : launchpadDefaults.reasoningEffort
+          && reasoningEfforts.includes(launchpadDefaults.reasoningEffort)
         ? launchpadDefaults.reasoningEffort
         : reasoningEfforts[0];
   const supportsFast =
-    Boolean(backend.launchpadOptions?.supportsFastMode) ||
-    Boolean(modelOption?.supportsFast);
+    Boolean(backend.launchpadOptions?.supportsFastMode)
+    || Boolean(modelOption?.supportsFast);
   const supportsReasoning =
     reasoningEfforts.length > 0 || Boolean(modelOption?.supportsReasoning);
   const acpRuntime = isAcpBackendId(backend.kind)
-    ? session.preferences?.acpRuntime ??
-      directoryLaunchpad?.acpRuntime ??
-      launchpadDefaults.acpRuntime
+    ? (session.preferences?.acpRuntime
+      ?? directoryLaunchpad?.acpRuntime
+      ?? launchpadDefaults.acpRuntime)
     : undefined;
   const executionMode =
-    session.preferences?.executionMode ??
-    directoryLaunchpad?.executionMode ??
-    launchpadDefaults.executionMode;
+    session.preferences?.executionMode
+    ?? directoryLaunchpad?.executionMode
+    ?? launchpadDefaults.executionMode;
   const executionModeSource = session.preferences?.executionMode
     ? "session"
     : directoryLaunchpad?.executionMode
       ? "directory-launchpad"
       : "launchpad-defaults";
-  const codexEnvironmentOptions = directoryLaunchpad?.codexEnvironmentOptions ?? [];
-  const codexEnvironmentId = resolveNewThreadCodexEnvironmentId(session, directory);
+  const codexEnvironmentOptions =
+    directoryLaunchpad?.codexEnvironmentOptions ?? [];
+  const codexEnvironmentId = resolveNewThreadCodexEnvironmentId(
+    session,
+    directory,
+  );
   const selectedEnvironment = codexEnvironmentOptions.find(
     (environment) => environment.id === codexEnvironmentId,
   );
@@ -12722,22 +13382,23 @@ function newThreadOptionsForSession(
     acpRuntime,
     branchName: resolveNewThreadBaseBranch(session, navigation, directory),
     codexEnvironmentActionId: selectedEnvironment
-      ? session.preferences?.codexEnvironmentActionId ??
-        directoryLaunchpad?.codexEnvironmentActionId
+      ? (session.preferences?.codexEnvironmentActionId
+        ?? directoryLaunchpad?.codexEnvironmentActionId)
       : undefined,
     codexEnvironmentExecutionTarget: selectedEnvironment
-      ? session.preferences?.codexEnvironmentExecutionTarget ??
-        directoryLaunchpad?.codexEnvironmentExecutionTarget ??
-        "local"
+      ? (session.preferences?.codexEnvironmentExecutionTarget
+        ?? directoryLaunchpad?.codexEnvironmentExecutionTarget
+        ?? "local")
       : undefined,
-    codexEnvironmentId: selectedEnvironment?.id ?? (codexEnvironmentId === null ? null : undefined),
+    codexEnvironmentId:
+      selectedEnvironment?.id
+      ?? (codexEnvironmentId === null ? null : undefined),
     codexEnvironmentOptions,
     executionMode,
     executionModeSource,
-    fastMode:
-      supportsFast
-        ? session.preferences?.fastMode ?? launchpadDefaults.fastMode ?? false
-        : false,
+    fastMode: supportsFast
+      ? (session.preferences?.fastMode ?? launchpadDefaults.fastMode ?? false)
+      : false,
     model: session.preferences?.model ?? modelOption?.id ?? "default",
     reasoningEffort,
     supportsFast,
@@ -12755,10 +13416,10 @@ function canCreateNewThreadWorktree(
   directory: NavigationDirectorySummary | undefined,
 ): boolean {
   return Boolean(
-    directory?.path &&
-      directory.kind === "directory" &&
-      (directory.gitStatus?.currentBranch ||
-        (directory.gitStatus?.branches?.length ?? 0) > 0),
+    directory?.path
+    && directory.kind === "directory"
+    && (directory.gitStatus?.currentBranch
+      || (directory.gitStatus?.branches?.length ?? 0) > 0),
   );
 }
 
@@ -12766,8 +13427,8 @@ function resolveNewThreadWorkMode(params: {
   requestedWorkMode: LaunchpadWorkMode;
   directory: NavigationDirectorySummary | undefined;
 }): LaunchpadWorkMode {
-  return params.requestedWorkMode === "worktree" &&
-    canCreateNewThreadWorktree(params.directory)
+  return params.requestedWorkMode === "worktree"
+    && canCreateNewThreadWorktree(params.directory)
     ? "worktree"
     : "local";
 }
@@ -12795,8 +13456,12 @@ function newThreadPromptGateBody(
       : undefined,
     `Provider: ${backend.label}`,
     `Workspace: ${options.workMode === "worktree" ? "New Worktree" : "Local"}`,
-    options.workMode === "worktree" ? `Base branch: ${options.branchName}` : undefined,
-    acpRuntimeMode || !isAcpBackendId(options.backend) || options.executionMode === "full-access"
+    options.workMode === "worktree"
+      ? `Base branch: ${options.branchName}`
+      : undefined,
+    acpRuntimeMode
+    || !isAcpBackendId(options.backend)
+    || options.executionMode === "full-access"
       ? `Permissions: ${permissionsLabel}`
       : undefined,
     options.codexEnvironmentOptions.length > 0 || options.codexEnvironmentId
@@ -12806,7 +13471,9 @@ function newThreadPromptGateBody(
     options.supportsReasoning && options.reasoningEffort
       ? `Reasoning: ${options.reasoningEffort}`
       : undefined,
-    options.supportsFast ? `Fast mode: ${options.fastMode ? "on" : "off"}` : undefined,
+    options.supportsFast
+      ? `Fast mode: ${options.fastMode ? "on" : "off"}`
+      : undefined,
     `Streaming: ${options.streamingResponses ? "on" : "off"}`,
   ]
     .filter((line): line is string => Boolean(line))
@@ -12821,8 +13488,8 @@ function resolveNewThreadCodexEnvironmentId(
     return null;
   }
   return (
-    session.preferences?.codexEnvironmentId ??
-    directory?.launchpad?.codexEnvironmentId
+    session.preferences?.codexEnvironmentId
+    ?? directory?.launchpad?.codexEnvironmentId
   );
 }
 
@@ -12867,7 +13534,9 @@ function buildMessagingEnvironmentSetupFailureBody(
   message: string,
 ): string {
   return [
-    runtime?.environmentName ? `Environment: ${runtime.environmentName}` : undefined,
+    runtime?.environmentName
+      ? `Environment: ${runtime.environmentName}`
+      : undefined,
     runtime?.setupCommand ? `Command: ${runtime.setupCommand}` : undefined,
     message,
     "The thread was created and your first message will still be submitted.",
@@ -12881,7 +13550,9 @@ function buildMessagingEnvironmentSetupSuccessBody(
 ): string {
   const duration = formatDurationMs(runtime?.setupDurationMs);
   return [
-    runtime?.environmentName ? `Environment: ${runtime.environmentName}` : undefined,
+    runtime?.environmentName
+      ? `Environment: ${runtime.environmentName}`
+      : undefined,
     runtime?.setupCommand ? `Command: ${runtime.setupCommand}` : undefined,
     duration ? `Duration: ${duration}` : undefined,
     "Your first message will be submitted now.",
@@ -12891,7 +13562,11 @@ function buildMessagingEnvironmentSetupSuccessBody(
 }
 
 function formatDurationMs(durationMs: number | undefined): string | undefined {
-  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) {
+  if (
+    durationMs === undefined
+    || !Number.isFinite(durationMs)
+    || durationMs < 0
+  ) {
     return undefined;
   }
   if (durationMs < 1_000) {
@@ -12906,16 +13581,16 @@ function resolveNewThreadBaseBranch(
   directory?: NavigationDirectorySummary,
 ): string {
   const selectedDirectory =
-    directory ??
-    (session.selectedProject
+    directory
+    ?? (session.selectedProject
       ? directoryForProjectSelection(navigation, session.selectedProject)
       : undefined);
   return (
-    sanitizeBranchLabel(session.branchName) ??
-    sanitizeBranchLabel(selectedDirectory?.gitStatus?.defaultBranch) ??
-    sanitizeBranchLabel(selectedDirectory?.gitStatus?.branches?.[0]) ??
-    sanitizeBranchLabel(selectedDirectory?.gitStatus?.currentBranch) ??
-    "main"
+    sanitizeBranchLabel(session.branchName)
+    ?? sanitizeBranchLabel(selectedDirectory?.gitStatus?.defaultBranch)
+    ?? sanitizeBranchLabel(selectedDirectory?.gitStatus?.branches?.[0])
+    ?? sanitizeBranchLabel(selectedDirectory?.gitStatus?.currentBranch)
+    ?? "main"
   );
 }
 
@@ -12924,7 +13599,11 @@ function newThreadBranchChoices(
   navigation: NavigationSnapshot,
   directory: NavigationDirectorySummary | undefined,
 ): string[] {
-  const defaultBranch = resolveNewThreadBaseBranch(session, navigation, directory);
+  const defaultBranch = resolveNewThreadBaseBranch(
+    session,
+    navigation,
+    directory,
+  );
   const branches = [
     defaultBranch,
     ...(directory?.gitStatus?.branches ?? []),
@@ -12941,12 +13620,16 @@ function sanitizeBranchLabel(branch: string | undefined): string | undefined {
   return normalized || undefined;
 }
 
-function normalizeConversationTitle(title: string | undefined): string | undefined {
+function normalizeConversationTitle(
+  title: string | undefined,
+): string | undefined {
   const normalized = title?.replace(/\s+/g, " ").trim();
   return normalized || undefined;
 }
 
-function conversationKindLabel(kind: MessagingBindingRecord["channel"]["conversation"]["kind"]): string {
+function conversationKindLabel(
+  kind: MessagingBindingRecord["channel"]["conversation"]["kind"],
+): string {
   switch (kind) {
     case "topic":
       return "topic";
@@ -12963,21 +13646,26 @@ function boundThreadConfirmationBody(
   binding: MessagingBindingRecord,
   capabilityProfile: MessagingCapabilityProfile,
 ): string {
-  const noun = binding.targetKind === "agent_thread" ? "Agent thread" : "thread";
+  const noun =
+    binding.targetKind === "agent_thread" ? "Agent thread" : "thread";
   return [
     `Messages in this conversation will route to the selected ${noun}.`,
     sharedConversationMentionInstruction(binding, capabilityProfile),
-  ].filter((line): line is string => Boolean(line)).join("\n\n");
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n\n");
 }
 
 function boundThreadFallbackText(
   binding: MessagingBindingRecord,
   capabilityProfile: MessagingCapabilityProfile,
 ): string {
-  return sharedConversationMentionInstruction(binding, capabilityProfile)
+  return (
+    sharedConversationMentionInstruction(binding, capabilityProfile)
     ?? (binding.targetKind === "agent_thread"
       ? "Send a message to continue with the Agent thread."
-      : "Send a message to continue the thread.");
+      : "Send a message to continue the thread.")
+  );
 }
 
 function sharedConversationMentionInstruction(
@@ -12985,15 +13673,18 @@ function sharedConversationMentionInstruction(
   capabilityProfile: MessagingCapabilityProfile,
 ): string | undefined {
   if (
-    binding.channel.conversation.kind === "dm" ||
-    !capabilityProfile.conversationInput?.sharedConversationRequiresMention
+    binding.channel.conversation.kind === "dm"
+    || !capabilityProfile.conversationInput?.sharedConversationRequiresMention
   ) {
     return undefined;
   }
-  return capabilityProfile.conversationInput.sharedConversationMentionInstruction;
+  return capabilityProfile.conversationInput
+    .sharedConversationMentionInstruction;
 }
 
-function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {
+function threadIdForBackendEvent(
+  event: AgentEvent,
+): ThreadIdentifier | undefined {
   const params = event.notification.params as {
     parentThreadId?: unknown;
     threadId?: unknown;
@@ -13001,7 +13692,9 @@ function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefine
   if (typeof params.threadId === "string") {
     return params.threadId;
   }
-  return typeof params.parentThreadId === "string" ? params.parentThreadId : undefined;
+  return typeof params.parentThreadId === "string"
+    ? params.parentThreadId
+    : undefined;
 }
 
 function contextUsageSummaryFromValue(value: unknown): string | undefined {
@@ -13030,13 +13723,15 @@ function contextUsageSummaryFromValue(value: unknown): string | undefined {
   );
   const reasoningOutputTokens = Math.max(
     0,
-    readNumberField(usage, "reasoningOutputTokens", "reasoning_output_tokens") ?? 0,
+    readNumberField(usage, "reasoningOutputTokens", "reasoning_output_tokens")
+      ?? 0,
   );
-  const outputLabel = reasoningOutputTokens > 0
-    ? `${formatContextUsageNumber(outputTokens)} out (${formatContextUsageNumber(
-        reasoningOutputTokens,
-      )} reasoning)`
-    : `${formatContextUsageNumber(outputTokens)} out`;
+  const outputLabel =
+    reasoningOutputTokens > 0
+      ? `${formatContextUsageNumber(outputTokens)} out (${formatContextUsageNumber(
+          reasoningOutputTokens,
+        )} reasoning)`
+      : `${formatContextUsageNumber(outputTokens)} out`;
 
   return [
     `Latest request usage: ${formatContextUsageNumber(uncachedInputTokens)} uncached in`,
@@ -13045,26 +13740,27 @@ function contextUsageSummaryFromValue(value: unknown): string | undefined {
   ].join(" · ");
 }
 
-function findTokenUsageRecord(value: unknown): Record<string, unknown> | undefined {
+function findTokenUsageRecord(
+  value: unknown,
+): Record<string, unknown> | undefined {
   const root = asPlainRecord(value);
   if (!root) {
     return undefined;
   }
   const container =
-    asPlainRecord(root.tokenUsage) ??
-    asPlainRecord(root.token_usage) ??
-    root;
+    asPlainRecord(root.tokenUsage) ?? asPlainRecord(root.token_usage) ?? root;
   const direct =
-    asPlainRecord(container.last) ??
-    asPlainRecord(container.last_token_usage) ??
-    asPlainRecord(container.total) ??
-    asPlainRecord(container.total_token_usage) ??
-    container;
+    asPlainRecord(container.last)
+    ?? asPlainRecord(container.last_token_usage)
+    ?? asPlainRecord(container.total)
+    ?? asPlainRecord(container.total_token_usage)
+    ?? container;
   if (
-    readNumberField(direct, "inputTokens", "input_tokens") !== undefined ||
-    readNumberField(direct, "cachedInputTokens", "cached_input_tokens") !== undefined ||
-    readNumberField(direct, "outputTokens", "output_tokens") !== undefined ||
-    readNumberField(
+    readNumberField(direct, "inputTokens", "input_tokens") !== undefined
+    || readNumberField(direct, "cachedInputTokens", "cached_input_tokens")
+      !== undefined
+    || readNumberField(direct, "outputTokens", "output_tokens") !== undefined
+    || readNumberField(
       direct,
       "reasoningOutputTokens",
       "reasoning_output_tokens",
@@ -13084,7 +13780,9 @@ function findTokenUsageRecord(value: unknown): Record<string, unknown> | undefin
 function findStringField(value: unknown, key: string): string | undefined {
   const record = asPlainRecord(value);
   const direct = record?.[key];
-  return typeof direct === "string" && direct.trim() ? direct.trim() : undefined;
+  return typeof direct === "string" && direct.trim()
+    ? direct.trim()
+    : undefined;
 }
 
 function readNumberField(
@@ -13102,7 +13800,7 @@ function readNumberField(
 
 function asPlainRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined;
 }
 
@@ -13127,23 +13825,26 @@ function planEntryForBackendEvent(
   if (typeof params.turnId !== "string" || !Array.isArray(params.plan?.steps)) {
     return undefined;
   }
-  const explanation = typeof params.plan.explanation === "string"
-    ? params.plan.explanation.trim()
-    : undefined;
-  const steps = params.plan.steps.flatMap((step): AppServerThreadPlanEntry["steps"] => {
-    if (!step || typeof step !== "object") {
-      return [];
-    }
-    const record = step as { status?: unknown; step?: unknown };
-    if (
-      typeof record.step !== "string" ||
-      !isPlanStepStatus(record.status) ||
-      !record.step.trim()
-    ) {
-      return [];
-    }
-    return [{ step: record.step.trim(), status: record.status }];
-  });
+  const explanation =
+    typeof params.plan.explanation === "string"
+      ? params.plan.explanation.trim()
+      : undefined;
+  const steps = params.plan.steps.flatMap(
+    (step): AppServerThreadPlanEntry["steps"] => {
+      if (!step || typeof step !== "object") {
+        return [];
+      }
+      const record = step as { status?: unknown; step?: unknown };
+      if (
+        typeof record.step !== "string"
+        || !isPlanStepStatus(record.status)
+        || !record.step.trim()
+      ) {
+        return [];
+      }
+      return [{ step: record.step.trim(), status: record.status }];
+    },
+  );
   if (!explanation && steps.length === 0) {
     return undefined;
   }
@@ -13184,17 +13885,20 @@ function reviewArtifactForBackendEvent(
   }
   const normalizedType = normalizeReviewItemType(item.type);
   if (
-    normalizedType !== "exitedreviewmode" &&
-    normalizedType !== "review" &&
-    normalizedType !== "reviewartifact"
+    normalizedType !== "exitedreviewmode"
+    && normalizedType !== "review"
+    && normalizedType !== "reviewartifact"
   ) {
     return undefined;
   }
-  const reviewOutput = normalizeStructuredReviewOutput(item as Record<string, unknown>);
-  const review = (typeof item.review === "string" ? item.review.trim() : "") ||
-    (typeof item.text === "string" ? item.text.trim() : "") ||
-    reviewOutput?.overall_explanation.trim() ||
-    "";
+  const reviewOutput = normalizeStructuredReviewOutput(
+    item as Record<string, unknown>,
+  );
+  const review =
+    (typeof item.review === "string" ? item.review.trim() : "")
+    || (typeof item.text === "string" ? item.text.trim() : "")
+    || reviewOutput?.overall_explanation.trim()
+    || "";
   if (!review) {
     return undefined;
   }
@@ -13220,35 +13924,41 @@ function normalizeStructuredReviewOutput(
 ): AppServerThreadReviewEntry["output"] | undefined {
   const data = asPlainRecord(item.data);
   const reviewOutput =
-    asPlainRecord(data?.reviewOutput) ??
-    asPlainRecord(data?.review_output) ??
-    asPlainRecord(item.reviewOutput) ??
-    asPlainRecord(item.review_output);
+    asPlainRecord(data?.reviewOutput)
+    ?? asPlainRecord(data?.review_output)
+    ?? asPlainRecord(item.reviewOutput)
+    ?? asPlainRecord(item.review_output);
   const findings = Array.isArray(reviewOutput?.findings)
     ? reviewOutput.findings
     : undefined;
 
   if (
-    !reviewOutput ||
-    !findings ||
-    (reviewOutput.overall_correctness !== "patch is correct" &&
-      reviewOutput.overall_correctness !== "patch is incorrect") ||
-    typeof reviewOutput.overall_explanation !== "string" ||
-    typeof reviewOutput.overall_confidence_score !== "number"
+    !reviewOutput
+    || !findings
+    || (reviewOutput.overall_correctness !== "patch is correct"
+      && reviewOutput.overall_correctness !== "patch is incorrect")
+    || typeof reviewOutput.overall_explanation !== "string"
+    || typeof reviewOutput.overall_confidence_score !== "number"
   ) {
     return undefined;
   }
 
   return {
-    findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
+    findings: findings as NonNullable<
+      AppServerThreadReviewEntry["output"]
+    >["findings"],
     overall_correctness: reviewOutput.overall_correctness,
     overall_explanation: reviewOutput.overall_explanation,
     overall_confidence_score: reviewOutput.overall_confidence_score,
   };
 }
 
-function isPlanStepStatus(value: unknown): value is AppServerThreadPlanEntry["steps"][number]["status"] {
-  return value === "pending" || value === "in_progress" || value === "completed";
+function isPlanStepStatus(
+  value: unknown,
+): value is AppServerThreadPlanEntry["steps"][number]["status"] {
+  return (
+    value === "pending" || value === "in_progress" || value === "completed"
+  );
 }
 
 function normalizeReviewItemType(type: string): string {
@@ -13362,7 +14072,9 @@ function eventFromBinding(
 
 function sanitizeMessagingChildTitle(title: string | undefined): string {
   const normalized = (title ?? "PwrAgent thread").replace(/\s+/g, " ").trim();
-  return Array.from(normalized || "PwrAgent thread").slice(0, 100).join("");
+  return Array.from(normalized || "PwrAgent thread")
+    .slice(0, 100)
+    .join("");
 }
 
 function managedConversationUnavailableMessage(
@@ -13384,15 +14096,17 @@ function managedConversationUnavailableMessage(
   return "PwrAgent cannot create a native child conversation in the current messaging location.";
 }
 
-function turnQueueUpdateForBackendEvent(event: AgentEvent): {
-  automationName?: string;
-  automationRunId?: string;
-  finalText?: string;
-  origin?: string;
-  status?: string;
-  suppressBindingBroadcast?: boolean;
-  turnId?: string;
-} | undefined {
+function turnQueueUpdateForBackendEvent(event: AgentEvent):
+  | {
+      automationName?: string;
+      automationRunId?: string;
+      finalText?: string;
+      origin?: string;
+      status?: string;
+      suppressBindingBroadcast?: boolean;
+      turnId?: string;
+    }
+  | undefined {
   if (event.notification.method !== "thread/turnQueue/updated") {
     return undefined;
   }
@@ -13407,10 +14121,15 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
   };
   return {
     automationName:
-      typeof params.automationName === "string" ? params.automationName : undefined,
+      typeof params.automationName === "string"
+        ? params.automationName
+        : undefined,
     automationRunId:
-      typeof params.automationRunId === "string" ? params.automationRunId : undefined,
-    finalText: typeof params.finalText === "string" ? params.finalText : undefined,
+      typeof params.automationRunId === "string"
+        ? params.automationRunId
+        : undefined,
+    finalText:
+      typeof params.finalText === "string" ? params.finalText : undefined,
     origin: typeof params.origin === "string" ? params.origin : undefined,
     status: typeof params.status === "string" ? params.status : undefined,
     suppressBindingBroadcast: params.suppressBindingBroadcast === true,
@@ -13418,13 +14137,15 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
   };
 }
 
-function automationRunUpdateForBackendEvent(event: AgentEvent): {
-  finalText?: string;
-  outputDecision?: AutomationRunOutputDecision;
-  runId: string;
-  status: string;
-  suppressBindingBroadcast?: boolean;
-} | undefined {
+function automationRunUpdateForBackendEvent(event: AgentEvent):
+  | {
+      finalText?: string;
+      outputDecision?: AutomationRunOutputDecision;
+      runId: string;
+      status: string;
+      suppressBindingBroadcast?: boolean;
+    }
+  | undefined {
   if (event.notification.method !== "automation/run/updated") {
     return undefined;
   }
@@ -13439,7 +14160,8 @@ function automationRunUpdateForBackendEvent(event: AgentEvent): {
     return undefined;
   }
   return {
-    finalText: typeof params.finalText === "string" ? params.finalText : undefined,
+    finalText:
+      typeof params.finalText === "string" ? params.finalText : undefined,
     outputDecision: isAutomationRunOutputDecision(params.outputDecision)
       ? params.outputDecision
       : undefined,
@@ -13485,7 +14207,8 @@ function isNonFinalAssistantTextForBackendEvent(event: AgentEvent): boolean {
   if (params.item?.type !== "agentMessage") {
     return false;
   }
-  const phase = typeof params.item.phase === "string" ? params.item.phase : undefined;
+  const phase =
+    typeof params.item.phase === "string" ? params.item.phase : undefined;
   return Boolean(phase && phase !== "final" && phase !== "final_answer");
 }
 
@@ -13493,8 +14216,8 @@ function isTerminalTurnLifecycle(
   lifecycle: MessagingActiveTurnSummary | undefined,
 ): boolean {
   return Boolean(
-    lifecycle &&
-      ["completed", "failed", "interrupted"].includes(lifecycle.status),
+    lifecycle
+    && ["completed", "failed", "interrupted"].includes(lifecycle.status),
   );
 }
 
@@ -13518,10 +14241,10 @@ function isSameActiveTurnState(
   next: MessagingActiveTurnSummary | undefined,
 ): boolean {
   return Boolean(
-    previous &&
-      next &&
-      previous.turnId === next.turnId &&
-      previous.status === next.status,
+    previous
+    && next
+    && previous.turnId === next.turnId
+    && previous.status === next.status,
   );
 }
 
@@ -13536,17 +14259,21 @@ function shouldRenderStatusForTurnStateChange(
   if (event.notification.method === "thread/status/changed") {
     return false;
   }
-  return Boolean(lifecycle && ["failed", "interrupted"].includes(lifecycle.status));
+  return Boolean(
+    lifecycle && ["failed", "interrupted"].includes(lifecycle.status),
+  );
 }
 
-function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boolean {
+function shouldFlushToolUpdatesBeforeIntent(
+  intent: MessagingSurfaceIntent,
+): boolean {
   if (intent.kind === "activity" || intent.kind === "dismiss") {
     return false;
   }
   if (
-    intent.kind === "message" &&
-    intent.role === "system" &&
-    intent.id.startsWith("tool-update")
+    intent.kind === "message"
+    && intent.role === "system"
+    && intent.id.startsWith("tool-update")
   ) {
     return false;
   }
@@ -13582,7 +14309,9 @@ function messagingEventFromAutomationSource(
   };
 }
 
-export function shouldConsumeDeliveryBudget(intent: MessagingSurfaceIntent): boolean {
+export function shouldConsumeDeliveryBudget(
+  intent: MessagingSurfaceIntent,
+): boolean {
   if (intent.kind === "stream_update" && !intent.stream.isFinal) {
     return false;
   }
@@ -13643,11 +14372,11 @@ function isUserInitiatedDeliveryEvent(
   event: MessagingInboundEvent | undefined,
 ): boolean {
   return Boolean(
-    event &&
-      (event.kind === "callback" ||
-        event.kind === "command" ||
-        event.kind === "media" ||
-        event.kind === "text"),
+    event
+    && (event.kind === "callback"
+      || event.kind === "command"
+      || event.kind === "media"
+      || event.kind === "text"),
   );
 }
 
@@ -13684,13 +14413,12 @@ function approvalBodyWithResponse(body: string, responseLabel: string): string {
     return !/^Reply with\b/i.test(block);
   });
 
-  return [...preservedBlocks, `Response Received: ${responseLabel}`].join("\n\n");
+  return [...preservedBlocks, `Response Received: ${responseLabel}`].join(
+    "\n\n",
+  );
 }
 
-function sleepUntil(
-  retryAt: number,
-  now: () => number,
-): Promise<void> {
+function sleepUntil(retryAt: number, now: () => number): Promise<void> {
   const delayMs = Math.max(0, retryAt - now());
   if (delayMs === 0) {
     return Promise.resolve();
@@ -13708,7 +14436,10 @@ function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
         type?: unknown;
       };
     };
-    if (params.item?.type !== "agentMessage" || typeof params.item.text !== "string") {
+    if (
+      params.item?.type !== "agentMessage"
+      || typeof params.item.text !== "string"
+    ) {
       return undefined;
     }
     return params.item.text.trim() || undefined;
@@ -13777,11 +14508,11 @@ function assistantDeltaForBackendEvent(
     return undefined;
   }
   if (
-    typeof params.threadId !== "string" ||
-    typeof params.turnId !== "string" ||
-    typeof params.itemId !== "string" ||
-    typeof params.delta !== "string" ||
-    params.delta.length === 0
+    typeof params.threadId !== "string"
+    || typeof params.turnId !== "string"
+    || typeof params.itemId !== "string"
+    || typeof params.delta !== "string"
+    || params.delta.length === 0
   ) {
     return undefined;
   }
@@ -13835,11 +14566,12 @@ function assistantStreamFilterForBackendEvent(
   }
   return {
     threadId: params.threadId,
-    turnId: typeof params.turnId === "string"
-      ? params.turnId
-      : typeof params.turn?.id === "string"
-        ? params.turn.id
-        : undefined,
+    turnId:
+      typeof params.turnId === "string"
+        ? params.turnId
+        : typeof params.turn?.id === "string"
+          ? params.turn.id
+          : undefined,
   };
 }
 
@@ -13858,7 +14590,8 @@ function assistantStreamKey(params: {
 
 function compactLogPreview(text: string, limit = 96): string {
   const compact = text.replace(/\s+/g, " ").trim();
-  const preview = compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
+  const preview =
+    compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
   return preview.replace(/["\\]/g, "\\$&");
 }
 
@@ -13891,13 +14624,17 @@ function truncateText(text: string, limit: number): string {
 
 function isTurnInProgressStartError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /\b(active turn|turn already|already active|in progress)\b/i.test(message);
+  return /\b(active turn|turn already|already active|in progress)\b/i.test(
+    message,
+  );
 }
 
-function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boolean {
+function isPermanentMessagingTargetFailure(
+  result: MessagingDeliveryResult,
+): boolean {
   return (
-    result.outcome === "failed" &&
-    Boolean(
+    result.outcome === "failed"
+    && Boolean(
       result.errorMessage?.match(
         /\bUnknown Channel\b|chat not found|message thread not found/i,
       ),
@@ -13910,17 +14647,19 @@ function shouldRetryArtifactInline(
   result: MessagingDeliveryResult,
 ): boolean {
   return (
-    intent.artifactDelivery.mode === "attachment_summary" &&
-    (result.outcome === "failed" || result.outcome === "unsupported")
+    intent.artifactDelivery.mode === "attachment_summary"
+    && (result.outcome === "failed" || result.outcome === "unsupported")
   );
 }
 
-function isVisibleAssistantStreamDelivery(result: MessagingDeliveryResult): boolean {
+function isVisibleAssistantStreamDelivery(
+  result: MessagingDeliveryResult,
+): boolean {
   return (
-    result.outcome === "presented" ||
-    result.outcome === "presented_new" ||
-    result.outcome === "updated" ||
-    result.outcome === "pinned"
+    result.outcome === "presented"
+    || result.outcome === "presented_new"
+    || result.outcome === "updated"
+    || result.outcome === "pinned"
   );
 }
 
@@ -13929,10 +14668,10 @@ function shouldRecordOutboundActivity(
   result: MessagingDeliveryResult,
 ): boolean {
   if (
-    result.outcome === "discarded" ||
-    result.outcome === "failed" ||
-    result.outcome === "unsupported" ||
-    result.outcome === "dismissed"
+    result.outcome === "discarded"
+    || result.outcome === "failed"
+    || result.outcome === "unsupported"
+    || result.outcome === "dismissed"
   ) {
     return false;
   }
@@ -14001,9 +14740,9 @@ function isTurnWorkActivityEvent(
   }
 
   return (
-    event.notification.method.startsWith("item/") ||
-    event.notification.method.startsWith("turn/") ||
-    event.notification.method.startsWith("thread/")
+    event.notification.method.startsWith("item/")
+    || event.notification.method.startsWith("turn/")
+    || event.notification.method.startsWith("thread/")
   );
 }
 
@@ -14016,9 +14755,9 @@ function typingActivityRefreshMsForBackendEvent(event: AgentEvent): number {
 
 function isHighFrequencyItemActivityEvent(method: string): boolean {
   return (
-    method.endsWith("/delta") ||
-    method.endsWith("Delta") ||
-    method.endsWith("/progress")
+    method.endsWith("/delta")
+    || method.endsWith("Delta")
+    || method.endsWith("/progress")
   );
 }
 
@@ -14115,7 +14854,8 @@ function navigationWithStartedThread(params: {
   const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
   if (
     params.navigation.threads.some(
-      (thread) => thread.source === params.backend && thread.id === params.threadId,
+      (thread) =>
+        thread.source === params.backend && thread.id === params.threadId,
     )
   ) {
     return params.navigation;
@@ -14123,13 +14863,16 @@ function navigationWithStartedThread(params: {
 
   const directoryPath = params.directory?.path ?? params.project.path;
   const linkedDirectory: LinkedDirectorySummary | undefined = directoryPath
-    ? params.linkedDirectory ?? {
+    ? (params.linkedDirectory ?? {
         id: params.directory?.key ?? directoryPath,
-        kind: params.workMode === "worktree" && params.worktreePath ? "worktree" : "local",
+        kind:
+          params.workMode === "worktree" && params.worktreePath
+            ? "worktree"
+            : "local",
         label: params.directory?.label ?? params.project.label,
         path: directoryPath,
         ...(params.worktreePath ? { worktreePath: params.worktreePath } : {}),
-      }
+      })
     : undefined;
 
   return {
@@ -14176,7 +14919,10 @@ function navigationWithStartedThread(params: {
             threadKeys: directory.threadKeys.includes(threadKey)
               ? directory.threadKeys
               : [threadKey, ...directory.threadKeys],
-            latestUpdatedAt: Math.max(directory.latestUpdatedAt ?? 0, params.now),
+            latestUpdatedAt: Math.max(
+              directory.latestUpdatedAt ?? 0,
+              params.now,
+            ),
           }
         : directory,
     ),
@@ -14202,10 +14948,10 @@ function launchpadForMessagingProject(params: {
   const directoryPath = params.directory?.path ?? params.project.path;
   const base: NavigationLaunchpadDraft = params.directory?.launchpad ?? {
     directoryKey:
-      params.directory?.key ??
-      params.project.directoryKey ??
-      params.project.path ??
-      params.project.label,
+      params.directory?.key
+      ?? params.project.directoryKey
+      ?? params.project.path
+      ?? params.project.label,
     directoryKind: params.directory?.kind ?? "directory",
     directoryLabel: params.directory?.label ?? params.project.label,
     directoryPath,
@@ -14229,7 +14975,7 @@ function launchpadForMessagingProject(params: {
     codexEnvironmentId:
       params.preferences?.codexEnvironmentId === null
         ? undefined
-        : params.options.codexEnvironmentId ?? undefined,
+        : (params.options.codexEnvironmentId ?? undefined),
     codexEnvironmentExecutionTarget:
       params.preferences?.codexEnvironmentId === null
         ? undefined
@@ -14239,7 +14985,7 @@ function launchpadForMessagingProject(params: {
         ? undefined
         : params.preferences?.codexEnvironmentActionId === null
           ? undefined
-          : params.options.codexEnvironmentActionId ?? undefined,
+          : (params.options.codexEnvironmentActionId ?? undefined),
     executionMode: params.options.executionMode,
     model: params.options.supportsModel ? params.options.model : undefined,
     reasoningEffort: params.options.supportsReasoning
@@ -14366,8 +15112,9 @@ function skillSearchCwdsForThreadState(
       directory.worktreePath,
       directory.path,
     ]),
-  ].filter((cwd, index, candidates): cwd is string =>
-    Boolean(cwd) && candidates.indexOf(cwd) === index,
+  ].filter(
+    (cwd, index, candidates): cwd is string =>
+      Boolean(cwd) && candidates.indexOf(cwd) === index,
   );
 }
 
@@ -14419,7 +15166,11 @@ function readBindingTargetFromValue(
 
   const backend = value.backend;
   const threadId = value.threadId;
-  if (typeof backend === "string" && isAppServerBackendKind(backend) && typeof threadId === "string") {
+  if (
+    typeof backend === "string"
+    && isAppServerBackendKind(backend)
+    && typeof threadId === "string"
+  ) {
     return {
       backend,
       threadId,
@@ -14476,13 +15227,11 @@ function readMessagingToolUpdateModeValue(
   value: MessagingJsonValue | undefined,
 ): MessagingToolUpdateMode | undefined {
   const toolUpdateMode = readStringValue(value, "toolUpdateMode");
-  return (
-    toolUpdateMode === "show_none" ||
-      toolUpdateMode === "show_less" ||
-      toolUpdateMode === "show_some" ||
-      toolUpdateMode === "show_more" ||
-      toolUpdateMode === "show_all"
-  )
+  return toolUpdateMode === "show_none"
+    || toolUpdateMode === "show_less"
+    || toolUpdateMode === "show_some"
+    || toolUpdateMode === "show_more"
+    || toolUpdateMode === "show_all"
     ? toolUpdateMode
     : undefined;
 }

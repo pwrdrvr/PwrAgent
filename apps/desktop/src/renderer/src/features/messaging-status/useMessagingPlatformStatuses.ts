@@ -103,7 +103,9 @@ function upsertHealth(
     ...existingWithoutCredentialMetadata
   } = existing ?? {};
   const next: MessagingPlatformStatus = {
-    ...(preserveCredentialMetadata ? existing : existingWithoutCredentialMetadata),
+    ...(preserveCredentialMetadata
+      ? existing
+      : existingWithoutCredentialMetadata),
     platform,
     health: event.health,
     ...(event.account !== undefined ? { account: event.account } : {}),

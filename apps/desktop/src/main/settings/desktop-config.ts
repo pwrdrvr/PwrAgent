@@ -281,7 +281,10 @@ export function readDesktopSettingsConfig(
     return {};
   }
 
-  return parseDesktopSettingsToml(fs.readFileSync(configPath, "utf8"), configPath);
+  return parseDesktopSettingsToml(
+    fs.readFileSync(configPath, "utf8"),
+    configPath,
+  );
 }
 
 /**
@@ -314,9 +317,9 @@ export function invalidateAgentCoreGrokEnabledCache(): void {
  * immediately). The disk read is memoized — see
  * {@link invalidateAgentCoreGrokEnabledCache} for the invalidation contract.
  */
-export function resolveAgentCoreGrokEnabled(
-  options?: { env?: NodeJS.ProcessEnv },
-): boolean {
+export function resolveAgentCoreGrokEnabled(options?: {
+  env?: NodeJS.ProcessEnv;
+}): boolean {
   const env = options?.env ?? process.env;
   const raw = env[AGENT_CORE_GROK_ENV]?.trim().toLowerCase();
   if (raw !== undefined && raw !== "") {
@@ -342,9 +345,9 @@ export function resolveAgentCoreGrokEnabled(
  * Reads synchronously from disk; safe to call from discovery hot paths since
  * discovery itself is on-demand (refresh button / startup).
  */
-export function resolveGrokCliPathOverride(
-  options?: { env?: NodeJS.ProcessEnv },
-): string | undefined {
+export function resolveGrokCliPathOverride(options?: {
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
   const env = options?.env ?? process.env;
   const envOverride = env[ACP_AGENTS_GROK_CLI_PATH_ENV]?.trim() || undefined;
   if (envOverride) {
@@ -362,9 +365,9 @@ export function resolveGrokCliPathOverride(
  * Resolve the active override path for the Qwen Code executable, used by the
  * ACP local-discovery probe. Order: env var > on-disk config > undefined.
  */
-export function resolveQwenCliPathOverride(
-  options?: { env?: NodeJS.ProcessEnv },
-): string | undefined {
+export function resolveQwenCliPathOverride(options?: {
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
   const env = options?.env ?? process.env;
   const envOverride = env[ACP_AGENTS_QWEN_CLI_PATH_ENV]?.trim() || undefined;
   if (envOverride) {
@@ -527,7 +530,8 @@ export function desktopSettingsPatchToEdits(
     const listKey = `${canonicalKey}_list`;
     const table = currentTables[tableName];
     const hasLegacyScalar = readStringArray(table?.[legacyKey]) !== undefined;
-    const hasListTable = readAuthorizedContactArray(table?.[listKey]) !== undefined;
+    const hasListTable =
+      readAuthorizedContactArray(table?.[listKey]) !== undefined;
     const tableArrayKey =
       (hasLegacyScalar && canonicalKey === legacyKey) || hasListTable
         ? listKey
@@ -573,7 +577,9 @@ export function desktopSettingsPatchToEdits(
         ...(contact.fullAccessWarningDismissed === true
           ? { full_access_warning_dismissed: true }
           : {}),
-        ...(contact.responseMode ? { response_mode: contact.responseMode } : {}),
+        ...(contact.responseMode
+          ? { response_mode: contact.responseMode }
+          : {}),
       })),
     });
   };
@@ -627,7 +633,10 @@ export function desktopSettingsPatchToEdits(
     );
   }
   if (patch.general?.notificationsEnabled !== undefined) {
-    set(["general", "notifications_enabled"], patch.general.notificationsEnabled);
+    set(
+      ["general", "notifications_enabled"],
+      patch.general.notificationsEnabled,
+    );
   }
 
   if (patch.experimental?.diffCondensation?.enabled !== undefined) {
@@ -685,10 +694,7 @@ export function desktopSettingsPatchToEdits(
     );
   }
   if (patch.experimental?.agentCoreGrok !== undefined) {
-    set(
-      ["experimental", "agent_core_grok"],
-      patch.experimental.agentCoreGrok,
-    );
+    set(["experimental", "agent_core_grok"], patch.experimental.agentCoreGrok);
     // Drop the memoized disk-read in resolveAgentCoreGrokEnabled so the next
     // listBackends call sees the new value without waiting for a TTL.
     invalidateAgentCoreGrokEnabledCache();
@@ -747,10 +753,7 @@ export function desktopSettingsPatchToEdits(
         ["general", "messaging_acknowledgment", "acknowledged_at"],
         ack.acknowledgedAt,
       );
-      set(
-        ["general", "messaging_acknowledgment", "providers"],
-        ack.providers,
-      );
+      set(["general", "messaging_acknowledgment", "providers"], ack.providers);
     }
   }
 
@@ -772,10 +775,7 @@ export function desktopSettingsPatchToEdits(
         path: ["image_uploads", "pasted_image_max_patches"],
       });
     } else {
-      set(
-        ["image_uploads", "pasted_image_max_patches"],
-        pastedImageMaxPatches,
-      );
+      set(["image_uploads", "pasted_image_max_patches"], pastedImageMaxPatches);
     }
   }
 
@@ -792,8 +792,8 @@ export function desktopSettingsPatchToEdits(
 
   if (patch.integratedTerminal?.windowsShell !== undefined) {
     if (
-      patch.integratedTerminal.windowsShell ===
-      DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT
+      patch.integratedTerminal.windowsShell
+      === DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT
     ) {
       edits.push({
         op: "delete",
@@ -867,7 +867,10 @@ export function desktopSettingsPatchToEdits(
     );
   }
   if (patch.messaging?.fullAccessWarning !== undefined) {
-    set(["messaging", "full_access_warning"], patch.messaging.fullAccessWarning);
+    set(
+      ["messaging", "full_access_warning"],
+      patch.messaging.fullAccessWarning,
+    );
   }
   if (patch.messaging?.toolUpdateMode !== undefined) {
     set(["messaging", "tool_update_mode"], patch.messaging.toolUpdateMode);
@@ -881,14 +884,23 @@ export function desktopSettingsPatchToEdits(
         path: ["messaging", "attachments", "image_profile"],
       });
     } else {
-      set(["messaging", "attachments", "image_profile"], attachments.imageProfile);
+      set(
+        ["messaging", "attachments", "image_profile"],
+        attachments.imageProfile,
+      );
     }
   }
   if (attachments?.maxAttachmentBytes !== undefined) {
-    set(["messaging", "attachments", "max_attachment_bytes"], attachments.maxAttachmentBytes);
+    set(
+      ["messaging", "attachments", "max_attachment_bytes"],
+      attachments.maxAttachmentBytes,
+    );
   }
   if (attachments?.maxAttachmentCount !== undefined) {
-    set(["messaging", "attachments", "max_attachment_count"], attachments.maxAttachmentCount);
+    set(
+      ["messaging", "attachments", "max_attachment_count"],
+      attachments.maxAttachmentCount,
+    );
   }
 
   const telegram = patch.messaging?.telegram;
@@ -899,7 +911,10 @@ export function desktopSettingsPatchToEdits(
     set(["messaging", "telegram", "response_mode"], telegram.responseMode);
   }
   if (telegram?.streamingResponses !== undefined) {
-    set(["messaging", "telegram", "streaming_responses"], telegram.streamingResponses);
+    set(
+      ["messaging", "telegram", "streaming_responses"],
+      telegram.streamingResponses,
+    );
   }
   if (telegram?.authorizedUserIds !== undefined) {
     setAuthorizedContacts(
@@ -924,7 +939,10 @@ export function desktopSettingsPatchToEdits(
     set(["messaging", "discord", "enabled"], discord.enabled);
   }
   if (discord?.streamingResponses !== undefined) {
-    set(["messaging", "discord", "streaming_responses"], discord.streamingResponses);
+    set(
+      ["messaging", "discord", "streaming_responses"],
+      discord.streamingResponses,
+    );
   }
   if (discord?.applicationId !== undefined) {
     set(["messaging", "discord", "application_id"], discord.applicationId);
@@ -1014,7 +1032,10 @@ export function desktopSettingsPatchToEdits(
     set(["messaging", "slack", "response_mode"], slack.responseMode);
   }
   if (slack?.streamingResponses !== undefined) {
-    set(["messaging", "slack", "streaming_responses"], slack.streamingResponses);
+    set(
+      ["messaging", "slack", "streaming_responses"],
+      slack.streamingResponses,
+    );
   }
   if (slack?.workspaceUrl !== undefined) {
     set(["messaging", "slack", "workspace_url"], slack.workspaceUrl);
@@ -1038,7 +1059,10 @@ export function desktopSettingsPatchToEdits(
     set(["messaging", "slack", "dm_access_mode"], slack.dmAccessMode);
   }
   if (slack?.groupDmAccessMode !== undefined) {
-    set(["messaging", "slack", "group_dm_access_mode"], slack.groupDmAccessMode);
+    set(
+      ["messaging", "slack", "group_dm_access_mode"],
+      slack.groupDmAccessMode,
+    );
   }
   if (slack?.channelUserAccessMode !== undefined) {
     set(
@@ -1047,7 +1071,10 @@ export function desktopSettingsPatchToEdits(
     );
   }
   if (slack?.slashCommandPrefix !== undefined) {
-    set(["messaging", "slack", "slash_command_prefix"], slack.slashCommandPrefix);
+    set(
+      ["messaging", "slack", "slash_command_prefix"],
+      slack.slashCommandPrefix,
+    );
   }
   if (slack?.registerSlashCommands !== undefined) {
     set(
@@ -1086,7 +1113,10 @@ export function desktopSettingsPatchToEdits(
     set(["messaging", "feishu", "enabled"], feishu.enabled);
   }
   if (feishu?.streamingResponses !== undefined) {
-    set(["messaging", "feishu", "streaming_responses"], feishu.streamingResponses);
+    set(
+      ["messaging", "feishu", "streaming_responses"],
+      feishu.streamingResponses,
+    );
   }
   if (feishu?.inboundMode !== undefined) {
     set(["messaging", "feishu", "inbound_mode"], feishu.inboundMode);
@@ -1101,7 +1131,10 @@ export function desktopSettingsPatchToEdits(
     set(["messaging", "feishu", "callback_base_url"], feishu.callbackBaseUrl);
   }
   if (feishu?.slashCommandPrefix !== undefined) {
-    set(["messaging", "feishu", "slash_command_prefix"], feishu.slashCommandPrefix);
+    set(
+      ["messaging", "feishu", "slash_command_prefix"],
+      feishu.slashCommandPrefix,
+    );
   }
   if (feishu?.registerSlashCommands !== undefined) {
     set(
@@ -1209,10 +1242,16 @@ export function desktopSettingsPatchToEdits(
   }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
-    set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
+    set(
+      ["applications", "editor", "preferred_id"],
+      patch.applications.editor.preferredId,
+    );
   }
   if (patch.applications?.terminal?.preferredId !== undefined) {
-    set(["applications", "terminal", "preferred_id"], patch.applications.terminal.preferredId);
+    set(
+      ["applications", "terminal", "preferred_id"],
+      patch.applications.terminal.preferredId,
+    );
   }
   if (patch.applications?.gh?.path !== undefined) {
     set(["applications", "gh", "path"], patch.applications.gh.path);
@@ -1291,9 +1330,7 @@ function normalizeDesktopConfig(
         density: readAppearanceDensity(generalAppearance?.density),
       },
       codexProfileModel: readCodexProfileModel(general?.codex_profile_model),
-      messagingAcknowledgment: readMessagingAcknowledgment(
-        generalMessagingAck,
-      ),
+      messagingAcknowledgment: readMessagingAcknowledgment(generalMessagingAck),
     },
     onboarding: {
       completed: readBoolean(onboarding?.completed),
@@ -1329,9 +1366,7 @@ function normalizeDesktopConfig(
       agentCoreGrok: readBoolean(experimental?.agent_core_grok),
     },
     imageUploads: {
-      pastedImageMaxPatches: readNumber(
-        imageUploads?.pasted_image_max_patches,
-      ),
+      pastedImageMaxPatches: readNumber(imageUploads?.pasted_image_max_patches),
     },
     updates: {
       channel: readUpdateChannel(updates?.channel),
@@ -1432,7 +1467,9 @@ function normalizeDesktopConfig(
           slack?.channel_authorization_mode,
         ),
         dmAccessMode: readSlackDmAccessMode(slack?.dm_access_mode),
-        groupDmAccessMode: readSlackGroupDmAccessMode(slack?.group_dm_access_mode),
+        groupDmAccessMode: readSlackGroupDmAccessMode(
+          slack?.group_dm_access_mode,
+        ),
         channelUserAccessMode: readSlackChannelUserAccessMode(
           slack?.channel_user_access_mode,
         ),
@@ -1537,15 +1574,16 @@ function normalizeDesktopConfig(
   });
 }
 
-function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig {
+function pruneEmptyConfig(
+  config: DesktopSettingsConfig,
+): DesktopSettingsConfig {
   const pruned: DesktopSettingsConfig = {};
 
   const developerMode = config.general?.developerMode;
   const hotCpuProfilingEnabled = config.general?.hotCpuProfilingEnabled;
   const hotCpuProfilingStartDelayMs =
     config.general?.hotCpuProfilingStartDelayMs;
-  const hotCpuProfilingTriggerMode =
-    config.general?.hotCpuProfilingTriggerMode;
+  const hotCpuProfilingTriggerMode = config.general?.hotCpuProfilingTriggerMode;
   const hotCpuProfilingSlowburnThresholdPercent =
     config.general?.hotCpuProfilingSlowburnThresholdPercent;
   const hotCpuProfilingCaptureHeapSnapshot =
@@ -1560,18 +1598,18 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const codexProfileModel = config.general?.codexProfileModel;
   const messagingAcknowledgment = config.general?.messagingAcknowledgment;
   if (
-    developerMode !== undefined ||
-    hotCpuProfilingEnabled !== undefined ||
-    hotCpuProfilingStartDelayMs !== undefined ||
-    hotCpuProfilingTriggerMode !== undefined ||
-    hotCpuProfilingSlowburnThresholdPercent !== undefined ||
-    hotCpuProfilingCaptureHeapSnapshot !== undefined ||
-    hotCpuProfilingHeapSnapshotLimit !== undefined ||
-    confirmQuitWithInProgressThreads !== undefined ||
-    notificationsEnabled !== undefined ||
-    appearanceDefined ||
-    codexProfileModel !== undefined ||
-    messagingAcknowledgment !== undefined
+    developerMode !== undefined
+    || hotCpuProfilingEnabled !== undefined
+    || hotCpuProfilingStartDelayMs !== undefined
+    || hotCpuProfilingTriggerMode !== undefined
+    || hotCpuProfilingSlowburnThresholdPercent !== undefined
+    || hotCpuProfilingCaptureHeapSnapshot !== undefined
+    || hotCpuProfilingHeapSnapshotLimit !== undefined
+    || confirmQuitWithInProgressThreads !== undefined
+    || notificationsEnabled !== undefined
+    || appearanceDefined
+    || codexProfileModel !== undefined
+    || messagingAcknowledgment !== undefined
   ) {
     pruned.general = {};
     if (developerMode !== undefined) {
@@ -1643,10 +1681,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.updates = config.updates;
   }
 
-  if (
-    config.integratedTerminal &&
-    hasDefinedValue(config.integratedTerminal)
-  ) {
+  if (config.integratedTerminal && hasDefinedValue(config.integratedTerminal)) {
     pruned.integratedTerminal = config.integratedTerminal;
   }
 
@@ -1664,17 +1699,18 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const inputDebounceMs = config.messaging?.inputDebounceMs;
   const enabled = config.messaging?.enabled;
   const allowFullAccessEscalation = config.messaging?.allowFullAccessEscalation;
-  const allowFullAccessThreadResume = config.messaging?.allowFullAccessThreadResume;
+  const allowFullAccessThreadResume =
+    config.messaging?.allowFullAccessThreadResume;
   const fullAccessWarning = config.messaging?.fullAccessWarning;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
   if (
-    enabled !== undefined ||
-    allowFullAccessEscalation !== undefined ||
-    allowFullAccessThreadResume !== undefined ||
-    fullAccessWarning !== undefined ||
-    inputDebounceMs !== undefined ||
-    toolUpdateMode !== undefined ||
-    (attachments && hasDefinedValue(attachments))
+    enabled !== undefined
+    || allowFullAccessEscalation !== undefined
+    || allowFullAccessThreadResume !== undefined
+    || fullAccessWarning !== undefined
+    || inputDebounceMs !== undefined
+    || toolUpdateMode !== undefined
+    || (attachments && hasDefinedValue(attachments))
     || (telegram && hasDefinedValue(telegram))
     || (discord && hasDefinedValue(discord))
     || (mattermost && hasDefinedValue(mattermost))
@@ -1690,7 +1726,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       pruned.messaging.allowFullAccessEscalation = allowFullAccessEscalation;
     }
     if (allowFullAccessThreadResume !== undefined) {
-      pruned.messaging.allowFullAccessThreadResume = allowFullAccessThreadResume;
+      pruned.messaging.allowFullAccessThreadResume =
+        allowFullAccessThreadResume;
     }
     if (fullAccessWarning !== undefined) {
       pruned.messaging.fullAccessWarning = fullAccessWarning;
@@ -1734,10 +1771,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const acpAgentsKimi = config.acpAgents?.kimi;
   const acpAgentsQwen = config.acpAgents?.qwen;
   if (
-    (acpAgentsGemini && hasDefinedValue(acpAgentsGemini)) ||
-    (acpAgentsGrok && hasDefinedValue(acpAgentsGrok)) ||
-    (acpAgentsKimi && hasDefinedValue(acpAgentsKimi)) ||
-    (acpAgentsQwen && hasDefinedValue(acpAgentsQwen))
+    (acpAgentsGemini && hasDefinedValue(acpAgentsGemini))
+    || (acpAgentsGrok && hasDefinedValue(acpAgentsGrok))
+    || (acpAgentsKimi && hasDefinedValue(acpAgentsKimi))
+    || (acpAgentsQwen && hasDefinedValue(acpAgentsQwen))
   ) {
     pruned.acpAgents = {
       ...(acpAgentsGemini && hasDefinedValue(acpAgentsGemini)
@@ -1787,7 +1824,9 @@ function hasDefinedValue(values: object): boolean {
   return Object.values(values).some((value) => value !== undefined);
 }
 
-function readComposer(value: TomlScalar | undefined): StoredChatReplyComposer | undefined {
+function readComposer(
+  value: TomlScalar | undefined,
+): StoredChatReplyComposer | undefined {
   return typeof value === "string" && isDesktopChatReplyComposer(value)
     ? value
     : undefined;
@@ -1887,7 +1926,6 @@ function readMessagingAcknowledgment(
   return { acknowledgedAt, providers };
 }
 
-
 function isMessagingToolUpdateMode(
   value: string,
 ): value is MessagingToolUpdateMode {
@@ -1974,10 +2012,10 @@ function isFullAccessWarningUserPolicy(
   value: unknown,
 ): value is DesktopMessagingFullAccessWarningUserPolicy {
   return (
-    value === "default" ||
-    value === "always" ||
-    value === "dismissable" ||
-    value === "never"
+    value === "default"
+    || value === "always"
+    || value === "dismissable"
+    || value === "never"
   );
 }
 
@@ -2045,8 +2083,8 @@ function readAuthorizedContactArray(
           ? entry.fullAccessWarningOverride
           : undefined,
       fullAccessWarningDismissed:
-        entry.full_access_warning_dismissed === true ||
-        entry.fullAccessWarningDismissed === true,
+        entry.full_access_warning_dismissed === true
+        || entry.fullAccessWarningDismissed === true,
       responseMode: isMessagingResponseMode(entry.response_mode)
         ? entry.response_mode
         : isMessagingResponseMode(entry.responseMode)
@@ -2063,8 +2101,8 @@ function normalizeAuthorizedContacts(
     .map((contact) => ({
       id: contact.id.trim(),
       displayName: sanitizeMessagingContactLabel(contact.displayName),
-      ...(isFullAccessWarningUserPolicy(contact.fullAccessWarningOverride) &&
-      contact.fullAccessWarningOverride !== "default"
+      ...(isFullAccessWarningUserPolicy(contact.fullAccessWarningOverride)
+      && contact.fullAccessWarningOverride !== "default"
         ? { fullAccessWarningOverride: contact.fullAccessWarningOverride }
         : {}),
       ...(contact.fullAccessWarningDismissed === true
@@ -2103,7 +2141,9 @@ function legacyChatReplyComposerComment(): string {
 }
 
 function readNumber(value: TomlScalar | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function readImageProfile(
@@ -2117,7 +2157,12 @@ function readImageProfile(
 function isDesktopMessagingImageProfile(
   value: string,
 ): value is DesktopMessagingImageProfile {
-  return value === "low" || value === "medium" || value === "high" || value === "actual";
+  return (
+    value === "low"
+    || value === "medium"
+    || value === "high"
+    || value === "actual"
+  );
 }
 
 function readWorktreeStorage(

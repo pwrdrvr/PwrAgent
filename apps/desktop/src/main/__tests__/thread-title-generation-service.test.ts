@@ -10,11 +10,14 @@ import {
 
 function makeGenerator(object: unknown): ThreadTitleGenerator {
   return {
-    generateTitle: vi.fn(async () => ({
-      status: "ok",
-      object,
-      cachedTokens: 12,
-    } as const)),
+    generateTitle: vi.fn(
+      async () =>
+        ({
+          status: "ok",
+          object,
+          cachedTokens: 12,
+        }) as const,
+    ),
   };
 }
 
@@ -29,7 +32,7 @@ describe("ThreadTitleGenerationService", () => {
       service.generateTitle({
         backend: "codex",
         userPrompt: "PROJECT-123 investigate checkout crash",
-      })
+      }),
     ).resolves.toEqual({
       status: "generated",
       title: "PROJECT-123 checkout crash",
@@ -38,10 +41,13 @@ describe("ThreadTitleGenerationService", () => {
   });
 
   it("allows 20 seconds for title generators by default", async () => {
-    const generateTitle = vi.fn(async () => ({
-      status: "ok",
-      object: { title: "Thread naming" },
-    } as const));
+    const generateTitle = vi.fn(
+      async () =>
+        ({
+          status: "ok",
+          object: { title: "Thread naming" },
+        }) as const,
+    );
     const service = new ThreadTitleGenerationService({
       generators: { codex: { generateTitle } },
     });
@@ -54,7 +60,7 @@ describe("ThreadTitleGenerationService", () => {
     expect(generateTitle).toHaveBeenCalledWith(
       expect.objectContaining({
         timeoutMs: 20_000,
-      })
+      }),
     );
   });
 
@@ -75,7 +81,7 @@ describe("ThreadTitleGenerationService", () => {
         threadId: "kimi-session-1",
         userPrompt:
           "We're testing something here... just tell me your favorite cereal.",
-      })
+      }),
     ).resolves.toEqual({
       status: "generated",
       title: "Favorite cereal",
@@ -102,7 +108,7 @@ describe("ThreadTitleGenerationService", () => {
       service.generateTitle({
         backend: "codex",
         userPrompt: "In issue 123 and PR 456, why does rename fail?",
-      })
+      }),
     ).resolves.toMatchObject({
       status: "generated",
       title: "PR 456 issue 123 followup",
@@ -120,7 +126,7 @@ describe("ThreadTitleGenerationService", () => {
       service.generateTitle({
         backend: "codex",
         userPrompt: "Can we inspect 456 for rename behavior?",
-      })
+      }),
     ).resolves.toMatchObject({
       status: "generated",
       title: "Rename behavior",
@@ -139,7 +145,7 @@ describe("ThreadTitleGenerationService", () => {
         backend: "codex",
         userPrompt:
           "At 19:36:47.622 thread title generation rejected a rename for thread 019dd673-a098-7021-a344-a09e4d8ec850.",
-      })
+      }),
     ).resolves.toMatchObject({
       status: "generated",
       title: "Thread rename rejection",
@@ -157,7 +163,7 @@ describe("ThreadTitleGenerationService", () => {
       service.generateTitle({
         backend: "codex",
         userPrompt: "PROJECT-123 investigate checkout crash",
-      })
+      }),
     ).resolves.toEqual({
       status: "invalid",
       reason: "ticket_reference_missing",
@@ -175,7 +181,7 @@ describe("ThreadTitleGenerationService", () => {
       service.generateTitle({
         backend: "codex",
         userPrompt: "In issue 123 and PR 456, why does rename fail?",
-      })
+      }),
     ).resolves.toEqual({
       status: "invalid",
       reason: "ticket_reference_missing",
@@ -194,7 +200,7 @@ describe("ThreadTitleGenerationService", () => {
         backend: "codex",
         userPrompt:
           "**Handoff Message: Dynamic Subagent Monitoring for Long-Running Tasks**\n\nTask #1: monitor the spawned agents.\nTask #2: report long-running tool calls.",
-      })
+      }),
     ).resolves.toMatchObject({
       status: "generated",
       title: "Dynamic subagent monitoring",
@@ -212,7 +218,7 @@ describe("ThreadTitleGenerationService", () => {
       service.generateTitle({
         backend: "codex",
         userPrompt: "Can we inspect #123 rename behavior?",
-      })
+      }),
     ).resolves.toMatchObject({
       status: "generated",
       title: "Rename thread #123",
@@ -223,7 +229,8 @@ describe("ThreadTitleGenerationService", () => {
     const longTitleService = new ThreadTitleGenerationService({
       generators: {
         codex: makeGenerator({
-          title: "This title is intentionally much too long for the desktop thread title limit",
+          title:
+            "This title is intentionally much too long for the desktop thread title limit",
         }),
       },
     });
@@ -237,7 +244,7 @@ describe("ThreadTitleGenerationService", () => {
       longTitleService.generateTitle({
         backend: "codex",
         userPrompt: "Name this thread",
-      })
+      }),
     ).resolves.toEqual({
       status: "invalid",
       reason: "title_too_long",
@@ -246,7 +253,7 @@ describe("ThreadTitleGenerationService", () => {
       wordyTitleService.generateTitle({
         backend: "codex",
         userPrompt: "Name this thread",
-      })
+      }),
     ).resolves.toEqual({
       status: "invalid",
       reason: "title_too_many_words",
@@ -264,7 +271,7 @@ describe("ThreadTitleGenerationService", () => {
       service.generateTitle({
         backend: "codex",
         userPrompt: "Name this thread",
-      })
+      }),
     ).resolves.toEqual({
       status: "invalid",
       reason: "title_must_be_string",
@@ -280,7 +287,7 @@ describe("ThreadTitleGenerationService", () => {
       service.generateTitle({
         backend: "grok",
         userPrompt: "Name this thread",
-      })
+      }),
     ).resolves.toEqual({
       status: "unavailable",
       reason: "grok_title_generator_unavailable",
@@ -306,7 +313,7 @@ describe("GrokThreadTitleGenerator", () => {
         schema: { type: "object" },
         schemaName: "thread_title",
         timeoutMs: 5_000,
-      })
+      }),
     ).resolves.toEqual({
       status: "ok",
       object: { title: "Thread naming" },
@@ -322,7 +329,7 @@ describe("GrokThreadTitleGenerator", () => {
         headers: {
           "x-grok-conv-id": THREAD_TITLE_PROMPT_VERSION,
         },
-      })
+      }),
     );
   });
 });

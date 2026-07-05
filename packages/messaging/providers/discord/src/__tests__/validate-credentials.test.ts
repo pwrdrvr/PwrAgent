@@ -64,7 +64,9 @@ describe("Discord validateCredentials", () => {
   });
 
   it("returns failed with the SDK error message on rejection", async () => {
-    getMock.mockRejectedValue(new Error("DiscordAPIError[0]: 401: Unauthorized"));
+    getMock.mockRejectedValue(
+      new Error("DiscordAPIError[0]: 401: Unauthorized"),
+    );
     const result = await validateCredentials({ botToken: "bad-token" });
     expect(result.status).toBe("failed");
     expect(result.errorMessage).toContain("401: Unauthorized");

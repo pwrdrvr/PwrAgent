@@ -1,8 +1,4 @@
-import {
-  BrowserWindow,
-  screen,
-  type Rectangle,
-} from "electron";
+import { BrowserWindow, screen, type Rectangle } from "electron";
 
 type WindowPosition = {
   x: number;
@@ -32,7 +28,11 @@ export function placementForSourceDisplay(
   height: number,
   source: WindowPlacementSource = {},
 ): WindowPosition {
-  return centerWindowOnDisplay(width, height, displayForPlacementSource(source));
+  return centerWindowOnDisplay(
+    width,
+    height,
+    displayForPlacementSource(source),
+  );
 }
 
 export function placementForCursorDisplay(
@@ -51,7 +51,11 @@ export function positionWindowForSourceDisplay(
   source: WindowPlacementSource = {},
 ): void {
   const bounds = window.getBounds();
-  const position = placementForSourceDisplay(bounds.width, bounds.height, source);
+  const position = placementForSourceDisplay(
+    bounds.width,
+    bounds.height,
+    source,
+  );
   window.setPosition(position.x, position.y, false);
 }
 

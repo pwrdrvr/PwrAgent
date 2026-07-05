@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions } from "electron";
+import type {
+  BrowserWindowConstructorOptions,
+  MenuItemConstructorOptions,
+} from "electron";
 
 const browserWindowState: {
   options?: BrowserWindowConstructorOptions;
@@ -14,8 +17,14 @@ const browserWindowState: {
   show?: ReturnType<typeof vi.fn>;
 } = {};
 
-const windowEventHandlers = new Map<string, Array<(...args: unknown[]) => void>>();
-const webContentsEventHandlers = new Map<string, Array<(...args: unknown[]) => void>>();
+const windowEventHandlers = new Map<
+  string,
+  Array<(...args: unknown[]) => void>
+>();
+const webContentsEventHandlers = new Map<
+  string,
+  Array<(...args: unknown[]) => void>
+>();
 const webContentsOnceHandlers = new Map<string, (...args: unknown[]) => void>();
 
 const resolveHeapMonitorConfigMock = vi.fn<
@@ -31,21 +40,27 @@ const clipboardWriteTextMock = vi.fn();
 const addWordToSpellCheckerDictionaryMock = vi.fn();
 const replaceMisspellingMock = vi.fn();
 const menuPopupMock = vi.fn();
-const buildFromTemplateMock = vi.fn((template: MenuItemConstructorOptions[]) => ({
-  popup: menuPopupMock,
-  template,
-}));
+const buildFromTemplateMock = vi.fn(
+  (template: MenuItemConstructorOptions[]) => ({
+    popup: menuPopupMock,
+    template,
+  }),
+);
 const getCursorScreenPointMock = vi.fn(() => ({ x: 100, y: 100 }));
 const getDisplayNearestPointMock = vi.fn(() => ({
   workArea: { x: 0, y: 0, width: 1920, height: 1080 },
 }));
-const RendererHeapMonitorMock = vi.fn(function RendererHeapMonitor(this: unknown) {
+const RendererHeapMonitorMock = vi.fn(function RendererHeapMonitor(
+  this: unknown,
+) {
   return {
     start: rendererMonitorStartMock,
     stop: rendererMonitorStopMock,
   };
 });
-const MainProcessHeapMonitorMock = vi.fn(function MainProcessHeapMonitor(this: unknown) {
+const MainProcessHeapMonitorMock = vi.fn(function MainProcessHeapMonitor(
+  this: unknown,
+) {
   return {
     start: mainMonitorStartMock,
     stop: mainMonitorStopMock,
@@ -81,38 +96,42 @@ function emitWebContentsEvent(event: string, ...args: unknown[]) {
 
 const BrowserWindowMock = vi.fn(function BrowserWindow(
   this: unknown,
-  options: BrowserWindowConstructorOptions
+  options: BrowserWindowConstructorOptions,
 ) {
   browserWindowState.options = options;
   browserWindowState.loadFile = vi.fn();
   browserWindowState.loadURL = vi.fn();
-  browserWindowState.on = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-    const handlers = windowEventHandlers.get(event) ?? [];
-    handlers.push(handler);
-    windowEventHandlers.set(event, handlers);
-  });
-  browserWindowState.once = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-    if (event === "ready-to-show") {
-      handler();
-      return;
-    }
+  browserWindowState.on = vi.fn(
+    (event: string, handler: (...args: unknown[]) => void) => {
+      const handlers = windowEventHandlers.get(event) ?? [];
+      handlers.push(handler);
+      windowEventHandlers.set(event, handlers);
+    },
+  );
+  browserWindowState.once = vi.fn(
+    (event: string, handler: (...args: unknown[]) => void) => {
+      if (event === "ready-to-show") {
+        handler();
+        return;
+      }
 
-    const handlers = windowEventHandlers.get(event) ?? [];
-    handlers.push(handler);
-    windowEventHandlers.set(event, handlers);
-  });
+      const handlers = windowEventHandlers.get(event) ?? [];
+      handlers.push(handler);
+      windowEventHandlers.set(event, handlers);
+    },
+  );
   browserWindowState.send = vi.fn();
   browserWindowState.webContentsOn = vi.fn(
     (event: string, handler: (...args: unknown[]) => void) => {
       const handlers = webContentsEventHandlers.get(event) ?? [];
       handlers.push(handler);
       webContentsEventHandlers.set(event, handlers);
-    }
+    },
   );
   browserWindowState.webContentsOnce = vi.fn(
     (event: string, handler: (...args: unknown[]) => void) => {
       webContentsOnceHandlers.set(event, handler);
-    }
+    },
   );
   browserWindowState.setWindowOpenHandler = vi.fn();
   browserWindowState.show = vi.fn();
@@ -131,8 +150,8 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
         Promise.resolve({
           hasPwragnt: true,
           pwragentKeys: [],
-          locationHref: "http://127.0.0.1:5173"
-        })
+          locationHref: "http://127.0.0.1:5173",
+        }),
       ),
       replaceMisspelling: replaceMisspellingMock,
       session: {
@@ -147,8 +166,8 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
         off: vi.fn(),
       },
       takeHeapSnapshot: vi.fn(),
-      setWindowOpenHandler: browserWindowState.setWindowOpenHandler
-    }
+      setWindowOpenHandler: browserWindowState.setWindowOpenHandler,
+    },
   };
 });
 
@@ -156,21 +175,21 @@ vi.mock("electron", () => ({
   BrowserWindow: BrowserWindowMock,
   app: {
     getAppPath: vi.fn(() => "/repo/apps/desktop"),
-    getVersion: vi.fn(() => "0.1.0")
+    getVersion: vi.fn(() => "0.1.0"),
   },
   clipboard: {
-    writeText: clipboardWriteTextMock
+    writeText: clipboardWriteTextMock,
   },
   Menu: {
-    buildFromTemplate: buildFromTemplateMock
+    buildFromTemplate: buildFromTemplateMock,
   },
   shell: {
-    openExternal: shellOpenExternalMock
+    openExternal: shellOpenExternalMock,
   },
   screen: {
     getCursorScreenPoint: getCursorScreenPointMock,
-    getDisplayNearestPoint: getDisplayNearestPointMock
-  }
+    getDisplayNearestPoint: getDisplayNearestPointMock,
+  },
 }));
 
 vi.mock("electron-log/main.js", () => ({
@@ -182,19 +201,19 @@ vi.mock("electron-log/main.js", () => ({
 }));
 
 vi.mock("../diagnostics/heap-monitor-config", () => ({
-  resolveHeapMonitorConfig: resolveHeapMonitorConfigMock
+  resolveHeapMonitorConfig: resolveHeapMonitorConfigMock,
 }));
 
 vi.mock("../diagnostics/heap-session", () => ({
-  createHeapSession: createHeapSessionMock
+  createHeapSession: createHeapSessionMock,
 }));
 
 vi.mock("../diagnostics/renderer-heap-monitor", () => ({
-  RendererHeapMonitor: RendererHeapMonitorMock
+  RendererHeapMonitor: RendererHeapMonitorMock,
 }));
 
 vi.mock("../diagnostics/main-process-heap-monitor", () => ({
-  MainProcessHeapMonitor: MainProcessHeapMonitorMock
+  MainProcessHeapMonitor: MainProcessHeapMonitorMock,
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
@@ -254,14 +273,14 @@ describe("createMainWindow", () => {
       height: 960,
     });
     expect(
-      browserWindowState.options?.webPreferences?.preload?.replace(/\\/g, "/")
+      browserWindowState.options?.webPreferences?.preload?.replace(/\\/g, "/"),
     ).toContain("preload/index.cjs");
     expect(browserWindowState.options?.webPreferences?.contextIsolation).toBe(
-      true
+      true,
     );
     expect(browserWindowState.options?.webPreferences?.sandbox).toBe(true);
     expect(browserWindowState.loadURL).toHaveBeenCalledWith(
-      "http://127.0.0.1:5173"
+      "http://127.0.0.1:5173",
     );
     expect(browserWindowState.show).toHaveBeenCalledTimes(1);
     expect(browserWindowState.setWindowOpenHandler).toHaveBeenCalledTimes(1);
@@ -296,12 +315,15 @@ describe("createMainWindow", () => {
     const { createMainWindow } = await import("../window");
     createMainWindow();
 
-    const openHandler = browserWindowState.setWindowOpenHandler?.mock.calls[0]?.[0];
+    const openHandler =
+      browserWindowState.setWindowOpenHandler?.mock.calls[0]?.[0];
     expect(openHandler).toBeDefined();
 
-    expect(openHandler({ url: "https://github.com/pwrdrvr/PwrAgent" })).toEqual({
-      action: "deny",
-    });
+    expect(openHandler({ url: "https://github.com/pwrdrvr/PwrAgent" })).toEqual(
+      {
+        action: "deny",
+      },
+    );
     expect(openHandler({ url: "mailto:team@example.com" })).toEqual({
       action: "deny",
     });
@@ -317,15 +339,19 @@ describe("createMainWindow", () => {
 
     expect(shellOpenExternalMock).toHaveBeenCalledTimes(5);
     expect(shellOpenExternalMock).toHaveBeenCalledWith(
-      "https://github.com/pwrdrvr/PwrAgent"
-    );
-    expect(shellOpenExternalMock).toHaveBeenCalledWith("mailto:team@example.com");
-    expect(shellOpenExternalMock).toHaveBeenCalledWith("file:///tmp/example.md");
-    expect(shellOpenExternalMock).toHaveBeenCalledWith(
-      "http://localhost:5173/status"
+      "https://github.com/pwrdrvr/PwrAgent",
     );
     expect(shellOpenExternalMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:5173/status"
+      "mailto:team@example.com",
+    );
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "file:///tmp/example.md",
+    );
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "http://localhost:5173/status",
+    );
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:5173/status",
     );
   });
 
@@ -333,11 +359,16 @@ describe("createMainWindow", () => {
     const { createMainWindow } = await import("../window");
     createMainWindow();
 
-    const openHandler = browserWindowState.setWindowOpenHandler?.mock.calls[0]?.[0];
+    const openHandler =
+      browserWindowState.setWindowOpenHandler?.mock.calls[0]?.[0];
     expect(openHandler).toBeDefined();
 
-    expect(openHandler({ url: "http://example.com" })).toEqual({ action: "deny" });
-    expect(openHandler({ url: "javascript:alert(1)" })).toEqual({ action: "deny" });
+    expect(openHandler({ url: "http://example.com" })).toEqual({
+      action: "deny",
+    });
+    expect(openHandler({ url: "javascript:alert(1)" })).toEqual({
+      action: "deny",
+    });
     expect(openHandler({ url: "pwragent-test://payload" })).toEqual({
       action: "deny",
     });
@@ -359,7 +390,7 @@ describe("createMainWindow", () => {
         linkURL: "file:///Users/huntharo/project/AGENTS.md:12",
         x: 40,
         y: 64,
-      }
+      },
     );
 
     expect(buildFromTemplateMock).toHaveBeenCalledWith([
@@ -372,7 +403,7 @@ describe("createMainWindow", () => {
       expect.objectContaining({
         x: 40,
         y: 64,
-      })
+      }),
     );
 
     const copyMenuItem = buildFromTemplateMock.mock.calls[0]?.[0]?.[0];
@@ -380,7 +411,7 @@ describe("createMainWindow", () => {
     click?.();
 
     expect(clipboardWriteTextMock).toHaveBeenCalledWith(
-      "file:///Users/huntharo/project/AGENTS.md:12"
+      "file:///Users/huntharo/project/AGENTS.md:12",
     );
   });
 
@@ -407,7 +438,7 @@ describe("createMainWindow", () => {
         misspelledWord: "superseeded",
         x: 40,
         y: 64,
-      }
+      },
     );
 
     const template = buildFromTemplateMock.mock.calls[0]?.[0];
@@ -426,17 +457,17 @@ describe("createMainWindow", () => {
           click: expect.any(Function),
         }),
         expect.objectContaining({ role: "paste" }),
-      ])
+      ]),
     );
     expect(menuPopupMock).toHaveBeenCalledWith(
       expect.objectContaining({
         x: 40,
         y: 64,
-      })
+      }),
     );
 
     const suggestionItem = template?.find(
-      (item) => item.label === "superseded"
+      (item) => item.label === "superseded",
     );
     const suggestionClick = suggestionItem?.click as (() => void) | undefined;
     suggestionClick?.();
@@ -444,13 +475,13 @@ describe("createMainWindow", () => {
     expect(replaceMisspellingMock).toHaveBeenCalledWith("superseded");
 
     const dictionaryItem = template?.find(
-      (item) => item.label === 'Add "superseeded" to Dictionary'
+      (item) => item.label === 'Add "superseeded" to Dictionary',
     );
     const dictionaryClick = dictionaryItem?.click as (() => void) | undefined;
     dictionaryClick?.();
 
     expect(addWordToSpellCheckerDictionaryMock).toHaveBeenCalledWith(
-      "superseeded"
+      "superseeded",
     );
   });
 
@@ -477,7 +508,9 @@ describe("createMainWindow", () => {
     });
 
     expect(startupCpuProfiler.attachWindow).toHaveBeenCalledTimes(1);
-    expect(browserWindowState.loadURL).toHaveBeenCalledWith("http://127.0.0.1:5173");
+    expect(browserWindowState.loadURL).toHaveBeenCalledWith(
+      "http://127.0.0.1:5173",
+    );
   });
 
   it("starts and stops heap diagnostics when enabled", async () => {
@@ -489,7 +522,7 @@ describe("createMainWindow", () => {
       settleDelayMs: 10000,
       deltaThresholdBytes: 100 * 1024 * 1024,
       snapshotCooldownMs: 60000,
-      maxSnapshots: 5
+      maxSnapshots: 5,
     });
     createHeapSessionMock.mockResolvedValue({
       ok: true,
@@ -501,8 +534,8 @@ describe("createMainWindow", () => {
         eventsPath: "/repo/.local/heap-2026-04-18-1702-abc123/events.ndjson",
         appendSample: vi.fn(),
         appendEvent: vi.fn(),
-        registerSnapshotFile: vi.fn()
-      }
+        registerSnapshotFile: vi.fn(),
+      },
     });
 
     const { createMainWindow } = await import("../window");
@@ -517,12 +550,12 @@ describe("createMainWindow", () => {
       expect.objectContaining({
         config: expect.objectContaining({
           enabled: true,
-          outputRoot: "/repo/.local"
+          outputRoot: "/repo/.local",
         }),
         versions: expect.objectContaining({
-          appVersion: "0.1.0"
-        })
-      })
+          appVersion: "0.1.0",
+        }),
+      }),
     );
     expect(MainProcessHeapMonitorMock).toHaveBeenCalledTimes(1);
     expect(RendererHeapMonitorMock).toHaveBeenCalledTimes(1);

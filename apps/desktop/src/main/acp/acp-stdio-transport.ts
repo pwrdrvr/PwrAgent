@@ -40,7 +40,9 @@ export type AcpStdioJsonRpcTransportOptions = {
   spawn?: AcpStdioSpawn;
 };
 
-function appendExecutableSearchPaths(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function appendExecutableSearchPaths(
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
   if (process.platform === "win32") {
     return env;
   }
@@ -125,7 +127,10 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
     return await this.connection.request(method, params, timeoutMs);
   }
 
-  async notify(method: string, params?: Record<string, unknown>): Promise<void> {
+  async notify(
+    method: string,
+    params?: Record<string, unknown>,
+  ): Promise<void> {
     await this.connection.connect();
     await this.connection.notify(method, params);
   }
@@ -180,8 +185,13 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       return;
     }
 
-    const descriptor = normalizeAcpLaunchDescriptor(this.options.launchDescriptor);
-    const env = appendExecutableSearchPaths({ ...process.env, ...descriptor.env });
+    const descriptor = normalizeAcpLaunchDescriptor(
+      this.options.launchDescriptor,
+    );
+    const env = appendExecutableSearchPaths({
+      ...process.env,
+      ...descriptor.env,
+    });
     const spawnProcess = this.options.spawn ?? spawn;
     acpTransportLog.info("launch ACP agent", {
       backendId: descriptor.backendId,

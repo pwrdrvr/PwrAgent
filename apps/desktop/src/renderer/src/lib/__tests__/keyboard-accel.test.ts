@@ -187,7 +187,12 @@ describe("matchHistoryNavChord", () => {
     ).toBe(null);
     expect(
       matchHistoryNavChord(
-        keydown({ metaKey: true, shiftKey: true, code: "BracketLeft", key: "{" }),
+        keydown({
+          metaKey: true,
+          shiftKey: true,
+          code: "BracketLeft",
+          key: "{",
+        }),
       ),
     ).toBe(null);
     expect(

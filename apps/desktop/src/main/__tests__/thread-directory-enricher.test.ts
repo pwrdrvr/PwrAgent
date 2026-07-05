@@ -13,29 +13,35 @@ describe("createThreadDirectoryEnricher", () => {
   });
 
   it("resolves the home repo, preserves the worktree path, and caches repeated lookups", async () => {
-    const projectPath = "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one/apps";
-    const dotGitPath = "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one/.git";
+    const projectPath =
+      "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one/apps";
+    const dotGitPath =
+      "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one/.git";
     // The enricher resolves currentPath (and joins ".git" onto the resolved
     // path) before calling access, so compare against the resolved forms to
     // match on Windows as well as POSIX.
     const accessMock = vi.fn(async (targetPath: string) => {
       if (
-        targetPath === path.resolve(projectPath) ||
-        targetPath === path.resolve(dotGitPath)
+        targetPath === path.resolve(projectPath)
+        || targetPath === path.resolve(dotGitPath)
       ) {
         return undefined;
       }
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     });
-    const readFileMock = vi.fn(async () =>
-      "gitdir: /Users/huntharo/pwrdrvr/PwrAgent/.git/worktrees/feature-one\n"
+    const readFileMock = vi.fn(
+      async () =>
+        "gitdir: /Users/huntharo/pwrdrvr/PwrAgent/.git/worktrees/feature-one\n",
     );
     const execFileMock = vi.fn(
       (
         _file: string,
         args: string[],
         _options: unknown,
-        callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void,
+        callback: (
+          error: Error | null,
+          result?: { stdout: string; stderr: string },
+        ) => void,
       ) => {
         if (args.includes("--show-toplevel")) {
           callback(null, {
@@ -74,9 +80,8 @@ describe("createThreadDirectoryEnricher", () => {
       execFile: execFileMock,
     }));
 
-    const { createThreadDirectoryEnricher } = await import(
-      "../app-server/thread-directory-enricher"
-    );
+    const { createThreadDirectoryEnricher } =
+      await import("../app-server/thread-directory-enricher");
     const enricher = createThreadDirectoryEnricher({
       cacheTtlMs: 60_000,
     });
@@ -108,23 +113,26 @@ describe("createThreadDirectoryEnricher", () => {
   });
 
   it("recovers the home repo from a worktree .git file when git worktree list fails", async () => {
-    const projectPath = "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75tdnu/PwrAgnt/apps/desktop";
-    const worktreePath = "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75tdnu/PwrAgnt";
+    const projectPath =
+      "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75tdnu/PwrAgnt/apps/desktop";
+    const worktreePath =
+      "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75tdnu/PwrAgnt";
     const dotGitPath = `${worktreePath}/.git`;
     vi.doMock("node:fs/promises", () => ({
       access: vi.fn(async (targetPath: string) => {
         // Compare resolved forms so the mock matches the resolved paths the
         // enricher passes to access on Windows as well as POSIX.
         if (
-          targetPath === path.resolve(projectPath) ||
-          targetPath === path.resolve(dotGitPath)
+          targetPath === path.resolve(projectPath)
+          || targetPath === path.resolve(dotGitPath)
         ) {
           return undefined;
         }
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       }),
-      readFile: vi.fn(async () =>
-        "gitdir: /Users/huntharo/pwrdrvr/PwrAgnt/.git/worktrees/PwrAgnt\n"
+      readFile: vi.fn(
+        async () =>
+          "gitdir: /Users/huntharo/pwrdrvr/PwrAgnt/.git/worktrees/PwrAgnt\n",
       ),
     }));
     vi.doMock("node:child_process", () => ({
@@ -133,23 +141,26 @@ describe("createThreadDirectoryEnricher", () => {
           _file: string,
           args: string[],
           _options: unknown,
-          callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void,
+          callback: (
+            error: Error | null,
+            result?: { stdout: string; stderr: string },
+          ) => void,
         ) => {
           if (args.includes("--porcelain")) {
             callback(new Error("worktree list failed"));
             return;
           }
           callback(null, {
-            stdout: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75tdnu/PwrAgnt\n",
+            stdout:
+              "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75tdnu/PwrAgnt\n",
             stderr: "",
           });
         },
       ),
     }));
 
-    const { createThreadDirectoryEnricher } = await import(
-      "../app-server/thread-directory-enricher"
-    );
+    const { createThreadDirectoryEnricher } =
+      await import("../app-server/thread-directory-enricher");
     const enricher = createThreadDirectoryEnricher();
 
     await expect(enricher(projectPath)).resolves.toEqual({
@@ -176,9 +187,8 @@ describe("createThreadDirectoryEnricher", () => {
       execFile: vi.fn(),
     }));
 
-    const { createThreadDirectoryEnricher } = await import(
-      "../app-server/thread-directory-enricher"
-    );
+    const { createThreadDirectoryEnricher } =
+      await import("../app-server/thread-directory-enricher");
     const enricher = createThreadDirectoryEnricher();
 
     await expect(

@@ -39,4 +39,3 @@ describe("renderer error reporting", () => {
     );
   });
 });
-

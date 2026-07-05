@@ -33,8 +33,8 @@ function threadIdMatchesQuery(threadId: string, query: string): boolean {
   }
   const hexChars = query.match(/[0-9a-f]/g)?.length ?? 0;
   const uuidFragment =
-    /^[0-9a-f][0-9a-f-]{7,}$/i.test(query) &&
-    hexChars >= MIN_UUID_FRAGMENT_HEX_CHARS;
+    /^[0-9a-f][0-9a-f-]{7,}$/i.test(query)
+    && hexChars >= MIN_UUID_FRAGMENT_HEX_CHARS;
   if (uuidFragment) {
     return true;
   }
@@ -129,8 +129,10 @@ export function threadMatchesQuery(
   }
   const bareNeedle = needle.replace(/^#/, "");
   if (
-    bareNeedle.length > 0 &&
-    threadPrNumbers(thread).some((number) => String(number).includes(bareNeedle))
+    bareNeedle.length > 0
+    && threadPrNumbers(thread).some((number) =>
+      String(number).includes(bareNeedle),
+    )
   ) {
     return true;
   }

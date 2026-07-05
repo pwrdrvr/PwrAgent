@@ -21,7 +21,9 @@ describe("messaging docs links", () => {
     const links = new Set<string>();
     for (const entry of entryPoints) {
       const body = readText(entry);
-      for (const match of body.matchAll(/\[.*?\]\((docs\/messaging-[^)]+\.md)\)/g)) {
+      for (const match of body.matchAll(
+        /\[.*?\]\((docs\/messaging-[^)]+\.md)\)/g,
+      )) {
         links.add(match[1]);
       }
     }
@@ -58,7 +60,9 @@ describe("messaging docs links", () => {
     ].join("\n");
 
     expect(docs).not.toMatch(/\b\d{6,}:[A-Za-z0-9_-]{20,}\b/);
-    expect(docs).not.toMatch(/\b(mfa\.[A-Za-z0-9_-]{20,}|[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,})\b/);
+    expect(docs).not.toMatch(
+      /\b(mfa\.[A-Za-z0-9_-]{20,}|[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,})\b/,
+    );
   });
 });
 

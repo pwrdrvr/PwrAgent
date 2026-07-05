@@ -49,7 +49,9 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
       await expect(store.setNavigationBrowseMode("directories")).resolves.toBe(
         "directories",
       );
-      await expect(store.getNavigationBrowseMode()).resolves.toBe("directories");
+      await expect(store.getNavigationBrowseMode()).resolves.toBe(
+        "directories",
+      );
       stateDb.close();
 
       const reopenedDb = StateDb.open(dbPath);
@@ -99,19 +101,29 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
 
   it("removes stale launchpad default rows when a setting is cleared", async () => {
     stateDb.raw
-      .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")
+      .prepare(
+        "INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)",
+      )
       .run("backend", JSON.stringify("codex"));
     stateDb.raw
-      .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")
+      .prepare(
+        "INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)",
+      )
       .run("executionMode", JSON.stringify("default"));
     stateDb.raw
-      .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")
+      .prepare(
+        "INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)",
+      )
       .run("serviceTier", JSON.stringify("fast"));
     stateDb.raw
-      .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")
+      .prepare(
+        "INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)",
+      )
       .run("fastMode", JSON.stringify(false));
     stateDb.raw
-      .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")
+      .prepare(
+        "INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)",
+      )
       .run(
         "providerSettings",
         JSON.stringify({
@@ -139,7 +151,10 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
       },
     });
 
-    await store.setLaunchpadDefaults({ fastMode: false, serviceTier: undefined });
+    await store.setLaunchpadDefaults({
+      fastMode: false,
+      serviceTier: undefined,
+    });
 
     expect(listDefaultKeys()).toEqual([
       "backend",
@@ -155,16 +170,24 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
 
   it("preserves unknown launchpad default keys while clearing owned keys", async () => {
     stateDb.raw
-      .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")
+      .prepare(
+        "INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)",
+      )
       .run("backend", JSON.stringify("codex"));
     stateDb.raw
-      .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")
+      .prepare(
+        "INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)",
+      )
       .run("executionMode", JSON.stringify("default"));
     stateDb.raw
-      .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")
+      .prepare(
+        "INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)",
+      )
       .run("serviceTier", JSON.stringify("priority"));
     stateDb.raw
-      .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")
+      .prepare(
+        "INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)",
+      )
       .run("futureExperimentalFlag", JSON.stringify({ enabled: true }));
 
     const defaults = await store.setLaunchpadDefaults({
@@ -179,6 +202,8 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     });
     expect(readDefaultValue("serviceTier")).toBeUndefined();
     expect(readDefaultValue("fastMode")).toBeUndefined();
-    expect(readDefaultValue("futureExperimentalFlag")).toEqual({ enabled: true });
+    expect(readDefaultValue("futureExperimentalFlag")).toEqual({
+      enabled: true,
+    });
   });
 });

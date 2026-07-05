@@ -46,10 +46,10 @@ export function summarizeToolActivityFromBackendEvent(
   }
 
   const id =
-    readString(item, "id") ??
-    readString(item, "itemId") ??
-    readString(item, "item_id") ??
-    `${event.backend}:${String(params.turnId ?? "turn")}:${itemType}`;
+    readString(item, "id")
+    ?? readString(item, "itemId")
+    ?? readString(item, "item_id")
+    ?? `${event.backend}:${String(params.turnId ?? "turn")}:${itemType}`;
   const status = normalizeToolStatus(item);
   const durationMs = readDurationMs(item);
 
@@ -104,29 +104,35 @@ export function summarizeToolActivityFromBackendEvent(
   };
 }
 
-export function formatToolActivityLine(activity: MessagingToolActivity): string {
+export function formatToolActivityLine(
+  activity: MessagingToolActivity,
+): string {
   return [
     activity.status === "failed"
       ? `Failed: ${activity.title}`
       : activity.status === "cancelled"
         ? `Cancelled: ${activity.title}`
         : activity.title,
-    activity.durationMs !== undefined ? ` (${formatDuration(activity.durationMs)})` : "",
+    activity.durationMs !== undefined
+      ? ` (${formatDuration(activity.durationMs)})`
+      : "",
   ].join("");
 }
 
 function isRecognizedToolItemType(itemType: string): boolean {
   return (
-    itemType === "commandexecution" ||
-    itemType === "mcptoolcall" ||
-    itemType === "dynamictoolcall" ||
-    itemType === "websearch" ||
-    itemType === "filechange" ||
-    itemType === "functioncall"
+    itemType === "commandexecution"
+    || itemType === "mcptoolcall"
+    || itemType === "dynamictoolcall"
+    || itemType === "websearch"
+    || itemType === "filechange"
+    || itemType === "functioncall"
   );
 }
 
-function commandActivityKind(item: Record<string, unknown>): MessagingToolActivityKind {
+function commandActivityKind(
+  item: Record<string, unknown>,
+): MessagingToolActivityKind {
   const actions = readCommandActions(item);
   return actions.some((action) =>
     ["read", "search", "listFiles"].includes(readString(action, "type") ?? ""),
@@ -149,7 +155,9 @@ function commandActionTitle(item: Record<string, unknown>): string | undefined {
     const actionType = readString(action, "type");
     const actionPath = readString(action, "path");
     const fallbackName = readString(action, "name");
-    const basename = actionPath ? path.basename(actionPath) || actionPath : undefined;
+    const basename = actionPath
+      ? path.basename(actionPath) || actionPath
+      : undefined;
 
     if (actionType === "read" && basename) {
       return `Read ${basename}`;
@@ -171,7 +179,9 @@ function commandActionTitle(item: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-function readCommandActions(item: Record<string, unknown>): Record<string, unknown>[] {
+function readCommandActions(
+  item: Record<string, unknown>,
+): Record<string, unknown>[] {
   return Array.isArray(item.commandActions)
     ? item.commandActions
         .map((entry) => readRecord(entry))
@@ -191,7 +201,9 @@ function fileChangeTitle(item: Record<string, unknown>): {
 
   if (changes.length === 1) {
     const changePath = readString(changes[0]!, "path");
-    const basename = changePath ? path.basename(changePath) || changePath : undefined;
+    const basename = changePath
+      ? path.basename(changePath) || changePath
+      : undefined;
     return {
       pathBasename: basename,
       title: basename ? `Edited ${basename}` : "Edited file",
@@ -214,13 +226,16 @@ function fileChangeTitle(item: Record<string, unknown>): {
 
 function mcpToolTitle(item: Record<string, unknown>): string {
   const toolName =
-    readString(item, "tool") ??
-    readString(item, "toolName") ??
-    readString(item, "tool_name") ??
-    readString(item, "name") ??
-    "tool";
-  const serverName = readString(item, "server") ?? readString(item, "serverName");
-  return truncateTitle(`Used MCP ${serverName ? `${serverName}/` : ""}${toolName}`);
+    readString(item, "tool")
+    ?? readString(item, "toolName")
+    ?? readString(item, "tool_name")
+    ?? readString(item, "name")
+    ?? "tool";
+  const serverName =
+    readString(item, "server") ?? readString(item, "serverName");
+  return truncateTitle(
+    `Used MCP ${serverName ? `${serverName}/` : ""}${toolName}`,
+  );
 }
 
 function webSearchTitle(item: Record<string, unknown>): string {
@@ -232,11 +247,11 @@ function webSearchTitle(item: Record<string, unknown>): string {
 
 function dynamicToolTitle(item: Record<string, unknown>): string {
   const name =
-    readString(item, "tool") ??
-    readString(item, "toolName") ??
-    readString(item, "tool_name") ??
-    readString(item, "name") ??
-    "Used tool";
+    readString(item, "tool")
+    ?? readString(item, "toolName")
+    ?? readString(item, "tool_name")
+    ?? readString(item, "name")
+    ?? "Used tool";
   const normalizedName = normalizeToolName(name);
   const args = readToolArguments(item);
 
@@ -262,14 +277,21 @@ function dynamicToolTitle(item: Record<string, unknown>): string {
       return `Searched ${basename}`;
     }
 
-    const query = readSafeDynamicText(args, ["query", "pattern", "search", "term"]);
+    const query = readSafeDynamicText(args, [
+      "query",
+      "pattern",
+      "search",
+      "term",
+    ]);
     return query ? truncateTitle(`Searched code: ${query}`) : "Searched code";
   }
   return truncateTitle(name.replace(/_/g, " "));
 }
 
 function isCommandLikeDynamicTool(normalizedName: string): boolean {
-  return ["execcommand", "shellcommand", "runcommand", "bash"].includes(normalizedName);
+  return ["execcommand", "shellcommand", "runcommand", "bash"].includes(
+    normalizedName,
+  );
 }
 
 function isReadFileDynamicTool(normalizedName: string): boolean {
@@ -281,13 +303,9 @@ function isListFilesDynamicTool(normalizedName: string): boolean {
 }
 
 function isSearchCodeDynamicTool(normalizedName: string): boolean {
-  return [
-    "grep",
-    "search",
-    "searchcode",
-    "codesearch",
-    "findinfiles",
-  ].includes(normalizedName);
+  return ["grep", "search", "searchcode", "codesearch", "findinfiles"].includes(
+    normalizedName,
+  );
 }
 
 function readDynamicPathBasename(
@@ -346,10 +364,10 @@ function readToolArguments(
   item: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
   return (
-    readRecord(parseJsonValue(item.arguments)) ??
-    readRecord(parseJsonValue(item.input)) ??
-    readRecord(item.arguments) ??
-    readRecord(item.input)
+    readRecord(parseJsonValue(item.arguments))
+    ?? readRecord(parseJsonValue(item.input))
+    ?? readRecord(item.arguments)
+    ?? readRecord(item.input)
   );
 }
 
@@ -386,16 +404,19 @@ function normalizeToolStatus(
   if (item.success === false) {
     return "failed";
   }
-  const exitCode = readNumber(item, "exitCode") ?? readNumber(item, "exit_code");
-  return typeof exitCode === "number" && exitCode !== 0 ? "failed" : "completed";
+  const exitCode =
+    readNumber(item, "exitCode") ?? readNumber(item, "exit_code");
+  return typeof exitCode === "number" && exitCode !== 0
+    ? "failed"
+    : "completed";
 }
 
 function readDurationMs(item: Record<string, unknown>): number | undefined {
   const direct =
-    readNumber(item, "durationMs") ??
-    readNumber(item, "duration_ms") ??
-    readNumber(item, "elapsedMs") ??
-    readNumber(item, "elapsed_ms");
+    readNumber(item, "durationMs")
+    ?? readNumber(item, "duration_ms")
+    ?? readNumber(item, "elapsedMs")
+    ?? readNumber(item, "elapsed_ms");
   if (typeof direct === "number") {
     return direct;
   }
@@ -406,9 +427,9 @@ function readDurationMs(item: Record<string, unknown>): number | undefined {
   const completedAt = normalizeTimestamp(
     readNumber(item, "completedAt") ?? readNumber(item, "completed_at"),
   );
-  return startedAt !== undefined &&
-    completedAt !== undefined &&
-    completedAt >= startedAt
+  return startedAt !== undefined
+    && completedAt !== undefined
+    && completedAt >= startedAt
     ? completedAt - startedAt
     : undefined;
 }
@@ -453,7 +474,7 @@ function parseJsonValue(value: unknown): unknown {
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined;
 }
 
@@ -470,5 +491,7 @@ function readNumber(
   key: string,
 ): number | undefined {
   const value = item[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }

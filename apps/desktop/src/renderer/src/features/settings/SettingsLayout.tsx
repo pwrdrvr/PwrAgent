@@ -89,9 +89,7 @@ export function SettingsSectionStack(props: {
 
   const updateCollapsedSections = useCallback(
     (
-      updater: (
-        current: Record<string, boolean>,
-      ) => Record<string, boolean>,
+      updater: (current: Record<string, boolean>) => Record<string, boolean>,
     ) => {
       setCollapsedSections((current) => {
         const next = updater(current);
@@ -169,11 +167,15 @@ export function SettingsSectionStack(props: {
   }, [registeredSections, updateCollapsedSections]);
 
   const allCollapsed =
-    registeredSections.length > 0 &&
-    registeredSections.every((section) => collapsedSections[section.id] === true);
+    registeredSections.length > 0
+    && registeredSections.every(
+      (section) => collapsedSections[section.id] === true,
+    );
   const allExpanded =
-    registeredSections.length > 0 &&
-    registeredSections.every((section) => collapsedSections[section.id] !== true);
+    registeredSections.length > 0
+    && registeredSections.every(
+      (section) => collapsedSections[section.id] !== true,
+    );
 
   useEffect(() => {
     if (didRestoreFocusRef.current || registeredSections.length === 0) {
@@ -323,10 +325,14 @@ export function SettingsSection(props: {
     });
   }, [props.title, registerSection, sectionId]);
 
-  const focusSiblingHeader = (direction: "next" | "previous" | "first" | "last") => {
+  const focusSiblingHeader = (
+    direction: "next" | "previous" | "first" | "last",
+  ) => {
     if (!pane) return;
     const sections = pane.registeredSections;
-    const currentIndex = sections.findIndex((section) => section.id === sectionId);
+    const currentIndex = sections.findIndex(
+      (section) => section.id === sectionId,
+    );
     if (currentIndex === -1) return;
 
     let nextIndex = currentIndex;
@@ -451,7 +457,8 @@ export function SettingsSectionGroup(props: {
   "aria-label"?: string;
 }) {
   const [collapsed, setCollapsed] = useState<boolean>(
-    () => savedGroupCollapsed.get(props.groupId) ?? props.defaultCollapsed ?? false,
+    () =>
+      savedGroupCollapsed.get(props.groupId) ?? props.defaultCollapsed ?? false,
   );
   const headingId = `settings-group-${props.groupId}-heading`;
   const bodyId = `settings-group-${props.groupId}-body`;
@@ -603,11 +610,11 @@ export function SettingsCompOption<TValue extends string>(props: {
     >
       <span
         aria-hidden="true"
-        className={`settings-comp-opt__radio${
-          props.active ? " is-on" : ""
-        }`}
+        className={`settings-comp-opt__radio${props.active ? " is-on" : ""}`}
       >
-        {props.active ? <span className="settings-comp-opt__radio-dot" /> : null}
+        {props.active ? (
+          <span className="settings-comp-opt__radio-dot" />
+        ) : null}
       </span>
       <span className="settings-comp-opt__text">
         <span className="settings-comp-opt__title">

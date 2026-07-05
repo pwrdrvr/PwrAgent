@@ -40,11 +40,15 @@ describe("requestShowThread", () => {
     };
 
     getFocusedWindowMock.mockReturnValue(focusedWindow);
-    vi.mocked(subscribersForChannel).mockReturnValue([focusedWindow.webContents]);
+    vi.mocked(subscribersForChannel).mockReturnValue([
+      focusedWindow.webContents,
+    ]);
 
     requestShowThread(request);
 
-    expect(subscribersForChannel).toHaveBeenCalledWith(WINDOW_SHOW_THREAD_CHANNEL);
+    expect(subscribersForChannel).toHaveBeenCalledWith(
+      WINDOW_SHOW_THREAD_CHANNEL,
+    );
     expect(focusedWindow.show).toHaveBeenCalledOnce();
     expect(focusedWindow.focus).toHaveBeenCalledOnce();
     expect(send).toHaveBeenCalledWith(WINDOW_SHOW_THREAD_CHANNEL, request);
@@ -71,7 +75,10 @@ describe("requestShowThread", () => {
     expect(fallbackWindow.restore).toHaveBeenCalledOnce();
     expect(fallbackWindow.show).toHaveBeenCalledOnce();
     expect(fallbackWindow.focus).toHaveBeenCalledOnce();
-    expect(fallbackSend).toHaveBeenCalledWith(WINDOW_SHOW_THREAD_CHANNEL, request);
+    expect(fallbackSend).toHaveBeenCalledWith(
+      WINDOW_SHOW_THREAD_CHANNEL,
+      request,
+    );
   });
 
   it("no-ops when no window is subscribed", () => {

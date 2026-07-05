@@ -42,9 +42,7 @@ describe("window placement", () => {
 
     const { placementForSourceDisplay } = await import("../window-placement");
 
-    expect(
-      placementForSourceDisplay(920, 760, { sourceBounds }),
-    ).toEqual({
+    expect(placementForSourceDisplay(920, 760, { sourceBounds })).toEqual({
       x: 2420,
       y: 160,
     });
@@ -90,7 +88,8 @@ describe("window placement", () => {
       workArea: { x: 1920, y: 0, width: 1920, height: 1080 },
     });
 
-    const { positionWindowForSourceDisplay } = await import("../window-placement");
+    const { positionWindowForSourceDisplay } =
+      await import("../window-placement");
     positionWindowForSourceDisplay(targetWindow as unknown as BrowserWindow, {
       sourceWindow: sourceWindow as unknown as BrowserWindow,
     });

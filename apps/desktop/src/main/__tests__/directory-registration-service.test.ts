@@ -31,9 +31,7 @@ function assertFailed(
   result: RegisterDirectoryFromDiskResponse,
 ): asserts result is Extract<RegisterDirectoryFromDiskResponse, { ok: false }> {
   if (result.ok) {
-    throw new Error(
-      `Expected failure result, got ok: ${result.directoryKey}`,
-    );
+    throw new Error(`Expected failure result, got ok: ${result.directoryKey}`);
   }
 }
 
@@ -98,17 +96,17 @@ function statFile(): Promise<{ isDirectory: () => boolean }> {
 describe("registerDirectoryFromDisk", () => {
   it("seeds a launchpad and returns canonical metadata for a git repo", async () => {
     const ensure = buildEnsureSpy();
-    const runGit = vi.fn<
-      (cwd: string, args: string[]) => Promise<string>
-    >(async (_cwd, args) => {
-      if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
-        return "/Users/huntharo/code/PwrAgent";
-      }
-      if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") {
-        return "main";
-      }
-      throw new Error(`unexpected git args: ${args.join(" ")}`);
-    });
+    const runGit = vi.fn<(cwd: string, args: string[]) => Promise<string>>(
+      async (_cwd, args) => {
+        if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
+          return "/Users/huntharo/code/PwrAgent";
+        }
+        if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") {
+          return "main";
+        }
+        throw new Error(`unexpected git args: ${args.join(" ")}`);
+      },
+    );
 
     const result = await registerDirectoryFromDisk(
       { path: "/Users/huntharo/code/PwrAgent" },

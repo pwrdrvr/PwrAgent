@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { AppServerSessionState } from "../app-server/session-state.js";
 import { GrokRolloutStore } from "../persistence/grok-rollout-store.js";
-import { Deferred, createTemporaryTestDirectory } from "../testing/test-harness.js";
+import {
+  Deferred,
+  createTemporaryTestDirectory,
+} from "../testing/test-harness.js";
 import type { ProviderActiveTurn } from "../providers/provider-contract.js";
 
 function createActiveTurn(): ProviderActiveTurn {
   return {
-    result: new Deferred<{ assistantText?: string; providerResponseId?: string }>().promise,
+    result: new Deferred<{
+      assistantText?: string;
+      providerResponseId?: string;
+    }>().promise,
   };
 }
 
@@ -14,11 +20,19 @@ describe("AppServerSessionState", () => {
   it("lists threads with title, summary, and most-recent-first ordering", () => {
     const state = new AppServerSessionState();
 
-    state.createThread({ threadId: "thread-1", cwd: "/repo/one", model: "grok-4.20-reasoning" });
+    state.createThread({
+      threadId: "thread-1",
+      cwd: "/repo/one",
+      model: "grok-4.20-reasoning",
+    });
     state.appendInput("thread-1", [{ type: "text", text: "first prompt" }]);
     state.setThreadName("thread-1", "First thread");
 
-    state.createThread({ threadId: "thread-2", cwd: "/repo/two", model: "grok-4.20-non-reasoning" });
+    state.createThread({
+      threadId: "thread-2",
+      cwd: "/repo/two",
+      model: "grok-4.20-non-reasoning",
+    });
     state.appendAssistant("thread-2", "latest reply");
     state.setThreadName("thread-2", "Second thread");
 
@@ -93,7 +107,8 @@ describe("AppServerSessionState", () => {
     expect(state.listThreads()).toEqual([
       {
         threadId: "thread-1",
-        title: "A bedtime story about Nvidia and building AI through programmable...",
+        title:
+          "A bedtime story about Nvidia and building AI through programmable...",
         titleSource: "derived",
         summary: undefined,
         projectKey: "/repo/workspace",
@@ -107,8 +122,15 @@ describe("AppServerSessionState", () => {
   it("keeps thread replay and touches timestamps as thread activity changes", () => {
     const state = new AppServerSessionState();
 
-    const created = state.createThread({ threadId: "thread-1", cwd: "/repo/workspace" });
-    state.createRun({ turnId: "turn-1", threadId: "thread-1", handle: createActiveTurn() });
+    const created = state.createThread({
+      threadId: "thread-1",
+      cwd: "/repo/workspace",
+    });
+    state.createRun({
+      turnId: "turn-1",
+      threadId: "thread-1",
+      handle: createActiveTurn(),
+    });
     state.appendInput("thread-1", [{ type: "text", text: "Ship it" }]);
     state.appendAssistant("thread-1", "Done.");
 
@@ -149,7 +171,9 @@ describe("AppServerSessionState", () => {
       lastUserMessage: "Ship it",
       lastAssistantMessage: "Done.",
     });
-    expect(replay.thread.updatedAt).toBeGreaterThanOrEqual(created.updatedAt ?? 0);
+    expect(replay.thread.updatedAt).toBeGreaterThanOrEqual(
+      created.updatedAt ?? 0,
+    );
   });
 
   it("preserves image input parts in replay messages", () => {
@@ -275,7 +299,9 @@ describe("AppServerSessionState", () => {
         model: "grok-4.20-reasoning",
       });
       firstState.setThreadName("thread-1", "Messaging - Streaming Responses");
-      firstState.appendInput("thread-1", [{ type: "text", text: "Name this thread" }]);
+      firstState.appendInput("thread-1", [
+        { type: "text", text: "Name this thread" },
+      ]);
       firstState.appendAssistant("thread-1", "Ready whenever you are.");
       firstState.setPreviousResponseId("thread-1", "resp_1");
 

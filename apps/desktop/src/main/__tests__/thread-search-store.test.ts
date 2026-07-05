@@ -44,7 +44,9 @@ describe("ThreadSearchStore", () => {
   });
 
   it("upserts and searches compact thread projections", () => {
-    store.upsertThread(threadSummary({ id: "thread-1", title: "Branch drift screenshots" }));
+    store.upsertThread(
+      threadSummary({ id: "thread-1", title: "Branch drift screenshots" }),
+    );
     store.upsertThread(
       threadSummary({
         id: "thread-2",
@@ -109,10 +111,9 @@ describe("ThreadSearchStore", () => {
       threadSummary({ id: "new", title: "New", updatedAt: 2_000 }),
     );
 
-    expect(store.search({ limit: 10 }).map((result) => result.threadId)).toEqual([
-      "new",
-      "old",
-    ]);
+    expect(
+      store.search({ limit: 10 }).map((result) => result.threadId),
+    ).toEqual(["new", "old"]);
   });
 
   it("applies structured filters before limiting projection results", () => {
@@ -150,9 +151,9 @@ describe("ThreadSearchStore", () => {
       threadSummary({ id: "archived", title: "Archived", archivedAt: 2_000 }),
     );
 
-    expect(store.search({ limit: 10 }).map((result) => result.threadId)).toEqual([
-      "active",
-    ]);
+    expect(
+      store.search({ limit: 10 }).map((result) => result.threadId),
+    ).toEqual(["active"]);
     expect(
       store
         .search({ includeArchived: true, limit: 10 })
@@ -161,15 +162,21 @@ describe("ThreadSearchStore", () => {
   });
 
   it("deletes document and FTS rows together", () => {
-    store.upsertThread(threadSummary({ id: "thread-1", title: "Branch drift" }));
+    store.upsertThread(
+      threadSummary({ id: "thread-1", title: "Branch drift" }),
+    );
     store.deleteThread({ backend: "codex", threadId: "thread-1" });
 
     expect(store.search({ query: "branch", limit: 10 })).toEqual([]);
   });
 
   it("prunes rows missing from a refreshed active thread list", () => {
-    store.upsertThread(threadSummary({ id: "stale", title: "Stale branch drift" }));
-    store.upsertThread(threadSummary({ id: "active", title: "Active branch drift" }));
+    store.upsertThread(
+      threadSummary({ id: "stale", title: "Stale branch drift" }),
+    );
+    store.upsertThread(
+      threadSummary({ id: "active", title: "Active branch drift" }),
+    );
 
     store.pruneMissingThreads({
       includeArchived: false,

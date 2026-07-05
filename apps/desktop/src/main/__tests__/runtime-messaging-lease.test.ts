@@ -19,7 +19,9 @@ let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
 let tempDir: string;
 
-function createRuntime(options: { failApply?: boolean } = {}): DesktopMessagingRuntime {
+function createRuntime(
+  options: { failApply?: boolean } = {},
+): DesktopMessagingRuntime {
   let enabled = false;
   return {
     applyConfig: vi.fn(async () => {
@@ -72,10 +74,12 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
       env: { PWRAGENT_DISABLE_MESSAGING: "1" } as NodeJS.ProcessEnv,
     });
 
-    await expect(coordinator.start(runtime, loadConfig)).resolves.toMatchObject({
-      enabled: false,
-      disabledReasonKind: "explicit_override",
-    });
+    await expect(coordinator.start(runtime, loadConfig)).resolves.toMatchObject(
+      {
+        enabled: false,
+        disabledReasonKind: "explicit_override",
+      },
+    );
 
     expect(loadConfig).not.toHaveBeenCalled();
     expect(runtime.applyConfig).not.toHaveBeenCalled();
@@ -235,14 +239,16 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
       },
     };
 
-    await expect(first.applyResolvedConfig(firstRuntime, config)).resolves
-      .toMatchObject({ enabled: true });
-    await expect(second.applyResolvedConfig(secondRuntime, config)).resolves
-      .toMatchObject({
-        enabled: false,
-        disabledReasonKind: "lease_held",
-        leaseHolder: { instanceId: "instance-a" },
-      });
+    await expect(
+      first.applyResolvedConfig(firstRuntime, config),
+    ).resolves.toMatchObject({ enabled: true });
+    await expect(
+      second.applyResolvedConfig(secondRuntime, config),
+    ).resolves.toMatchObject({
+      enabled: false,
+      disabledReasonKind: "lease_held",
+      leaseHolder: { instanceId: "instance-a" },
+    });
 
     expect(firstRuntime.applyConfig).toHaveBeenCalledTimes(1);
     expect(secondRuntime.applyConfig).not.toHaveBeenCalled();
@@ -295,12 +301,13 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
     now = 32_000;
     await second.applyResolvedConfig(secondRuntime, config);
     now = 33_000;
-    await expect(first.applyResolvedConfig(firstRuntime, config)).resolves
-      .toMatchObject({
-        enabled: false,
-        disabledReasonKind: "lease_held",
-        leaseHolder: { instanceId: "instance-b" },
-      });
+    await expect(
+      first.applyResolvedConfig(firstRuntime, config),
+    ).resolves.toMatchObject({
+      enabled: false,
+      disabledReasonKind: "lease_held",
+      leaseHolder: { instanceId: "instance-b" },
+    });
 
     expect(firstRuntime.stop).toHaveBeenCalledTimes(1);
     expect(firstRuntime.isEnabled()).toBe(false);
@@ -430,10 +437,12 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
         authorizedSupergroupIds: [],
       },
     });
-    await expect(coordinator.disableForSession(runtime)).resolves.toMatchObject({
-      enabled: false,
-      disabledReasonKind: "runtime_stopped",
-    });
+    await expect(coordinator.disableForSession(runtime)).resolves.toMatchObject(
+      {
+        enabled: false,
+        disabledReasonKind: "runtime_stopped",
+      },
+    );
 
     expect(runtime.stop).toHaveBeenCalledTimes(1);
     expect(store.getMessagingLease()).toMatchObject({

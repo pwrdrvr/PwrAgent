@@ -82,7 +82,7 @@ export function getRendererEntry(): { kind: "url" | "file"; value: string } {
 
   return {
     kind: "file",
-    value: join(__dirname, "../renderer/index.html")
+    value: join(__dirname, "../renderer/index.html"),
   };
 }
 
@@ -263,9 +263,9 @@ export function isSafeExternalOpenUrl(url: string): boolean {
   }
 
   if (
-    parsed.protocol === "https:" ||
-    parsed.protocol === "mailto:" ||
-    parsed.protocol === "file:"
+    parsed.protocol === "https:"
+    || parsed.protocol === "mailto:"
+    || parsed.protocol === "file:"
   ) {
     return true;
   }
@@ -277,10 +277,10 @@ function isLoopbackHost(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
 
   return (
-    normalized === "localhost" ||
-    normalized.endsWith(".localhost") ||
-    normalized === "127.0.0.1" ||
-    normalized === "::1"
+    normalized === "localhost"
+    || normalized.endsWith(".localhost")
+    || normalized === "127.0.0.1"
+    || normalized === "::1"
   );
 }
 
@@ -368,13 +368,13 @@ export function createMainWindow(options?: {
         // absolute paths to `~` (the sandboxed preload can't read it itself).
         `--pwragent-home-dir=${JSON.stringify(homedir())}`,
       ],
-    }
+    },
   });
 
   if (isDevelopment) {
     mainLog.info("creating window", {
       preloadPath,
-      rendererUrl: process.env.ELECTRON_RENDERER_URL ?? null
+      rendererUrl: process.env.ELECTRON_RENDERER_URL ?? null,
     });
   }
 
@@ -410,7 +410,9 @@ export function createMainWindow(options?: {
   });
   if (!isMac) {
     window.webContents.once("did-finish-load", () => {
-      recordStartupProfileEvent({ type: "window-did-finish-load-fallback-arm" });
+      recordStartupProfileEvent({
+        type: "window-did-finish-load-fallback-arm",
+      });
       setTimeout(() => showWindow("fallback"), 500);
     });
   }
@@ -420,12 +422,16 @@ export function createMainWindow(options?: {
   attachWindowFullscreenSync(window);
   let rendererLoaded = false;
   let hotCpuProfilerConfigKey: string | null = null;
-  let hotCpuProfilerPromise: Promise<RendererHotCpuProfiler | null> | null = null;
+  let hotCpuProfilerPromise: Promise<RendererHotCpuProfiler | null> | null =
+    null;
   let hotCpuProfilerGeneration = 0;
   let hotCpuProfilerSyncQueue: Promise<void> = Promise.resolve();
 
   const createHotCpuProfiler = async (
-    hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
+    hotCpuConfig: Extract<
+      ReturnType<typeof resolveHotCpuProfileConfig>,
+      { enabled: true }
+    >,
   ): Promise<RendererHotCpuProfiler | null> => {
     const created = await createHotCpuProfileSession({
       config: hotCpuConfig,
@@ -490,7 +496,10 @@ export function createMainWindow(options?: {
   };
 
   const hotCpuConfigKey = (
-    hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
+    hotCpuConfig: Extract<
+      ReturnType<typeof resolveHotCpuProfileConfig>,
+      { enabled: true }
+    >,
   ): string => {
     return JSON.stringify({
       startDelayMs: hotCpuConfig.startDelayMs,
@@ -509,7 +518,11 @@ export function createMainWindow(options?: {
 
   const runHotCpuProfilerSync = async (reason: string): Promise<void> => {
     try {
-      if (!rendererLoaded || window.isDestroyed?.() || webContents.isDestroyed?.()) {
+      if (
+        !rendererLoaded
+        || window.isDestroyed?.()
+        || webContents.isDestroyed?.()
+      ) {
         return;
       }
 
@@ -519,8 +532,8 @@ export function createMainWindow(options?: {
       const hotCpuConfig = resolveHotCpuProfileConfig({
         captureHeapSnapshot,
         enabled:
-          settingsService.resolveHotCpuProfilingEnabled() ||
-          captureHeapSnapshot,
+          settingsService.resolveHotCpuProfilingEnabled()
+          || captureHeapSnapshot,
         heapSnapshotLimit:
           settingsService.resolveHotCpuProfilingHeapSnapshotLimit(),
         outputRoot: resolveHotCpuProfileOutputRoot(),
@@ -646,13 +659,16 @@ export function createMainWindow(options?: {
   };
 
   if (typeof webContents.on === "function") {
-    webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl) => {
-      mainLog.error("renderer load failed", {
-        errorCode,
-        errorDescription,
-        validatedUrl
-      });
-    });
+    webContents.on(
+      "did-fail-load",
+      (_event, errorCode, errorDescription, validatedUrl) => {
+        mainLog.error("renderer load failed", {
+          errorCode,
+          errorDescription,
+          validatedUrl,
+        });
+      },
+    );
 
     webContents.on("render-process-gone", (_event, details) => {
       stopHeapMonitor("render-process-gone");
@@ -663,21 +679,26 @@ export function createMainWindow(options?: {
     if (typeof webContents.once === "function") {
       webContents.once("did-finish-load", () => {
         rendererLoaded = true;
-        void heapMonitorPromise.then((monitors) => monitors?.rendererMonitor.start());
+        void heapMonitorPromise.then((monitors) =>
+          monitors?.rendererMonitor.start(),
+        );
         syncHotCpuProfiler("did-finish-load");
       });
     }
   }
 
   if (isDevelopment && typeof webContents.on === "function") {
-    webContents.on("console-message", (_event, level, message, line, sourceId) => {
-      rendererConsoleLog.info("message", {
-        level,
-        message,
-        line,
-        sourceId
-      });
-    });
+    webContents.on(
+      "console-message",
+      (_event, level, message, line, sourceId) => {
+        rendererConsoleLog.info("message", {
+          level,
+          message,
+          line,
+          sourceId,
+        });
+      },
+    );
 
     webContents.on("did-finish-load", () => {
       void webContents
@@ -687,7 +708,7 @@ export function createMainWindow(options?: {
             pwragentKeys: typeof window.pwragent !== "undefined" ? Object.keys(window.pwragent) : [],
             locationHref: window.location.href
           })`,
-          true
+          true,
         )
         .then((result) => {
           mainLog.info("renderer globals", result);

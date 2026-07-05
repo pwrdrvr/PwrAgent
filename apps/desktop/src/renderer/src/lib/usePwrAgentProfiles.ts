@@ -22,8 +22,11 @@ export type PwrAgentProfilesState = {
 export function usePwrAgentProfiles(
   desktopApi?: DesktopApi,
 ): PwrAgentProfilesState {
-  const [response, setResponse] = useState<ListDesktopPwrAgentProfilesResponse>();
-  const [loading, setLoading] = useState(Boolean(desktopApi?.listPwrAgentProfiles));
+  const [response, setResponse] =
+    useState<ListDesktopPwrAgentProfilesResponse>();
+  const [loading, setLoading] = useState(
+    Boolean(desktopApi?.listPwrAgentProfiles),
+  );
   const [error, setError] = useState<string>();
 
   const refresh = useCallback(async () => {
@@ -36,7 +39,9 @@ export function usePwrAgentProfiles(
     try {
       setResponse(await desktopApi.listPwrAgentProfiles());
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
     } finally {
       setLoading(false);
     }

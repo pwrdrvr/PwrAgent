@@ -62,7 +62,10 @@ export type SlackActionsBlock = {
   elements: SlackButtonElement[];
 };
 
-export type SlackBlock = SlackActionsBlock | SlackContextBlock | SlackSectionBlock;
+export type SlackBlock =
+  | SlackActionsBlock
+  | SlackContextBlock
+  | SlackSectionBlock;
 
 export type SlackPostBody = {
   blocks?: SlackBlock[];

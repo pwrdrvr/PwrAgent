@@ -5,7 +5,10 @@ import {
   readRequiredString,
   requestToolApproval,
 } from "./tool-contract.js";
-import { InvalidToolArgumentsError, ToolExecutionFailure } from "./tool-errors.js";
+import {
+  InvalidToolArgumentsError,
+  ToolExecutionFailure,
+} from "./tool-errors.js";
 import { resolveWorkspaceFilePath } from "./workspace-paths.js";
 
 const TOOL_NAME = "edit_file";
@@ -45,7 +48,10 @@ export function createEditFileTool(): ToolDefinition<EditFileArguments> {
       const record = asObjectArguments(TOOL_NAME, arguments_);
       const newString = record.newString;
       if (typeof newString !== "string") {
-        throw new InvalidToolArgumentsError(TOOL_NAME, '"newString" must be a string');
+        throw new InvalidToolArgumentsError(
+          TOOL_NAME,
+          '"newString" must be a string',
+        );
       }
       return {
         path: readRequiredString(record, TOOL_NAME, "path"),
@@ -54,7 +60,11 @@ export function createEditFileTool(): ToolDefinition<EditFileArguments> {
       };
     },
     async execute(arguments_, context) {
-      const resolved = resolveWorkspaceFilePath(context, TOOL_NAME, arguments_.path);
+      const resolved = resolveWorkspaceFilePath(
+        context,
+        TOOL_NAME,
+        arguments_.path,
+      );
       let content: string;
       try {
         content = await fs.readFile(resolved.absolutePath, "utf8");
@@ -82,7 +92,10 @@ export function createEditFileTool(): ToolDefinition<EditFileArguments> {
         );
       }
 
-      const approval = await maybeApproveFileChange(context, resolved.relativePath);
+      const approval = await maybeApproveFileChange(
+        context,
+        resolved.relativePath,
+      );
       if (approval) {
         return approval;
       }

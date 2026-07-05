@@ -62,7 +62,9 @@ function toRepoRelativePath(
   if (full === root) {
     return absolutePath;
   }
-  return full.startsWith(`${root}/`) ? full.slice(root.length + 1) : absolutePath;
+  return full.startsWith(`${root}/`)
+    ? full.slice(root.length + 1)
+    : absolutePath;
 }
 
 type EditedFileGroupListProps = {
@@ -207,39 +209,39 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
 
   function renderGroupedOrFlat() {
     return effectiveView === "turns" ? (
-        (() => {
-          const visibleGroups = showAllTurns
-            ? props.groups
-            : props.groups.slice(0, VISIBLE_TURN_GROUPS);
-          const hiddenCount = props.groups.length - visibleGroups.length;
-          return (
-            <>
-              {visibleGroups.map((group, index) => (
-                <EditedFileGroupSection
-                  key={group.key}
-                  group={group}
-                  commitState={props.commitStatesByKey?.[group.key]}
-                  showCommitStatus={index === 0}
-                  defaultExpanded={index === 0}
-                  onScrollToTurn={props.onScrollToTurn}
-                />
-              ))}
-              {props.groups.length > VISIBLE_TURN_GROUPS ? (
-                <button
-                  type="button"
-                  className="edited-file-groups__show-more"
-                  aria-expanded={showAllTurns}
-                  onClick={() => setShowAllTurns((current) => !current)}
-                >
-                  {showAllTurns ? "Show less" : `Show ${hiddenCount} more`}
-                </button>
-              ) : null}
-            </>
-          );
-        })()
-      ) : (
-        <EditedFileFlatSection groups={props.groups} />
-      );
+      (() => {
+        const visibleGroups = showAllTurns
+          ? props.groups
+          : props.groups.slice(0, VISIBLE_TURN_GROUPS);
+        const hiddenCount = props.groups.length - visibleGroups.length;
+        return (
+          <>
+            {visibleGroups.map((group, index) => (
+              <EditedFileGroupSection
+                key={group.key}
+                group={group}
+                commitState={props.commitStatesByKey?.[group.key]}
+                showCommitStatus={index === 0}
+                defaultExpanded={index === 0}
+                onScrollToTurn={props.onScrollToTurn}
+              />
+            ))}
+            {props.groups.length > VISIBLE_TURN_GROUPS ? (
+              <button
+                type="button"
+                className="edited-file-groups__show-more"
+                aria-expanded={showAllTurns}
+                onClick={() => setShowAllTurns((current) => !current)}
+              >
+                {showAllTurns ? "Show less" : `Show ${hiddenCount} more`}
+              </button>
+            ) : null}
+          </>
+        );
+      })()
+    ) : (
+      <EditedFileFlatSection groups={props.groups} />
+    );
   }
 }
 
@@ -292,7 +294,9 @@ function formatGroupTimestamp(group: EditedFileGroup): string | undefined {
  * group header height varies (one vs two rows, badge state, summary wrap), so
  * we measure the real header instead.
  */
-function useMeasuredHeight(ref: RefObject<HTMLElement | null>): number | undefined {
+function useMeasuredHeight(
+  ref: RefObject<HTMLElement | null>,
+): number | undefined {
   const [height, setHeight] = useState<number | undefined>(undefined);
   useLayoutEffect(() => {
     const element = ref.current;
@@ -422,9 +426,8 @@ export function EditedFileRow(props: {
   const diffId = useId();
   const additions = props.detail.fileDiff?.additions ?? 0;
   const removals = props.detail.fileDiff?.removals ?? 0;
-  const { worktreeRoot, ignoredPaths, onOpenFile, preferredEditor } = useContext(
-    EditedFileRowContext,
-  );
+  const { worktreeRoot, ignoredPaths, onOpenFile, preferredEditor } =
+    useContext(EditedFileRowContext);
   const absolutePath = props.detail.path;
   const ignored = absolutePath
     ? ignoredPaths.has(normalizePath(absolutePath))

@@ -27,7 +27,10 @@ describe("generateAutomationPromptDraft", () => {
   it("propagates an unavailable backend without calling normalization", async () => {
     const result = await generateAutomationPromptDraft({
       description: "investigate alerts",
-      generate: async () => ({ status: "unavailable", reason: "acp_structured_generation_unavailable" }),
+      generate: async () => ({
+        status: "unavailable",
+        reason: "acp_structured_generation_unavailable",
+      }),
     });
 
     expect(result).toEqual({
@@ -53,6 +56,9 @@ describe("generateAutomationPromptDraft", () => {
       generate: async () => ({ status: "ok", object: { prompt: 42 } }),
     });
 
-    expect(result).toEqual({ status: "invalid", reason: "prompt_must_be_string" });
+    expect(result).toEqual({
+      status: "invalid",
+      reason: "prompt_must_be_string",
+    });
   });
 });

@@ -228,7 +228,13 @@ export type TelegramForumTopicActionRequest = {
 export type TelegramChatMember = {
   can_delete_messages?: boolean;
   can_manage_topics?: boolean;
-  status: "creator" | "administrator" | "member" | "restricted" | "left" | "kicked";
+  status:
+    | "creator"
+    | "administrator"
+    | "member"
+    | "restricted"
+    | "left"
+    | "kicked";
 };
 
 export type TelegramSendPhotoRequest = {
@@ -279,7 +285,9 @@ export type TelegramBotApi = {
     text?: string;
   }): Promise<boolean>;
   closeForumTopic(request: TelegramForumTopicActionRequest): Promise<boolean>;
-  createForumTopic(request: TelegramCreateForumTopicRequest): Promise<TelegramForumTopic>;
+  createForumTopic(
+    request: TelegramCreateForumTopicRequest,
+  ): Promise<TelegramForumTopic>;
   deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
   deleteForumTopic(request: TelegramForumTopicActionRequest): Promise<boolean>;
   editForumTopic(request: TelegramEditForumTopicRequest): Promise<boolean>;
@@ -287,15 +295,21 @@ export type TelegramBotApi = {
     chatId: number | string,
     userId: number | string,
   ): Promise<TelegramChatMember>;
-  editMessageText(request: TelegramEditMessageTextRequest): Promise<TelegramSentMessage>;
+  editMessageText(
+    request: TelegramEditMessageTextRequest,
+  ): Promise<TelegramSentMessage>;
   getMe(): Promise<{ id: number; is_bot: boolean; username?: string }>;
   reopenForumTopic(request: TelegramForumTopicActionRequest): Promise<boolean>;
   getWebhookInfo(): Promise<{ url: string }>;
   getFile(fileId: string): Promise<{ file_path?: string }>;
   pinChatMessage(request: TelegramPinChatMessageRequest): Promise<boolean>;
   sendChatAction(request: TelegramSendChatActionRequest): Promise<boolean>;
-  sendDocument(request: TelegramSendDocumentRequest): Promise<TelegramSentMessage>;
-  sendMessage(request: TelegramSendMessageRequest): Promise<TelegramSentMessage>;
+  sendDocument(
+    request: TelegramSendDocumentRequest,
+  ): Promise<TelegramSentMessage>;
+  sendMessage(
+    request: TelegramSendMessageRequest,
+  ): Promise<TelegramSentMessage>;
   sendPhoto(request: TelegramSendPhotoRequest): Promise<TelegramSentMessage>;
   setMyCommands(params: {
     commands: Array<{ command: string; description: string }>;
@@ -307,7 +321,10 @@ export type TelegramBotLike = {
   api: TelegramBotApi;
   catch?(handler: (error: unknown) => void): void;
   handleUpdate?(update: TelegramUpdate): Promise<void>;
-  on?(filter: string, handler: (context: unknown) => void | Promise<void>): void;
+  on?(
+    filter: string,
+    handler: (context: unknown) => void | Promise<void>,
+  ): void;
   start?(options?: { allowed_updates?: string[] }): Promise<void>;
   stop?(): void | Promise<void>;
 };
@@ -326,7 +343,9 @@ export type TelegramGrammyBotLike = {
       chatId: number | string,
       name: string,
     ): Promise<TelegramForumTopic>;
-    deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
+    deleteWebhook(params?: {
+      drop_pending_updates?: boolean;
+    }): Promise<boolean>;
     deleteForumTopic(
       chatId: number | string,
       messageThreadId: number,
@@ -343,7 +362,10 @@ export type TelegramGrammyBotLike = {
       chatId: number | string,
       messageId: number,
       text: string,
-      other?: Omit<TelegramEditMessageTextRequest, "chat_id" | "message_id" | "text">,
+      other?: Omit<
+        TelegramEditMessageTextRequest,
+        "chat_id" | "message_id" | "text"
+      >,
     ): Promise<TelegramSentMessage | boolean>;
     // Telegram's `User` allows `username` to be absent (non-bot users
     // can omit it). Grammy returns `UserFromGetMe` which always has
@@ -379,7 +401,10 @@ export type TelegramGrammyBotLike = {
     sendDocument(
       chatId: number | string,
       document: InputFile | string,
-      other?: Omit<TelegramSendDocumentRequest, "chat_id" | "document" | "filename">,
+      other?: Omit<
+        TelegramSendDocumentRequest,
+        "chat_id" | "document" | "filename"
+      >,
     ): Promise<TelegramSentMessage>;
     sendPhoto(
       chatId: number | string,
@@ -397,7 +422,10 @@ export type TelegramGrammyBotLike = {
   };
   catch?(handler: (error: unknown) => void): void;
   handleUpdate?(update: TelegramUpdate): Promise<void>;
-  on?(filter: string, handler: (context: unknown) => void | Promise<void>): void;
+  on?(
+    filter: string,
+    handler: (context: unknown) => void | Promise<void>,
+  ): void;
   start?(options?: { allowed_updates?: string[] }): Promise<void>;
   stop?(): void | Promise<void>;
 };
@@ -408,9 +436,13 @@ export type TelegramProviderAdapter = {
   channel: "telegram";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
-  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  resolveDeliveryScope?(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
-  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateAuthorization?(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void>;
   updateRenderingPreferences?(
     update: MessagingAdapterRenderingPreferencesUpdate,
   ): Promise<void>;
@@ -445,7 +477,9 @@ export type TelegramProviderAdapter = {
   deleteManagedConversation(
     request: MessagingManagedConversationActionRequest,
   ): Promise<MessagingManagedConversationActionResult>;
-  start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
+  start?(
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void>;
   stop?(): Promise<void>;
 };
 
@@ -528,7 +562,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private static readonly TOPIC_NAME_CACHE_CAP = 500;
   private readonly topicNameCache = new Map<string, string>();
   private readonly unauthorizedConversationLogKeys = new Set<string>();
-  private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  private readonly inboundRejectedListeners =
+    new Set<MessagingInboundRejectedListener>();
   private readonly options: {
     api?: TelegramBotApi;
     bot?: TelegramBotLike;
@@ -547,7 +582,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
    */
   private stopping = false;
   private readonly runtimeErrorListeners = new Set<(reason: string) => void>();
-  private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
+  private readonly rateLimitListeners = new Set<
+    (info: MessagingRateLimitInfo) => void
+  >();
   private typingSignalSequence = 0;
   private typingSignals = new Map<string, TelegramTypingSignal>();
 
@@ -567,7 +604,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     };
   }
 
-  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+  async updateAuthorization(
+    update: MessagingAdapterAuthorizationUpdate,
+  ): Promise<void> {
     if (update.responseMode !== undefined) {
       this.options.config.responseMode = update.responseMode;
     }
@@ -617,19 +656,28 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     };
   }
 
-  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+  resolveDeliveryScope(
+    intent: MessagingSurfaceIntent,
+  ): MessagingDeliveryScope | undefined {
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
   }
 
-  async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
+  async start(
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void> {
     this.listener = listener;
 
     this.registerBotErrorHandler();
     this.registerBotHandlers();
 
-    const tokenDiagnostics = telegramBotTokenDiagnostics(this.options.config.botToken);
-    this.options.logger?.debug("telegram startup token diagnostics", tokenDiagnostics);
+    const tokenDiagnostics = telegramBotTokenDiagnostics(
+      this.options.config.botToken,
+    );
+    this.options.logger?.debug(
+      "telegram startup token diagnostics",
+      tokenDiagnostics,
+    );
 
     // Capture the bot's `@username` so the inbound path can recognize
     // `@<botusername> <verb>` text mentions. Telegram usernames live
@@ -645,9 +693,12 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         );
       }
     } catch (error) {
-      this.options.logger?.warn?.("telegram getMe failed; @-mention commands disabled", {
-        error: errorMessage(error),
-      });
+      this.options.logger?.warn?.(
+        "telegram getMe failed; @-mention commands disabled",
+        {
+          error: errorMessage(error),
+        },
+      );
     }
 
     try {
@@ -768,7 +819,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
     const data = new Uint8Array(await response.arrayBuffer());
     if (data.byteLength > request.maxBytes) {
-      throw new Error("Telegram attachment exceeds the configured download limit.");
+      throw new Error(
+        "Telegram attachment exceeds the configured download limit.",
+      );
     }
     return {
       data,
@@ -778,7 +831,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     };
   }
 
-  async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
+  async deliver(
+    intent: MessagingSurfaceIntent,
+  ): Promise<MessagingDeliveryResult> {
     try {
       return await this.deliverSurface(intent);
     } catch (error) {
@@ -845,7 +900,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const actions = actionsForTelegramIntent(intent);
     const replyMarkup = await this.buildReplyMarkup(intent, actions);
     const files = uploadableFileParts(intent);
-    const text = files.length > 0 ? textForTelegramIntentWithoutFiles(intent) : textForTelegramIntent(intent);
+    const text =
+      files.length > 0
+        ? textForTelegramIntentWithoutFiles(intent)
+        : textForTelegramIntent(intent);
     const image = this.firstImagePayload(intent);
     const sentMessages: TelegramSentMessage[] = [];
     let outcome: MessagingDeliveryResult["outcome"] = "presented";
@@ -854,23 +912,27 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     );
 
     if (
-      intent.delivery?.mode === "update" &&
-      target.messageId &&
-      !image &&
-      files.length === 0 &&
-      Buffer.byteLength(text || " ", "utf8") <= 4096
+      intent.delivery?.mode === "update"
+      && target.messageId
+      && !image
+      && files.length === 0
+      && Buffer.byteLength(text || " ", "utf8") <= 4096
     ) {
       try {
         sentMessages.push(
-      await this.bot.api.editMessageText({
-        chat_id: target.chatId,
-        disable_web_page_preview: true,
-        message_id: target.messageId,
-        message_thread_id: target.messageThreadId,
-        parse_mode: "HTML",
-        reply_markup: replyMarkup ?? (intent.delivery.replaceMarkup ? { inline_keyboard: [] } : undefined),
-        text: text || " ",
-      }),
+          await this.bot.api.editMessageText({
+            chat_id: target.chatId,
+            disable_web_page_preview: true,
+            message_id: target.messageId,
+            message_thread_id: target.messageThreadId,
+            parse_mode: "HTML",
+            reply_markup:
+              replyMarkup
+              ?? (intent.delivery.replaceMarkup
+                ? { inline_keyboard: [] }
+                : undefined),
+            text: text || " ",
+          }),
         );
         outcome = "updated";
       } catch (error) {
@@ -890,7 +952,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         outcome = "presented_new";
       }
     } else if (files.length > 0) {
-      const caption = text && Buffer.byteLength(text, "utf8") <= 1024 ? text : undefined;
+      const caption =
+        text && Buffer.byteLength(text, "utf8") <= 1024 ? text : undefined;
       if (text && !caption) {
         const chunks = splitTelegramHtml(text);
         for (const chunk of chunks) {
@@ -992,11 +1055,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     target: TelegramDeliveryTarget,
   ): Promise<MessagingDeliveryResult> {
     if (
-      intent.policy === "disabled" ||
-      (
-        this.options.config.streamingResponses !== true &&
-        intent.policy !== "enabled"
-      )
+      intent.policy === "disabled"
+      || (this.options.config.streamingResponses !== true
+        && intent.policy !== "enabled")
     ) {
       return {
         channel: this.channel,
@@ -1013,10 +1074,17 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       renderTelegramHtml(intent.text, intent.markdown ?? "plain") || " ",
     );
     if (chunks.length === 0) {
-      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
     }
 
-    const rateLimit = this.evaluateStreamRateLimit(target, intent.stream.isFinal);
+    const rateLimit = this.evaluateStreamRateLimit(
+      target,
+      intent.stream.isFinal,
+    );
     if (!rateLimit.allowed) {
       if (intent.stream.isFinal && rateLimit.hard) {
         await this.sleep(rateLimit.waitMs);
@@ -1035,8 +1103,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     // Seed anchor 0 from a caller-supplied surface (restart-safety).
     const anchors =
-      this.streamSurfaces.get(intent.stream.key) ??
-      (target.messageId ? [{ ...target, text: "" }] : []);
+      this.streamSurfaces.get(intent.stream.key)
+      ?? (target.messageId ? [{ ...target, text: "" }] : []);
     let firstOutcome: "presented" | "updated" | undefined;
     try {
       for (let index = 0; index < chunks.length; index += 1) {
@@ -1159,14 +1227,15 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const title = sanitizeTelegramTopicName(request.title);
     const conversation = request.channel.conversation;
     const target =
-      this.telegramStateFromChannel(conversation) ??
-      this.telegramStateFromSurface(request.routingState);
+      this.telegramStateFromChannel(conversation)
+      ?? this.telegramStateFromSurface(request.routingState);
 
     if (conversation.kind !== "topic" || !target?.messageThreadId) {
       return {
         channel: this.channel,
         conversation,
-        errorMessage: "Telegram name sync is only available inside forum topics.",
+        errorMessage:
+          "Telegram name sync is only available inside forum topics.",
         outcome: "unsupported",
         title,
         updatedAt: this.now(),
@@ -1217,13 +1286,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   ): Promise<MessagingManagedConversationRightsResult> {
     const conversation = request.channel.conversation;
     const target =
-      this.telegramStateFromChannel(conversation) ??
-      this.telegramStateFromSurface(request.routingState);
+      this.telegramStateFromChannel(conversation)
+      ?? this.telegramStateFromSurface(request.routingState);
     if (!target) {
       return {
         channel: this.channel,
         conversation,
-        errorMessage: "Telegram topic management needs a supergroup or topic target.",
+        errorMessage:
+          "Telegram topic management needs a supergroup or topic target.",
         operations: unsupportedManagedTopicOperations("unsupported target"),
         outcome: "unsupported",
         updatedAt: this.now(),
@@ -1233,7 +1303,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     try {
       const me = await this.bot.api.getMe();
       const member = await this.bot.api.getChatMember(target.chatId, me.id);
-      const isAdmin = member.status === "creator" || member.status === "administrator";
+      const isAdmin =
+        member.status === "creator" || member.status === "administrator";
       const canManageTopics =
         member.status === "creator" || member.can_manage_topics === true;
       const canDeleteMessages =
@@ -1245,25 +1316,29 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           {
             operation: "create_child",
             supported: isAdmin && canManageTopics,
-            missingPermission: isAdmin && !canManageTopics ? "can_manage_topics" : undefined,
+            missingPermission:
+              isAdmin && !canManageTopics ? "can_manage_topics" : undefined,
             reason: isAdmin ? undefined : "bot is not an administrator",
           },
           {
             operation: "close",
             supported: isAdmin && canManageTopics,
-            missingPermission: isAdmin && !canManageTopics ? "can_manage_topics" : undefined,
+            missingPermission:
+              isAdmin && !canManageTopics ? "can_manage_topics" : undefined,
             reason: isAdmin ? undefined : "bot is not an administrator",
           },
           {
             operation: "reopen",
             supported: isAdmin && canManageTopics,
-            missingPermission: isAdmin && !canManageTopics ? "can_manage_topics" : undefined,
+            missingPermission:
+              isAdmin && !canManageTopics ? "can_manage_topics" : undefined,
             reason: isAdmin ? undefined : "bot is not an administrator",
           },
           {
             operation: "delete",
             supported: isAdmin && canDeleteMessages,
-            missingPermission: isAdmin && !canDeleteMessages ? "can_delete_messages" : undefined,
+            missingPermission:
+              isAdmin && !canDeleteMessages ? "can_delete_messages" : undefined,
             reason: isAdmin ? undefined : "bot is not an administrator",
           },
         ],
@@ -1287,8 +1362,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   ): Promise<MessagingManagedConversationCreateResult> {
     const parent = request.parent.conversation;
     const target =
-      this.telegramStateFromChannel(parent) ??
-      this.telegramStateFromSurface(request.routingState);
+      this.telegramStateFromChannel(parent)
+      ?? this.telegramStateFromSurface(request.routingState);
     if (!target) {
       return {
         channel: this.channel,
@@ -1308,7 +1383,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         id: String(topic.message_thread_id),
         kind: "topic" as const,
         parentId: String(target.chatId),
-        parentTitle: parent.kind === "topic" ? parent.parentTitle : parent.title,
+        parentTitle:
+          parent.kind === "topic" ? parent.parentTitle : parent.title,
         title: topic.name,
       };
       this.topicNameCache.set(
@@ -1361,8 +1437,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   ): Promise<MessagingManagedConversationActionResult> {
     const conversation = request.channel.conversation;
     const target =
-      this.telegramStateFromChannel(conversation) ??
-      this.telegramStateFromSurface(request.routingState);
+      this.telegramStateFromChannel(conversation)
+      ?? this.telegramStateFromSurface(request.routingState);
     if (conversation.kind !== "topic" || !target?.messageThreadId) {
       return {
         channel: this.channel,
@@ -1435,7 +1511,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       // message in that topic can populate `channel.conversation.title`
       // for the binding chip. Telegram has no other API to fetch this.
       this.captureForumTopicNameIfPresent(message);
-      const logServiceMessage = this.options.logger?.info ?? this.options.logger?.debug;
+      const logServiceMessage =
+        this.options.logger?.info ?? this.options.logger?.debug;
       logServiceMessage?.("telegram inbound ignored service message", {
         chatId: message.chat.id,
         messageId: message.message_id,
@@ -1483,8 +1560,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       : undefined;
     const attachments = this.attachmentsFromMessage(message);
     if (
-      !isPairingMessage &&
-      !this.isAuthorizedMessageSource(message, {
+      !isPairingMessage
+      && !this.isAuthorizedMessageSource(message, {
         actionable:
           isPairingMessage
           || mentionRemainder !== undefined
@@ -1494,13 +1571,13 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
     if (
-      mentionRemainder !== undefined &&
-      mentionCandidate !== undefined &&
+      mentionRemainder !== undefined
+      && mentionCandidate !== undefined
       // A bare mention caption has no command verb. Let the media
       // branch handle the upload so bound conversations can send it
       // to the thread; unbound conversations will get the
       // controller's normal "bind before attachments" response.
-      !(mentionRemainder.length === 0 && attachments.length > 0)
+      && !(mentionRemainder.length === 0 && attachments.length > 0)
     ) {
       if (mentionRemainder.length === 0) {
         this.options.logger?.debug(
@@ -1529,17 +1606,19 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         actor: this.actorFromUser(message.from),
         attachments,
         channel: this.channelFromMessage(message),
-        disposition: attachments.some((attachment) => attachment.disposition === "available")
+        disposition: attachments.some(
+          (attachment) => attachment.disposition === "available",
+        )
           ? "available"
           : "unsupported",
         media: {
           type: "file",
           name: attachments[0]?.name ?? "telegram-media",
           mimeType:
-            message.document?.mime_type ??
-            message.animation?.mime_type ??
-            message.voice?.mime_type ??
-            message.video?.mime_type,
+            message.document?.mime_type
+            ?? message.animation?.mime_type
+            ?? message.voice?.mime_type
+            ?? message.video?.mime_type,
           sizeBytes: attachments[0]?.sizeBytes,
         },
         receivedAt: this.messageReceivedAt(message),
@@ -1555,7 +1634,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
 
-    const commandMatch = /^\/([A-Za-z0-9_]+)(?:@\S+)?(?:\s+(.*))?$/.exec(inboundText);
+    const commandMatch = /^\/([A-Za-z0-9_]+)(?:@\S+)?(?:\s+(.*))?$/.exec(
+      inboundText,
+    );
     this.options.logger?.debug(
       `telegram inbound ${commandMatch ? "command" : "text"} update=${updateId} message=${message.message_id} chat=${message.chat.id} actor=${message.from.id} chars=${inboundText.length} preview="${compactPreview(inboundText)}"`,
     );
@@ -1642,11 +1723,27 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     options: { requireActor: boolean } = { requireActor: true },
   ): boolean {
     return (
-      this.validateIdentifier("update.update_id", updateId, validateTelegramPositiveId)
-      && this.validateIdentifier("message.message_id", message.message_id, validateTelegramPositiveId)
-      && this.validateIdentifier("chat.id", message.chat.id, validateTelegramChatId)
+      this.validateIdentifier(
+        "update.update_id",
+        updateId,
+        validateTelegramPositiveId,
+      )
+      && this.validateIdentifier(
+        "message.message_id",
+        message.message_id,
+        validateTelegramPositiveId,
+      )
+      && this.validateIdentifier(
+        "chat.id",
+        message.chat.id,
+        validateTelegramChatId,
+      )
       && (!options.requireActor
-        || this.validateIdentifier("user.id", message.from?.id, validateTelegramPositiveId))
+        || this.validateIdentifier(
+          "user.id",
+          message.from?.id,
+          validateTelegramPositiveId,
+        ))
       && (message.message_thread_id === undefined
         || this.validateIdentifier(
           "message.message_thread_id",
@@ -1662,13 +1759,21 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     callbackQuery: TelegramCallbackQuery,
   ): boolean {
     return (
-      this.validateIdentifier("update.update_id", updateId, validateTelegramPositiveId)
+      this.validateIdentifier(
+        "update.update_id",
+        updateId,
+        validateTelegramPositiveId,
+      )
       && this.validateIdentifier(
         "callback_query.id",
         callbackQuery.id,
         validateTelegramCallbackQueryId,
       )
-      && this.validateIdentifier("user.id", callbackQuery.from.id, validateTelegramPositiveId)
+      && this.validateIdentifier(
+        "user.id",
+        callbackQuery.from.id,
+        validateTelegramPositiveId,
+      )
       && this.validateIdentifier(
         "callback_query.data",
         callbackQuery.data,
@@ -1703,7 +1808,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private validateIdentifier(
     field: TelegramIdentifierField,
     value: unknown,
-    validator: (value: unknown) => ReturnType<typeof validateTelegramPositiveId>,
+    validator: (
+      value: unknown,
+    ) => ReturnType<typeof validateTelegramPositiveId>,
   ): boolean {
     const result = validator(value);
     if (result.ok) {
@@ -1725,51 +1832,67 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const actorId = String(message.from?.id ?? "");
     if (!this.isAuthorizedActor(actorId)) {
       if (message.chat.type === "private" || options.actionable) {
-        this.options.logger?.warn?.("telegram inbound ignored unauthorized actor", {
-          actorId,
-          chatId: String(message.chat.id),
-          chatType: message.chat.type,
-          actionable: options.actionable,
-        });
-        this.emitInboundRejected(this.rejectedEventFromMessage(message, {
-          kind: options.actionable ? "command" : "text",
-          reason: "unauthorized-actor",
-        }));
+        this.options.logger?.warn?.(
+          "telegram inbound ignored unauthorized actor",
+          {
+            actorId,
+            chatId: String(message.chat.id),
+            chatType: message.chat.type,
+            actionable: options.actionable,
+          },
+        );
+        this.emitInboundRejected(
+          this.rejectedEventFromMessage(message, {
+            kind: options.actionable ? "command" : "text",
+            reason: "unauthorized-actor",
+          }),
+        );
       }
       return false;
     }
 
     if (!this.isAuthorizedTelegramConversation(message.chat)) {
       this.logUnauthorizedConversationOnce("message", message.chat);
-      this.emitInboundRejected(this.rejectedEventFromMessage(message, {
-        kind: options.actionable ? "command" : "text",
-        reason: "unauthorized-conversation",
-      }));
+      this.emitInboundRejected(
+        this.rejectedEventFromMessage(message, {
+          kind: options.actionable ? "command" : "text",
+          reason: "unauthorized-conversation",
+        }),
+      );
       return false;
     }
     return true;
   }
 
-  private isAuthorizedCallbackSource(callbackQuery: TelegramCallbackQuery): boolean {
+  private isAuthorizedCallbackSource(
+    callbackQuery: TelegramCallbackQuery,
+  ): boolean {
     const actorId = String(callbackQuery.from.id);
     const chat = callbackQuery.message?.chat;
     if (!this.isAuthorizedActor(actorId)) {
-      this.options.logger?.warn?.("telegram callback ignored unauthorized actor", {
-        actorId,
-        chatId: chat ? String(chat.id) : undefined,
-      });
+      this.options.logger?.warn?.(
+        "telegram callback ignored unauthorized actor",
+        {
+          actorId,
+          chatId: chat ? String(chat.id) : undefined,
+        },
+      );
       if (chat) {
-        this.emitInboundRejected(this.rejectedEventFromCallback(callbackQuery, {
-          reason: "unauthorized-actor",
-        }));
+        this.emitInboundRejected(
+          this.rejectedEventFromCallback(callbackQuery, {
+            reason: "unauthorized-actor",
+          }),
+        );
       }
       return false;
     }
     if (chat && !this.isAuthorizedTelegramConversation(chat)) {
       this.logUnauthorizedConversationOnce("callback", chat);
-      this.emitInboundRejected(this.rejectedEventFromCallback(callbackQuery, {
-        reason: "unauthorized-conversation",
-      }));
+      this.emitInboundRejected(
+        this.rejectedEventFromCallback(callbackQuery, {
+          reason: "unauthorized-conversation",
+        }),
+      );
       return false;
     }
     return true;
@@ -1798,14 +1921,19 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
     this.unauthorizedConversationLogKeys.add(key);
-    this.options.logger?.warn?.("telegram inbound ignored unauthorized conversation", {
-      chatId: String(chat.id),
-      chatType: chat.type,
-      surface,
-    });
+    this.options.logger?.warn?.(
+      "telegram inbound ignored unauthorized conversation",
+      {
+        chatId: String(chat.id),
+        chatType: chat.type,
+        surface,
+      },
+    );
   }
 
-  private attachmentsFromMessage(message: TelegramMessage): MessagingAttachmentDescriptor[] {
+  private attachmentsFromMessage(
+    message: TelegramMessage,
+  ): MessagingAttachmentDescriptor[] {
     const attachments: MessagingAttachmentDescriptor[] = [];
     if (message.document) {
       const mimeType = message.document.mime_type;
@@ -1814,7 +1942,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         id: `telegram:file:${message.document.file_id}`,
         kind: image ? "image" : "file",
         name: message.document.file_name ?? "telegram-document",
-        disposition: this.isDownloadableTelegramMimeType(mimeType) ? "available" : "rejected",
+        disposition: this.isDownloadableTelegramMimeType(mimeType)
+          ? "available"
+          : "rejected",
         height: message.document.height,
         mimeType,
         reason: this.isDownloadableTelegramMimeType(mimeType)
@@ -1909,14 +2039,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return attachments;
   }
 
-  private isDownloadableTelegramMimeType(mimeType: string | undefined): boolean {
+  private isDownloadableTelegramMimeType(
+    mimeType: string | undefined,
+  ): boolean {
     if (!mimeType) {
       return true;
     }
     return (
-      mimeType.startsWith("text/") ||
-      mimeType.startsWith("image/") ||
-      [
+      mimeType.startsWith("text/")
+      || mimeType.startsWith("image/")
+      || [
         "application/json",
         "application/pdf",
         "application/toml",
@@ -1943,9 +2075,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         .map(async (action) => ({
           action,
           component: {
-            text: action.label.length > maxLabelLength
-              ? action.label.slice(0, maxLabelLength)
-              : action.label,
+            text:
+              action.label.length > maxLabelLength
+                ? action.label.slice(0, maxLabelLength)
+                : action.label,
             callback_data: await this.createCallbackData(intent, action),
           },
         })),
@@ -1971,7 +2104,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       .update(JSON.stringify([intent.id, action.id, action.value ?? null]))
       .digest("base64url")
       .slice(0, 18)}`;
-    if (Buffer.byteLength(handle, "utf8") > TELEGRAM_CALLBACK_DATA_LIMIT_BYTES) {
+    if (
+      Buffer.byteLength(handle, "utf8") > TELEGRAM_CALLBACK_DATA_LIMIT_BYTES
+    ) {
       throw new Error("Telegram callback handle exceeds callback_data limit.");
     }
 
@@ -1996,11 +2131,13 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return handle;
   }
 
-  private resolveTarget(intent: MessagingSurfaceIntent): TelegramDeliveryTarget | undefined {
+  private resolveTarget(
+    intent: MessagingSurfaceIntent,
+  ): TelegramDeliveryTarget | undefined {
     if (intent.kind === "activity") {
       return (
-        this.telegramStateFromSurface(intent.targetSurface?.state) ??
-        (intent.audit?.channel
+        this.telegramStateFromSurface(intent.targetSurface?.state)
+        ?? (intent.audit?.channel
           ? this.telegramStateFromChannel(intent.audit.channel.conversation)
           : undefined)
       );
@@ -2008,8 +2145,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     if (intent.delivery?.mode === "update" || intent.kind === "dismiss") {
       return (
-        this.telegramStateFromSurface(intent.targetSurface?.state) ??
-        (intent.audit?.channel
+        this.telegramStateFromSurface(intent.targetSurface?.state)
+        ?? (intent.audit?.channel
           ? this.telegramStateFromChannel(intent.audit.channel.conversation)
           : undefined)
       );
@@ -2017,7 +2154,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     const sourceRelative = intent.delivery?.sourceRelative;
     return intent.audit?.channel
-      ? this.telegramStateFromChannel(intent.audit.channel.conversation, sourceRelative)
+      ? this.telegramStateFromChannel(
+          intent.audit.channel.conversation,
+          sourceRelative,
+        )
       : this.telegramStateFromSurface(intent.targetSurface?.state);
   }
 
@@ -2079,7 +2219,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return undefined;
     }
 
-    const url = intent.parts.find((part) => part.type === "image" && "url" in part)?.url;
+    const url = intent.parts.find(
+      (part) => part.type === "image" && "url" in part,
+    )?.url;
     if (!url) {
       return undefined;
     }
@@ -2143,11 +2285,13 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       if (!current || current.signalId !== signalId) {
         return;
       }
-      void this.sendTypingSignal(target, signalId, "interval").catch((error) => {
-        this.options.logger?.warn?.(
-          `telegram sendChatAction typing failed signal=${signalId} source=interval target=${this.compactTypingTarget(target)} error=${errorMessage(error)}`,
-        );
-      });
+      void this.sendTypingSignal(target, signalId, "interval").catch(
+        (error) => {
+          this.options.logger?.warn?.(
+            `telegram sendChatAction typing failed signal=${signalId} source=interval target=${this.compactTypingTarget(target)} error=${errorMessage(error)}`,
+          );
+        },
+      );
     }, TELEGRAM_TYPING_SIGNAL_INTERVAL_MS);
     (interval as { unref?: () => void }).unref?.();
     this.typingSignals.set(key, {
@@ -2210,7 +2354,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
     clearTimeout(signal.timeout);
-    signal.timeout = this.createTypingSignalTimeout(target, leaseMs, signal.signalId);
+    signal.timeout = this.createTypingSignalTimeout(
+      target,
+      leaseMs,
+      signal.signalId,
+    );
     this.options.logger?.debug(
       `telegram typing lease refreshed signal=${signal.signalId} leaseMs=${leaseMs} target=${this.compactTypingTarget(target)}`,
     );
@@ -2277,11 +2425,17 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       };
     }
 
-    if (policy === "group" && state.timestamps.length >= TELEGRAM_STREAM_GROUP_MAX_PER_WINDOW) {
+    if (
+      policy === "group"
+      && state.timestamps.length >= TELEGRAM_STREAM_GROUP_MAX_PER_WINDOW
+    ) {
       const oldest = state.timestamps[0] ?? now;
       const waitMs = Math.max(
         0,
-        oldest + TELEGRAM_STREAM_GROUP_WINDOW_MS - now + TELEGRAM_STREAM_RETRY_AFTER_BUFFER_MS,
+        oldest
+          + TELEGRAM_STREAM_GROUP_WINDOW_MS
+          - now
+          + TELEGRAM_STREAM_RETRY_AFTER_BUFFER_MS,
       );
       if (waitMs > 0) {
         return {
@@ -2349,7 +2503,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       this.streamRateLimits.set(key, state);
     }
     const cutoff = now - TELEGRAM_STREAM_GROUP_WINDOW_MS;
-    state.timestamps = state.timestamps.filter((timestamp) => timestamp > cutoff);
+    state.timestamps = state.timestamps.filter(
+      (timestamp) => timestamp > cutoff,
+    );
     if (state.blockedUntil !== undefined && state.blockedUntil <= now) {
       state.blockedUntil = undefined;
     }
@@ -2378,7 +2534,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const chatId = String(target.chatId);
     return {
       platform: this.channel,
-      id: policy === "group" ? `telegram:group:${chatId}` : `telegram:dm:${chatId}`,
+      id:
+        policy === "group"
+          ? `telegram:group:${chatId}`
+          : `telegram:dm:${chatId}`,
       kind: policy === "group" ? "group" : "dm",
       label:
         policy === "group"
@@ -2433,7 +2592,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       : String(target.chatId);
   }
 
-  private channelFromMessage(message: TelegramMessage): MessagingInboundEvent["channel"] {
+  private channelFromMessage(
+    message: TelegramMessage,
+  ): MessagingInboundEvent["channel"] {
     // Private DMs don't carry a chat title — synthesize one from the
     // sender's first/last name so the chip renders as "DM: Alice"
     // instead of "DM: ?".
@@ -2445,8 +2606,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     const messageThreadId = this.messageThreadIdFromMessage(message);
     if (
-      messageThreadId !== undefined &&
-      messageThreadId !== TELEGRAM_GENERAL_TOPIC_THREAD_ID
+      messageThreadId !== undefined
+      && messageThreadId !== TELEGRAM_GENERAL_TOPIC_THREAD_ID
     ) {
       // Topic-bound messages: title slot belongs to the topic itself.
       // Look up the cached topic name (populated from
@@ -2455,10 +2616,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       // (bot joined the chat after topic creation, no rename has
       // happened since), title stays undefined and the renderer falls
       // back to a literal "Topic" placeholder.
-      const topicTitle = this.lookupTopicName(
-        message.chat.id,
-        messageThreadId,
-      );
+      const topicTitle = this.lookupTopicName(message.chat.id, messageThreadId);
       return {
         channel: this.channel,
         conversation: {
@@ -2481,10 +2639,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     };
   }
 
-  private actorFromUser(user: TelegramMessage["from"]): MessagingInboundEvent["actor"] {
+  private actorFromUser(
+    user: TelegramMessage["from"],
+  ): MessagingInboundEvent["actor"] {
     return {
       platformUserId: String(user?.id ?? "unknown"),
-      displayName: [user?.first_name, user?.last_name].filter(Boolean).join(" ") || undefined,
+      displayName:
+        [user?.first_name, user?.last_name].filter(Boolean).join(" ")
+        || undefined,
       isBot: user?.is_bot,
       phoneNumber: user?.phone_number,
       username: user?.username,
@@ -2526,7 +2688,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           },
       receivedAt: this.now(),
       reason: options.reason,
-      ...(message ? { routingState: this.routingStateFromMessage(message) } : {}),
+      ...(message
+        ? { routingState: this.routingStateFromMessage(message) }
+        : {}),
     };
   }
 
@@ -2546,7 +2710,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return /^\d+$/.test(id) ? id : undefined;
   }
 
-  private routingStateFromMessage(message: TelegramMessage): MessagingAdapterState {
+  private routingStateFromMessage(
+    message: TelegramMessage,
+  ): MessagingAdapterState {
     const messageThreadId = this.messageThreadIdFromMessage(message);
     return {
       opaque: {
@@ -2556,12 +2722,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     };
   }
 
-  private messageThreadIdFromMessage(message: TelegramMessage): number | undefined {
-    return message.message_thread_id ??
-      (message.is_topic_message === true ||
-      (message.chat.type === "supergroup" && message.chat.is_forum === true)
+  private messageThreadIdFromMessage(
+    message: TelegramMessage,
+  ): number | undefined {
+    return (
+      message.message_thread_id
+      ?? (message.is_topic_message === true
+      || (message.chat.type === "supergroup" && message.chat.is_forum === true)
         ? TELEGRAM_GENERAL_TOPIC_THREAD_ID
-        : undefined);
+        : undefined)
+    );
   }
 
   /**
@@ -2575,8 +2745,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private captureForumTopicNameIfPresent(message: TelegramMessage): void {
     if (!message.message_thread_id) return;
     const name =
-      message.forum_topic_created?.name ??
-      message.forum_topic_edited?.name;
+      message.forum_topic_created?.name ?? message.forum_topic_edited?.name;
     if (!name) return;
     const key = this.topicCacheKey(message.chat.id, message.message_thread_id);
     // LRU: re-insert on update so the cache picks the genuinely-coldest
@@ -2632,7 +2801,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         update?: { update_id?: number };
       };
       if (update.message) {
-        await this.handleMessage(update.update?.update_id ?? this.now(), update.message);
+        await this.handleMessage(
+          update.update?.update_id ?? this.now(),
+          update.message,
+        );
       }
     });
     this.bot.on("callback_query:data", async (context) => {
@@ -2679,7 +2851,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private get fetch(): FetchLike {
     return this.options.fetch ?? fetch;
   }
-
 }
 
 export function createTelegramAdapter(
@@ -2694,7 +2865,9 @@ export function createTelegramAdapter(
   });
 }
 
-function uploadableFileParts(intent: MessagingSurfaceIntent): MessagingFilePart[] {
+function uploadableFileParts(
+  intent: MessagingSurfaceIntent,
+): MessagingFilePart[] {
   if (intent.kind !== "message") {
     return [];
   }
@@ -2706,19 +2879,18 @@ function uploadableFileParts(intent: MessagingSurfaceIntent): MessagingFilePart[
 }
 
 function unsupportedManagedTopicOperations(reason: string) {
-  return ([
-    "create_child",
-    "close",
-    "reopen",
-    "delete",
-  ] as const).map((operation) => ({
-    operation,
-    reason,
-    supported: false,
-  }));
+  return (["create_child", "close", "reopen", "delete"] as const).map(
+    (operation) => ({
+      operation,
+      reason,
+      supported: false,
+    }),
+  );
 }
 
-function textForTelegramIntentWithoutFiles(intent: MessagingSurfaceIntent): string {
+function textForTelegramIntentWithoutFiles(
+  intent: MessagingSurfaceIntent,
+): string {
   if (intent.kind !== "message") {
     return textForTelegramIntent(intent);
   }
@@ -2820,7 +2992,9 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
       sendPhoto: async (request) => {
         const { chat_id, filename, photo, ...other } = request;
         const upload =
-          typeof photo === "string" ? photo : new InputFile(Buffer.from(photo), filename);
+          typeof photo === "string"
+            ? photo
+            : new InputFile(Buffer.from(photo), filename);
         return await bot.api.sendPhoto(chat_id, upload, other);
       },
       setMyCommands: async (params) =>
@@ -2856,14 +3030,18 @@ function coerceTelegramSentMessage(
 
 function parseTelegramIdentifier(value: string): number | string {
   const numeric = Number(value);
-  return Number.isSafeInteger(numeric) && String(numeric) === value ? numeric : value;
+  return Number.isSafeInteger(numeric) && String(numeric) === value
+    ? numeric
+    : value;
 }
 
-function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | undefined {
-  return intent.kind === "thread_picker" ||
-    intent.kind === "project_picker" ||
-    intent.kind === "single_select" ||
-    intent.kind === "confirmation"
+function browseSessionIdForIntent(
+  intent: MessagingSurfaceIntent,
+): string | undefined {
+  return intent.kind === "thread_picker"
+    || intent.kind === "project_picker"
+    || intent.kind === "single_select"
+    || intent.kind === "confirmation"
     ? intent.browseSessionId
     : undefined;
 }
@@ -2884,7 +3062,9 @@ function telegramContactsFromIds(
       }[]
     | undefined,
 ): { id: string; displayName: string; responseMode?: MessagingResponseMode }[] {
-  const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
+  const previousById = new Map(
+    (previous ?? []).map((contact) => [contact.id, contact]),
+  );
   return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 
@@ -2943,7 +3123,10 @@ export function stripTelegramBotMention(
   if (trimmedStart.length < mention.length) {
     return undefined;
   }
-  if (trimmedStart.slice(0, mention.length).toLowerCase() !== mention.toLowerCase()) {
+  if (
+    trimmedStart.slice(0, mention.length).toLowerCase()
+    !== mention.toLowerCase()
+  ) {
     return undefined;
   }
   // Word-boundary check: anything after the mention prefix must be
@@ -2960,7 +3143,9 @@ export function stripTelegramBotMention(
 
 function sanitizeTelegramTopicName(title: string): string {
   const normalized = title.replace(/\s+/g, " ").trim();
-  return Array.from(normalized || "PwrAgent thread").slice(0, 128).join("");
+  return Array.from(normalized || "PwrAgent thread")
+    .slice(0, 128)
+    .join("");
 }
 
 function telegramGroupStreamMinIntervalMs(deliveriesInWindow: number): number {
@@ -2992,8 +3177,8 @@ function isTelegramMessageNotModifiedError(error: unknown): boolean {
 
 function telegramRetryAfterMs(error: unknown): number | undefined {
   const seconds =
-    telegramRetryAfterSeconds(error) ??
-    telegramRetryAfterSeconds(readErrorProperty(error));
+    telegramRetryAfterSeconds(error)
+    ?? telegramRetryAfterSeconds(readErrorProperty(error));
   return seconds !== undefined && seconds > 0
     ? Math.ceil(seconds * 1000)
     : undefined;
@@ -3001,13 +3186,16 @@ function telegramRetryAfterMs(error: unknown): number | undefined {
 
 function telegramRetryAfterSeconds(value: unknown): number | undefined {
   return (
-    readNumberProperty(value, "retry_after") ??
-    readNumberProperty(readObjectProperty(value, "parameters"), "retry_after") ??
-    readNumberProperty(
+    readNumberProperty(value, "retry_after")
+    ?? readNumberProperty(
+      readObjectProperty(value, "parameters"),
+      "retry_after",
+    )
+    ?? readNumberProperty(
       readObjectProperty(readObjectProperty(value, "payload"), "parameters"),
       "retry_after",
-    ) ??
-    readNumberProperty(
+    )
+    ?? readNumberProperty(
       readObjectProperty(readObjectProperty(value, "response"), "parameters"),
       "retry_after",
     )
@@ -3040,10 +3228,13 @@ function telegramBotTokenDiagnostics(token: string): Record<string, unknown> {
 
 function telegramHttpErrorDiagnostics(error: unknown): Record<string, unknown> {
   const inner = readErrorProperty(error);
-  const status = readNumberProperty(inner, "status") ?? readNumberProperty(error, "status");
+  const status =
+    readNumberProperty(inner, "status") ?? readNumberProperty(error, "status");
   const statusText =
-    readStringProperty(inner, "statusText") ?? readStringProperty(error, "statusText");
-  const code = readStringProperty(inner, "code") ?? readStringProperty(error, "code");
+    readStringProperty(inner, "statusText")
+    ?? readStringProperty(error, "statusText");
+  const code =
+    readStringProperty(inner, "code") ?? readStringProperty(error, "code");
   const innerMessage = diagnosticErrorMessage(inner);
   return {
     ...(status !== undefined ? { status } : {}),
@@ -3093,11 +3284,14 @@ function readStringProperty(value: unknown, key: string): string | undefined {
 
 function compactPreview(text: string, limit = 96): string {
   const compact = text.replace(/\s+/g, " ").trim();
-  const preview = compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
+  const preview =
+    compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
   return preview.replace(/["\\]/g, "\\$&");
 }
 
-function telegramServiceMessageReason(message: TelegramMessage): string | undefined {
+function telegramServiceMessageReason(
+  message: TelegramMessage,
+): string | undefined {
   if (message.pinned_message) {
     return "pin";
   }

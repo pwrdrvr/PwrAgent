@@ -93,7 +93,8 @@ const LazySettingsScreen = lazy(async () => ({
 }));
 
 const LazyOnboardingWizard = lazy(async () => ({
-  default: (await import("./features/onboarding/OnboardingWizard")).OnboardingWizard,
+  default: (await import("./features/onboarding/OnboardingWizard"))
+    .OnboardingWizard,
 }));
 
 export function App() {
@@ -111,9 +112,9 @@ export function App() {
   const appearanceController = useAppearance({
     snapshotPreference: settings.snapshot?.general.appearance
       ? {
-        theme: settings.snapshot.general.appearance.theme.value,
-        density: settings.snapshot.general.appearance.density.value,
-      }
+          theme: settings.snapshot.general.appearance.theme.value,
+          density: settings.snapshot.general.appearance.density.value,
+        }
       : undefined,
     writeConfig: settings.writeConfig,
   });
@@ -502,15 +503,16 @@ function DesktopAppShell(props: {
   }, [uiPrefs]);
 
   const normalAppEnabled =
-    !desktopApi?.readSettings ||
-    (Boolean(settings.snapshot) &&
-      settings.snapshot?.onboarding?.completed.value !== false);
+    !desktopApi?.readSettings
+    || (Boolean(settings.snapshot)
+      && settings.snapshot?.onboarding?.completed.value !== false);
   const profiles = usePwrAgentProfiles(desktopApi);
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const navigation = useThreadNavigation(desktopApi, {
     enabled: normalAppEnabled,
     lightweightNavigationRefresh:
-      settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
+      settings.snapshot?.experimental.lightweightNavigationRefresh?.value
+      ?? false,
     threadViewVisible: mainView === "thread",
   });
   // Keep the backend-error toast's thread lookup fresh without making the
@@ -576,11 +578,15 @@ function DesktopAppShell(props: {
     liveThreadKeys,
     restore: restoreHistoryLocation,
   });
-  useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
+  useHistoryNavHotkeys({
+    onBack: history.goBack,
+    onForward: history.goForward,
+  });
   // ⌘⇧F / ⌃⇧F opens the global thread search screen. ⌘F (in-thread find /
   // thread-list quick search) is wired onto this same owner further below.
   useFindHotkeys({
-    onOpenSearch: () => setMainView(mainView === "search" ? "thread" : "search"),
+    onOpenSearch: () =>
+      setMainView(mainView === "search" ? "thread" : "search"),
     onFind: () => {
       // The thread-list quick search (below) claims ⌘F while the sidebar is
       // focused; anywhere else ⌘F finds within the open thread.
@@ -623,10 +629,12 @@ function DesktopAppShell(props: {
   // Find bar is open for a manual ⌘F, or for a search deep-link while its
   // target thread is the one on screen.
   const deepLinkFindActive =
-    findRequest !== undefined &&
-    findRequest.threadKey === navigation.selectedThreadKey;
+    findRequest !== undefined
+    && findRequest.threadKey === navigation.selectedThreadKey;
   const threadFindOpen = manualFindOpen || deepLinkFindActive;
-  const threadFindInitialQuery = deepLinkFindActive ? findRequest.query : undefined;
+  const threadFindInitialQuery = deepLinkFindActive
+    ? findRequest.query
+    : undefined;
   const threadFindTurnId = deepLinkFindActive ? findRequest.turnId : undefined;
   const historyNav: HistoryNavControls = useMemo(
     () => ({
@@ -671,10 +679,10 @@ function DesktopAppShell(props: {
   }, [desktopApi]);
   useEffect(() => {
     if (
-      threadViewReady ||
-      mainView !== "thread" ||
-      navigation.loading ||
-      !navigation.loaded
+      threadViewReady
+      || mainView !== "thread"
+      || navigation.loading
+      || !navigation.loaded
     ) {
       return;
     }
@@ -698,12 +706,7 @@ function DesktopAppShell(props: {
         window.clearTimeout(timeoutId);
       }
     };
-  }, [
-    mainView,
-    navigation.loaded,
-    navigation.loading,
-    threadViewReady,
-  ]);
+  }, [mainView, navigation.loaded, navigation.loading, threadViewReady]);
   useEffect(() => {
     if (!threadViewReady || ThreadViewComponent) {
       return;
@@ -711,16 +714,18 @@ function DesktopAppShell(props: {
 
     let cancelled = false;
     desktopApi?.recordStartupProfileEvent?.("thread-view-import:start");
-    void import("./features/thread-detail/ThreadView").then((module) => {
-      desktopApi?.recordStartupProfileEvent?.("thread-view-import:end");
-      if (!cancelled) {
-        setThreadViewComponent(() => module.ThreadView);
-      }
-    }).catch((error) => {
-      desktopApi?.recordStartupProfileEvent?.("thread-view-import:error", {
-        error: error instanceof Error ? error.message : String(error),
+    void import("./features/thread-detail/ThreadView")
+      .then((module) => {
+        desktopApi?.recordStartupProfileEvent?.("thread-view-import:end");
+        if (!cancelled) {
+          setThreadViewComponent(() => module.ThreadView);
+        }
+      })
+      .catch((error) => {
+        desktopApi?.recordStartupProfileEvent?.("thread-view-import:error", {
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
-    });
 
     return () => {
       cancelled = true;
@@ -780,11 +785,7 @@ function DesktopAppShell(props: {
     // wizard's Skip/Finish path writes `completed = true` and the
     // snapshot path stops triggering us on subsequent refreshes.
     const completed = settings.snapshot?.onboarding?.completed.value;
-    if (
-      completed === false &&
-      onboardingOpen === null &&
-      !autoOpenSeen
-    ) {
+    if (completed === false && onboardingOpen === null && !autoOpenSeen) {
       setOnboardingOpen("auto");
       setAutoOpenSeen(true);
     }
@@ -795,14 +796,16 @@ function DesktopAppShell(props: {
   ]);
   const loadThreadDetail = threadViewReady && mainView === "thread";
   const lightweightNavigationRefresh =
-    settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false;
+    settings.snapshot?.experimental.lightweightNavigationRefresh?.value
+    ?? false;
   const session = useThreadSessionState({
     desktopApi,
     initialHistoryLimit: lightweightNavigationRefresh
       ? LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT
       : undefined,
     liveTranscriptEventFiltering:
-      settings.snapshot?.experimental.liveTranscriptEventFiltering?.value ?? false,
+      settings.snapshot?.experimental.liveTranscriptEventFiltering?.value
+      ?? false,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
   const skills = useThreadSkills({
@@ -835,7 +838,9 @@ function DesktopAppShell(props: {
     },
     onCreateThreadWithoutDirectory: async () => {
       setMainView("thread");
-      await navigation.createThread(undefined, "default", { forceWorkspace: true });
+      await navigation.createThread(undefined, "default", {
+        forceWorkspace: true,
+      });
     },
   };
   const threadViewProps = {
@@ -849,11 +854,11 @@ function DesktopAppShell(props: {
     archiveThreadError: navigation.archiveThreadError,
     clearPendingRequest: session.clearPendingRequest,
     composerDisabled:
-      !navigation.selectedThread ||
-      !backendSummaries.backends.some(
+      !navigation.selectedThread
+      || !backendSummaries.backends.some(
         (backend) =>
-          backend.kind === navigation.selectedThread?.source &&
-          backend.available
+          backend.kind === navigation.selectedThread?.source
+          && backend.available,
       ),
     composerImplementation: settings.composerImplementation,
     composerDraftStore,
@@ -869,9 +874,10 @@ function DesktopAppShell(props: {
       settings.snapshot?.experimental.threadPricingSummary?.value ?? true,
     pricingDisplayOptions: {
       codexCredits:
-        settings.snapshot?.experimental.threadPricingDisplayCodexCredits?.value ??
-        false,
-      usd: settings.snapshot?.experimental.threadPricingDisplayUsd?.value ?? true,
+        settings.snapshot?.experimental.threadPricingDisplayCodexCredits?.value
+        ?? false,
+      usd:
+        settings.snapshot?.experimental.threadPricingDisplayUsd?.value ?? true,
     },
     pendingAssistantMessage: session.pendingAssistantMessage,
     pendingMcpInteraction: session.pendingMcpInteraction,
@@ -895,7 +901,8 @@ function DesktopAppShell(props: {
     suppressBranchDriftDialog: mainView === "settings",
     directories: navigation.directories,
     fullAccessRiskWarningDismissed:
-      settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
+      settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value
+      ?? false,
     pickDirectoryError: navigation.pickDirectoryError,
     pickingDirectory: navigation.pickingDirectory,
     onSelectDirectoryFromPicker: (directory) => {
@@ -965,7 +972,7 @@ function DesktopAppShell(props: {
       ? async (request) =>
           await navigation.handoffThreadWorkspace(
             navigation.selectedThread!,
-            request
+            request,
           )
       : undefined,
     onLoadOlder: session.loadOlder,
@@ -978,7 +985,7 @@ function DesktopAppShell(props: {
       ? async (executionMode) =>
           await navigation.setThreadExecutionMode(
             navigation.selectedThread!,
-            executionMode
+            executionMode,
           )
       : undefined,
     onSetAcpRuntimeOption: navigation.selectedThread
@@ -990,11 +997,16 @@ function DesktopAppShell(props: {
       : undefined,
     onCancelExecutionModeQueue: navigation.selectedThread
       ? async () =>
-          await navigation.cancelThreadExecutionModeQueue(navigation.selectedThread!)
+          await navigation.cancelThreadExecutionModeQueue(
+            navigation.selectedThread!,
+          )
       : undefined,
     onSetThreadModelSettings: navigation.selectedThread
       ? async (patch) =>
-          await navigation.setThreadModelSettings(navigation.selectedThread!, patch)
+          await navigation.setThreadModelSettings(
+            navigation.selectedThread!,
+            patch,
+          )
       : undefined,
     onRestoreWorktree: navigation.restoreWorktree,
     onTranscriptViewportChange: session.setViewport,
@@ -1005,10 +1017,10 @@ function DesktopAppShell(props: {
     transcriptViewport: session.viewport,
   } satisfies ThreadViewProps;
   const selectedThreadPending =
-    Boolean(navigation.selectedThreadKey) &&
-    !navigation.selectedThread &&
-    !navigation.selectedLaunchpad &&
-    (navigation.loading || navigation.refreshing);
+    Boolean(navigation.selectedThreadKey)
+    && !navigation.selectedThread
+    && !navigation.selectedLaunchpad
+    && (navigation.loading || navigation.refreshing);
   const threadDetailPending =
     mainView === "thread" && (!ThreadViewComponent || selectedThreadPending);
 
@@ -1099,7 +1111,9 @@ function DesktopAppShell(props: {
         ref={appShellRef}
         className="app-shell"
         data-sidebar-hidden={sidebarHidden ? "true" : undefined}
-        style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
+        style={
+          { "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties
+        }
       >
         <Sidebar
           backends={backendSummaries.backends}
@@ -1154,7 +1168,10 @@ function DesktopAppShell(props: {
           }}
           onOpenLaunchpad={async (directory, preferredBackend) => {
             setMainView("thread");
-            await navigation.openDirectoryLaunchpad(directory, preferredBackend);
+            await navigation.openDirectoryLaunchpad(
+              directory,
+              preferredBackend,
+            );
           }}
           onOpenSettings={() => {
             setSettingsInitialSection(undefined);
@@ -1194,11 +1211,15 @@ function DesktopAppShell(props: {
           }}
           onUnbindMessagingBinding={async (_thread, binding) => {
             if (!desktopApi?.unbindMessagingThread) return;
-            await desktopApi.unbindMessagingThread({ bindingId: binding.bindingId });
+            await desktopApi.unbindMessagingThread({
+              bindingId: binding.bindingId,
+            });
             await navigation.refresh?.();
           }}
           onResizeStart={startSidebarResize}
-          onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidthRef.current + delta)}
+          onResizeByKeyboard={(delta) =>
+            resizeSidebar(sidebarWidthRef.current + delta)
+          }
           sidebarWidth={sidebarWidth}
           sidebarMinWidth={sidebarMinWidth}
           sidebarMaxWidth={sidebarMaxWidth}
@@ -1216,8 +1237,10 @@ function DesktopAppShell(props: {
               layout={{
                 sidebarOpen: !sidebarHidden,
                 railOpen: contextRailPinned,
-                onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-                onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+                onToggleSidebar: () =>
+                  setSidebarHiddenPersisted(!sidebarHidden),
+                onToggleRail: () =>
+                  setContextRailPinnedPersisted(!contextRailPinned),
               }}
               masthead={mastheadActions}
               history={historyNav}
@@ -1264,8 +1287,10 @@ function DesktopAppShell(props: {
                 layout={{
                   sidebarOpen: !sidebarHidden,
                   railOpen: contextRailPinned,
-                  onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-                  onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+                  onToggleSidebar: () =>
+                    setSidebarHiddenPersisted(!sidebarHidden),
+                  onToggleRail: () =>
+                    setContextRailPinnedPersisted(!contextRailPinned),
                 }}
                 masthead={mastheadActions}
                 history={historyNav}
@@ -1313,7 +1338,9 @@ function DesktopAppShell(props: {
             <LazyOnboardingWizard
               isReplay={onboardingOpen === "replay"}
               bootInfo={bootInfo}
-              initialDensity={settings.snapshot.general.appearance.density.value}
+              initialDensity={
+                settings.snapshot.general.appearance.density.value
+              }
               initialTheme={settings.snapshot.general.appearance.theme.value}
               initialCodexProfileModel={
                 onboardingOpen === "replay" && replayCodexProfileSetup
@@ -1360,9 +1387,9 @@ function DesktopAppShell(props: {
                 // handles its own completion + prefetch on launch.
                 if (!onboardingOpen) return;
                 if (
-                  onboardingOpen !== "replay" &&
-                  bootInfo?.mode !== "bootstrap" &&
-                  desktopApi?.completeOnboardingCodexBootstrap
+                  onboardingOpen !== "replay"
+                  && bootInfo?.mode !== "bootstrap"
+                  && desktopApi?.completeOnboardingCodexBootstrap
                 ) {
                   await desktopApi.completeOnboardingCodexBootstrap({
                     connect: true,
@@ -1378,9 +1405,11 @@ function DesktopAppShell(props: {
                   // we don't auto-load Codex threads under an unverified
                   // identity. The renderer's next explicit refresh (or app
                   // restart) will surface them.
-                  void desktopApi?.completeOnboardingCodexBootstrap?.({
-                    connect: false,
-                  }).then(() => settings.refresh());
+                  void desktopApi
+                    ?.completeOnboardingCodexBootstrap?.({
+                      connect: false,
+                    })
+                    .then(() => settings.refresh());
                 }
                 setOnboardingOpen(null);
               }}

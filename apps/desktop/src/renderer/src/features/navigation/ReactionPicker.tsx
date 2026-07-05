@@ -23,19 +23,7 @@ const REACTION_GROUPS: { label: string; emojis: string[] }[] = [
   },
   {
     label: "Numbers",
-    emojis: [
-      "0️⃣",
-      "1️⃣",
-      "2️⃣",
-      "3️⃣",
-      "4️⃣",
-      "5️⃣",
-      "6️⃣",
-      "7️⃣",
-      "8️⃣",
-      "9️⃣",
-      "🔟",
-    ],
+    emojis: ["0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"],
   },
   {
     // Negative-circled Latin capitals (U+1F150-…). Render as solid black
@@ -102,7 +90,9 @@ export function ReactionPicker(props: ReactionPickerProps) {
         props.onDismiss();
       }
     };
-    window.addEventListener("pointerdown", handlePointerDown, { capture: true });
+    window.addEventListener("pointerdown", handlePointerDown, {
+      capture: true,
+    });
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown, {
@@ -170,7 +160,11 @@ export function ReactionPicker(props: ReactionPickerProps) {
         </div>
       ))}
 
-      <div className="reaction-picker__custom" role="group" aria-label="Custom emoji">
+      <div
+        className="reaction-picker__custom"
+        role="group"
+        aria-label="Custom emoji"
+      >
         <input
           type="text"
           aria-label="Custom emoji (Cmd+Ctrl+Space to open emoji keyboard)"

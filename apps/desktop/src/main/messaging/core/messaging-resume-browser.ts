@@ -17,7 +17,10 @@ import type {
   MessagingSurfaceAction,
   MessagingThreadPickerIntent,
 } from "@pwragent/messaging-interface";
-import { buildThreadIdentityKey, isAppServerBackendKind } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  isAppServerBackendKind,
+} from "@pwragent/shared";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import { capabilityProfilePageSize } from "@pwragent/messaging-interface";
 
@@ -58,8 +61,8 @@ export function isNewThreadLaunchAction(
   launchAction: MessagingBrowseLaunchAction,
 ): boolean {
   return (
-    launchAction === "start_new_thread" ||
-    launchAction === "start_new_agent_thread"
+    launchAction === "start_new_thread"
+    || launchAction === "start_new_agent_thread"
   );
 }
 
@@ -152,7 +155,10 @@ export function buildResumeIntent(params: {
   navigation: NavigationSnapshot;
   session: MessagingBrowseSessionRecord;
 }): MessagingThreadPickerIntent | MessagingProjectPickerIntent {
-  if (params.session.mode === "projects" || params.session.mode === "new_project") {
+  if (
+    params.session.mode === "projects"
+    || params.session.mode === "new_project"
+  ) {
     return buildProjectPickerIntent(params);
   }
 
@@ -181,9 +187,9 @@ export function selectThreadFromValue(
     return undefined;
   }
   if (
-    typeof value.backend !== "string" ||
-    !isAppServerBackendKind(value.backend) ||
-    typeof value.threadId !== "string"
+    typeof value.backend !== "string"
+    || !isAppServerBackendKind(value.backend)
+    || typeof value.threadId !== "string"
   ) {
     return undefined;
   }
@@ -199,23 +205,23 @@ export function directoryForProjectSelection(
   selectedProject: MessagingBrowseSelectedProject,
 ): NavigationDirectorySummary | undefined {
   if (selectedProject.directoryKey) {
-    const keyed = navigation.directories.find((directory) =>
-      directory.key === selectedProject.directoryKey
+    const keyed = navigation.directories.find(
+      (directory) => directory.key === selectedProject.directoryKey,
     );
     if (keyed) {
       return keyed;
     }
   }
   if (selectedProject.path) {
-    const pathed = navigation.directories.find((directory) =>
-      directory.path === selectedProject.path
+    const pathed = navigation.directories.find(
+      (directory) => directory.path === selectedProject.path,
     );
     if (pathed) {
       return pathed;
     }
   }
-  return navigation.directories.find((directory) =>
-    directory.label === selectedProject.label
+  return navigation.directories.find(
+    (directory) => directory.label === selectedProject.label,
   );
 }
 
@@ -226,7 +232,11 @@ function buildThreadPickerIntent(params: {
   session: MessagingBrowseSessionRecord;
 }): MessagingThreadPickerIntent {
   const allThreads = threadsForSession(params.navigation, params.session);
-  const page = paginate(allThreads, params.session.pageIndex, params.session.pageSize);
+  const page = paginate(
+    allThreads,
+    params.session.pageIndex,
+    params.session.pageSize,
+  );
   const actions: MessagingSurfaceAction[] = [
     ...page.items.map((thread, index) => ({
       id: "browse:select-thread",
@@ -265,7 +275,11 @@ function buildThreadPickerIntent(params: {
       pageSize: params.session.pageSize,
       totalItems: page.totalItems,
     },
-    prompt: threadPickerPromptText(params.session, page.totalPages, page.totalItems),
+    prompt: threadPickerPromptText(
+      params.session,
+      page.totalPages,
+      page.totalItems,
+    ),
     targetSurface: params.session.surface,
   };
 }
@@ -277,7 +291,11 @@ function buildProjectPickerIntent(params: {
   session: MessagingBrowseSessionRecord;
 }): MessagingProjectPickerIntent {
   const allProjects = projectsForSession(params.navigation, params.session);
-  const page = paginate(allProjects, params.session.pageIndex, params.session.pageSize);
+  const page = paginate(
+    allProjects,
+    params.session.pageIndex,
+    params.session.pageSize,
+  );
   const actions: MessagingSurfaceAction[] = [
     ...page.items.map((project, index) => {
       const projectLabel = formatProjectPickerLabel(project, params.session);
@@ -324,7 +342,11 @@ function buildProjectPickerIntent(params: {
       pageSize: params.session.pageSize,
       totalItems: page.totalItems,
     },
-    prompt: projectPickerPromptText(params.session, page.totalPages, page.totalItems),
+    prompt: projectPickerPromptText(
+      params.session,
+      page.totalPages,
+      page.totalItems,
+    ),
     targetSurface: params.session.surface,
   };
 }
@@ -369,7 +391,9 @@ function threadsForSession(
   }
 
   return [...threads].sort(
-    (left, right) => (right.updatedAt ?? right.createdAt ?? 0) - (left.updatedAt ?? left.createdAt ?? 0),
+    (left, right) =>
+      (right.updatedAt ?? right.createdAt ?? 0)
+      - (left.updatedAt ?? left.createdAt ?? 0),
   );
 }
 
@@ -378,10 +402,9 @@ function projectsForSession(
   session: MessagingBrowseSessionRecord,
 ): NavigationDirectorySummary[] {
   const query = session.query?.trim().toLowerCase();
-  const directories =
-    isNewThreadLaunchAction(session.launchAction)
-      ? collapseWorkspaceScratchpadDirectories(navigation.directories)
-      : navigation.directories;
+  const directories = isNewThreadLaunchAction(session.launchAction)
+    ? collapseWorkspaceScratchpadDirectories(navigation.directories)
+    : navigation.directories;
 
   return [...directories]
     .filter((directory) => {
@@ -405,8 +428,11 @@ function projectsForSession(
           return leftRank - rightRank;
         }
       }
-      const updatedDelta = (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
-      return updatedDelta !== 0 ? updatedDelta : left.label.localeCompare(right.label);
+      const updatedDelta =
+        (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
+      return updatedDelta !== 0
+        ? updatedDelta
+        : left.label.localeCompare(right.label);
     });
 }
 
@@ -418,7 +444,9 @@ function collapseWorkspaceScratchpadDirectories(
     return directories;
   }
 
-  const preferred = [...scratchpads].sort(compareWorkspaceScratchpadPreference)[0]!;
+  const preferred = [...scratchpads].sort(
+    compareWorkspaceScratchpadPreference,
+  )[0]!;
   const threadKeys = new Set<string>();
   let needsAttentionCount = 0;
   let latestUpdatedAt = 0;
@@ -427,7 +455,10 @@ function collapseWorkspaceScratchpadDirectories(
       threadKeys.add(threadKey);
     }
     needsAttentionCount += scratchpad.needsAttentionCount;
-    latestUpdatedAt = Math.max(latestUpdatedAt, scratchpad.latestUpdatedAt ?? 0);
+    latestUpdatedAt = Math.max(
+      latestUpdatedAt,
+      scratchpad.latestUpdatedAt ?? 0,
+    );
   }
 
   return [
@@ -437,7 +468,9 @@ function collapseWorkspaceScratchpadDirectories(
       needsAttentionCount,
       latestUpdatedAt,
     },
-    ...directories.filter((directory) => !isWorkspaceScratchpadDirectory(directory)),
+    ...directories.filter(
+      (directory) => !isWorkspaceScratchpadDirectory(directory),
+    ),
   ];
 }
 
@@ -445,11 +478,14 @@ function compareWorkspaceScratchpadPreference(
   left: NavigationDirectorySummary,
   right: NavigationDirectorySummary,
 ): number {
-  const updatedDelta = (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
+  const updatedDelta =
+    (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
   return updatedDelta !== 0 ? updatedDelta : left.key.localeCompare(right.key);
 }
 
-function isWorkspaceScratchpadDirectory(directory: NavigationDirectorySummary): boolean {
+function isWorkspaceScratchpadDirectory(
+  directory: NavigationDirectorySummary,
+): boolean {
   return directory.kind === "workspace";
 }
 
@@ -457,8 +493,8 @@ function formatProjectPickerLabel(
   project: NavigationDirectorySummary,
   session: MessagingBrowseSessionRecord,
 ): string {
-  return isNewThreadLaunchAction(session.launchAction) &&
-    isWorkspaceScratchpadDirectory(project)
+  return isNewThreadLaunchAction(session.launchAction)
+    && isWorkspaceScratchpadDirectory(project)
     ? WORKSPACES_SCRATCHPAD_LABEL
     : project.label;
 }
@@ -537,10 +573,15 @@ function navigationActions(
       layout: { row: FOOTER_ROW },
     });
   }
-  if (session.mode !== "agents" && !isNewThreadLaunchAction(session.launchAction)) {
+  if (
+    session.mode !== "agents"
+    && !isNewThreadLaunchAction(session.launchAction)
+  ) {
     actions.push({
       id: "browse:mode:new",
-      label: shouldStartNewAgentThreadFromSession(session) ? "New Agent" : "New",
+      label: shouldStartNewAgentThreadFromSession(session)
+        ? "New Agent"
+        : "New",
       style: "secondary",
       fallbackText: "new",
       layout: { row: FOOTER_ROW },
@@ -612,7 +653,8 @@ function threadPickerFallbackText(
   return [
     threadPickerPromptText(session, page.totalPages, page.totalItems),
     ...page.items.map(
-      (thread, index) => `${page.startIndex + index + 1}. ${formatThreadLabel(thread)}`,
+      (thread, index) =>
+        `${page.startIndex + index + 1}. ${formatThreadLabel(thread)}`,
     ),
     page.totalItems > 0
       ? `Reply with a number, or reply ${formatControlList(controls)}.`
@@ -628,10 +670,9 @@ function projectPickerPromptText(
   totalItems: number,
 ): string {
   const pageLabel = `Page ${session.pageIndex + 1}/${totalPages}`;
-  const opening =
-    isNewAgentThreadLaunchAction(session.launchAction)
-      ? "Choose a project for the new PwrAgent Agent thread."
-      : session.launchAction === "start_new_thread"
+  const opening = isNewAgentThreadLaunchAction(session.launchAction)
+    ? "Choose a project for the new PwrAgent Agent thread."
+    : session.launchAction === "start_new_thread"
       ? "Choose a project for the new PwrAgent thread."
       : "Choose a project to filter recent PwrAgent threads.";
   return [
@@ -679,8 +720,9 @@ function projectPickerFallbackText(
 }
 
 function formatThreadLabel(thread: NavigationThreadSummary): string {
-  const directory = thread.linkedDirectories.find((item) => item.kind === "worktree") ??
-    thread.linkedDirectories[0];
+  const directory =
+    thread.linkedDirectories.find((item) => item.kind === "worktree")
+    ?? thread.linkedDirectories[0];
   const suffix = directory?.label ? ` (${directory.label})` : "";
   return `${thread.title}${suffix}`;
 }

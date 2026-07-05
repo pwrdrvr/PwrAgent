@@ -43,8 +43,9 @@ function safeProjectThreads(
   project: ThreadMigrationSourceProjectGroup,
 ): ThreadMigrationSourceThreadSummary[] {
   return Array.isArray(project.threads)
-    ? project.threads.filter((thread): thread is ThreadMigrationSourceThreadSummary =>
-        Boolean(thread),
+    ? project.threads.filter(
+        (thread): thread is ThreadMigrationSourceThreadSummary =>
+          Boolean(thread),
       )
     : [];
 }
@@ -53,8 +54,8 @@ function hasMalformedLinkedDirectories(
   thread: ThreadMigrationSourceThreadSummary,
 ): boolean {
   return (
-    !Array.isArray(thread.linkedDirectories) ||
-    thread.linkedDirectories.some(
+    !Array.isArray(thread.linkedDirectories)
+    || thread.linkedDirectories.some(
       (directory) => !directory || typeof directory !== "object",
     )
   );
@@ -64,14 +65,14 @@ function hasProfileOwnedWorktree(
   thread: ThreadMigrationSourceThreadSummary,
 ): boolean {
   return (
-    isToolManagedWorktreePath(thread.projectKey) ||
-    (Array.isArray(thread.linkedDirectories)
+    isToolManagedWorktreePath(thread.projectKey)
+    || (Array.isArray(thread.linkedDirectories)
       ? thread.linkedDirectories.some(
           (directory) =>
-            Boolean(directory) &&
-            typeof directory === "object" &&
-            (isToolManagedWorktreePath(directory.worktreePath) ||
-              isToolManagedWorktreePath(directory.path)),
+            Boolean(directory)
+            && typeof directory === "object"
+            && (isToolManagedWorktreePath(directory.worktreePath)
+              || isToolManagedWorktreePath(directory.path)),
         )
       : false)
   );
@@ -86,23 +87,26 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
     loading: false,
     projects: [],
   });
-  const [selectedThreadIds, setSelectedThreadIds] = useState<Set<ThreadIdentifier>>(
-    () => new Set(),
-  );
+  const [selectedThreadIds, setSelectedThreadIds] = useState<
+    Set<ThreadIdentifier>
+  >(() => new Set());
   const [run, setRun] = useState<StartThreadMigrationResponse>();
   const [startError, setStartError] = useState<string>();
   const [startingOperation, setStartingOperation] =
     useState<ThreadMigrationOperation>();
   const [retryingThreadId, setRetryingThreadId] = useState<ThreadIdentifier>();
-  const [copyStrategy, setCopyStrategy] =
-    useState<ThreadMigrationCopyStrategy>("detached-destination");
+  const [copyStrategy, setCopyStrategy] = useState<ThreadMigrationCopyStrategy>(
+    "detached-destination",
+  );
   const [includeArchived, setIncludeArchived] = useState(false);
   const sourceThreadsRequestIdRef = useRef(0);
 
   const loadSources = useCallback(async () => {
     const listSources = props.desktopApi?.listThreadMigrationSources;
     if (!listSources) {
-      setSourcesError("Desktop bridge is missing listThreadMigrationSources().");
+      setSourcesError(
+        "Desktop bridge is missing listThreadMigrationSources().",
+      );
       setSourcesLoading(false);
       return;
     }
@@ -113,7 +117,10 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
       const response = await listSources();
       setSources(response);
       setSelectedProfile((current) => {
-        if (current && response.profiles.some((profile) => profile.profile === current)) {
+        if (
+          current
+          && response.profiles.some((profile) => profile.profile === current)
+        ) {
           return current;
         }
         return response.profiles.find((profile) => profile.available)?.profile;
@@ -137,7 +144,8 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
       const listThreads = props.desktopApi?.listThreadMigrationSourceThreads;
       if (!listThreads) {
         setThreadsState({
-          error: "Desktop bridge is missing listThreadMigrationSourceThreads().",
+          error:
+            "Desktop bridge is missing listThreadMigrationSourceThreads().",
           loading: false,
           projects: [],
         });
@@ -197,8 +205,8 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
     [run],
   );
   const runWarningCount =
-    run?.items.reduce((count, item) => count + (item.warnings?.length ?? 0), 0) ??
-    0;
+    run?.items.reduce((count, item) => count + (item.warnings?.length ?? 0), 0)
+    ?? 0;
   const runCompletedWithWarningsCount =
     run?.items.filter(
       (item) => item.status === "completed" && (item.warnings?.length ?? 0) > 0,
@@ -209,17 +217,17 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
       threadsState.projects.some((project) =>
         safeProjectThreads(project).some(
           (thread) =>
-            selectedThreadIds.has(thread.threadId) &&
-            hasProfileOwnedWorktree(thread),
+            selectedThreadIds.has(thread.threadId)
+            && hasProfileOwnedWorktree(thread),
         ),
       ),
     [selectedThreadIds, threadsState.projects],
   );
   const canStartBase =
-    Boolean(selectedSource?.available) &&
-    selectedCount > 0 &&
-    !startingOperation &&
-    !threadsState.loading;
+    Boolean(selectedSource?.available)
+    && selectedCount > 0
+    && !startingOperation
+    && !threadsState.loading;
   const canMove = canStartBase;
   const canCopy = canStartBase;
 
@@ -241,16 +249,19 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
       hasMalformedLinkedDirectories,
     ).length;
     if (malformedThreadCount > 0) {
-      void props.desktopApi?.logRendererDiagnostic?.({
-        level: "warn",
-        message: "Thread migration source project has malformed linked directories.",
-        details: {
-          malformedThreadCount,
-          projectKey: project.key,
-          projectLabel: project.label,
-          threadCount: projectThreads.length,
-        },
-      })?.catch(() => undefined);
+      void props.desktopApi
+        ?.logRendererDiagnostic?.({
+          level: "warn",
+          message:
+            "Thread migration source project has malformed linked directories.",
+          details: {
+            malformedThreadCount,
+            projectKey: project.key,
+            projectLabel: project.label,
+            threadCount: projectThreads.length,
+          },
+        })
+        ?.catch(() => undefined);
     }
     setSelectedThreadIds((current) => {
       const next = new Set(current);
@@ -355,7 +366,11 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
         eyebrow="Source"
         title="Codex profiles"
         description="The active Codex auth profile is excluded from migration sources."
-        chip={sourcesLoading ? "loading" : `${sources?.profiles.length ?? 0} profiles`}
+        chip={
+          sourcesLoading
+            ? "loading"
+            : `${sources?.profiles.length ?? 0} profiles`
+        }
         chipKind="muted"
       >
         {sourcesLoading ? (
@@ -364,7 +379,10 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
           </p>
         ) : null}
         {sourcesError ? (
-          <p className="settings-row__error settings-thread-management__status" role="alert">
+          <p
+            className="settings-row__error settings-thread-management__status"
+            role="alert"
+          >
             {sourcesError}
           </p>
         ) : null}
@@ -405,7 +423,10 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
         chipKind={selectedCount ? "ok" : "muted"}
       >
         {threadsState.error ? (
-          <p className="settings-row__error settings-thread-management__status" role="alert">
+          <p
+            className="settings-row__error settings-thread-management__status"
+            role="alert"
+          >
             {threadsState.error}
           </p>
         ) : null}
@@ -414,10 +435,10 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
             Loading source threads...
           </p>
         ) : null}
-        {!threadsState.loading &&
-        !threadsState.error &&
-        selectedSource &&
-        threadsState.projects.length === 0 ? (
+        {!threadsState.loading
+        && !threadsState.error
+        && selectedSource
+        && threadsState.projects.length === 0 ? (
           <p className="settings-empty settings-thread-management__status">
             No source threads found.
           </p>
@@ -494,12 +515,15 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
             {threadsState.projects.map((project) => {
               const projectThreads = safeProjectThreads(project);
               const projectSelected =
-                projectThreads.length > 0 &&
-                projectThreads.every((thread) =>
+                projectThreads.length > 0
+                && projectThreads.every((thread) =>
                   selectedThreadIds.has(thread.threadId),
                 );
               return (
-                <div className="settings-thread-management__project" key={project.key}>
+                <div
+                  className="settings-thread-management__project"
+                  key={project.key}
+                >
                   <label className="settings-thread-management__project-head">
                     <input
                       checked={projectSelected}
@@ -573,7 +597,9 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
                           />
                         </span>
                         <span className="settings-archive-row__side">
-                          <RunStatus item={runItemsByThreadId.get(thread.threadId)} />
+                          <RunStatus
+                            item={runItemsByThreadId.get(thread.threadId)}
+                          />
                           <RetryMigrationButton
                             item={runItemsByThreadId.get(thread.threadId)}
                             retrying={retryingThreadId === thread.threadId}
@@ -593,13 +619,17 @@ export function ThreadManagementSettings(props: { desktopApi?: DesktopApi }) {
           </div>
         </div>
         {startError ? (
-          <p className="settings-row__error settings-thread-management__status" role="alert">
+          <p
+            className="settings-row__error settings-thread-management__status"
+            role="alert"
+          >
             {startError}
           </p>
         ) : null}
         {run ? (
           <p className="settings-thread-management__status" role="status">
-            Run {run.runId}: {run.items.filter((item) => item.status === "completed").length} of{" "}
+            Run {run.runId}:{" "}
+            {run.items.filter((item) => item.status === "completed").length} of{" "}
             {run.items.length} completed
             {runWarningCount > 0
               ? `, ${runCompletedWithWarningsCount} with ${
@@ -619,7 +649,8 @@ function SourceProfileRow(props: {
   selected: boolean;
   onSelect: () => void;
 }) {
-  const label = props.profile.displayName || props.profile.profile || "System default";
+  const label =
+    props.profile.displayName || props.profile.profile || "System default";
   return (
     <button
       className={`settings-pathrow settings-thread-management__profile${
@@ -631,7 +662,9 @@ function SourceProfileRow(props: {
     >
       <span className="settings-pathrow__body">
         <span className="settings-pathrow__title">{label}</span>
-        <span className="settings-pathrow__path">{props.profile.codexHome}</span>
+        <span className="settings-pathrow__path">
+          {props.profile.codexHome}
+        </span>
         {props.profile.accountEmail ? (
           <span className="settings-pathrow__meta">
             {props.profile.accountEmail}
@@ -670,10 +703,10 @@ function RunStatus(props: { item?: ThreadMigrationRunItem }) {
         completedWithWarnings
           ? "settings-pathrow__chip--warn"
           : props.item.status === "completed"
-          ? "settings-pathrow__chip--ok"
-          : props.item.status === "failed"
-            ? "settings-pathrow__chip--err"
-            : "settings-pathrow__chip--warn"
+            ? "settings-pathrow__chip--ok"
+            : props.item.status === "failed"
+              ? "settings-pathrow__chip--err"
+              : "settings-pathrow__chip--warn"
       }`}
       title={[props.item.error, ...(props.item.warnings ?? [])]
         .filter(Boolean)
@@ -716,10 +749,7 @@ function RunDiagnostics(props: { item?: ThreadMigrationRunItem }) {
         <span className="settings-thread-management__run-detail">{detail}</span>
       ) : null}
       {item.warnings?.map((warning) => (
-        <span
-          className="settings-thread-management__run-warning"
-          key={warning}
-        >
+        <span className="settings-thread-management__run-warning" key={warning}>
           {warning}
         </span>
       ))}

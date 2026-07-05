@@ -17,10 +17,12 @@ type LoadState =
 export function MarkdownFilesWindow() {
   const desktopApi = useDesktopApi();
   const contextKey = useMemo(() => markdownFilesContextKeyFromHash(), []);
-  const [snapshot, setSnapshot] = useState<MarkdownFileViewerSnapshot | undefined>();
-  const selectedFile = snapshot?.files.find(
-    (file) => file.path === snapshot.selectedPath,
-  ) ?? snapshot?.files[0];
+  const [snapshot, setSnapshot] = useState<
+    MarkdownFileViewerSnapshot | undefined
+  >();
+  const selectedFile =
+    snapshot?.files.find((file) => file.path === snapshot.selectedPath)
+    ?? snapshot?.files[0];
   const markdownApplications = useMemo(
     () => applicationsSnapshotForEditor(snapshot),
     [snapshot],
@@ -97,7 +99,10 @@ export function MarkdownFilesWindow() {
         if (cancelled) return;
         setLoadState({
           status: "error",
-          error: error instanceof Error ? error.message : "Markdown file could not be read.",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Markdown file could not be read.",
         });
       });
 
@@ -120,7 +125,11 @@ export function MarkdownFilesWindow() {
   );
 
   const openSelectedFileInEditor = useCallback(() => {
-    if (!desktopApi?.openApplication || !snapshot?.editorApplication || !selectedFile) {
+    if (
+      !desktopApi?.openApplication
+      || !snapshot?.editorApplication
+      || !selectedFile
+    ) {
       return;
     }
     void desktopApi
@@ -150,7 +159,10 @@ export function MarkdownFilesWindow() {
             {breadcrumbParts.map((part, index) => (
               <Fragment key={`${part}:${index}`}>
                 {index > 0 ? (
-                  <span aria-hidden="true" className="activity-titlebar__separator">
+                  <span
+                    aria-hidden="true"
+                    className="activity-titlebar__separator"
+                  >
                     ›
                   </span>
                 ) : null}
@@ -170,7 +182,10 @@ export function MarkdownFilesWindow() {
         </header>
 
         <main className="markdown-files-window__shell">
-          <aside className="markdown-files-window__sidebar" aria-label="Open files">
+          <aside
+            className="markdown-files-window__sidebar"
+            aria-label="Open files"
+          >
             <p className="markdown-files-window__sidebar-label">Files</p>
             <div className="markdown-files-window__file-list">
               {(snapshot?.files ?? []).map((file) => (
@@ -189,7 +204,9 @@ export function MarkdownFilesWindow() {
                   onClick={() => selectFile(file)}
                 >
                   <span>{file.label}</span>
-                  <span>{relativeFilePath(file.path, snapshot?.context.projectPath)}</span>
+                  <span>
+                    {relativeFilePath(file.path, snapshot?.context.projectPath)}
+                  </span>
                 </button>
               ))}
             </div>
@@ -242,7 +259,9 @@ export function MarkdownFilesWindow() {
 
             <div className="markdown-files-window__markdown-scroll">
               {loadState.status === "loading" ? (
-                <p className="markdown-files-window__status">Loading document...</p>
+                <p className="markdown-files-window__status">
+                  Loading document...
+                </p>
               ) : null}
               {loadState.status === "error" ? (
                 <p className="markdown-files-window__status markdown-files-window__status--error">
@@ -276,7 +295,10 @@ function markdownFilesContextKeyFromHash(): string | undefined {
   return decodeURIComponent(hash.slice("files/".length));
 }
 
-function relativeFilePath(filePath: string, projectPath: string | undefined): string {
+function relativeFilePath(
+  filePath: string,
+  projectPath: string | undefined,
+): string {
   if (!projectPath) {
     return filePath;
   }
@@ -298,7 +320,9 @@ function markdownFilesBreadcrumbParts(
   return parts.length > 0 ? parts : ["Files"];
 }
 
-function projectLabelFromPath(projectPath: string | undefined): string | undefined {
+function projectLabelFromPath(
+  projectPath: string | undefined,
+): string | undefined {
   const label = projectPath?.split(/[\\/]/).filter(Boolean).at(-1)?.trim();
   return label || undefined;
 }

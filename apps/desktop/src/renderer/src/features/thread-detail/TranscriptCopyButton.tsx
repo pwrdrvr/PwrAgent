@@ -25,10 +25,12 @@ export function TranscriptCopyButton(props: TranscriptCopyButtonProps) {
   return (
     <button
       type="button"
-      className={["transcript-copy-button", props.className].filter(Boolean).join(" ")}
+      className={["transcript-copy-button", props.className]
+        .filter(Boolean)
+        .join(" ")}
       data-copied={copied ? "true" : undefined}
-      aria-label={copied ? props.copiedLabel ?? "Copied" : props.label}
-      title={copied ? props.copiedLabel ?? "Copied" : props.label}
+      aria-label={copied ? (props.copiedLabel ?? "Copied") : props.label}
+      title={copied ? (props.copiedLabel ?? "Copied") : props.label}
       onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -47,7 +49,6 @@ export function TranscriptCopyButton(props: TranscriptCopyButtonProps) {
             console.error("Failed to copy transcript text", error);
           });
       }}
-    >
-    </button>
+    ></button>
   );
 }

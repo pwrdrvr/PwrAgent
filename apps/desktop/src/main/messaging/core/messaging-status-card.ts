@@ -69,49 +69,60 @@ export function buildBindingStatusIntent(params: {
   const directoryPath = params.threadState.directoryPath ?? unavailable();
   const defaults = params.threadState.launchpadDefaults;
   const model =
-    params.threadState.model ??
-    preferences?.model ??
-    defaults?.model ??
-    unavailable();
+    params.threadState.model
+    ?? preferences?.model
+    ?? defaults?.model
+    ?? unavailable();
   const modelOption = params.backendSummary?.launchpadOptions?.models?.find(
     (option) => option.id === model,
   );
   const supportsReasoning =
-    !params.backendSummary ||
-    Boolean(params.backendSummary.launchpadOptions?.reasoningEfforts?.length);
+    !params.backendSummary
+    || Boolean(
+      params.backendSummary.launchpadOptions?.reasoningEfforts?.length,
+    );
   const reasoning = supportsReasoning
-    ? params.threadState.reasoningEffort ??
-      preferences?.reasoningEffort ??
-      defaults?.reasoningEffort ??
-      unavailable()
+    ? (params.threadState.reasoningEffort
+      ?? preferences?.reasoningEffort
+      ?? defaults?.reasoningEffort
+      ?? unavailable())
     : undefined;
   const supportsFastMode = backendSupportsFastMode(
     params.backendSummary,
     modelOption,
   );
   const fastMode = supportsFastMode
-    ? params.threadState.fastMode ?? preferences?.fastMode ?? defaults?.fastMode
+    ? (params.threadState.fastMode
+      ?? preferences?.fastMode
+      ?? defaults?.fastMode)
     : undefined;
   const contextUsageLine = formatContextUsageLine(params.contextUsageSummary);
-  const accountLine = formatBackendAccountLine(params.backendSummary, params.binding);
+  const accountLine = formatBackendAccountLine(
+    params.backendSummary,
+    params.binding,
+  );
   const rateLimitsLine = formatBackendRateLimitsLine(params.backendSummary);
   const permissionsMode =
-    params.threadState.executionMode ??
-    preferences?.permissionsMode ??
-    (preferences?.executionMode === "full-access" ? "full-access" : undefined) ??
-    defaults?.executionMode ??
-    "default";
+    params.threadState.executionMode
+    ?? preferences?.permissionsMode
+    ?? (preferences?.executionMode === "full-access"
+      ? "full-access"
+      : undefined)
+    ?? defaults?.executionMode
+    ?? "default";
   const queuedExecutionMode =
-    params.threadState.queuedExecutionMode &&
-    params.threadState.queuedExecutionMode !== permissionsMode
+    params.threadState.queuedExecutionMode
+    && params.threadState.queuedExecutionMode !== permissionsMode
       ? params.threadState.queuedExecutionMode
       : undefined;
   const activeTurn = params.threadState.activeTurn;
   const branch = formatBranch(params.threadState);
-  const bindingTitle = formatStatusBindingTitle(params.threadState, params.binding.threadId);
-  const bindingKind = params.binding.targetKind === "agent_thread"
-    ? "Agent binding"
-    : "Binding";
+  const bindingTitle = formatStatusBindingTitle(
+    params.threadState,
+    params.binding.threadId,
+  );
+  const bindingKind =
+    params.binding.targetKind === "agent_thread" ? "Agent binding" : "Binding";
   const toolUpdateMode = resolveMessagingToolUpdateMode(
     params.binding,
     params.toolUpdateMode,
@@ -156,7 +167,9 @@ export function buildBindingStatusIntent(params: {
       `${bindingKind}: ${bindingTitle} (${params.binding.backend})`,
       `Project: ${projectLabel}`,
       `Directory: ${directoryPath}`,
-      params.threadState.worktreePath ? `Worktree: ${params.threadState.worktreePath}` : undefined,
+      params.threadState.worktreePath
+        ? `Worktree: ${params.threadState.worktreePath}`
+        : undefined,
       `Branch: ${branch ?? unavailable()}`,
       params.threadState.missing ? "Thread state: unavailable" : undefined,
       mentionRequiredLine(params.binding, params.capabilityProfile),
@@ -174,7 +187,9 @@ export function buildBindingStatusIntent(params: {
       accountLine,
       rateLimitsLine,
       `Thread: ${params.binding.threadId}`,
-      activeTurn ? `Turn: ${activeTurn.status} (${activeTurn.turnId})` : "Turn: idle",
+      activeTurn
+        ? `Turn: ${activeTurn.status} (${activeTurn.turnId})`
+        : "Turn: idle",
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n"),
@@ -187,8 +202,8 @@ export function buildBindingStatusIntent(params: {
       permissionsActionLabel,
       permissionsChoices: acpRuntimeChoices,
       supportsLegacyPermissionsAction:
-        !isAcpBackendId(params.binding.backend) ||
-        permissionsMode === "full-access",
+        !isAcpBackendId(params.binding.backend)
+        || permissionsMode === "full-access",
       queuedExecutionMode,
       reasoning,
       supportsFastMode,
@@ -210,10 +225,16 @@ function backendSupportsFastMode(
   if (backendSummary.kind !== "codex") {
     return false;
   }
-  return modelOption?.supportsFast ?? backendSummary.launchpadOptions?.supportsFastMode ?? false;
+  return (
+    modelOption?.supportsFast
+    ?? backendSummary.launchpadOptions?.supportsFastMode
+    ?? false
+  );
 }
 
-function formatContextUsageLine(summary: string | undefined): string | undefined {
+function formatContextUsageLine(
+  summary: string | undefined,
+): string | undefined {
   if (!summary) {
     return undefined;
   }
@@ -355,8 +376,10 @@ function splitRateLimitName(name: string): {
 function isSparkRateLimit(
   rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
 ): boolean {
-  return isSparkRateLimitName(rateLimit.limitId) ||
-    isSparkRateLimitName(rateLimit.name);
+  return (
+    isSparkRateLimitName(rateLimit.limitId)
+    || isSparkRateLimitName(rateLimit.name)
+  );
 }
 
 function isSparkRateLimitName(value: string | undefined): boolean {
@@ -402,13 +425,15 @@ function mentionRequiredLine(
   capabilityProfile: MessagingCapabilityProfile | undefined,
 ): string | undefined {
   if (
-    binding.channel.conversation.kind === "dm" ||
-    !capabilityProfile?.conversationInput?.sharedConversationRequiresMention
+    binding.channel.conversation.kind === "dm"
+    || !capabilityProfile?.conversationInput?.sharedConversationRequiresMention
   ) {
     return undefined;
   }
-  return capabilityProfile.conversationInput.sharedConversationStatusLine
-    ?? capabilityProfile.conversationInput.sharedConversationMentionInstruction;
+  return (
+    capabilityProfile.conversationInput.sharedConversationStatusLine
+    ?? capabilityProfile.conversationInput.sharedConversationMentionInstruction
+  );
 }
 
 function buildStatusActions(params: {
@@ -429,17 +454,18 @@ function buildStatusActions(params: {
   toolUpdateMode: MessagingToolUpdateMode;
 }): MessagingSurfaceAction[] {
   const profile = params.capabilityProfile;
-  if (profile && !capabilityProfileSupportsActionCount(profile, STATUS_CARD_MIN_ACTIONS)) {
+  if (
+    profile
+    && !capabilityProfileSupportsActionCount(profile, STATUS_CARD_MIN_ACTIONS)
+  ) {
     return [];
   }
 
-  const permissionsAction:
-    | MessagingSurfaceAction
-    | undefined =
-    params.permissionsChoices?.length ||
-    (params.supportsLegacyPermissionsAction !== false &&
-      (params.permissionsMode === "full-access" ||
-        params.allowFullAccessEscalation !== false))
+  const permissionsAction: MessagingSurfaceAction | undefined =
+    params.permissionsChoices?.length
+    || (params.supportsLegacyPermissionsAction !== false
+      && (params.permissionsMode === "full-access"
+        || params.allowFullAccessEscalation !== false))
       ? {
           id: "status:permissions",
           label: `Permissions: ${params.permissionsActionLabel}`,
@@ -988,7 +1014,9 @@ export function buildHandoffConfirmationIntent(params: {
   strategy?: HandoffThreadWorkspaceRequest["strategy"];
 }): MessagingConfirmationIntent {
   const direction =
-    params.context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local";
+    params.context.workspaceKind === "local"
+      ? "local-to-worktree"
+      : "worktree-to-local";
   const body = [
     params.strategy === "detached-changes"
       ? "Confirm new detached-head worktree."
@@ -1038,11 +1066,12 @@ export function buildHandoffConfirmationIntent(params: {
           },
         },
         {
-          id: params.context.workspaceKind === "local"
-            ? params.strategy === "move-branch"
-              ? "handoff:move-branch"
-              : "status:handoff"
-            : "status:handoff",
+          id:
+            params.context.workspaceKind === "local"
+              ? params.strategy === "move-branch"
+                ? "handoff:move-branch"
+                : "status:handoff"
+              : "status:handoff",
           label: "Back",
           fallbackText: "back",
           style: "secondary",
@@ -1069,16 +1098,16 @@ export function handoffRequestFromValue(
     return undefined;
   }
   if (
-    value.direction !== "local-to-worktree" &&
-    value.direction !== "worktree-to-local"
+    value.direction !== "local-to-worktree"
+    && value.direction !== "worktree-to-local"
   ) {
     return undefined;
   }
   if (
-    (value.backend !== "codex" && value.backend !== "grok") ||
-    typeof value.threadId !== "string" ||
-    typeof value.repositoryPath !== "string" ||
-    typeof value.sourcePath !== "string"
+    (value.backend !== "codex" && value.backend !== "grok")
+    || typeof value.threadId !== "string"
+    || typeof value.repositoryPath !== "string"
+    || typeof value.sourcePath !== "string"
   ) {
     return undefined;
   }
@@ -1088,16 +1117,19 @@ export function handoffRequestFromValue(
     threadId: value.threadId,
     direction: value.direction,
     strategy:
-      value.strategy === "move-branch" ||
-      value.strategy === "detached-changes" ||
-      value.strategy === "new-branch"
+      value.strategy === "move-branch"
+      || value.strategy === "detached-changes"
+      || value.strategy === "new-branch"
         ? value.strategy
         : undefined,
     repositoryPath: value.repositoryPath,
     sourcePath: value.sourcePath,
-    sourceBranch: typeof value.sourceBranch === "string" ? value.sourceBranch : undefined,
+    sourceBranch:
+      typeof value.sourceBranch === "string" ? value.sourceBranch : undefined,
     leaveLocalBranch:
-      typeof value.leaveLocalBranch === "string" ? value.leaveLocalBranch : undefined,
+      typeof value.leaveLocalBranch === "string"
+        ? value.leaveLocalBranch
+        : undefined,
     newBranchName:
       typeof value.newBranchName === "string" ? value.newBranchName : undefined,
   };
@@ -1132,7 +1164,11 @@ export function buildStatusModelPickerIntent(params: {
         ...params.models.map((model, index) => ({
           id: "status:set-model",
           label: `${model.label ?? model.id}${
-            (params.currentModelId ? model.id === params.currentModelId : model.current)
+            (
+              params.currentModelId
+                ? model.id === params.currentModelId
+                : model.current
+            )
               ? " (current)"
               : ""
           }`,
@@ -1412,14 +1448,16 @@ function statusForThreadState(
   }
 }
 
-function formatBranch(threadState: MessagingResolvedThreadState): string | undefined {
+function formatBranch(
+  threadState: MessagingResolvedThreadState,
+): string | undefined {
   if (!threadState.gitBranch && !threadState.observedGitBranch) {
     return undefined;
   }
   if (
-    threadState.gitBranch &&
-    threadState.observedGitBranch &&
-    threadState.gitBranch !== threadState.observedGitBranch
+    threadState.gitBranch
+    && threadState.observedGitBranch
+    && threadState.gitBranch !== threadState.observedGitBranch
   ) {
     return `${threadState.gitBranch} (now ${threadState.observedGitBranch})`;
   }
@@ -1433,14 +1471,18 @@ function handoffValue(
     backend: context.backend,
     threadId: context.threadId,
     direction:
-      context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local",
+      context.workspaceKind === "local"
+        ? "local-to-worktree"
+        : "worktree-to-local",
     repositoryPath: context.repositoryPath,
     sourcePath: context.workingDirectoryPath,
     ...(context.branch ? { sourceBranch: context.branch } : {}),
   };
 }
 
-function handoffOverviewText(context: MessagingWorkspaceHandoffContext): string {
+function handoffOverviewText(
+  context: MessagingWorkspaceHandoffContext,
+): string {
   return [
     "Workspace Handoff",
     `Project: ${context.projectLabel ?? unavailable()}`,
@@ -1492,10 +1534,10 @@ export function formatPermissionsActionDisplayLabel(params: {
 }): string {
   return formatPermissionsDisplayLabel({
     acpRuntimeLabel: params.acpRuntimeLabel,
-    executionLabel: formatPermissionsActionLabel(params.current, params.queued).replace(
-      /^Permissions:\s*/,
-      "",
-    ),
+    executionLabel: formatPermissionsActionLabel(
+      params.current,
+      params.queued,
+    ).replace(/^Permissions:\s*/, ""),
     current: params.current,
     queued: params.queued,
   });
@@ -1539,7 +1581,8 @@ function formatPermissionsLineLabel(
   current: string,
   queued?: ThreadExecutionMode,
 ): string {
-  const currentLabel = current === "full-access" ? "Full Access" : "Default Access";
+  const currentLabel =
+    current === "full-access" ? "Full Access" : "Default Access";
   if (!queued) {
     return currentLabel;
   }

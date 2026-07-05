@@ -126,7 +126,10 @@ export function registerAutomationIpcHandlers(): void {
   ipcMain.removeHandler(AUTOMATIONS_LIST_CARDS_CHANNEL);
   ipcMain.handle(
     AUTOMATIONS_LIST_CARDS_CHANNEL,
-    (_event, request: ListAutomationCardsRequest): ListAutomationCardsResponse =>
+    (
+      _event,
+      request: ListAutomationCardsRequest,
+    ): ListAutomationCardsResponse =>
       getDesktopAutomationService().listCards(request),
   );
 

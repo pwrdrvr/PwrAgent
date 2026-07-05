@@ -6,7 +6,10 @@ import {
   readRequiredString,
   requestToolApproval,
 } from "./tool-contract.js";
-import { InvalidToolArgumentsError, ToolExecutionFailure } from "./tool-errors.js";
+import {
+  InvalidToolArgumentsError,
+  ToolExecutionFailure,
+} from "./tool-errors.js";
 import { resolveWorkspaceFilePath } from "./workspace-paths.js";
 
 const TOOL_NAME = "write_file";
@@ -41,7 +44,10 @@ export function createWriteFileTool(): ToolDefinition<WriteFileArguments> {
       const record = asObjectArguments(TOOL_NAME, arguments_);
       const content = record.content;
       if (typeof content !== "string") {
-        throw new InvalidToolArgumentsError(TOOL_NAME, '"content" must be a string');
+        throw new InvalidToolArgumentsError(
+          TOOL_NAME,
+          '"content" must be a string',
+        );
       }
       return {
         path: readRequiredString(record, TOOL_NAME, "path"),
@@ -49,8 +55,15 @@ export function createWriteFileTool(): ToolDefinition<WriteFileArguments> {
       };
     },
     async execute(arguments_, context) {
-      const resolved = resolveWorkspaceFilePath(context, TOOL_NAME, arguments_.path);
-      const approval = await maybeApproveFileChange(context, resolved.relativePath);
+      const resolved = resolveWorkspaceFilePath(
+        context,
+        TOOL_NAME,
+        arguments_.path,
+      );
+      const approval = await maybeApproveFileChange(
+        context,
+        resolved.relativePath,
+      );
       if (approval) {
         return approval;
       }

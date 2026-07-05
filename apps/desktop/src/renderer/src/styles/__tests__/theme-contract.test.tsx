@@ -24,8 +24,8 @@ function extractTokensForSelector(
 
   return Object.fromEntries(
     [...rootMatch.groups.body.matchAll(/--([a-z0-9-]+):\s*([^;]+);/g)].map(
-      ([, name, value]) => [name, value.trim()]
-    )
+      ([, name, value]) => [name, value.trim()],
+    ),
   );
 }
 
@@ -68,7 +68,8 @@ function expandHex(hex: string): string {
 function relativeLuminance(hex: string): number {
   const normalized = expandHex(hex);
   const [red, green, blue] = [0, 2, 4].map((start) => {
-    const channel = Number.parseInt(normalized.slice(start, start + 2), 16) / 255;
+    const channel =
+      Number.parseInt(normalized.slice(start, start + 2), 16) / 255;
     return channel <= 0.03928
       ? channel / 12.92
       : ((channel + 0.055) / 1.055) ** 2.4;
@@ -88,11 +89,14 @@ function contrastRatio(foreground: string, background: string): number {
 
 describe("Tangerine Terminal theme contract", () => {
   const tokens = extractRootTokens(css);
-  const lightTokens = extractTokensForSelector(css, ':root[data-theme="light"]');
+  const lightTokens = extractTokensForSelector(
+    css,
+    ':root[data-theme="light"]',
+  );
 
   it("defines the semantic tokens used by the renderer theme", () => {
     expect(tokens).toMatchObject({
-      "accent": "#ff8a1f",
+      accent: "#ff8a1f",
       "accent-border": "color-mix(in srgb, var(--accent) 42%, transparent)",
       "accent-bright": "#ffb35c",
       "accent-soft": "color-mix(in srgb, var(--accent) 12%, transparent)",
@@ -156,7 +160,7 @@ describe("Tangerine Terminal theme contract", () => {
     for (const [foreground, background, threshold] of pairs) {
       expect(
         contrastRatio(tokens[foreground], tokens[background]),
-        `${foreground} on ${background}`
+        `${foreground} on ${background}`,
       ).toBeGreaterThanOrEqual(threshold);
     }
   });
@@ -168,10 +172,14 @@ describe("Tangerine Terminal theme contract", () => {
       "terminal-ansi-white": "#555555",
       "terminal-ansi-bright-white": "#a5a5a5",
     });
-    expect(contrastRatio(lightTokens["terminal-fg"], lightTokens["terminal-bg"]))
-      .toBeGreaterThanOrEqual(4.5);
     expect(
-      contrastRatio(lightTokens["terminal-ansi-white"], lightTokens["terminal-bg"]),
+      contrastRatio(lightTokens["terminal-fg"], lightTokens["terminal-bg"]),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(
+        lightTokens["terminal-ansi-white"],
+        lightTokens["terminal-bg"],
+      ),
     ).toBeGreaterThanOrEqual(4.5);
   });
 
@@ -186,10 +194,10 @@ describe("Tangerine Terminal theme contract", () => {
       "sidebar-masthead-pull",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
-      ([, token]) => token
+      ([, token]) => token,
     );
     const missingTokens = tokenReferences.filter(
-      (token) => !tokens[token] && !localTokens.has(token)
+      (token) => !tokens[token] && !localTokens.has(token),
     );
 
     expect([...new Set(missingTokens)]).toEqual([]);
@@ -214,7 +222,7 @@ describe("Tangerine Terminal theme contract", () => {
       /padding-bottom:\s*24px;|padding:\s*\S+\s+\S+\s+24px(?:\s+\S+)?;/,
     );
     expect(css).toMatch(
-      /\.transcript-list__items:has\(\.transcript-list__pending:last-child\)\s*\{[\s\S]*?padding-bottom:\s*4px;[\s\S]*?\}/
+      /\.transcript-list__items:has\(\.transcript-list__pending:last-child\)\s*\{[\s\S]*?padding-bottom:\s*4px;[\s\S]*?\}/,
     );
     // Negative regex stays — guard against accidental large bottom
     // values (>= 40px) regardless of which form is used.
@@ -225,7 +233,10 @@ describe("Tangerine Terminal theme contract", () => {
 
   it("keeps unavailable thread detail surfaces draggable", () => {
     const emptyStateRule = extractRuleBody(css, ".thread-empty-state");
-    const pendingMainRule = extractRuleBody(css, ".app-main--thread-detail-pending");
+    const pendingMainRule = extractRuleBody(
+      css,
+      ".app-main--thread-detail-pending",
+    );
 
     expect(emptyStateRule).toContain("padding: 0 16px;");
     expect(emptyStateRule).toContain("flex: 1;");
@@ -233,7 +244,7 @@ describe("Tangerine Terminal theme contract", () => {
     expect(emptyStateRule).toContain("-webkit-app-region: drag;");
     expect(pendingMainRule).toContain("-webkit-app-region: drag;");
     expect(css).toMatch(
-      /\.thread-empty-state \*\s*\{[\s\S]*?-webkit-app-region:\s*drag;[\s\S]*?\}/
+      /\.thread-empty-state \*\s*\{[\s\S]*?-webkit-app-region:\s*drag;[\s\S]*?\}/,
     );
   });
 
@@ -246,44 +257,52 @@ describe("Tangerine Terminal theme contract", () => {
     expect(projectHeaderRule).toContain("position: sticky;");
     expect(projectHeaderRule).toContain("top: 0;");
     expect(projectHeaderRule).toContain("z-index: 3;");
-    expect(projectHeaderRule).toContain("background: var(--bg-panel-elevated);");
+    expect(projectHeaderRule).toContain(
+      "background: var(--bg-panel-elevated);",
+    );
   });
 
   it("keeps onboarding and warning overlays clickable without losing window drag affordances", () => {
     const overlayRule = extractRuleBody(css, ".onboarding-wizard-overlay");
     const titlebarRule = extractRuleBody(css, ".onboarding-wizard__titlebar");
-    const warningBannerRule = extractRuleBody(css, ".codex-config-warning-banner");
+    const warningBannerRule = extractRuleBody(
+      css,
+      ".codex-config-warning-banner",
+    );
 
     expect(overlayRule).toContain("-webkit-app-region: no-drag;");
     expect(css).toMatch(
-      /\.onboarding-wizard-overlay__scrim\s*\{[\s\S]*?pointer-events:\s*none;[\s\S]*?\}/
+      /\.onboarding-wizard-overlay__scrim\s*\{[\s\S]*?pointer-events:\s*none;[\s\S]*?\}/,
     );
     expect(titlebarRule).toContain("-webkit-app-region: drag;");
     expect(css).toMatch(
-      /\.onboarding-wizard__titlebar button,\s*\.onboarding-wizard__titlebar input,\s*\.onboarding-wizard__titlebar a,\s*\.onboarding-wizard__titlebar select,\s*\.onboarding-wizard__titlebar \[role="button"\]\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/
+      /\.onboarding-wizard__titlebar button,\s*\.onboarding-wizard__titlebar input,\s*\.onboarding-wizard__titlebar a,\s*\.onboarding-wizard__titlebar select,\s*\.onboarding-wizard__titlebar \[role="button"\]\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
     );
     expect(warningBannerRule).toContain("-webkit-app-region: no-drag;");
   });
 
   it("lets transcript scroll restoration own scroll anchoring", () => {
     expect(css).toMatch(
-      /\.transcript-list__items\s*\{[\s\S]*?overflow-anchor:\s*none;[\s\S]*?\}/
+      /\.transcript-list__items\s*\{[\s\S]*?overflow-anchor:\s*none;[\s\S]*?\}/,
     );
   });
 
   it("keeps thread header titles tall enough for descenders", () => {
-    const compactTitleRule = extractRuleBody(css, ".thread-header__compact-title");
+    const compactTitleRule = extractRuleBody(
+      css,
+      ".thread-header__compact-title",
+    );
     const threadRowTitleRule = extractRuleBody(css, ".thread-row__title");
 
     expect(css).toMatch(
-      /\.thread-header__title,\s*\.thread-empty-state h2\s*\{[\s\S]*?line-height:\s*1\.16;[\s\S]*?\}/
+      /\.thread-header__title,\s*\.thread-empty-state h2\s*\{[\s\S]*?line-height:\s*1\.16;[\s\S]*?\}/,
     );
     expect(compactTitleRule).toContain("padding-bottom: 2px;");
     expect(compactTitleRule).toContain("line-height: 1.25;");
     expect(threadRowTitleRule).toContain("padding-bottom: 2px;");
     expect(threadRowTitleRule).toContain("line-height: 1.25;");
     expect(css).not.toMatch(
-      /\.thread-header--launchpad \.thread-header__title\s*\{[\s\S]*?line-height:\s*1\.05;[\s\S]*?\}/
+      /\.thread-header--launchpad \.thread-header__title\s*\{[\s\S]*?line-height:\s*1\.05;[\s\S]*?\}/,
     );
     expect(compactTitleRule).not.toContain("line-height: 1;");
   });
@@ -292,7 +311,10 @@ describe("Tangerine Terminal theme contract", () => {
     const headerMainRule = extractRuleBody(css, ".thread-header__main");
     const statusBarRule = extractRuleBody(css, ".messaging-status-bar");
     const eyebrowRowRule = extractRuleBody(css, ".thread-header__eyebrow-row");
-    const compactTitleRule = extractRuleBody(css, ".thread-header__compact-title");
+    const compactTitleRule = extractRuleBody(
+      css,
+      ".thread-header__compact-title",
+    );
 
     expect(headerMainRule).toContain("flex: 1 1 0;");
     expect(statusBarRule).toContain("flex: 0 0 auto;");
@@ -301,13 +323,19 @@ describe("Tangerine Terminal theme contract", () => {
     expect(compactTitleRule).toContain("flex: 0 1 auto;");
     expect(compactTitleRule).toContain("overflow: hidden;");
     expect(css).toMatch(
-      /\.thread-header__eyebrow-row > \.thread-row__chip\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?\}/
+      /\.thread-header__eyebrow-row > \.thread-row__chip\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?\}/,
     );
   });
 
   it("keeps the thread title reveal hit target to the rendered title text", () => {
-    const compactTitleRule = extractRuleBody(css, ".thread-header__compact-title");
-    const titleButtonRule = extractRuleBody(css, ".thread-header__title-button");
+    const compactTitleRule = extractRuleBody(
+      css,
+      ".thread-header__compact-title",
+    );
+    const titleButtonRule = extractRuleBody(
+      css,
+      ".thread-header__title-button",
+    );
 
     expect(compactTitleRule).toContain("width: fit-content;");
     expect(compactTitleRule).toContain("max-width: min(58vw, 520px);");
@@ -317,30 +345,39 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("keeps launchpad header chips content-sized and aligned with the eyebrow", () => {
-    const launchpadHeaderRule = extractRuleBody(css, ".thread-header--launchpad");
-    const launchpadAsideRule = extractRuleBody(css, ".thread-header__launchpad-aside");
-    const eyebrowRule = extractRuleBody(css, ".thread-header__eyebrow-row > .eyebrow");
+    const launchpadHeaderRule = extractRuleBody(
+      css,
+      ".thread-header--launchpad",
+    );
+    const launchpadAsideRule = extractRuleBody(
+      css,
+      ".thread-header__launchpad-aside",
+    );
+    const eyebrowRule = extractRuleBody(
+      css,
+      ".thread-header__eyebrow-row > .eyebrow",
+    );
 
     expect(launchpadHeaderRule).toContain("align-items: flex-start;");
     expect(launchpadAsideRule).toContain("align-items: flex-start;");
     expect(eyebrowRule).toContain("height: 24px;");
     expect(eyebrowRule).toContain("margin: 0 2px 0 0;");
     expect(css).toMatch(
-      /\.thread-header--launchpad \.thread-header__eyebrow-row > \.thread-row__chip\s*\{[\s\S]*?max-width:\s*100%;[\s\S]*?\}/
+      /\.thread-header--launchpad \.thread-header__eyebrow-row > \.thread-row__chip\s*\{[\s\S]*?max-width:\s*100%;[\s\S]*?\}/,
     );
     expect(css).toMatch(
-      /\.thread-header--launchpad \.messaging-status-bar\s*\{[\s\S]*?padding-top:\s*0;[\s\S]*?padding-bottom:\s*0;[\s\S]*?\}/
+      /\.thread-header--launchpad \.messaging-status-bar\s*\{[\s\S]*?padding-top:\s*0;[\s\S]*?padding-bottom:\s*0;[\s\S]*?\}/,
     );
   });
 
   it("keeps launchpad setup output from shrinking the header summary", () => {
     const setupComposerRule = extractRuleBody(
       css,
-      ".thread-view__launchpad-composer:has(.transcript-panel--setup)"
+      ".thread-view__launchpad-composer:has(.transcript-panel--setup)",
     );
 
     expect(css).toMatch(
-      /\.thread-view--launchpad > \.thread-header,\s*\.thread-view--launchpad > \.launchpad-panel\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?\}/
+      /\.thread-view--launchpad > \.thread-header,\s*\.thread-view--launchpad > \.launchpad-panel\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?\}/,
     );
     expect(setupComposerRule).toContain("flex: 1 1 0;");
     expect(setupComposerRule).toContain("min-height: 0;");
@@ -351,7 +388,7 @@ describe("Tangerine Terminal theme contract", () => {
     const errorTextRule = extractRuleBody(css, ".composer__meta-text");
     const copyButtonRule = extractRuleBody(
       css,
-      ".transcript-copy-button--composer-error"
+      ".transcript-copy-button--composer-error",
     );
 
     expect(errorRule).toContain("user-select: text;");
@@ -361,7 +398,10 @@ describe("Tangerine Terminal theme contract", () => {
 
   it("keeps pricing usage cards selectable and directly copyable", () => {
     const pricingRowRule = extractRuleBody(css, ".pricing-usage-row");
-    const pricingRunningTotalRule = extractRuleBody(css, ".pricing-running-total");
+    const pricingRunningTotalRule = extractRuleBody(
+      css,
+      ".pricing-running-total",
+    );
 
     expect(pricingRowRule).toContain("user-select: text;");
     expect(pricingRunningTotalRule).toContain("user-select: text;");
@@ -374,16 +414,16 @@ describe("Tangerine Terminal theme contract", () => {
     // `position: fixed; top: 0` rail overlapped the header and forced the
     // toggles/MSG to squash, then slide under the rail).
     expect(extractRuleBody(css, ".context-rail")).toContain(
-      "position: absolute;"
+      "position: absolute;",
     );
     // A media query must NOT flip the rail back to `position: static` (the
     // old "stack the rail below the chat" narrow-width design) — anchored
     // absolute, an in-flow full-width rail collapses the chat to zero width.
     expect(css).not.toMatch(
-      /@media[^{]*\{[\s\S]*?\.context-rail[^{]*\{[^}]*position:\s*static/
+      /@media[^{]*\{[\s\S]*?\.context-rail[^{]*\{[^}]*position:\s*static/,
     );
     expect(css).not.toMatch(
-      /\.thread-header[^{]*\{[^}]*padding-right:\s*calc\(var\(--context-rail-effective/
+      /\.thread-header[^{]*\{[^}]*padding-right:\s*calc\(var\(--context-rail-effective/,
     );
     // Single source of truth for the chat-side gutter: `--context-rail-effective`
     // is computed once on `.thread-view`, sidebar-aware (not a bare `vw`) so a
@@ -391,22 +431,22 @@ describe("Tangerine Terminal theme contract", () => {
     // it and the chat column reserves it (+ the 48px spine) — same value, so
     // the panel can never render wider than its reserved gutter.
     expect(css).toMatch(
-      /--context-rail-effective:\s*min\(\s*var\(--context-rail-width, 380px\),\s*max\(240px, calc\(100vw - var\(--sidebar-reserve, 408px\) - 448px\)\)\s*\);/
+      /--context-rail-effective:\s*min\(\s*var\(--context-rail-width, 380px\),\s*max\(240px, calc\(100vw - var\(--sidebar-reserve, 408px\) - 448px\)\)\s*\);/,
     );
     expect(css).toContain(
-      "padding-right: calc(var(--context-rail-effective, 380px) + 48px);"
+      "padding-right: calc(var(--context-rail-effective, 380px) + 48px);",
     );
     expect(css).toContain("width: var(--context-rail-effective, 380px);");
     // The narrow-width media query must NOT zero the rail gutter or drop the
     // header reserve to a fixed 56px anymore.
     expect(css).not.toMatch(
-      /@media \(max-width: 1100px\)[\s\S]*?\.thread-header,[\s\S]*?padding-right:\s*56px;/
+      /@media \(max-width: 1100px\)[\s\S]*?\.thread-header,[\s\S]*?padding-right:\s*56px;/,
     );
     expect(css).not.toContain("the header reclaims the space");
     // The sidebar-hidden override must zero the reserve so the rail reclaims
     // the freed space instead of subtracting a sidebar that isn't on screen.
     expect(css).toMatch(
-      /\.app-shell\[data-sidebar-hidden="true"\][^{]*\{[^}]*--sidebar-reserve:\s*0px;/
+      /\.app-shell\[data-sidebar-hidden="true"\][^{]*\{[^}]*--sidebar-reserve:\s*0px;/,
     );
   });
 
@@ -428,30 +468,30 @@ describe("Tangerine Terminal theme contract", () => {
 
     expect(actionsRule).toContain("pointer-events: none;");
     expect(css).toMatch(
-      /\.thread-row-shell:hover \.thread-row__chip--add-reaction,\s*\.thread-row__chip--add-reaction:focus-visible,\s*\.thread-row__chip--add-reaction\.is-open\s*\{[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/
+      /\.thread-row-shell:hover \.thread-row__chip--add-reaction,\s*\.thread-row__chip--add-reaction:focus-visible,\s*\.thread-row__chip--add-reaction\.is-open\s*\{[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/,
     );
     expect(css).toMatch(
-      /\.thread-row-shell:hover \.thread-row__overflow-button,\s*\.thread-row__overflow-button:focus-visible\s*\{[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/
+      /\.thread-row-shell:hover \.thread-row__overflow-button,\s*\.thread-row__overflow-button:focus-visible\s*\{[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/,
     );
   });
 
   it("hides thread row timestamps behind focused or open row actions", () => {
     expect(css).toMatch(
-      /\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/
+      /\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/,
     );
   });
 
   it("keeps thread card reaction emoji the same size as picker emoji", () => {
     const baseChipIndex = css.indexOf(".thread-row__chip {");
     const reactionChipIndex = css.indexOf(
-      ".thread-row__chip.thread-row__chip--reaction {"
+      ".thread-row__chip.thread-row__chip--reaction {",
     );
     expect(baseChipIndex).toBeGreaterThanOrEqual(0);
     expect(reactionChipIndex).toBeGreaterThan(baseChipIndex);
 
     const threadReactionRule = extractRuleBody(
       css,
-      ".thread-row__chip.thread-row__chip--reaction"
+      ".thread-row__chip.thread-row__chip--reaction",
     );
     const pickerReactionRule = extractRuleBody(css, ".reaction-picker__option");
 
@@ -468,16 +508,21 @@ describe("Tangerine Terminal theme contract", () => {
     expect(headerRule).toContain("top: 0;");
     expect(headerRule).toContain("background: var(--bg-sidebar);");
     expect(css).toMatch(
-      /\.directory-row__summary:focus,\s*\.directory-row__summary:focus-visible\s*\{[\s\S]*?outline-offset:\s*-2px;[\s\S]*?\}/
+      /\.directory-row__summary:focus,\s*\.directory-row__summary:focus-visible\s*\{[\s\S]*?outline-offset:\s*-2px;[\s\S]*?\}/,
     );
   });
 
   it("keeps long directory names from crowding the count and expand control", () => {
     const summaryRule = extractRuleBody(css, ".directory-row__summary");
-    const summaryMetaRule = extractRuleBody(css, ".directory-row__summary-meta");
+    const summaryMetaRule = extractRuleBody(
+      css,
+      ".directory-row__summary-meta",
+    );
 
     expect(summaryRule).toContain("display: grid;");
-    expect(summaryRule).toContain("grid-template-columns: minmax(0, 1fr) auto;");
+    expect(summaryRule).toContain(
+      "grid-template-columns: minmax(0, 1fr) auto;",
+    );
     expect(summaryRule).toContain("align-items: center;");
     expect(summaryMetaRule).toContain("flex: 0 0 auto;");
   });
@@ -506,7 +551,7 @@ describe("Tangerine Terminal theme contract", () => {
     // don't pick up the accent hover treatment — they stay muted
     // to telegraph that nothing happens on click.
     expect(css).toMatch(
-      /\.thread-context-menu button:hover:not\(:disabled\),\s*\.thread-context-menu button:focus-visible:not\(:disabled\)\s*\{[\s\S]*?background:\s*var\(--accent-soft\);[\s\S]*?color:\s*var\(--accent-bright\);[\s\S]*?\}/
+      /\.thread-context-menu button:hover:not\(:disabled\),\s*\.thread-context-menu button:focus-visible:not\(:disabled\)\s*\{[\s\S]*?background:\s*var\(--accent-soft\);[\s\S]*?color:\s*var\(--accent-bright\);[\s\S]*?\}/,
     );
     // Disabled state uses text-muted so the row reads as
     // "present but inert" rather than fully hidden — keeps the
@@ -524,26 +569,27 @@ describe("Tangerine Terminal theme contract", () => {
     // Visual contract: muted color by default, tracks the parent
     // button's accent color on hover so it doesn't drop out of
     // the highlighted row.
-    const shortcutRule = extractRuleBody(
-      css,
-      ".thread-context-menu__shortcut",
-    );
+    const shortcutRule = extractRuleBody(css, ".thread-context-menu__shortcut");
     expect(shortcutRule).toContain("margin-left: auto;");
     expect(shortcutRule).toContain("color: var(--text-muted);");
     expect(css).toMatch(
-      /\.thread-context-menu button:hover:not\(:disabled\) \.thread-context-menu__shortcut,\s*\.thread-context-menu button:focus-visible:not\(:disabled\) \.thread-context-menu__shortcut\s*\{[\s\S]*?color:\s*var\(--accent-bright\);[\s\S]*?\}/
+      /\.thread-context-menu button:hover:not\(:disabled\) \.thread-context-menu__shortcut,\s*\.thread-context-menu button:focus-visible:not\(:disabled\) \.thread-context-menu__shortcut\s*\{[\s\S]*?color:\s*var\(--accent-bright\);[\s\S]*?\}/,
     );
   });
 
   it("keeps composer autocomplete visually separated from transcript surfaces", () => {
     const autocompleteRule = extractRuleBody(css, ".composer__autocomplete");
 
-    expect(autocompleteRule).toContain("border: 1px solid var(--border-strong);");
+    expect(autocompleteRule).toContain(
+      "border: 1px solid var(--border-strong);",
+    );
     expect(autocompleteRule).toContain("background: var(--bg-panel-elevated);");
     expect(autocompleteRule).toContain(
       "inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 6%, transparent)",
     );
-    expect(autocompleteRule).not.toContain("background: rgba(10, 10, 10, 0.98);");
+    expect(autocompleteRule).not.toContain(
+      "background: rgba(10, 10, 10, 0.98);",
+    );
   });
 
   it("locks composer height contract — compact when empty, grows, capped at 280px", () => {
@@ -593,9 +639,10 @@ describe("Tangerine Terminal theme contract", () => {
       expect(rule, `${selector} must use var(--accent)`).toContain(
         "color: var(--accent);",
       );
-      expect(rule, `${selector} must NOT use var(--accent-bright)`).not.toContain(
-        "color: var(--accent-bright);",
-      );
+      expect(
+        rule,
+        `${selector} must NOT use var(--accent-bright)`,
+      ).not.toContain("color: var(--accent-bright);");
     }
   });
 
@@ -605,14 +652,12 @@ describe("Tangerine Terminal theme contract", () => {
     // future PR that adds a new tone to one primitive can't silently
     // skip the other.
     for (const tone of ["ok", "err", "warn"] as const) {
-      expect(
-        css,
-        `.settings-card__chip--${tone} should be defined`,
-      ).toMatch(new RegExp(`\\.settings-card__chip--${tone}\\s*\\{`));
-      expect(
-        css,
-        `.settings-pathrow__chip--${tone} should be defined`,
-      ).toMatch(new RegExp(`\\.settings-pathrow__chip--${tone}\\s*\\{`));
+      expect(css, `.settings-card__chip--${tone} should be defined`).toMatch(
+        new RegExp(`\\.settings-card__chip--${tone}\\s*\\{`),
+      );
+      expect(css, `.settings-pathrow__chip--${tone} should be defined`).toMatch(
+        new RegExp(`\\.settings-pathrow__chip--${tone}\\s*\\{`),
+      );
     }
   });
 
@@ -839,7 +884,10 @@ describe("Tangerine Terminal theme contract", () => {
     // .transcript-message__text: inherited overflow-wrap reaches table
     // cells too, where `anywhere` changes min-content sizing and would
     // defeat the wide-table horizontal scroll affordance.
-    const paragraphRule = extractRuleBody(css, ".transcript-message__paragraph");
+    const paragraphRule = extractRuleBody(
+      css,
+      ".transcript-message__paragraph",
+    );
     expect(paragraphRule).toContain("overflow-wrap: anywhere;");
 
     const listRule = extractRuleBody(css, ".transcript-message__list");
@@ -860,7 +908,7 @@ describe("Tangerine Terminal theme contract", () => {
 
     const focusRule = extractRuleBody(
       css,
-      ".transcript-message__blockquote:focus-visible,\n.transcript-message__pre:focus-visible"
+      ".transcript-message__blockquote:focus-visible,\n.transcript-message__pre:focus-visible",
     );
     expect(focusRule).toContain("outline: 2px solid var(--focus-ring);");
     expect(focusRule).toContain("outline-offset: 2px;");
@@ -883,14 +931,16 @@ describe("Tangerine Terminal theme contract", () => {
     for (const selector of [".sidebar-list--dense", ".directory-groups"]) {
       const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const bodies = [
-        ...css.matchAll(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, "g")),
+        ...css.matchAll(
+          new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, "g"),
+        ),
       ].map((match) => match[1]);
-      expect(bodies.some((body) => body.includes("scrollbar-width: thin;"))).toBe(
-        true
-      );
+      expect(
+        bodies.some((body) => body.includes("scrollbar-width: thin;")),
+      ).toBe(true);
     }
     expect(css).not.toMatch(
-      /\.(?:sidebar-list--dense|directory-groups)::-webkit-scrollbar/
+      /\.(?:sidebar-list--dense|directory-groups)::-webkit-scrollbar/,
     );
   });
 
@@ -911,7 +961,7 @@ describe("Tangerine Terminal theme contract", () => {
     // The masthead pull is always derived from the two insets, never set
     // by hand — that's what keeps the chrome glued to the lane edge.
     expect(sidebarBody).toMatch(
-      /--sidebar-masthead-pull:\s*calc\(\s*var\(--sidebar-lane-inset\)\s*-\s*var\(--sidebar-rail-inset\)\s*\)/
+      /--sidebar-masthead-pull:\s*calc\(\s*var\(--sidebar-lane-inset\)\s*-\s*var\(--sidebar-rail-inset\)\s*\)/,
     );
 
     // Both lanes inset to the same lane token (no recurrence of the
@@ -922,31 +972,33 @@ describe("Tangerine Terminal theme contract", () => {
     for (const selector of [".sidebar-list--dense", ".directory-groups"]) {
       const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const bodies = [
-        ...css.matchAll(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, "g")),
+        ...css.matchAll(
+          new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, "g"),
+        ),
       ].map((match) => match[1]);
       expect(
         bodies.some((body) =>
-          /padding-inline:\s*var\(--sidebar-lane-inset\);/.test(body)
-        )
+          /padding-inline:\s*var\(--sidebar-lane-inset\);/.test(body),
+        ),
       ).toBe(true);
     }
 
     // Both masthead rows pull out to the lane edge via the shared token.
     for (const selector of [".runtime-identity", ".lens-switch"]) {
       expect(extractRuleBody(css, selector)).toMatch(
-        /margin-inline:\s*var\(--sidebar-masthead-pull\)/
+        /margin-inline:\s*var\(--sidebar-masthead-pull\)/,
       );
     }
     // The lens switch is an inline-grid that can't stretch, so it also
     // grows its explicit width by twice the pull to reach both lane edges.
     expect(extractRuleBody(css, ".lens-switch")).toMatch(
-      /width:\s*calc\(\s*100%\s*-\s*2\s*\*\s*var\(--sidebar-masthead-pull\)\s*\)/
+      /width:\s*calc\(\s*100%\s*-\s*2\s*\*\s*var\(--sidebar-masthead-pull\)\s*\)/,
     );
 
     // The scroll region cancels exactly the rail padding to bleed to the
     // walls — kept in lockstep with the padding via the same token.
     expect(extractRuleBody(css, ".sidebar__scroll-region")).toMatch(
-      /margin-inline:\s*calc\(\s*-1\s*\*\s*var\(--sidebar-rail-inset\)\s*\)/
+      /margin-inline:\s*calc\(\s*-1\s*\*\s*var\(--sidebar-rail-inset\)\s*\)/,
     );
   });
 
@@ -959,7 +1011,7 @@ describe("Tangerine Terminal theme contract", () => {
     const universal = extractRuleBody(css, "*");
     expect(universal).toContain("scrollbar-width: thin;");
     expect(universal).toContain(
-      "scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);"
+      "scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);",
     );
   });
 
@@ -969,13 +1021,13 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toContain("--thinking-scanner-mini-offset");
     expect(css).toContain("@keyframes pwragent-thinking-scanner-sweep");
     expect(css).toMatch(
-      /\.thinking-scanner\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*18px;[\s\S]*?--thinking-scanner-delay:\s*0ms;[\s\S]*?--thinking-scanner-travel:\s*44px;[\s\S]*?width:\s*62px;[\s\S]*?\}/
+      /\.thinking-scanner\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*18px;[\s\S]*?--thinking-scanner-delay:\s*0ms;[\s\S]*?--thinking-scanner-travel:\s*44px;[\s\S]*?width:\s*62px;[\s\S]*?\}/,
     );
     expect(css).toMatch(
-      /\.thinking-scanner--mini\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*6px;[\s\S]*?--thinking-scanner-travel:\s*10px;[\s\S]*?width:\s*16px;[\s\S]*?\}/
+      /\.thinking-scanner--mini\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*6px;[\s\S]*?--thinking-scanner-travel:\s*10px;[\s\S]*?width:\s*16px;[\s\S]*?\}/,
     );
     expect(css).toMatch(
-      /\.thinking-scanner__beam\s*\{[\s\S]*?animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;[\s\S]*?animation-delay:\s*var\(--thinking-scanner-delay\);[\s\S]*?\}/
+      /\.thinking-scanner__beam\s*\{[\s\S]*?animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;[\s\S]*?animation-delay:\s*var\(--thinking-scanner-delay\);[\s\S]*?\}/,
     );
   });
 });

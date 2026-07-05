@@ -22,7 +22,7 @@ const malformedHandoffBody = [
   "command/title as well as object identity:",
   "",
   "```swift",
-  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+  '} else if button === uploadButton || button.titleText == "UPLOAD TO GIPHY" {',
   "    uploadButtonClicked()",
   "}",
   "```",
@@ -42,18 +42,22 @@ describe("ThreadMarkdown", () => {
   it("renders markdown formatting and local file links", () => {
     render(
       <ThreadMarkdown
-        text={"Use **bold** text and open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)."}
-      />
+        text={
+          "Use **bold** text and open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)."
+        }
+      />,
     );
 
-    expect(screen.getByText("bold", { selector: "strong" })).toBeInTheDocument();
+    expect(
+      screen.getByText("bold", { selector: "strong" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
       "href",
-      "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
+      "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md",
     );
     expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
       "title",
-      "Open in PwrAgent"
+      "Open in PwrAgent",
     );
   });
 
@@ -94,7 +98,7 @@ describe("ThreadMarkdown", () => {
         }}
         desktopApi={{ openApplication }}
         text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md:17)."}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
@@ -112,7 +116,9 @@ describe("ThreadMarkdown", () => {
 
   it("opens markdown file links in a document modal and keeps the editor icon separate", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
-    const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
+    const openMarkdownFileViewer = vi.fn(async () => ({
+      opened: true as const,
+    }));
     const readMarkdownFile = vi.fn(async (request: { path: string }) => ({
       path: request.path,
       content: "# AGENTS\n\nUse the repo guidance.",
@@ -142,7 +148,11 @@ describe("ThreadMarkdown", () => {
             discovery: { candidates: [] },
           },
         }}
-        desktopApi={{ openApplication, openMarkdownFileViewer, readMarkdownFile }}
+        desktopApi={{
+          openApplication,
+          openMarkdownFileViewer,
+          readMarkdownFile,
+        }}
         fileViewerContext={{
           key: "codex:thread-1",
           title: "Files - Thread title",
@@ -150,16 +160,16 @@ describe("ThreadMarkdown", () => {
           projectPath: "/repo/PwrAgent",
         }}
         text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md:17)."}
-      />
+      />,
     );
 
     expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "title",
-      "Open in PwrAgent"
+      "Open in PwrAgent",
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Open file in Zed: AGENTS.md" })
+      screen.getByRole("button", { name: "Open file in Zed: AGENTS.md" }),
     );
 
     await waitFor(() => {
@@ -175,15 +185,20 @@ describe("ThreadMarkdown", () => {
     openApplication.mockClear();
     fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
 
-    expect(await screen.findByRole("dialog", { name: "Markdown document: AGENTS.md" }))
-      .toBeInTheDocument();
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Markdown document: AGENTS.md",
+      }),
+    ).toBeInTheDocument();
     expect(readMarkdownFile).toHaveBeenCalledWith({
       path: "/repo/PwrAgent/AGENTS.md",
     });
     expect(screen.getByRole("heading", { name: "AGENTS" })).toBeInTheDocument();
     expect(openApplication).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open in detached files window" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open in detached files window" }),
+    );
 
     await waitFor(() => {
       expect(openMarkdownFileViewer).toHaveBeenCalledWith({
@@ -236,7 +251,7 @@ describe("ThreadMarkdown", () => {
         }}
         desktopApi={{ openApplication }}
         text={"Open [source](/repo/PwrAgent/src/main.ts:12:4)."}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("link", { name: "source" }));
@@ -258,11 +273,11 @@ describe("ThreadMarkdown", () => {
         text={
           "Open docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md then notes.md and www.example.com."
         }
-      />
+      />,
     );
 
     expect(container).toHaveTextContent(
-      "docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md"
+      "docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md",
     );
     expect(container).toHaveTextContent("notes.md");
     expect(container).toHaveTextContent("www.example.com");
@@ -275,18 +290,20 @@ describe("ThreadMarkdown", () => {
         text={
           "[Docs](https://example.com/docs) [Local](http://localhost:5173/status) [Plain HTTP](http://example.com) [Bad](javascript:alert(1))"
         }
-      />
+      />,
     );
 
     expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute(
       "href",
-      "https://example.com/docs"
+      "https://example.com/docs",
     );
     expect(screen.getByRole("link", { name: "Local" })).toHaveAttribute(
       "href",
-      "http://localhost:5173/status"
+      "http://localhost:5173/status",
     );
-    expect(screen.queryByRole("link", { name: "Plain HTTP" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Plain HTTP" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Bad" })).not.toBeInTheDocument();
   });
 
@@ -301,34 +318,42 @@ describe("ThreadMarkdown", () => {
             enabled: true,
           },
         ]}
-        text={"Load [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)"}
-      />
+        text={
+          "Load [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)"
+        }
+      />,
     );
 
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "$frontend-design" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "$frontend-design" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders emoji, italic, strikethrough, and inline code", () => {
     render(
       <ThreadMarkdown
         text={"Calmer 😎 with *italic*, ~~struck~~, and `inline code`."}
-      />
+      />,
     );
 
     expect(screen.getByText("😎", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("italic", { selector: "em" })).toBeInTheDocument();
     expect(screen.getByText("struck", { selector: "del" })).toBeInTheDocument();
     expect(
-      screen.getByText("inline code", { selector: "code.transcript-message__code" })
+      screen.getByText("inline code", {
+        selector: "code.transcript-message__code",
+      }),
     ).toBeInTheDocument();
   });
 
   it("preserves single newlines as visible line breaks", () => {
     const { container } = render(
       <ThreadMarkdown
-        text={"Still Grok 4.\nWon't change no matter how many times you test.\nBuilt by xAI."}
-      />
+        text={
+          "Still Grok 4.\nWon't change no matter how many times you test.\nBuilt by xAI."
+        }
+      />,
     );
 
     expect(container.querySelectorAll("br")).toHaveLength(2);
@@ -349,11 +374,15 @@ describe("ThreadMarkdown", () => {
           "- Third List - One",
           "- Third List - Two",
         ].join("\n")}
-      />
+      />,
     );
 
-    expect(container.querySelectorAll("hr.transcript-message__rule")).toHaveLength(2);
-    expect(container.querySelectorAll("ul.transcript-message__list")).toHaveLength(3);
+    expect(
+      container.querySelectorAll("hr.transcript-message__rule"),
+    ).toHaveLength(2);
+    expect(
+      container.querySelectorAll("ul.transcript-message__list"),
+    ).toHaveLength(3);
     expect(screen.getByText("Second List - One")).toBeInTheDocument();
   });
 
@@ -370,25 +399,31 @@ describe("ThreadMarkdown", () => {
           "- Five",
           "- Six",
         ].join("\n")}
-      />
+      />,
     );
 
     expect(container.querySelector("hr")).toBeNull();
-    expect(container.querySelectorAll("ul.transcript-message__list")).toHaveLength(1);
+    expect(
+      container.querySelectorAll("ul.transcript-message__list"),
+    ).toHaveLength(1);
     expect(screen.getAllByText("--")).toHaveLength(2);
   });
 
   it("renders html-looking transcript text literally", () => {
     const { container } = render(
       <ThreadMarkdown
-        text={"Use <em>safe</em> markup and <table><tr><td>x</td></tr></table> literally."}
-      />
+        text={
+          "Use <em>safe</em> markup and <table><tr><td>x</td></tr></table> literally."
+        }
+      />,
     );
 
     expect(container.querySelector("em")).toBeNull();
     expect(container.querySelector("table")).toBeNull();
     expect(container.textContent).toContain("<em>safe</em>");
-    expect(container.textContent).toContain("<table><tr><td>x</td></tr></table>");
+    expect(container.textContent).toContain(
+      "<table><tr><td>x</td></tr></table>",
+    );
   });
 
   it("keeps markdown-looking syntax literal inside fenced code blocks", () => {
@@ -403,16 +438,18 @@ describe("ThreadMarkdown", () => {
           },
         ]}
         text={
-          "````md\n```ts\nconst marker = \"**not bold**\";\n```\n[$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)\n![Preview](https://example.com/inside-code.png)\n````"
+          '````md\n```ts\nconst marker = "**not bold**";\n```\n[$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)\n![Preview](https://example.com/inside-code.png)\n````'
         }
-      />
+      />,
     );
 
     const codeBlock = container.querySelector("pre code");
     expect(codeBlock).not.toBeNull();
     expect(codeBlock?.textContent).toContain("**not bold**");
     expect(codeBlock?.textContent).toContain("[$frontend-design]");
-    expect(codeBlock?.textContent).toContain("![Preview](https://example.com/inside-code.png)");
+    expect(codeBlock?.textContent).toContain(
+      "![Preview](https://example.com/inside-code.png)",
+    );
     expect(container.querySelector("pre strong")).toBeNull();
     expect(container.querySelector("pre .skill-chip")).toBeNull();
     expect(container.querySelector("pre img")).toBeNull();
@@ -429,7 +466,7 @@ describe("ThreadMarkdown", () => {
           "- --",
           "````",
         ].join("\n")}
-      />
+      />,
     );
 
     const codeBlock = container.querySelector("pre code");
@@ -449,7 +486,7 @@ describe("ThreadMarkdown", () => {
     expect(codeBlocks[0]?.textContent).toContain("Regression test:");
     expect(codeBlocks[0]?.textContent).toContain("Related hardening:");
     const paragraphText = Array.from(
-      container.querySelectorAll(".transcript-message__paragraph")
+      container.querySelectorAll(".transcript-message__paragraph"),
     ).map((paragraph) => paragraph.textContent ?? "");
     expect(paragraphText.join("\n")).not.toContain("Regression test:");
   });
@@ -458,10 +495,7 @@ describe("ThreadMarkdown", () => {
     const copyText = vi.fn(async () => undefined);
 
     render(
-      <ThreadMarkdown
-        desktopApi={{ copyText }}
-        text={malformedHandoff}
-      />
+      <ThreadMarkdown desktopApi={{ copyText }} text={malformedHandoff} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
@@ -498,7 +532,7 @@ describe("ThreadMarkdown", () => {
       <ThreadMarkdown
         desktopApi={{ copyText }}
         text={"```ts\nconst answer = 42;\n```"}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
@@ -512,15 +546,19 @@ describe("ThreadMarkdown", () => {
     const lines = Array.from({ length: 21 }, (_, index) => `line ${index + 1}`);
 
     const { container } = render(
-      <ThreadMarkdown text={`\`\`\`txt\n${lines.join("\n")}\n\`\`\``} />
+      <ThreadMarkdown text={`\`\`\`txt\n${lines.join("\n")}\n\`\`\``} />,
     );
 
     const codeBlock = container.querySelector("pre.transcript-message__pre");
     expect(codeBlock).toBeInTheDocument();
     expect(codeBlock).toHaveAttribute("aria-label", "Code block");
     expect(codeBlock).toHaveAttribute("tabindex", "0");
-    expect(screen.queryByRole("button", { name: /Show full code/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Collapse code/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Show full code/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Collapse code/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("copies blockquotes without quote markers", async () => {
@@ -530,67 +568,89 @@ describe("ThreadMarkdown", () => {
       <ThreadMarkdown
         desktopApi={{ copyText }}
         text={"> Replay this prompt\n> exactly as written"}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Copy quote" }));
 
     await waitFor(() => {
-      expect(copyText).toHaveBeenCalledWith("Replay this prompt\nexactly as written");
+      expect(copyText).toHaveBeenCalledWith(
+        "Replay this prompt\nexactly as written",
+      );
     });
   });
 
   it("renders long blockquotes without expand controls", () => {
     const quote = Array.from(
       { length: 21 },
-      (_, index) => `> quoted line ${index + 1}`
+      (_, index) => `> quoted line ${index + 1}`,
     ).join("\n");
 
     const { container } = render(<ThreadMarkdown text={quote} />);
 
-    const blockquote = container.querySelector("blockquote.transcript-message__blockquote");
+    const blockquote = container.querySelector(
+      "blockquote.transcript-message__blockquote",
+    );
     expect(blockquote).toBeInTheDocument();
     expect(blockquote).toHaveAttribute("aria-label", "Quoted text");
     expect(blockquote).toHaveAttribute("tabindex", "0");
-    expect(screen.queryByRole("button", { name: /Show full quote/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Collapse quote/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Show full quote/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Collapse quote/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders markdown image syntax as literal text instead of an image", () => {
     const { container } = render(
       <ThreadMarkdown
-        text={"Keep ![Transcript preview](https://example.com/preview.png) inert for now."}
-      />
+        text={
+          "Keep ![Transcript preview](https://example.com/preview.png) inert for now."
+        }
+      />,
     );
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.textContent).toContain(
-      "![Transcript preview](https://example.com/preview.png)"
+      "![Transcript preview](https://example.com/preview.png)",
     );
   });
 
   it("renders wide review-style markdown tables with transcript table chrome", () => {
     const { container } = render(
-      <ThreadMarkdown text={`## Findings\n\n${sanitizedReviewFindingsTable}`} />
+      <ThreadMarkdown
+        text={`## Findings\n\n${sanitizedReviewFindingsTable}`}
+      />,
     );
 
     const tableScroll = container.querySelector<HTMLDivElement>(
-      ".thread-markdown__table-scroll"
+      ".thread-markdown__table-scroll",
     );
-    const table = container.querySelector<HTMLTableElement>(".thread-markdown__table");
+    const table = container.querySelector<HTMLTableElement>(
+      ".thread-markdown__table",
+    );
 
     expect(tableScroll).not.toBeNull();
     expect(table).not.toBeNull();
     expect(tableScroll).toContainElement(table);
-    expect(container.querySelectorAll("th.thread-markdown__th")).toHaveLength(5);
-    expect(container.querySelectorAll("td.thread-markdown__td")).toHaveLength(25);
-    expect(screen.getByRole("columnheader", { name: "Issue" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Fix" })).toBeInTheDocument();
+    expect(container.querySelectorAll("th.thread-markdown__th")).toHaveLength(
+      5,
+    );
+    expect(container.querySelectorAll("td.thread-markdown__td")).toHaveLength(
+      25,
+    );
     expect(
-      screen.getByRole("link", { name: "InvoiceDispatcher.scala (line 48)" })
+      screen.getByRole("columnheader", { name: "Issue" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: "Fix" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "InvoiceDispatcher.scala (line 48)" }),
     ).toHaveAttribute(
       "href",
-      "file:///Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:48"
+      "file:///Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:48",
     );
     expect(container).toHaveTextContent("Retry suppressed");
     expect(container).toHaveTextContent("failure-heavy behavior explicitly");
@@ -598,20 +658,30 @@ describe("ThreadMarkdown", () => {
 
   it("profiles review findings columns by content shape (tag / label / prose)", () => {
     const { container } = render(
-      <ThreadMarkdown text={`## Findings\n\n${sanitizedReviewFindingsTable}`} />
+      <ThreadMarkdown
+        text={`## Findings\n\n${sanitizedReviewFindingsTable}`}
+      />,
     );
 
     const headerCellKinds = Array.from(
-      container.querySelectorAll<HTMLTableCellElement>("thead th")
+      container.querySelectorAll<HTMLTableCellElement>("thead th"),
     ).map((cell) => cell.getAttribute("data-col-kind"));
 
     expect(headerCellKinds).toEqual(["tag", "tag", "label", "prose", "prose"]);
 
     const firstRowCellKinds = Array.from(
-      container.querySelectorAll<HTMLTableCellElement>("tbody tr:first-child td")
+      container.querySelectorAll<HTMLTableCellElement>(
+        "tbody tr:first-child td",
+      ),
     ).map((cell) => cell.getAttribute("data-col-kind"));
 
-    expect(firstRowCellKinds).toEqual(["tag", "tag", "label", "prose", "prose"]);
+    expect(firstRowCellKinds).toEqual([
+      "tag",
+      "tag",
+      "label",
+      "prose",
+      "prose",
+    ]);
   });
 
   it("profiles a generic wide table without applying review-findings sizing", () => {
@@ -620,18 +690,22 @@ describe("ThreadMarkdown", () => {
         text={`| Metric | North America | Europe | Asia Pacific |
 |---|---|---|---|
 | Request fingerprint | \`north-america-invoice-pacing-window-retry-suppressed-001\` | \`europe-invoice-pacing-window-retry-suppressed-002\` | \`asia-pacific-invoice-pacing-window-retry-suppressed-003\` |`}
-      />
+      />,
     );
 
     const headerCellKinds = Array.from(
-      container.querySelectorAll<HTMLTableCellElement>("thead th")
+      container.querySelectorAll<HTMLTableCellElement>("thead th"),
     ).map((cell) => cell.getAttribute("data-col-kind"));
 
     // Metric column has a single short two-word value -> label.
     // Regional columns hold long unbroken identifiers -> prose.
     expect(headerCellKinds).toEqual(["label", "prose", "prose", "prose"]);
-    expect(screen.getByRole("columnheader", { name: "Metric" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "North America" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: "Metric" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: "North America" }),
+    ).toBeInTheDocument();
   });
 
   it("classifies a compact key/value table as label/label", () => {
@@ -641,11 +715,11 @@ describe("ThreadMarkdown", () => {
 |---|---|
 | Mode | Shadow |
 | Owner | Billing |`}
-      />
+      />,
     );
 
     const headerCellKinds = Array.from(
-      container.querySelectorAll<HTMLTableCellElement>("thead th")
+      container.querySelectorAll<HTMLTableCellElement>("thead th"),
     ).map((cell) => cell.getAttribute("data-col-kind"));
 
     // 5-7 char values, single word -> label (not tag, since "Shadow"=6 chars > 4)
@@ -660,11 +734,11 @@ describe("ThreadMarkdown", () => {
 | ✓ | P1 | Critical retry suppression issue blocking the rollout |
 | ✗ | P2 | Cross-tenant identity merging detected by snapshot test |
 | ✓ | P3 | Sampling key drift across repeat customer requests |`}
-      />
+      />,
     );
 
     const headerCellKinds = Array.from(
-      container.querySelectorAll<HTMLTableCellElement>("thead th")
+      container.querySelectorAll<HTMLTableCellElement>("thead th"),
     ).map((cell) => cell.getAttribute("data-col-kind"));
 
     // ✓/✗ -> tag, P1/P2/P3 -> tag, long Note prose -> prose

@@ -15,7 +15,11 @@ type HeapUsageResponse = {
 
 type SessionStub = ReturnType<typeof createSessionStub>;
 
-function createMonitorConfig(overrides?: Partial<Extract<ReturnType<typeof resolveHeapMonitorConfig>, { enabled: true }>>) {
+function createMonitorConfig(
+  overrides?: Partial<
+    Extract<ReturnType<typeof resolveHeapMonitorConfig>, { enabled: true }>
+  >,
+) {
   const config = resolveHeapMonitorConfig({
     env: {
       PWRAGENT_HEAP_DIAGNOSTICS: "1",
@@ -97,21 +101,25 @@ function createTarget(
 
       return next;
     }),
-    on: vi.fn((event: string, listener: (event: unknown, reason: string) => void) => {
-      if (event === "detach") {
-        detachListeners.add(listener);
-      }
-    }),
-    off: vi.fn((event: string, listener: (event: unknown, reason: string) => void) => {
-      if (event === "detach") {
-        detachListeners.delete(listener);
-      }
-    }),
+    on: vi.fn(
+      (event: string, listener: (event: unknown, reason: string) => void) => {
+        if (event === "detach") {
+          detachListeners.add(listener);
+        }
+      },
+    ),
+    off: vi.fn(
+      (event: string, listener: (event: unknown, reason: string) => void) => {
+        if (event === "detach") {
+          detachListeners.delete(listener);
+        }
+      },
+    ),
   };
 
   const takeHeapSnapshot = vi.fn(
-    options?.takeHeapSnapshot ??
-      (async () => {
+    options?.takeHeapSnapshot
+      ?? (async () => {
         return undefined;
       }),
   );
@@ -181,9 +189,24 @@ describe("RendererHeapMonitor", () => {
     await advance(5);
 
     expect(session.samples).toEqual([
-      expect.objectContaining({ source: "renderer", usedSize: 100, isBaseline: true, deltaBytes: null }),
-      expect.objectContaining({ source: "renderer", usedSize: 120, isBaseline: false, deltaBytes: 20 }),
-      expect.objectContaining({ source: "renderer", usedSize: 125, isBaseline: false, deltaBytes: 5 }),
+      expect.objectContaining({
+        source: "renderer",
+        usedSize: 100,
+        isBaseline: true,
+        deltaBytes: null,
+      }),
+      expect.objectContaining({
+        source: "renderer",
+        usedSize: 120,
+        isBaseline: false,
+        deltaBytes: 20,
+      }),
+      expect.objectContaining({
+        source: "renderer",
+        usedSize: 125,
+        isBaseline: false,
+        deltaBytes: 5,
+      }),
     ]);
 
     await monitor.stop();
@@ -242,8 +265,13 @@ describe("RendererHeapMonitor", () => {
     await advance(1);
     await advance(5);
 
-    const snapPath = (takeHeapSnapshot.mock.calls.at(-1)?.[0] ?? "").replace(/\\/g, "/");
-    expect(snapPath).toBe("/repo/.local/heap-2026-04-18-1702-abc123/heap-0001.heapsnapshot");
+    const snapPath = (takeHeapSnapshot.mock.calls.at(-1)?.[0] ?? "").replace(
+      /\\/g,
+      "/",
+    );
+    expect(snapPath).toBe(
+      "/repo/.local/heap-2026-04-18-1702-abc123/heap-0001.heapsnapshot",
+    );
     expect(session.snapshotFiles).toEqual(["heap-0001.heapsnapshot"]);
     expect(session.events).toEqual(
       expect.arrayContaining([
@@ -521,7 +549,9 @@ describe("RendererHeapMonitor", () => {
 
   it("stops cleanly when the renderer target has already been destroyed", async () => {
     const session = createSessionStub();
-    const { target, debuggerApi } = createTarget([{ usedSize: 100, totalSize: 200 }]);
+    const { target, debuggerApi } = createTarget([
+      { usedSize: 100, totalSize: 200 },
+    ]);
     const logger = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -625,10 +655,16 @@ describe("RendererHeapMonitor", () => {
     await snapshotWritten.promise;
 
     await expect(
-      fs.readFile(path.join(created.session.directoryPath, "heap-0001.heapsnapshot"), "utf8"),
+      fs.readFile(
+        path.join(created.session.directoryPath, "heap-0001.heapsnapshot"),
+        "utf8",
+      ),
     ).resolves.toContain('"snapshot":true');
 
-    const eventsPath = path.join(created.session.directoryPath, "events.ndjson");
+    const eventsPath = path.join(
+      created.session.directoryPath,
+      "events.ndjson",
+    );
     let eventLines: Array<Record<string, unknown>> = [];
     const deadline = Date.now() + 1_000;
 
@@ -640,10 +676,11 @@ describe("RendererHeapMonitor", () => {
 
       const hasCompletedSnapshot = eventLines.some(
         (line) =>
-          line.type === "snapshot-completed" &&
-          typeof line.detail === "object" &&
-          line.detail !== null &&
-          (line.detail as { filename?: string }).filename === "heap-0001.heapsnapshot"
+          line.type === "snapshot-completed"
+          && typeof line.detail === "object"
+          && line.detail !== null
+          && (line.detail as { filename?: string }).filename
+            === "heap-0001.heapsnapshot",
       );
       if (hasCompletedSnapshot) {
         break;

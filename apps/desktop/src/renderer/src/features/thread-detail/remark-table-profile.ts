@@ -51,7 +51,10 @@ export const remarkTableProfile: RemarkPlugin = () => (tree) => {
   });
 };
 
-function forEachTable(node: MdastNode, visit: (table: MdastTable) => void): void {
+function forEachTable(
+  node: MdastNode,
+  visit: (table: MdastTable) => void,
+): void {
   if (node.type === "table") {
     visit(node as MdastTable);
     return;
@@ -71,9 +74,10 @@ function computeColumnKinds(
 ): ColumnKind[] {
   const kinds: ColumnKind[] = [];
   for (let column = 0; column < columnCount; column++) {
-    const sampleCells: MdastTableCell[] = dataRows.length > 0
-      ? dataRows.map((row) => row.children[column]).filter(isCell)
-      : [headerRow.children[column]].filter(isCell);
+    const sampleCells: MdastTableCell[] =
+      dataRows.length > 0
+        ? dataRows.map((row) => row.children[column]).filter(isCell)
+        : [headerRow.children[column]].filter(isCell);
 
     kinds.push(classifyColumn(sampleCells));
   }

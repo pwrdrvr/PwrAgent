@@ -8,8 +8,10 @@ export const APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL =
 export const APP_SERVER_LIST_SKILLS_CHANNEL = "app-server:list-skills";
 export const APP_SERVER_ARCHIVE_THREAD_CHANNEL = "app-server:archive-thread";
 export const APP_SERVER_RESTORE_THREAD_CHANNEL = "app-server:restore-thread";
-export const APP_SERVER_ARCHIVE_WORKTREE_CHANNEL = "app-server:archive-worktree";
-export const APP_SERVER_RESTORE_WORKTREE_CHANNEL = "app-server:restore-worktree";
+export const APP_SERVER_ARCHIVE_WORKTREE_CHANNEL =
+  "app-server:archive-worktree";
+export const APP_SERVER_RESTORE_WORKTREE_CHANNEL =
+  "app-server:restore-worktree";
 export const APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL =
   "app-server:handoff-thread-workspace";
 export const APP_SERVER_RENAME_THREAD_CHANNEL = "app-server:rename-thread";
@@ -29,15 +31,18 @@ export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";
 export const AGENT_COMPACT_THREAD_CHANNEL = "agent:compact-thread";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";
-export const AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL = "agent:set-thread-execution-mode";
+export const AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL =
+  "agent:set-thread-execution-mode";
 export const AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL =
   "agent:queue-thread-execution-mode";
 export const AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL =
   "agent:cancel-thread-execution-mode-queue";
 export const AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL =
   "agent:set-acp-session-runtime-option";
-export const AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL = "agent:set-thread-model-settings";
-export const AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL = "agent:check-thread-branch-drift";
+export const AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL =
+  "agent:set-thread-model-settings";
+export const AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL =
+  "agent:check-thread-branch-drift";
 export const AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL =
   "agent:update-thread-expected-branch";
 export const AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL =
@@ -52,19 +57,19 @@ export const AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL =
   "agent:stop-codex-environment-action";
 export const AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL =
   "agent:set-codex-thread-environment";
-export const AGENT_SUBMIT_SERVER_REQUEST_CHANNEL = "agent:submit-server-request";
+export const AGENT_SUBMIT_SERVER_REQUEST_CHANNEL =
+  "agent:submit-server-request";
 export const AGENT_TRUST_CODEX_PROJECT_CHANNEL = "agent:trust-codex-project";
 export const AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL =
   "agent:latest-codex-config-warning";
 export const AGENT_EVENT_CHANNEL = "agent:event";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
-export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
-  "navigation:set-browse-mode";
-export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
+export const NAVIGATION_SET_BROWSE_MODE_CHANNEL = "navigation:set-browse-mode";
+export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL =
+  "navigation:mark-thread-seen";
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
-export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
-  "navigation:set-thread-pin";
+export const NAVIGATION_SET_THREAD_PIN_CHANNEL = "navigation:set-thread-pin";
 export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
   "navigation:set-thread-agent";
 export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
@@ -95,8 +100,7 @@ export const NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL =
   "navigation:attach-directory-to-thread";
 export const NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL =
   "navigation:detach-directory-from-thread";
-export const NAVIGATION_GET_GH_STATUS_CHANNEL =
-  "navigation:get-gh-status";
+export const NAVIGATION_GET_GH_STATUS_CHANNEL = "navigation:get-gh-status";
 export const NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL =
   "navigation:refresh-directory-git-statuses";
 export const NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL =
@@ -155,8 +159,7 @@ export const MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL =
  *
  * Idempotent — calling it when no runtime is running is a no-op.
  */
-export const MESSAGING_SHUTDOWN_RUNTIME_CHANNEL =
-  "messaging:shutdown-runtime";
+export const MESSAGING_SHUTDOWN_RUNTIME_CHANNEL = "messaging:shutdown-runtime";
 /**
  * Drives the per-credential "Test" button on Settings → Messaging
  * and Settings → Models. Request payload: `{ kind: "telegram" |
@@ -167,8 +170,7 @@ export const MESSAGING_SHUTDOWN_RUNTIME_CHANNEL =
  * identity (bot username, model IDs, codex version), never the
  * token or API key.
  */
-export const SETTINGS_TEST_CREDENTIALS_CHANNEL =
-  "settings:test-credentials";
+export const SETTINGS_TEST_CREDENTIALS_CHANNEL = "settings:test-credentials";
 /**
  * Sibling channel for "what was the last result?" — driven on
  * settings-pane mount so the test block can render the previous
@@ -281,8 +283,7 @@ export const SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL =
   "settings:start-codex-auth-profile-login";
 export const SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL =
   "settings:check-codex-auth-profile-status";
-export const SETTINGS_PICK_GH_COMMAND_CHANNEL =
-  "settings:pick-gh-command";
+export const SETTINGS_PICK_GH_COMMAND_CHANNEL = "settings:pick-gh-command";
 export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
   "onboarding:complete-codex-bootstrap";
 export const APPLICATION_OPEN_CHANNEL = "application:open";
@@ -294,18 +295,17 @@ export const MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL =
   "markdown-file-viewer:read-snapshot";
 export const MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL =
   "markdown-file-viewer:snapshot-changed";
-export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
-  "integrated-terminal:create";
+export const INTEGRATED_TERMINAL_CREATE_CHANNEL = "integrated-terminal:create";
 export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";
-export const INTEGRATED_TERMINAL_RESIZE_CHANNEL =
-  "integrated-terminal:resize";
+export const INTEGRATED_TERMINAL_RESIZE_CHANNEL = "integrated-terminal:resize";
 export const INTEGRATED_TERMINAL_CLOSE_CHANNEL = "integrated-terminal:close";
 export const INTEGRATED_TERMINAL_OUTPUT_CHANNEL = "integrated-terminal:output";
 export const INTEGRATED_TERMINAL_EXIT_CHANNEL = "integrated-terminal:exit";
 export const INTEGRATED_TERMINAL_ERROR_CHANNEL = "integrated-terminal:error";
 export const APP_METADATA_READ_CHANNEL = "app:read-metadata";
 export const APP_LICENSE_DOCUMENT_READ_CHANNEL = "app:read-license-document";
-export const APP_CHANGELOG_DOCUMENT_READ_CHANNEL = "app:read-changelog-document";
+export const APP_CHANGELOG_DOCUMENT_READ_CHANNEL =
+  "app:read-changelog-document";
 export const APP_CHANGELOG_WINDOW_OPEN_CHANNEL = "app:open-changelog-window";
 export const APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL =
   "app:open-third-party-notices-window";

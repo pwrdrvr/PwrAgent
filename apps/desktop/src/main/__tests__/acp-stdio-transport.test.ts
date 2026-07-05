@@ -26,7 +26,9 @@ class MockAcpChildProcess extends EventEmitter {
   }
 }
 
-function createDescriptor(overrides: Partial<AcpLaunchDescriptor> = {}): AcpLaunchDescriptor {
+function createDescriptor(
+  overrides: Partial<AcpLaunchDescriptor> = {},
+): AcpLaunchDescriptor {
   return {
     backendId: "acp:test-agent" as AcpBackendId,
     registryId: "test-agent",
@@ -76,7 +78,10 @@ describe("AcpStdioJsonRpcTransport", () => {
       expect(String(options.env?.PATH)).toContain("/usr/local/bin");
     }
 
-    const envelope = JSON.parse(child.writes[0]) as { id: string; method: string };
+    const envelope = JSON.parse(child.writes[0]) as {
+      id: string;
+      method: string;
+    };
     expect(child.writes[0]).toMatch(/\n$/);
     expect(envelope).toMatchObject({
       jsonrpc: "2.0",
@@ -153,7 +158,9 @@ describe("AcpStdioJsonRpcTransport", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(listener).toHaveBeenCalledWith("session/update", { sessionId: "s1" });
+    expect(listener).toHaveBeenCalledWith("session/update", {
+      sessionId: "s1",
+    });
     expect(listener).toHaveBeenCalledTimes(1);
     await transport.close();
     expect(child.killCalled).toBe(true);

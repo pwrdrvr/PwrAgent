@@ -68,17 +68,20 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       maxPages: request.refreshMode === "active-recent" ? 1 : undefined,
       skipArchivedMetadataRefresh: request.refreshMode === "active-recent",
     });
-    const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
+    const messagingBindingsByThreadKey =
+      await buildMessagingBindingsByThreadKey(threads);
     const queuedExecutionModesByThreadKey =
       this.registry.getQueuedExecutionModesSnapshot();
-    const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
-      backend,
-      fetchedAt: Date.now(),
-      messagingBindingsByThreadKey,
-      queuedExecutionModesByThreadKey,
-      threads,
-      workspaceRoots: resolveScratchProjectsRoots(),
-    });
+    const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot(
+      {
+        backend,
+        fetchedAt: Date.now(),
+        messagingBindingsByThreadKey,
+        queuedExecutionModesByThreadKey,
+        threads,
+        workspaceRoots: resolveScratchProjectsRoots(),
+      },
+    );
     const directoryStatuses = await this.registry.readDirectoryStatuses(
       snapshot.directories,
     );
@@ -204,11 +207,15 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return await this.registry.startThread(request);
   }
 
-  async compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse> {
+  async compactThread(
+    request: CompactThreadRequest,
+  ): Promise<CompactThreadResponse> {
     return await this.registry.compactThread(request);
   }
 
-  async interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse> {
+  async interruptTurn(
+    request: InterruptTurnRequest,
+  ): Promise<InterruptTurnResponse> {
     return await this.registry.interruptTurn(request);
   }
 
@@ -218,7 +225,9 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return await this.registry.listSkills(request);
   }
 
-  async listBackends(request: ListBackendsRequest = {}): Promise<ListBackendsResponse> {
+  async listBackends(
+    request: ListBackendsRequest = {},
+  ): Promise<ListBackendsResponse> {
     return await this.registry.listBackends(request);
   }
 
@@ -314,9 +323,9 @@ function findLastAssistantEntryCreatedAt(
   for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
     const entry = replay.entries[index];
     if (
-      entry?.type === "message" &&
-      entry.role === "assistant" &&
-      entry.text.trim() === text
+      entry?.type === "message"
+      && entry.role === "assistant"
+      && entry.text.trim() === text
     ) {
       return entry.createdAt;
     }
@@ -329,10 +338,10 @@ function isReplyNewer(
   current: MessagingLastAssistantReply,
 ): boolean {
   return (
-    typeof candidate.createdAt === "number" &&
-    Number.isFinite(candidate.createdAt) &&
-    typeof current.createdAt === "number" &&
-    Number.isFinite(current.createdAt) &&
-    candidate.createdAt > current.createdAt
+    typeof candidate.createdAt === "number"
+    && Number.isFinite(candidate.createdAt)
+    && typeof current.createdAt === "number"
+    && Number.isFinite(current.createdAt)
+    && candidate.createdAt > current.createdAt
   );
 }

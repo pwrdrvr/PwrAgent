@@ -181,9 +181,9 @@ describe("live diff activity normalization", () => {
 
     expect(entry?.details).toHaveLength(80);
     expect(entry?.summary).toBe("Edited 80 files, +80, -0");
-    expect(
-      entry?.details.every((detail) => detail.fileDiff?.diff === ""),
-    ).toBe(true);
+    expect(entry?.details.every((detail) => detail.fileDiff?.diff === "")).toBe(
+      true,
+    );
     expect(entry?.details[0]?.fileDiff).toMatchObject({
       diff: "",
       diffRef: expect.objectContaining({

@@ -149,10 +149,14 @@ function upsertSnapshotFile(
   file: MarkdownFileViewerFile,
   editorApplication: OpenMarkdownFileViewerRequest["editorApplication"],
 ): MarkdownFileViewerSnapshot {
-  const existingIndex = snapshot.files.findIndex((candidate) => candidate.path === file.path);
+  const existingIndex = snapshot.files.findIndex(
+    (candidate) => candidate.path === file.path,
+  );
   const files =
     existingIndex >= 0
-      ? snapshot.files.map((candidate, index) => index === existingIndex ? file : candidate)
+      ? snapshot.files.map((candidate, index) =>
+          index === existingIndex ? file : candidate,
+        )
       : [...snapshot.files, file];
 
   return {

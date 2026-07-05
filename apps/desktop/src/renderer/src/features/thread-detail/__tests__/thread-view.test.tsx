@@ -1,5 +1,13 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -107,11 +115,11 @@ afterEach(() => {
 beforeEach(() => {
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
-    value: vi.fn(() => "blob:expanded-transcript-image")
+    value: vi.fn(() => "blob:expanded-transcript-image"),
   });
   Object.defineProperty(URL, "revokeObjectURL", {
     configurable: true,
-    value: vi.fn()
+    value: vi.fn(),
   });
 });
 
@@ -147,11 +155,11 @@ describe("ThreadView", () => {
         transcriptEntries={[]}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     expect(
-      screen.getByRole("heading", { level: 2, name: "Pick a Thread" })
+      screen.getByRole("heading", { level: 2, name: "Pick a Thread" }),
     ).toBeInTheDocument();
     const emptyState = screen
       .getByRole("heading", { level: 2, name: "Select a thread" })
@@ -159,7 +167,9 @@ describe("ThreadView", () => {
     const header = document.querySelector(".thread-header--placeholder");
 
     expect(emptyState).not.toBeNull();
-    expect(emptyState?.querySelector(".thread-empty-state__content")).not.toBeNull();
+    expect(
+      emptyState?.querySelector(".thread-empty-state__content"),
+    ).not.toBeNull();
     expect(header).not.toBeNull();
     await waitFor(() => {
       expect(screen.getByLabelText(/Telegram: Enabled/)).toBeInTheDocument();
@@ -197,7 +207,12 @@ describe("ThreadView", () => {
                 windowMinutes: 10_080,
               },
             ],
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -210,7 +225,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -243,7 +258,7 @@ describe("ThreadView", () => {
               transcriptPagination: false,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: false
+              multiDirectoryThreads: false,
             },
             executionModes: [
               {
@@ -254,8 +269,8 @@ describe("ThreadView", () => {
                 unavailableReason: "XAI_API_KEY is not set",
               },
             ],
-            unavailableReason: "XAI_API_KEY is not set"
-          }
+            unavailableReason: "XAI_API_KEY is not set",
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -280,8 +295,8 @@ describe("ThreadView", () => {
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
-            inInbox: false
-          }
+            inInbox: false,
+          },
         }}
         skills={[
           {
@@ -296,7 +311,7 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Inspect [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)."
+            text: "Inspect [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md).",
           },
           {
             type: "activity",
@@ -306,35 +321,38 @@ describe("ThreadView", () => {
               {
                 id: "detail-1",
                 kind: "read",
-                label: "Read TranscriptList.tsx"
+                label: "Read TranscriptList.tsx",
               },
               {
                 id: "detail-2",
                 kind: "read",
-                label: "Read ThreadView.tsx"
-              }
-            ]
+                label: "Read ThreadView.tsx",
+              },
+            ],
           },
           {
             type: "message",
             id: "message-2",
             role: "assistant",
-            text: "The desktop client now reads the full transcript."
-          }
+            text: "The desktop client now reads the full transcript.",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
         skillLoading={false}
-      />
+      />,
     );
 
     expect(
-      screen.getByRole("heading", { level: 2, name: "Plan the app-server protocol" })
+      screen.getByRole("heading", {
+        level: 2,
+        name: "Plan the app-server protocol",
+      }),
     ).toBeInTheDocument();
-    expect(document.querySelector(".thread-header__compact-title")).toHaveTextContent(
-      "Plan the app-server protocol"
-    );
+    expect(
+      document.querySelector(".thread-header__compact-title"),
+    ).toHaveTextContent("Plan the app-server protocol");
     expect(document.querySelector(".thread-header__title")).toBeNull();
     expect(document.querySelector(".thread-header__summary")).toBeNull();
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
@@ -344,17 +362,23 @@ describe("ThreadView", () => {
 
     expect(screen.getByText("No linked directory")).toBeInTheDocument();
     expect(
-      screen.getByText("The desktop client now reads the full transcript.")
+      screen.getByText("The desktop client now reads the full transcript."),
     ).toBeInTheDocument();
     expect(screen.queryByText("thread/read")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "desktop docs" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "desktop docs" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("Explored 2 files")).toBeInTheDocument();
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 3, name: "Execution context" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Execution context" }),
+    ).toBeInTheDocument();
     // Backend availability + account + rate limits now live under their own
     // Provider status tab (covered in ProviderStatusPanel.test.tsx). Here we
     // just confirm the tab is present in the rail.
-    expect(screen.getByRole("tab", { name: "Provider status" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("tab", { name: "Provider status" }),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
@@ -401,7 +425,9 @@ describe("ThreadView", () => {
       <ThreadView {...commonProps} selectedThread={firstThread} />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open integrated terminal" }),
+    );
 
     expect(await screen.findByLabelText("Integrated terminal")).toHaveAttribute(
       "data-thread-key",
@@ -411,10 +437,9 @@ describe("ThreadView", () => {
       "data-height",
       "260",
     );
-    expect(screen.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(
+      screen.getByRole("button", { name: "Hide integrated terminal" }),
+    ).toHaveAttribute("aria-pressed", "true");
 
     rerender(<ThreadView {...commonProps} selectedThread={secondThread} />);
 
@@ -423,10 +448,9 @@ describe("ThreadView", () => {
       container.querySelector('[aria-label="Integrated terminal"]'),
     ).toHaveAttribute("hidden");
     expect(closeIntegratedTerminal).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Open integrated terminal" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    expect(
+      screen.getByRole("button", { name: "Open integrated terminal" }),
+    ).toHaveAttribute("aria-pressed", "false");
 
     rerender(<ThreadView {...commonProps} selectedThread={firstThread} />);
 
@@ -434,12 +458,13 @@ describe("ThreadView", () => {
       "data-cwd",
       "/repo/a",
     );
-    expect(screen.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(
+      screen.getByRole("button", { name: "Hide integrated terminal" }),
+    ).toHaveAttribute("aria-pressed", "true");
 
-    fireEvent.click(screen.getByRole("button", { name: "Hide integrated terminal" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hide integrated terminal" }),
+    );
 
     expect(screen.getByLabelText("Integrated terminal")).not.toBeVisible();
     expect(
@@ -447,7 +472,9 @@ describe("ThreadView", () => {
     ).toHaveAttribute("hidden");
     expect(closeIntegratedTerminal).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open integrated terminal" }),
+    );
     fireEvent.click(await screen.findByTitle("Close terminal"));
 
     expect(closeIntegratedTerminal).toHaveBeenCalledWith({
@@ -494,7 +521,9 @@ describe("ThreadView", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open integrated terminal" }),
+    );
 
     expect(await screen.findByLabelText("Integrated terminal")).toHaveAttribute(
       "data-cwd",
@@ -542,7 +571,9 @@ describe("ThreadView", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open integrated terminal" }),
+    );
 
     expect(await screen.findByLabelText("Integrated terminal")).toHaveAttribute(
       "data-cwd",
@@ -586,14 +617,17 @@ describe("ThreadView", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open integrated terminal" }),
+    );
     fireEvent.click(await screen.findByText("Simulate terminal exit"));
 
-    expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open integrated terminal" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    expect(
+      screen.queryByLabelText("Integrated terminal"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open integrated terminal" }),
+    ).toHaveAttribute("aria-pressed", "false");
     expect(closeIntegratedTerminal).not.toHaveBeenCalled();
   });
 
@@ -641,7 +675,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: true,
@@ -691,19 +730,25 @@ describe("ThreadView", () => {
         transcriptEntries={[]}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     const header = document.querySelector(".thread-header--launchpad");
     expect(header).not.toBeNull();
-    expect(within(header as HTMLElement).getByText("New thread")).toBeInTheDocument();
-    expect(within(header as HTMLElement).getByText("Codex app server")).toBeInTheDocument();
+    expect(
+      within(header as HTMLElement).getByText("New thread"),
+    ).toBeInTheDocument();
+    expect(
+      within(header as HTMLElement).getByText("Codex app server"),
+    ).toBeInTheDocument();
     // Access mode is shown only in the composer now, not the header.
     expect(within(header as HTMLElement).queryByText("Full Access")).toBeNull();
     await waitFor(() => {
       expect(screen.getByLabelText(/Telegram: Enabled/)).toBeInTheDocument();
     });
-    expect(screen.getByRole("group", { name: "Messaging platform status" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Messaging platform status" }),
+    ).toBeInTheDocument();
   });
 
   it("shows environment setup details from config even when the deprecated setup flag is false", async () => {
@@ -750,7 +795,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: true,
@@ -787,7 +837,7 @@ describe("ThreadView", () => {
         onLoadOlder={async () => undefined}
         onMaterializeLaunchpad={onMaterializeLaunchpad}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
@@ -795,7 +845,9 @@ describe("ThreadView", () => {
     expect(
       await screen.findByRole("heading", { name: "Running environment setup" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
+    expect(screen.getByLabelText("Setup command")).toHaveTextContent(
+      "pnpm install",
+    );
     expect(screen.getAllByText("PwrSnap").length).toBeGreaterThan(0);
   });
 
@@ -838,7 +890,9 @@ describe("ThreadView", () => {
     expect(
       screen.getByRole("heading", { name: "Running environment setup" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
+    expect(screen.getByLabelText("Setup command")).toHaveTextContent(
+      "pnpm install",
+    );
     expect(screen.getByText("New worktree")).toBeInTheDocument();
 
     act(() => {
@@ -854,7 +908,9 @@ describe("ThreadView", () => {
       });
     });
 
-    expect(screen.getByText("/repo/app/.worktrees/thread-fork/app")).toBeInTheDocument();
+    expect(
+      screen.getByText("/repo/app/.worktrees/thread-fork/app"),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("Setup output")).toHaveTextContent(
       "installing dependencies",
     );
@@ -882,7 +938,9 @@ describe("ThreadView", () => {
       workMode: "worktree",
     } satisfies NavigationLaunchpadDraft;
     const onMaterializeLaunchpad = vi.fn(async () => {
-      throw new Error("json-rpc error (500): You have exhausted your capacity on this model.");
+      throw new Error(
+        "json-rpc error (500): You have exhausted your capacity on this model.",
+      );
     });
 
     render(
@@ -923,13 +981,14 @@ describe("ThreadView", () => {
         onLoadOlder={async () => undefined}
         onMaterializeLaunchpad={onMaterializeLaunchpad}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
 
-    expect(await screen.findByRole("heading", { name: "Could not start PwrAgent" }))
-      .toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Could not start PwrAgent" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(
         "json-rpc error (500): You have exhausted your capacity on this model.",
@@ -938,8 +997,12 @@ describe("ThreadView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
-    expect(await screen.findByRole("textbox", { name: "New thread" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Start thread" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("textbox", { name: "New thread" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Start thread" }),
+    ).toBeInTheDocument();
   });
 
   it("describes sub-thread launchpads as grouped children with empty history", () => {
@@ -982,11 +1045,13 @@ describe("ThreadView", () => {
         transcriptEntries={[]}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     expect(screen.getByText("Grouped under")).toBeInTheDocument();
-    expect(screen.getByText("Issue 193 Markdown attachments")).toBeInTheDocument();
+    expect(
+      screen.getByText("Issue 193 Markdown attachments"),
+    ).toBeInTheDocument();
     expect(screen.getByText("History")).toBeInTheDocument();
     expect(screen.getByText("Starts empty")).toBeInTheDocument();
     expect(screen.getByText("Base branch")).toBeInTheDocument();
@@ -1034,15 +1099,15 @@ describe("ThreadView", () => {
         transcriptEntries={[]}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     expect(screen.getByText("Workspace").nextElementSibling).toHaveTextContent(
       "Same worktree",
     );
-    expect(screen.getByText("Current branch").nextElementSibling).toHaveTextContent(
-      "feat/messaging-artifact-delivery",
-    );
+    expect(
+      screen.getByText("Current branch").nextElementSibling,
+    ).toHaveTextContent("feat/messaging-artifact-delivery");
     expect(screen.getByText("Status").nextElementSibling).toHaveTextContent(
       "Git worktree",
     );
@@ -1085,10 +1150,12 @@ describe("ThreadView", () => {
         transcriptEntries={[]}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
-    expect(await screen.findByRole("textbox", { name: "New thread" })).toBeEnabled();
+    expect(
+      await screen.findByRole("textbox", { name: "New thread" }),
+    ).toBeEnabled();
   });
 
   it("surfaces ACP unavailable reasons in launchpad drafts", async () => {
@@ -1157,11 +1224,11 @@ describe("ThreadView", () => {
         transcriptEntries={[]}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     expect(
-      await screen.findByText("ACP agent authentication required")
+      await screen.findByText("ACP agent authentication required"),
     ).toHaveClass("composer__meta--error");
     expect(screen.getByRole("textbox", { name: "New thread" })).toHaveAttribute(
       "contenteditable",
@@ -1174,8 +1241,8 @@ describe("ThreadView", () => {
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
-        copyText
-      }
+        copyText,
+      },
     });
 
     const { rerender } = render(
@@ -1186,7 +1253,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -1199,7 +1271,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -1209,7 +1281,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -1231,8 +1303,8 @@ describe("ThreadView", () => {
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
-            inInbox: false
-          }
+            inInbox: false,
+          },
         }}
         skills={[]}
         transcriptEntries={[
@@ -1240,27 +1312,31 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "assistant",
-            text: "The thread still loads."
-          }
+            text: "The thread still loads.",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "This thread is linked to a directory that no longer exists: /Users/huntharo/.codex/worktrees/be87/search-product"
+      "This thread is linked to a directory that no longer exists: /Users/huntharo/.codex/worktrees/be87/search-product",
     );
 
     fireEvent.click(screen.getByRole("tab", { name: "Thread info" }));
 
-    expect(screen.getByText("Recorded working directory is no longer available.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Recorded working directory is no longer available."),
+    ).toBeInTheDocument();
     expect(screen.getByText("search-product")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy thread id" }));
 
-    expect(copyText).toHaveBeenCalledWith("019d88a2-0e0b-77f0-bfce-130ae8e37d8f");
+    expect(copyText).toHaveBeenCalledWith(
+      "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
+    );
   });
 
   it("opens transcript image previews in a lightbox and dismisses them with Escape", () => {
@@ -1274,7 +1350,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -1287,7 +1368,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -1297,7 +1378,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -1318,8 +1399,8 @@ describe("ThreadView", () => {
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
-            inInbox: false
-          }
+            inInbox: false,
+          },
         }}
         skills={[]}
         transcriptEntries={[
@@ -1332,30 +1413,31 @@ describe("ThreadView", () => {
               {
                 type: "image",
                 url: dataUrl,
-                alt: "Transcript screenshot"
-              }
-            ]
-          }
+                alt: "Transcript screenshot",
+              },
+            ],
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand transcript image 1" }),
+    );
 
     const dialog = screen.getByRole("dialog", { name: "Expanded image" });
     expect(dialog).toBeInTheDocument();
-    expect(within(dialog).getByAltText("Transcript screenshot")).toHaveAttribute(
-      "src",
-      "blob:expanded-transcript-image"
-    );
+    expect(
+      within(dialog).getByAltText("Transcript screenshot"),
+    ).toHaveAttribute("src", "blob:expanded-transcript-image");
 
     fireEvent.keyDown(window, { key: "Escape" });
 
     expect(
-      screen.queryByRole("dialog", { name: "Expanded image" })
+      screen.queryByRole("dialog", { name: "Expanded image" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1380,7 +1462,7 @@ describe("ThreadView", () => {
             transcriptPagination: true,
             toolUse: false,
             approvalRequests: false,
-            multiDirectoryThreads: true
+            multiDirectoryThreads: true,
           },
           executionModes: [
             {
@@ -1390,7 +1472,7 @@ describe("ThreadView", () => {
               isDefault: true,
             },
           ],
-        }
+        },
       ],
       composerDisabled: false,
       desktopApi: {
@@ -1414,10 +1496,10 @@ describe("ThreadView", () => {
             {
               type: "image" as const,
               url: "file:///tmp/screenshot.png",
-              alt: "Transcript screenshot"
-            }
-          ]
-        }
+              alt: "Transcript screenshot",
+            },
+          ],
+        },
       ],
       clearPendingRequest: () => undefined,
       onLoadOlder: async () => undefined,
@@ -1435,14 +1517,18 @@ describe("ThreadView", () => {
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
-            inInbox: false
-          }
+            inInbox: false,
+          },
         }}
-      />
+      />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
-    expect(screen.getByRole("dialog", { name: "Expanded image" })).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand transcript image 1" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Expanded image" }),
+    ).toBeInTheDocument();
 
     rerender(
       <ThreadView
@@ -1455,14 +1541,14 @@ describe("ThreadView", () => {
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
-            inInbox: false
-          }
+            inInbox: false,
+          },
         }}
-      />
+      />,
     );
 
     expect(
-      screen.queryByRole("dialog", { name: "Expanded image" })
+      screen.queryByRole("dialog", { name: "Expanded image" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1475,8 +1561,8 @@ describe("ThreadView", () => {
       updatedAt: Date.now(),
       linkedDirectories: [],
       inbox: {
-        inInbox: false
-      }
+        inInbox: false,
+      },
     };
 
     const { rerender } = render(
@@ -1487,7 +1573,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -1500,7 +1591,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -1510,7 +1601,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -1530,13 +1621,13 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Run npm view dive"
-          }
+            text: "Run npm view dive",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     rerender(
@@ -1547,7 +1638,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -1560,7 +1656,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -1570,7 +1666,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -1588,7 +1684,7 @@ describe("ThreadView", () => {
           id: "msg-1",
           role: "assistant",
           phase: "commentary",
-          text: "I ran `npm view dive`"
+          text: "I ran `npm view dive`",
         }}
         selectedThread={selectedThread}
         skills={[]}
@@ -1597,19 +1693,19 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Run npm view dive"
-          }
+            text: "Run npm view dive",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     expect(screen.getByText("I ran")).toBeInTheDocument();
     expect(screen.getByText("npm view dive")).toBeInTheDocument();
     expect(screen.getByText("I ran").closest("article")).toHaveClass(
-      "transcript-message--assistant"
+      "transcript-message--assistant",
     );
 
     rerender(
@@ -1620,7 +1716,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -1633,7 +1734,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -1643,7 +1744,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -1663,13 +1764,13 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Run npm view dive"
-          }
+            text: "Run npm view dive",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     expect(screen.queryByText("I ran")).not.toBeInTheDocument();
@@ -1684,8 +1785,8 @@ describe("ThreadView", () => {
       updatedAt: Date.now(),
       linkedDirectories: [],
       inbox: {
-        inInbox: false
-      }
+        inInbox: false,
+      },
     };
     const livePlan = {
       type: "plan" as const,
@@ -1694,8 +1795,8 @@ describe("ThreadView", () => {
       steps: [
         { step: "Normalize replay", status: "pending" as const },
         { step: "Render plan card", status: "pending" as const },
-        { step: "Verify the thread view", status: "pending" as const }
-      ]
+        { step: "Verify the thread view", status: "pending" as const },
+      ],
     };
     let agentEventHandler: ((event: AgentEvent) => void) | undefined;
 
@@ -1707,7 +1808,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -1720,7 +1826,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -1730,7 +1836,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -1754,13 +1860,13 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Render the task list."
-          }
+            text: "Render the task list.",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     await act(async () => {
@@ -1773,9 +1879,9 @@ describe("ThreadView", () => {
             turnId: "turn-1",
             plan: {
               explanation: livePlan.explanation,
-              steps: livePlan.steps
-            }
-          }
+              steps: livePlan.steps,
+            },
+          },
         },
       });
       agentEventHandler?.({
@@ -1787,9 +1893,9 @@ describe("ThreadView", () => {
             turnId: "turn-2",
             plan: {
               explanation: "Ignore this other thread.",
-              steps: [{ step: "Ignore", status: "completed" }]
-            }
-          }
+              steps: [{ step: "Ignore", status: "completed" }],
+            },
+          },
         },
       });
     });
@@ -1798,7 +1904,9 @@ describe("ThreadView", () => {
     expect(screen.getByText("Normalize replay")).toBeInTheDocument();
     expect(screen.getByText("Render plan card")).toBeInTheDocument();
     expect(screen.getByText("Verify the thread view")).toBeInTheDocument();
-    expect(screen.queryByText("Ignore this other thread.")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Ignore this other thread."),
+    ).not.toBeInTheDocument();
 
     rerender(
       <ThreadView
@@ -1808,7 +1916,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -1821,7 +1934,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -1831,7 +1944,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -1855,14 +1968,14 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Render the task list."
+            text: "Render the task list.",
           },
-          livePlan
+          livePlan,
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     expect(screen.getAllByText("0 out of 3 tasks completed")).toHaveLength(1);
@@ -1877,8 +1990,8 @@ describe("ThreadView", () => {
       updatedAt: Date.now(),
       linkedDirectories: [],
       inbox: {
-        inInbox: false
-      }
+        inInbox: false,
+      },
     };
     let agentEventHandler: ((event: AgentEvent) => void) | undefined;
 
@@ -1890,7 +2003,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -1903,7 +2021,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -1913,7 +2031,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -1937,13 +2055,13 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Make a breakfast plan."
-          }
+            text: "Make a breakfast plan.",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     await act(async () => {
@@ -1956,10 +2074,10 @@ describe("ThreadView", () => {
             turnId: "turn-1",
             item: {
               id: "plan-item-1",
-              type: "plan"
+              type: "plan",
             },
-            delta: "## Breakfast plan\n\n"
-          }
+            delta: "## Breakfast plan\n\n",
+          },
         } as AppServerNotification,
       });
       agentEventHandler?.({
@@ -1971,17 +2089,19 @@ describe("ThreadView", () => {
             turnId: "turn-1",
             item: {
               id: "plan-item-1",
-              type: "plan"
+              type: "plan",
             },
-            delta: "Choose bagels after checking the cream cheese."
-          }
+            delta: "Choose bagels after checking the cream cheese.",
+          },
         } as AppServerNotification,
       });
     });
 
-    expect(screen.getByRole("heading", { name: "Breakfast plan" })).toBeInTheDocument();
     expect(
-      screen.getByText("Choose bagels after checking the cream cheese.")
+      screen.getByRole("heading", { name: "Breakfast plan" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Choose bagels after checking the cream cheese."),
     ).toBeInTheDocument();
 
     await act(async () => {
@@ -1995,16 +2115,18 @@ describe("ThreadView", () => {
             item: {
               id: "plan-item-1",
               type: "plan",
-              text: "## Final breakfast plan\n\nEat bagels if the cream cheese passes inspection."
-            }
-          }
+              text: "## Final breakfast plan\n\nEat bagels if the cream cheese passes inspection.",
+            },
+          },
         },
       });
     });
 
-    expect(screen.getByRole("heading", { name: "Final breakfast plan" })).toBeInTheDocument();
     expect(
-      screen.getByText("Eat bagels if the cream cheese passes inspection.")
+      screen.getByRole("heading", { name: "Final breakfast plan" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Eat bagels if the cream cheese passes inspection."),
     ).toBeInTheDocument();
 
     rerender(
@@ -2015,7 +2137,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -2028,7 +2155,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -2038,7 +2165,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -2062,22 +2189,25 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Make a breakfast plan."
+            text: "Make a breakfast plan.",
           },
           {
             type: "plan",
             id: "persisted-plan-item-1",
-            markdown: "## Final breakfast plan\n\nEat bagels if the cream cheese passes inspection.",
-            steps: []
-          }
+            markdown:
+              "## Final breakfast plan\n\nEat bagels if the cream cheese passes inspection.",
+            steps: [],
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
-    expect(screen.getAllByRole("heading", { name: "Final breakfast plan" })).toHaveLength(1);
+    expect(
+      screen.getAllByRole("heading", { name: "Final breakfast plan" }),
+    ).toHaveLength(1);
   });
 
   it("renders global MCP startup and OAuth status for the selected backend", async () => {
@@ -2089,8 +2219,8 @@ describe("ThreadView", () => {
       updatedAt: Date.now(),
       linkedDirectories: [],
       inbox: {
-        inInbox: false
-      }
+        inInbox: false,
+      },
     };
     let agentEventHandler:
       | ((event: {
@@ -2107,7 +2237,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -2120,7 +2255,7 @@ describe("ThreadView", () => {
               transcriptPagination: false,
               toolUse: true,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -2130,7 +2265,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -2154,13 +2289,13 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Use Playwright."
-          }
+            text: "Use Playwright.",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     await act(async () => {
@@ -2204,8 +2339,12 @@ describe("ThreadView", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /MCP status updates \(2\)/ }));
-    expect(screen.getByText("MCP playwright login completed")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: /MCP status updates \(2\)/ }),
+    );
+    expect(
+      screen.getByText("MCP playwright login completed"),
+    ).toBeInTheDocument();
   });
 
   it("keeps multiple global MCP startup statuses visible", async () => {
@@ -2217,8 +2356,8 @@ describe("ThreadView", () => {
       updatedAt: Date.now(),
       linkedDirectories: [],
       inbox: {
-        inInbox: false
-      }
+        inInbox: false,
+      },
     };
     let agentEventHandler: ((event: AgentEvent) => void) | undefined;
 
@@ -2230,7 +2369,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -2243,7 +2387,7 @@ describe("ThreadView", () => {
               transcriptPagination: false,
               toolUse: true,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -2253,7 +2397,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -2277,13 +2421,13 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Start a new thread."
-          }
+            text: "Start a new thread.",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     await act(async () => {
@@ -2302,7 +2446,9 @@ describe("ThreadView", () => {
       }
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /MCP status updates \(3\)/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /MCP status updates \(3\)/ }),
+    );
     expect(screen.getByText("MCP browser-use ready")).toBeInTheDocument();
     expect(screen.getByText("MCP playwright ready")).toBeInTheDocument();
     expect(screen.getByText("MCP codex_apps ready")).toBeInTheDocument();
@@ -2317,8 +2463,8 @@ describe("ThreadView", () => {
       updatedAt: Date.now(),
       linkedDirectories: [],
       inbox: {
-        inInbox: false
-      }
+        inInbox: false,
+      },
     };
     const liveDiff = [
       "diff --git a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
@@ -2327,7 +2473,7 @@ describe("ThreadView", () => {
       "@@ -113,2 +113,1 @@",
       "-<<<<<<< HEAD",
       "-function appendMessageEntries(",
-      "+function messageMatchesOptimisticEntry("
+      "+function messageMatchesOptimisticEntry(",
     ].join("\n");
     let agentEventHandler: ((event: AgentEvent) => void) | undefined;
 
@@ -2339,7 +2485,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -2352,7 +2503,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -2362,7 +2513,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -2386,13 +2537,13 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Fix the merge markers."
-          }
+            text: "Fix the merge markers.",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     await act(async () => {
@@ -2413,8 +2564,8 @@ describe("ThreadView", () => {
           params: {
             threadId: "thread-other",
             turnId: "turn-2",
-            diff: "diff --git a/ignored.ts b/ignored.ts"
-          }
+            diff: "diff --git a/ignored.ts b/ignored.ts",
+          },
         },
       });
     });
@@ -2427,10 +2578,16 @@ describe("ThreadView", () => {
     expect(
       screen.getByRole("complementary", { name: /Edited 1 file, \+1, -2/ }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Update useThreadSessionState.ts")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Update useThreadSessionState.ts/i }));
+    expect(
+      screen.getByText("Update useThreadSessionState.ts"),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Update useThreadSessionState.ts/i }),
+    );
 
-    expect(screen.getByText("function messageMatchesOptimisticEntry(")).toBeInTheDocument();
+    expect(
+      screen.getByText("function messageMatchesOptimisticEntry("),
+    ).toBeInTheDocument();
     expect(screen.queryByText("ignored.ts")).not.toBeInTheDocument();
 
     rerender(
@@ -2441,7 +2598,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -2454,7 +2616,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -2464,7 +2626,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -2488,7 +2650,7 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Fix the merge markers."
+            text: "Fix the merge markers.",
           },
           {
             type: "activity",
@@ -2504,16 +2666,16 @@ describe("ThreadView", () => {
                   kind: "update",
                   additions: 1,
                   removals: 2,
-                  diff: liveDiff
-                }
-              }
-            ]
-          }
+                  diff: liveDiff,
+                },
+              },
+            ],
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     // Replay caught up: the pending live entry clears (no dupe), but the
@@ -2638,7 +2800,9 @@ describe("ThreadView", () => {
       screen.getByRole("button", { name: /Update useThreadSessionState.ts/i }),
     );
 
-    expect(screen.getByText("function messageMatchesOptimisticEntry(")).toBeInTheDocument();
+    expect(
+      screen.getByText("function messageMatchesOptimisticEntry("),
+    ).toBeInTheDocument();
     expect(getThreadFileDiff).not.toHaveBeenCalled();
     expect(
       screen.getByRole("complementary", { name: /Edited 1 file, \+1, -2/ }),
@@ -2654,8 +2818,8 @@ describe("ThreadView", () => {
       updatedAt: Date.now(),
       linkedDirectories: [],
       inbox: {
-        inInbox: false
-      }
+        inInbox: false,
+      },
     };
     let agentEventHandler:
       | ((event: {
@@ -2672,7 +2836,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -2685,7 +2854,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: false,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -2695,7 +2864,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -2719,13 +2888,13 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Start with many skills."
-          }
+            text: "Start with many skills.",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     await act(async () => {
@@ -2736,7 +2905,7 @@ describe("ThreadView", () => {
           params: {
             threadId: "thread-2",
             message:
-              "Warning: Exceeded skills context budget of 2%. Loaded skill descriptions were truncated."
+              "Warning: Exceeded skills context budget of 2%. Loaded skill descriptions were truncated.",
           },
         } as AppServerNotification,
       });
@@ -2744,8 +2913,8 @@ describe("ThreadView", () => {
 
     expect(
       screen.getByText(
-        "Warning: Exceeded skills context budget of 2%. Loaded skill descriptions were truncated."
-      )
+        "Warning: Exceeded skills context budget of 2%. Loaded skill descriptions were truncated.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -2755,21 +2924,24 @@ describe("ThreadView", () => {
       threadId: "thread-2",
       requestId: "req-1",
     }));
-    let currentPendingRequest: AppServerPendingRequestNotification | undefined = {
-      method: "item/commandExecution/requestApproval",
-      params: {
-        threadId: "thread-2",
-        requestId: "req-1",
-        availableDecisions: ["accept", "decline", "cancel"],
-        command: "npm view dive",
-      },
-    };
+    let currentPendingRequest: AppServerPendingRequestNotification | undefined =
+      {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-2",
+          requestId: "req-1",
+          availableDecisions: ["accept", "decline", "cancel"],
+          command: "npm view dive",
+        },
+      };
     let currentPendingStatus: string | undefined = "Waiting for approval";
-    const clearPendingRequest = vi.fn((_requestId: string, nextStatus?: string) => {
-      currentPendingRequest = undefined;
-      currentPendingStatus = nextStatus;
-      rerenderThreadView();
-    });
+    const clearPendingRequest = vi.fn(
+      (_requestId: string, nextStatus?: string) => {
+        currentPendingRequest = undefined;
+        currentPendingStatus = nextStatus;
+        rerenderThreadView();
+      },
+    );
 
     const { rerender } = render(
       <ThreadView
@@ -2779,7 +2951,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -2792,7 +2969,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: true,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -2802,7 +2979,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -2826,8 +3003,8 @@ describe("ThreadView", () => {
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
-            inInbox: false
-          }
+            inInbox: false,
+          },
         }}
         skills={[]}
         transcriptEntries={[
@@ -2835,13 +3012,13 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Run npm view dive"
-          }
+            text: "Run npm view dive",
+          },
         ]}
         clearPendingRequest={clearPendingRequest}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     const rerenderThreadView = () => {
@@ -2853,7 +3030,12 @@ describe("ThreadView", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+              methods: [
+                "thread/list",
+                "thread/read",
+                "turn/start",
+                "skills/list",
+              ],
               capabilities: {
                 listThreads: true,
                 createThread: false,
@@ -2866,7 +3048,7 @@ describe("ThreadView", () => {
                 transcriptPagination: true,
                 toolUse: false,
                 approvalRequests: true,
-                multiDirectoryThreads: true
+                multiDirectoryThreads: true,
               },
               executionModes: [
                 {
@@ -2876,7 +3058,7 @@ describe("ThreadView", () => {
                   isDefault: true,
                 },
               ],
-            }
+            },
           ]}
           composerDisabled={false}
           desktopApi={{
@@ -2900,8 +3082,8 @@ describe("ThreadView", () => {
             updatedAt: Date.now(),
             linkedDirectories: [],
             inbox: {
-              inInbox: false
-            }
+              inInbox: false,
+            },
           }}
           skills={[]}
           transcriptEntries={[
@@ -2909,17 +3091,19 @@ describe("ThreadView", () => {
               type: "message",
               id: "message-1",
               role: "user",
-              text: "Run npm view dive"
-            }
+              text: "Run npm view dive",
+            },
           ]}
           clearPendingRequest={clearPendingRequest}
           onLoadOlder={async () => undefined}
           removeOptimisticMessage={(_id) => undefined}
-        />
+        />,
       );
     };
 
-    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending approval" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Approve Once" }));
 
@@ -2935,7 +3119,7 @@ describe("ThreadView", () => {
 
     await waitFor(() => {
       expect(
-        screen.queryByRole("group", { name: "Pending approval" })
+        screen.queryByRole("group", { name: "Pending approval" }),
       ).not.toBeInTheDocument();
     });
     expect(clearPendingRequest).toHaveBeenCalledWith("req-1", "Thinking");
@@ -2981,21 +3165,25 @@ describe("ThreadView", () => {
       ],
     };
     let currentPendingStatus: string | undefined = "Waiting for input";
-    const clearPendingRequest = vi.fn((_requestId: string, nextStatus?: string) => {
-      currentPendingUserInput = undefined;
-      currentPendingStatus = nextStatus;
-      rerenderThreadView();
-    });
+    const clearPendingRequest = vi.fn(
+      (_requestId: string, nextStatus?: string) => {
+        currentPendingUserInput = undefined;
+        currentPendingStatus = nextStatus;
+        rerenderThreadView();
+      },
+    );
     const updatePendingUserInput = vi.fn(
       (
         requestId: string,
-        updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+        updater: (
+          state: PendingQuestionnaireState,
+        ) => PendingQuestionnaireState,
       ) => {
         if (currentPendingUserInput?.requestId === requestId) {
           currentPendingUserInput = updater(currentPendingUserInput);
           rerenderThreadView();
         }
-      }
+      },
     );
 
     const { rerender } = render(
@@ -3006,7 +3194,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -3019,7 +3212,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: true,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -3029,7 +3222,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -3053,8 +3246,8 @@ describe("ThreadView", () => {
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
-            inInbox: false
-          }
+            inInbox: false,
+          },
         }}
         skills={[]}
         transcriptEntries={[
@@ -3062,14 +3255,14 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Ask me a plan question"
-          }
+            text: "Ask me a plan question",
+          },
         ]}
         clearPendingRequest={clearPendingRequest}
         onLoadOlder={async () => undefined}
         onUpdatePendingUserInput={updatePendingUserInput}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     const rerenderThreadView = () => {
@@ -3081,7 +3274,12 @@ describe("ThreadView", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+              methods: [
+                "thread/list",
+                "thread/read",
+                "turn/start",
+                "skills/list",
+              ],
               capabilities: {
                 listThreads: true,
                 createThread: false,
@@ -3094,7 +3292,7 @@ describe("ThreadView", () => {
                 transcriptPagination: true,
                 toolUse: false,
                 approvalRequests: true,
-                multiDirectoryThreads: true
+                multiDirectoryThreads: true,
               },
               executionModes: [
                 {
@@ -3104,7 +3302,7 @@ describe("ThreadView", () => {
                   isDefault: true,
                 },
               ],
-            }
+            },
           ]}
           composerDisabled={false}
           desktopApi={{
@@ -3128,8 +3326,8 @@ describe("ThreadView", () => {
             updatedAt: Date.now(),
             linkedDirectories: [],
             inbox: {
-              inInbox: false
-            }
+              inInbox: false,
+            },
           }}
           skills={[]}
           transcriptEntries={[
@@ -3137,19 +3335,23 @@ describe("ThreadView", () => {
               type: "message",
               id: "message-1",
               role: "user",
-              text: "Ask me a plan question"
-            }
+              text: "Ask me a plan question",
+            },
           ]}
           clearPendingRequest={clearPendingRequest}
           onLoadOlder={async () => undefined}
           onUpdatePendingUserInput={updatePendingUserInput}
           removeOptimisticMessage={(_id) => undefined}
-        />
+        />,
       );
     };
 
-    expect(screen.getByRole("group", { name: "Pending input" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending input" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Approve" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Small patch/ }));
 
@@ -3162,19 +3364,22 @@ describe("ThreadView", () => {
         response: {
           answers: {
             approach: {
-              answers: ["Small patch (Recommended)"]
-            }
-          }
+              answers: ["Small patch (Recommended)"],
+            },
+          },
         },
       });
     });
 
     await waitFor(() => {
       expect(
-        screen.queryByRole("group", { name: "Pending input" })
+        screen.queryByRole("group", { name: "Pending input" }),
       ).not.toBeInTheDocument();
     });
-    expect(clearPendingRequest).toHaveBeenCalledWith("input-request-1", "Thinking");
+    expect(clearPendingRequest).toHaveBeenCalledWith(
+      "input-request-1",
+      "Thinking",
+    );
   });
 
   it("submits pending MCP interactions through the server request bridge", async () => {
@@ -3184,7 +3389,7 @@ describe("ThreadView", () => {
       turnId: "turn-1",
       requestId: "mcp-request-1",
       serverName: "playwright",
-      message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+      message: 'Allow the playwright MCP server to run tool "browser_tabs"?',
       mode: "form",
       _meta: {
         tool_description: "List, create, close, or select a browser tab.",
@@ -3202,21 +3407,25 @@ describe("ThreadView", () => {
       turnId: "turn-1",
       requestId: "mcp-request-1",
     }));
-    const clearPendingRequest = vi.fn((_requestId: string, nextStatus?: string) => {
-      currentPendingMcpInteraction = undefined;
-      currentPendingStatus = nextStatus ?? "";
-      rerenderThreadView();
-    });
+    const clearPendingRequest = vi.fn(
+      (_requestId: string, nextStatus?: string) => {
+        currentPendingMcpInteraction = undefined;
+        currentPendingStatus = nextStatus ?? "";
+        rerenderThreadView();
+      },
+    );
     const updatePendingMcpInteraction = vi.fn(
       (
         _requestId: string,
-        updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
+        updater: (
+          state: PendingMcpInteractionState,
+        ) => PendingMcpInteractionState,
       ) => {
         if (currentPendingMcpInteraction) {
           currentPendingMcpInteraction = updater(currentPendingMcpInteraction);
           rerenderThreadView();
         }
-      }
+      },
     );
 
     const { rerender } = render(
@@ -3227,7 +3436,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -3240,7 +3454,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: true,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -3250,7 +3464,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -3274,8 +3488,8 @@ describe("ThreadView", () => {
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
-            inInbox: false
-          }
+            inInbox: false,
+          },
         }}
         skills={[]}
         transcriptEntries={[
@@ -3283,14 +3497,14 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Use the browser"
-          }
+            text: "Use the browser",
+          },
         ]}
         clearPendingRequest={clearPendingRequest}
         onLoadOlder={async () => undefined}
         onUpdatePendingMcpInteraction={updatePendingMcpInteraction}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     const rerenderThreadView = () => {
@@ -3302,7 +3516,12 @@ describe("ThreadView", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+              methods: [
+                "thread/list",
+                "thread/read",
+                "turn/start",
+                "skills/list",
+              ],
               capabilities: {
                 listThreads: true,
                 createThread: false,
@@ -3315,7 +3534,7 @@ describe("ThreadView", () => {
                 transcriptPagination: true,
                 toolUse: false,
                 approvalRequests: true,
-                multiDirectoryThreads: true
+                multiDirectoryThreads: true,
               },
               executionModes: [
                 {
@@ -3325,7 +3544,7 @@ describe("ThreadView", () => {
                   isDefault: true,
                 },
               ],
-            }
+            },
           ]}
           composerDisabled={false}
           desktopApi={{
@@ -3349,8 +3568,8 @@ describe("ThreadView", () => {
             updatedAt: Date.now(),
             linkedDirectories: [],
             inbox: {
-              inInbox: false
-            }
+              inInbox: false,
+            },
           }}
           skills={[]}
           transcriptEntries={[
@@ -3358,21 +3577,23 @@ describe("ThreadView", () => {
               type: "message",
               id: "message-1",
               role: "user",
-              text: "Use the browser"
-            }
+              text: "Use the browser",
+            },
           ]}
           clearPendingRequest={clearPendingRequest}
           onLoadOlder={async () => undefined}
           onUpdatePendingMcpInteraction={updatePendingMcpInteraction}
           removeOptimisticMessage={(_id) => undefined}
-        />
+        />,
       );
     };
 
     expect(
-      screen.getByRole("group", { name: "Pending MCP interaction" })
+      screen.getByRole("group", { name: "Pending MCP interaction" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Approve" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
@@ -3392,10 +3613,13 @@ describe("ThreadView", () => {
 
     await waitFor(() => {
       expect(
-        screen.queryByRole("group", { name: "Pending MCP interaction" })
+        screen.queryByRole("group", { name: "Pending MCP interaction" }),
       ).not.toBeInTheDocument();
     });
-    expect(clearPendingRequest).toHaveBeenCalledWith("mcp-request-1", "Thinking");
+    expect(clearPendingRequest).toHaveBeenCalledWith(
+      "mcp-request-1",
+      "Thinking",
+    );
   });
 
   it("clears a stale approval card when assistant output resumes", async () => {
@@ -3407,8 +3631,8 @@ describe("ThreadView", () => {
       updatedAt: Date.now(),
       linkedDirectories: [],
       inbox: {
-        inInbox: false
-      }
+        inInbox: false,
+      },
     };
 
     const { rerender } = render(
@@ -3419,7 +3643,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -3432,7 +3661,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: true,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -3442,7 +3671,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -3471,16 +3700,18 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Run npm view dive"
-          }
+            text: "Run npm view dive",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
-    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Pending approval" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
 
     rerender(
@@ -3491,7 +3722,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -3504,7 +3740,7 @@ describe("ThreadView", () => {
               transcriptPagination: true,
               toolUse: false,
               approvalRequests: true,
-              multiDirectoryThreads: true
+              multiDirectoryThreads: true,
             },
             executionModes: [
               {
@@ -3514,7 +3750,7 @@ describe("ThreadView", () => {
                 isDefault: true,
               },
             ],
-          }
+          },
         ]}
         composerDisabled={false}
         desktopApi={{
@@ -3532,7 +3768,7 @@ describe("ThreadView", () => {
           id: "msg-1",
           role: "assistant",
           phase: "commentary",
-          text: "The request was handled."
+          text: "The request was handled.",
         }}
         pendingStatusText="Thinking"
         selectedThread={selectedThread}
@@ -3542,17 +3778,17 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Run npm view dive"
-          }
+            text: "Run npm view dive",
+          },
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     expect(
-      screen.queryByRole("group", { name: "Pending approval" })
+      screen.queryByRole("group", { name: "Pending approval" }),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.getByText("The request was handled.")).toBeInTheDocument();
@@ -3575,7 +3811,12 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "turn/start",
+              "skills/list",
+            ],
             capabilities: {
               listThreads: true,
               createThread: false,
@@ -3629,7 +3870,9 @@ describe("ThreadView", () => {
       />,
     );
 
-    const dialog = await screen.findByRole("dialog", { name: "Thread branch changed" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Thread branch changed",
+    });
     expect(dialog).toHaveTextContent(/Thread expects\s*feature\/old/);
     expect(dialog).toHaveTextContent(/Worktree is on\s*main/);
     expect(dialog).toHaveTextContent("I'll switch back");
@@ -3706,9 +3949,13 @@ describe("ThreadView", () => {
       />,
     );
 
-    const dialog = await screen.findByRole("dialog", { name: "Thread branch changed" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Thread branch changed",
+    });
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close branch warning" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Close branch warning" }),
+    );
 
     await waitFor(() => {
       expect(
@@ -3781,7 +4028,10 @@ describe("ThreadView", () => {
         expectedBranch: "feature/old",
         threadId: "thread-branch",
       });
-      expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 30_000);
+      expect(setIntervalSpy).not.toHaveBeenCalledWith(
+        expect.any(Function),
+        30_000,
+      );
 
       await act(async () => {
         focusCallback?.();
@@ -3960,7 +4210,7 @@ describe("ThreadView", () => {
     }
 
     const { rerender } = render(
-      <Harness observedGitBranch="feature/old" suppress />
+      <Harness observedGitBranch="feature/old" suppress />,
     );
 
     await waitFor(() => {
@@ -4036,7 +4286,9 @@ describe("ThreadView", () => {
     rerender(<Harness activeTurnId={undefined} />);
 
     await waitFor(() => {
-      expect(checkThreadBranchDrift.mock.calls.length).toBeGreaterThan(callsBeforeEnd);
+      expect(checkThreadBranchDrift.mock.calls.length).toBeGreaterThan(
+        callsBeforeEnd,
+      );
     });
     await waitFor(() => {
       expect(
@@ -4066,7 +4318,11 @@ describe("ThreadView", () => {
           gitBranch: "HEAD",
           observedGitBranch: "fix/foo",
           retainedBranchDriftPairs: [
-            { expectedBranch: "HEAD", observedBranch: "fix/foo", retainedAt: 1 },
+            {
+              expectedBranch: "HEAD",
+              observedBranch: "fix/foo",
+              retainedAt: 1,
+            },
           ],
           updatedAt: Date.now(),
           linkedDirectories: [],
@@ -4134,7 +4390,9 @@ describe("ThreadView", () => {
     }
 
     // Thread A with active turn.
-    const { rerender } = render(<Harness activeTurnId="turn-1" threadId="thread-a" />);
+    const { rerender } = render(
+      <Harness activeTurnId="turn-1" threadId="thread-a" />,
+    );
     await waitFor(() => {
       expect(checkThreadBranchDrift).toHaveBeenCalled();
     });
@@ -4160,7 +4418,9 @@ describe("ThreadView", () => {
   });
 
   it("defers completed live transcript publishing outside the render phase", async () => {
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     const onPublished = vi.fn();
     let agentEventHandler:
       | ((event: {
@@ -4262,8 +4522,8 @@ describe("ThreadView", () => {
         consoleErrorSpy.mock.calls.some((call) =>
           call.some(
             (part) =>
-              typeof part === "string" &&
-              part.includes("Cannot update a component"),
+              typeof part === "string"
+              && part.includes("Cannot update a component"),
           ),
         ),
       ).toBe(false);
@@ -4331,7 +4591,7 @@ describe("ThreadView", () => {
         onLoadOlder={async () => undefined}
         onPendingStatusChange={onPendingStatusChange}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
@@ -4404,7 +4664,7 @@ describe("ThreadView", () => {
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-      />
+      />,
     );
 
     expect(
@@ -4440,7 +4700,9 @@ describe("ThreadView", () => {
       // Mirrors the real upstream lifecycle: the hook clears
       // `activeTurnId` on `turn/completed` so the rail flips from
       // live → pinned. The Harness simulates that here.
-      const [activeTurnId, setActiveTurnId] = useState<string | undefined>("turn-1");
+      const [activeTurnId, setActiveTurnId] = useState<string | undefined>(
+        "turn-1",
+      );
       const [entries, setEntries] = useState<any[]>([]);
       return (
         <ThreadView
@@ -4548,11 +4810,13 @@ describe("ThreadView", () => {
       expect(
         screen.getAllByRole("complementary", { name: /Edited 1 file/ }),
       ).toHaveLength(1);
-      const transcriptRegion = screen.getByRole("region", { name: "Transcript" });
+      const transcriptRegion = screen.getByRole("region", {
+        name: "Transcript",
+      });
       expect(
-        within(transcriptRegion)
-          .queryAllByRole("button", { name: /^Edited 1 file/i })
-          .length,
+        within(transcriptRegion).queryAllByRole("button", {
+          name: /^Edited 1 file/i,
+        }).length,
       ).toBeLessThanOrEqual(1);
     } finally {
       consoleErrorSpy.mockRestore();
@@ -4571,7 +4835,9 @@ describe("ThreadView", () => {
     ].join("\n");
 
     function Harness() {
-      const [activeTurnId, setActiveTurnId] = useState<string | undefined>("turn-1");
+      const [activeTurnId, setActiveTurnId] = useState<string | undefined>(
+        "turn-1",
+      );
       const [entries, setEntries] = useState<any[]>([]);
       return (
         <>

@@ -1,5 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   MessagingThreadBindingSummary,
@@ -75,7 +81,12 @@ describe("ThreadRow chip flow", () => {
       ...overrides,
     };
     const utils = render(<ThreadRow {...props} />);
-    return { ...utils, onSelectThread, onUnbindMessagingBinding, onSetReaction };
+    return {
+      ...utils,
+      onSelectThread,
+      onUnbindMessagingBinding,
+      onSetReaction,
+    };
   }
 
   it("renders content chips as siblings inside a single .thread-row__chips container", () => {
@@ -94,7 +105,9 @@ describe("ThreadRow chip flow", () => {
     const { container } = renderRow();
     const actions = container.querySelector(".thread-row__actions");
     const flow = container.querySelector(".thread-row__chips");
-    const addReaction = container.querySelector(".thread-row__chip--add-reaction");
+    const addReaction = container.querySelector(
+      ".thread-row__chip--add-reaction",
+    );
     expect(actions).not.toBeNull();
     expect(flow).not.toBeNull();
     expect(addReaction).not.toBeNull();
@@ -318,7 +331,9 @@ describe("ThreadRow chip flow", () => {
       expect(
         dragImage?.querySelector(".thread-row__chip--add-reaction"),
       ).toBeNull();
-      expect(dragImage?.querySelector(".thread-row__overflow-button")).toBeNull();
+      expect(
+        dragImage?.querySelector(".thread-row__overflow-button"),
+      ).toBeNull();
       expect(dataTransfer.setDragImage).toHaveBeenCalledWith(
         dragImage,
         expect.any(Number),
@@ -382,9 +397,13 @@ describe("ThreadRow chip flow", () => {
     // we don't assert the count of meta chips since that depends on
     // ThreadMetaChips internals.
     const indexOf = (selector: string): number =>
-      chipNodes.findIndex((el) => el.matches(selector) || el.querySelector(selector) !== null);
+      chipNodes.findIndex(
+        (el) => el.matches(selector) || el.querySelector(selector) !== null,
+      );
     const prIdx = indexOf(".thread-row__chip--pr, [data-pr-chip]");
-    const bindingIdx = indexOf(".thread-row__chip--binding, .thread-row__chip-wrap");
+    const bindingIdx = indexOf(
+      ".thread-row__chip--binding, .thread-row__chip-wrap",
+    );
     const reactionIdx = indexOf(".thread-row__chip--reaction");
     // Each chip type that's present comes after the previous one. Messaging
     // bindings sit before PR chips so fixed-width metadata packs first and

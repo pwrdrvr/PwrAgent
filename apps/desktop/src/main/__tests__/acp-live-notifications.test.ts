@@ -87,7 +87,7 @@ describe("acpToolUpdateNotifications", () => {
   });
 
   it("keeps non-shell ACP content with command fields as live output", () => {
-    const output = "{\"command\":\"npm view pnpm\",\"result\":\"found text\"}";
+    const output = '{"command":"npm view pnpm","result":"found text"}';
     const notifications = acpToolUpdateNotifications({
       threadId: "session-1",
       turnId: "turn-1",
@@ -169,7 +169,7 @@ describe("acpToolUpdateNotifications", () => {
             type: "content",
             content: {
               type: "text",
-              text: "{\"command\":\"npm view pnpm\"}",
+              text: '{"command":"npm view pnpm"}',
             },
           },
         ],

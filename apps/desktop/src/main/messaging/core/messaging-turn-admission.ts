@@ -1,6 +1,4 @@
-import type {
-  AppServerTurnInputItem,
-} from "@pwragent/shared";
+import type { AppServerTurnInputItem } from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
   MessagingInboundEvent,
@@ -42,7 +40,10 @@ type PendingWindow = {
 
 export class MessagingTurnAdmission {
   private readonly pendingByThreadKey = new Map<string, PendingWindow>();
-  private readonly queuedByThreadKey = new Map<string, MessagingQueuedTurnEntry[]>();
+  private readonly queuedByThreadKey = new Map<
+    string,
+    MessagingQueuedTurnEntry[]
+  >();
   private readonly startingThreadKeys = new Set<string>();
   private sequence = 0;
 
@@ -50,7 +51,9 @@ export class MessagingTurnAdmission {
     private readonly options: {
       debounceMs: number;
       now: () => number;
-      onBundleReady: (bundle: MessagingTurnAdmissionBundle) => void | Promise<void>;
+      onBundleReady: (
+        bundle: MessagingTurnAdmissionBundle,
+      ) => void | Promise<void>;
     },
   ) {}
 
@@ -105,7 +108,10 @@ export class MessagingTurnAdmission {
   }
 
   enqueue(
-    entry: Omit<MessagingQueuedTurnEntry, "createdAt" | "id" | "status" | "updatedAt">,
+    entry: Omit<
+      MessagingQueuedTurnEntry,
+      "createdAt" | "id" | "status" | "updatedAt"
+    >,
   ): MessagingQueuedTurnEntry {
     const now = this.options.now();
     const queued: MessagingQueuedTurnEntry = {

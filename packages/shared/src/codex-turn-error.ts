@@ -16,7 +16,9 @@
 
 const FALLBACK_MESSAGE = "Turn failed.";
 
-function tryParseJsonObject(value: string): Record<string, unknown> | undefined {
+function tryParseJsonObject(
+  value: string,
+): Record<string, unknown> | undefined {
   const trimmed = value.trim();
   if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
     return undefined;

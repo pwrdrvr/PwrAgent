@@ -79,9 +79,7 @@ describe("buildAutomationTurnInput", () => {
     expect(item?.type === "text" ? item.text : "").toContain(
       "Trigger: manual Run Now",
     );
-    expect(item?.type === "text" ? item.text : "").toContain(
-      "- none",
-    );
+    expect(item?.type === "text" ? item.text : "").toContain("- none");
   });
 
   it("includes inbound message source context", () => {

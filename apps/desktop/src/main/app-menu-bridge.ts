@@ -13,10 +13,7 @@
 // macOS/Linux never reach the renderer path — they keep their native menu bar.
 
 import { BrowserWindow, ipcMain, Menu } from "electron";
-import {
-  APP_MENU_MODEL_CHANNEL,
-  APP_MENU_POPUP_CHANNEL,
-} from "../shared/ipc";
+import { APP_MENU_MODEL_CHANNEL, APP_MENU_POPUP_CHANNEL } from "../shared/ipc";
 import type { AppMenuTopLevel } from "../shared/app-menu";
 import { timeStartupProfileOperation } from "./diagnostics/startup-profile-events";
 
@@ -53,11 +50,13 @@ export function wireAppMenuBridge(): void {
   if (wired) return;
   wired = true;
 
-  ipcMain.handle(APP_MENU_MODEL_CHANNEL, async () =>
-    await timeStartupProfileOperation({
-      type: "ipc-main:getAppMenuModel",
-      operation: async () => appMenuTopLevel(),
-    }),
+  ipcMain.handle(
+    APP_MENU_MODEL_CHANNEL,
+    async () =>
+      await timeStartupProfileOperation({
+        type: "ipc-main:getAppMenuModel",
+        operation: async () => appMenuTopLevel(),
+      }),
   );
 
   ipcMain.on(APP_MENU_POPUP_CHANNEL, (event, payload: unknown) => {
@@ -76,8 +75,10 @@ export function wireAppMenuBridge(): void {
     // x/y are window-relative DIP (the button's bottom-left). Round to whole
     // pixels; omit when absent so Electron falls back to the cursor position.
     const popupOptions: Electron.PopupOptions = { window: win };
-    if (typeof x === "number" && Number.isFinite(x)) popupOptions.x = Math.round(x);
-    if (typeof y === "number" && Number.isFinite(y)) popupOptions.y = Math.round(y);
+    if (typeof x === "number" && Number.isFinite(x))
+      popupOptions.x = Math.round(x);
+    if (typeof y === "number" && Number.isFinite(y))
+      popupOptions.y = Math.round(y);
     submenu.popup(popupOptions);
   });
 }

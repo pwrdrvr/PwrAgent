@@ -22,7 +22,9 @@ import {
   type DiscordApplicationCommand,
 } from "../discord-commands.ts";
 
-const unknownChannelError = new Error("DiscordAPIError[10003]: Unknown Channel");
+const unknownChannelError = new Error(
+  "DiscordAPIError[10003]: Unknown Channel",
+);
 const TEST_CHANNEL_ID = "1480556454498009352";
 const TEST_GUILD_ID = "1480556454498009353";
 const TEST_MESSAGE_ID = "1480556454498009354";
@@ -32,14 +34,9 @@ const TEST_AUTHORIZED_GUILD_IDS = [{ id: TEST_GUILD_ID, displayName: "" }];
 
 describe("discord adapter", () => {
   it("declares Monitor as a desired Discord application command", () => {
-    expect(DISCORD_APPLICATION_COMMANDS.map((command) => command.name)).toEqual([
-      "resume",
-      "agent",
-      "new",
-      "status",
-      "detach",
-      "monitor",
-    ]);
+    expect(DISCORD_APPLICATION_COMMANDS.map((command) => command.name)).toEqual(
+      ["resume", "agent", "new", "status", "detach", "monitor"],
+    );
   });
 
   it("returns a failed delivery when a stale channel rejects new messages", async () => {
@@ -139,7 +136,8 @@ describe("discord adapter", () => {
     const apiRateLimitError = Object.assign(new Error("API body"), {
       retry_after: 2,
     });
-    const createMessage = vi.fn()
+    const createMessage = vi
+      .fn()
       .mockRejectedValueOnce(restRateLimitError)
       .mockRejectedValueOnce(apiRateLimitError);
     const adapter = new DiscordAdapter({
@@ -163,7 +161,9 @@ describe("discord adapter", () => {
     await expect(adapter.deliver(intent)).resolves.toMatchObject({
       rateLimit: { retryAfterMs: 750 },
     });
-    await expect(adapter.deliver({ ...intent, id: "message-2" })).resolves.toMatchObject({
+    await expect(
+      adapter.deliver({ ...intent, id: "message-2" }),
+    ).resolves.toMatchObject({
       rateLimit: { retryAfterMs: 2000 },
     });
   });
@@ -172,7 +172,8 @@ describe("discord adapter", () => {
     const rateLimitError = Object.assign(new Error("Too Many Requests"), {
       retryAfter: 500,
     });
-    const createMessage = vi.fn()
+    const createMessage = vi
+      .fn()
       .mockResolvedValueOnce({ channel_id: "channel-1", id: "message-1" })
       .mockRejectedValueOnce(rateLimitError);
     const adapter = new DiscordAdapter({
@@ -192,7 +193,9 @@ describe("discord adapter", () => {
         id: "message-1",
         kind: "message",
         role: "assistant",
-        parts: [{ type: "text", text: `${"a".repeat(2000)}${"b".repeat(2000)}` }],
+        parts: [
+          { type: "text", text: `${"a".repeat(2000)}${"b".repeat(2000)}` },
+        ],
       }),
     ).resolves.toMatchObject({
       outcome: "failed",
@@ -518,9 +521,13 @@ describe("discord adapter", () => {
       },
     });
 
-    expect(createInteractionResponse).toHaveBeenCalledWith(TEST_MESSAGE_ID, "token_ABC.123", {
-      type: 6,
-    });
+    expect(createInteractionResponse).toHaveBeenCalledWith(
+      TEST_MESSAGE_ID,
+      "token_ABC.123",
+      {
+        type: 6,
+      },
+    );
     expect(events).toEqual([
       expect.objectContaining({
         actionId: "permissions",
@@ -675,9 +682,13 @@ describe("discord adapter", () => {
       handle: customId,
       now: 1235,
     });
-    expect(createInteractionResponse).toHaveBeenCalledWith(TEST_MESSAGE_ID, "token_ABC.123", {
-      type: 6,
-    });
+    expect(createInteractionResponse).toHaveBeenCalledWith(
+      TEST_MESSAGE_ID,
+      "token_ABC.123",
+      {
+        type: 6,
+      },
+    );
     expect(events).toEqual([
       expect.objectContaining({
         actionId: undefined,
@@ -692,7 +703,10 @@ describe("discord adapter", () => {
     const store = createCallbackHandleStore();
     const firstChannelId = TEST_CHANNEL_ID;
     const secondChannelId = "1480556454498009360";
-    const createdRequests = new Map<string, Parameters<DiscordApi["createMessage"]>[1]>();
+    const createdRequests = new Map<
+      string,
+      Parameters<DiscordApi["createMessage"]>[1]
+    >();
     const createMessage = vi.fn(async (channelId: string, request) => {
       createdRequests.set(channelId, request);
       return {
@@ -763,9 +777,11 @@ describe("discord adapter", () => {
     });
 
     const firstCustomId =
-      createdRequests.get(firstChannelId)?.components?.[0]?.components[0]?.custom_id;
+      createdRequests.get(firstChannelId)?.components?.[0]?.components[0]
+        ?.custom_id;
     const secondCustomId =
-      createdRequests.get(secondChannelId)?.components?.[0]?.components[0]?.custom_id;
+      createdRequests.get(secondChannelId)?.components?.[0]?.components[0]
+        ?.custom_id;
     expect(firstCustomId).toMatch(/^dc:/);
     expect(secondCustomId).toBe(firstCustomId);
     expect(store.upsertCallbackHandle).toHaveBeenCalledTimes(2);
@@ -840,17 +856,21 @@ describe("discord adapter", () => {
     });
 
     it("accepts the legacy <@!id> nickname-alias form", () => {
-      expect(stripDiscordBotMention(`<@!${BOT_ID}> resume`, BOT_ID)).toBe("resume");
-    });
-
-    it("preserves args after the verb", () => {
-      expect(stripDiscordBotMention(`<@${BOT_ID}> resume thread-42`, BOT_ID)).toBe(
-        "resume thread-42",
+      expect(stripDiscordBotMention(`<@!${BOT_ID}> resume`, BOT_ID)).toBe(
+        "resume",
       );
     });
 
+    it("preserves args after the verb", () => {
+      expect(
+        stripDiscordBotMention(`<@${BOT_ID}> resume thread-42`, BOT_ID),
+      ).toBe("resume thread-42");
+    });
+
     it("tolerates leading whitespace before the mention", () => {
-      expect(stripDiscordBotMention(`   <@${BOT_ID}> help`, BOT_ID)).toBe("help");
+      expect(stripDiscordBotMention(`   <@${BOT_ID}> help`, BOT_ID)).toBe(
+        "help",
+      );
     });
 
     it("returns an empty string when the mention is the entire message", () => {
@@ -859,7 +879,9 @@ describe("discord adapter", () => {
     });
 
     it("returns undefined when the message doesn't start with the mention", () => {
-      expect(stripDiscordBotMention(`hi <@${BOT_ID}> help`, BOT_ID)).toBeUndefined();
+      expect(
+        stripDiscordBotMention(`hi <@${BOT_ID}> help`, BOT_ID),
+      ).toBeUndefined();
       expect(stripDiscordBotMention("just text", BOT_ID)).toBeUndefined();
     });
 
@@ -868,7 +890,9 @@ describe("discord adapter", () => {
     });
 
     it("returns undefined when botUserId is unset", () => {
-      expect(stripDiscordBotMention(`<@${BOT_ID}> help`, undefined)).toBeUndefined();
+      expect(
+        stripDiscordBotMention(`<@${BOT_ID}> help`, undefined),
+      ).toBeUndefined();
     });
   });
 
@@ -1241,9 +1265,13 @@ describe("discord adapter", () => {
         },
       });
 
-      expect(createInteractionResponse).toHaveBeenCalledWith(TEST_MESSAGE_ID, "token_ABC.123", {
-        type: 6,
-      });
+      expect(createInteractionResponse).toHaveBeenCalledWith(
+        TEST_MESSAGE_ID,
+        "token_ABC.123",
+        {
+          type: 6,
+        },
+      );
       expect(events).toHaveLength(0);
       expect(rejectedEvents).toEqual([
         expect.objectContaining({
@@ -1260,7 +1288,10 @@ describe("discord adapter", () => {
       ]);
       expect(logger.warn).toHaveBeenCalledWith(
         "discord inbound ignored unauthorized guild",
-        expect.objectContaining({ guildId: TEST_GUILD_ID, surface: "interaction" }),
+        expect.objectContaining({
+          guildId: TEST_GUILD_ID,
+          surface: "interaction",
+        }),
       );
       await adapter.stop();
     });
@@ -1306,9 +1337,13 @@ describe("discord adapter", () => {
         },
       });
 
-      expect(createInteractionResponse).toHaveBeenCalledWith(TEST_MESSAGE_ID, "token_ABC.123", {
-        type: 5,
-      });
+      expect(createInteractionResponse).toHaveBeenCalledWith(
+        TEST_MESSAGE_ID,
+        "token_ABC.123",
+        {
+          type: 5,
+        },
+      );
       expect(events).toHaveLength(0);
       expect(logger.warn).toHaveBeenCalledWith(
         "discord interaction ignored unauthorized actor",
@@ -1640,7 +1675,9 @@ class TestDiscordGateway implements DiscordGatewayConnection {
     };
   }
   async emit(event: DiscordGatewayEvent): Promise<void> {
-    await Promise.all([...this.listeners].map(async (listener) => listener(event)));
+    await Promise.all(
+      [...this.listeners].map(async (listener) => listener(event)),
+    );
   }
 }
 
@@ -1700,26 +1737,30 @@ function discordAudit(): MessagingAuditContext {
 function createCallbackHandleStore(): MessagingCallbackHandleStore {
   const records = new Map<string, MessagingCallbackHandleRecord>();
   return {
-    resolveCallbackHandle: vi.fn(async ({ actorId, channel, handle, now = Date.now() }) => {
-      const record = [...records.values()]
-        .filter(
-          (candidate) =>
-            candidate.handle === handle
-            && candidate.expiresAt > now
-            && candidate.allowedActorIds.includes(actorId)
-            && candidate.channel.channel === channel.channel
-            && candidate.channel.conversation.id === channel.conversation.id,
-        )
-        .sort((left, right) => right.updatedAt - left.updatedAt)[0];
-      if (!record || record.expiresAt <= now) {
-        return undefined;
-      }
-      return record;
-    }),
-    upsertCallbackHandle: vi.fn(async (record: MessagingCallbackHandleRecord) => {
-      records.set(record.id, record);
-      return record;
-    }),
+    resolveCallbackHandle: vi.fn(
+      async ({ actorId, channel, handle, now = Date.now() }) => {
+        const record = [...records.values()]
+          .filter(
+            (candidate) =>
+              candidate.handle === handle
+              && candidate.expiresAt > now
+              && candidate.allowedActorIds.includes(actorId)
+              && candidate.channel.channel === channel.channel
+              && candidate.channel.conversation.id === channel.conversation.id,
+          )
+          .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+        if (!record || record.expiresAt <= now) {
+          return undefined;
+        }
+        return record;
+      },
+    ),
+    upsertCallbackHandle: vi.fn(
+      async (record: MessagingCallbackHandleRecord) => {
+        records.set(record.id, record);
+        return record;
+      },
+    ),
   };
 }
 

@@ -23,13 +23,15 @@ import {
 export function isPwrAgentThreadDynamicToolCall(
   call: Pick<DynamicToolCallParams, "namespace" | "tool">,
 ): call is DynamicToolCallParams & {
-  namespace: typeof PWRAGENT_THREAD_TOOL_NAMESPACE | typeof PWRAGENT_TOOL_NAMESPACE;
+  namespace:
+    | typeof PWRAGENT_THREAD_TOOL_NAMESPACE
+    | typeof PWRAGENT_TOOL_NAMESPACE;
   tool: PwrAgentThreadInspectionOperationName;
 } {
   return (
-    call.namespace === PWRAGENT_THREAD_TOOL_NAMESPACE ||
-    (call.namespace === PWRAGENT_TOOL_NAMESPACE &&
-      PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES.includes(
+    call.namespace === PWRAGENT_THREAD_TOOL_NAMESPACE
+    || (call.namespace === PWRAGENT_TOOL_NAMESPACE
+      && PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES.includes(
         call.tool as PwrAgentThreadInspectionOperationName,
       ))
   );
@@ -43,7 +45,9 @@ export async function handlePwrAgentThreadDynamicToolCall(params: {
   const call = isPwrAgentThreadDynamicToolCall(params.call)
     ? { ...params.call, namespace: PWRAGENT_TOOL_NAMESPACE }
     : params.call;
-  return await buildPwrAgentThreadToolRouter(params.handler).handleDynamicToolCall({
+  return await buildPwrAgentThreadToolRouter(
+    params.handler,
+  ).handleDynamicToolCall({
     backend: params.backend,
     call,
   });

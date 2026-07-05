@@ -20,14 +20,18 @@ const liveNotificationTimeoutMs = 60_000;
 
 function completedOutput(notification: AppServerNotification): string {
   if (notification.method !== "turn/completed") {
-    throw new Error(`Expected a completed notification, received ${notification.method}`);
+    throw new Error(
+      `Expected a completed notification, received ${notification.method}`,
+    );
   }
   return notification.params.turn.output[0]?.text ?? "";
 }
 
 function completedItemText(notification: AppServerNotification): string {
   if (notification.method !== "item/completed") {
-    throw new Error(`Expected a completed item notification, received ${notification.method}`);
+    throw new Error(
+      `Expected a completed item notification, received ${notification.method}`,
+    );
   }
   return notification.params.item.text ?? notification.params.item.review ?? "";
 }
@@ -109,8 +113,8 @@ describe("Grok live smoke", () => {
       const firstCompleted = await waitForNotification(
         notifications,
         (notification) =>
-          notification.method === "turn/completed" &&
-          notification.params.turnId === firstTurn.turnId,
+          notification.method === "turn/completed"
+          && notification.params.turnId === firstTurn.turnId,
         `turn/completed for ${firstTurn.turnId}`,
       );
       const firstOutput = completedOutput(firstCompleted);
@@ -143,20 +147,24 @@ describe("Grok live smoke", () => {
       const secondCompleted = await waitForNotification(
         notifications,
         (notification) =>
-          notification.method === "turn/completed" &&
-          notification.params.turnId === secondTurn.turnId,
+          notification.method === "turn/completed"
+          && notification.params.turnId === secondTurn.turnId,
         `turn/completed for ${secondTurn.turnId}`,
       );
       const secondOutput = completedOutput(secondCompleted);
 
       expect(secondOutput).toContain(marker);
 
-      const replay = await server.request("thread/read", { threadId: "thread-live" });
+      const replay = await server.request("thread/read", {
+        threadId: "thread-live",
+      });
       expect(replay).toMatchObject({
         threadId: "thread-live",
         lastUserMessage: "Repeat the same words from your previous reply.",
       });
-      expect((replay as { lastAssistantMessage?: string }).lastAssistantMessage).toContain(marker);
+      expect(
+        (replay as { lastAssistantMessage?: string }).lastAssistantMessage,
+      ).toContain(marker);
     },
   );
 
@@ -184,8 +192,8 @@ describe("Grok live smoke", () => {
       await waitForNotification(
         notifications,
         (notification) =>
-          notification.method === "turn/completed" &&
-          notification.params.turnId === seedTurn.turnId,
+          notification.method === "turn/completed"
+          && notification.params.turnId === seedTurn.turnId,
         `turn/completed for ${seedTurn.turnId}`,
       );
 
@@ -196,26 +204,26 @@ describe("Grok live smoke", () => {
       const started = await waitForNotification(
         notifications,
         (notification) =>
-          notification.method === "item/started" &&
-          notification.params.turnId === compaction.turnId &&
-          notification.params.item.id === compaction.itemId &&
-          notification.params.item.type === "contextCompaction",
+          notification.method === "item/started"
+          && notification.params.turnId === compaction.turnId
+          && notification.params.item.id === compaction.itemId
+          && notification.params.item.type === "contextCompaction",
         `item/started for ${compaction.itemId}`,
       );
       const completed = await waitForNotification(
         notifications,
         (notification) =>
-          notification.method === "item/completed" &&
-          notification.params.turnId === compaction.turnId &&
-          notification.params.item.id === compaction.itemId,
+          notification.method === "item/completed"
+          && notification.params.turnId === compaction.turnId
+          && notification.params.item.id === compaction.itemId,
         `item/completed for ${compaction.itemId}`,
       );
       const compacted = await waitForNotification(
         notifications,
         (notification) =>
-          notification.method === "thread/compacted" &&
-          notification.params.threadId === "thread-live" &&
-          notification.params.itemId === compaction.itemId,
+          notification.method === "thread/compacted"
+          && notification.params.threadId === "thread-live"
+          && notification.params.itemId === compaction.itemId,
         `thread/compacted for ${compaction.itemId}`,
       );
 
@@ -271,8 +279,7 @@ describe("Grok live smoke", () => {
           input: [
             {
               type: "text",
-              text:
-                "Use the repository tools to inspect this workspace and find the exact string value assigned to TOOL_TARGET in src/marker.ts. Reply with the value only.",
+              text: "Use the repository tools to inspect this workspace and find the exact string value assigned to TOOL_TARGET in src/marker.ts. Reply with the value only.",
             },
           ],
         })) as { threadId: string; turnId: string };
@@ -280,10 +287,10 @@ describe("Grok live smoke", () => {
         const startedTool = await waitForNotification(
           notifications,
           (notification) =>
-            notification.method === "item/started" &&
-            notification.params.turnId === turn.turnId &&
-            notification.params.item.type === "dynamicToolCall" &&
-            ["read_file", "search_code", "list_files"].includes(
+            notification.method === "item/started"
+            && notification.params.turnId === turn.turnId
+            && notification.params.item.type === "dynamicToolCall"
+            && ["read_file", "search_code", "list_files"].includes(
               notification.params.item.toolName ?? "",
             ),
           `tool item/started for ${turn.turnId}`,
@@ -291,11 +298,11 @@ describe("Grok live smoke", () => {
         const completedTool = await waitForNotification(
           notifications,
           (notification) =>
-            notification.method === "item/completed" &&
-            notification.params.turnId === turn.turnId &&
-            notification.params.item.type === "dynamicToolCall" &&
-            notification.params.item.success === true &&
-            ["read_file", "search_code", "list_files"].includes(
+            notification.method === "item/completed"
+            && notification.params.turnId === turn.turnId
+            && notification.params.item.type === "dynamicToolCall"
+            && notification.params.item.success === true
+            && ["read_file", "search_code", "list_files"].includes(
               notification.params.item.toolName ?? "",
             ),
           `tool item/completed for ${turn.turnId}`,
@@ -303,8 +310,8 @@ describe("Grok live smoke", () => {
         const completedTurn = await waitForNotification(
           notifications,
           (notification) =>
-            notification.method === "turn/completed" &&
-            notification.params.turnId === turn.turnId,
+            notification.method === "turn/completed"
+            && notification.params.turnId === turn.turnId,
           `turn/completed for ${turn.turnId}`,
         );
 
@@ -312,14 +319,24 @@ describe("Grok live smoke", () => {
         expect(completedTool.method).toBe("item/completed");
         expect(completedOutput(completedTurn)).toContain(marker);
 
-        const replay = await server.request("thread/read", { threadId: "thread-live" });
-        expect((replay as { lastAssistantMessage?: string }).lastAssistantMessage).toContain(
-          marker,
-        );
-        expect((replay as { items?: Array<{ toolName?: string; success?: boolean }> }).items).toEqual(
+        const replay = await server.request("thread/read", {
+          threadId: "thread-live",
+        });
+        expect(
+          (replay as { lastAssistantMessage?: string }).lastAssistantMessage,
+        ).toContain(marker);
+        expect(
+          (
+            replay as {
+              items?: Array<{ toolName?: string; success?: boolean }>;
+            }
+          ).items,
+        ).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
-              toolName: expect.stringMatching(/^(read_file|search_code|list_files)$/),
+              toolName: expect.stringMatching(
+                /^(read_file|search_code|list_files)$/,
+              ),
               success: true,
             }),
           ]),

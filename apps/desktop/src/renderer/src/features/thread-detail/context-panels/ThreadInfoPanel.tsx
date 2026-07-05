@@ -47,7 +47,9 @@ export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
     setAgentSaving(false);
   }, [props.thread.id, props.thread.source]);
 
-  const setThreadAgent = async (agent: { name: string } | null): Promise<void> => {
+  const setThreadAgent = async (
+    agent: { name: string } | null,
+  ): Promise<void> => {
     if (!props.desktopApi?.setThreadAgent) {
       return;
     }
@@ -80,9 +82,9 @@ export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
                 worktreePath,
               );
               const canRestore =
-                directory.kind === "worktree" &&
-                snapshot?.state === "archived" &&
-                Boolean(props.onRestoreWorktree);
+                directory.kind === "worktree"
+                && snapshot?.state === "archived"
+                && Boolean(props.onRestoreWorktree);
 
               return (
                 <li key={directory.id} className="context-list__item">
@@ -136,13 +138,17 @@ export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
                       />
                       <TooltipValue
                         label={`Path for ${
-                          snapshot?.state === "archived" ? "archived" : directory.kind
+                          snapshot?.state === "archived"
+                            ? "archived"
+                            : directory.kind
                         } ${directory.label}`}
                         value={worktreePath}
                         onBlur={props.hideTooltip}
                         onShowTooltip={props.showTooltip}
                       >
-                        {snapshot?.state === "archived" ? "archived" : directory.kind}
+                        {snapshot?.state === "archived"
+                          ? "archived"
+                          : directory.kind}
                       </TooltipValue>
                     </span>
                   </div>
@@ -193,7 +199,9 @@ export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
                 </span>
               </li>
             </ul>
-            <p className="context-empty">Recorded working directory is no longer available.</p>
+            <p className="context-empty">
+              Recorded working directory is no longer available.
+            </p>
           </>
         ) : (
           <p className="context-empty">No linked directory</p>
@@ -212,7 +220,9 @@ export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
             <div className="context-list__content">
               <p className="context-list__label">{props.thread.agent.name}</p>
               <p className="context-list__meta">
-                {formatAgentInstructionSummary(props.thread.agent.instructionLineCount)}
+                {formatAgentInstructionSummary(
+                  props.thread.agent.instructionLineCount,
+                )}
               </p>
             </div>
             <button
@@ -262,8 +272,12 @@ export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
                     onClick={(event) => {
                       void handleCopyPath(event, snapshot.snapshotRef);
                     }}
-                    onFocus={(event) => props.showTooltip(event, snapshot.snapshotRef)}
-                    onMouseEnter={(event) => props.showTooltip(event, snapshot.snapshotRef)}
+                    onFocus={(event) =>
+                      props.showTooltip(event, snapshot.snapshotRef)
+                    }
+                    onMouseEnter={(event) =>
+                      props.showTooltip(event, snapshot.snapshotRef)
+                    }
                     onMouseLeave={props.hideTooltip}
                   >
                     <span aria-hidden="true" className="context-list__icon">
@@ -343,7 +357,9 @@ export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
           <div>
             <dt>Updated</dt>
             <dd>
-              {props.thread.updatedAt ? formatTimestamp(props.thread.updatedAt) : "Unknown"}
+              {props.thread.updatedAt
+                ? formatTimestamp(props.thread.updatedAt)
+                : "Unknown"}
             </dd>
           </div>
           <div>

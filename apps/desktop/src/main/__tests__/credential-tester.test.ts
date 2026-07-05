@@ -40,36 +40,40 @@ type TesterOptions = {
 function buildTester(options: TesterOptions = {}) {
   const validateMessagingCredentials =
     options.validateMessagingCredentials
-    ?? vi.fn(async (
-      request: CredentialValidationRequest,
-    ): Promise<MessagingCredentialValidationResult> => ({
-      status: "ok" as const,
-      durationMs: 1,
-      testedAt: Date.now(),
-      account:
-        request.channel === "telegram" ? "@pwragent_bot" : "pwragent",
-      detail:
-        request.channel === "telegram"
-          ? "api.telegram.org"
-          : "discord.com/api/v10",
-    }));
+    ?? vi.fn(
+      async (
+        request: CredentialValidationRequest,
+      ): Promise<MessagingCredentialValidationResult> => ({
+        status: "ok" as const,
+        durationMs: 1,
+        testedAt: Date.now(),
+        account: request.channel === "telegram" ? "@pwragent_bot" : "pwragent",
+        detail:
+          request.channel === "telegram"
+            ? "api.telegram.org"
+            : "discord.com/api/v10",
+      }),
+    );
   const tester = new CredentialTester({
-    resolveTelegramBotToken: options.resolveTelegramBotToken ?? (() => "telegram-token"),
-    resolveDiscordBotToken: options.resolveDiscordBotToken ?? (() => "discord-token"),
+    resolveTelegramBotToken:
+      options.resolveTelegramBotToken ?? (() => "telegram-token"),
+    resolveDiscordBotToken:
+      options.resolveDiscordBotToken ?? (() => "discord-token"),
     resolveMattermostBotToken:
       options.resolveMattermostBotToken ?? (() => "mattermost-token"),
     resolveMattermostServerUrl:
-      options.resolveMattermostServerUrl
-      ?? (() => "https://mm.example.com"),
+      options.resolveMattermostServerUrl ?? (() => "https://mm.example.com"),
     resolveSlackBotToken: options.resolveSlackBotToken ?? (() => "slack-token"),
     resolveFeishuAppId: options.resolveFeishuAppId ?? (() => "cli_feishu"),
-    resolveFeishuAppSecret: options.resolveFeishuAppSecret ?? (() => "feishu-secret"),
+    resolveFeishuAppSecret:
+      options.resolveFeishuAppSecret ?? (() => "feishu-secret"),
     resolveFeishuTenantUrl:
       options.resolveFeishuTenantUrl ?? (() => "https://open.feishu.cn"),
     resolveLineChannelAccessToken:
       options.resolveLineChannelAccessToken ?? (() => "line-token"),
     resolveGrokApiKey: options.resolveGrokApiKey ?? (async () => "grok-key"),
-    resolveCodexCommand: options.resolveCodexCommand ?? (async () => "/usr/local/bin/codex"),
+    resolveCodexCommand:
+      options.resolveCodexCommand ?? (async () => "/usr/local/bin/codex"),
     validateMessagingCredentials,
     fetch: options.fetch as typeof fetch,
     runCodexVersion:
@@ -284,7 +288,9 @@ describe("CredentialTester", () => {
       const result = await tester.test("grok");
       expect(result.status).toBe("ok");
       // First three plus +N more.
-      expect(result.detail).toBe("grok-4-fast, grok-4-fast-reasoning, grok-3, +1 more");
+      expect(result.detail).toBe(
+        "grok-4-fast, grok-4-fast-reasoning, grok-3, +1 more",
+      );
       const init = fetcher.mock.calls[0]?.[1];
       expect(init?.headers).toMatchObject({
         Authorization: "Bearer grok-key",
@@ -334,11 +340,16 @@ describe("CredentialTester", () => {
 
     it("returns failed when the binary spawns but doesn't print a version", async () => {
       const { tester } = buildTester({
-        runCodexVersion: async () => ({ stdout: "no version here\n", stderr: "" }),
+        runCodexVersion: async () => ({
+          stdout: "no version here\n",
+          stderr: "",
+        }),
       });
       const result = await tester.test("codex");
       expect(result.status).toBe("failed");
-      expect(result.errorMessage).toBe("version banner not recognized in stdout/stderr");
+      expect(result.errorMessage).toBe(
+        "version banner not recognized in stdout/stderr",
+      );
     });
 
     it("returns failed when the binary throws (ENOENT etc.)", async () => {

@@ -94,7 +94,9 @@ function fanOut(channel: string, payload: unknown): void {
   }
 }
 
-function broadcastPlatformStatusEvent(event: MessagingPlatformStatusEvent): void {
+function broadcastPlatformStatusEvent(
+  event: MessagingPlatformStatusEvent,
+): void {
   fanOut(MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL, event);
 }
 
@@ -102,18 +104,25 @@ function broadcastBindingsChanged(): void {
   fanOut(MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL, { at: Date.now() });
 }
 
-function broadcastPairingChanged(event: { at: number; entry: MessagingPairingEntry }): void {
+function broadcastPairingChanged(event: {
+  at: number;
+  entry: MessagingPairingEntry;
+}): void {
   fanOut(MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL, event);
 }
 
-function markPairingConsumed(entryId: string): MessagingPairingEntry | undefined {
+function markPairingConsumed(
+  entryId: string,
+): MessagingPairingEntry | undefined {
   return getDesktopMessagingPairingStore().markStatus({
     entryId,
     status: "consumed",
   });
 }
 
-function markPairingRejected(entryId: string): MessagingPairingEntry | undefined {
+function markPairingRejected(
+  entryId: string,
+): MessagingPairingEntry | undefined {
   return getDesktopMessagingPairingStore().markStatus({
     entryId,
     status: "rejected",
@@ -126,7 +135,11 @@ function buildPairingApprovalPatch(
   target?: MessagingPairingApprovalTarget,
   options?: { teamName?: string },
 ): { added: boolean; patch: DesktopSettingsConfigPatch } {
-  if (entry.status !== "observed" || !entry.observedActor || !entry.observedChat) {
+  if (
+    entry.status !== "observed"
+    || !entry.observedActor
+    || !entry.observedChat
+  ) {
     throw new Error("Pairing request has not been observed yet.");
   }
 
@@ -144,16 +157,22 @@ function buildPairingApprovalPatch(
   switch (entry.platform) {
     case "telegram": {
       if (entry.scope === "bucket") {
-        const merged = merge(snapshot.messaging.telegram.authorizedSupergroups.value);
+        const merged = merge(
+          snapshot.messaging.telegram.authorizedSupergroups.value,
+        );
         return {
           added: merged.added,
-          patch: { messaging: { telegram: { authorizedSupergroups: merged.contacts } } },
+          patch: {
+            messaging: { telegram: { authorizedSupergroups: merged.contacts } },
+          },
         };
       }
       const merged = merge(snapshot.messaging.telegram.authorizedUserIds.value);
       return {
         added: merged.added,
-        patch: { messaging: { telegram: { authorizedUserIds: merged.contacts } } },
+        patch: {
+          messaging: { telegram: { authorizedUserIds: merged.contacts } },
+        },
       };
     }
     case "discord": {
@@ -161,41 +180,62 @@ function buildPairingApprovalPatch(
         const merged = merge(snapshot.messaging.discord.authorizedGuilds.value);
         return {
           added: merged.added,
-          patch: { messaging: { discord: { authorizedGuilds: merged.contacts } } },
+          patch: {
+            messaging: { discord: { authorizedGuilds: merged.contacts } },
+          },
         };
       }
       const merged = merge(snapshot.messaging.discord.authorizedUserIds.value);
       return {
         added: merged.added,
-        patch: { messaging: { discord: { authorizedUserIds: merged.contacts } } },
+        patch: {
+          messaging: { discord: { authorizedUserIds: merged.contacts } },
+        },
       };
     }
     case "mattermost": {
       if (entry.scope === "bucket") {
-        throw new Error("Mattermost bucket pairing is not supported by the current settings schema.");
+        throw new Error(
+          "Mattermost bucket pairing is not supported by the current settings schema.",
+        );
       }
-      const merged = merge(snapshot.messaging.mattermost.authorizedUserIds.value);
+      const merged = merge(
+        snapshot.messaging.mattermost.authorizedUserIds.value,
+      );
       return {
         added: merged.added,
-        patch: { messaging: { mattermost: { authorizedUserIds: merged.contacts } } },
+        patch: {
+          messaging: { mattermost: { authorizedUserIds: merged.contacts } },
+        },
       };
     }
     case "slack": {
       if (approvalTarget === "team") {
-        const merged = merge(snapshot.messaging.slack.authorizedWorkspaces.value);
+        const merged = merge(
+          snapshot.messaging.slack.authorizedWorkspaces.value,
+        );
         return {
           added: merged.added,
-          patch: { messaging: { slack: { authorizedWorkspaces: merged.contacts } } },
+          patch: {
+            messaging: { slack: { authorizedWorkspaces: merged.contacts } },
+          },
         };
       }
-      if (approvalTarget === "conversation" || (!approvalTarget && entry.scope === "bucket")) {
+      if (
+        approvalTarget === "conversation"
+        || (!approvalTarget && entry.scope === "bucket")
+      ) {
         if (entry.observedChat.kind === "dm") {
-          throw new Error("Slack channel approval requires a channel or group DM.");
+          throw new Error(
+            "Slack channel approval requires a channel or group DM.",
+          );
         }
         const merged = merge(snapshot.messaging.slack.authorizedChannels.value);
         return {
           added: merged.added,
-          patch: { messaging: { slack: { authorizedChannels: merged.contacts } } },
+          patch: {
+            messaging: { slack: { authorizedChannels: merged.contacts } },
+          },
         };
       }
       const merged = merge(snapshot.messaging.slack.authorizedUserIds.value);
@@ -225,7 +265,9 @@ function buildPairingApprovalPatch(
         );
         return {
           added: merged.added,
-          patch: { messaging: { feishu: { authorizedChats: merged.contacts } } },
+          patch: {
+            messaging: { feishu: { authorizedChats: merged.contacts } },
+          },
         };
       }
       const merged = merge(snapshot.messaging.feishu.authorizedUserIds.value);
@@ -251,7 +293,9 @@ function buildPairingApprovalPatch(
       }
       return {
         added: merged.added,
-        patch: { messaging: { feishu: { authorizedUserIds: merged.contacts } } },
+        patch: {
+          messaging: { feishu: { authorizedUserIds: merged.contacts } },
+        },
       };
     }
     case "line": {
@@ -260,14 +304,18 @@ function buildPairingApprovalPatch(
           const merged = merge(snapshot.messaging.line.authorizedGroups.value);
           return {
             added: merged.added,
-            patch: { messaging: { line: { authorizedGroups: merged.contacts } } },
+            patch: {
+              messaging: { line: { authorizedGroups: merged.contacts } },
+            },
           };
         }
         if (contact.id.startsWith("R")) {
           const merged = merge(snapshot.messaging.line.authorizedRooms.value);
           return {
             added: merged.added,
-            patch: { messaging: { line: { authorizedRooms: merged.contacts } } },
+            patch: {
+              messaging: { line: { authorizedRooms: merged.contacts } },
+            },
           };
         }
         throw new Error("LINE bucket pairing requires a group or room ID.");
@@ -279,7 +327,9 @@ function buildPairingApprovalPatch(
       };
     }
     default:
-      throw new Error(`Pairing approval is not supported for ${entry.platform}.`);
+      throw new Error(
+        `Pairing approval is not supported for ${entry.platform}.`,
+      );
   }
 }
 
@@ -318,10 +368,14 @@ function contactForPairing(
       }
       return { id, displayName: slackChannelDisplayName(entry.observedChat) };
     }
-    const id = entry.observedChat.bucketId ?? entry.observedChat.parentId ?? entry.observedChat.id;
+    const id =
+      entry.observedChat.bucketId
+      ?? entry.observedChat.parentId
+      ?? entry.observedChat.id;
     return {
       id,
-      displayName: entry.observedChat.title ?? entry.observedChat.parentTitle ?? "",
+      displayName:
+        entry.observedChat.title ?? entry.observedChat.parentTitle ?? "",
     };
   }
   if (isSlack && !validateSlackUserId(entry.observedActor.id).ok) {
@@ -333,7 +387,9 @@ function contactForPairing(
     id: entry.observedActor.id,
     displayName:
       entry.observedActor.displayName
-      ?? (entry.observedActor.username ? `@${entry.observedActor.username}` : ""),
+      ?? (entry.observedActor.username
+        ? `@${entry.observedActor.username}`
+        : ""),
   };
 }
 
@@ -369,7 +425,10 @@ async function resolveSlackWorkspaceName(
 }
 
 /** Resolve `promise`, or `undefined` if it takes longer than `ms`. */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+): Promise<T | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<undefined>((resolve) => {
     timer = setTimeout(() => resolve(undefined), ms);
@@ -400,7 +459,8 @@ function slackApprovalConfirmationText(
 
   // State *after* this approval — the just-approved target counts as added.
   const userAuthorized =
-    target === "actor" || inList(slack.authorizedUserIds.value, entry.observedActor?.id);
+    target === "actor"
+    || inList(slack.authorizedUserIds.value, entry.observedActor?.id);
   const channelAuthorized =
     slack.channelAuthorizationMode?.value === "allow_all"
     || target === "conversation"
@@ -445,7 +505,10 @@ function slackChannelDisplayName(
   return chat.title ?? chat.parentTitle ?? "";
 }
 
-function recordPairingActivity(entry: MessagingPairingEntry, summary: string): void {
+function recordPairingActivity(
+  entry: MessagingPairingEntry,
+  summary: string,
+): void {
   try {
     getDesktopMessagingActivityLog().record({
       platform: entry.platform,
@@ -484,7 +547,9 @@ export function registerMessagingStatusIpcHandlers(): void {
     broadcastPlatformStatusEvent,
   );
   unsubscribeBindingsChanged?.();
-  unsubscribeBindingsChanged = runtime.onBindingsChanged(broadcastBindingsChanged);
+  unsubscribeBindingsChanged = runtime.onBindingsChanged(
+    broadcastBindingsChanged,
+  );
   unsubscribePairingChanged?.();
   unsubscribePairingChanged = runtime.onPairingChanged(broadcastPairingChanged);
 
@@ -557,9 +622,11 @@ export function registerMessagingStatusIpcHandlers(): void {
       request: ListInboundTopicsRequest,
     ): Promise<ListInboundTopicsResponse> => {
       if (!request.groupId) return { topics: [] };
-      const records = await getDesktopMessagingStore().findManagedTopicsForSupergroup(
-        { channel: request.provider, supergroupId: request.groupId },
-      );
+      const records =
+        await getDesktopMessagingStore().findManagedTopicsForSupergroup({
+          channel: request.provider,
+          supergroupId: request.groupId,
+        });
       const topics = records
         .filter((record) => record.lifecycle !== "deleted")
         .map((record) => ({
@@ -623,8 +690,9 @@ export function registerMessagingStatusIpcHandlers(): void {
       request: ApproveMessagingPairingRequest,
     ): Promise<ApproveMessagingPairingResponse> => {
       const service = getDesktopSettingsService();
-      const pairing = runtime.listPairingRequests({ includeResolved: true }).entries
-        .find((entry) => entry.id === request.entryId);
+      const pairing = runtime
+        .listPairingRequests({ includeResolved: true })
+        .entries.find((entry) => entry.id === request.entryId);
       if (!pairing) throw new Error("Pairing request not found.");
       // For a Slack team approval, resolve the workspace name best-effort so the
       // saved row carries a label (blank on failure/timeout), mirroring how the
@@ -633,7 +701,10 @@ export function registerMessagingStatusIpcHandlers(): void {
         pairing.platform === "slack"
         && request.target === "team"
         && pairing.observedChat?.bucketId
-          ? await resolveSlackWorkspaceName(service, pairing.observedChat.bucketId)
+          ? await resolveSlackWorkspaceName(
+              service,
+              pairing.observedChat.bucketId,
+            )
           : undefined;
       const snapshot = await service.readSettings();
       const approval = buildPairingApprovalPatch(
@@ -645,7 +716,8 @@ export function registerMessagingStatusIpcHandlers(): void {
       const next = await service.writeConfigPatch(approval.patch);
       await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(
         runtime,
-        (options) => loadDesktopMessagingConfigFromSettings(service, process.env, options),
+        (options) =>
+          loadDesktopMessagingConfigFromSettings(service, process.env, options),
         {
           logStartupEligibility: true,
         },
@@ -745,38 +817,47 @@ export function registerMessagingStatusIpcHandlers(): void {
       request: SetMessagingEnabledRequest,
     ): Promise<SetMessagingEnabledResponse> => {
       if (request.enabled) {
-        const result = await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(
-          runtime,
-          (options) => loadDesktopMessagingConfigFromSettings(
-            getDesktopSettingsService(),
-            process.env,
-            options,
-          ),
-          {
-            logStartupEligibility: true,
-            messagingEnabledOverride: true,
-          },
-        );
+        const result =
+          await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(
+            runtime,
+            (options) =>
+              loadDesktopMessagingConfigFromSettings(
+                getDesktopSettingsService(),
+                process.env,
+                options,
+              ),
+            {
+              logStartupEligibility: true,
+              messagingEnabledOverride: true,
+            },
+          );
         const override = resolveRuntimeMessagingOverride();
         return {
           enabled: result.enabled,
-          overridden: override.disabled || result.disabledReasonKind === "lease_held",
+          overridden:
+            override.disabled || result.disabledReasonKind === "lease_held",
           ...(override.reason ? { overrideReason: override.reason } : {}),
-          ...(result.disabledReason ? { disabledReason: result.disabledReason } : {}),
+          ...(result.disabledReason
+            ? { disabledReason: result.disabledReason }
+            : {}),
           ...(result.disabledReasonKind
             ? { disabledReasonKind: result.disabledReasonKind }
             : {}),
           ...(result.leaseHolder ? { leaseHolder: result.leaseHolder } : {}),
         };
       } else {
-        const result = await getRuntimeMessagingLeaseCoordinator()
-          .disableForSession(runtime);
+        const result =
+          await getRuntimeMessagingLeaseCoordinator().disableForSession(
+            runtime,
+          );
         const override = resolveRuntimeMessagingOverride();
         return {
           enabled: result.enabled,
           overridden: override.disabled,
           ...(override.reason ? { overrideReason: override.reason } : {}),
-          ...(result.disabledReason ? { disabledReason: result.disabledReason } : {}),
+          ...(result.disabledReason
+            ? { disabledReason: result.disabledReason }
+            : {}),
           ...(result.disabledReasonKind
             ? { disabledReasonKind: result.disabledReasonKind }
             : {}),
@@ -796,26 +877,29 @@ export function registerMessagingStatusIpcHandlers(): void {
   );
 
   ipcMain.removeHandler(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL);
-  ipcMain.handle(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL, async (): Promise<void> => {
-    // Called by the wizard right before it spawns the operator's
-    // chosen profile in a new Electron process. The bootstrap's
-    // adapters (Telegram long-poll, Discord gateway, etc.) hold
-    // exclusive resources upstream; if we don't release them first
-    // the child process's adapters race and lose (Telegram 409,
-    // Discord "another shard already connected", etc.).
-    //
-    // `shutdown` stops the runtime AND releases the runtime-messaging
-    // lease, mirroring the SIGTERM cleanup path. Idempotent — calling
-    // it twice or when nothing is running is a no-op.
-    try {
-      await getRuntimeMessagingLeaseCoordinator().shutdown(runtime);
-      log.info("messaging runtime shutdown via wizard graduation");
-    } catch (error) {
-      log.warn("messaging runtime shutdown failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  });
+  ipcMain.handle(
+    MESSAGING_SHUTDOWN_RUNTIME_CHANNEL,
+    async (): Promise<void> => {
+      // Called by the wizard right before it spawns the operator's
+      // chosen profile in a new Electron process. The bootstrap's
+      // adapters (Telegram long-poll, Discord gateway, etc.) hold
+      // exclusive resources upstream; if we don't release them first
+      // the child process's adapters race and lose (Telegram 409,
+      // Discord "another shard already connected", etc.).
+      //
+      // `shutdown` stops the runtime AND releases the runtime-messaging
+      // lease, mirroring the SIGTERM cleanup path. Idempotent — calling
+      // it twice or when nothing is running is a no-op.
+      try {
+        await getRuntimeMessagingLeaseCoordinator().shutdown(runtime);
+        log.info("messaging runtime shutdown via wizard graduation");
+      } catch (error) {
+        log.warn("messaging runtime shutdown failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+  );
 }
 
 export async function disposeMessagingStatusIpcHandlers(): Promise<void> {

@@ -38,7 +38,12 @@ export type HotCpuProfileSession = {
 
 export type HotCpuProfileSessionCreateResult =
   | { ok: true; session: HotCpuProfileSession }
-  | { ok: false; code: "SESSION_CREATE_FAILED"; message: string; cause: unknown };
+  | {
+      ok: false;
+      code: "SESSION_CREATE_FAILED";
+      message: string;
+      cause: unknown;
+    };
 
 type HotCpuProfileSessionManifest = {
   id: string;
@@ -76,7 +81,9 @@ function formatSessionPrefix(date: Date): string {
   return `${year}-${month}-${day}-${hours}${minutes}`;
 }
 
-function serializeNdjsonRecord(record: HotCpuProfileSample | HotCpuProfileEvent): string {
+function serializeNdjsonRecord(
+  record: HotCpuProfileSample | HotCpuProfileEvent,
+): string {
   return `${JSON.stringify(record)}\n`;
 }
 
@@ -84,7 +91,11 @@ async function writeManifest(
   manifestPath: string,
   manifest: HotCpuProfileSessionManifest,
 ): Promise<void> {
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await fs.writeFile(
+    manifestPath,
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 export async function createHotCpuProfileSession(options: {
@@ -161,7 +172,10 @@ export async function createHotCpuProfileSession(options: {
       appendSample: async (sample) => appendRecord(samplesPath, sample),
       appendEvent: async (event) => appendRecord(eventsPath, event),
       createProfilePath: (index) =>
-        path.join(directoryPath, `renderer-hot-${String(index).padStart(4, "0")}.cpuprofile`),
+        path.join(
+          directoryPath,
+          `renderer-hot-${String(index).padStart(4, "0")}.cpuprofile`,
+        ),
       createHeapSnapshotPath: (index, phase) =>
         path.join(
           directoryPath,

@@ -193,8 +193,8 @@ function ensureBranchNotCheckedOutElsewhere(params: {
 }): void {
   const occupied = params.worktrees.find(
     (worktree) =>
-      worktree.branch === params.branch &&
-      path.resolve(worktree.path) !== path.resolve(params.allowedPath),
+      worktree.branch === params.branch
+      && path.resolve(worktree.path) !== path.resolve(params.allowedPath),
   );
   if (occupied) {
     throw new Error(
@@ -217,8 +217,13 @@ async function createNamedStashIfDirty(
     options.gitEnv,
   );
   const ref = trim(
-    (await runGit(options.path, ["rev-parse", "--verify", "stash@{0}"], options.gitEnv))
-      .stdout,
+    (
+      await runGit(
+        options.path,
+        ["rev-parse", "--verify", "stash@{0}"],
+        options.gitEnv,
+      )
+    ).stdout,
   );
 
   return {
@@ -235,12 +240,13 @@ async function getDirtyStatus(
   gitEnv?: NodeJS.ProcessEnv,
 ): Promise<string> {
   return trim(
-    (await runGit(
-      workspacePath,
-      ["status", "--porcelain", "--untracked-files=normal"],
-      gitEnv,
-    ))
-      .stdout,
+    (
+      await runGit(
+        workspacePath,
+        ["status", "--porcelain", "--untracked-files=normal"],
+        gitEnv,
+      )
+    ).stdout,
   );
 }
 
@@ -340,7 +346,9 @@ export class GitWorkspaceHandoffService {
     this.homeDir = options.homeDir;
   }
 
-  async handoff(params: HandoffParams): Promise<HandoffThreadWorkspaceResponse> {
+  async handoff(
+    params: HandoffParams,
+  ): Promise<HandoffThreadWorkspaceResponse> {
     const response =
       params.direction === "local-to-worktree"
         ? await this.handoffLocalToWorktree(params)
@@ -356,27 +364,36 @@ export class GitWorkspaceHandoffService {
     const sourcePath = await realpath(path.resolve(rawSourcePath));
     const repositoryPath = await realpath(
       path.resolve(
-        params.repositoryPath ??
-          trim(
-            (await runGit(
-              sourcePath,
-              ["rev-parse", "--show-toplevel"],
-              this.gitEnv,
-            )).stdout,
+        params.repositoryPath
+          ?? trim(
+            (
+              await runGit(
+                sourcePath,
+                ["rev-parse", "--show-toplevel"],
+                this.gitEnv,
+              )
+            ).stdout,
           ),
       ),
     );
     const worktrees = parseWorktreeList(
-      (await runGit(repositoryPath, ["worktree", "list", "--porcelain"], this.gitEnv))
-        .stdout,
+      (
+        await runGit(
+          repositoryPath,
+          ["worktree", "list", "--porcelain"],
+          this.gitEnv,
+        )
+      ).stdout,
     );
     const observedBranch = sanitizeBranchName(
       trim(
-        (await runGit(
-          sourcePath,
-          ["rev-parse", "--abbrev-ref", "HEAD"],
-          this.gitEnv,
-        )).stdout,
+        (
+          await runGit(
+            sourcePath,
+            ["rev-parse", "--abbrev-ref", "HEAD"],
+            this.gitEnv,
+          )
+        ).stdout,
       ),
     );
     const branch =
@@ -384,11 +401,13 @@ export class GitWorkspaceHandoffService {
         ? "HEAD"
         : sanitizeBranchName(params.sourceBranch ?? "") || observedBranch;
     const headSha = trim(
-      (await runGit(
-        sourcePath,
-        ["rev-parse", "--verify", "HEAD^{commit}"],
-        this.gitEnv,
-      )).stdout,
+      (
+        await runGit(
+          sourcePath,
+          ["rev-parse", "--verify", "HEAD^{commit}"],
+          this.gitEnv,
+        )
+      ).stdout,
     );
 
     if (!branch) {
@@ -396,7 +415,9 @@ export class GitWorkspaceHandoffService {
     }
 
     if (!findWorktree(worktrees, sourcePath)) {
-      throw new Error(`Source workspace is not registered with Git: ${sourcePath}`);
+      throw new Error(
+        `Source workspace is not registered with Git: ${sourcePath}`,
+      );
     }
 
     return {
@@ -415,8 +436,12 @@ export class GitWorkspaceHandoffService {
     params: HandoffParams,
   ): Promise<HandoffThreadWorkspaceResponse> {
     const context = await this.buildContext(params);
-    if (path.resolve(context.repositoryPath) !== path.resolve(context.sourcePath)) {
-      throw new Error("Local-to-worktree handoff must start from the local checkout.");
+    if (
+      path.resolve(context.repositoryPath) !== path.resolve(context.sourcePath)
+    ) {
+      throw new Error(
+        "Local-to-worktree handoff must start from the local checkout.",
+      );
     }
 
     const strategy = params.strategy ?? "move-branch";
@@ -428,7 +453,9 @@ export class GitWorkspaceHandoffService {
     }
 
     if (context.branch === "HEAD") {
-      throw new Error("Local-to-worktree handoff requires a named source branch.");
+      throw new Error(
+        "Local-to-worktree handoff requires a named source branch.",
+      );
     }
 
     ensureBranchNotCheckedOutElsewhere({
@@ -438,7 +465,8 @@ export class GitWorkspaceHandoffService {
     });
 
     const rawLeaveLocalBranch = params.leaveLocalBranch?.trim() ?? "";
-    const leaveLocalDetached = rawLeaveLocalBranch === DETACHED_HEAD_LEAVE_LOCAL_BRANCH;
+    const leaveLocalDetached =
+      rawLeaveLocalBranch === DETACHED_HEAD_LEAVE_LOCAL_BRANCH;
     const leaveLocalBranch = leaveLocalDetached
       ? DETACHED_HEAD_LEAVE_LOCAL_BRANCH
       : sanitizeBranchName(rawLeaveLocalBranch);
@@ -460,7 +488,9 @@ export class GitWorkspaceHandoffService {
 
     const warnings = ["Ignored files are not preserved by workspace handoff."];
     if (leaveLocalDetached) {
-      warnings.push("Local was left on a detached HEAD at the moved branch commit.");
+      warnings.push(
+        "Local was left on a detached HEAD at the moved branch commit.",
+      );
     }
     const sourceStash = await createNamedStashIfDirty({
       gitEnv: this.gitEnv,
@@ -521,8 +551,14 @@ export class GitWorkspaceHandoffService {
     if (newBranchName === context.branch) {
       throw new Error("New branch name must differ from the current branch.");
     }
-    await validateBranchName(context.repositoryPath, newBranchName, this.gitEnv);
-    if (await branchExists(context.repositoryPath, newBranchName, this.gitEnv)) {
+    await validateBranchName(
+      context.repositoryPath,
+      newBranchName,
+      this.gitEnv,
+    );
+    if (
+      await branchExists(context.repositoryPath, newBranchName, this.gitEnv)
+    ) {
       throw new Error(`Branch ${newBranchName} already exists.`);
     }
 
@@ -648,7 +684,9 @@ export class GitWorkspaceHandoffService {
     params: HandoffParams,
   ): Promise<HandoffThreadWorkspaceResponse> {
     const context = await this.buildContext(params);
-    if (path.resolve(context.repositoryPath) === path.resolve(context.sourcePath)) {
+    if (
+      path.resolve(context.repositoryPath) === path.resolve(context.sourcePath)
+    ) {
       throw new Error("Worktree-to-local handoff must start from a worktree.");
     }
 
@@ -663,7 +701,10 @@ export class GitWorkspaceHandoffService {
     });
 
     const warnings = ["Ignored files are not preserved by workspace handoff."];
-    await assertLocalCleanForDestinationHandoff(context.repositoryPath, this.gitEnv);
+    await assertLocalCleanForDestinationHandoff(
+      context.repositoryPath,
+      this.gitEnv,
+    );
     const sourceStash = await createNamedStashIfDirty({
       gitEnv: this.gitEnv,
       path: context.sourcePath,
@@ -671,7 +712,11 @@ export class GitWorkspaceHandoffService {
     });
 
     await runGit(context.sourcePath, ["switch", "--detach"], this.gitEnv);
-    await runGit(context.repositoryPath, ["switch", context.branch], this.gitEnv);
+    await runGit(
+      context.repositoryPath,
+      ["switch", context.branch],
+      this.gitEnv,
+    );
     const appliedSourceStash = await applyVerifyAndDropStash(
       context.repositoryPath,
       sourceStash,
@@ -715,7 +760,10 @@ export class GitWorkspaceHandoffService {
       "Ignored files are not preserved by workspace handoff.",
       "Local will be left on a detached HEAD at the moved worktree commit.",
     ];
-    await assertLocalCleanForDestinationHandoff(context.repositoryPath, this.gitEnv);
+    await assertLocalCleanForDestinationHandoff(
+      context.repositoryPath,
+      this.gitEnv,
+    );
     const sourceStash = await createNamedStashIfDirty({
       gitEnv: this.gitEnv,
       path: context.sourcePath,

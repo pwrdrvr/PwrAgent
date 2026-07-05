@@ -127,7 +127,9 @@ export function buildToolUpdateBatchMessageIntent(params: {
         type: "text",
         text: [
           `Tool updates: ran ${count} tool${count === 1 ? "" : "s"}`,
-          ...params.activities.map((activity) => `- ${formatToolActivityLine(activity)}`),
+          ...params.activities.map(
+            (activity) => `- ${formatToolActivityLine(activity)}`,
+          ),
         ].join("\n"),
         markdown: "light",
       },
@@ -150,7 +152,10 @@ export function buildConfirmationIntent(params: {
   return {
     id: params.id,
     kind: "confirmation",
-    actions: applyActionCapabilityLimits(params.actions ?? [], params.capabilityProfile),
+    actions: applyActionCapabilityLimits(
+      params.actions ?? [],
+      params.capabilityProfile,
+    ),
     body: params.body,
     browseSessionId: params.browseSessionId,
     createdAt: params.createdAt,
@@ -192,7 +197,8 @@ export function buildQuestionnaireIntent(params: {
     answers: params.request.params.questions.map(() => null),
     currentIndex: 0,
     phase: "answering",
-    fallbackText: "Reply with an option, Back, Next, Submit, or a free-form answer.",
+    fallbackText:
+      "Reply with an option, Back, Next, Submit, or a free-form answer.",
     questions: params.request.params.questions.map((question) => ({
       id: question.id,
       header: question.header || undefined,
@@ -201,7 +207,10 @@ export function buildQuestionnaireIntent(params: {
       secret: question.isSecret,
       options: (question.options ?? []).map((option, index) => ({
         id: `${question.id}:option:${index + 1}`,
-        label: labelLimit === undefined ? option.label : truncateMessagingLabel(option.label, labelLimit),
+        label:
+          labelLimit === undefined
+            ? option.label
+            : truncateMessagingLabel(option.label, labelLimit),
         description: option.description || undefined,
         fallbackText: String(index + 1),
         recommended: /\(recommended\)/i.test(option.label),

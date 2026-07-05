@@ -29,7 +29,9 @@ import type {
   AppServerThreadStatus,
 } from "@pwragent/shared";
 
-export function normalizedThreadToReplay(thread: NormalizedThread): AppServerThreadReplay {
+export function normalizedThreadToReplay(
+  thread: NormalizedThread,
+): AppServerThreadReplay {
   const entries: AppServerThreadEntry[] = thread.entries.map((entry) => {
     if (entry.type === "message") {
       return messageEntryToReplay(entry);
@@ -60,7 +62,9 @@ export function normalizedThreadToReplay(thread: NormalizedThread): AppServerThr
   };
 }
 
-function messageEntryToReplay(entry: NormalizedMessageEntry): AppServerThreadEntry {
+function messageEntryToReplay(
+  entry: NormalizedMessageEntry,
+): AppServerThreadEntry {
   return {
     type: "message",
     id: entry.id,
@@ -69,7 +73,9 @@ function messageEntryToReplay(entry: NormalizedMessageEntry): AppServerThreadEnt
   };
 }
 
-function activityEntryToReplay(entry: NormalizedActivityEntry): AppServerThreadEntry {
+function activityEntryToReplay(
+  entry: NormalizedActivityEntry,
+): AppServerThreadEntry {
   return {
     type: "activity",
     id: entry.id,
@@ -87,12 +93,16 @@ function planEntryToReplay(entry: NormalizedPlanEntry): AppServerThreadEntry {
   return {
     type: "plan",
     id: entry.id,
-    ...(entry.explanation !== undefined ? { explanation: entry.explanation } : {}),
+    ...(entry.explanation !== undefined
+      ? { explanation: entry.explanation }
+      : {}),
     steps,
   };
 }
 
-function toolCallToDetail(tool: NormalizedToolCall): AppServerThreadActivityDetail {
+function toolCallToDetail(
+  tool: NormalizedToolCall,
+): AppServerThreadActivityDetail {
   // NOTE: the in-tree normalizer keeps tool status on the ACTIVITY entry, not
   // the detail (detail has no `status`), so we deliberately don't set it here.
   //
@@ -113,8 +123,12 @@ function toolCallToDetail(tool: NormalizedToolCall): AppServerThreadActivityDeta
             ...(tool.command.rawCommand !== undefined
               ? { rawCommand: tool.command.rawCommand }
               : {}),
-            ...(tool.command.cwd !== undefined ? { cwd: tool.command.cwd } : {}),
-            ...(tool.command.output !== undefined ? { output: tool.command.output } : {}),
+            ...(tool.command.cwd !== undefined
+              ? { cwd: tool.command.cwd }
+              : {}),
+            ...(tool.command.output !== undefined
+              ? { output: tool.command.output }
+              : {}),
             ...(tool.command.exitCode !== undefined
               ? { exitCode: tool.command.exitCode }
               : {}),
@@ -134,17 +148,23 @@ function toolCallToDetail(tool: NormalizedToolCall): AppServerThreadActivityDeta
   };
 }
 
-function detailKind(kind: NormalizedToolCall["kind"]): AppServerThreadActivityDetail["kind"] {
+function detailKind(
+  kind: NormalizedToolCall["kind"],
+): AppServerThreadActivityDetail["kind"] {
   if (kind === "command") return "command";
   if (kind === "write") return "write";
   return "read";
 }
 
-function activityStatus(status: NormalizedToolStatus): AppServerThreadActivityStatus {
+function activityStatus(
+  status: NormalizedToolStatus,
+): AppServerThreadActivityStatus {
   return status === "pending" ? "in_progress" : status;
 }
 
-function threadStatus(status: NormalizedThreadActivity | undefined): AppServerThreadStatus {
+function threadStatus(
+  status: NormalizedThreadActivity | undefined,
+): AppServerThreadStatus {
   if (status === "active") return "active";
   if (status === "unknown") return "unknown";
   return "idle";

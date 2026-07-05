@@ -62,8 +62,9 @@ describe("LINE formatting", () => {
     const button = row?.type === "box" ? row.contents[0] : undefined;
 
     expect(button?.type).toBe("button");
-    expect(button?.type === "button" ? button.action.displayText : undefined)
-      .toBe("detach");
+    expect(
+      button?.type === "button" ? button.action.displayText : undefined,
+    ).toBe("detach");
   });
 
   it("flows status-sized action sets into compact rows by default", () => {
@@ -105,35 +106,39 @@ describe("LINE formatting", () => {
       "Reply with a number, or reply next, projects, new, or cancel.",
     ].join("\n");
 
-    expect(textForLineIntent({
-      id: "intent-picker",
-      kind: "thread_picker",
-      createdAt: 1,
-      fallbackText,
-      navigation: {
-        backend: "all",
-        fetchedAt: 1,
-        unchanged: false,
-      },
-      page: {
-        actions: [],
-        items: [],
-        pageIndex: 0,
-        pageSize: 8,
-        totalItems: 1,
-      },
-      prompt,
-    })).toBe(fallbackText);
+    expect(
+      textForLineIntent({
+        id: "intent-picker",
+        kind: "thread_picker",
+        createdAt: 1,
+        fallbackText,
+        navigation: {
+          backend: "all",
+          fetchedAt: 1,
+          unchanged: false,
+        },
+        page: {
+          actions: [],
+          items: [],
+          pageIndex: 0,
+          pageSize: 8,
+          totalItems: 1,
+        },
+        prompt,
+      }),
+    ).toBe(fallbackText);
   });
 
   it("does not render activity as a LINE chat message", () => {
-    expect(textForLineIntent({
-      id: "activity-1",
-      kind: "activity",
-      activity: "typing",
-      state: "active",
-      createdAt: 1,
-    })).toBe("");
+    expect(
+      textForLineIntent({
+        id: "activity-1",
+        kind: "activity",
+        activity: "typing",
+        state: "active",
+        createdAt: 1,
+      }),
+    ).toBe("");
   });
 
   it("requires postback button data to be opaque persisted handles", () => {
@@ -143,25 +148,33 @@ describe("LINE formatting", () => {
         buildPostbackData: () => "confirm:yes",
         capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
         title: "Choose",
-      })
+      }),
     ).toThrow(/opaque persisted handle/);
   });
 
   it("renders https image parts as LINE image messages", () => {
-    expect(imageMessagesForLineIntent({
-      id: "intent-1",
-      kind: "message",
-      parts: [
-        { type: "text", text: "Result" },
-        { type: "image", url: "https://example.com/image.png", alt: "Preview" },
-        { type: "image", url: "data:image/png;base64,abc", alt: "Inline" },
-      ],
-      createdAt: 1,
-    })).toEqual([{
-      type: "image",
-      originalContentUrl: "https://example.com/image.png",
-      previewImageUrl: "https://example.com/image.png",
-    }]);
+    expect(
+      imageMessagesForLineIntent({
+        id: "intent-1",
+        kind: "message",
+        parts: [
+          { type: "text", text: "Result" },
+          {
+            type: "image",
+            url: "https://example.com/image.png",
+            alt: "Preview",
+          },
+          { type: "image", url: "data:image/png;base64,abc", alt: "Inline" },
+        ],
+        createdAt: 1,
+      }),
+    ).toEqual([
+      {
+        type: "image",
+        originalContentUrl: "https://example.com/image.png",
+        previewImageUrl: "https://example.com/image.png",
+      },
+    ]);
   });
 });
 

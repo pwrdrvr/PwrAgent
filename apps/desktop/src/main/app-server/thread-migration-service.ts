@@ -52,7 +52,9 @@ type SourceMigrationClient = Pick<
 type DestinationMigrationBackend = {
   forkThread(
     request: ForkThreadRequest & {
-      onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
+      onPreparedWorkspaceRollback?: (
+        rollback: (() => Promise<void>) | undefined,
+      ) => void;
       sourceThreadPath?: string;
     },
   ): Promise<ForkThreadResponse>;
@@ -102,8 +104,8 @@ export class ThreadMigrationService {
       settings.models.codex.profile.value,
     );
     const discovery =
-      settings.models.codex.profiles ??
-      discoverCodexAuthProfiles({
+      settings.models.codex.profiles
+      ?? discoverCodexAuthProfiles({
         configuredProfile: activeCodexProfile,
         env: this.options.env,
         homeDir: this.options.homeDir,
@@ -112,7 +114,10 @@ export class ThreadMigrationService {
     return {
       activeCodexProfile,
       profiles: discovery.profiles
-        .filter((profile) => normalizeSourceProfile(profile.name) !== activeCodexProfile)
+        .filter(
+          (profile) =>
+            normalizeSourceProfile(profile.name) !== activeCodexProfile,
+        )
         .map((profile) => {
           const hasAuth = Boolean(profile.hasAuthFile);
           const available = Boolean(profile.exists && hasAuth);
@@ -131,7 +136,9 @@ export class ThreadMigrationService {
                     ? "Codex auth is not configured for this profile."
                     : "Codex profile directory does not exist.",
                 }),
-            ...(profile.accountEmail ? { accountEmail: profile.accountEmail } : {}),
+            ...(profile.accountEmail
+              ? { accountEmail: profile.accountEmail }
+              : {}),
           };
         }),
     };
@@ -194,9 +201,11 @@ export class ThreadMigrationService {
     }
 
     migrationLog.info("thread migration run finished", {
-      completedCount: run.items.filter((item) => item.status === "completed").length,
+      completedCount: run.items.filter((item) => item.status === "completed")
+        .length,
       completedWithWarningsCount: run.items.filter(
-        (item) => item.status === "completed" && (item.warnings?.length ?? 0) > 0,
+        (item) =>
+          item.status === "completed" && (item.warnings?.length ?? 0) > 0,
       ).length,
       failedCount: run.items.filter((item) => item.status === "failed").length,
       operation: request.operation,
@@ -257,10 +266,14 @@ export class ThreadMigrationService {
       });
     }
     if (
-      retrySourceState.wasArchived &&
-      item.diagnostics?.archivedSource !== true
+      retrySourceState.wasArchived
+      && item.diagnostics?.archivedSource !== true
     ) {
-      await this.rearchiveSourceAfterRetry({ item, runId: run.runId, sourceProfile });
+      await this.rearchiveSourceAfterRetry({
+        item,
+        runId: run.runId,
+        sourceProfile,
+      });
     }
 
     migrationLog.info("thread migration retry finished", {
@@ -308,18 +321,23 @@ export class ThreadMigrationService {
         warnings: item.warnings,
       });
       if (!sourceThread.rolloutPath) {
-        throw new Error("Source CAS did not provide a rollout path for this thread.");
+        throw new Error(
+          "Source CAS did not provide a rollout path for this thread.",
+        );
       }
       if (
-        request.operation === "copy" &&
-        request.copyStrategy &&
-        request.copyStrategy !== "detached-destination"
+        request.operation === "copy"
+        && request.copyStrategy
+        && request.copyStrategy !== "detached-destination"
       ) {
         throw new Error(
           "Only detached destination Copy is implemented for branch/worktree migration.",
         );
       }
-      const destinationWorkspace = resolveDestinationWorkspace(sourceThread, request);
+      const destinationWorkspace = resolveDestinationWorkspace(
+        sourceThread,
+        request,
+      );
       item.diagnostics = {
         ...item.diagnostics,
         ...(destinationWorkspace.directoryPath
@@ -352,7 +370,9 @@ export class ThreadMigrationService {
         onPreparedWorkspaceRollback: (rollback) => {
           rollbackPreparedWorkspace = rollback;
         },
-        directoryKind: destinationWorkspace.directoryPath ? "directory" : "workspace",
+        directoryKind: destinationWorkspace.directoryPath
+          ? "directory"
+          : "workspace",
         directoryLabel: destinationWorkspace.directoryLabel,
         directoryPath: destinationWorkspace.directoryPath,
         workMode: destinationWorkspace.workMode,
@@ -373,11 +393,16 @@ export class ThreadMigrationService {
           ? { destinationDirectoryPath: destination.linkedDirectory.path }
           : {}),
         ...(destination.linkedDirectory?.worktreePath
-          ? { destinationWorktreePath: destination.linkedDirectory.worktreePath }
+          ? {
+              destinationWorktreePath: destination.linkedDirectory.worktreePath,
+            }
           : {}),
         destinationWorkMode: destination.workMode,
       };
-      appendWarnings(item, validateDestinationWorkspaceResult(destinationWorkspace, destination));
+      appendWarnings(
+        item,
+        validateDestinationWorkspaceResult(destinationWorkspace, destination),
+      );
       migrationLog.info("thread migration fork completed", {
         ...item.diagnostics,
         destinationThreadId: destination.threadId,
@@ -398,10 +423,8 @@ export class ThreadMigrationService {
           threadId: destination.threadId,
         }),
       ]);
-      const validation: NonNullable<ThreadMigrationRunItem["validation"]> = validateReplay(
-        sourceReplay,
-        destinationReplay.replay,
-      );
+      const validation: NonNullable<ThreadMigrationRunItem["validation"]> =
+        validateReplay(sourceReplay, destinationReplay.replay);
       item.validation = validation;
       if (!validation.matched) {
         throw new Error("Destination replay did not match source replay.");
@@ -452,7 +475,10 @@ export class ThreadMigrationService {
         warnings: item.warnings ?? [],
       };
       if (item.warnings?.length) {
-        migrationLog.warn("thread migration item completed with warnings", logPayload);
+        migrationLog.warn(
+          "thread migration item completed with warnings",
+          logPayload,
+        );
       } else {
         migrationLog.info("thread migration item completed", logPayload);
       }
@@ -470,7 +496,9 @@ export class ThreadMigrationService {
         } catch (rollbackError) {
           appendWarnings(item, [
             `Workspace rollback failed: ${
-              rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+              rollbackError instanceof Error
+                ? rollbackError.message
+                : String(rollbackError)
             }`,
           ]);
           migrationLog.warn("thread migration workspace rollback failed", {
@@ -662,16 +690,22 @@ export class ThreadMigrationService {
 
   private async assertProfileSelectable(sourceProfile: string): Promise<void> {
     const sources = await this.listSources();
-    const source = sources.profiles.find((profile) => profile.profile === sourceProfile);
+    const source = sources.profiles.find(
+      (profile) => profile.profile === sourceProfile,
+    );
     if (!source) {
       throw new Error("Source profile is not available for migration.");
     }
     if (!source.available) {
-      throw new Error(source.unavailableReason ?? "Source profile is unavailable.");
+      throw new Error(
+        source.unavailableReason ?? "Source profile is unavailable.",
+      );
     }
   }
 
-  private async getSourceClient(sourceProfile: string): Promise<SourceMigrationClient> {
+  private async getSourceClient(
+    sourceProfile: string,
+  ): Promise<SourceMigrationClient> {
     const cached = this.sourceClients.get(sourceProfile);
     if (cached) {
       return cached;
@@ -695,8 +729,8 @@ export class ThreadMigrationService {
         command,
         env,
         profile: sourceProfile,
-      }) ??
-      new CodexAppServerClient({
+      })
+      ?? new CodexAppServerClient({
         args: buildCodexClientArgs(env),
         command,
         env,
@@ -804,7 +838,9 @@ function groupSourceThreads(
     const projectPath = thread.projectKey?.trim();
     groups.push({
       key: projectPath ? `directory:${projectPath}` : "unlinked",
-      label: projectPath ? path.basename(projectPath) || projectPath : "No project",
+      label: projectPath
+        ? path.basename(projectPath) || projectPath
+        : "No project",
       ...(projectPath ? { path: projectPath } : {}),
       threads: [stripInternalThread(thread)],
     });
@@ -846,14 +882,14 @@ function hasProfileOwnedWorktree(
   thread: Pick<InternalSourceThread, "linkedDirectories" | "projectKey">,
 ): boolean {
   return Boolean(
-    (thread.projectKey && isToolManagedWorktreePath(thread.projectKey)) ||
-      thread.linkedDirectories.some(
-        (directory) =>
-          Boolean(directory) &&
-          typeof directory === "object" &&
-          (isToolManagedWorktreePath(directory.worktreePath) ||
-            isToolManagedWorktreePath(directory.path)),
-      ),
+    (thread.projectKey && isToolManagedWorktreePath(thread.projectKey))
+    || thread.linkedDirectories.some(
+      (directory) =>
+        Boolean(directory)
+        && typeof directory === "object"
+        && (isToolManagedWorktreePath(directory.worktreePath)
+          || isToolManagedWorktreePath(directory.path)),
+    ),
   );
 }
 
@@ -878,16 +914,18 @@ function resolveDestinationWorkspace(
     );
   }
   const branchName =
-    thread.gitBranch && thread.gitBranch !== "HEAD" ? thread.gitBranch : undefined;
+    thread.gitBranch && thread.gitBranch !== "HEAD"
+      ? thread.gitBranch
+      : undefined;
   if (sourceHasProfileOwnedWorktree && !branchName) {
     throw new Error(
       "Migration is blocked because the source managed worktree did not report an attached branch.",
     );
   }
   const needsDestinationWorktree =
-    Boolean(directoryPath && branchName) &&
-    ((request.operation === "move" && sourceHasProfileOwnedWorktree) ||
-      request.copyStrategy === "detached-destination");
+    Boolean(directoryPath && branchName)
+    && ((request.operation === "move" && sourceHasProfileOwnedWorktree)
+      || request.copyStrategy === "detached-destination");
 
   return {
     directoryLabel: directoryPath ? path.basename(directoryPath) : thread.title,
@@ -928,7 +966,9 @@ async function inspectSourceThread(thread: InternalSourceThread): Promise<{
   const sourceDirectoryPath = resolveDestinationDirectoryPath(thread);
   const sourceWorktreePath = resolveSourceWorktreePath(thread);
   const sourceGitBranch =
-    thread.gitBranch && thread.gitBranch !== "HEAD" ? thread.gitBranch : undefined;
+    thread.gitBranch && thread.gitBranch !== "HEAD"
+      ? thread.gitBranch
+      : undefined;
   const [sourceDirectoryExists, sourceWorktreeExists, sourceBranchExists] =
     await Promise.all([
       pathExists(sourceDirectoryPath),
@@ -951,7 +991,9 @@ async function inspectSourceThread(thread: InternalSourceThread): Promise<{
     warnings.push("Source thread was already archived before migration.");
   }
   if (sourceDirectoryPath && sourceDirectoryExists === false) {
-    warnings.push(`Source project directory was not found: ${sourceDirectoryPath}`);
+    warnings.push(
+      `Source project directory was not found: ${sourceDirectoryPath}`,
+    );
   }
   if (sourceWorktreePath && sourceWorktreeExists === false) {
     warnings.push(`Source worktree was not found: ${sourceWorktreePath}`);
@@ -982,7 +1024,9 @@ function resolveSourceWorktreePath(
   return undefined;
 }
 
-async function pathExists(filesystemPath: string | undefined): Promise<boolean | undefined> {
+async function pathExists(
+  filesystemPath: string | undefined,
+): Promise<boolean | undefined> {
   if (!filesystemPath) {
     return undefined;
   }
@@ -1020,21 +1064,27 @@ function validateDestinationWorkspaceResult(
   destination: ForkThreadResponse,
 ): string[] {
   const warnings: string[] = [];
-  if (requested.workMode === "worktree" && destination.workMode !== "worktree") {
+  if (
+    requested.workMode === "worktree"
+    && destination.workMode !== "worktree"
+  ) {
     warnings.push(
       `Destination returned ${destination.workMode} even though migration requested a worktree.`,
     );
   }
   if (
-    requested.workMode === "worktree" &&
-    !destination.linkedDirectory?.worktreePath
+    requested.workMode === "worktree"
+    && !destination.linkedDirectory?.worktreePath
   ) {
     warnings.push("Destination did not report a worktree path.");
   }
   return warnings;
 }
 
-function appendWarnings(item: ThreadMigrationRunItem, warnings: string[]): void {
+function appendWarnings(
+  item: ThreadMigrationRunItem,
+  warnings: string[],
+): void {
   if (warnings.length === 0) {
     return;
   }
@@ -1051,8 +1101,10 @@ function validateReplay(
     sourceMessageCount: sourceFingerprint.length,
     destinationMessageCount: destinationFingerprint.length,
     matched:
-      sourceFingerprint.length === destinationFingerprint.length &&
-      sourceFingerprint.every((entry, index) => entry === destinationFingerprint[index]),
+      sourceFingerprint.length === destinationFingerprint.length
+      && sourceFingerprint.every(
+        (entry, index) => entry === destinationFingerprint[index],
+      ),
   };
 }
 

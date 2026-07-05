@@ -14,10 +14,7 @@ import {
 } from "./subagent-format";
 import { RailStatusChip } from "./RailStatusChip";
 import { SubAgentDetailsModal } from "./SubAgentDetailsModal";
-import {
-  subAgentOriginSentence,
-  subAgentUsageLabel,
-} from "./subagent-kind";
+import { subAgentOriginSentence, subAgentUsageLabel } from "./subagent-kind";
 
 type SubAgentsPanelProps = {
   pricingDisplayOptions?: PricingDisplayOptions;
@@ -27,7 +24,9 @@ type SubAgentsPanelProps = {
 /** Sub-Agents tab: durable task-monitor cards spawned from this thread. */
 export function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
-  const [detailsFor, setDetailsFor] = useState<ThreadSubAgentSummary | null>(null);
+  const [detailsFor, setDetailsFor] = useState<ThreadSubAgentSummary | null>(
+    null,
+  );
 
   return (
     <section className="context-panel__section">
@@ -54,7 +53,10 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                   </RailStatusChip>
                 </p>
                 {subAgent.agentName ? (
-                  <p className="rail-card__agent-name" title={subAgent.agentName}>
+                  <p
+                    className="rail-card__agent-name"
+                    title={subAgent.agentName}
+                  >
                     {subAgent.agentName}
                   </p>
                 ) : null}

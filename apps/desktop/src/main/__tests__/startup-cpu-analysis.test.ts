@@ -38,7 +38,9 @@ function buildProfile(params: {
         callFrame: {
           functionName: params.topFunctionName ?? "refreshNavigationSnapshot",
           scriptId: "1",
-          url: params.topUrl ?? "file:///repo/apps/desktop/src/main/ipc/app-server.ts",
+          url:
+            params.topUrl
+            ?? "file:///repo/apps/desktop/src/main/ipc/app-server.ts",
           lineNumber: 1,
           columnNumber: 1,
         },
@@ -166,8 +168,8 @@ describe("startup CPU analysis", () => {
     });
     expect(
       analysis.topFunctionsBySelf.filter(
-        (entry) => entry.functionName === "formatRelativeTime"
-      )
+        (entry) => entry.functionName === "formatRelativeTime",
+      ),
     ).toHaveLength(1);
   });
 

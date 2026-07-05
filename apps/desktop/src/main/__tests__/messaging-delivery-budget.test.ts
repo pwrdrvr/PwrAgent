@@ -161,7 +161,7 @@ describe("MessagingDeliveryBudget", () => {
     const scope = testScope({ limit: 60, reserved: 0 });
 
     for (let index = 0; index < 20; index += 1) {
-      now = 1_000 + (index * 500);
+      now = 1_000 + index * 500;
       expect(budget.admit({ scope, priority: "routine_status" })).toEqual({
         outcome: "admitted",
         slowMode: false,
@@ -177,7 +177,7 @@ describe("MessagingDeliveryBudget", () => {
     const scope = testScope({ limit: 60, reserved: 0 });
 
     for (let index = 0; index < 60; index += 1) {
-      now = 1_000 + (index * 500);
+      now = 1_000 + index * 500;
       expect(budget.admit({ scope, priority: "routine_status" })).toEqual({
         outcome: "admitted",
         slowMode: false,
@@ -229,9 +229,11 @@ describe("MessagingDeliveryBudget", () => {
     // Fill the non-reserved capacity (25 = limit 30 - reserved 5) with chatter.
     for (let sent = 3; sent < 25; sent += 1) {
       now += 100;
-      expect(budget.admit({ scope, priority: "routine_status" })).toMatchObject({
-        outcome: "admitted",
-      });
+      expect(budget.admit({ scope, priority: "routine_status" })).toMatchObject(
+        {
+          outcome: "admitted",
+        },
+      );
     }
 
     // Chatter beyond the non-reserved capacity is dropped and arms slow mode,
@@ -282,12 +284,15 @@ describe("MessagingDeliveryBudget", () => {
     const first = testScope({ id: "telegram:group:1", limit: 1, reserved: 0 });
     const second = testScope({ id: "telegram:group:2", limit: 1, reserved: 0 });
 
-    expect(budget.admit({ scope: first, priority: "routine_status" }))
-      .toMatchObject({ outcome: "admitted" });
-    expect(budget.admit({ scope: first, priority: "routine_status" }))
-      .toMatchObject({ outcome: "dropped" });
-    expect(budget.admit({ scope: second, priority: "routine_status" }))
-      .toMatchObject({ outcome: "admitted" });
+    expect(
+      budget.admit({ scope: first, priority: "routine_status" }),
+    ).toMatchObject({ outcome: "admitted" });
+    expect(
+      budget.admit({ scope: first, priority: "routine_status" }),
+    ).toMatchObject({ outcome: "dropped" });
+    expect(
+      budget.admit({ scope: second, priority: "routine_status" }),
+    ).toMatchObject({ outcome: "admitted" });
   });
 });
 

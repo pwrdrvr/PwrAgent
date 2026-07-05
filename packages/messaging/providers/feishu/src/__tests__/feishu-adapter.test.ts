@@ -38,7 +38,8 @@ function fakeStore(): MessagingCallbackHandleStore & {
         (record) =>
           record.handle === params.handle
           && record.allowedActorIds.includes(params.actorId)
-          && conversationKey(record.channel) === conversationKey(params.channel),
+          && conversationKey(record.channel)
+            === conversationKey(params.channel),
       ),
     upsertCallbackHandle: async (record) => {
       records.push(record);
@@ -151,7 +152,10 @@ describe("FeishuAdapter", () => {
   }
 
   it("discards stream updates when streaming is off without touching the chat", async () => {
-    const spies: { sent: unknown[]; updated: unknown[] } = { sent: [], updated: [] };
+    const spies: { sent: unknown[]; updated: unknown[] } = {
+      sent: [],
+      updated: [],
+    };
     const adapter = new FeishuAdapter({
       config: baseConfig, // streaming off
       callbackHandleStore: fakeStore(),
@@ -161,7 +165,13 @@ describe("FeishuAdapter", () => {
 
     await expect(
       adapter.deliver(
-        streamIntent({ id: "s1", text: "partial", isFinal: false, sequence: 1, policy: "inherit" }),
+        streamIntent({
+          id: "s1",
+          text: "partial",
+          isFinal: false,
+          sequence: 1,
+          policy: "inherit",
+        }),
       ),
     ).resolves.toMatchObject({ channel: "feishu", outcome: "discarded" });
     expect(spies.sent).toEqual([]);
@@ -181,13 +191,34 @@ describe("FeishuAdapter", () => {
     });
 
     await expect(
-      adapter.deliver(streamIntent({ id: "s1", text: "Partial", isFinal: false, sequence: 1 })),
+      adapter.deliver(
+        streamIntent({
+          id: "s1",
+          text: "Partial",
+          isFinal: false,
+          sequence: 1,
+        }),
+      ),
     ).resolves.toMatchObject({ channel: "feishu", outcome: "presented" });
     await expect(
-      adapter.deliver(streamIntent({ id: "s2", text: "Partial answer", isFinal: false, sequence: 2 })),
+      adapter.deliver(
+        streamIntent({
+          id: "s2",
+          text: "Partial answer",
+          isFinal: false,
+          sequence: 2,
+        }),
+      ),
     ).resolves.toMatchObject({ channel: "feishu", outcome: "updated" });
     await expect(
-      adapter.deliver(streamIntent({ id: "s3", text: "Partial answer, done.", isFinal: true, sequence: 3 })),
+      adapter.deliver(
+        streamIntent({
+          id: "s3",
+          text: "Partial answer, done.",
+          isFinal: true,
+          sequence: 3,
+        }),
+      ),
     ).resolves.toMatchObject({ channel: "feishu", outcome: "updated" });
 
     // One send (first chunk), two updates — a single Feishu card message.
@@ -197,7 +228,10 @@ describe("FeishuAdapter", () => {
   });
 
   it("splits a long text-only message across multiple sends", async () => {
-    const spies: { sent: unknown[]; updated: unknown[] } = { sent: [], updated: [] };
+    const spies: { sent: unknown[]; updated: unknown[] } = {
+      sent: [],
+      updated: [],
+    };
     const adapter = new FeishuAdapter({
       config: baseConfig,
       callbackHandleStore: fakeStore(),
@@ -238,23 +272,25 @@ describe("FeishuAdapter", () => {
       now: () => 1_700_000_000_000,
     });
 
-    await expect(adapter.deliver({
-      id: "status-1",
-      kind: "status",
-      createdAt: 1,
-      status: "waiting",
-      text: "Approve?",
-      actions: [{ id: "approve", label: "Approve", value: "yes" }],
-      audit: {
-        actor: { platformUserId: "ou_user" },
-        bindingId: "binding-1",
-        channel: {
-          channel: "feishu",
-          conversation: { id: "ou_user", kind: "dm" },
+    await expect(
+      adapter.deliver({
+        id: "status-1",
+        kind: "status",
+        createdAt: 1,
+        status: "waiting",
+        text: "Approve?",
+        actions: [{ id: "approve", label: "Approve", value: "yes" }],
+        audit: {
+          actor: { platformUserId: "ou_user" },
+          bindingId: "binding-1",
+          channel: {
+            channel: "feishu",
+            conversation: { id: "ou_user", kind: "dm" },
+          },
+          occurredAt: 1,
         },
-        occurredAt: 1,
-      },
-    })).resolves.toMatchObject({
+      }),
+    ).resolves.toMatchObject({
       channel: "feishu",
       outcome: "presented",
       surface: { id: "om_sent" },
@@ -272,7 +308,9 @@ describe("FeishuAdapter", () => {
   });
 
   it("sends markdown table messages as Lark markdown cards", async () => {
-    const spies: { sent: Array<{ card?: { elements?: unknown[] }; text?: string }> } = {
+    const spies: {
+      sent: Array<{ card?: { elements?: unknown[] }; text?: string }>;
+    } = {
       sent: [],
     };
     const adapter = new FeishuAdapter({
@@ -287,22 +325,24 @@ describe("FeishuAdapter", () => {
       "| Volcanoes | Hawai'i Island |",
     ].join("\n");
 
-    await expect(adapter.deliver({
-      id: "message-1",
-      kind: "message",
-      createdAt: 1,
-      role: "assistant",
-      parts: [{ type: "text", text: table, markdown: "markdown" }],
-      audit: {
-        actor: { platformUserId: "ou_user" },
-        bindingId: "binding-1",
-        channel: {
-          channel: "feishu",
-          conversation: { id: "oc_chat", kind: "channel" },
+    await expect(
+      adapter.deliver({
+        id: "message-1",
+        kind: "message",
+        createdAt: 1,
+        role: "assistant",
+        parts: [{ type: "text", text: table, markdown: "markdown" }],
+        audit: {
+          actor: { platformUserId: "ou_user" },
+          bindingId: "binding-1",
+          channel: {
+            channel: "feishu",
+            conversation: { id: "oc_chat", kind: "channel" },
+          },
+          occurredAt: 1,
         },
-        occurredAt: 1,
-      },
-    })).resolves.toMatchObject({
+      }),
+    ).resolves.toMatchObject({
       channel: "feishu",
       outcome: "presented",
     });
@@ -347,7 +387,9 @@ describe("FeishuAdapter", () => {
         unchanged: false,
       },
       page: {
-        actions: [{ id: "browse:page:next", label: "Next", value: { pageIndex: 1 } }],
+        actions: [
+          { id: "browse:page:next", label: "Next", value: { pageIndex: 1 } },
+        ],
         items: [],
         pageIndex: 0,
         pageSize: 8,
@@ -751,22 +793,24 @@ describe("FeishuAdapter", () => {
       api: fakeApi(spies),
     });
 
-    await expect(adapter.downloadAttachment({
-      attachment: {
-        id: "feishu:image:img_v3_123",
-        kind: "image",
-        name: "lark-image",
-        disposition: "available",
-        state: {
-          opaque: {
-            fileKey: "img_v3_123",
-            messageId: "om_image",
-            resourceType: "image",
+    await expect(
+      adapter.downloadAttachment({
+        attachment: {
+          id: "feishu:image:img_v3_123",
+          kind: "image",
+          name: "lark-image",
+          disposition: "available",
+          state: {
+            opaque: {
+              fileKey: "img_v3_123",
+              messageId: "om_image",
+              resourceType: "image",
+            },
           },
         },
-      },
-      maxBytes: 10,
-    })).resolves.toMatchObject({
+        maxBytes: 10,
+      }),
+    ).resolves.toMatchObject({
       fileName: "lark-image",
       sizeBytes: 3,
     });
@@ -785,11 +829,14 @@ describe("FeishuAdapter", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/open-apis/auth/v3/tenant_access_token/internal")) {
-        return new Response(JSON.stringify({
-          code: 0,
-          expire: 3600,
-          tenant_access_token: "tenant-token",
-        }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            expire: 3600,
+            tenant_access_token: "tenant-token",
+          }),
+          { status: 200 },
+        );
       }
       return new Response(new Uint8Array([1, 2, 3]), {
         headers: { "content-length": "3" },
@@ -799,12 +846,14 @@ describe("FeishuAdapter", () => {
     vi.stubGlobal("fetch", fetchMock);
     const api = createFeishuApi(baseConfig);
 
-    await expect(api.downloadFile({
-      fileKey: "img_v3_123",
-      maxBytes: 10,
-      messageId: "om_message",
-      resourceType: "image",
-    })).resolves.toEqual(new Uint8Array([1, 2, 3]));
+    await expect(
+      api.downloadFile({
+        fileKey: "img_v3_123",
+        maxBytes: 10,
+        messageId: "om_message",
+        resourceType: "image",
+      }),
+    ).resolves.toEqual(new Uint8Array([1, 2, 3]));
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
@@ -832,9 +881,11 @@ describe("FeishuAdapter", () => {
       events.push(event);
     });
     try {
-      const address = (adapter as unknown as {
-        server: { address(): AddressInfo | string | null };
-      }).server.address();
+      const address = (
+        adapter as unknown as {
+          server: { address(): AddressInfo | string | null };
+        }
+      ).server.address();
       if (!address || typeof address === "string") {
         throw new Error("Expected Feishu test webhook server to listen on TCP");
       }
@@ -862,7 +913,9 @@ describe("FeishuAdapter", () => {
 
       const response = await fetch(`http://127.0.0.1:${address.port}`, {
         method: "POST",
-        body: JSON.stringify({ encrypt: encryptFeishuPayload(payload, encryptKey) }),
+        body: JSON.stringify({
+          encrypt: encryptFeishuPayload(payload, encryptKey),
+        }),
         headers: { "content-type": "application/json" },
       });
 
@@ -882,7 +935,13 @@ describe("FeishuAdapter", () => {
   it("uses Lark persistent connection events by default", async () => {
     let started = false;
     let closed = false;
-    let dispatcher: { invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown> }
+    let dispatcher:
+      | {
+          invoke(
+            data: unknown,
+            params?: { needCheck?: boolean },
+          ): Promise<unknown>;
+        }
       | undefined;
     const { inboundMode: _inboundMode, ...persistentConfig } = baseConfig;
     const adapter = new FeishuAdapter({
@@ -905,36 +964,42 @@ describe("FeishuAdapter", () => {
       events.push(event);
     });
 
-    await dispatcher?.invoke({
-      schema: "2.0",
-      header: {
-        event_id: "evt_ws",
-        event_type: "im.message.receive_v1",
-        tenant_key: "tenant_1",
-      },
-      event: {
-        sender: {
-          sender_id: { open_id: "ou_user" },
+    await dispatcher?.invoke(
+      {
+        schema: "2.0",
+        header: {
+          event_id: "evt_ws",
+          event_type: "im.message.receive_v1",
           tenant_key: "tenant_1",
         },
-        message: {
-          chat_id: "oc_chat",
-          chat_type: "p2p",
-          content: JSON.stringify({ text: "/help" }),
-          message_id: "om_message",
-          message_type: "text",
+        event: {
+          sender: {
+            sender_id: { open_id: "ou_user" },
+            tenant_key: "tenant_1",
+          },
+          message: {
+            chat_id: "oc_chat",
+            chat_type: "p2p",
+            content: JSON.stringify({ text: "/help" }),
+            message_id: "om_message",
+            message_type: "text",
+          },
         },
       },
-    }, { needCheck: false });
-    await dispatcher?.invoke({
-      schema: "2.0",
-      header: {
-        event_id: "evt_entered",
-        event_type: "im.chat.access_event.bot_p2p_chat_entered_v1",
-        tenant_key: "tenant_1",
+      { needCheck: false },
+    );
+    await dispatcher?.invoke(
+      {
+        schema: "2.0",
+        header: {
+          event_id: "evt_entered",
+          event_type: "im.chat.access_event.bot_p2p_chat_entered_v1",
+          tenant_key: "tenant_1",
+        },
+        event: {},
       },
-      event: {},
-    }, { needCheck: false });
+      { needCheck: false },
+    );
     await adapter.stop();
 
     expect(started).toBe(true);
@@ -949,7 +1014,13 @@ describe("FeishuAdapter", () => {
   });
 
   it("logs every persistent event before SDK dispatch", async () => {
-    let dispatcher: { invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown> }
+    let dispatcher:
+      | {
+          invoke(
+            data: unknown,
+            params?: { needCheck?: boolean },
+          ): Promise<unknown>;
+        }
       | undefined;
     const logs: Array<{ data?: Record<string, unknown>; message: string }> = [];
     const { inboundMode: _inboundMode, ...persistentConfig } = baseConfig;
@@ -971,37 +1042,48 @@ describe("FeishuAdapter", () => {
     });
     await adapter.start(async () => undefined);
 
-    await dispatcher?.invoke({
-      schema: "2.0",
-      header: {
-        event_id: "evt_unknown",
-        event_type: "custom.event",
-        tenant_key: "tenant_1",
+    await dispatcher?.invoke(
+      {
+        schema: "2.0",
+        header: {
+          event_id: "evt_unknown",
+          event_type: "custom.event",
+          tenant_key: "tenant_1",
+        },
+        event: {
+          chat_id: "oc_chat",
+          operator_id: { open_id: "ou_user" },
+        },
       },
-      event: {
-        chat_id: "oc_chat",
-        operator_id: { open_id: "ou_user" },
-      },
-    }, { needCheck: false });
+      { needCheck: false },
+    );
     await adapter.stop();
 
-    expect(logs).toEqual(expect.arrayContaining([
-      {
-        message: "feishu event received",
-        data: expect.objectContaining({
-          actorId: "ou_user",
-          chatId: "oc_chat",
-          eventId: "evt_unknown",
-          eventType: "custom.event",
-          tenantKey: "tenant_1",
-          transport: "persistent",
-        }),
-      },
-    ]));
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        {
+          message: "feishu event received",
+          data: expect.objectContaining({
+            actorId: "ou_user",
+            chatId: "oc_chat",
+            eventId: "evt_unknown",
+            eventType: "custom.event",
+            tenantKey: "tenant_1",
+            transport: "persistent",
+          }),
+        },
+      ]),
+    );
   });
 
   it("normalizes persistent message events when the SDK forwards the full envelope", async () => {
-    let dispatcher: { invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown> }
+    let dispatcher:
+      | {
+          invoke(
+            data: unknown,
+            params?: { needCheck?: boolean },
+          ): Promise<unknown>;
+        }
       | undefined;
     const { inboundMode: _inboundMode, ...persistentConfig } = baseConfig;
     const adapter = new FeishuAdapter({
@@ -1021,27 +1103,32 @@ describe("FeishuAdapter", () => {
       events.push(event);
     });
 
-    await dispatcher?.invoke({
-      schema: "2.0",
-      header: {
-        event_id: "evt_full_envelope",
-        event_type: "im.message.receive_v1",
-        tenant_key: "tenant_1",
-      },
-      event: {
-        sender: {
-          sender_id: { open_id: "ou_user" },
+    await dispatcher?.invoke(
+      {
+        schema: "2.0",
+        header: {
+          event_id: "evt_full_envelope",
+          event_type: "im.message.receive_v1",
           tenant_key: "tenant_1",
         },
-        message: {
-          chat_id: "oc_chat",
-          chat_type: "p2p",
-          content: JSON.stringify({ text: "pair 11111111111111111111111111111111" }),
-          message_id: "om_message",
-          message_type: "text",
+        event: {
+          sender: {
+            sender_id: { open_id: "ou_user" },
+            tenant_key: "tenant_1",
+          },
+          message: {
+            chat_id: "oc_chat",
+            chat_type: "p2p",
+            content: JSON.stringify({
+              text: "pair 11111111111111111111111111111111",
+            }),
+            message_id: "om_message",
+            message_type: "text",
+          },
         },
       },
-    }, { needCheck: false });
+      { needCheck: false },
+    );
     await adapter.stop();
 
     expect(events).toEqual([
@@ -1055,7 +1142,13 @@ describe("FeishuAdapter", () => {
   });
 
   it("surfaces persistent p2p chat-entered events as diagnostics", async () => {
-    let dispatcher: { invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown> }
+    let dispatcher:
+      | {
+          invoke(
+            data: unknown,
+            params?: { needCheck?: boolean },
+          ): Promise<unknown>;
+        }
       | undefined;
     const { inboundMode: _inboundMode, ...persistentConfig } = baseConfig;
     const adapter = new FeishuAdapter({
@@ -1079,19 +1172,22 @@ describe("FeishuAdapter", () => {
       events.push(event);
     });
 
-    await dispatcher?.invoke({
-      schema: "2.0",
-      header: {
-        event_id: "evt_entered",
-        event_type: "im.chat.access_event.bot_p2p_chat_entered_v1",
-        tenant_key: "tenant_1",
+    await dispatcher?.invoke(
+      {
+        schema: "2.0",
+        header: {
+          event_id: "evt_entered",
+          event_type: "im.chat.access_event.bot_p2p_chat_entered_v1",
+          tenant_key: "tenant_1",
+        },
+        event: {
+          operator_id: { open_id: "ou_user" },
+          chat_id: "oc_chat",
+          tenant_key: "tenant_1",
+        },
       },
-      event: {
-        operator_id: { open_id: "ou_user" },
-        chat_id: "oc_chat",
-        tenant_key: "tenant_1",
-      },
-    }, { needCheck: false });
+      { needCheck: false },
+    );
     await adapter.stop();
 
     expect(events).toEqual([]);
@@ -1143,7 +1239,9 @@ describe("FeishuAdapter", () => {
           chat_id: "oc_chat",
           chat_type: "group",
           content: JSON.stringify({ text: "@_user_1 /help threads" }),
-          mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" }, name: "PwrAgent" }],
+          mentions: [
+            { key: "@_user_1", id: { open_id: "ou_bot" }, name: "PwrAgent" },
+          ],
           message_id: "om_message",
           message_type: "text",
         },
@@ -1195,7 +1293,9 @@ describe("FeishuAdapter", () => {
           chat_id: "oc_chat",
           chat_type: "group",
           content: JSON.stringify({ text: "@_user_1 /detach" }),
-          mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" }, name: "PwrAgent" }],
+          mentions: [
+            { key: "@_user_1", id: { open_id: "ou_bot" }, name: "PwrAgent" },
+          ],
           message_id: "om_retry",
           message_type: "text",
         },
@@ -1256,15 +1356,21 @@ describe("FeishuAdapter", () => {
           chat_id: "oc_chat",
           chat_type: "group",
           content: JSON.stringify({ text: "@_user_1 /detach" }),
-          mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" }, name: "PwrAgent" }],
+          mentions: [
+            { key: "@_user_1", id: { open_id: "ou_bot" }, name: "PwrAgent" },
+          ],
           message_id: "om_retry_after_failure",
           message_type: "text",
         },
       },
     };
 
-    await expect(adapter.handleWebhookPayload(payload)).rejects.toThrow("runtime unavailable");
-    await expect(adapter.handleWebhookPayload(payload)).resolves.toEqual({ status: 200 });
+    await expect(adapter.handleWebhookPayload(payload)).rejects.toThrow(
+      "runtime unavailable",
+    );
+    await expect(adapter.handleWebhookPayload(payload)).resolves.toEqual({
+      status: 200,
+    });
     await adapter.stop();
 
     expect(listener).toHaveBeenCalledTimes(1);
@@ -1311,7 +1417,9 @@ describe("FeishuAdapter", () => {
         message: {
           chat_id: "oc_chat",
           chat_type: "p2p",
-          content: JSON.stringify({ text: "pair 11111111111111111111111111111111" }),
+          content: JSON.stringify({
+            text: "pair 11111111111111111111111111111111",
+          }),
           message_id: "om_message",
           message_type: "text",
         },
@@ -1332,7 +1440,9 @@ describe("FeishuAdapter", () => {
 
   it("resolves group chat card callbacks against the delivered chat channel", async () => {
     const store = fakeStore();
-    const spies: { sent: Array<{ card?: { elements?: unknown[] } }> } = { sent: [] };
+    const spies: { sent: Array<{ card?: { elements?: unknown[] } }> } = {
+      sent: [],
+    };
     const adapter = new FeishuAdapter({
       config: {
         ...baseConfig,
@@ -1354,7 +1464,11 @@ describe("FeishuAdapter", () => {
         bindingId: "binding-1",
         channel: {
           channel: "feishu",
-          conversation: { id: "oc_chat", kind: "channel", parentId: "tenant_1" },
+          conversation: {
+            id: "oc_chat",
+            kind: "channel",
+            parentId: "tenant_1",
+          },
         },
         occurredAt: 1,
       },
@@ -1363,7 +1477,9 @@ describe("FeishuAdapter", () => {
     const card = spies.sent[0]?.card as {
       elements: Array<{ actions?: Array<{ value?: { handle?: string } }> }>;
     };
-    const actionElement = card.elements.find((element) => Array.isArray(element.actions));
+    const actionElement = card.elements.find((element) =>
+      Array.isArray(element.actions),
+    );
     const handle = actionElement?.actions?.[0]?.value?.handle;
     expect(handle).toEqual(expect.any(String));
 
@@ -1371,25 +1487,27 @@ describe("FeishuAdapter", () => {
     await adapter.start(async (event) => {
       events.push(event);
     });
-    await expect(adapter.handleWebhookPayload({
-      header: {
-        event_id: "evt_card",
-        event_type: "card.action.trigger",
-        tenant_key: "tenant_1",
-        token: "verify-token",
-      },
-      event: {
-        operator: { open_id: "ou_user" },
-        tenant_key: "tenant_1",
-        context: {
-          open_chat_id: "oc_chat",
-          open_message_id: "om_sent",
+    await expect(
+      adapter.handleWebhookPayload({
+        header: {
+          event_id: "evt_card",
+          event_type: "card.action.trigger",
+          tenant_key: "tenant_1",
+          token: "verify-token",
         },
-        action: {
-          value: { handle },
+        event: {
+          operator: { open_id: "ou_user" },
+          tenant_key: "tenant_1",
+          context: {
+            open_chat_id: "oc_chat",
+            open_message_id: "om_sent",
+          },
+          action: {
+            value: { handle },
+          },
         },
-      },
-    })).resolves.toEqual({
+      }),
+    ).resolves.toEqual({
       body: {
         toast: {
           content: "PwrAgent received this action.",
@@ -1409,7 +1527,11 @@ describe("FeishuAdapter", () => {
         actionId: "approve",
         channel: {
           channel: "feishu",
-          conversation: { id: "oc_chat", kind: "channel", parentId: "tenant_1" },
+          conversation: {
+            id: "oc_chat",
+            kind: "channel",
+            parentId: "tenant_1",
+          },
         },
       }),
     ]);
@@ -1417,7 +1539,9 @@ describe("FeishuAdapter", () => {
 
   it("acknowledges card callbacks without waiting for downstream handling", async () => {
     const store = fakeStore();
-    const spies: { sent: Array<{ card?: { elements?: unknown[] } }> } = { sent: [] };
+    const spies: { sent: Array<{ card?: { elements?: unknown[] } }> } = {
+      sent: [],
+    };
     const adapter = new FeishuAdapter({
       config: {
         ...baseConfig,
@@ -1438,7 +1562,11 @@ describe("FeishuAdapter", () => {
         actor: { platformUserId: "ou_user" },
         channel: {
           channel: "feishu",
-          conversation: { id: "oc_chat", kind: "channel", parentId: "tenant_1" },
+          conversation: {
+            id: "oc_chat",
+            kind: "channel",
+            parentId: "tenant_1",
+          },
         },
         occurredAt: 1,
       },
@@ -1447,7 +1575,9 @@ describe("FeishuAdapter", () => {
     const card = spies.sent[0]?.card as {
       elements: Array<{ actions?: Array<{ value?: { handle?: string } }> }>;
     };
-    const actionElement = card.elements.find((element) => Array.isArray(element.actions));
+    const actionElement = card.elements.find((element) =>
+      Array.isArray(element.actions),
+    );
     const handle = actionElement?.actions?.[0]?.value?.handle;
     let releaseListener: (() => void) | undefined;
     const listenerDone = new Promise<void>((resolve) => {
@@ -1459,25 +1589,27 @@ describe("FeishuAdapter", () => {
       await listenerDone;
     });
 
-    await expect(adapter.handleWebhookPayload({
-      header: {
-        event_id: "evt_resume",
-        event_type: "card.action.trigger",
-        tenant_key: "tenant_1",
-        token: "verify-token",
-      },
-      event: {
-        operator: { open_id: "ou_user" },
-        tenant_key: "tenant_1",
-        context: {
-          open_chat_id: "oc_chat",
-          open_message_id: "om_sent",
+    await expect(
+      adapter.handleWebhookPayload({
+        header: {
+          event_id: "evt_resume",
+          event_type: "card.action.trigger",
+          tenant_key: "tenant_1",
+          token: "verify-token",
         },
-        action: {
-          value: { handle },
+        event: {
+          operator: { open_id: "ou_user" },
+          tenant_key: "tenant_1",
+          context: {
+            open_chat_id: "oc_chat",
+            open_message_id: "om_sent",
+          },
+          action: {
+            value: { handle },
+          },
         },
-      },
-    })).resolves.toEqual({
+      }),
+    ).resolves.toEqual({
       body: {
         toast: {
           content: "PwrAgent received this action.",
@@ -1497,24 +1629,31 @@ describe("FeishuAdapter", () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
       const url = String(input);
       if (url.endsWith("/open-apis/auth/v3/tenant_access_token/internal")) {
-        return new Response(JSON.stringify({
-          code: 0,
-          tenant_access_token: "tenant-token",
-        }));
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            tenant_access_token: "tenant-token",
+          }),
+        );
       }
       if (url.endsWith("/open-apis/bot/v3/info")) {
-        return new Response(JSON.stringify({
-          code: 0,
-          bot: {
-            app_name: "PwrAgent",
-            avatar_url: "https://example.com/avatar.png",
-            open_id: "ou_bot",
-          },
-        }));
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            bot: {
+              app_name: "PwrAgent",
+              avatar_url: "https://example.com/avatar.png",
+              open_id: "ou_bot",
+            },
+          }),
+        );
       }
-      return new Response(JSON.stringify({ code: 99992402, msg: "unexpected URL" }), {
-        status: 400,
-      });
+      return new Response(
+        JSON.stringify({ code: 99992402, msg: "unexpected URL" }),
+        {
+          status: 400,
+        },
+      );
     });
     vi.stubGlobal("fetch", fetch);
 

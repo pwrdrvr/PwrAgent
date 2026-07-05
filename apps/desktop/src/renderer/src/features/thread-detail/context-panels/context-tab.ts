@@ -30,8 +30,7 @@ export const DEFAULT_CONTEXT_TAB: ContextTabId = "info";
 
 export function isContextTabId(value: unknown): value is ContextTabId {
   return (
-    typeof value === "string" &&
-    (CONTEXT_TAB_IDS as string[]).includes(value)
+    typeof value === "string" && (CONTEXT_TAB_IDS as string[]).includes(value)
   );
 }
 

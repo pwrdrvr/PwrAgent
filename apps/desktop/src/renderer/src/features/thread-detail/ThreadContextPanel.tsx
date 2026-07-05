@@ -113,7 +113,7 @@ type ThreadContextPanelProps = {
   onRestoreWorktree?: (
     thread: NavigationThreadSummary,
     snapshotRef: string,
-    worktreePath: string
+    worktreePath: string,
   ) => Promise<void>;
   activeTab: ContextTabId;
   onActiveTabChange: (tab: ContextTabId) => void;
@@ -135,7 +135,7 @@ type ThreadContextPanelProps = {
   onDismissEnvActionRun?: (run: CodexEnvironmentActionRun) => void;
   onStopEnvActionRun?: (
     run: CodexEnvironmentActionRun,
-    mode: "stop" | "terminate"
+    mode: "stop" | "terminate",
   ) => void;
 };
 
@@ -167,7 +167,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const hideTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const revealIntentRef = useRef(0);
-  const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
+  const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(
+    undefined,
+  );
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
 
@@ -181,13 +183,16 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const topTabs = visibleTabs.filter((tab) => !tab.bottom);
   const bottomTabs = visibleTabs.filter((tab) => tab.bottom);
 
-  const rememberMousePosition = useCallback((event: MouseEvent<HTMLElement>) => {
-    lastMousePositionRef.current = {
-      x: event.clientX,
-      y: event.clientY,
-    };
-    outsideRailSinceRef.current = undefined;
-  }, []);
+  const rememberMousePosition = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      lastMousePositionRef.current = {
+        x: event.clientX,
+        y: event.clientY,
+      };
+      outsideRailSinceRef.current = undefined;
+    },
+    [],
+  );
 
   const isMouseInsideRail = useCallback((point: { x: number; y: number }) => {
     const rail = railRef.current;
@@ -201,16 +206,19 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     }
 
     return (
-      point.x >= rect.left - 1 &&
-      point.x <= rect.right + 1 &&
-      point.y >= rect.top - 1 &&
-      point.y <= rect.bottom + 1
+      point.x >= rect.left - 1
+      && point.x <= rect.right + 1
+      && point.y >= rect.top - 1
+      && point.y <= rect.bottom + 1
     );
   }, []);
 
   const isScreenCursorInsideRail = useCallback(
     (snapshot: WindowPointerSnapshot) => {
-      if (snapshot.contentBounds.width <= 0 || snapshot.contentBounds.height <= 0) {
+      if (
+        snapshot.contentBounds.width <= 0
+        || snapshot.contentBounds.height <= 0
+      ) {
         return false;
       }
 
@@ -219,7 +227,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         y: snapshot.cursor.y - snapshot.contentBounds.y,
       });
     },
-    [isMouseInsideRail]
+    [isMouseInsideRail],
   );
 
   const clearRevealTimer = useCallback(() => {
@@ -244,7 +252,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       const latestPoint = lastMousePositionRef.current ?? point;
       return Boolean(latestPoint && isMouseInsideRail(latestPoint));
     },
-    [isMouseInsideRail, isScreenCursorInsideRail, props.desktopApi?.getWindowPointerSnapshot]
+    [
+      isMouseInsideRail,
+      isScreenCursorInsideRail,
+      props.desktopApi?.getWindowPointerSnapshot,
+    ],
   );
 
   const hideRailNow = useCallback(() => {
@@ -288,7 +300,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         })();
       }, HOVER_RAIL_REVEAL_DELAY_MS);
     },
-    [clearRevealTimer, isHoverStillInsideRail, revealRail]
+    [clearRevealTimer, isHoverStillInsideRail, revealRail],
   );
 
   const hideRail = useCallback(
@@ -304,7 +316,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         hideRailNow();
       }, 300);
     },
-    [clearRevealTimer, hideRailNow, isMouseInsideRail]
+    [clearRevealTimer, hideRailNow, isMouseInsideRail],
   );
 
   useEffect(() => {
@@ -404,7 +416,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     const viewportPadding = 12;
     const left = Math.min(
       window.innerWidth - tooltipRect.width - viewportPadding,
-      Math.max(viewportPadding, tooltip.targetCenter - tooltipRect.width / 2)
+      Math.max(viewportPadding, tooltip.targetCenter - tooltipRect.width / 2),
     );
     const top =
       tooltip.targetTop - tooltipRect.height - 10 >= viewportPadding
@@ -426,7 +438,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   };
 
   const resizeRail = (nextWidth: number): void => {
-    const clampedWidth = Math.min(RAIL_MAX_WIDTH, Math.max(RAIL_MIN_WIDTH, nextWidth));
+    const clampedWidth = Math.min(
+      RAIL_MAX_WIDTH,
+      Math.max(RAIL_MIN_WIDTH, nextWidth),
+    );
     props.onWidthChange?.(clampedWidth);
   };
   const startRailResize = (event: PointerEvent<HTMLElement>): void => {
@@ -489,7 +504,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         }
       }}
       onBlurCapture={(event) => {
-        if (!pinned && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        if (
+          !pinned
+          && !event.currentTarget.contains(event.relatedTarget as Node | null)
+        ) {
           hideRail();
         }
       }}
@@ -565,7 +583,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             >
               {tooltip.text}
             </div>,
-            document.body
+            document.body,
           )
         : null}
     </aside>
@@ -599,10 +617,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   // reveal on every keypress. Home/End jump to the first/last tab.
   function handleTablistKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
     if (
-      event.key !== "ArrowDown" &&
-      event.key !== "ArrowUp" &&
-      event.key !== "Home" &&
-      event.key !== "End"
+      event.key !== "ArrowDown"
+      && event.key !== "ArrowUp"
+      && event.key !== "Home"
+      && event.key !== "End"
     ) {
       return;
     }
@@ -619,7 +637,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         next = current < 0 ? 0 : (current + 1) % tabs.length;
         break;
       case "ArrowUp":
-        next = current < 0 ? tabs.length - 1 : (current - 1 + tabs.length) % tabs.length;
+        next =
+          current < 0
+            ? tabs.length - 1
+            : (current - 1 + tabs.length) % tabs.length;
         break;
       case "Home":
         next = 0;
@@ -655,7 +676,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             commitStatesByKey={props.editedFileCommitStates}
             worktreeRoot={props.editedFilesWorktreeRoot}
             desktopApi={props.desktopApi}
-            workingStateRefreshKey={JSON.stringify(props.thread.gitWorkingState ?? null)}
+            workingStateRefreshKey={JSON.stringify(
+              props.thread.gitWorkingState ?? null,
+            )}
             onOpenFile={props.onOpenEditedFile}
             preferredEditor={props.preferredEditor}
             onScrollToTurn={props.onScrollToTurn}
@@ -735,7 +758,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
     path: string,
     maxLength?: number,
-    copyHint = true
+    copyHint = true,
   ): void {
     const rect = event.currentTarget.getBoundingClientRect();
     setTooltip({

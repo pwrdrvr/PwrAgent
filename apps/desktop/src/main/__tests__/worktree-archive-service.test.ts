@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, realpath, stat, writeFile, mkdir } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  realpath,
+  stat,
+  writeFile,
+  mkdir,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -32,7 +39,9 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 describe("WorktreeArchiveService", () => {
   it("snapshots tracked and untracked worktree changes, removes the worktree, and restores it", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-archive-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-worktree-archive-"),
+    );
     const repoPath = path.join(root, "repo");
     const worktreePath = path.join(root, "repo-feature");
     await mkdir(repoPath);
@@ -43,15 +52,38 @@ describe("WorktreeArchiveService", () => {
     await git(repoPath, ["config", "core.autocrlf", "false"]);
     await git(repoPath, ["config", "core.eol", "lf"]);
     await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
-    await writeFile(path.join(repoPath, ".gitignore"), "node_modules/\n", "utf8");
+    await writeFile(
+      path.join(repoPath, ".gitignore"),
+      "node_modules/\n",
+      "utf8",
+    );
     await git(repoPath, ["add", "."]);
     await git(repoPath, ["commit", "-m", "initial"]);
-    await git(repoPath, ["worktree", "add", "-b", "feature/archive", worktreePath, "main"]);
+    await git(repoPath, [
+      "worktree",
+      "add",
+      "-b",
+      "feature/archive",
+      worktreePath,
+      "main",
+    ]);
 
-    await writeFile(path.join(worktreePath, "README.md"), "dirty readme\n", "utf8");
-    await writeFile(path.join(worktreePath, "notes.txt"), "untracked note\n", "utf8");
+    await writeFile(
+      path.join(worktreePath, "README.md"),
+      "dirty readme\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(worktreePath, "notes.txt"),
+      "untracked note\n",
+      "utf8",
+    );
     await mkdir(path.join(worktreePath, "node_modules"));
-    await writeFile(path.join(worktreePath, "node_modules", "left-out.txt"), "ignored\n", "utf8");
+    await writeFile(
+      path.join(worktreePath, "node_modules", "left-out.txt"),
+      "ignored\n",
+      "utf8",
+    );
 
     const service = new WorktreeArchiveService();
     const snapshot = await service.archive({
@@ -68,9 +100,9 @@ describe("WorktreeArchiveService", () => {
     expect(await git(repoPath, ["rev-parse", snapshot.snapshotRef])).toBe(
       snapshot.snapshotCommit,
     );
-    expect(await git(repoPath, ["branch", "--list", "feature/archive"])).toContain(
-      "feature/archive",
-    );
+    expect(
+      await git(repoPath, ["branch", "--list", "feature/archive"]),
+    ).toContain("feature/archive");
 
     const restored = await service.restore({
       backend: "codex",
@@ -84,20 +116,24 @@ describe("WorktreeArchiveService", () => {
     });
 
     expect(restored.state).toBe("restored");
-    await expect(readFile(path.join(worktreePath, "README.md"), "utf8")).resolves.toBe(
-      "dirty readme\n",
+    await expect(
+      readFile(path.join(worktreePath, "README.md"), "utf8"),
+    ).resolves.toBe("dirty readme\n");
+    await expect(
+      readFile(path.join(worktreePath, "notes.txt"), "utf8"),
+    ).resolves.toBe("untracked note\n");
+    expect(
+      await pathExists(path.join(worktreePath, "node_modules", "left-out.txt")),
+    ).toBe(false);
+    expect(await git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(
+      "HEAD",
     );
-    await expect(readFile(path.join(worktreePath, "notes.txt"), "utf8")).resolves.toBe(
-      "untracked note\n",
-    );
-    expect(await pathExists(path.join(worktreePath, "node_modules", "left-out.txt"))).toBe(
-      false,
-    );
-    expect(await git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
   });
 
   it("resolves the primary repository when the repository path points at the worktree", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-archive-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-worktree-archive-"),
+    );
     const repoPath = path.join(root, "repo");
     const worktreePath = path.join(root, "repo-feature");
     await mkdir(repoPath);
@@ -126,7 +162,9 @@ describe("WorktreeArchiveService", () => {
   });
 
   it("restores a detached worktree from the retained snapshot commit when the snapshot ref is missing", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-archive-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-worktree-archive-"),
+    );
     const repoPath = path.join(root, "repo");
     const worktreePath = path.join(root, "repo-feature");
     await mkdir(repoPath);
@@ -139,8 +177,19 @@ describe("WorktreeArchiveService", () => {
     await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
     await git(repoPath, ["add", "."]);
     await git(repoPath, ["commit", "-m", "initial"]);
-    await git(repoPath, ["worktree", "add", "-b", "feature/archive", worktreePath, "main"]);
-    await writeFile(path.join(worktreePath, "README.md"), "snapshot contents\n", "utf8");
+    await git(repoPath, [
+      "worktree",
+      "add",
+      "-b",
+      "feature/archive",
+      worktreePath,
+      "main",
+    ]);
+    await writeFile(
+      path.join(worktreePath, "README.md"),
+      "snapshot contents\n",
+      "utf8",
+    );
 
     const service = new WorktreeArchiveService();
     const snapshot = await service.archive({
@@ -167,14 +216,18 @@ describe("WorktreeArchiveService", () => {
     expect(restored.state).toBe("restored");
     expect(restored.snapshotCommit).toBe(snapshot.snapshotCommit);
     expect(restored.unavailableReason).toContain("retained snapshot commit");
-    await expect(readFile(path.join(worktreePath, "README.md"), "utf8")).resolves.toBe(
-      "snapshot contents\n",
+    await expect(
+      readFile(path.join(worktreePath, "README.md"), "utf8"),
+    ).resolves.toBe("snapshot contents\n");
+    expect(await git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(
+      "HEAD",
     );
-    expect(await git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
   });
 
   it("restores a detached worktree from an existing branch when no archive snapshot exists", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-archive-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-worktree-archive-"),
+    );
     const repoPath = path.join(root, "repo");
     const worktreePath = path.join(root, "restored-worktree");
     await mkdir(repoPath);
@@ -190,7 +243,10 @@ describe("WorktreeArchiveService", () => {
     await git(repoPath, ["switch", "-c", "fix/float-over-hitbox"]);
     await writeFile(path.join(repoPath, "README.md"), "branch work\n", "utf8");
     await git(repoPath, ["commit", "-am", "branch work"]);
-    const branchCommit = await git(repoPath, ["rev-parse", "fix/float-over-hitbox"]);
+    const branchCommit = await git(repoPath, [
+      "rev-parse",
+      "fix/float-over-hitbox",
+    ]);
 
     const service = new WorktreeArchiveService();
     const restored = await service.restoreDetached({
@@ -205,9 +261,11 @@ describe("WorktreeArchiveService", () => {
     expect(restored.state).toBe("restored");
     expect(restored.snapshotRef).toBe("fix/float-over-hitbox");
     expect(restored.snapshotCommit).toBe(branchCommit);
-    await expect(readFile(path.join(worktreePath, "README.md"), "utf8")).resolves.toBe(
-      "branch work\n",
+    await expect(
+      readFile(path.join(worktreePath, "README.md"), "utf8"),
+    ).resolves.toBe("branch work\n");
+    expect(await git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(
+      "HEAD",
     );
-    expect(await git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
   });
 });

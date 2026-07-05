@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { MessagingCapabilityProfile, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
+import type {
+  MessagingCapabilityProfile,
+  MessagingSurfaceIntent,
+} from "@pwragent/messaging-interface";
 import {
   buildFeishuActionElements,
   buildFeishuCardForIntent,
@@ -36,9 +39,9 @@ const profile: MessagingCapabilityProfile = {
 
 describe("Feishu formatting", () => {
   it("keeps explicit markdown links for lark_md", () => {
-    expect(markdownToFeishuMarkdown("Read [PwrAgent](https://example.com)")).toBe(
-      "Read [PwrAgent](https://example.com)",
-    );
+    expect(
+      markdownToFeishuMarkdown("Read [PwrAgent](https://example.com)"),
+    ).toBe("Read [PwrAgent](https://example.com)");
   });
 
   it("truncates button labels to the platform profile cap", () => {

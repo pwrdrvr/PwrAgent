@@ -62,9 +62,15 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
 
   return {
     version: CURRENT_MESSAGING_STORE_VERSION,
-    browseSessions: migrateRecord(record.browseSessions, isMessagingBrowseSessionRecord),
+    browseSessions: migrateRecord(
+      record.browseSessions,
+      isMessagingBrowseSessionRecord,
+    ),
     bindings: migrateBindingRecords(record.bindings),
-    callbackHandles: migrateRecord(record.callbackHandles, isMessagingCallbackHandleRecord),
+    callbackHandles: migrateRecord(
+      record.callbackHandles,
+      isMessagingCallbackHandleRecord,
+    ),
     monitorSubscriptions: migrateRecord(
       record.monitorSubscriptions,
       isMessagingMonitorSubscriptionRecord,
@@ -73,14 +79,22 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
       record.topicCleanupProposals,
       isMessagingTopicCleanupProposalRecord,
     ),
-    topicLinks: migrateRecord(record.topicLinks, isMessagingThreadTopicLinkRecord),
+    topicLinks: migrateRecord(
+      record.topicLinks,
+      isMessagingThreadTopicLinkRecord,
+    ),
     topics: migrateRecord(record.topics, isMessagingManagedTopicRecord),
-    pendingIntents: migrateRecord(record.pendingIntents, isMessagingPendingIntentRecord),
+    pendingIntents: migrateRecord(
+      record.pendingIntents,
+      isMessagingPendingIntentRecord,
+    ),
     deliveries: migrateRecord(record.deliveries, isMessagingDeliveryRecord),
   };
 }
 
-function migrateBindingRecords(value: unknown): Record<string, MessagingBindingRecord> {
+function migrateBindingRecords(
+  value: unknown,
+): Record<string, MessagingBindingRecord> {
   const bindings = migrateRecord(value, isMessagingBindingRecord);
   return Object.fromEntries(
     Object.entries(bindings).map(([id, binding]) => [
@@ -93,7 +107,11 @@ function migrateBindingRecords(value: unknown): Record<string, MessagingBindingR
 function stripCachedThreadState(
   binding: MessagingBindingRecord,
 ): MessagingBindingRecord {
-  const { activeTurn: _activeTurn, threadDisplay: _threadDisplay, ...rest } = binding;
+  const {
+    activeTurn: _activeTurn,
+    threadDisplay: _threadDisplay,
+    ...rest
+  } = binding;
   return {
     ...rest,
     targetKind: normalizeMessagingBindingTargetKind(binding.targetKind),
@@ -110,25 +128,29 @@ function migrateRecord<T>(
   }
 
   return Object.fromEntries(
-    Object.entries(record).filter((entry): entry is [string, T] => predicate(entry[1])),
+    Object.entries(record).filter((entry): entry is [string, T] =>
+      predicate(entry[1]),
+    ),
   );
 }
 
-function isMessagingBindingRecord(value: unknown): value is MessagingBindingRecord {
+function isMessagingBindingRecord(
+  value: unknown,
+): value is MessagingBindingRecord {
   const record = asRecord(value);
   const channel = asRecord(record?.channel);
   const conversation = asRecord(channel?.conversation);
   return Boolean(
-    record &&
-      typeof record.id === "string" &&
-      typeof record.backend === "string" &&
-      typeof record.threadId === "string" &&
-      Array.isArray(record.authorizedActorIds) &&
-      typeof channel?.channel === "string" &&
-      typeof conversation?.id === "string" &&
-      typeof conversation?.kind === "string" &&
-      typeof record.createdAt === "number" &&
-      typeof record.updatedAt === "number",
+    record
+    && typeof record.id === "string"
+    && typeof record.backend === "string"
+    && typeof record.threadId === "string"
+    && Array.isArray(record.authorizedActorIds)
+    && typeof channel?.channel === "string"
+    && typeof conversation?.id === "string"
+    && typeof conversation?.kind === "string"
+    && typeof record.createdAt === "number"
+    && typeof record.updatedAt === "number",
   );
 }
 
@@ -138,14 +160,14 @@ function isMessagingPendingIntentRecord(
   const record = asRecord(value);
   const intent = asRecord(record?.intent);
   return Boolean(
-    record &&
-      typeof record.id === "string" &&
-      intent &&
-      typeof intent.id === "string" &&
-      typeof intent.kind === "string" &&
-      Array.isArray(record.allowedActorIds) &&
-      typeof record.createdAt === "number" &&
-      typeof record.expiresAt === "number",
+    record
+    && typeof record.id === "string"
+    && intent
+    && typeof intent.id === "string"
+    && typeof intent.kind === "string"
+    && Array.isArray(record.allowedActorIds)
+    && typeof record.createdAt === "number"
+    && typeof record.expiresAt === "number",
   );
 }
 
@@ -157,18 +179,18 @@ function isMessagingMonitorSubscriptionRecord(
   const conversation = asRecord(channel?.conversation);
   const monitor = asRecord(record?.monitor);
   return Boolean(
-    record &&
-      typeof record.id === "string" &&
-      Array.isArray(record.authorizedActorIds) &&
-      typeof channel?.channel === "string" &&
-      typeof conversation?.id === "string" &&
-      typeof conversation?.kind === "string" &&
-      typeof record.createdAt === "number" &&
-      typeof record.updatedAt === "number" &&
-      monitor &&
-      typeof monitor.enabled === "boolean" &&
-      typeof monitor.intervalMs === "number" &&
-      typeof monitor.updatedAt === "number",
+    record
+    && typeof record.id === "string"
+    && Array.isArray(record.authorizedActorIds)
+    && typeof channel?.channel === "string"
+    && typeof conversation?.id === "string"
+    && typeof conversation?.kind === "string"
+    && typeof record.createdAt === "number"
+    && typeof record.updatedAt === "number"
+    && monitor
+    && typeof monitor.enabled === "boolean"
+    && typeof monitor.intervalMs === "number"
+    && typeof monitor.updatedAt === "number",
   );
 }
 
@@ -178,18 +200,18 @@ function isMessagingManagedTopicRecord(
   const record = asRecord(value);
   const conversation = asRecord(record?.conversation);
   return Boolean(
-    record &&
-      typeof record.id === "string" &&
-      typeof record.channel === "string" &&
-      typeof record.supergroupId === "string" &&
-      typeof record.topicId === "string" &&
-      typeof conversation?.id === "string" &&
-      typeof conversation?.kind === "string" &&
-      Array.isArray(record.authorizedActorIds) &&
-      typeof record.createdAt === "number" &&
-      typeof record.updatedAt === "number" &&
-      typeof record.lifecycle === "string" &&
-      typeof record.source === "string",
+    record
+    && typeof record.id === "string"
+    && typeof record.channel === "string"
+    && typeof record.supergroupId === "string"
+    && typeof record.topicId === "string"
+    && typeof conversation?.id === "string"
+    && typeof conversation?.kind === "string"
+    && Array.isArray(record.authorizedActorIds)
+    && typeof record.createdAt === "number"
+    && typeof record.updatedAt === "number"
+    && typeof record.lifecycle === "string"
+    && typeof record.source === "string",
   );
 }
 
@@ -198,15 +220,15 @@ function isMessagingThreadTopicLinkRecord(
 ): value is MessagingThreadTopicLinkRecord {
   const record = asRecord(value);
   return Boolean(
-    record &&
-      typeof record.id === "string" &&
-      typeof record.backend === "string" &&
-      typeof record.channel === "string" &&
-      typeof record.supergroupId === "string" &&
-      typeof record.threadId === "string" &&
-      typeof record.topicRecordId === "string" &&
-      typeof record.createdAt === "number" &&
-      typeof record.updatedAt === "number",
+    record
+    && typeof record.id === "string"
+    && typeof record.backend === "string"
+    && typeof record.channel === "string"
+    && typeof record.supergroupId === "string"
+    && typeof record.threadId === "string"
+    && typeof record.topicRecordId === "string"
+    && typeof record.createdAt === "number"
+    && typeof record.updatedAt === "number",
   );
 }
 
@@ -215,15 +237,15 @@ function isMessagingTopicCleanupProposalRecord(
 ): value is MessagingTopicCleanupProposalRecord {
   const record = asRecord(value);
   return Boolean(
-    record &&
-      typeof record.id === "string" &&
-      typeof record.channel === "string" &&
-      typeof record.supergroupId === "string" &&
-      Array.isArray(record.authorizedActorIds) &&
-      Array.isArray(record.items) &&
-      typeof record.createdAt === "number" &&
-      typeof record.updatedAt === "number" &&
-      typeof record.status === "string",
+    record
+    && typeof record.id === "string"
+    && typeof record.channel === "string"
+    && typeof record.supergroupId === "string"
+    && Array.isArray(record.authorizedActorIds)
+    && Array.isArray(record.items)
+    && typeof record.createdAt === "number"
+    && typeof record.updatedAt === "number"
+    && typeof record.status === "string",
   );
 }
 
@@ -234,19 +256,19 @@ function isMessagingBrowseSessionRecord(
   const channel = asRecord(record?.channel);
   const conversation = asRecord(channel?.conversation);
   return Boolean(
-    record &&
-      typeof record.id === "string" &&
-      Array.isArray(record.allowedActorIds) &&
-      typeof channel?.channel === "string" &&
-      typeof conversation?.id === "string" &&
-      typeof conversation?.kind === "string" &&
-      typeof record.createdAt === "number" &&
-      typeof record.updatedAt === "number" &&
-      typeof record.expiresAt === "number" &&
-      typeof record.launchAction === "string" &&
-      typeof record.mode === "string" &&
-      typeof record.pageIndex === "number" &&
-      typeof record.pageSize === "number",
+    record
+    && typeof record.id === "string"
+    && Array.isArray(record.allowedActorIds)
+    && typeof channel?.channel === "string"
+    && typeof conversation?.id === "string"
+    && typeof conversation?.kind === "string"
+    && typeof record.createdAt === "number"
+    && typeof record.updatedAt === "number"
+    && typeof record.expiresAt === "number"
+    && typeof record.launchAction === "string"
+    && typeof record.mode === "string"
+    && typeof record.pageIndex === "number"
+    && typeof record.pageSize === "number",
   );
 }
 
@@ -257,28 +279,30 @@ function isMessagingCallbackHandleRecord(
   const channel = asRecord(record?.channel);
   const conversation = asRecord(channel?.conversation);
   return Boolean(
-    record &&
-      typeof record.id === "string" &&
-      typeof record.handle === "string" &&
-      typeof record.actionId === "string" &&
-      Array.isArray(record.allowedActorIds) &&
-      typeof channel?.channel === "string" &&
-      typeof conversation?.id === "string" &&
-      typeof conversation?.kind === "string" &&
-      typeof record.createdAt === "number" &&
-      typeof record.updatedAt === "number" &&
-      typeof record.expiresAt === "number",
+    record
+    && typeof record.id === "string"
+    && typeof record.handle === "string"
+    && typeof record.actionId === "string"
+    && Array.isArray(record.allowedActorIds)
+    && typeof channel?.channel === "string"
+    && typeof conversation?.id === "string"
+    && typeof conversation?.kind === "string"
+    && typeof record.createdAt === "number"
+    && typeof record.updatedAt === "number"
+    && typeof record.expiresAt === "number",
   );
 }
 
-function isMessagingDeliveryRecord(value: unknown): value is MessagingDeliveryRecord {
+function isMessagingDeliveryRecord(
+  value: unknown,
+): value is MessagingDeliveryRecord {
   const record = asRecord(value);
   return Boolean(
-    record &&
-      typeof record.id === "string" &&
-      typeof record.channel === "string" &&
-      typeof record.outcome === "string" &&
-      typeof record.deliveredAt === "number",
+    record
+    && typeof record.id === "string"
+    && typeof record.channel === "string"
+    && typeof record.outcome === "string"
+    && typeof record.deliveredAt === "number",
   );
 }
 

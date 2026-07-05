@@ -358,23 +358,23 @@ describe("StateDb", () => {
          WHERE usage_turn_id = ?`,
       )
       .get(line.usage_turn_id) as {
-        provider: string;
-        backend: string;
-        thread_id: string;
-        turn_id: string | null;
-      };
+      provider: string;
+      backend: string;
+      thread_id: string;
+      turn_id: string | null;
+    };
     const summary = stateDb.raw
       .prepare(
         `SELECT provider, backend, thread_id, currency, total_cost_micros
          FROM thread_pricing_summaries`,
       )
       .get() as {
-        provider: string;
-        backend: string;
-        thread_id: string;
-        currency: string;
-        total_cost_micros: number;
-      };
+      provider: string;
+      backend: string;
+      thread_id: string;
+      currency: string;
+      total_cost_micros: number;
+    };
 
     expect(line).toEqual({
       provider: "openai",
@@ -626,11 +626,11 @@ describe("StateDb", () => {
          WHERE usage_line_id = 'live-line-june-15'`,
       )
       .get() as {
-        price_status: string;
-        price_unavailable_reason: string | null;
-        pricing_rate_id: string | null;
-        total_cost_micros: number;
-      };
+      price_status: string;
+      price_unavailable_reason: string | null;
+      pricing_rate_id: string | null;
+      total_cost_micros: number;
+    };
     const summary = stateDb.raw
       .prepare(
         `SELECT priced_usage_line_count, unpriced_usage_line_count, total_cost_micros
@@ -641,10 +641,10 @@ describe("StateDb", () => {
            AND currency = 'USD'`,
       )
       .get() as {
-        priced_usage_line_count: number;
-        total_cost_micros: number;
-        unpriced_usage_line_count: number;
-      };
+      priced_usage_line_count: number;
+      total_cost_micros: number;
+      unpriced_usage_line_count: number;
+    };
 
     expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
       CURRENT_STATE_DB_USER_VERSION,
@@ -753,10 +753,10 @@ describe("StateDb", () => {
          ORDER BY thread_id`,
       )
       .all() as Array<{
-        priced_usage_line_count: number;
-        thread_id: string;
-        total_cost_micros: number;
-      }>;
+      priced_usage_line_count: number;
+      thread_id: string;
+      total_cost_micros: number;
+    }>;
 
     expect(summaries).toEqual([
       {
@@ -884,7 +884,10 @@ describe("StateDb", () => {
   it("repairs stale thread search FTS tables even at current user_version", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "current-version-stale-thread-search-fts.db");
+    const dbPath = path.join(
+      tempDir,
+      "current-version-stale-thread-search-fts.db",
+    );
     createLegacyThreadSearchFtsDb(dbPath, CURRENT_STATE_DB_USER_VERSION);
 
     stateDb = StateDb.open(dbPath);
@@ -1053,11 +1056,15 @@ function readTableInfo(
 ): Array<{ name: string }> {
   switch (tableName) {
     case "pr_lookup_cache":
-      return stateDb.raw.prepare("PRAGMA table_info(pr_lookup_cache)").all() as Array<{
+      return stateDb.raw
+        .prepare("PRAGMA table_info(pr_lookup_cache)")
+        .all() as Array<{
         name: string;
       }>;
     case "pr_status_cache":
-      return stateDb.raw.prepare("PRAGMA table_info(pr_status_cache)").all() as Array<{
+      return stateDb.raw
+        .prepare("PRAGMA table_info(pr_status_cache)")
+        .all() as Array<{
         name: string;
       }>;
     case "thread_pricing_summaries":

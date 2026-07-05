@@ -81,9 +81,16 @@ export async function readProtocolCaptureFile(
       );
     }
 
-    const redactedRecord = applyReplacements(parsedLine, redactions) as ProtocolCaptureEventRecord;
+    const redactedRecord = applyReplacements(
+      parsedLine,
+      redactions,
+    ) as ProtocolCaptureEventRecord;
     const record = validateCaptureRecord(redactedRecord, filePath, index + 1);
-    const envelope = parseProtocolCaptureEnvelope(record.raw, filePath, record.sequence);
+    const envelope = parseProtocolCaptureEnvelope(
+      record.raw,
+      filePath,
+      record.sequence,
+    );
 
     output.push({
       record,
@@ -91,7 +98,9 @@ export async function readProtocolCaptureFile(
     });
   }
 
-  return output.sort((left, right) => left.record.sequence - right.record.sequence);
+  return output.sort(
+    (left, right) => left.record.sequence - right.record.sequence,
+  );
 }
 
 export class ProtocolCaptureStore {
@@ -107,7 +116,7 @@ export class ProtocolCaptureStore {
       backendInstance?: string;
       captureId: string;
       rootDir: string;
-    }
+    },
   ) {
     this.createdAt = Date.now();
   }
@@ -147,7 +156,7 @@ export class ProtocolCaptureStore {
       sequence: ++this.sequence,
       timestamp: Date.now(),
       threadIds: extractThreadIds(params.envelope),
-      raw: params.raw
+      raw: params.raw,
     };
 
     for (const threadId of record.threadIds) {
@@ -156,7 +165,11 @@ export class ProtocolCaptureStore {
 
     const nextWrite = this.writeQueue.then(async () => {
       await this.ensureInitialized();
-      await fs.appendFile(this.captureFilePath, `${JSON.stringify(record)}\n`, "utf8");
+      await fs.appendFile(
+        this.captureFilePath,
+        `${JSON.stringify(record)}\n`,
+        "utf8",
+      );
       await this.writeIndexQueued();
     });
     this.writeQueue = nextWrite;
@@ -180,7 +193,8 @@ export class ProtocolCaptureStore {
   }
 
   private async writeIndexQueued(): Promise<void> {
-    const previousWrite = indexWriteQueues.get(this.indexFilePath) ?? Promise.resolve();
+    const previousWrite =
+      indexWriteQueues.get(this.indexFilePath) ?? Promise.resolve();
     const nextWrite = previousWrite
       .catch(() => undefined)
       .then(() => this.writeIndex());
@@ -204,14 +218,16 @@ export class ProtocolCaptureStore {
       createdAt: this.createdAt,
       path: this.captureFilePath,
       threadIds: [...this.threadIds].sort(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     };
     current[this.params.captureId] = nextEntry;
     await writeJsonFileAtomically(this.indexFilePath, current);
   }
 }
 
-async function readIndex(filePath: string): Promise<Record<string, CaptureIndexEntry>> {
+async function readIndex(
+  filePath: string,
+): Promise<Record<string, CaptureIndexEntry>> {
   let contents: string;
   try {
     contents = await fs.readFile(filePath, "utf8");
@@ -223,9 +239,12 @@ async function readIndex(filePath: string): Promise<Record<string, CaptureIndexE
   }
 
   if (!contents.trim()) {
-    protocolCaptureLog.warn("protocol capture index was empty; resetting index", {
-      path: filePath
-    });
+    protocolCaptureLog.warn(
+      "protocol capture index was empty; resetting index",
+      {
+        path: filePath,
+      },
+    );
     return {};
   }
 
@@ -234,17 +253,23 @@ async function readIndex(filePath: string): Promise<Record<string, CaptureIndexE
     parsed = JSON.parse(contents) as unknown;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    protocolCaptureLog.warn("protocol capture index was invalid JSON; resetting index", {
-      path: filePath,
-      error: message
-    });
+    protocolCaptureLog.warn(
+      "protocol capture index was invalid JSON; resetting index",
+      {
+        path: filePath,
+        error: message,
+      },
+    );
     return {};
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    protocolCaptureLog.warn("protocol capture index had unexpected shape; resetting index", {
-      path: filePath
-    });
+    protocolCaptureLog.warn(
+      "protocol capture index had unexpected shape; resetting index",
+      {
+        path: filePath,
+      },
+    );
     return {};
   }
   return parsed as Record<string, CaptureIndexEntry>;
@@ -266,7 +291,9 @@ function getEnvelopeKind(envelope: {
   error?: unknown;
 }): "request" | "response" | "notification" {
   if (envelope.method?.trim()) {
-    return envelope.id === null || envelope.id === undefined ? "notification" : "request";
+    return envelope.id === null || envelope.id === undefined
+      ? "notification"
+      : "request";
   }
 
   if (envelope.id !== null && envelope.id !== undefined) {
@@ -297,18 +324,18 @@ function validateCaptureRecord(
     );
   }
   if (
-    value.kind !== "request" &&
-    value.kind !== "response" &&
-    value.kind !== "notification"
+    value.kind !== "request"
+    && value.kind !== "response"
+    && value.kind !== "notification"
   ) {
     throw new Error(
       `Invalid capture record ${lineNumber} in ${filePath}: unsupported kind`,
     );
   }
   if (
-    typeof value.sequence !== "number" ||
-    !Number.isInteger(value.sequence) ||
-    value.sequence < 1
+    typeof value.sequence !== "number"
+    || !Number.isInteger(value.sequence)
+    || value.sequence < 1
   ) {
     throw new Error(
       `Invalid capture record ${lineNumber} in ${filePath}: missing sequence`,
@@ -405,7 +432,11 @@ function visit(value: unknown, found: Set<string>): void {
   }
 
   const threadRecord = record.thread;
-  if (threadRecord && typeof threadRecord === "object" && !Array.isArray(threadRecord)) {
+  if (
+    threadRecord
+    && typeof threadRecord === "object"
+    && !Array.isArray(threadRecord)
+  ) {
     const nestedThreadId = (threadRecord as Record<string, unknown>).id;
     if (typeof nestedThreadId === "string" && nestedThreadId.trim()) {
       found.add(nestedThreadId.trim());

@@ -12,10 +12,7 @@ import {
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
-import {
-  SettingsPathRow,
-  type SettingsPathRowChip,
-} from "./SettingsPathRow";
+import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import { formatSourceLabel, sourceBadge } from "./settings-fields";
 import {
@@ -43,7 +40,9 @@ export function ModelsSettings(props: {
   /** Persist a per-ACP-agent enabled flag (off = hidden from the model picker). */
   onAcpEnabledChange: (registryId: string, enabled: boolean) => Promise<void>;
 }) {
-  const [codexPath, setCodexPath] = useState(props.snapshot.models.codex.path.value);
+  const [codexPath, setCodexPath] = useState(
+    props.snapshot.models.codex.path.value,
+  );
   const [codexMode, setCodexMode] = useState<CodexPathMode>(
     props.snapshot.models.codex.path.value.trim() ? "specified" : "auto",
   );
@@ -52,7 +51,8 @@ export function ModelsSettings(props: {
   const grok = props.snapshot.models.grok.apiKey;
   const envForced = codex.path.source === "env";
   const autoCandidates = codex.discovery.candidates.filter(
-    (candidate) => candidate.source === "path" || candidate.source === "application",
+    (candidate) =>
+      candidate.source === "path" || candidate.source === "application",
   );
   // Per-field source pill text — shows where the effective value
   // comes from (config / env override / default). Used on both the
@@ -150,10 +150,7 @@ export function ModelsSettings(props: {
             sub="Detected on this machine. The first listed will be used."
             source={codexSource}
             control={
-              <div
-                className="settings-paths"
-                aria-label="Codex discovery"
-              >
+              <div className="settings-paths" aria-label="Codex discovery">
                 {autoCandidates.length === 0 ? (
                   <p className="settings-empty">No Codex candidates found.</p>
                 ) : (
@@ -179,10 +176,7 @@ export function ModelsSettings(props: {
             source={codexProfileSource}
             error={codex.profiles.error}
             control={
-              <div
-                className="settings-paths"
-                aria-label="Codex auth profiles"
-              >
+              <div className="settings-paths" aria-label="Codex auth profiles">
                 <div className="settings-inline-actions">
                   <CodexAuthProfileCreateButton
                     desktopApi={props.desktopApi}
@@ -229,73 +223,79 @@ export function ModelsSettings(props: {
       </SettingsSection>
 
       {props.snapshot.experimental.agentCoreGrok.value ? (
-      <SettingsSection
-        eyebrow="Models"
-        title="Grok (xAI API)"
-        description="The x.ai API key for the experimental AgentCore - Grok backend (enabled in Settings → Experimental). The Grok CLI (ACP) agent authenticates separately through the Grok CLI itself and is configured under ACP agents below."
-      >
-        <div className="settings-fields">
-          <SettingsField
-            label="API Key"
-            sub="x.ai API key. Stored in the system keychain."
-            source={grokConfigured ? `Set · ${grokSource}` : `Not set · ${grokSource}`}
-            error={grok.unavailableReason}
-            control={
-              <div className="settings-secret">
-                <input
-                  aria-label="Grok API Key"
-                  className="settings-input"
-                  disabled={props.saving || !grok.writable}
-                  placeholder="••••••••"
-                  type="password"
-                  value={grokKey}
-                  onChange={(event) => setGrokKey(event.currentTarget.value)}
+        <SettingsSection
+          eyebrow="Models"
+          title="Grok (xAI API)"
+          description="The x.ai API key for the experimental AgentCore - Grok backend (enabled in Settings → Experimental). The Grok CLI (ACP) agent authenticates separately through the Grok CLI itself and is configured under ACP agents below."
+        >
+          <div className="settings-fields">
+            <SettingsField
+              label="API Key"
+              sub="x.ai API key. Stored in the system keychain."
+              source={
+                grokConfigured
+                  ? `Set · ${grokSource}`
+                  : `Not set · ${grokSource}`
+              }
+              error={grok.unavailableReason}
+              control={
+                <div className="settings-secret">
+                  <input
+                    aria-label="Grok API Key"
+                    className="settings-input"
+                    disabled={props.saving || !grok.writable}
+                    placeholder="••••••••"
+                    type="password"
+                    value={grokKey}
+                    onChange={(event) => setGrokKey(event.currentTarget.value)}
+                  />
+                  <button
+                    className="button button--secondary"
+                    disabled={props.saving || !grok.writable || !grokKey.trim()}
+                    type="button"
+                    onClick={() => {
+                      const nextValue = grokKey.trim();
+                      void props
+                        .onReplaceSecret("grokApiKey", nextValue)
+                        .then((saved) => {
+                          if (saved) {
+                            setGrokKey("");
+                          }
+                        });
+                    }}
+                  >
+                    Replace
+                  </button>
+                  <button
+                    className="button button--ghost"
+                    disabled={
+                      props.saving || !grok.writable || grok.source === "env"
+                    }
+                    type="button"
+                    onClick={() => {
+                      void props.onClearSecret("grokApiKey");
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              }
+            />
+            <SettingsField
+              label="Connection test"
+              sub="Calls GET /v1/models on the xAI API and reports the available models."
+              control={
+                <SettingsTestBlock
+                  kind="grok"
+                  desktopApi={props.desktopApi}
+                  icon={<span aria-hidden="true">x</span>}
+                  defaultName="api.x.ai/v1/models"
+                  defaultSub="GET /v1/models"
                 />
-                <button
-                  className="button button--secondary"
-                  disabled={props.saving || !grok.writable || !grokKey.trim()}
-                  type="button"
-                  onClick={() => {
-                    const nextValue = grokKey.trim();
-                    void props.onReplaceSecret("grokApiKey", nextValue).then(
-                      (saved) => {
-                        if (saved) {
-                          setGrokKey("");
-                        }
-                      },
-                    );
-                  }}
-                >
-                  Replace
-                </button>
-                <button
-                  className="button button--ghost"
-                  disabled={props.saving || !grok.writable || grok.source === "env"}
-                  type="button"
-                  onClick={() => {
-                    void props.onClearSecret("grokApiKey");
-                  }}
-                >
-                  Clear
-                </button>
-              </div>
-            }
-          />
-          <SettingsField
-            label="Connection test"
-            sub="Calls GET /v1/models on the xAI API and reports the available models."
-            control={
-              <SettingsTestBlock
-                kind="grok"
-                desktopApi={props.desktopApi}
-                icon={<span aria-hidden="true">x</span>}
-                defaultName="api.x.ai/v1/models"
-                defaultSub="GET /v1/models"
-              />
-            }
-          />
-        </div>
-      </SettingsSection>
+              }
+            />
+          </div>
+        </SettingsSection>
       ) : null}
 
       <AcpAgentsSettings
@@ -318,7 +318,10 @@ function CodexProfileRow(props: {
 }) {
   const profile = props.profile;
   const chips: SettingsPathRowChip[] = [
-    { label: profile.source === "default" ? "default" : "profile", tone: "muted" },
+    {
+      label: profile.source === "default" ? "default" : "profile",
+      tone: "muted",
+    },
     {
       label: profile.hasAuthFile ? "auth" : "no auth",
       tone: profile.hasAuthFile || !profile.name ? "muted" : "err",
@@ -338,7 +341,9 @@ function CodexProfileRow(props: {
         <span className="settings-pathrow__title-line">
           <span>{profile.displayName}</span>
           {profile.accountEmail ? (
-            <span className="settings-pathrow__meta">{profile.accountEmail}</span>
+            <span className="settings-pathrow__meta">
+              {profile.accountEmail}
+            </span>
           ) : null}
         </span>
       }
@@ -369,7 +374,9 @@ function CodexCandidateRow(props: {
   onUse: (command: string) => void;
 }) {
   const candidate = props.candidate;
-  const unavailableLabel = describeCommandDiscoveryFailure(candidate.failureReason);
+  const unavailableLabel = describeCommandDiscoveryFailure(
+    candidate.failureReason,
+  );
   const status = !candidate.executable
     ? (unavailableLabel ?? "Not executable")
     : candidate.selected
