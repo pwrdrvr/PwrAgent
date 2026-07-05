@@ -10605,6 +10605,124 @@ describe("MessagingController", () => {
     });
   });
 
+  it("flushes the agent's setup prose before an elicitation even at None", async () => {
+    const harness = await createHarness({ toolUpdateDefaultMode: "show_none" });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    // Agent narrates the options mid-turn (non-final prose). At None this is
+    // suppressed from the channel by the Working Updates dial...
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "msg-setup",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Do you want Option A or Option B?",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    // ...but when the questionnaire arrives, the setup prose is flushed first so
+    // the terse question carries the context the agent just wrote.
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "request-1",
+        questions: [
+          {
+            id: "q1",
+            header: "Choice",
+            question: "Which one?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Option A", description: "A" },
+              { label: "Option B", description: "B" },
+            ],
+          },
+        ],
+      },
+    } satisfies AppServerPendingRequestNotification);
+
+    const sequence = harness.delivered.map((intent) => JSON.stringify(intent));
+    const proseIndex = sequence.findIndex(
+      (entry) =>
+        entry.includes("Do you want Option A or Option B?") &&
+        entry.includes('"role":"assistant"'),
+    );
+    const questionnaireIndex = sequence.findIndex((entry) =>
+      entry.includes('"kind":"questionnaire"'),
+    );
+    expect(proseIndex).toBeGreaterThanOrEqual(0);
+    expect(questionnaireIndex).toBeGreaterThanOrEqual(0);
+    expect(proseIndex).toBeLessThan(questionnaireIndex);
+  });
+
+  it("does not re-post setup prose the dial already delivered", async () => {
+    const harness = await createHarness({ toolUpdateDefaultMode: "show_all" });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    // At All the prose is bridged individually as it arrives...
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "msg-setup",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Do you want Option A or Option B?",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "request-1",
+        questions: [
+          {
+            id: "q1",
+            header: "Choice",
+            question: "Which one?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Option A", description: "A" },
+              { label: "Option B", description: "B" },
+            ],
+          },
+        ],
+      },
+    } satisfies AppServerPendingRequestNotification);
+
+    // ...so the elicitation flush must not re-post it — exactly one prose message.
+    const proseMessages = harness.delivered.filter((intent) => {
+      const entry = JSON.stringify(intent);
+      return (
+        entry.includes("Do you want Option A or Option B?") &&
+        entry.includes('"role":"assistant"')
+      );
+    });
+    expect(proseMessages).toHaveLength(1);
+  });
+
   it("stops typing while presenting a Plan questionnaire for an active turn", async () => {
     const harness = await createHarness();
     await bindThread(harness);

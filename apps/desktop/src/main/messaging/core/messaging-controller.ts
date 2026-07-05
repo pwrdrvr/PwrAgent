@@ -1353,6 +1353,10 @@ export class MessagingController {
         }
       }
       const pendingIntent = await this.storePendingIntent(intent, binding);
+      await this.flushPendingTurnProseBeforeElicitation(
+        binding,
+        request.params.turnId,
+      );
       const delivery = await this.deliver(intent, binding);
       let deliveredPendingIntent = pendingIntent;
       if (delivery.surface) {
@@ -11365,22 +11369,86 @@ export class MessagingController {
       return;
     }
 
+    // Drop prose already delivered out-of-band (e.g. flushed ahead of an
+    // elicitation by U7) so a later coalesced batch does not re-post it.
+    const activities = this.filterUndeliveredProseActivities(delivery);
+    if (activities.length === 0) {
+      return;
+    }
+
     const intent =
       delivery.kind === "individual"
         ? buildToolUpdateMessageIntent({
-            activity: delivery.activities[0]!,
+            activity: activities[0]!,
             bindingId: binding.id,
             createdAt: this.now(),
             id: this.newIntentId("tool-update"),
           })
         : buildToolUpdateBatchMessageIntent({
-            activities: delivery.activities,
+            activities,
             bindingId: binding.id,
             createdAt: this.now(),
             id: this.newIntentId("tool-update-batch"),
           });
-    this.markProseActivitiesDelivered(delivery);
+    this.markProseActivitiesDelivered({ ...delivery, activities });
     await this.deliver(intent, binding);
+  }
+
+  private filterUndeliveredProseActivities(
+    delivery: MessagingToolUpdatePolicyDelivery,
+  ): MessagingToolActivity[] {
+    const delivered = this.deliveredProseIds.get(
+      this.turnProseKey(delivery.bindingId, delivery.turnId),
+    );
+    if (!delivered) {
+      return delivery.activities;
+    }
+    return delivery.activities.filter(
+      (activity) => activity.kind !== "prose" || !delivered.has(activity.id),
+    );
+  }
+
+  /**
+   * Deliver the agent's captured in-turn setup prose immediately before an
+   * elicitation (U7), so a questionnaire like "Option A or Option B?" carries
+   * the message that described the options — even when the Working Updates dial
+   * (None) would otherwise suppress it. Idempotent: prose already delivered this
+   * turn (individually, in a batch, or by a prior elicitation) is not re-sent.
+   */
+  private async flushPendingTurnProseBeforeElicitation(
+    binding: MessagingBindingRecord,
+    turnId: string | null | undefined,
+  ): Promise<void> {
+    if (!turnId) {
+      return;
+    }
+    const key = this.turnProseKey(binding.id, turnId);
+    const captured = this.turnProseCapture.get(key);
+    if (!captured) {
+      return;
+    }
+    let delivered = this.deliveredProseIds.get(key);
+    if (delivered?.has(captured.activityId)) {
+      return;
+    }
+    if (!delivered) {
+      delivered = new Set();
+      this.deliveredProseIds.set(key, delivered);
+    }
+    // Mark before delivering so a re-entrant elicitation for the same turn does
+    // not double-post the setup message.
+    delivered.add(captured.activityId);
+    await this.deliver(
+      {
+        id: this.newIntentId("assistant-prose"),
+        kind: "message",
+        bindingId: binding.id,
+        createdAt: this.now(),
+        role: "assistant",
+        parts: [{ type: "text", text: captured.text, markdown: "markdown" }],
+      },
+      binding,
+    );
   }
 
   private async attachThreadHereFromAgentMessagingOrigin(
