@@ -108,6 +108,7 @@ type PanelOverrides = Partial<
   Pick<
     ComponentProps<typeof ThreadContextPanel>,
     | "activeTab"
+    | "activeTurnId"
     | "backends"
     | "desktopApi"
     | "pinned"

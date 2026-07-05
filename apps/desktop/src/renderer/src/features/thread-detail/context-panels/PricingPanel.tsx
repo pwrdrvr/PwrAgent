@@ -16,6 +16,7 @@ import { formatTimestamp } from "./context-rail-shared";
 import { formatTokenCount } from "./subagent-format";
 
 type PricingPanelProps = {
+  activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
@@ -932,6 +933,20 @@ function isHistoricalUsageSummary(line: ThreadUsageLineRecord): boolean {
     line.status === "pending" &&
     line.cumulativeTotalTokens === undefined &&
     line.totalTokens >= 1_000_000
+  );
+}
+
+// The in-progress turn: the live, still-pending turn row whose id matches the
+// session's active turn. Drives the Live chip + running duration.
+function isActiveLiveTurnUsageLine(params: {
+  activeTurnId?: string;
+  line: PricingUsageLine;
+}): boolean {
+  return (
+    params.line.scope === "turn" &&
+    params.line.source === "live" &&
+    Boolean(params.activeTurnId) &&
+    params.line.turnId === params.activeTurnId
   );
 }
 
