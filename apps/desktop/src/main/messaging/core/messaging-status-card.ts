@@ -51,6 +51,20 @@ export type MessagingWorkspaceHandoffContext = {
 export const BRANCH_PICKER_PAGE_SIZE = 8;
 export const HANDOFF_BRANCH_PAGE_SIZE = BRANCH_PICKER_PAGE_SIZE;
 
+/**
+ * The per-thread streaming control is an advanced, default-off feature. Show it
+ * only when the operator opted in globally (`showStreamingOption`) OR the
+ * binding already has streaming explicitly enabled — the anti-stranding case so
+ * a pre-existing streaming binding can still be turned off after the default
+ * hides the control.
+ */
+export function shouldShowStreamingControl(
+  streamingMode: MessagingStreamingResponseMode,
+  showStreamingOption?: boolean,
+): boolean {
+  return Boolean(showStreamingOption) || streamingMode === "enabled";
+}
+
 export function buildBindingStatusIntent(params: {
   allowFullAccessEscalation?: boolean;
   backendSummary?: BackendSummary;
@@ -61,6 +75,7 @@ export function buildBindingStatusIntent(params: {
   handoff?: MessagingWorkspaceHandoffContext;
   id: string;
   streamingResponsesDefault?: boolean;
+  showStreamingOption?: boolean;
   threadState: MessagingResolvedThreadState;
   toolUpdateMode?: MessagingToolUpdateMode;
 }): MessagingStatusIntent {
@@ -166,7 +181,9 @@ export function buildBindingStatusIntent(params: {
       planDeliveryLine(params.capabilityProfile),
       `Permissions: ${permissionsLineLabel}`,
       `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
-      `Streaming: ${streamingLabel}`,
+      shouldShowStreamingControl(streamingMode, params.showStreamingOption)
+        ? `Streaming: ${streamingLabel}`
+        : undefined,
       params.binding.pendingSkillSelection
         ? `Pending skill: $${params.binding.pendingSkillSelection.name}`
         : undefined,
@@ -195,6 +212,7 @@ export function buildBindingStatusIntent(params: {
       supportsReasoning,
       streamingMode,
       streamingResponsesDefault: params.streamingResponsesDefault,
+      showStreamingOption: params.showStreamingOption,
       toolUpdateMode,
     }),
   };
@@ -426,6 +444,7 @@ function buildStatusActions(params: {
   supportsReasoning: boolean;
   streamingMode: MessagingStreamingResponseMode;
   streamingResponsesDefault?: boolean;
+  showStreamingOption?: boolean;
   toolUpdateMode: MessagingToolUpdateMode;
 }): MessagingSurfaceAction[] {
   const profile = params.capabilityProfile;
@@ -498,16 +517,20 @@ function buildStatusActions(params: {
       fallbackText: "tools",
       priority: 9,
     },
-    {
-      id: "status:streaming",
-      label: `Stream: ${formatMessagingStreamingResponseModeLabel(
-        params.streamingMode,
-        params.streamingResponsesDefault,
-      )}`,
-      style: "secondary",
-      fallbackText: "stream",
-      priority: 10,
-    },
+    ...(shouldShowStreamingControl(params.streamingMode, params.showStreamingOption)
+      ? [
+          {
+            id: "status:streaming",
+            label: `Stream: ${formatMessagingStreamingResponseModeLabel(
+              params.streamingMode,
+              params.streamingResponsesDefault,
+            )}`,
+            style: "secondary" as const,
+            fallbackText: "stream",
+            priority: 10,
+          },
+        ]
+      : []),
     {
       id: "status:compact",
       label: "Compact",

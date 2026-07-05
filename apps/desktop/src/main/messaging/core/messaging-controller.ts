@@ -177,6 +177,7 @@ import {
   nextMessagingToolUpdateMode,
   resolveMessagingStreamingResponseMode,
   resolveMessagingToolUpdateMode,
+  shouldShowStreamingControl,
   type MessagingWorkspaceHandoffContext,
 } from "./messaging-status-card.js";
 import {
@@ -574,6 +575,7 @@ export type MessagingControllerOptions = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   store: MessagingStoreLike;
   streamingResponsesDefault?: boolean;
+  showStreamingOption?: boolean;
   responseModeForConversation?: (
     channel: MessagingChannelRef,
   ) => Promise<MessagingResponseMode> | MessagingResponseMode;
@@ -631,6 +633,7 @@ export class MessagingController {
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly logger: MessagingControllerLogger;
   private readonly streamingResponsesDefault: boolean;
+  private readonly showStreamingOption: boolean;
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
   // Un-gated per-turn capture of the agent's most recent in-turn (non-final)
   // prose, keyed by `${bindingId}\0${turnId}`. Written before the Working
@@ -689,6 +692,7 @@ export class MessagingController {
     this.deliveryBudget = options.deliveryBudget;
     this.logger = options.logger ?? messagingControllerLog;
     this.streamingResponsesDefault = options.streamingResponsesDefault ?? false;
+    this.showStreamingOption = options.showStreamingOption ?? false;
     this.turnAdmission = new MessagingTurnAdmission({
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
       now: this.now,
@@ -4981,6 +4985,10 @@ export class MessagingController {
     const toolUpdateMode =
       effectiveSession.preferences?.toolUpdateMode ??
       (await this.resolveToolUpdateDefaultMode());
+    const showStreaming = shouldShowStreamingControl(
+      effectiveSession.preferences?.streamingResponses ?? "inherit",
+      this.showStreamingOption,
+    );
     await this.options.store.upsertBrowseSession(effectiveSession);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
@@ -4999,6 +5007,7 @@ export class MessagingController {
         options,
         selectedBackend,
         toolUpdateMode,
+        showStreaming,
       ),
       fallbackText: "Send your first instruction, or use the option buttons before sending it.",
       targetSurface: effectiveSession.surface,
@@ -5074,12 +5083,16 @@ export class MessagingController {
           style: "secondary",
           fallbackText: "working updates",
         },
-        {
-          id: "browse:new:streaming",
-          label: options.streamingResponses ? "Stream: on" : "Stream: off",
-          style: "secondary",
-          fallbackText: "stream",
-        },
+        ...(showStreaming
+          ? [
+              {
+                id: "browse:new:streaming",
+                label: options.streamingResponses ? "Stream: on" : "Stream: off",
+                style: "secondary" as const,
+                fallbackText: "stream",
+              },
+            ]
+          : []),
         ...(supportsModel
           ? [
               {
@@ -9930,6 +9943,7 @@ export class MessagingController {
         ? handoffContextForBinding(binding, snapshot)
         : undefined,
       streamingResponsesDefault: this.streamingResponsesDefault,
+      showStreamingOption: this.showStreamingOption,
       threadState: resolveMessagingThreadState({
         activeTurn,
         binding,
@@ -12980,6 +12994,7 @@ function newThreadPromptGateBody(
   options: NewThreadOptionsSummary,
   backend: BackendSummary,
   toolUpdateMode: MessagingToolUpdateMode,
+  showStreaming: boolean,
 ): string {
   const acpRuntimeMode = isAcpBackendId(options.backend)
     ? buildMessagingAcpRuntimeModeSummary({
@@ -13012,7 +13027,9 @@ function newThreadPromptGateBody(
       : undefined,
     options.supportsFast ? `Fast mode: ${options.fastMode ? "on" : "off"}` : undefined,
     `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
-    `Streaming: ${options.streamingResponses ? "on" : "off"}`,
+    showStreaming
+      ? `Streaming: ${options.streamingResponses ? "on" : "off"}`
+      : undefined,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");

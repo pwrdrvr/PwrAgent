@@ -978,7 +978,6 @@ describe("MessagingController", () => {
           id: "browse:new:working-updates",
           label: "Working Updates: Some",
         }),
-        expect.objectContaining({ id: "browse:new:streaming" }),
         expect.objectContaining({ id: "browse:new:model" }),
         expect.objectContaining({ id: "browse:new:reasoning" }),
       ]),
@@ -993,9 +992,14 @@ describe("MessagingController", () => {
         expect.objectContaining({ id: "browse:new:workspace:worktree" }),
       ]),
     });
+    // Streaming is default-off/advanced, so the wizard hides it (button + body
+    // line) unless the operator opts in globally.
     expect(readyIntent).toMatchObject({
-      body: expect.stringContaining("Streaming: off"),
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:streaming" }),
+      ]),
     });
+    expect(JSON.stringify(readyIntent)).not.toContain("Streaming:");
     expect(readyIntent).toMatchObject({
       browseSessionId: expect.stringMatching(/^browse:/),
     });
@@ -2403,16 +2407,17 @@ describe("MessagingController", () => {
           label: "Working Updates: Some",
           fallbackText: "tools",
         }),
-        expect.objectContaining({
-          id: "status:streaming",
-          label: "Stream: Off",
-          fallbackText: "stream",
-        }),
       ]),
     });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      text: expect.stringContaining("Streaming: Off"),
-    });
+    // Streaming is an advanced, default-off control: with the global
+    // show-streaming-option off and no per-binding override, it is hidden from
+    // both the status card actions and the overview text.
+    const boundStatus = harness.delivered.at(-1);
+    expect(boundStatus).toMatchObject({ kind: "status" });
+    expect(
+      (boundStatus as Extract<MessagingSurfaceIntent, { kind: "status" }>).actions,
+    ).not.toContainEqual(expect.objectContaining({ id: "status:streaming" }));
+    expect(JSON.stringify(boundStatus)).not.toContain("Streaming:");
   });
 
   it("uses the provider conversation-input profile for shared-chat mention instructions", async () => {
@@ -2458,7 +2463,7 @@ describe("MessagingController", () => {
   });
 
   it("cycles per-binding streaming mode from the status card", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ showStreamingOption: true });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(
@@ -2511,7 +2516,10 @@ describe("MessagingController", () => {
   });
 
   it("shows and toggles the effective streaming default from the new-thread screen", async () => {
-    const harness = await createHarness({ streamingResponsesDefault: true });
+    const harness = await createHarness({
+      streamingResponsesDefault: true,
+      showStreamingOption: true,
+    });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
     await harness.controller.handleInboundEvent(
@@ -14552,6 +14560,7 @@ async function createHarness(options?: {
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
+  showStreamingOption?: boolean;
 }): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
@@ -14957,6 +14966,7 @@ async function createHarness(options?: {
     store,
     responseModeForConversation: options?.responseModeForConversation,
     streamingResponsesDefault: options?.streamingResponsesDefault,
+    showStreamingOption: options?.showStreamingOption,
     toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
   });
   controllerRef = controller;
