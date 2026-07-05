@@ -39,6 +39,12 @@ export default tseslint.config(
     // set-state-in-render, …); those are out of scope for an adoption baseline.
     // rules-of-hooks catches real crashes; exhaustive-deps is the rule the
     // existing inline `// eslint-disable-next-line` directives already target.
+    //
+    // Scoped to the renderer — React lives only under src/renderer. Applying
+    // rules-of-hooks (error) repo-wide would false-positive on any
+    // `use`-prefixed non-hook function in main-process/Node code and fail CI
+    // with no fix but an inline disable.
+    files: ["apps/desktop/src/renderer/**/*.{ts,tsx}"],
     plugins: { "react-hooks": reactHooks },
     rules: {
       "react-hooks/rules-of-hooks": "error",
