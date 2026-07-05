@@ -245,6 +245,48 @@ describe("foldObservedContextReplay", () => {
     expect(second.cursor).toMatchObject({ cumulativeInputTokens: 65_000 });
   });
 
+  it("classifies a both-eligible request as hot only — never both", () => {
+    // One request over a 50k context: 60k uncached (>= context size, so it
+    // LOOKS cold-eligible) AND 50k cached (= the full context, so it IS a
+    // cache hit). A single request is exactly one replay; cached takes
+    // precedence and the uncached remainder is fresh input, attributed
+    // nowhere. toEqual (not toMatchObject) locks the cold bucket at zero.
+    const { tally } = foldObservedContextReplay({
+      cursor: { cumulativeInputTokens: 50_000, lastContextTokens: 50_000 },
+      tally: undefined,
+      tokenUsage: {
+        total: { inputTokens: 160_000, cachedInputTokens: 50_000 },
+        last: { inputTokens: 110_000, cachedInputTokens: 50_000 },
+      },
+    });
+    expect(tally).toEqual({
+      coldReplayCount: 0,
+      coldReplayUncachedTokens: 0,
+      hotReplayCachedTokens: 50_000,
+      hotReplayCount: 1,
+    });
+  });
+
+  it("classifies a genuine cache miss as cold only — never both", () => {
+    // Same shape but the cache genuinely missed (20k of 50k context cached):
+    // one cold replay attributed at the context size, and nothing in the hot
+    // bucket despite the partial cache hit.
+    const { tally } = foldObservedContextReplay({
+      cursor: { cumulativeInputTokens: 50_000, lastContextTokens: 50_000 },
+      tally: undefined,
+      tokenUsage: {
+        total: { inputTokens: 160_000, cachedInputTokens: 20_000 },
+        last: { inputTokens: 110_000, cachedInputTokens: 20_000 },
+      },
+    });
+    expect(tally).toEqual({
+      coldReplayCount: 1,
+      coldReplayUncachedTokens: 50_000,
+      hotReplayCachedTokens: 0,
+      hotReplayCount: 0,
+    });
+  });
+
   it("attributes the full uncached amount when no prior context is known", () => {
     // First observed request after app start: no prior snapshot, so cold
     // attribution falls back to the request's full uncached amount.
