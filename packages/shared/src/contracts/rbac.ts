@@ -60,6 +60,15 @@ export type MessagingPermissionId =
   // Mid-turn interactive surfaces.
   | "approval.respond.default"
   | "approval.respond.escalation"
+  // Agent-driven dynamic tools ("manage this instance" surface). These let the
+  // AGENT — acting for the messaging user — reach BEYOND the bound thread, so
+  // they are a distinct privilege from operating one's own thread. Gating them
+  // prevents unintended cross-thread information disclosure and privilege
+  // escalation (e.g. a chat user asking the agent to search every thread or
+  // inject a message into another thread).
+  | "tools.thread_inspection"
+  | "tools.thread_orchestration"
+  | "tools.instance_management"
   // Escalation-equivalent — near-complete control of the host. Danger.
   | "thread.execution.full_access";
 
@@ -71,6 +80,7 @@ export type MessagingPermissionGroup =
   | "settings"
   | "control"
   | "interactive"
+  | "tools"
   | "danger";
 
 export type MessagingPermissionDescriptor = {
@@ -217,6 +227,30 @@ export const MESSAGING_PERMISSION_CATALOG: readonly MessagingPermissionDescripto
     danger: "med",
   },
   {
+    id: "tools.thread_inspection",
+    label: "Agent: inspect threads",
+    description:
+      "Let the agent search and read OTHER threads (search_threads, read_thread, thread status, PRs).",
+    group: "tools",
+    danger: "med",
+  },
+  {
+    id: "tools.thread_orchestration",
+    label: "Agent: orchestrate threads",
+    description:
+      "Let the agent inject messages into other threads, hand off tasks, and attach directories.",
+    group: "tools",
+    danger: "med",
+  },
+  {
+    id: "tools.instance_management",
+    label: "Agent: manage this instance",
+    description:
+      "Let the agent manage PwrAgent itself and inspect automations (manage_pwragent).",
+    group: "tools",
+    danger: "med",
+  },
+  {
     id: "thread.execution.full_access",
     label: "Codex Full Access",
     description:
@@ -250,6 +284,7 @@ export type RbacRoleDefinition = {
 export const RBAC_BUILT_IN_ROLE_IDS = {
   admin: "admin",
   powerUser: "power_user",
+  powerUserTools: "power_user_tools",
   chatUser: "chat_user",
   limitedChatUser: "limited_chat_user",
 } as const;
@@ -293,6 +328,20 @@ const POWER_USER_PERMISSIONS: MessagingPermissionId[] = [
   "approval.respond.default",
 ];
 
+/**
+ * Power User + Tools: a Power User who is ALSO trusted to let the agent reach
+ * beyond the bound thread (search/read/orchestrate other threads, manage the
+ * instance). Kept separate from Power User so granting the cross-thread/agent
+ * surface is a deliberate choice, not the default for anyone who can drive a
+ * thread.
+ */
+const POWER_USER_TOOLS_PERMISSIONS: MessagingPermissionId[] = [
+  ...POWER_USER_PERMISSIONS,
+  "tools.thread_inspection",
+  "tools.thread_orchestration",
+  "tools.instance_management",
+];
+
 const CHAT_USER_PERMISSIONS: MessagingPermissionId[] = [
   "message.reply",
   "elicitation.answer",
@@ -325,6 +374,14 @@ export const BUILT_IN_ROLES: readonly RbacRoleDefinition[] = [
       "Start, resume, and control threads and their settings. No full access, no escalation approvals.",
     builtIn: true,
     permissions: POWER_USER_PERMISSIONS,
+  },
+  {
+    id: RBAC_BUILT_IN_ROLE_IDS.powerUserTools,
+    name: "Power User + Tools",
+    description:
+      "Power User, plus letting the agent search/read/orchestrate other threads and manage the instance.",
+    builtIn: true,
+    permissions: POWER_USER_TOOLS_PERMISSIONS,
   },
   {
     id: RBAC_BUILT_IN_ROLE_IDS.chatUser,
@@ -566,6 +623,49 @@ export function permissionForActionId(
     return "elicitation.answer";
   }
   return STATUS_ACTION_PERMISSIONS[actionId];
+}
+
+/**
+ * The dynamic-tool categories the agent can invoke on the desktop (matching the
+ * dispatch in the backend registry). These execute for BOTH the Codex and Grok
+ * backends through the same request chokepoint.
+ */
+export type MessagingDynamicToolCategory =
+  | "automation_inspection"
+  | "thread_inspection"
+  | "app_management"
+  | "thread_orchestration"
+  | "messaging_context";
+
+/**
+ * Map a dynamic-tool call to the permission a messaging-originated turn must
+ * hold for the agent to run it. Returns `undefined` for tools that are always
+ * allowed (they can't reach beyond the current conversation).
+ *
+ * The gate is category-level, matching the "manage this instance" grouping:
+ *   - thread_inspection  → `tools.thread_inspection`  (search/read/inspect other threads)
+ *   - thread_orchestration → `tools.thread_orchestration` (inject messages, handoff, attach dirs)
+ *   - app_management / automation_inspection → `tools.instance_management`
+ *   - messaging_context: `get_current_messaging_surface` is benign (ungated);
+ *     `attach_thread_here` binds a conversation to a thread → `thread.resume`.
+ */
+export function permissionForDynamicTool(
+  category: MessagingDynamicToolCategory,
+  tool: string,
+): MessagingPermissionId | undefined {
+  switch (category) {
+    case "thread_inspection":
+      return "tools.thread_inspection";
+    case "thread_orchestration":
+      return "tools.thread_orchestration";
+    case "automation_inspection":
+    case "app_management":
+      return "tools.instance_management";
+    case "messaging_context":
+      return tool === "attach_thread_here" ? "thread.resume" : undefined;
+    default:
+      return undefined;
+  }
 }
 
 // ---------------------------------------------------------------------------

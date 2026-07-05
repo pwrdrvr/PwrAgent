@@ -93,7 +93,11 @@ import {
   MessagingDeliveryBudget,
   type MessagingDeliveryPriority,
 } from "./core/messaging-delivery-budget";
-import type { MessagingAgentToolService } from "./messaging-agent-tool-service";
+import type {
+  DynamicToolPermissionCheck,
+  DynamicToolPermissionResult,
+  MessagingAgentToolService,
+} from "./messaging-agent-tool-service";
 
 export type DesktopMessagingAdapter = {
   authorizedActorIds: readonly string[];
@@ -446,6 +450,22 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         message: "No running messaging adapter has this Agent turn location.",
       },
     };
+  }
+
+  checkDynamicToolPermission(
+    check: DynamicToolPermissionCheck,
+  ): DynamicToolPermissionResult {
+    for (const controller of this.controllers) {
+      const result = controller.checkDynamicToolPermission(check);
+      if (result.owns) {
+        return result.permission !== undefined
+          ? { allowed: result.allowed, permission: result.permission }
+          : { allowed: result.allowed };
+      }
+    }
+    // No messaging controller started this turn → desktop-operator turn →
+    // unrestricted (RBAC only governs messaging-originated agents).
+    return { allowed: true };
   }
 
   private async stopNow(

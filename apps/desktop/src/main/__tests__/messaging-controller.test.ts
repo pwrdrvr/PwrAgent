@@ -21318,6 +21318,108 @@ describe("RBAC capability enforcement", () => {
       title: "Not permitted",
     });
   });
+
+  async function driveOneTurn(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    text: string,
+  ): Promise<void> {
+    harness.startTurn.mockImplementation(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-1",
+    }));
+    const event = buildTextEvent(text);
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    await harness.controller.handleInboundEvent(event);
+  }
+
+  it("gates agent dynamic tools by the originating actor's role", async () => {
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "elicitation.answer",
+        "thread.status.view",
+      ]), // Chat User: no tools.*
+    });
+    await driveOneTurn(harness, "look something up");
+
+    // Chat User → denied for a cross-thread inspection tool.
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "thread_inspection",
+        tool: "search_threads",
+      }),
+    ).toEqual({ owns: true, allowed: false, permission: "tools.thread_inspection" });
+
+    // The benign messaging-context surface stays allowed.
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "messaging_context",
+        tool: "get_current_messaging_surface",
+      }),
+    ).toEqual({ owns: true, allowed: true });
+
+    // An unknown turn is not owned by this controller → allowed (a
+    // desktop-operator turn is unrestricted).
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-unknown",
+        category: "thread_inspection",
+        tool: "search_threads",
+      }),
+    ).toEqual({ owns: false, allowed: true });
+  });
+
+  it("allows agent dynamic tools for an actor with the tools permission", async () => {
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "tools.thread_orchestration",
+      ]),
+    });
+    await driveOneTurn(harness, "send it");
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "thread_orchestration",
+        tool: "send_message_to_thread",
+      }),
+    ).toEqual({ owns: true, allowed: true });
+  });
+
+  it("does not gate dynamic tools in legacy mode (no policy)", async () => {
+    const harness = await createHarness();
+    await driveOneTurn(harness, "legacy");
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "thread_inspection",
+        tool: "search_threads",
+      }),
+    ).toEqual({ owns: true, allowed: true });
+  });
 });
 
 async function createHarness(options?: {

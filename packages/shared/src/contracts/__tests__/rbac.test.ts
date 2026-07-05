@@ -9,6 +9,7 @@ import {
   emptyRbacPolicy,
   permissionForActionId,
   permissionForCommandVerb,
+  permissionForDynamicTool,
   resolveEffectivePermissions,
   roleIsDangerous,
   type MessagingPermissionId,
@@ -50,14 +51,29 @@ describe("built-in roles", () => {
     expect(roleIsDangerous(admin.permissions)).toBe(true);
   });
 
-  it("Power User lacks full access and escalation approvals", () => {
+  it("Power User lacks full access, escalation approvals, and agent tools", () => {
     const power = roleById(RBAC_BUILT_IN_ROLE_IDS.powerUser);
     expect(power.permissions).not.toContain("thread.execution.full_access");
     expect(power.permissions).not.toContain("approval.respond.escalation");
+    expect(power.permissions).not.toContain("tools.thread_inspection");
+    expect(power.permissions).not.toContain("tools.thread_orchestration");
+    expect(power.permissions).not.toContain("tools.instance_management");
     expect(power.permissions).toContain("approval.respond.default");
     expect(power.permissions).toContain("thread.resume");
     expect(power.permissions).toContain("thread.settings.execution_mode");
     expect(roleIsDangerous(power.permissions)).toBe(false);
+  });
+
+  it("Power User + Tools is Power User plus the three agent-tool permissions", () => {
+    const power = new Set(roleById(RBAC_BUILT_IN_ROLE_IDS.powerUser).permissions);
+    const plus = roleById(RBAC_BUILT_IN_ROLE_IDS.powerUserTools);
+    for (const perm of power) expect(plus.permissions).toContain(perm);
+    expect(plus.permissions).toContain("tools.thread_inspection");
+    expect(plus.permissions).toContain("tools.thread_orchestration");
+    expect(plus.permissions).toContain("tools.instance_management");
+    // Still not full-access or escalation-approval.
+    expect(plus.permissions).not.toContain("thread.execution.full_access");
+    expect(plus.permissions).not.toContain("approval.respond.escalation");
   });
 
   it("Chat User can view+reply+answer but not resume/detach/settings", () => {
@@ -304,6 +320,28 @@ describe("action → permission lookup tables", () => {
       expect(ALL_MESSAGING_PERMISSIONS).toContain(permission);
       expect(permissionForActionId(actionId)).toBe(permission);
     }
+  });
+
+  it("maps dynamic tool categories to the right agent-tool permission", () => {
+    expect(permissionForDynamicTool("thread_inspection", "search_threads")).toBe(
+      "tools.thread_inspection",
+    );
+    expect(
+      permissionForDynamicTool("thread_orchestration", "send_message_to_thread"),
+    ).toBe("tools.thread_orchestration");
+    expect(permissionForDynamicTool("app_management", "manage_pwragent")).toBe(
+      "tools.instance_management",
+    );
+    expect(
+      permissionForDynamicTool("automation_inspection", "list_automations"),
+    ).toBe("tools.instance_management");
+    // messaging_context: benign surface ungated; attach binds → resume.
+    expect(
+      permissionForDynamicTool("messaging_context", "get_current_messaging_surface"),
+    ).toBeUndefined();
+    expect(
+      permissionForDynamicTool("messaging_context", "attach_thread_here"),
+    ).toBe("thread.resume");
   });
 
   it("resolves prefixed action ids for render-time filtering", () => {

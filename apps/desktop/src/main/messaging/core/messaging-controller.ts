@@ -13,6 +13,7 @@ import {
   parseCodexTurnErrorMessage,
   permissionForActionId,
   permissionForCommandVerb,
+  permissionForDynamicTool,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
   stripCodexGitActionDirectives,
@@ -46,6 +47,7 @@ import type {
   LaunchpadWorkMode,
   MaterializedDirectoryLaunchpadThread,
   MessagingBindingTargetKind,
+  MessagingDynamicToolCategory,
   MessagingPermissionId,
   MessagingToolUpdateMode,
   PwrAgentMessagingBoundThreadSummary,
@@ -16732,6 +16734,53 @@ export class MessagingController {
       undefined,
       event,
     );
+  }
+
+  /**
+   * Authorize an agent dynamic-tool call against the RBAC actor who started the
+   * turn. `owns: false` means this controller has no record of the turn (a
+   * different platform's controller, or a desktop-operator turn) — the runtime
+   * asks each controller and only the owner decides. When owned: legacy mode is
+   * allow-all; otherwise gate on the tool's required permission and audit
+   * denials. This is the second RBAC surface — the agent reaching BEYOND the
+   * bound thread — distinct from the actor's direct command/button surface.
+   */
+  checkDynamicToolPermission(params: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+    turnId?: string;
+    category: MessagingDynamicToolCategory;
+    tool: string;
+  }): { owns: boolean; allowed: boolean; permission?: string } {
+    if (!params.turnId) {
+      return { owns: false, allowed: true };
+    }
+    const origin = this.activeAgentMessagingOriginsByTurnKey.get(
+      agentMessagingTurnKey(params.backend, params.threadId, params.turnId),
+    );
+    if (!origin) {
+      return { owns: false, allowed: true };
+    }
+    const resolution = this.resolveActorPermissions(origin.event);
+    if (resolution === null) {
+      // Legacy-compatible mode: full capability, exactly as before RBAC.
+      return { owns: true, allowed: true };
+    }
+    const permission = permissionForDynamicTool(params.category, params.tool);
+    if (!permission) {
+      // Benign tool (e.g. get_current_messaging_surface) — never gated.
+      return { owns: true, allowed: true };
+    }
+    if (resolution.permissions.has(permission)) {
+      return { owns: true, allowed: true };
+    }
+    this.recordCapabilityDenied(
+      origin.event,
+      permission,
+      resolution.roleIds,
+      `tool:${params.category}:${params.tool}`,
+    );
+    return { owns: true, allowed: false, permission };
   }
 
   private newIntentId(prefix: string): string {
