@@ -174,7 +174,6 @@ import {
   messagingStreamingResponsesEnabled,
   messagingToolUpdateModeChoices,
   nextMessagingStreamingResponseMode,
-  nextMessagingToolUpdateMode,
   resolveMessagingStreamingResponseMode,
   resolveMessagingToolUpdateMode,
   shouldShowStreamingControl,
@@ -4356,7 +4355,19 @@ export class MessagingController {
       const currentMode =
         nextSession.preferences?.toolUpdateMode ??
         (await this.resolveToolUpdateDefaultMode());
-      const toolUpdateMode = nextMessagingToolUpdateMode(currentMode);
+      await this.presentNewThreadWorkingUpdatesPicker(
+        nextSession,
+        event,
+        currentMode,
+      );
+      return;
+    }
+    if (actionId === "browse:new:set-working-updates") {
+      const toolUpdateMode = readMessagingToolUpdateModeValue(event.value);
+      if (!toolUpdateMode) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
@@ -5833,6 +5844,58 @@ export class MessagingController {
           fallbackText: String(index + 1),
           priority: 10 + index,
           value: { reasoningEffort: effort },
+        })),
+        {
+          id: session.workMode === "worktree"
+            ? "browse:new:workspace:worktree"
+            : "browse:new:workspace:local",
+          label: "Back",
+          style: "secondary" as const,
+          fallbackText: "back",
+          priority: 1,
+        },
+      ],
+    });
+    await this.storePendingIntent(intent, undefined, event);
+    const result = await this.deliver(intent, undefined, event);
+    if (result.surface) {
+      await this.options.store.upsertBrowseSession({
+        ...session,
+        surface: result.surface,
+        updatedAt: this.now(),
+      });
+    }
+  }
+
+  private async presentNewThreadWorkingUpdatesPicker(
+    session: MessagingBrowseSessionRecord,
+    event: MessagingInboundEvent,
+    currentMode: MessagingToolUpdateMode,
+  ): Promise<void> {
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("new-thread-working-updates"),
+      capabilityProfile: this.capabilityProfile,
+      browseSessionId: session.id,
+      createdAt: this.now(),
+      delivery: session.surface
+        ? { mode: "update", replaceMarkup: true }
+        : undefined,
+      title: "Working Updates",
+      body:
+        "How much of the agent's in-progress work is bridged to this chat.\n\n"
+        + "None: only final answers and questions.\n"
+        + "Less / Some / More: coalesced batches that respect platform rate limits.\n"
+        + "All: the most (the rate budget may still hold some back).",
+      fallbackText: "Choose a Working Updates option, or reply back.",
+      targetSurface: session.surface,
+      actions: [
+        ...messagingToolUpdateModeChoices(currentMode).map((choice, index) => ({
+          id: "browse:new:set-working-updates",
+          label: `${choice.label}${choice.current ? " (current)" : ""}`,
+          style: "secondary" as const,
+          fallbackText: String(index + 1),
+          priority: 10 + index,
+          value: { toolUpdateMode: choice.mode },
         })),
         {
           id: session.workMode === "worktree"

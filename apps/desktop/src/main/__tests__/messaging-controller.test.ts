@@ -1076,10 +1076,34 @@ describe("MessagingController", () => {
       }),
     );
 
-    // Cycle the Working Updates dial (default Some -> More) before sending the
-    // first instruction, so the setting is chosen before the thread is born.
+    // Open the Working Updates picker before sending the first instruction, so
+    // the setting is chosen before the thread is born.
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "browse:new:working-updates" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Working Updates",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-working-updates",
+          label: "Some (current)",
+          value: { toolUpdateMode: "show_some" },
+        }),
+        expect.objectContaining({
+          id: "browse:new:set-working-updates",
+          label: "More",
+          value: { toolUpdateMode: "show_more" },
+        }),
+      ]),
+    });
+
+    // Pick "More", which returns to the ready gate reflecting the choice.
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-working-updates",
+        value: { toolUpdateMode: "show_more" },
+      }),
     );
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
