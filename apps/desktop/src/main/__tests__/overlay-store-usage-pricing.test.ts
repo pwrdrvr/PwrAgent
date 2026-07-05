@@ -209,6 +209,61 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("round-trips a parent-scoped monitor line's observed tally through the turn record", async () => {
+    const monitorLine: Partial<ThreadUsageLineRecord> = {
+      parentThreadId: "thread-1",
+      scope: "monitor",
+      source: "monitor",
+      sourceItemId: "review:turn-review-1",
+      threadId: "monitor-thread-1",
+      turnId: "turn-review-1",
+      usageLineId:
+        "codex:thread-1:review:turn-review-1:monitor-thread-1:turn-review-1:monitor",
+    };
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        ...monitorLine,
+        observedColdReplayCount: 1,
+        observedColdReplayUncachedTokens: 152_000,
+        observedHotReplayCount: 8,
+        observedHotReplayCachedTokens: 4_207_616,
+      }),
+    });
+
+    // The parent-thread read picks the monitor line up through the
+    // parent_thread_id branch and must join the tally back from its
+    // child-thread-scoped turn record.
+    let pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      scope: "monitor",
+      threadId: "monitor-thread-1",
+      usageTurnId: "openai:codex:monitor-thread-1:turn-review-1",
+      observedColdReplayCount: 1,
+      observedColdReplayUncachedTokens: 152_000,
+      observedHotReplayCount: 8,
+      observedHotReplayCachedTokens: 4_207_616,
+    });
+
+    // A later tally-less re-upsert of the same monitor line (e.g. a duplicate
+    // usage emission after restart) must not wipe the persisted counts.
+    await store.upsertThreadUsageLine({ line: buildUsageLine(monitorLine) });
+    pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      observedColdReplayCount: 1,
+      observedColdReplayUncachedTokens: 152_000,
+      observedHotReplayCount: 8,
+      observedHotReplayCachedTokens: 4_207_616,
+    });
+  });
+
   it("keeps the observed tally on the turn record when hydration supersedes the live line", async () => {
     // Live turn we observed replays for.
     await store.upsertThreadUsageLine({

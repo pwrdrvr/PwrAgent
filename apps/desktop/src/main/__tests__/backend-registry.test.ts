@@ -13418,6 +13418,166 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("counts observed context replays on review sub-agent usage lines", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+      startReviewResult: {
+        threadId: "thread-parent",
+        reviewThreadId: "thread-review",
+        turnId: "turn-review-1",
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "detached",
+    });
+
+    // First request: 160k of input on a cold cache — one cold replay.
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-review",
+        turnId: "turn-review-1",
+        model: "gpt-5.5",
+        tokenUsage: {
+          total: { inputTokens: 160_000, cachedInputTokens: 8_000, outputTokens: 500 },
+          last: { inputTokens: 160_000, cachedInputTokens: 8_000, outputTokens: 500 },
+        },
+      },
+    });
+    // Second request replays the grown context mostly cache-served — one hot
+    // replay on the same review turn.
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-review",
+        turnId: "turn-review-1",
+        model: "gpt-5.5",
+        tokenUsage: {
+          total: { inputTokens: 325_000, cachedInputTokens: 168_000, outputTokens: 1_200 },
+          last: { inputTokens: 165_000, cachedInputTokens: 160_000, outputTokens: 700 },
+        },
+      },
+    });
+
+    await expect
+      .poll(async () => {
+        const pricing = await overlayStore.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-parent",
+        });
+        return pricing.lines[0];
+      })
+      .toMatchObject({
+        scope: "monitor",
+        threadId: "thread-review",
+        turnId: "turn-review-1",
+        observedColdReplayCount: 1,
+        // The review thread's first observed request has no prior context
+        // snapshot, so cold attribution falls back to its full uncached amount.
+        observedColdReplayUncachedTokens: 152_000,
+        observedHotReplayCount: 1,
+        observedHotReplayCachedTokens: 160_000,
+      });
+
+    await registry.close();
+  });
+
+  it("counts observed context replays on Codex native sub-agent usage lines", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    const nativeThreadId = "019ebb70-2c58-7143-850e-0a699607c799";
+
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "thread-parent",
+        turnId: "turn-1",
+        item: {
+          id: "collab-spawn-1",
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          status: "completed",
+          receiverThreadIds: [nativeThreadId],
+          prompt: "You are the correctness reviewer. Inspect the diff.",
+          model: "gpt-5.4-mini",
+          agentsStates: {
+            [nativeThreadId]: {
+              status: "running",
+              message: "Inspecting the diff.",
+            },
+          },
+        },
+      },
+    } as AppServerNotification);
+
+    // Two cache-served context replays on the agent's own thread.
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: nativeThreadId,
+        turnId: "turn-native-1",
+        model: "gpt-5.4-mini",
+        tokenUsage: {
+          total: { inputTokens: 65_000, cachedInputTokens: 60_000, outputTokens: 1_000 },
+          last: { inputTokens: 65_000, cachedInputTokens: 60_000, outputTokens: 1_000 },
+        },
+      },
+    });
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: nativeThreadId,
+        turnId: "turn-native-1",
+        model: "gpt-5.4-mini",
+        tokenUsage: {
+          total: { inputTokens: 131_000, cachedInputTokens: 124_000, outputTokens: 1_800 },
+          last: { inputTokens: 66_000, cachedInputTokens: 64_000, outputTokens: 800 },
+        },
+      },
+    });
+
+    await expect
+      .poll(async () => {
+        const pricing = await overlayStore.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-parent",
+        });
+        return pricing.lines[0];
+      })
+      .toMatchObject({
+        scope: "monitor",
+        threadId: nativeThreadId,
+        turnId: "turn-native-1",
+        observedColdReplayCount: 0,
+        observedColdReplayUncachedTokens: 0,
+        observedHotReplayCount: 2,
+        observedHotReplayCachedTokens: 124_000,
+      });
+
+    await registry.close();
+  });
+
   it("persists Codex native spawnAgent calls as sub-agent summaries", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
