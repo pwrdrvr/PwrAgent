@@ -330,73 +330,75 @@ export function MessagingStatusBar(props: {
           role="dialog"
           aria-label="Messaging platforms"
         >
-          <div className="messaging-status-popover__head">
-            <div>
-              <div className="messaging-status-popover__title">
-                Messaging platforms
+          <div className="messaging-status-popover__panel">
+            <div className="messaging-status-popover__head">
+              <div>
+                <div className="messaging-status-popover__title">
+                  Messaging platforms
+                </div>
+                <div className="messaging-status-popover__summary">
+                  {summary}
+                </div>
               </div>
-              <div className="messaging-status-popover__summary">
-                {summary}
-              </div>
+              <button
+                type="button"
+                className={`settings-switch messaging-status-popover__switch${
+                  messagingOn ? " is-on" : ""
+                }`}
+                aria-pressed={messagingOn}
+                disabled={togglePending}
+                onClick={() => {
+                  void handleToggleMessaging();
+                }}
+              >
+                <span aria-hidden="true" className="settings-switch__track">
+                  <span className="settings-switch__thumb" />
+                </span>
+                <span>{togglePending ? "..." : messagingOn ? "On" : "Off"}</span>
+              </button>
             </div>
-            <button
-              type="button"
-              className={`settings-switch messaging-status-popover__switch${
-                messagingOn ? " is-on" : ""
-              }`}
-              aria-pressed={messagingOn}
-              disabled={togglePending}
-              onClick={() => {
-                void handleToggleMessaging();
-              }}
-            >
-              <span aria-hidden="true" className="settings-switch__track">
-                <span className="settings-switch__thumb" />
-              </span>
-              <span>{togglePending ? "..." : messagingOn ? "On" : "Off"}</span>
-            </button>
+            <div className="messaging-status-popover__rows">
+              {displayStatuses.map((status) => (
+                <PlatformStatusRow
+                  key={status.platform}
+                  status={status}
+                  active={hasRecentActivity(status, activeAtByPlatform[status.platform])}
+                  activity={activityByPlatform[status.platform]}
+                  forcedOff={!messagingOn}
+                  platformEnabled={platformEnabledFromSnapshot(
+                    settingsSnapshot,
+                    status.platform,
+                  )}
+                  platformTogglePending={
+                    configurablePlatform(status.platform)
+                      ? platformTogglePending[status.platform] === true
+                      : false
+                  }
+                  platformToggleDisabled={!messagingOn}
+                  now={now}
+                  onTogglePlatform={handleTogglePlatform}
+                />
+              ))}
+            </div>
+            {toggleError || platformToggleError ? (
+              <p className="messaging-status-popover__error" role="alert">
+                {toggleError ?? platformToggleError}
+              </p>
+            ) : null}
+            {props.onOpenActivity ? (
+              <button
+                type="button"
+                className="messaging-status-popover__activity"
+                onClick={() => {
+                  setOpen(false);
+                  setPinned(false);
+                  props.onOpenActivity?.();
+                }}
+              >
+                Open Messaging Activity
+              </button>
+            ) : null}
           </div>
-          <div className="messaging-status-popover__rows">
-            {displayStatuses.map((status) => (
-              <PlatformStatusRow
-                key={status.platform}
-                status={status}
-                active={hasRecentActivity(status, activeAtByPlatform[status.platform])}
-                activity={activityByPlatform[status.platform]}
-                forcedOff={!messagingOn}
-                platformEnabled={platformEnabledFromSnapshot(
-                  settingsSnapshot,
-                  status.platform,
-                )}
-                platformTogglePending={
-                  configurablePlatform(status.platform)
-                    ? platformTogglePending[status.platform] === true
-                    : false
-                }
-                platformToggleDisabled={!messagingOn}
-                now={now}
-                onTogglePlatform={handleTogglePlatform}
-              />
-            ))}
-          </div>
-          {toggleError || platformToggleError ? (
-            <p className="messaging-status-popover__error" role="alert">
-              {toggleError ?? platformToggleError}
-            </p>
-          ) : null}
-          {props.onOpenActivity ? (
-            <button
-              type="button"
-              className="messaging-status-popover__activity"
-              onClick={() => {
-                setOpen(false);
-                setPinned(false);
-                props.onOpenActivity?.();
-              }}
-            >
-              Open Messaging Activity
-            </button>
-          ) : null}
         </div>
       ) : null}
     </div>
