@@ -1,0 +1,23 @@
+# Build output / caches / deps
+**/node_modules
+**/out
+**/dist
+**/.vite
+**/coverage
+
+# Generated / vendored data we never hand-format
+pnpm-lock.yaml
+**/*.snap
+apps/desktop/.local
+
+# Captured protocol snippets and replay fixtures are byte-exact test data —
+# reformatting them would break the captures (see CLAUDE.md).
+**/protocol-captures
+**/e2e/fixtures
+**/__fixtures__
+
+# Decision-artifact docs are point-in-time records; do not reflow them
+# (see docs/plans/AGENTS.md).
+docs/plans
+docs/brainstorms
+docs/solutions

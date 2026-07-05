@@ -66,6 +66,14 @@ jobs:
         timeout-minutes: 10
         run: pnpm lint:colors
 
+      - name: Prettier format check
+        timeout-minutes: 10
+        run: pnpm format:check
+
+      - name: ESLint
+        timeout-minutes: 10
+        run: pnpm lint:eslint
+
       - name: Type check
         timeout-minutes: 10
         run: pnpm typecheck
