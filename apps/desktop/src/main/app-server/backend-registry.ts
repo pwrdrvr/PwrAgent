@@ -2766,19 +2766,36 @@ const MIN_OBSERVED_CONTEXT_REPLAY_INPUT_TOKENS = 32_000;
 // A replay counts as "hot" when at least this fraction of its input was cached.
 const OBSERVED_HOT_CACHE_FRACTION = 0.9;
 
+// Per-thread replay-observation cursor.
+export type ObservedContextReplayCursor = {
+  // High-water mark of the session's cumulative `total.inputTokens`. A replay is
+  // counted only when this grows, which makes duplicate re-emissions and a
+  // forked thread's inherited baseline no-ops.
+  cumulativeInputTokens: number;
+  // Approximate working-context size after the most recent observed request
+  // (its input plus its output). Used to cap COLD replay attribution: a cold
+  // request's uncached tokens include both the replayed context AND any fresh
+  // prompt/tool content submitted with it — only the portion up to the prior
+  // context size is replay overhead; the rest would have been paid regardless.
+  // Absent until the thread's first observed request (e.g. right after app
+  // start), in which case cold attribution falls back to the full uncached.
+  lastContextTokens?: number;
+};
+
 // Pure core of the context-replay accumulator: fold one token-usage update into
-// a running per-turn tally, given the per-thread high-water `cursor` of
-// cumulative `total.inputTokens`. A replay is counted only when the cumulative
-// input grows past the cursor (so duplicate re-emissions and the inherited
-// baseline of a forked thread are ignored), the growing request meets the
-// replay-size floor, and it is classified hot/cold by its own cache split.
-// Returns a fresh tally so callers can treat state immutably.
+// a running per-turn tally, given the per-thread cursor. A replay is counted
+// only when the cumulative input grows past the cursor, the growing request
+// meets the replay-size floor, and it is classified hot/cold by its own cache
+// split. Cold token attribution is capped at the prior context size (see
+// ObservedContextReplayCursor.lastContextTokens); hot attribution is the cached
+// tokens themselves, which are previously-seen content by definition. Returns
+// fresh objects so callers can treat state immutably.
 export function foldObservedContextReplay(params: {
-  cursor: number | undefined;
+  cursor: ObservedContextReplayCursor | undefined;
   tally: ObservedContextReplayTally | undefined;
   tokenUsage: unknown;
 }): {
-  cursor: number | undefined;
+  cursor: ObservedContextReplayCursor | undefined;
   tally: ObservedContextReplayTally | undefined;
 } {
   const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
@@ -2794,14 +2811,26 @@ export function foldObservedContextReplay(params: {
   }
 
   const lastInput = last.inputTokens;
-  const cursor = params.cursor ?? Math.max(0, total.inputTokens - lastInput);
-  if (total.inputTokens <= cursor) {
+  const cumulativeInputTokens =
+    params.cursor?.cumulativeInputTokens ??
+    Math.max(0, total.inputTokens - lastInput);
+  if (total.inputTokens <= cumulativeInputTokens) {
     // Duplicate re-emission or no new request — cumulative input did not grow.
-    return { cursor, tally: params.tally };
+    return {
+      cursor: params.cursor ?? { cumulativeInputTokens },
+      tally: params.tally,
+    };
   }
+  const lastOutput =
+    typeof last.outputTokens === "number" ? Math.max(0, last.outputTokens) : 0;
+  const nextCursor: ObservedContextReplayCursor = {
+    cumulativeInputTokens: total.inputTokens,
+    lastContextTokens: lastInput + lastOutput,
+  };
   if (lastInput < MIN_OBSERVED_CONTEXT_REPLAY_INPUT_TOKENS) {
-    // A new request, but too small to be a full context replay.
-    return { cursor: total.inputTokens, tally: params.tally };
+    // A new request, but too small to be a full context replay. Still advance
+    // the cursor — the context grew, and the next request replays it.
+    return { cursor: nextCursor, tally: params.tally };
   }
 
   const cached =
@@ -2821,10 +2850,14 @@ export function foldObservedContextReplay(params: {
     tally.hotReplayCount += 1;
     tally.hotReplayCachedTokens += cached;
   } else {
+    const priorContextTokens = params.cursor?.lastContextTokens;
     tally.coldReplayCount += 1;
-    tally.coldReplayUncachedTokens += uncached;
+    tally.coldReplayUncachedTokens +=
+      typeof priorContextTokens === "number" && priorContextTokens > 0
+        ? Math.min(uncached, priorContextTokens)
+        : uncached;
   }
-  return { cursor: total.inputTokens, tally };
+  return { cursor: nextCursor, tally };
 }
 
 function buildTaskMonitorUsageSnapshot(params: {
@@ -4927,14 +4960,16 @@ export class DesktopBackendRegistry {
     string,
     ObservedContextReplayTally
   >();
-  // Per-thread high-water mark of cumulative `total.inputTokens` (key:
-  // backend:threadId). Used to detect a genuinely new model request: a replay
-  // is counted only when the cumulative input grows, so duplicate re-emissions
-  // of an unchanged snapshot (observed live) are no-ops. Kept per-thread, not
-  // per-turn, so the monotonic guard spans turn boundaries. Like
-  // liveThreadUsageBaselines, these maps are turn/thread-keyed and not wiped
-  // mid-session — a turn's tally never bleeds into another turn.
-  private readonly liveThreadReplayInputCursor = new Map<string, number>();
+  // Per-thread replay cursor (key: backend:threadId): the high-water mark of
+  // cumulative `total.inputTokens` (detects a genuinely new model request, so
+  // duplicate re-emissions are no-ops) plus the prior request's context size
+  // (caps cold-replay attribution). Kept per-thread, not per-turn, so both
+  // signals span turn boundaries; per-turn tallies are dropped at turn end but
+  // this cursor intentionally survives so late duplicates still dedup.
+  private readonly liveThreadReplayInputCursor = new Map<
+    string,
+    ObservedContextReplayCursor
+  >();
   private readonly taskMonitorDelegations = new Map<
     string,
     TaskMonitorDelegationRecord
@@ -12746,7 +12781,7 @@ export class DesktopBackendRegistry {
       tally: this.liveThreadReplayObservations.get(turnKey),
       tokenUsage: params.tokenUsage,
     });
-    if (typeof cursor === "number") {
+    if (cursor) {
       this.liveThreadReplayInputCursor.set(threadKey, cursor);
     }
     if (tally) {

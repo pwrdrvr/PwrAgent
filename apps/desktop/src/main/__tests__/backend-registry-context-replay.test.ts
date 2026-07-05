@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   foldObservedContextReplay,
+  type ObservedContextReplayCursor,
   type ObservedContextReplayTally,
 } from "../app-server/backend-registry";
 
@@ -40,7 +41,7 @@ function loadTokenUsageEvents(): TokenUsageEvent[] {
 }
 
 function accumulate(events: TokenUsageEvent[]): Map<string, ObservedContextReplayTally> {
-  const cursors = new Map<string, number>(); // per thread
+  const cursors = new Map<string, ObservedContextReplayCursor>(); // per thread
   const tallies = new Map<string, ObservedContextReplayTally>(); // per turn
   for (const event of events) {
     const { cursor, tally } = foldObservedContextReplay({
@@ -48,7 +49,7 @@ function accumulate(events: TokenUsageEvent[]): Map<string, ObservedContextRepla
       tally: tallies.get(event.turnId),
       tokenUsage: event.tokenUsage,
     });
-    if (typeof cursor === "number") {
+    if (cursor) {
       cursors.set(event.threadId, cursor);
     }
     if (tally) {
@@ -138,6 +139,63 @@ describe("foldObservedContextReplay", () => {
     });
     expect(tally).toBeUndefined();
     // Cursor still advances so the next real request is measured against it.
-    expect(cursor).toBe(1_200);
+    expect(cursor).toEqual({
+      cumulativeInputTokens: 1_200,
+      lastContextTokens: 1_200,
+    });
+  });
+
+  it("caps cold attribution at the prior context size, excluding fresh input", () => {
+    // Mirrors a real observed thread: a 53,646-token turn completes, then the
+    // next turn's first request submits 73,766 tokens on a cold cache — 71,334
+    // uncached, but only ~54.1k of that is the replayed prior context; the rest
+    // is fresh prompt/injected content that would be paid for regardless.
+    const first = foldObservedContextReplay({
+      cursor: undefined,
+      tally: undefined,
+      tokenUsage: {
+        total: { inputTokens: 53_646, cachedInputTokens: 2_432 },
+        last: {
+          inputTokens: 53_646,
+          cachedInputTokens: 2_432,
+          outputTokens: 487,
+        },
+      },
+    });
+    expect(first.cursor).toEqual({
+      cumulativeInputTokens: 53_646,
+      lastContextTokens: 54_133,
+    });
+
+    const second = foldObservedContextReplay({
+      cursor: first.cursor,
+      tally: undefined, // new turn — fresh tally
+      tokenUsage: {
+        total: { inputTokens: 127_412, cachedInputTokens: 4_864 },
+        last: { inputTokens: 73_766, cachedInputTokens: 2_432 },
+      },
+    });
+    expect(second.tally).toMatchObject({
+      coldReplayCount: 1,
+      // min(73,766 − 2,432 = 71,334, prior context 54,133) = 54,133.
+      coldReplayUncachedTokens: 54_133,
+    });
+  });
+
+  it("attributes the full uncached amount when no prior context is known", () => {
+    // First observed request after app start: no prior snapshot, so cold
+    // attribution falls back to the request's full uncached amount.
+    const { tally } = foldObservedContextReplay({
+      cursor: undefined,
+      tally: undefined,
+      tokenUsage: {
+        total: { inputTokens: 53_646, cachedInputTokens: 2_432 },
+        last: { inputTokens: 53_646, cachedInputTokens: 2_432 },
+      },
+    });
+    expect(tally).toMatchObject({
+      coldReplayCount: 1,
+      coldReplayUncachedTokens: 51_214,
+    });
   });
 });

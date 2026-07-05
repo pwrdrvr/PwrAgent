@@ -132,6 +132,16 @@ update, it already scopes state per active turn, and it can wipe on turn end.
   submitted for that request); `modelContextWindow` is the ceiling, not the
   per-request size. Attribute `min(cached, last.input)` to the hot bucket per
   intent step 4/5.
+  **Refined 2026-07-05 after live testing:** a cold request's uncached tokens
+  include both the replayed context AND the fresh prompt/tool content submitted
+  with it — intent step 4 says only the replayed portion is replay overhead.
+  The accumulator now tracks the prior request's context size per thread
+  (`ObservedContextReplayCursor.lastContextTokens` = previous `last.input +
+  last.output`, surviving across turns) and caps cold attribution at
+  `min(uncached, priorContextTokens)`. With no prior snapshot (first observed
+  request after app start), it falls back to the full uncached amount. Hot
+  attribution stays `min(cached, last.input)` — cached tokens are
+  previously-seen content by definition, so no fresh content leaks in.
 
 > Open question O1 (resolve during implementation): do we report cold/hot as a
 > **count of requests** in each class (recommended — it is what "replays" means),
