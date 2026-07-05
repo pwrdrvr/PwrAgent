@@ -554,6 +554,7 @@ export type DesktopSettingsSnapshot = {
     fullAccessWarning: DesktopSettingsValue<DesktopMessagingFullAccessWarningGlobalPolicy>;
     inputDebounceMs: DesktopSettingsValue<number>;
     toolUpdateMode: DesktopSettingsValue<MessagingToolUpdateMode>;
+    showStreamingOption: DesktopSettingsValue<boolean>;
     attachments: DesktopMessagingAttachmentSettingsSnapshot;
     telegram: {
       enabled: DesktopSettingsValue<boolean>;
@@ -769,6 +770,7 @@ export type DesktopSettingsConfigPatch = {
     fullAccessWarning?: DesktopMessagingFullAccessWarningGlobalPolicy;
     inputDebounceMs?: number;
     toolUpdateMode?: MessagingToolUpdateMode;
+    showStreamingOption?: boolean;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
       maxAttachmentBytes?: number;

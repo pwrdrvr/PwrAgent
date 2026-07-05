@@ -44,6 +44,7 @@ describe("DesktopSettingsService", () => {
         'full_access_warning = "always"',
         "input_debounce_ms = 750",
         'tool_update_mode = "show_more"',
+        "show_streaming_option = true",
         "",
         "[image_uploads]",
         "pasted_image_max_patches = 4096",
@@ -109,6 +110,10 @@ describe("DesktopSettingsService", () => {
     });
     expect(snapshot.messaging.toolUpdateMode).toEqual({
       value: "show_more",
+      source: "config",
+    });
+    expect(snapshot.messaging.showStreamingOption).toEqual({
+      value: true,
       source: "config",
     });
     expect(snapshot.messaging.inputDebounceMs).toEqual({
@@ -705,6 +710,7 @@ describe("DesktopSettingsService", () => {
     await service.writeConfigPatch({
       messaging: {
         toolUpdateMode: "show_all",
+        showStreamingOption: true,
       },
     });
 
@@ -714,6 +720,7 @@ describe("DesktopSettingsService", () => {
     );
     expect(contents).toContain('chat_reply_composer = "custom-widget-chips"');
     expect(contents).toContain('tool_update_mode = "show_all"');
+    expect(contents).toContain("show_streaming_option = true");
   });
 
   it("reads authorized contacts from TOML array-of-tables", async () => {

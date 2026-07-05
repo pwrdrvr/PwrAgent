@@ -683,6 +683,10 @@ export class DesktopSettingsService {
         toolUpdateMode: this.resolveToolUpdateMode(
           config.messaging?.toolUpdateMode,
         ),
+        showStreamingOption: this.resolveConfigBoolean(
+          config.messaging?.showStreamingOption,
+          false,
+        ),
         attachments: {
           imageProfile: this.resolveMessagingImageProfile(
             config.messaging?.attachments?.imageProfile,

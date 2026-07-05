@@ -136,6 +136,7 @@ export type DesktopSettingsConfig = {
     fullAccessWarning?: DesktopMessagingFullAccessWarningGlobalPolicy;
     inputDebounceMs?: number;
     toolUpdateMode?: MessagingToolUpdateMode;
+    showStreamingOption?: boolean;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
       maxAttachmentBytes?: number;
@@ -872,6 +873,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.messaging?.toolUpdateMode !== undefined) {
     set(["messaging", "tool_update_mode"], patch.messaging.toolUpdateMode);
   }
+  if (patch.messaging?.showStreamingOption !== undefined) {
+    set(["messaging", "show_streaming_option"], patch.messaging.showStreamingOption);
+  }
 
   const attachments = patch.messaging?.attachments;
   if (attachments?.imageProfile !== undefined) {
@@ -1361,6 +1365,7 @@ function normalizeDesktopConfig(
       ),
       inputDebounceMs: readNumber(messaging?.input_debounce_ms),
       toolUpdateMode: readToolUpdateMode(messaging?.tool_update_mode),
+      showStreamingOption: readBoolean(messaging?.show_streaming_option),
       attachments: {
         imageProfile: readImageProfile(attachments?.image_profile),
         maxAttachmentBytes: readNumber(attachments?.max_attachment_bytes),
@@ -1667,6 +1672,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const allowFullAccessThreadResume = config.messaging?.allowFullAccessThreadResume;
   const fullAccessWarning = config.messaging?.fullAccessWarning;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
+  const showStreamingOption = config.messaging?.showStreamingOption;
   if (
     enabled !== undefined ||
     allowFullAccessEscalation !== undefined ||
@@ -1674,6 +1680,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     fullAccessWarning !== undefined ||
     inputDebounceMs !== undefined ||
     toolUpdateMode !== undefined ||
+    showStreamingOption !== undefined ||
     (attachments && hasDefinedValue(attachments))
     || (telegram && hasDefinedValue(telegram))
     || (discord && hasDefinedValue(discord))
@@ -1697,6 +1704,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (inputDebounceMs !== undefined) {
       pruned.messaging.inputDebounceMs = inputDebounceMs;
+    }
+    if (showStreamingOption !== undefined) {
+      pruned.messaging.showStreamingOption = showStreamingOption;
     }
     if (toolUpdateMode !== undefined) {
       pruned.messaging.toolUpdateMode = toolUpdateMode;

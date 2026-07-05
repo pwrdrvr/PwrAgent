@@ -77,6 +77,7 @@ export function MessagingSettings(props: {
     value: string,
   ) => Promise<boolean>;
   onToolUpdateModeChange: (mode: MessagingToolUpdateMode) => Promise<void>;
+  onShowStreamingOptionChange: (enabled: boolean) => Promise<void>;
   onImageProfileChange: (profile: DesktopMessagingImageProfile) => Promise<void>;
   onInputDebounceMsChange: (value: number) => Promise<void>;
   onMessagingEnabledChange: (enabled: boolean) => Promise<void>;
@@ -118,6 +119,7 @@ export function MessagingSettings(props: {
     props.snapshot.messaging.allowFullAccessThreadResume;
   const fullAccessWarning = props.snapshot.messaging.fullAccessWarning;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
+  const showStreamingOption = props.snapshot.messaging.showStreamingOption;
   const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
   const imageProfile = props.snapshot.messaging.attachments.imageProfile;
   const runtimeMessaging = props.snapshot.runtime.messaging;
@@ -207,6 +209,16 @@ export function MessagingSettings(props: {
             value={toolUpdateMode.value}
             onChange={(mode) => {
               void props.onToolUpdateModeChange(mode);
+            }}
+          />
+          <ToggleField
+            checked={showStreamingOption.value}
+            disabled={props.saving}
+            label="Show streaming option on thread cards"
+            sub="Advanced. Reveals a per-thread streaming toggle in chat status cards and the New Thread menu. Streaming does not send in-turn messages — it repeatedly edits one message as tokens arrive, which burns platform rate limits fast and usually ends up throttled. Most people should leave this off."
+            source={sourceBadge(showStreamingOption)}
+            onChange={(enabled) => {
+              void props.onShowStreamingOptionChange(enabled);
             }}
           />
           <NumberField
