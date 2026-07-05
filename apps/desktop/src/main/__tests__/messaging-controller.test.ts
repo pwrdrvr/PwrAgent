@@ -974,10 +974,17 @@ describe("MessagingController", () => {
       actions: expect.arrayContaining([
         expect.objectContaining({ id: "browse:new:permissions" }),
         expect.objectContaining({ id: "browse:new:fast" }),
+        expect.objectContaining({
+          id: "browse:new:working-updates",
+          label: "Working Updates: Some",
+        }),
         expect.objectContaining({ id: "browse:new:streaming" }),
         expect.objectContaining({ id: "browse:new:model" }),
         expect.objectContaining({ id: "browse:new:reasoning" }),
       ]),
+    });
+    expect(readyIntent).toMatchObject({
+      body: expect.stringContaining("Working Updates: Some"),
     });
     expect(readyIntent).toMatchObject({
       actions: expect.not.arrayContaining([
@@ -1047,6 +1054,47 @@ describe("MessagingController", () => {
     );
     expect(harness.delivered.at(-1)).toMatchObject({
       text: expect.stringContaining("Directory: /repo/pwragent"),
+    });
+  });
+
+  it("sets Working Updates in the /new wizard before the thread is created", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    // Cycle the Working Updates dial (default Some -> More) before sending the
+    // first instruction, so the setting is chosen before the thread is born.
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:working-updates" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:working-updates",
+          label: "Working Updates: More",
+        }),
+      ]),
+      body: expect.stringContaining("Working Updates: More"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({
+      preferences: expect.objectContaining({ toolUpdateMode: "show_more" }),
     });
   });
 

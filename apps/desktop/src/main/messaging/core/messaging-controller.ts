@@ -167,12 +167,14 @@ import {
   buildStatusReasoningPickerIntent,
   buildStatusToolUpdateModePickerIntent,
   formatExecutionModeLabel,
+  formatMessagingToolUpdateModeLabel,
   formatPermissionsActionDisplayLabel,
   formatPermissionsLineDisplayLabel,
   handoffRequestFromValue,
   messagingStreamingResponsesEnabled,
   messagingToolUpdateModeChoices,
   nextMessagingStreamingResponseMode,
+  nextMessagingToolUpdateMode,
   resolveMessagingStreamingResponseMode,
   resolveMessagingToolUpdateMode,
   type MessagingWorkspaceHandoffContext,
@@ -4346,6 +4348,25 @@ export class MessagingController {
       );
       return;
     }
+    if (actionId === "browse:new:working-updates") {
+      const currentMode =
+        nextSession.preferences?.toolUpdateMode ??
+        (await this.resolveToolUpdateDefaultMode());
+      const toolUpdateMode = nextMessagingToolUpdateMode(currentMode);
+      await this.presentNewThreadPromptGate(
+        {
+          ...nextSession,
+          preferences: {
+            ...nextSession.preferences,
+            toolUpdateMode,
+            updatedAt: this.now(),
+          },
+        },
+        event,
+        navigation,
+      );
+      return;
+    }
     if (actionId === "browse:new:backend") {
       await this.presentNewThreadBackendPicker(nextSession, event, navigation);
       return;
@@ -4957,6 +4978,9 @@ export class MessagingController {
     const supportsEnvironment =
       options.codexEnvironmentOptions.length > 0 ||
       Boolean(options.codexEnvironmentId);
+    const toolUpdateMode =
+      effectiveSession.preferences?.toolUpdateMode ??
+      (await this.resolveToolUpdateDefaultMode());
     await this.options.store.upsertBrowseSession(effectiveSession);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
@@ -4970,7 +4994,12 @@ export class MessagingController {
           }
         : undefined,
       title: "Ready to start",
-      body: newThreadPromptGateBody(effectiveSession, options, selectedBackend),
+      body: newThreadPromptGateBody(
+        effectiveSession,
+        options,
+        selectedBackend,
+        toolUpdateMode,
+      ),
       fallbackText: "Send your first instruction, or use the option buttons before sending it.",
       targetSurface: effectiveSession.surface,
       actions: [
@@ -5039,6 +5068,12 @@ export class MessagingController {
               },
             ]
           : []),
+        {
+          id: "browse:new:working-updates",
+          label: `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
+          style: "secondary",
+          fallbackText: "working updates",
+        },
         {
           id: "browse:new:streaming",
           label: options.streamingResponses ? "Stream: on" : "Stream: off",
@@ -12944,6 +12979,7 @@ function newThreadPromptGateBody(
   session: MessagingBrowseSessionRecord,
   options: NewThreadOptionsSummary,
   backend: BackendSummary,
+  toolUpdateMode: MessagingToolUpdateMode,
 ): string {
   const acpRuntimeMode = isAcpBackendId(options.backend)
     ? buildMessagingAcpRuntimeModeSummary({
@@ -12975,6 +13011,7 @@ function newThreadPromptGateBody(
       ? `Reasoning: ${options.reasoningEffort}`
       : undefined,
     options.supportsFast ? `Fast mode: ${options.fastMode ? "on" : "off"}` : undefined,
+    `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
     `Streaming: ${options.streamingResponses ? "on" : "off"}`,
   ]
     .filter((line): line is string => Boolean(line))
