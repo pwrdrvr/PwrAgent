@@ -2786,10 +2786,11 @@ export type ObservedContextReplayCursor = {
 // a running per-turn tally, given the per-thread cursor. A replay is counted
 // only when the cumulative input grows past the cursor, the growing request
 // meets the replay-size floor, and it is classified hot/cold by its own cache
-// split. Cold token attribution is capped at the prior context size (see
-// ObservedContextReplayCursor.lastContextTokens); hot attribution is the cached
-// tokens themselves, which are previously-seen content by definition. Returns
-// fresh objects so callers can treat state immutably.
+// split. Cold token attribution is the replayed portion minus the cache-served
+// slice (see ObservedContextReplayCursor.lastContextTokens); hot attribution is
+// the cached tokens themselves, which are previously-seen content by
+// definition. Returns fresh objects whenever state advances; inputs are never
+// mutated.
 export function foldObservedContextReplay(params: {
   cursor: ObservedContextReplayCursor | undefined;
   tally: ObservedContextReplayTally | undefined;
@@ -2811,18 +2812,37 @@ export function foldObservedContextReplay(params: {
   }
 
   const lastInput = last.inputTokens;
+  const lastOutput =
+    typeof last.outputTokens === "number" ? Math.max(0, last.outputTokens) : 0;
   const cumulativeInputTokens =
     params.cursor?.cumulativeInputTokens ??
     Math.max(0, total.inputTokens - lastInput);
   if (total.inputTokens <= cumulativeInputTokens) {
     // Duplicate re-emission or no new request — cumulative input did not grow.
+    // On an exact match this is the same already-folded request; refresh the
+    // context snapshot in case this re-emission books output the first
+    // emission had not seen yet (input-first emission cadence). A stale
+    // re-emission of an older request (total below the cursor) is left alone.
+    if (params.cursor && total.inputTokens === cumulativeInputTokens) {
+      const refreshedContextTokens = Math.max(
+        params.cursor.lastContextTokens ?? 0,
+        lastInput + lastOutput,
+      );
+      return {
+        cursor: {
+          cumulativeInputTokens,
+          ...(refreshedContextTokens > 0
+            ? { lastContextTokens: refreshedContextTokens }
+            : {}),
+        },
+        tally: params.tally,
+      };
+    }
     return {
       cursor: params.cursor ?? { cumulativeInputTokens },
       tally: params.tally,
     };
   }
-  const lastOutput =
-    typeof last.outputTokens === "number" ? Math.max(0, last.outputTokens) : 0;
   const nextCursor: ObservedContextReplayCursor = {
     cumulativeInputTokens: total.inputTokens,
     lastContextTokens: lastInput + lastOutput,
@@ -2866,8 +2886,16 @@ export function foldObservedContextReplay(params: {
     tally.hotReplayCount += 1;
     tally.hotReplayCachedTokens += cached;
   } else {
+    // The uncached replay overhead is the replayed portion minus whatever the
+    // cache DID serve — cached tokens are previously-seen content, so they sit
+    // inside the replayed window even on a partial miss. (Always positive here:
+    // the cold branch means cached < 0.9 × replayed. Also never exceeds
+    // `uncached`, since replayed <= last.input.)
     tally.coldReplayCount += 1;
-    tally.coldReplayUncachedTokens += Math.min(uncached, replayedTokens);
+    tally.coldReplayUncachedTokens += Math.min(
+      uncached,
+      Math.max(0, replayedTokens - cached),
+    );
   }
   return { cursor: nextCursor, tally };
 }

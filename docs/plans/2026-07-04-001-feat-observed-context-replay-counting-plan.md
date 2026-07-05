@@ -150,10 +150,21 @@ update, it already scopes state per active turn, and it can wipe on turn end.
   against the replayed portion `min(last.input, priorContextTokens)`: the
   hot/cold threshold (`cached >= 0.9 × replayed`), the size floor
   (`replayed >= 32k`, so a mostly-fresh request with a tiny prior context is
-  not a replay at all), and cold attribution (`min(uncached, replayed)`).
+  not a replay at all), and cold attribution.
   Fresh tokens (`last.input − replayed`) are excluded from replay logic
   entirely — the protocol has no explicit "fresh tokens" field, but it is
   derivable as input growth over the prior context snapshot.
+  **Delta review (same day):** cold attribution refined once more from
+  `min(uncached, replayed)` to `min(uncached, replayed − cached)` — a partial
+  cache hit below the 90% hot line was counting its cache-served slice as
+  uncached overhead. Also: a duplicate re-emission with an exactly-equal
+  cumulative total now refreshes the context snapshot with any late-booked
+  output (input-first emission cadence), so the next request's replayed
+  portion is not underestimated. Accepted approximation, unchanged: the
+  context snapshot uses `last.input + last.output` where `output` is
+  reasoning-inclusive per the protocol; if a model does not retain reasoning
+  in context, the snapshot overestimates by that amount — bounded to one
+  request and non-compounding (each request re-snapshots), so left as-is.
 
 > Open question O1 (resolve during implementation): do we report cold/hot as a
 > **count of requests** in each class (recommended — it is what "replays" means),

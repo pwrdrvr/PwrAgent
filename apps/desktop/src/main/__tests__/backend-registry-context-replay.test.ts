@@ -77,7 +77,10 @@ describe("foldObservedContextReplay", () => {
     expect(turnA).toMatchObject({
       coldReplayCount: 2,
       hotReplayCount: 4,
-      coldReplayUncachedTokens: 153_600 + 169_300,
+      // req1: no prior context -> replayed = full input, minus its 6,400 cached.
+      // req5: replayed = prior context 172,995 (req4 input+output), minus its
+      // 8,200 cache-served tokens.
+      coldReplayUncachedTokens: 153_600 + (172_995 - 8_200),
       hotReplayCachedTokens: 159_800 + 164_900 + 169_100 + 178_400,
     });
     expect(turnB).toMatchObject({
@@ -107,7 +110,7 @@ describe("foldObservedContextReplay", () => {
       tokenUsage,
     });
     expect(second.tally).toMatchObject({ coldReplayCount: 1, hotReplayCount: 0 });
-    expect(second.cursor).toBe(first.cursor);
+    expect(second.cursor).toEqual(first.cursor);
   });
 
   it("never counts a forked thread's inherited baseline", () => {
@@ -177,8 +180,9 @@ describe("foldObservedContextReplay", () => {
     });
     expect(second.tally).toMatchObject({
       coldReplayCount: 1,
-      // min(73,766 − 2,432 = 71,334, prior context 54,133) = 54,133.
-      coldReplayUncachedTokens: 54_133,
+      // Replayed portion = prior context 54,133; its 2,432 cache-served tokens
+      // are subtracted — only the cache-missed replay overhead counts.
+      coldReplayUncachedTokens: 54_133 - 2_432,
     });
   });
 
@@ -242,7 +246,10 @@ describe("foldObservedContextReplay", () => {
     });
     expect(second.tally).toBeUndefined();
     // Cursor still advances: the fresh content becomes the next context.
-    expect(second.cursor).toMatchObject({ cumulativeInputTokens: 65_000 });
+    expect(second.cursor).toEqual({
+      cumulativeInputTokens: 65_000,
+      lastContextTokens: 60_000,
+    });
   });
 
   it("classifies a both-eligible request as hot only — never both", () => {
@@ -268,9 +275,11 @@ describe("foldObservedContextReplay", () => {
   });
 
   it("classifies a genuine cache miss as cold only — never both", () => {
-    // Same shape but the cache genuinely missed (20k of 50k context cached):
-    // one cold replay attributed at the context size, and nothing in the hot
-    // bucket despite the partial cache hit.
+    // Same shape but the cache genuinely missed most of the 50k context (20k
+    // cached): one cold replay attributed at the cache-MISSED portion of the
+    // replayed context (50k − 20k), and nothing in the hot bucket despite the
+    // partial cache hit — the 20k that was served sits inside the replayed
+    // window and is not uncached overhead.
     const { tally } = foldObservedContextReplay({
       cursor: { cumulativeInputTokens: 50_000, lastContextTokens: 50_000 },
       tally: undefined,
@@ -281,9 +290,95 @@ describe("foldObservedContextReplay", () => {
     });
     expect(tally).toEqual({
       coldReplayCount: 1,
-      coldReplayUncachedTokens: 50_000,
+      coldReplayUncachedTokens: 30_000,
       hotReplayCachedTokens: 0,
       hotReplayCount: 0,
+    });
+  });
+
+  it("classifies a request cached at exactly the 90% threshold as hot", () => {
+    // Locks the >= boundary of OBSERVED_HOT_CACHE_FRACTION: cached is exactly
+    // 0.9 × replayed (90,000 of a 100,000 prior context).
+    const { tally } = foldObservedContextReplay({
+      cursor: { cumulativeInputTokens: 100_000, lastContextTokens: 100_000 },
+      tally: undefined,
+      tokenUsage: {
+        total: { inputTokens: 230_000, cachedInputTokens: 90_000 },
+        last: { inputTokens: 130_000, cachedInputTokens: 90_000 },
+      },
+    });
+    expect(tally).toEqual({
+      coldReplayCount: 0,
+      coldReplayUncachedTokens: 0,
+      hotReplayCachedTokens: 90_000,
+      hotReplayCount: 1,
+    });
+  });
+
+  it("refreshes the context snapshot from a duplicate that books late output", () => {
+    // Some cadences emit usage when the request's input is booked (output 0)
+    // and re-emit the same cumulative total once output lands. The duplicate
+    // must not count, but its output belongs in the context snapshot so the
+    // NEXT request's replayed portion is not underestimated.
+    const first = foldObservedContextReplay({
+      cursor: undefined,
+      tally: undefined,
+      tokenUsage: {
+        total: { inputTokens: 40_000, cachedInputTokens: 0 },
+        last: { inputTokens: 40_000, cachedInputTokens: 0, outputTokens: 0 },
+      },
+    });
+    expect(first.cursor).toEqual({
+      cumulativeInputTokens: 40_000,
+      lastContextTokens: 40_000,
+    });
+
+    const second = foldObservedContextReplay({
+      cursor: first.cursor,
+      tally: first.tally,
+      tokenUsage: {
+        total: { inputTokens: 40_000, cachedInputTokens: 0 },
+        last: { inputTokens: 40_000, cachedInputTokens: 0, outputTokens: 8_000 },
+      },
+    });
+    // Not counted again, but the snapshot now includes the 8k output.
+    expect(second.tally).toEqual(first.tally);
+    expect(second.cursor).toEqual({
+      cumulativeInputTokens: 40_000,
+      lastContextTokens: 48_000,
+    });
+
+    const third = foldObservedContextReplay({
+      cursor: second.cursor,
+      tally: second.tally,
+      tokenUsage: {
+        total: { inputTokens: 90_000, cachedInputTokens: 45_000 },
+        last: { inputTokens: 50_000, cachedInputTokens: 45_000 },
+      },
+    });
+    // replayed = min(50,000, 48,000) = 48,000; cached 45,000 >= 0.9 × 48,000
+    // (43,200) -> hot. Without the refresh, replayed would be 40,000 and the
+    // request would still be hot here, but a floor/threshold case would skew.
+    expect(third.tally).toMatchObject({
+      hotReplayCount: 1,
+      hotReplayCachedTokens: 45_000,
+    });
+  });
+
+  it("falls back to the whole input when the prior context snapshot is zero", () => {
+    // A zero lastContextTokens (contradictory prior data) must not zero out
+    // replay counting via the floor — it behaves like an unknown prior.
+    const { tally } = foldObservedContextReplay({
+      cursor: { cumulativeInputTokens: 10_000, lastContextTokens: 0 },
+      tally: undefined,
+      tokenUsage: {
+        total: { inputTokens: 63_646, cachedInputTokens: 2_432 },
+        last: { inputTokens: 53_646, cachedInputTokens: 2_432 },
+      },
+    });
+    expect(tally).toMatchObject({
+      coldReplayCount: 1,
+      coldReplayUncachedTokens: 51_214,
     });
   });
 
