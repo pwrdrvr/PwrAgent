@@ -297,7 +297,6 @@ type AssistantStreamDelta = {
 };
 
 type AssistantStreamBuffer = AssistantStreamDelta & {
-  lastEmittedAt: number;
   // Earliest time a non-final `stream_update` may be emitted for this message.
   // Deltas arriving before it are coalesced into `text`; see
   // {@link coalesceBackoffMs}. The final flush ignores this and emits at once.
@@ -3330,7 +3329,6 @@ export class MessagingController {
         }
       : {
           ...delta,
-          lastEmittedAt: 0,
           // First receipt: hold the first coalesced block for the initial
           // window so a burst of opening tokens becomes one edit, not many.
           nextReleaseAt: now + coalesceBackoffMs(0),
@@ -3365,7 +3363,6 @@ export class MessagingController {
     const releaseCount = buffer.releaseCount + 1;
     this.assistantStreamBuffers.set(bufferKey, {
       ...buffer,
-      lastEmittedAt: now,
       releaseCount,
       nextReleaseAt: now + coalesceBackoffMs(releaseCount),
     });
@@ -3396,7 +3393,6 @@ export class MessagingController {
       this.assistantStreamBuffers.set(bufferKey, {
         ...buffer,
         delta: "",
-        lastEmittedAt: this.now(),
         sequence: buffer.sequence + 1,
         text: finalText,
       });
@@ -3437,7 +3433,6 @@ export class MessagingController {
       this.assistantStreamBuffers.set(bufferKey, {
         ...buffer,
         delta: "",
-        lastEmittedAt: this.now(),
         sequence: buffer.sequence + 1,
         text,
       });
@@ -3567,7 +3562,6 @@ export class MessagingController {
     const current = this.assistantStreamBuffers.get(bufferKey);
     this.assistantStreamBuffers.set(bufferKey, {
       ...(current && current.sequence >= buffer.sequence ? current : buffer),
-      lastEmittedAt: now,
       surface,
     });
     return result;
