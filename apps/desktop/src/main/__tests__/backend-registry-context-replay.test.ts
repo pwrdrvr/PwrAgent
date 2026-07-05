@@ -182,6 +182,69 @@ describe("foldObservedContextReplay", () => {
     });
   });
 
+  it("does not flip a cache-hit request to cold on a large fresh payload", () => {
+    // A tool loop reads big files: the request resubmits a fully-cached 100k
+    // context PLUS ~60k of fresh command output. The fresh tokens dilute the
+    // cache fraction of the whole input below 90%, but the REPLAYED portion was
+    // cache-served — this is a hot replay plus fresh content, not a cold one.
+    const first = foldObservedContextReplay({
+      cursor: undefined,
+      tally: undefined,
+      tokenUsage: {
+        total: { inputTokens: 100_000, cachedInputTokens: 95_000 },
+        last: {
+          inputTokens: 100_000,
+          cachedInputTokens: 95_000,
+          outputTokens: 500,
+        },
+      },
+    });
+    expect(first.tally).toMatchObject({ hotReplayCount: 1, coldReplayCount: 0 });
+
+    const second = foldObservedContextReplay({
+      cursor: first.cursor,
+      tally: first.tally,
+      tokenUsage: {
+        total: { inputTokens: 260_000, cachedInputTokens: 195_000 },
+        last: { inputTokens: 160_000, cachedInputTokens: 100_000 },
+      },
+    });
+    // cached (100,000) vs whole input (160,000) is only 62.5% — but vs the
+    // replayed portion (prior context 100,500) it is ~99.5%: hot.
+    expect(second.tally).toMatchObject({
+      coldReplayCount: 0,
+      hotReplayCount: 2,
+      hotReplayCachedTokens: 195_000,
+    });
+  });
+
+  it("does not count a mostly-fresh request whose replayed context is tiny", () => {
+    // A thread starts with a small 5k context; the next request carries 55k of
+    // fresh payload. The whole input clears the 32k floor, but the replayed
+    // portion (5k) does not — it is not a context replay.
+    const first = foldObservedContextReplay({
+      cursor: undefined,
+      tally: undefined,
+      tokenUsage: {
+        total: { inputTokens: 5_000, cachedInputTokens: 0 },
+        last: { inputTokens: 5_000, cachedInputTokens: 0 },
+      },
+    });
+    expect(first.tally).toBeUndefined();
+
+    const second = foldObservedContextReplay({
+      cursor: first.cursor,
+      tally: first.tally,
+      tokenUsage: {
+        total: { inputTokens: 65_000, cachedInputTokens: 4_800 },
+        last: { inputTokens: 60_000, cachedInputTokens: 4_800 },
+      },
+    });
+    expect(second.tally).toBeUndefined();
+    // Cursor still advances: the fresh content becomes the next context.
+    expect(second.cursor).toMatchObject({ cumulativeInputTokens: 65_000 });
+  });
+
   it("attributes the full uncached amount when no prior context is known", () => {
     // First observed request after app start: no prior snapshot, so cold
     // attribution falls back to the request's full uncached amount.

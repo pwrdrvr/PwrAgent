@@ -142,6 +142,18 @@ update, it already scopes state per active turn, and it can wipe on turn end.
   request after app start), it falls back to the full uncached amount. Hot
   attribution stays `min(cached, last.input)` — cached tokens are
   previously-seen content by definition, so no fresh content leaks in.
+  **Refined again same day (classification):** a heavy tool-loop turn (16
+  requests, 2 misclassified) showed that classifying against the WHOLE input
+  flips a cache-hit request to "cold" whenever a large fresh payload (big file
+  reads / command output) dilutes the cached fraction below 90%, even though
+  the replayed context itself was fully cache-served. Everything now measures
+  against the replayed portion `min(last.input, priorContextTokens)`: the
+  hot/cold threshold (`cached >= 0.9 × replayed`), the size floor
+  (`replayed >= 32k`, so a mostly-fresh request with a tiny prior context is
+  not a replay at all), and cold attribution (`min(uncached, replayed)`).
+  Fresh tokens (`last.input − replayed`) are excluded from replay logic
+  entirely — the protocol has no explicit "fresh tokens" field, but it is
+  derivable as input growth over the prior context snapshot.
 
 > Open question O1 (resolve during implementation): do we report cold/hot as a
 > **count of requests** in each class (recommended — it is what "replays" means),

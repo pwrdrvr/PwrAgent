@@ -2827,9 +2827,21 @@ export function foldObservedContextReplay(params: {
     cumulativeInputTokens: total.inputTokens,
     lastContextTokens: lastInput + lastOutput,
   };
-  if (lastInput < MIN_OBSERVED_CONTEXT_REPLAY_INPUT_TOKENS) {
-    // A new request, but too small to be a full context replay. Still advance
-    // the cursor — the context grew, and the next request replays it.
+  // The replayed portion of this request: everything up to the prior context
+  // size existed before and was resubmitted; the remainder is fresh prompt/tool
+  // content sent WITH the request (large file reads, command output). Fresh
+  // content is excluded from all replay logic — it is paid for regardless of
+  // caching. With no prior snapshot (first observed request after app start),
+  // treat the whole input as replayed.
+  const priorContextTokens = params.cursor?.lastContextTokens;
+  const replayedTokens =
+    typeof priorContextTokens === "number" && priorContextTokens > 0
+      ? Math.min(lastInput, priorContextTokens)
+      : lastInput;
+  if (replayedTokens < MIN_OBSERVED_CONTEXT_REPLAY_INPUT_TOKENS) {
+    // The replayed context is too small to be a full context replay (the
+    // request itself may still be large from fresh payload). Still advance the
+    // cursor — the context grew, and the next request replays it.
     return { cursor: nextCursor, tally: params.tally };
   }
 
@@ -2846,16 +2858,16 @@ export function foldObservedContextReplay(params: {
         hotReplayCachedTokens: 0,
         hotReplayCount: 0,
       };
-  if (cached >= OBSERVED_HOT_CACHE_FRACTION * lastInput) {
+  // Classify against the REPLAYED portion, not the whole input: a request
+  // carrying a large fresh payload has a diluted cache fraction even when its
+  // replayed context was fully cache-served — that is a hot replay plus fresh
+  // content, not a cold replay.
+  if (cached >= OBSERVED_HOT_CACHE_FRACTION * replayedTokens) {
     tally.hotReplayCount += 1;
     tally.hotReplayCachedTokens += cached;
   } else {
-    const priorContextTokens = params.cursor?.lastContextTokens;
     tally.coldReplayCount += 1;
-    tally.coldReplayUncachedTokens +=
-      typeof priorContextTokens === "number" && priorContextTokens > 0
-        ? Math.min(uncached, priorContextTokens)
-        : uncached;
+    tally.coldReplayUncachedTokens += Math.min(uncached, replayedTokens);
   }
   return { cursor: nextCursor, tally };
 }
