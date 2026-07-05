@@ -86,6 +86,34 @@ describe("StateDb", () => {
     ]);
   });
 
+  it("carries observed context-replay columns on both the turn and the line", () => {
+    // The tally's source of truth is thread_usage_turns. The line columns are a
+    // DEPRECATED dual-write (issue #947) kept so older locally-run builds — which
+    // read the tally off the usage line — keep working against a shared profile
+    // DB. Every build must find the columns it expects on a fresh DB.
+    const observedColumns = [
+      "observed_cold_replay_count",
+      "observed_cold_replay_uncached_tokens",
+      "observed_hot_replay_cached_tokens",
+      "observed_hot_replay_count",
+    ];
+    const turnColumns = (
+      stateDb.raw
+        .prepare("PRAGMA table_info(thread_usage_turns)")
+        .all() as Array<{ name: string }>
+    ).map((column) => column.name);
+    const lineColumns = (
+      stateDb.raw
+        .prepare("PRAGMA table_info(thread_usage_lines)")
+        .all() as Array<{ name: string }>
+    ).map((column) => column.name);
+
+    for (const column of observedColumns) {
+      expect(turnColumns).toContain(column);
+      expect(lineColumns).toContain(column);
+    }
+  });
+
   it("sets explicit WAL checkpoint and journal size bounds", () => {
     expect(stateDb.raw.pragma("journal_mode", { simple: true })).toBe("wal");
     expect(stateDb.raw.pragma("wal_autocheckpoint", { simple: true })).toBe(
@@ -901,11 +929,14 @@ describe("StateDb", () => {
     stateDb.close();
 
     const dbPath = path.join(tempDir, "newer-version-thread-search-fts.db");
-    createLegacyThreadSearchFtsDb(dbPath, 24);
+    const newerVersion = CURRENT_STATE_DB_USER_VERSION + 1;
+    createLegacyThreadSearchFtsDb(dbPath, newerVersion);
 
     stateDb = StateDb.open(dbPath);
 
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(24);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      newerVersion,
+    );
     expect(columnNames("thread_search_fts")).toContain("thread_id");
   });
 });

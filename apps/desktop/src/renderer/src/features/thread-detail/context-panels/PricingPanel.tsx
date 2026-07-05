@@ -11,7 +11,6 @@ import { formatTimestamp } from "./context-rail-shared";
 import { formatTokenCount } from "./subagent-format";
 
 type PricingPanelProps = {
-  activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
@@ -33,9 +32,6 @@ const DEFAULT_PRICING_DISPLAY_OPTIONS: PricingDisplayOptions = {
   codexCredits: false,
   usd: true,
 };
-// Below this size, uncached input is often the new request/tool payload rather than a full context replay.
-const MIN_CONTEXT_REPLAY_INPUT_TOKENS = 32_000;
-const MAX_ESTIMATED_CONTEXT_REPLAY_TOKENS = 250_000;
 
 export function PricingPanel(props: PricingPanelProps) {
   const summaries = props.pricing?.summaries ?? [];
@@ -134,7 +130,6 @@ export function PricingPanel(props: PricingPanelProps) {
               lineTotals,
             });
             const contextReplayLines = formatContextReplayEstimate({
-              activeTurnId: props.activeTurnId,
               displayOptions,
               line,
             });
@@ -641,154 +636,89 @@ function formatUsageLineRunningTotal(params: {
 }
 
 function formatContextReplayEstimate(params: {
-  activeTurnId?: string;
   displayOptions: PricingDisplayOptions;
   line: PricingUsageLine;
 }): string[] {
+  // Context replays are a per-turn concept; only turn-scoped lines carry the
+  // observed tally. Guarding on scope keeps monitor/total/backfill rows from
+  // ever rendering replay estimates even if they somehow carried the fields.
   if (
-    !isActiveLiveTurnUsageLine({
-      activeTurnId: params.activeTurnId,
-      line: params.line,
-    }) ||
+    params.line.scope !== "turn" ||
     isEstimatedUsageGap(params.line) ||
     isHistoricalUsageSummary(params.line)
   ) {
     return [];
   }
 
-  const unboundedColdContextReplays = estimateContextReplayBucket(
-    params.line.uncachedInputTokens,
-  );
-  const hotContextReplays = estimateContextReplayBucket(
-    params.line.cachedInputTokens,
-    unboundedColdContextReplays?.averageTokens,
-  );
-  const coldContextReplays = refineColdContextReplayBucket({
-    bucket: unboundedColdContextReplays,
-    hotBucket: hotContextReplays,
-    line: params.line,
-  });
   const lines: string[] = [];
-  if (coldContextReplays) {
-    lines.push(
-      formatContextReplayBucketLine({
-        bucket: coldContextReplays,
-        displayOptions: params.displayOptions,
-        label: "cold",
-        line: params.line,
-        tokenKind: "uncached",
-      }),
-    );
-  }
-  if (hotContextReplays) {
-    lines.push(
-      formatContextReplayBucketLine({
-        bucket: hotContextReplays,
-        displayOptions: params.displayOptions,
-        label: "hot",
-        line: params.line,
-        tokenKind: "cached",
-      }),
-    );
+  for (const label of ["cold", "hot"] as const) {
+    const summary = readObservedReplaySummary(params.line, label);
+    if (summary) {
+      lines.push(
+        formatObservedReplayLine({
+          displayOptions: params.displayOptions,
+          line: params.line,
+          summary,
+        }),
+      );
+    }
   }
   return lines;
 }
 
-type EstimatedContextReplayBucket = {
-  averageTokens: number;
+type ObservedReplaySummary = {
   count: number;
-  totalTokens: number;
+  label: "cold" | "hot";
+  tokenKind: "cached" | "uncached";
+  tokens: number;
 };
 
-function estimateContextReplayBucket(
-  totalTokens: number,
-  referenceReplayTokens?: number,
-): EstimatedContextReplayBucket | undefined {
-  if (totalTokens < MIN_CONTEXT_REPLAY_INPUT_TOKENS) {
+// Replay tallies come straight from the main-process accumulator on the usage
+// line — one replay per model request in the turn, classified hot/cold from
+// that request's cache split. Absent fields mean the turn was not observed
+// live, so we render nothing rather than inventing a bucket estimate.
+function readObservedReplaySummary(
+  line: PricingUsageLine,
+  label: "cold" | "hot",
+): ObservedReplaySummary | undefined {
+  const count =
+    label === "cold" ? line.observedColdReplayCount : line.observedHotReplayCount;
+  if (typeof count !== "number" || count <= 0) {
     return undefined;
   }
-  const replaySize =
-    referenceReplayTokens && referenceReplayTokens >= MIN_CONTEXT_REPLAY_INPUT_TOKENS
-      ? Math.min(referenceReplayTokens, MAX_ESTIMATED_CONTEXT_REPLAY_TOKENS)
-      : MAX_ESTIMATED_CONTEXT_REPLAY_TOKENS;
-  const count = Math.max(1, Math.ceil(totalTokens / replaySize));
+  const tokens =
+    label === "cold"
+      ? line.observedColdReplayUncachedTokens ?? 0
+      : line.observedHotReplayCachedTokens ?? 0;
   return {
-    averageTokens: Math.round(totalTokens / count),
     count,
-    totalTokens,
+    label,
+    tokenKind: label === "cold" ? "uncached" : "cached",
+    tokens,
   };
 }
 
-function refineColdContextReplayBucket(params: {
-  bucket: EstimatedContextReplayBucket | undefined;
-  hotBucket: EstimatedContextReplayBucket | undefined;
-  line: PricingUsageLine;
-}): EstimatedContextReplayBucket | undefined {
-  if (!params.bucket) {
-    return undefined;
-  }
-  if (
-    !isCumulativeLiveTurnUsageLine(params.line) ||
-    !params.hotBucket ||
-    params.bucket.count !== 1
-  ) {
-    return params.bucket;
-  }
-
-  const replayTokens = Math.min(
-    params.bucket.totalTokens,
-    params.hotBucket.averageTokens,
-  );
-  return {
-    averageTokens: replayTokens,
-    count: 1,
-    totalTokens: replayTokens,
-  };
-}
-
-function isCumulativeLiveTurnUsageLine(line: PricingUsageLine): boolean {
-  return (
-    line.scope === "turn" &&
-    line.source === "live" &&
-    hasCumulativeTokenBreakdown(line)
-  );
-}
-
-function isActiveLiveTurnUsageLine(params: {
-  activeTurnId?: string;
-  line: PricingUsageLine;
-}): boolean {
-  return (
-    params.line.scope === "turn" &&
-    params.line.source === "live" &&
-    Boolean(params.activeTurnId) &&
-    params.line.turnId === params.activeTurnId
-  );
-}
-
-function formatContextReplayBucketLine(params: {
-  bucket: EstimatedContextReplayBucket;
+function formatObservedReplayLine(params: {
   displayOptions: PricingDisplayOptions;
-  label: "cold" | "hot";
   line: PricingUsageLine;
-  tokenKind: "cached" | "uncached";
+  summary: ObservedReplaySummary;
 }): string {
+  const { count, tokenKind, tokens } = params.summary;
   const replayTokens =
-    params.bucket.count > 1
-      ? `~${formatTokenCount(params.bucket.averageTokens)} ${params.tokenKind} avg; ${formatTokenCount(
-          params.bucket.totalTokens,
-        )} ${params.tokenKind} bucket`
-      : `${formatTokenCount(params.bucket.totalTokens)} ${params.tokenKind}`;
-  return `Estimated ${params.label} context replays: ${params.bucket.count.toLocaleString()} (${replayTokens}${formatReplayCostEstimates(
+    count > 1
+      ? `~${formatTokenCount(Math.round(tokens / count))} ${tokenKind} avg; ${formatTokenCount(
+          tokens,
+        )} ${tokenKind} bucket`
+      : `${formatTokenCount(tokens)} ${tokenKind}`;
+  return `Estimated ${params.summary.label} context replays: ${count.toLocaleString()} (${replayTokens}${formatReplayCostEstimates(
     params,
   )})`;
 }
 
 function formatReplayCostEstimates(params: {
-  bucket: EstimatedContextReplayBucket;
   displayOptions: PricingDisplayOptions;
   line: PricingUsageLine;
-  tokenKind: "cached" | "uncached";
+  summary: ObservedReplaySummary;
 }): string {
   const estimates: string[] = [];
   if (params.displayOptions.usd) {
@@ -798,11 +728,7 @@ function formatReplayCostEstimates(params: {
     }
   }
   if (params.displayOptions.codexCredits) {
-    const credits = estimateContextReplayCodexCredits({
-      bucket: params.bucket,
-      line: params.line,
-      tokenKind: params.tokenKind,
-    });
+    const credits = estimateContextReplayCodexCredits(params);
     if (credits !== undefined && credits > 0) {
       estimates.push(formatCodexCredits(credits));
     }
@@ -813,43 +739,50 @@ function formatReplayCostEstimates(params: {
   return ` · ${estimates.join(" · ")}`;
 }
 
+// Price the observed replay tokens as a fraction of the turn line's already-
+// priced cached/uncached cost. The line's cached/uncached totals are the
+// per-request sums across the turn, so the observed replay tokens are always a
+// subset — the ratio attributes the share of the turn's input cost the replays
+// account for.
 function estimateReplayCostMicros(params: {
-  bucket: EstimatedContextReplayBucket;
   line: PricingUsageLine;
-  tokenKind: "cached" | "uncached";
+  summary: ObservedReplaySummary;
 }): number {
   const totalTokens =
-    params.tokenKind === "cached"
+    params.summary.tokenKind === "cached"
       ? params.line.cachedInputTokens
       : params.line.uncachedInputTokens;
   const totalMicros =
-    params.tokenKind === "cached"
+    params.summary.tokenKind === "cached"
       ? params.line.cachedInputCostMicros
       : params.line.uncachedInputCostMicros;
-  if (totalTokens <= 0 || params.bucket.totalTokens >= totalTokens) {
+  if (totalTokens <= 0) {
+    return 0;
+  }
+  if (params.summary.tokens >= totalTokens) {
     return totalMicros;
   }
-  return Math.round((totalMicros * params.bucket.totalTokens) / totalTokens);
+  return Math.round((totalMicros * params.summary.tokens) / totalTokens);
 }
 
 function estimateContextReplayCodexCredits(params: {
-  bucket: EstimatedContextReplayBucket;
   line: PricingUsageLine;
-  tokenKind: "cached" | "uncached";
+  summary: ObservedReplaySummary;
 }): number | undefined {
   if (params.line.provider !== "openai") {
     return undefined;
   }
   const estimate = estimateOpenAiCodexCreditUsage({
     at: params.line.createdAt,
-    cachedInputTokens: params.tokenKind === "cached" ? params.bucket.totalTokens : 0,
+    cachedInputTokens:
+      params.summary.tokenKind === "cached" ? params.summary.tokens : 0,
     fastMode: params.line.fastMode,
     model: params.line.model,
     outputTokens: 0,
     reasoningOutputTokens: 0,
     serviceTier: params.line.serviceTier,
     uncachedInputTokens:
-      params.tokenKind === "uncached" ? params.bucket.totalTokens : 0,
+      params.summary.tokenKind === "uncached" ? params.summary.tokens : 0,
   });
   return estimate?.totalCreditMicros;
 }

@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 23;
+export const CURRENT_STATE_DB_USER_VERSION = 25;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -536,6 +536,10 @@ CREATE TABLE IF NOT EXISTS thread_usage_turns (
   started_at          INTEGER,
   completed_at        INTEGER,
   observed_at         INTEGER NOT NULL,
+  observed_cold_replay_count   INTEGER,
+  observed_cold_replay_uncached_tokens INTEGER,
+  observed_hot_replay_cached_tokens    INTEGER,
+  observed_hot_replay_count    INTEGER,
   updated_at          INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_thread
@@ -586,6 +590,15 @@ CREATE TABLE IF NOT EXISTS thread_usage_lines (
   output_cost_micros         INTEGER NOT NULL,
   total_cost_micros          INTEGER NOT NULL,
   cumulative_total_cost_micros INTEGER,
+  -- DEPRECATED (see issue #947): the observed context-replay tally now lives on
+  -- thread_usage_turns. These columns are dual-written only so older locally-run
+  -- builds (which read the tally off the usage line) keep working against a
+  -- shared profile DB during the transition. Remove after the new build is
+  -- stable (~1 week post-merge).
+  observed_cold_replay_count   INTEGER,
+  observed_cold_replay_uncached_tokens INTEGER,
+  observed_hot_replay_cached_tokens    INTEGER,
+  observed_hot_replay_count    INTEGER,
   updated_at                 INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_thread
@@ -819,6 +832,28 @@ export class StateDb {
         // the same column/index also live in AUTOMATION_SCHEMA so
         // re-instantiated dbs converge.
         ensureAutomationRunSourceEventKey(db);
+        db.pragma("user_version = 23");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 24) {
+      db.transaction(() => {
+        // Observed context-replay tallies on the usage line. DEPRECATED (see
+        // issue #947): the tally has since moved to thread_usage_turns (v25), but
+        // these columns are still dual-written during the transition so older
+        // locally-run builds keep working. Additive; the same columns also live
+        // in THREAD_USAGE_PRICING_SCHEMA so re-instantiated dbs converge.
+        ensureThreadUsageObservedReplayColumns(db);
+        db.pragma("user_version = 24");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 25) {
+      db.transaction(() => {
+        // Relocate the observed context-replay tally onto thread_usage_turns —
+        // the per-turn record hydration refreshes via COALESCE, immune to the
+        // usage *line* supersession lifecycle. Additive columns that also live in
+        // THREAD_USAGE_PRICING_SCHEMA; the ALTERs are guarded by tableColumnExists
+        // so a fresh db (schema already carries them) no-ops.
+        ensureThreadUsageTurnObservedReplayColumns(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1044,6 +1079,10 @@ CREATE TABLE IF NOT EXISTS thread_usage_turns (
   started_at          INTEGER,
   completed_at        INTEGER,
   observed_at         INTEGER NOT NULL,
+  observed_cold_replay_count   INTEGER,
+  observed_cold_replay_uncached_tokens INTEGER,
+  observed_hot_replay_cached_tokens    INTEGER,
+  observed_hot_replay_count    INTEGER,
   updated_at          INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_thread
@@ -1216,6 +1255,71 @@ function ensureThreadUsagePricingCumulativeColumns(db: BetterSqlite3.Database): 
   ];
   for (const column of columns) {
     if (!tableColumnExists(db, "thread_usage_lines", column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
+// DEPRECATED (see issue #947): observed context-replay tally on the usage line.
+// Kept only to dual-write the columns so older locally-run builds keep working
+// during the transition to thread_usage_turns. Remove with the dual-write.
+function ensureThreadUsageObservedReplayColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "observed_cold_replay_count",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_cold_replay_count INTEGER",
+    },
+    {
+      name: "observed_cold_replay_uncached_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_cold_replay_uncached_tokens INTEGER",
+    },
+    {
+      name: "observed_hot_replay_cached_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_hot_replay_cached_tokens INTEGER",
+    },
+    {
+      name: "observed_hot_replay_count",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_hot_replay_count INTEGER",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_lines", column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
+function ensureThreadUsageTurnObservedReplayColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_turns")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "observed_cold_replay_count",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN observed_cold_replay_count INTEGER",
+    },
+    {
+      name: "observed_cold_replay_uncached_tokens",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN observed_cold_replay_uncached_tokens INTEGER",
+    },
+    {
+      name: "observed_hot_replay_cached_tokens",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN observed_hot_replay_cached_tokens INTEGER",
+    },
+    {
+      name: "observed_hot_replay_count",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN observed_hot_replay_count INTEGER",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_turns", column.name)) {
       db.exec(column.sql);
     }
   }
@@ -1673,7 +1777,8 @@ function tableColumnExists(
     | "pr_status_cache"
     | "thread_pricing_summaries"
     | "thread_search_fts"
-    | "thread_usage_lines",
+    | "thread_usage_lines"
+    | "thread_usage_turns",
   columnName: string,
 ): boolean {
   const rows = readTableInfo(db, tableName);
@@ -1689,7 +1794,8 @@ function readTableInfo(
     | "pr_status_cache"
     | "thread_pricing_summaries"
     | "thread_search_fts"
-    | "thread_usage_lines",
+    | "thread_usage_lines"
+    | "thread_usage_turns",
 ): Array<{ name: string }> {
   switch (tableName) {
     case "app_runtime_instances":
@@ -1718,6 +1824,10 @@ function readTableInfo(
       }>;
     case "thread_usage_lines":
       return db.prepare("PRAGMA table_info(thread_usage_lines)").all() as Array<{
+        name: string;
+      }>;
+    case "thread_usage_turns":
+      return db.prepare("PRAGMA table_info(thread_usage_turns)").all() as Array<{
         name: string;
       }>;
   }

@@ -666,6 +666,10 @@ export class SqliteOverlayStore {
             started_at,
             completed_at,
             observed_at,
+            observed_cold_replay_count,
+            observed_cold_replay_uncached_tokens,
+            observed_hot_replay_cached_tokens,
+            observed_hot_replay_count,
             updated_at
           ) VALUES (
             @usageTurnId,
@@ -683,6 +687,10 @@ export class SqliteOverlayStore {
             @startedAt,
             @completedAt,
             @createdAt,
+            @observedColdReplayCount,
+            @observedColdReplayUncachedTokens,
+            @observedHotReplayCachedTokens,
+            @observedHotReplayCount,
             @updatedAt
           )
           ON CONFLICT(usage_turn_id) DO UPDATE SET
@@ -708,6 +716,14 @@ export class SqliteOverlayStore {
             started_at = COALESCE(thread_usage_turns.started_at, excluded.started_at),
             completed_at = excluded.completed_at,
             observed_at = MIN(thread_usage_turns.observed_at, excluded.observed_at),
+            -- Observation-derived tallies are absent on transcript-hydration
+            -- lines (the Codex transcript can't reproduce them). COALESCE keeps a
+            -- previously-observed tally when a hydration line (NULL params) later
+            -- refreshes the turn metadata, so the count survives thread re-read.
+            observed_cold_replay_count = COALESCE(excluded.observed_cold_replay_count, thread_usage_turns.observed_cold_replay_count),
+            observed_cold_replay_uncached_tokens = COALESCE(excluded.observed_cold_replay_uncached_tokens, thread_usage_turns.observed_cold_replay_uncached_tokens),
+            observed_hot_replay_cached_tokens = COALESCE(excluded.observed_hot_replay_cached_tokens, thread_usage_turns.observed_hot_replay_cached_tokens),
+            observed_hot_replay_count = COALESCE(excluded.observed_hot_replay_count, thread_usage_turns.observed_hot_replay_count),
             updated_at = excluded.updated_at`,
         )
         .run(toThreadUsageLineRowParams(line));
@@ -757,6 +773,10 @@ export class SqliteOverlayStore {
             output_cost_micros,
             total_cost_micros,
             cumulative_total_cost_micros,
+            observed_cold_replay_count,
+            observed_cold_replay_uncached_tokens,
+            observed_hot_replay_cached_tokens,
+            observed_hot_replay_count,
             updated_at
           ) VALUES (
             @usageLineId,
@@ -801,6 +821,10 @@ export class SqliteOverlayStore {
             @outputCostMicros,
             @totalCostMicros,
             @cumulativeTotalCostMicros,
+            @observedColdReplayCount,
+            @observedColdReplayUncachedTokens,
+            @observedHotReplayCachedTokens,
+            @observedHotReplayCount,
             @updatedAt
           )
           ON CONFLICT(usage_line_id) DO UPDATE SET
@@ -845,6 +869,14 @@ export class SqliteOverlayStore {
             output_cost_micros = excluded.output_cost_micros,
             total_cost_micros = excluded.total_cost_micros,
             cumulative_total_cost_micros = excluded.cumulative_total_cost_micros,
+            -- DEPRECATED (see issue #947): dual-written for older builds; the new
+            -- build reads the tally from thread_usage_turns. COALESCE mirrors the
+            -- turn-record preserve so a tally-less re-upsert of the same line
+            -- (e.g. accumulator reset) does not wipe the persisted values.
+            observed_cold_replay_count = COALESCE(excluded.observed_cold_replay_count, thread_usage_lines.observed_cold_replay_count),
+            observed_cold_replay_uncached_tokens = COALESCE(excluded.observed_cold_replay_uncached_tokens, thread_usage_lines.observed_cold_replay_uncached_tokens),
+            observed_hot_replay_cached_tokens = COALESCE(excluded.observed_hot_replay_cached_tokens, thread_usage_lines.observed_hot_replay_cached_tokens),
+            observed_hot_replay_count = COALESCE(excluded.observed_hot_replay_count, thread_usage_lines.observed_hot_replay_count),
             updated_at = excluded.updated_at`,
         )
         .run(toThreadUsageLineRowParams(line));
@@ -918,10 +950,85 @@ export class SqliteOverlayStore {
       )
       .all(params.backend, params.threadId) as ThreadPricingSummaryRow[];
 
+    const lines = lineRows.map(threadUsageLineFromRow);
+    this.attachObservedReplayTalliesSync(params.backend, params.threadId, lines);
+
     return {
-      lines: lineRows.map(threadUsageLineFromRow),
+      lines,
       summaries: summaryRows.map(threadPricingSummaryFromRow),
     };
+  }
+
+  // The observed context-replay tally lives on the per-turn record
+  // (thread_usage_turns), not on the usage line — the turn record is refreshed
+  // via COALESCE and is immune to the line supersession lifecycle, so a
+  // transcript-hydration line can supersede the live line without dropping the
+  // tally. Attach it back onto the displayed line at read time so the renderer
+  // keeps reading the observed fields off ThreadUsageLineRecord. Deliberately
+  // NOT summed into pricing summaries.
+  private attachObservedReplayTalliesSync(
+    backend: string,
+    threadId: string,
+    lines: ThreadUsageLineRecord[],
+  ): void {
+    if (lines.length === 0) {
+      return;
+    }
+    const turnRows = this.stateDb.raw
+      .prepare(
+        `SELECT usage_turn_id,
+                observed_cold_replay_count,
+                observed_cold_replay_uncached_tokens,
+                observed_hot_replay_cached_tokens,
+                observed_hot_replay_count
+           FROM thread_usage_turns
+          WHERE backend = ?
+            AND thread_id = ?
+          UNION ALL
+         SELECT usage_turn_id,
+                observed_cold_replay_count,
+                observed_cold_replay_uncached_tokens,
+                observed_hot_replay_cached_tokens,
+                observed_hot_replay_count
+           FROM thread_usage_turns
+          WHERE backend = ?
+            AND parent_thread_id = ?
+            AND thread_id != ?`,
+      )
+      .all(backend, threadId, backend, threadId, threadId) as Array<{
+      usage_turn_id: string;
+      observed_cold_replay_count: number | null;
+      observed_cold_replay_uncached_tokens: number | null;
+      observed_hot_replay_cached_tokens: number | null;
+      observed_hot_replay_count: number | null;
+    }>;
+    if (turnRows.length === 0) {
+      return;
+    }
+    const byTurnId = new Map(turnRows.map((row) => [row.usage_turn_id, row]));
+    for (const line of lines) {
+      if (!line.usageTurnId) {
+        continue;
+      }
+      const turn = byTurnId.get(line.usageTurnId);
+      if (!turn) {
+        continue;
+      }
+      if (turn.observed_cold_replay_count !== null) {
+        line.observedColdReplayCount = turn.observed_cold_replay_count;
+      }
+      if (turn.observed_cold_replay_uncached_tokens !== null) {
+        line.observedColdReplayUncachedTokens =
+          turn.observed_cold_replay_uncached_tokens;
+      }
+      if (turn.observed_hot_replay_cached_tokens !== null) {
+        line.observedHotReplayCachedTokens =
+          turn.observed_hot_replay_cached_tokens;
+      }
+      if (turn.observed_hot_replay_count !== null) {
+        line.observedHotReplayCount = turn.observed_hot_replay_count;
+      }
+    }
   }
 
   async upsertThreadSubAgent(params: {
@@ -2599,6 +2706,10 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     fastMode: typeof line.fastMode === "boolean" ? (line.fastMode ? 1 : 0) : null,
     inputTokens: line.inputTokens,
     model: line.model ?? null,
+    observedColdReplayCount: line.observedColdReplayCount ?? null,
+    observedColdReplayUncachedTokens: line.observedColdReplayUncachedTokens ?? null,
+    observedHotReplayCachedTokens: line.observedHotReplayCachedTokens ?? null,
+    observedHotReplayCount: line.observedHotReplayCount ?? null,
     outputCostMicros: line.outputCostMicros,
     outputTokens: line.outputTokens,
     parentThreadId: line.parentThreadId ?? null,

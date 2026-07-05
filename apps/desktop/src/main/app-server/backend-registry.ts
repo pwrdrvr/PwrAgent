@@ -2742,6 +2742,159 @@ type TaskMonitorTokenUsageRecords = {
   totalUsage?: TaskMonitorTokenUsageBreakdown;
 };
 
+// Running tally of observed context replays within one live turn. Each model
+// request inside a turn resubmits the working context (one "replay"); the
+// protocol reports it as a fresh `last` breakdown while `total.inputTokens`
+// grows by that request's input. A replay is "hot" when its input was
+// predominantly cache-served, else "cold" (cache miss).
+export type ObservedContextReplayTally = {
+  coldReplayCount: number;
+  coldReplayUncachedTokens: number;
+  hotReplayCachedTokens: number;
+  hotReplayCount: number;
+};
+
+// Below this per-request input size, the request is the new prompt/tool payload
+// rather than a full context replay — do not count it. Mirrors the renderer's
+// former MIN_CONTEXT_REPLAY_INPUT_TOKENS floor.
+const MIN_OBSERVED_CONTEXT_REPLAY_INPUT_TOKENS = 32_000;
+// A replay counts as "hot" when at least this fraction of its input was cached.
+const OBSERVED_HOT_CACHE_FRACTION = 0.9;
+
+// Per-thread replay-observation cursor.
+export type ObservedContextReplayCursor = {
+  // High-water mark of the session's cumulative `total.inputTokens`. A replay is
+  // counted only when this grows, which makes duplicate re-emissions and a
+  // forked thread's inherited baseline no-ops.
+  cumulativeInputTokens: number;
+  // Approximate working-context size after the most recent observed request
+  // (its input plus its output). Used to cap COLD replay attribution: a cold
+  // request's uncached tokens include both the replayed context AND any fresh
+  // prompt/tool content submitted with it — only the portion up to the prior
+  // context size is replay overhead; the rest would have been paid regardless.
+  // Absent until the thread's first observed request (e.g. right after app
+  // start), in which case cold attribution falls back to the full uncached.
+  lastContextTokens?: number;
+};
+
+// Pure core of the context-replay accumulator: fold one token-usage update into
+// a running per-turn tally, given the per-thread cursor. A replay is counted
+// only when the cumulative input grows past the cursor, the growing request
+// meets the replay-size floor, and it is classified hot/cold by its own cache
+// split. Cold token attribution is the replayed portion minus the cache-served
+// slice (see ObservedContextReplayCursor.lastContextTokens); hot attribution is
+// the cached tokens themselves, which are previously-seen content by
+// definition. Returns fresh objects whenever state advances; inputs are never
+// mutated.
+export function foldObservedContextReplay(params: {
+  cursor: ObservedContextReplayCursor | undefined;
+  tally: ObservedContextReplayTally | undefined;
+  tokenUsage: unknown;
+}): {
+  cursor: ObservedContextReplayCursor | undefined;
+  tally: ObservedContextReplayTally | undefined;
+} {
+  const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
+  const total = records?.totalUsage;
+  const last = records?.latestUsage;
+  if (
+    !total ||
+    typeof total.inputTokens !== "number" ||
+    !last ||
+    typeof last.inputTokens !== "number"
+  ) {
+    return { cursor: params.cursor, tally: params.tally };
+  }
+
+  const lastInput = last.inputTokens;
+  const lastOutput =
+    typeof last.outputTokens === "number" ? Math.max(0, last.outputTokens) : 0;
+  const cumulativeInputTokens =
+    params.cursor?.cumulativeInputTokens ??
+    Math.max(0, total.inputTokens - lastInput);
+  if (total.inputTokens <= cumulativeInputTokens) {
+    // Duplicate re-emission or no new request — cumulative input did not grow.
+    // On an exact match this is the same already-folded request; refresh the
+    // context snapshot in case this re-emission books output the first
+    // emission had not seen yet (input-first emission cadence). A stale
+    // re-emission of an older request (total below the cursor) is left alone.
+    if (params.cursor && total.inputTokens === cumulativeInputTokens) {
+      const refreshedContextTokens = Math.max(
+        params.cursor.lastContextTokens ?? 0,
+        lastInput + lastOutput,
+      );
+      return {
+        cursor: {
+          cumulativeInputTokens,
+          ...(refreshedContextTokens > 0
+            ? { lastContextTokens: refreshedContextTokens }
+            : {}),
+        },
+        tally: params.tally,
+      };
+    }
+    return {
+      cursor: params.cursor ?? { cumulativeInputTokens },
+      tally: params.tally,
+    };
+  }
+  const nextCursor: ObservedContextReplayCursor = {
+    cumulativeInputTokens: total.inputTokens,
+    lastContextTokens: lastInput + lastOutput,
+  };
+  // The replayed portion of this request: everything up to the prior context
+  // size existed before and was resubmitted; the remainder is fresh prompt/tool
+  // content sent WITH the request (large file reads, command output). Fresh
+  // content is excluded from all replay logic — it is paid for regardless of
+  // caching. With no prior snapshot (first observed request after app start),
+  // treat the whole input as replayed.
+  const priorContextTokens = params.cursor?.lastContextTokens;
+  const replayedTokens =
+    typeof priorContextTokens === "number" && priorContextTokens > 0
+      ? Math.min(lastInput, priorContextTokens)
+      : lastInput;
+  if (replayedTokens < MIN_OBSERVED_CONTEXT_REPLAY_INPUT_TOKENS) {
+    // The replayed context is too small to be a full context replay (the
+    // request itself may still be large from fresh payload). Still advance the
+    // cursor — the context grew, and the next request replays it.
+    return { cursor: nextCursor, tally: params.tally };
+  }
+
+  const cached =
+    typeof last.cachedInputTokens === "number"
+      ? Math.min(Math.max(0, last.cachedInputTokens), lastInput)
+      : 0;
+  const uncached = Math.max(0, lastInput - cached);
+  const tally: ObservedContextReplayTally = params.tally
+    ? { ...params.tally }
+    : {
+        coldReplayCount: 0,
+        coldReplayUncachedTokens: 0,
+        hotReplayCachedTokens: 0,
+        hotReplayCount: 0,
+      };
+  // Classify against the REPLAYED portion, not the whole input: a request
+  // carrying a large fresh payload has a diluted cache fraction even when its
+  // replayed context was fully cache-served — that is a hot replay plus fresh
+  // content, not a cold replay.
+  if (cached >= OBSERVED_HOT_CACHE_FRACTION * replayedTokens) {
+    tally.hotReplayCount += 1;
+    tally.hotReplayCachedTokens += cached;
+  } else {
+    // The uncached replay overhead is the replayed portion minus whatever the
+    // cache DID serve — cached tokens are previously-seen content, so they sit
+    // inside the replayed window even on a partial miss. (Always positive here:
+    // the cold branch means cached < 0.9 × replayed. Also never exceeds
+    // `uncached`, since replayed <= last.input.)
+    tally.coldReplayCount += 1;
+    tally.coldReplayUncachedTokens += Math.min(
+      uncached,
+      Math.max(0, replayedTokens - cached),
+    );
+  }
+  return { cursor: nextCursor, tally };
+}
+
 function buildTaskMonitorUsageSnapshot(params: {
   fastMode?: boolean;
   model?: string;
@@ -3229,6 +3382,7 @@ function buildLiveThreadUsageLine(params: {
   createdAt?: number;
   fastMode?: boolean;
   model?: string;
+  observedReplays?: ObservedContextReplayTally;
   serviceTier?: string;
   startedAt?: number;
   threadId: string;
@@ -3293,6 +3447,16 @@ function buildLiveThreadUsageLine(params: {
     ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
     inputTokens,
     ...(params.model ? { model: params.model } : {}),
+    ...(params.observedReplays
+      ? {
+          observedColdReplayCount: params.observedReplays.coldReplayCount,
+          observedColdReplayUncachedTokens:
+            params.observedReplays.coldReplayUncachedTokens,
+          observedHotReplayCachedTokens:
+            params.observedReplays.hotReplayCachedTokens,
+          observedHotReplayCount: params.observedReplays.hotReplayCount,
+        }
+      : {}),
     outputCostMicros: cost?.outputCostMicros ?? 0,
     outputTokens,
     priceStatus: cost ? "priced" : "unpriced",
@@ -4897,6 +5061,21 @@ export class DesktopBackendRegistry {
   private readonly liveThreadUsageBaselines = new Map<
     string,
     TaskMonitorTokenUsageBreakdown
+  >();
+  // Per-turn tally of observed context replays (key: backend:threadId:turnId).
+  private readonly liveThreadReplayObservations = new Map<
+    string,
+    ObservedContextReplayTally
+  >();
+  // Per-thread replay cursor (key: backend:threadId): the high-water mark of
+  // cumulative `total.inputTokens` (detects a genuinely new model request, so
+  // duplicate re-emissions are no-ops) plus the prior request's context size
+  // (caps cold-replay attribution). Kept per-thread, not per-turn, so both
+  // signals span turn boundaries; per-turn tallies are dropped at turn end but
+  // this cursor intentionally survives so late duplicates still dedup.
+  private readonly liveThreadReplayInputCursor = new Map<
+    string,
+    ObservedContextReplayCursor
   >();
   private readonly taskMonitorDelegations = new Map<
     string,
@@ -12706,6 +12885,59 @@ export class DesktopBackendRegistry {
     };
   }
 
+  // Observe one `thread/tokenUsage/updated` and fold any newly-completed model
+  // request into the turn's context-replay tally. Returns the current tally for
+  // the turn (unchanged on duplicate/sub-threshold updates) so the usage line
+  // keeps its frozen counts across re-emissions. Counts nothing for the
+  // inherited baseline of a forked thread: the cursor is seeded from
+  // `total.inputTokens - last.inputTokens`, so only the observed request counts,
+  // never the unobserved history already in `total`.
+  private observeLiveThreadContextReplay(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    tokenUsage: unknown;
+    turnId?: string;
+  }): ObservedContextReplayTally | undefined {
+    if (!params.turnId) {
+      return undefined;
+    }
+    const threadKey = [params.backend, params.threadId].join(":");
+    const turnKey = [params.backend, params.threadId, params.turnId].join(":");
+    const { cursor, tally } = foldObservedContextReplay({
+      cursor: this.liveThreadReplayInputCursor.get(threadKey),
+      tally: this.liveThreadReplayObservations.get(turnKey),
+      tokenUsage: params.tokenUsage,
+    });
+    if (cursor) {
+      this.liveThreadReplayInputCursor.set(threadKey, cursor);
+    }
+    if (tally) {
+      this.liveThreadReplayObservations.set(turnKey, tally);
+    }
+    return tally;
+  }
+
+  // Drop a turn's in-memory replay tally once the turn ends. The final counts
+  // are already frozen on the persisted usage line, so this only bounds the
+  // per-turn map's growth over a long session. The per-thread input cursor is
+  // deliberately kept: it lets any late duplicate re-emission for this turn
+  // dedup (its cumulative input does not grow, so it is a no-op) instead of
+  // re-seeding and re-counting from scratch.
+  private forgetCompletedTurnReplayObservations(event: AgentEvent): void {
+    const method = event.notification.method;
+    if (method !== "turn/completed" && method !== "turn/failed") {
+      return;
+    }
+    const threadId = event.notification.params.threadId;
+    const turnId = turnIdFromTerminalNotification(event.notification);
+    if (!threadId || !turnId) {
+      return;
+    }
+    this.liveThreadReplayObservations.delete(
+      [event.backend, threadId, turnId].join(":"),
+    );
+  }
+
   private async recordLiveThreadUsage(event: AgentEvent): Promise<void> {
     const notification = event.notification;
     if (notification.method !== "thread/tokenUsage/updated") {
@@ -12763,6 +12995,12 @@ export class DesktopBackendRegistry {
       tokenUsage,
       turnId: notification.params.turnId ?? undefined,
     });
+    const observedReplays = this.observeLiveThreadContextReplay({
+      backend: event.backend,
+      threadId,
+      tokenUsage,
+      turnId: notification.params.turnId ?? undefined,
+    });
     const usageTiming = resolveLiveThreadUsageTiming({
       overlay,
       turnId: notification.params.turnId ?? undefined,
@@ -12773,6 +13011,7 @@ export class DesktopBackendRegistry {
       ...usageTiming,
       fastMode,
       model,
+      observedReplays,
       serviceTier,
       threadId,
       tokenUsage: derivedUsage.turnTokenUsage,
@@ -19706,6 +19945,7 @@ export class DesktopBackendRegistry {
     }
 
     await this.recordLiveThreadUsage(event);
+    this.forgetCompletedTurnReplayObservations(event);
     await this.recordCodexNativeSubAgentActivity(event);
     await this.recordCodexNativeSubAgentNotifications(event);
     await this.recordCodexNativeSubAgentNames(event);
