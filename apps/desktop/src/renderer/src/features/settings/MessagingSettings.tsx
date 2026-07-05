@@ -238,55 +238,6 @@ export function MessagingSettings(props: {
               void props.onToolUpdateModeChange(mode);
             }}
           />
-          <ToggleField
-            checked={showStreamingOption.value}
-            disabled={props.saving}
-            label="Show streaming option on thread cards"
-            sub="Advanced. Reveals a per-thread streaming toggle in chat status cards and the New Thread menu. Streaming does not send in-turn messages — it repeatedly edits one message as tokens arrive, which burns platform rate limits fast and usually ends up throttled. Most people should leave this off."
-            source={sourceBadge(showStreamingOption)}
-            onChange={(enabled) => {
-              void props.onShowStreamingOptionChange(enabled);
-            }}
-          />
-          {streamingNudgeProvider ? (
-            <section
-              className="settings-panel settings-panel--warning"
-              role="status"
-            >
-              <div className="settings-panel__header">
-                <div>
-                  <p className="eyebrow">Streaming enabled</p>
-                  <h2>Show the streaming option on thread cards?</h2>
-                </div>
-              </div>
-              <p className="settings-row__description">
-                You turned on streaming for {streamingNudgeProvider}. Show the
-                per-thread streaming toggle in chat status cards and the New
-                Thread menu so you can pick it per thread? It stays an advanced
-                option — most people leave it off.
-              </p>
-              <div className="settings-inline-actions">
-                <button
-                  className="button button--secondary"
-                  disabled={props.saving}
-                  onClick={() => {
-                    setStreamingNudgeProvider(null);
-                    void props.onShowStreamingOptionChange(true);
-                  }}
-                  type="button"
-                >
-                  Show it on thread cards
-                </button>
-                <button
-                  className="button button--ghost"
-                  onClick={() => setStreamingNudgeProvider(null)}
-                  type="button"
-                >
-                  Not now
-                </button>
-              </div>
-            </section>
-          ) : null}
           <NumberField
             disabled={props.saving}
             label="Input debounce"
@@ -341,6 +292,57 @@ export function MessagingSettings(props: {
               void props.onImageProfileChange(profile);
             }}
           />
+
+          <SettingsGroupLabel>Advanced</SettingsGroupLabel>
+          <ToggleField
+            checked={showStreamingOption.value}
+            disabled={props.saving}
+            label="Show streaming option on thread cards"
+            sub="Advanced. Reveals a per-thread streaming toggle in chat status cards and the New Thread menu. Streaming does not send in-turn messages — it repeatedly edits one message as tokens arrive, which burns platform rate limits fast and usually ends up throttled. Most people should leave this off."
+            source={sourceBadge(showStreamingOption)}
+            onChange={(enabled) => {
+              void props.onShowStreamingOptionChange(enabled);
+            }}
+          />
+          {streamingNudgeProvider ? (
+            <section
+              className="settings-panel settings-panel--warning"
+              role="status"
+            >
+              <div className="settings-panel__header">
+                <div>
+                  <p className="eyebrow">Streaming enabled</p>
+                  <h2>Show the streaming option on thread cards?</h2>
+                </div>
+              </div>
+              <p className="settings-row__description">
+                You turned on streaming for {streamingNudgeProvider}. Show the
+                per-thread streaming toggle in chat status cards and the New
+                Thread menu so you can pick it per thread? It stays an advanced
+                option — most people leave it off.
+              </p>
+              <div className="settings-inline-actions">
+                <button
+                  className="button button--secondary"
+                  disabled={props.saving}
+                  onClick={() => {
+                    setStreamingNudgeProvider(null);
+                    void props.onShowStreamingOptionChange(true);
+                  }}
+                  type="button"
+                >
+                  Show it on thread cards
+                </button>
+                <button
+                  className="button button--ghost"
+                  onClick={() => setStreamingNudgeProvider(null)}
+                  type="button"
+                >
+                  Not now
+                </button>
+              </div>
+            </section>
+          ) : null}
         </div>
       </SettingsSection>
 
