@@ -1,0 +1,6 @@
+# Revisions to exclude from `git blame`. Enable locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (GitHub honors this file automatically.)
+
+# style: reformat repo with Prettier and apply ESLint autofixes
+1eddac204347a9dc10281ec4f86249870afa3a2d
