@@ -509,11 +509,6 @@ function copyGrokConfig(
   fs.copyFileSync(srcPath, destPath);
 }
 
-function backupFile(filePath: string | undefined, timestamp: number): void {
-  if (!filePath || !fs.existsSync(filePath)) return;
-  fs.renameSync(filePath, `${filePath}.bak.${timestamp}`);
-}
-
 function cleanupSidecars(tmpDbPath: string): void {
   const walPath = `${tmpDbPath}-wal`;
   const shmPath = `${tmpDbPath}-shm`;

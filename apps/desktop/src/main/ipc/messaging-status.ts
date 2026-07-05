@@ -67,7 +67,6 @@ import {
   MESSAGING_UNBIND_THREAD_CHANNEL,
 } from "../../shared/ipc";
 import {
-  resetInboundPreview,
   setInboundPreviewSink,
   startInboundPreview,
   stopInboundPreview,

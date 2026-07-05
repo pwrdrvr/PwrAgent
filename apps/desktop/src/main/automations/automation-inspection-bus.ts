@@ -13,7 +13,6 @@ import type {
   AutomationInspectionToolDataByOperation,
   AutomationInspectionToolData,
   AutomationRunArtifact,
-  AutomationRunStatus,
   AutomationRunSummary,
   AutomationTimelineCard,
 } from "@pwragent/shared";

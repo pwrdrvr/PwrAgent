@@ -1,6 +1,5 @@
 import type {
   AgentEvent,
-  AppServerBackendKind,
   AppServerNotification,
   AutomationDetail,
   AutomationInspectionFailure,

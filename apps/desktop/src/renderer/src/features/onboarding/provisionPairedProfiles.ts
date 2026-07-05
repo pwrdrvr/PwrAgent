@@ -65,7 +65,7 @@ export async function provisionPairedProfiles(
       });
       created.push(name);
     } catch (caught) {
-      // eslint-disable-next-line no-console
+       
       console.warn(
         `Onboarding: failed to provision paired profile "${name}"`,
         caught,

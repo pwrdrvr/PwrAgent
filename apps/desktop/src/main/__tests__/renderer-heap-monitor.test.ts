@@ -13,8 +13,6 @@ type HeapUsageResponse = {
   backingStorageSize?: number;
 };
 
-type SessionStub = ReturnType<typeof createSessionStub>;
-
 function createMonitorConfig(overrides?: Partial<Extract<ReturnType<typeof resolveHeapMonitorConfig>, { enabled: true }>>) {
   const config = resolveHeapMonitorConfig({
     env: {

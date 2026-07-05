@@ -19,11 +19,9 @@ import type {
   MessagingDeliveryScope,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
-  MessagingJsonValue,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
-  MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
 import {
   extractMessagingPairingToken,

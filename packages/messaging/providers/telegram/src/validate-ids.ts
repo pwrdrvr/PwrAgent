@@ -111,10 +111,6 @@ function validateBoundedVisibleAscii(
   return { ok: true };
 }
 
-function isAsciiDigit(code: number): boolean {
-  return code >= 0x30 && code <= 0x39;
-}
-
 function isBase64UrlChar(code: number): boolean {
   return (
     (code >= 0x30 && code <= 0x39) ||

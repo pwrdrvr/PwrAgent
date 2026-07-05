@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
-  AppServerThreadEntry,
 } from "@pwragent/shared";
 import {
   MAX_RETAINED_TURN_GROUPS,

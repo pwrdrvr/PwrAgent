@@ -8657,7 +8657,7 @@ describe("MessagingController", () => {
   });
 
   it("rechecks budget admission after a provider rate-limit rejection", async () => {
-    let now = 1000;
+    const now = 1000;
     let rejectNextStream = false;
     const scope: MessagingDeliveryScope = {
       platform: "telegram",
@@ -8730,7 +8730,7 @@ describe("MessagingController", () => {
   });
 
   it("does not replay non-retryable provider rate-limit failures", async () => {
-    let now = 1000;
+    const now = 1000;
     let rejectNextStream = false;
     const scope: MessagingDeliveryScope = {
       platform: "telegram",
@@ -12003,7 +12003,7 @@ describe("MessagingController", () => {
       },
     });
     await bindThread(harness);
-    const binding = await harness.store.findActiveBindingForChannel(
+    await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/status").channel,
     );
 
@@ -12159,7 +12159,7 @@ describe("MessagingController", () => {
       },
     });
     await bindThread(harness);
-    const binding = await harness.store.findActiveBindingForChannel(
+    await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/status").channel,
     );
 
@@ -12217,7 +12217,7 @@ describe("MessagingController", () => {
       },
     });
     await bindThread(harness);
-    const binding = await harness.store.findActiveBindingForChannel(
+    await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/status").channel,
     );
 
@@ -12319,8 +12319,6 @@ describe("MessagingController", () => {
         },
       }),
     );
-    const readyIntent = harness.delivered.at(-1);
-
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "browse:new:permissions" }),
     );
@@ -15268,8 +15266,3 @@ function buildCallbackEvent(params: {
   };
 }
 
-async function flushMicrotasks(): Promise<void> {
-  for (let index = 0; index < 10; index += 1) {
-    await Promise.resolve();
-  }
-}

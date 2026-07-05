@@ -291,7 +291,7 @@ describe("FocusedDiffService", () => {
     const originalXaiApiKey = process.env.XAI_API_KEY;
     const originalXaiBaseUrl = process.env.XAI_BASE_URL;
     const originalGrokModel = process.env.GROK_MODEL;
-    const fetchSpy = vi.fn(async (_input, init) =>
+    const fetchSpy = vi.fn(async (_input, _init) =>
       new Response(
         JSON.stringify(
           makeAiSdkXaiResponse(

@@ -290,7 +290,7 @@ function renderContentPart(part: MessagingContentPart): string | undefined {
 
 function renderMarkdownPolicy(
   text: string,
-  policy: MessagingMarkdownPolicy,
+  _policy: MessagingMarkdownPolicy,
 ): string {
   // Mattermost natively renders Markdown (CommonMark + GFM superset).
   // For "plain" we still pass-through; the platform doesn't auto-format
