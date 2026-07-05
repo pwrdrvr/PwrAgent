@@ -53,16 +53,25 @@ export const HANDOFF_BRANCH_PAGE_SIZE = BRANCH_PICKER_PAGE_SIZE;
 
 /**
  * The per-thread streaming control is an advanced, default-off feature. Show it
- * only when the operator opted in globally (`showStreamingOption`) OR the
- * binding already has streaming explicitly enabled — the anti-stranding case so
- * a pre-existing streaming binding can still be turned off after the default
- * hides the control.
+ * when any of:
+ * - the operator opted in globally (`showStreamingOption`) — governs threads
+ *   that never had streaming on, and all new threads;
+ * - this thread has streaming enabled *right now* (`streamingMode === "enabled"`)
+ *   — covers pre-existing enabled bindings before the sticky flag was recorded;
+ * - this thread has had streaming enabled before (`streamingControlRevealed`) —
+ *   the sticky anti-stranding case, so a thread that turned streaming off can
+ *   always toggle it back even while the global setting is off.
  */
 export function shouldShowStreamingControl(
   streamingMode: MessagingStreamingResponseMode,
   showStreamingOption?: boolean,
+  streamingControlRevealed?: boolean,
 ): boolean {
-  return Boolean(showStreamingOption) || streamingMode === "enabled";
+  return (
+    Boolean(showStreamingOption) ||
+    Boolean(streamingControlRevealed) ||
+    streamingMode === "enabled"
+  );
 }
 
 export function buildBindingStatusIntent(params: {
@@ -181,7 +190,11 @@ export function buildBindingStatusIntent(params: {
       planDeliveryLine(params.capabilityProfile),
       `Permissions: ${permissionsLineLabel}`,
       `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
-      shouldShowStreamingControl(streamingMode, params.showStreamingOption)
+      shouldShowStreamingControl(
+        streamingMode,
+        params.showStreamingOption,
+        params.binding.preferences?.streamingControlRevealed,
+      )
         ? `Streaming: ${streamingLabel}`
         : undefined,
       params.binding.pendingSkillSelection
@@ -213,6 +226,7 @@ export function buildBindingStatusIntent(params: {
       streamingMode,
       streamingResponsesDefault: params.streamingResponsesDefault,
       showStreamingOption: params.showStreamingOption,
+      streamingControlRevealed: params.binding.preferences?.streamingControlRevealed,
       toolUpdateMode,
     }),
   };
@@ -445,6 +459,7 @@ function buildStatusActions(params: {
   streamingMode: MessagingStreamingResponseMode;
   streamingResponsesDefault?: boolean;
   showStreamingOption?: boolean;
+  streamingControlRevealed?: boolean;
   toolUpdateMode: MessagingToolUpdateMode;
 }): MessagingSurfaceAction[] {
   const profile = params.capabilityProfile;
@@ -517,7 +532,11 @@ function buildStatusActions(params: {
       fallbackText: "tools",
       priority: 9,
     },
-    ...(shouldShowStreamingControl(params.streamingMode, params.showStreamingOption)
+    ...(shouldShowStreamingControl(
+      params.streamingMode,
+      params.showStreamingOption,
+      params.streamingControlRevealed,
+    )
       ? [
           {
             id: "status:streaming",

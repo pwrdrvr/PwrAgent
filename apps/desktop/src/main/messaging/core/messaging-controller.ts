@@ -4345,12 +4345,20 @@ export class MessagingController {
         nextSession.preferences?.streamingResponses ?? "inherit",
         this.streamingResponsesDefault,
       );
+      // Sticky-reveal so the control stays in the gate once enabled here, and
+      // carries onto the created binding.
+      const streamingControlRevealed =
+        nextSession.preferences?.streamingControlRevealed ||
+        streamingResponses === "enabled";
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
           preferences: {
             ...nextSession.preferences,
             streamingResponses,
+            ...(streamingControlRevealed
+              ? { streamingControlRevealed: true }
+              : {}),
             updatedAt: this.now(),
           },
         },
@@ -5007,6 +5015,7 @@ export class MessagingController {
     const showStreaming = shouldShowStreamingControl(
       effectiveSession.preferences?.streamingResponses ?? "inherit",
       await this.resolveShowStreamingOption(),
+      effectiveSession.preferences?.streamingControlRevealed,
     );
     await this.options.store.upsertBrowseSession(effectiveSession);
     const intent = buildConfirmationIntent({
@@ -9671,11 +9680,20 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<void> {
     const currentMode = resolveMessagingStreamingResponseMode(binding);
+    const nextMode = nextMessagingStreamingResponseMode(
+      currentMode,
+      this.streamingResponsesDefault,
+    );
+    // Sticky-reveal: once streaming has been enabled on this thread (now, or by
+    // this toggle), keep the control visible so it can be turned back on/off
+    // even after the global setting hides it for other threads.
+    const streamingControlRevealed =
+      binding.preferences?.streamingControlRevealed ||
+      currentMode === "enabled" ||
+      nextMode === "enabled";
     const updatedBinding = await this.updateBindingPreferences(binding, {
-      streamingResponses: nextMessagingStreamingResponseMode(
-        currentMode,
-        this.streamingResponsesDefault,
-      ),
+      streamingResponses: nextMode,
+      ...(streamingControlRevealed ? { streamingControlRevealed: true } : {}),
     });
     await this.renderBindingStatus(updatedBinding, event);
   }

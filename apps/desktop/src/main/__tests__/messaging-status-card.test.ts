@@ -476,6 +476,43 @@ describe("buildBindingStatusIntent", () => {
     );
   });
 
+  it("keeps the streaming control on a thread that had it on, after it is turned off with the global setting off", () => {
+    const binding = {
+      id: "binding-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: {
+        channel: "telegram",
+        conversation: { id: "chat-1", kind: "dm" },
+      },
+      createdAt: 1000,
+      threadId: "thread-1",
+      updatedAt: 1000,
+      // Streaming was enabled here before and later turned back off, but the
+      // sticky reveal flag persists.
+      preferences: {
+        streamingResponses: "disabled" as const,
+        streamingControlRevealed: true,
+        updatedAt: 1000,
+      },
+    } satisfies MessagingBindingRecord;
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-1",
+      createdAt: 1000,
+      binding,
+      // Global setting is OFF...
+      showStreamingOption: false,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    // ...but the control stays reachable so the user can toggle streaming back on.
+    expect(intent.text).toContain("Streaming: Off");
+    expect(intent.actions).toContainEqual(
+      expect.objectContaining({ id: "status:streaming" }),
+    );
+  });
+
   it("targets an existing status surface for updates", () => {
     const binding = {
       id: "binding-1",

@@ -2539,6 +2539,32 @@ describe("MessagingController", () => {
     });
   });
 
+  it("sticks the streaming-control reveal once a thread has enabled streaming", async () => {
+    const harness = await createHarness({ showStreamingOption: true });
+    await bindThread(harness);
+
+    // Enable streaming on the thread (inherit -> enabled).
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:streaming" }),
+    );
+    const afterEnable = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(afterEnable?.preferences?.streamingResponses).toBe("enabled");
+    expect(afterEnable?.preferences?.streamingControlRevealed).toBe(true);
+
+    // Turn it back off (enabled -> disabled). The sticky reveal flag persists so
+    // the control stays reachable even though the current mode is off.
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:streaming" }),
+    );
+    const afterDisable = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(afterDisable?.preferences?.streamingResponses).toBe("disabled");
+    expect(afterDisable?.preferences?.streamingControlRevealed).toBe(true);
+  });
+
   it("shows and toggles the effective streaming default from the new-thread screen", async () => {
     const harness = await createHarness({
       streamingResponsesDefault: true,
