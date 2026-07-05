@@ -169,6 +169,31 @@ into the persisted summary). Fixed by exempting `scope: "fork-baseline"` lines
 from repricing (always $0, priced). Caught by the sqlite round-trip test; the
 main-process test uses a non-repricing mock store and did not surface it.
 
+## Review follow-ups (applied)
+
+Multi-agent review of PR #936 surfaced fixes applied in a follow-up commit:
+
+- **First-turn guard.** `captureForkBaselineUsageLine` now skips (and latches)
+  when the thread already has an observed turn line for a *different* turn
+  (`threadHasObservedTurnBefore`) — the seeded `total − latest` baseline only
+  equals the inherited context on the fork's genuine first turn. Covers the
+  observed-earlier-turn-but-latch-not-yet-written window; the never-observed
+  first turn remains a limitation (below).
+- **Capture can't block the emit.** The capture call in `recordLiveThreadUsage`
+  is wrapped in try/catch so a fork-line persist failure no longer suppresses
+  the load-bearing `thread/pricing/updated` push for the already-persisted turn.
+- **Repricing strip parity.** The `scope: "fork-baseline"` exemption in
+  `repriceOpenAiUsageLine` now strips `pricingCatalogId`/`pricingRateId`/
+  `pricingCatalogVersion`/`priceUnavailableReason` like the normal path, so a
+  $0 "priced" line never carries a stale rate id or unavailable-reason.
+- **Latch dedupe.** The `forkBaselineCaptured` write is a single
+  `latchForkBaselineCaptured` helper instead of a copy-pasted branch.
+
+Deferred (not fragile enough to warrant the churn now): generalizing the
+scattered `isForkBaselineLine` renderer dispatch + scope-literal reprice gate
+into one `carriesOwnCost`/`noReprice` predicate; the persisted-summary token
+inflation (no consumer beyond PricingPanel reads those fields today).
+
 ## Known limitation
 
 If the app first observes a fork at turn N>1 (fork's earlier turns never watched

@@ -12981,6 +12981,103 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("does not capture a fork baseline when an earlier turn was already observed", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-fork": {
+          backend: "codex",
+          threadId: "thread-fork",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-5.5",
+          serviceTier: "standard",
+          forkSourceThreadId: "thread-parent",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    // Simulate turn-1 already having been observed (a persisted turn line)
+    // WITHOUT the fork baseline having been captured (e.g. the latch write was
+    // lost). The first turn we now observe is turn-2, whose total−latest folds
+    // turn-1's own usage — so no fork baseline may be fabricated.
+    await overlayStore.upsertThreadUsageLine({
+      line: {
+        backend: "codex",
+        usageLineId: "codex:thread-fork:turn-1:live-token-usage",
+        threadId: "thread-fork",
+        turnId: "turn-1",
+        scope: "turn",
+        source: "live",
+        status: "finalized",
+        model: "gpt-5.5",
+        currency: "USD",
+        inputTokens: 160_000,
+        cachedInputTokens: 159_104,
+        uncachedInputTokens: 896,
+        outputTokens: 6,
+        reasoningOutputTokens: 0,
+        totalTokens: 160_006,
+        priceStatus: "priced",
+        provider: "openai",
+        cachedInputCostMicros: 0,
+        uncachedInputCostMicros: 0,
+        outputCostMicros: 0,
+        totalCostMicros: 0,
+        createdAt: 1_800_000_000_000,
+      },
+    });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-fork",
+        turnId: "turn-2",
+        tokenUsage: {
+          last_token_usage: {
+            input_tokens: 5_000,
+            cached_input_tokens: 4_992,
+            output_tokens: 7,
+            reasoning_output_tokens: 0,
+            total_tokens: 5_007,
+          },
+          total_token_usage: {
+            input_tokens: 18_966_393,
+            cached_input_tokens: 17_792_768,
+            output_tokens: 46_007,
+            reasoning_output_tokens: 9_979,
+            total_tokens: 19_022_379,
+          },
+        },
+      },
+    });
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-fork",
+    });
+    expect(
+      pricing.lines.filter((line) => line.scope === "fork-baseline"),
+    ).toHaveLength(0);
+    // The guard latches so it will not keep re-checking on later turns.
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-fork",
+    });
+    expect(overlay?.forkBaselineCaptured).toBe(true);
+
+    await registry.close();
+  });
+
   it("persists Codex reviews as sub-agent summaries on the parent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },

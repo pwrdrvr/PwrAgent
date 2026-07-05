@@ -12789,16 +12789,27 @@ export class DesktopBackendRegistry {
     if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
       logUnpricedThreadUsageLine(line);
       await this.overlayStore.upsertThreadUsageLine({ line });
-      await this.captureForkBaselineUsageLine({
-        backend: event.backend,
-        fastMode,
-        inheritedTokenUsage: derivedUsage.seededBaselineTokenUsage,
-        model,
-        overlay,
-        serviceTier,
-        threadId,
-        usageTiming,
-      });
+      // Best-effort: a failure here must never block the load-bearing pricing
+      // push below (the turn line is already persisted).
+      try {
+        await this.captureForkBaselineUsageLine({
+          backend: event.backend,
+          fastMode,
+          inheritedTokenUsage: derivedUsage.seededBaselineTokenUsage,
+          model,
+          overlay,
+          serviceTier,
+          threadId,
+          turnId: notification.params.turnId ?? undefined,
+          usageTiming,
+        });
+      } catch (error) {
+        backendRegistryLog.warn("fork-baseline usage capture failed", {
+          backend: event.backend,
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       await this.emitThreadPricingUpdated({
         backend: event.backend,
         threadId: line.parentThreadId ?? line.threadId,
@@ -12826,6 +12837,7 @@ export class DesktopBackendRegistry {
     overlay?: ThreadOverlayState;
     serviceTier?: string;
     threadId: string;
+    turnId?: string;
     usageTiming: { completedAt?: number; createdAt?: number; startedAt?: number };
   }): Promise<void> {
     if (
@@ -12836,6 +12848,26 @@ export class DesktopBackendRegistry {
     ) {
       return;
     }
+
+    // The seeded baseline (`total − latest`) only equals the inherited fork
+    // context on the fork's FIRST observed turn. If this thread already has an
+    // observed turn line for a different turn, the baseline has folded this
+    // thread's own earlier usage into the "inherited" amount — capturing it
+    // would under-bill. Skip and latch (capturing on a later turn would be
+    // wrong too). This catches the observed-earlier-turn window; a fork whose
+    // first turn was never seen live still mis-attributes (known limitation).
+    if (
+      params.turnId &&
+      (await this.threadHasObservedTurnBefore({
+        backend: params.backend,
+        threadId: params.threadId,
+        turnId: params.turnId,
+      }))
+    ) {
+      await this.latchForkBaselineCaptured(params.backend, params.threadId);
+      return;
+    }
+
     const forkLine = buildForkBaselineUsageLine({
       backend: params.backend,
       fastMode: params.fastMode,
@@ -12845,23 +12877,52 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       usageTiming: params.usageTiming,
     });
-    if (!forkLine) {
-      // No inherited tokens to attribute (e.g. a fork with an empty parent
-      // context): nothing to show, but still latch the guard so we don't
-      // re-check every subsequent turn.
-      await this.overlayStore.setThreadForkOrigin?.({
-        backend: params.backend,
-        threadId: params.threadId,
-        forkBaselineCaptured: true,
-      });
-      return;
+    // Persist the fork-baseline line when there are inherited tokens to
+    // attribute; a fork of an empty-context parent has none, but we still latch
+    // the guard below so we don't re-check every subsequent turn.
+    if (forkLine) {
+      await this.overlayStore.upsertThreadUsageLine({ line: forkLine });
     }
-    await this.overlayStore.upsertThreadUsageLine({ line: forkLine });
+    await this.latchForkBaselineCaptured(params.backend, params.threadId);
+  }
+
+  private async latchForkBaselineCaptured(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<void> {
     await this.overlayStore.setThreadForkOrigin?.({
-      backend: params.backend,
-      threadId: params.threadId,
+      backend,
+      threadId,
       forkBaselineCaptured: true,
     });
+  }
+
+  /**
+   * True when this thread already has a persisted turn usage line for a turn
+   * OTHER than `turnId`. Used to detect that a fork's first turn is not the one
+   * being observed now, so its inherited-context baseline can't be trusted.
+   * Only the thread's own lines count — rolled-up child/monitor lines
+   * (different `threadId`) are ignored.
+   */
+  private async threadHasObservedTurnBefore(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): Promise<boolean> {
+    if (typeof this.overlayStore.readThreadPricing !== "function") {
+      return false;
+    }
+    const { lines } = await this.overlayStore.readThreadPricing({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    return lines.some(
+      (line) =>
+        line.threadId === params.threadId &&
+        line.scope === "turn" &&
+        Boolean(line.turnId) &&
+        line.turnId !== params.turnId,
+    );
   }
 
   private async recordCodexNativeSubAgentUsage(event: AgentEvent): Promise<void> {

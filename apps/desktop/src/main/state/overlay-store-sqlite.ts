@@ -2508,10 +2508,19 @@ function repriceOpenAiUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRec
   }
   // Fork-baseline lines carry inherited context that was billed on the parent
   // thread. Their cost is $0 to this thread by definition — never re-price them
-  // from their (large) inherited token counts.
+  // from their (large) inherited token counts. Strip catalog/rate/reason fields
+  // (as the normal repricing path does) so a $0 "priced" line never carries a
+  // stale rate id or priceUnavailableReason.
   if (line.scope === "fork-baseline") {
+    const {
+      priceUnavailableReason: _forkPriceUnavailableReason,
+      pricingCatalogId: _forkPricingCatalogId,
+      pricingCatalogVersion: _forkPricingCatalogVersion,
+      pricingRateId: _forkPricingRateId,
+      ...forkBaseLine
+    } = line;
     return {
-      ...line,
+      ...forkBaseLine,
       cachedInputCostMicros: 0,
       outputCostMicros: 0,
       priceStatus: "priced",
