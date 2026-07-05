@@ -427,6 +427,14 @@ export type AutomationRunWindow = {
   scheduledFor: number;
 };
 
+/**
+ * Why a run was recorded as `skipped` without starting a headless turn. Used to
+ * tell the two inbound-skip kinds apart structurally (rather than by matching
+ * display copy): `lane_busy` is a drop_missed busy-lane drop; `rate_limited` is
+ * an hourly-cap throttle drop.
+ */
+export type AutomationRunSkipReason = "lane_busy" | "rate_limited";
+
 export type AutomationRunSummary = {
   id: string;
   automationId: string;
@@ -441,6 +449,14 @@ export type AutomationRunSummary = {
   backendThreadId?: string;
   backendTurnId?: string;
   errorMessage?: string;
+  /** Set on `skipped` runs to explain the skip without matching display copy. */
+  skipReason?: AutomationRunSkipReason;
+  /**
+   * How many inbound messages a `rate_limited` throttle marker has absorbed by
+   * coalescing (a bounded count, not a per-message list). Surfaced in the run
+   * list so the operator sees the size of the drop, e.g. "N messages dropped".
+   */
+  coalescedCount?: number;
   source?: AutomationRunSourceMetadata;
 };
 

@@ -366,6 +366,35 @@ export function AutomationEditor(props: AutomationEditorProps) {
     (group) => group.id === destGroupSelection,
   );
 
+  const destSelectionReconciledRef = useRef(false);
+  const initialDestGroupId = initialTargetIsTopic
+    ? initialTargetSnapshot?.parentId
+    : initialTargetSnapshot?.conversationId;
+  useEffect(() => {
+    // On edit, preselect the saved destination in the dropdown once it appears
+    // in the provider's authorized groups (which can arrive after mount, or when
+    // the operator authorizes the group via the in-editor capture flow).
+    // Otherwise destGroupSelection stays at MANUAL_GROUP_VALUE, selectedDestGroup
+    // is undefined, and the group's friendly title is dropped on re-save. We only
+    // mark reconciliation done once we actually match, and bail the moment the
+    // user has changed the destination id, so we never override a deliberate
+    // manual entry or a provider switch.
+    if (destSelectionReconciledRef.current) return;
+    if (!initialTargetSnapshot || !initialDestGroupId) return;
+    if (destProvider !== initialTargetSnapshot.channel) return;
+    if (destGroupId !== initialDestGroupId) return;
+    const match = destGroups.find((group) => group.id === initialDestGroupId);
+    if (!match) return;
+    setDestGroupSelection(match.id);
+    destSelectionReconciledRef.current = true;
+  }, [
+    destGroups,
+    destGroupId,
+    destProvider,
+    initialDestGroupId,
+    initialTargetSnapshot,
+  ]);
+
   const [topicOptions, setTopicOptions] = useState<InboundTopicOption[]>([]);
   const [topicSelection, setTopicSelection] = useState<string>(
     initialIsTopic ? MANUAL_GROUP_VALUE : "",
@@ -1652,9 +1681,12 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     ))}
                   </select>
                 </label>
-                {destProvider === "telegram" && destGroups.length > 0 ? (
+                {destGroups.length > 0 ? (
                   <label className="automation-field">
-                    <span>Destination group</span>
+                    <span>
+                      Destination{" "}
+                      {conversationPickerLabel(destProvider).toLowerCase()}
+                    </span>
                     <select
                       value={destGroupSelection}
                       onChange={(event) => {
@@ -1664,37 +1696,28 @@ export function AutomationEditor(props: AutomationEditorProps) {
                         setValidationError(undefined);
                       }}
                     >
-                      <option value="">Choose a group</option>
+                      <option value="">
+                        Choose a{" "}
+                        {conversationPickerLabel(destProvider).toLowerCase()}
+                      </option>
                       {destGroups.map((group) => (
                         <option key={group.id} value={group.id}>
                           {group.title}
                         </option>
                       ))}
                       <option value={MANUAL_GROUP_VALUE}>
-                        Enter group ID manually...
+                        Enter {conversationLabel(destProvider)} manually...
                       </option>
                     </select>
                   </label>
                 ) : null}
               </div>
-              {destProvider === "telegram" ? (
-                destGroups.length === 0 ||
-                destGroupSelection === MANUAL_GROUP_VALUE ? (
-                  <label className="automation-field">
-                    <span>Destination group ID</span>
-                    <input
-                      placeholder="e.g. -1001234567890"
-                      value={destGroupId}
-                      onChange={(event) => {
-                        setDestGroupId(event.currentTarget.value);
-                        setValidationError(undefined);
-                      }}
-                    />
-                  </label>
-                ) : null
-              ) : (
+              {destGroups.length === 0 ||
+              destGroupSelection === MANUAL_GROUP_VALUE ? (
                 <label className="automation-field">
-                  <span>Destination {conversationLabel(destProvider).toLowerCase()}</span>
+                  <span>
+                    Destination {lowerLead(conversationLabel(destProvider))}
+                  </span>
                   <input
                     placeholder={conversationPlaceholder(destProvider)}
                     value={destGroupId}
@@ -1704,7 +1727,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     }}
                   />
                 </label>
-              )}
+              ) : null}
               {destProvider === "telegram" ? (
                 <label className="automation-field">
                   <span>Destination topic ID (optional)</span>
@@ -2458,6 +2481,13 @@ function conversationPickerLabel(provider: MessagingChannelKind): string {
   if (provider === "telegram") return "Group";
   if (provider === "slack" || provider === "discord") return "Channel";
   return "Conversation";
+}
+
+// Lowercase only the leading word so "Group ID" reads as "group ID" after a
+// "Destination " prefix, keeping the "ID" suffix capitalized like the inbound
+// field's "Group ID"/"Channel ID" labels.
+function lowerLead(label: string): string {
+  return label.charAt(0).toLowerCase() + label.slice(1);
 }
 
 function conversationLabel(provider: MessagingChannelKind): string {

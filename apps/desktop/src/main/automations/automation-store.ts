@@ -10,6 +10,7 @@ import type {
   AutomationOutputActionResult,
   AutomationRunArtifact,
   AutomationRunOutputDecision,
+  AutomationRunSkipReason,
   AutomationRunSourceMetadata,
   AutomationRunStatus,
   AutomationRunSummary,
@@ -205,6 +206,8 @@ type AutomationRunPayload = {
   scheduledWindows: AutomationRunWindow[];
   backendThreadId?: string;
   errorMessage?: string;
+  skipReason?: AutomationRunSkipReason;
+  coalescedCount?: number;
   source?: AutomationRunSourceMetadata;
 };
 
@@ -581,6 +584,26 @@ export class AutomationStore {
     return row ? this.runFromRow(row) : undefined;
   }
 
+  /**
+   * Count inbound-triggered runs created for this automation at or after
+   * `sinceMs` that consumed (or will consume) a headless turn — everything
+   * except `skipped` runs (a busy-lane / drop_missed skip never started).
+   * Backs the per-automation inbound run-rate limit: a rolling-hour count from
+   * the run history survives process restarts (unlike an in-memory bucket) and
+   * makes "N per hour" a hard cap rather than a burstable token bucket.
+   */
+  countRecentInboundRuns(params: {
+    automationId: string;
+    sinceMs: number;
+  }): number {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT COUNT(*) AS count FROM automation_runs WHERE automation_id = ? AND trigger = 'inbound_message' AND status != 'skipped' AND created_at >= ?",
+      )
+      .get(params.automationId, params.sinceMs) as { count: number };
+    return row.count;
+  }
+
   findPendingRunForAutomation(automationId: string): AutomationRunSummary | undefined {
     const row = this.stateDb.raw
       .prepare(
@@ -625,6 +648,8 @@ export class AutomationStore {
     status: Extract<AutomationRunStatus, "completed" | "failed" | "cancelled" | "skipped">;
     completedAt?: number;
     errorMessage?: string;
+    skipReason?: AutomationRunSkipReason;
+    coalescedCount?: number;
     now?: number;
   }): AutomationRunSummary | undefined {
     const completedAt = params.completedAt ?? params.now ?? Date.now();
@@ -632,6 +657,8 @@ export class AutomationStore {
       status: params.status,
       completedAt,
       errorMessage: params.errorMessage,
+      skipReason: params.skipReason,
+      coalescedCount: params.coalescedCount,
       now: params.now,
     });
     if (!run) return undefined;
@@ -864,6 +891,8 @@ export class AutomationStore {
       backendTurnId?: string;
       queueEntryId?: string;
       errorMessage?: string;
+      skipReason?: AutomationRunSkipReason;
+      coalescedCount?: number;
       now?: number;
     },
   ): AutomationRunSummary | undefined {
@@ -881,6 +910,8 @@ export class AutomationStore {
       backendThreadId: input.backendThreadId ?? current.backendThreadId,
       backendTurnId: input.backendTurnId ?? current.backendTurnId,
       errorMessage: input.errorMessage ?? current.errorMessage,
+      skipReason: input.skipReason ?? current.skipReason,
+      coalescedCount: input.coalescedCount ?? current.coalescedCount,
     };
     this.upsertRun(nextRun, {
       backend: row.backend,
@@ -981,6 +1012,8 @@ export class AutomationStore {
       scheduledWindows: run.scheduledWindows,
       backendThreadId: run.backendThreadId,
       errorMessage: run.errorMessage,
+      skipReason: run.skipReason,
+      coalescedCount: run.coalescedCount,
       source: run.source,
     };
     this.stateDb.raw
@@ -1155,6 +1188,8 @@ export class AutomationStore {
       backendThreadId: payload.backendThreadId,
       backendTurnId: row.backend_turn_id ?? undefined,
       errorMessage: payload.errorMessage,
+      skipReason: payload.skipReason,
+      coalescedCount: payload.coalescedCount,
     };
   }
 

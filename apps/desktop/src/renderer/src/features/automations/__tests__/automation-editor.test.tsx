@@ -850,6 +850,86 @@ describe("AutomationEditor", () => {
     });
   });
 
+  it("preselects a saved destination channel on edit so its title survives re-save", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    const automation: AutomationDetail = {
+      backend: "codex",
+      threadId: "thread-1",
+      id: "auto-1",
+      name: "Slack alerts",
+      status: "enabled",
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C0IN" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      scheduleSummary: "On inbound message",
+      backlogPolicy: "coalesce",
+      updatedAt: 1,
+      createdAt: 1,
+      taskPrompt: "Investigate.",
+      outputActions: [
+        { id: "agent-context", kind: "agent_context" },
+        {
+          id: "messaging-target",
+          kind: "messaging_target",
+          target: {
+            channel: "slack",
+            conversationId: "C0ALERTS",
+            conversationKind: "channel",
+            title: "Alerts",
+          },
+        },
+      ],
+    };
+
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { slack: true },
+            slackChannels: [{ displayName: "Alerts", id: "C0ALERTS" }],
+          }),
+        )}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    // Once channels load, the saved destination is preselected in the dropdown
+    // (not "Enter manually"), so selectedDestGroup resolves.
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Destination channel") as HTMLSelectElement).value,
+      ).toBe("C0ALERTS"),
+    );
+
+    // Re-saving without touching the destination must keep its friendly title.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "update",
+        request: expect.objectContaining({
+          outputActions: expect.arrayContaining([
+            expect.objectContaining({
+              kind: "messaging_target",
+              target: expect.objectContaining({
+                channel: "slack",
+                conversationId: "C0ALERTS",
+                title: "Alerts",
+              }),
+            }),
+          ]),
+        }),
+      }),
+    );
+  });
+
   it("offers Agents first and regular threads on the Threads tab", async () => {
     const onSubmit = vi.fn(async () => undefined);
 
