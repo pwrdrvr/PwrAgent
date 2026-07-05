@@ -492,6 +492,61 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       }),
     ]);
   });
+
+  it("reclassifies legacy live summary rows to scope 'total' on migration", async () => {
+    // A pre-cumulative-snapshot whole-thread total that landed as a live/pending
+    // "turn" row. It should be reclassified; a modern turn (has cumulative) and a
+    // sub-1M live turn should not.
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        scope: "turn",
+        source: "live",
+        status: "pending",
+        totalTokens: 2_000_000,
+        turnId: "turn-legacy",
+        usageLineId: "legacy-summary",
+      }),
+    });
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        cumulativeTotalTokens: 2_000_000,
+        scope: "turn",
+        source: "live",
+        status: "pending",
+        totalTokens: 2_000_000,
+        turnId: "turn-modern",
+        usageLineId: "modern-turn",
+      }),
+    });
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        scope: "turn",
+        source: "live",
+        status: "pending",
+        totalTokens: 500_000,
+        turnId: "turn-small",
+        usageLineId: "small-live-turn",
+      }),
+    });
+
+    // Force the user_version 24 migration to run against the seeded rows, then
+    // reassign the module handle so afterEach closes the reopened db.
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.raw.pragma("user_version = 23");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+
+    const scopeById = new Map(
+      (
+        stateDb.raw
+          .prepare("SELECT usage_line_id, scope FROM thread_usage_lines")
+          .all() as { usage_line_id: string; scope: string }[]
+      ).map((row) => [row.usage_line_id, row.scope]),
+    );
+    expect(scopeById.get("legacy-summary")).toBe("total");
+    expect(scopeById.get("modern-turn")).toBe("turn");
+    expect(scopeById.get("small-live-turn")).toBe("turn");
+  });
 });
 
 function buildUsageLine(

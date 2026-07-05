@@ -941,16 +941,13 @@ function isEstimatedUsageGap(line: ThreadUsageLineRecord): boolean {
   return "estimatedUsageGap" in line && line.estimatedUsageGap === true;
 }
 
+// A usage line is a whole-thread/historical summary purely by its scope. Legacy
+// pre-cumulative live rows that once needed a `total_tokens >= 1M` heuristic are
+// reclassified to scope 'total' by the state-db migration (user_version 24), so
+// the renderer never re-guesses a summary from raw token counts — which would
+// also misclassify a legitimately large live turn.
 function isHistoricalUsageSummary(line: ThreadUsageLineRecord): boolean {
-  if (line.scope === "total" || line.scope === "backfill") {
-    return true;
-  }
-  return (
-    line.source === "live" &&
-    line.status === "pending" &&
-    line.cumulativeTotalTokens === undefined &&
-    line.totalTokens >= 1_000_000
-  );
+  return line.scope === "total" || line.scope === "backfill";
 }
 
 function PricingUsageTimestamp(props: {

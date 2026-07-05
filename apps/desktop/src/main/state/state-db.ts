@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 23;
+export const CURRENT_STATE_DB_USER_VERSION = 24;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -819,6 +819,12 @@ export class StateDb {
         // the same column/index also live in AUTOMATION_SCHEMA so
         // re-instantiated dbs converge.
         ensureAutomationRunSourceEventKey(db);
+        db.pragma("user_version = 23");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 24) {
+      db.transaction(() => {
+        reclassifyLegacyThreadUsageSummaries(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1353,6 +1359,31 @@ WHERE source = 'live'
     WHERE thread_usage_turns.usage_turn_id = thread_usage_lines.usage_turn_id
       AND thread_usage_turns.observed_at < thread_usage_lines.created_at
   )
+`);
+}
+
+// One-time reclassification of pre-cumulative-snapshot ledger rows. Before the
+// protocol carried per-turn cumulative breakdowns, a whole-thread usage total
+// could land as a single live/pending row scoped as a "turn". The renderer used
+// to re-detect these on every paint with a `total_tokens >= 1M` heuristic, which
+// also misfired on legitimately large modern turns. These legacy rows are a
+// finite, static set already in the ledger, so we fix the data once here: mark
+// them scope 'total' (the structural "historical summary" scope) and drop the
+// render-time guess. Modern turns carry cumulative_total_tokens and are left
+// untouched; the token threshold only ever runs against this closed legacy set.
+function reclassifyLegacyThreadUsageSummaries(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    return;
+  }
+
+  db.exec(`
+UPDATE thread_usage_lines
+SET scope = 'total'
+WHERE source = 'live'
+  AND status = 'pending'
+  AND scope = 'turn'
+  AND cumulative_total_tokens IS NULL
+  AND total_tokens >= 1000000
 `);
 }
 

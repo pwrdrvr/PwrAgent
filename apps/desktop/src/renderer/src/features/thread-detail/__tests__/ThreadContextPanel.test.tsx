@@ -1449,7 +1449,10 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Sub-agent usage")).toBeInTheDocument();
   });
 
-  it("labels legacy live rows without cumulative context as historical summaries", () => {
+  it("labels whole-thread total rows as historical summaries", () => {
+    // The scope 'total' shape a legacy live/pending summary is migrated into
+    // (state-db user_version 24), and the shape hydration emits for a
+    // whole-thread total. Classified as historical purely by scope.
     renderPanel({
       activeTab: "pricing",
       pinned: true,
@@ -1468,9 +1471,9 @@ describe("ThreadContextPanel", () => {
             priceStatus: "priced",
             provider: "openai",
             reasoningOutputTokens: 37_030,
-            scope: "turn",
-            source: "live",
-            status: "pending",
+            scope: "total",
+            source: "hydration",
+            status: "finalized",
             threadId: "thread-1",
             totalCostMicros: 55_830_000,
             totalTokens: 73_473_538,
@@ -1506,6 +1509,50 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Historical usage summary")).toBeInTheDocument();
     expect(screen.getByText("$55.83 list price")).toBeInTheDocument();
     expect(screen.queryByText("$55.83 list price this turn")).not.toBeInTheDocument();
+  });
+
+  it("treats a large live turn as a turn, not a historical summary", () => {
+    // A genuine turn-scoped live row is a turn regardless of size — no
+    // token-count heuristic reclassifies it. (Previously a >= 1M-token live
+    // row without cumulative context was mislabeled "Historical usage summary".)
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 7_000_000,
+            cachedInputTokens: 70_463_104,
+            createdAt: 1_800_000_000_000,
+            currency: "USD",
+            inputTokens: 73_251_863,
+            model: "gpt-5.5",
+            outputCostMicros: 42_000_000,
+            outputTokens: 221_675,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 37_030,
+            scope: "turn",
+            source: "live",
+            status: "pending",
+            threadId: "thread-1",
+            totalCostMicros: 55_830_000,
+            totalTokens: 73_473_538,
+            turnId: "turn-big-live",
+            uncachedInputCostMicros: 6_830_000,
+            uncachedInputTokens: 2_788_759,
+            usageLineId: "line-big-live",
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("Turn usage")).toBeInTheDocument();
+    expect(screen.queryByText("Historical usage summary")).not.toBeInTheDocument();
+    expect(screen.getByText("$55.83 list price this turn")).toBeInTheDocument();
   });
 
   it("hides the hover rail when document mouse movement resumes outside the rail", async () => {
