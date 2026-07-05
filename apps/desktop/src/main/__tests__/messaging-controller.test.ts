@@ -9638,6 +9638,7 @@ describe("MessagingController", () => {
   it("suppresses non-final commentary completions so a turn posts one message", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
+      toolUpdateDefaultMode: "show_none",
       deliver: async (intent) => {
         delivered.push(intent);
         return {
@@ -9652,8 +9653,9 @@ describe("MessagingController", () => {
     delivered.length = 0;
 
     // A regular (non-automation) turn where the backend emits intermediate
-    // "commentary" agentMessage completions before the final answer. Each of
-    // these used to post its own message — the multi-message channel flood.
+    // "commentary" agentMessage completions before the final answer. With the
+    // Working Updates dial at None (the agent-personality case), the commentary
+    // prose is suppressed — only the final answer and any elicitation post.
     for (const [phase, text] of [
       ["commentary", "I'll check the weather for 07747."],
       ["commentary", "Pulling current conditions now."],
@@ -9694,8 +9696,8 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    // Only the final answer is posted — the commentary phases are dropped, so
-    // the turn lands as a single message instead of a burst.
+    // Only the final answer is posted — the commentary phases are suppressed by
+    // the None dial, so the turn lands as a single message instead of a burst.
     expect(
       delivered.filter((intent) => intent.kind === "message" && intent.role === "assistant"),
     ).toEqual([
@@ -9711,6 +9713,53 @@ describe("MessagingController", () => {
     ]);
     expect(JSON.stringify(delivered)).not.toContain("I'll check the weather");
     expect(JSON.stringify(delivered)).not.toContain("Pulling current conditions");
+  });
+
+  it("posts intermediate prose through the Working Updates dial at Show All", async () => {
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_all",
+      deliver: async (intent) => {
+        delivered.push(intent);
+        return {
+          channel: "telegram" as const,
+          deliveredAt: 1000,
+          outcome: "presented" as const,
+          surface: { channel: "telegram" as const, id: `surface:${intent.id}` },
+        };
+      },
+    });
+    await bindThread(harness);
+    delivered.length = 0;
+
+    // With the dial at All, the agent's in-turn prose is bridged individually
+    // (still subject to the rate budget) rather than suppressed.
+    for (const [phase, text] of [
+      ["commentary", "I'll check the weather for 07747."],
+      ["commentary", "Pulling current conditions now."],
+      ["final", "For 07747 / Matawan, NJ: sunny and very hot."],
+    ] as const) {
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { id: `msg-${phase}-${text.length}`, type: "agentMessage", phase, text },
+          },
+        },
+      } satisfies AgentEvent);
+    }
+
+    const assistantTexts = delivered
+      .filter(
+        (intent): intent is Extract<MessagingSurfaceIntent, { kind: "message" }> =>
+          intent.kind === "message" && intent.role === "assistant",
+      )
+      .flatMap((intent) => intent.parts.map((part) => ("text" in part ? part.text : "")));
+    expect(assistantTexts).toContain("I'll check the weather for 07747.");
+    expect(assistantTexts).toContain("Pulling current conditions now.");
   });
 
   it("does not re-post buffered text when deltas arrive after the turn is terminal", async () => {

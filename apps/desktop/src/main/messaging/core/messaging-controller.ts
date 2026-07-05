@@ -199,6 +199,7 @@ import {
   type MessagingResolvedThreadState,
 } from "./messaging-thread-state.js";
 import { summarizeToolActivityFromBackendEvent } from "./messaging-tool-activity.js";
+import type { MessagingToolActivity } from "./messaging-tool-activity.js";
 import {
   MessagingToolUpdatePolicy,
   type MessagingToolUpdatePolicyDelivery,
@@ -629,6 +630,17 @@ export class MessagingController {
   private readonly logger: MessagingControllerLogger;
   private readonly streamingResponsesDefault: boolean;
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
+  // Un-gated per-turn capture of the agent's most recent in-turn (non-final)
+  // prose, keyed by `${bindingId}\0${turnId}`. Written before the Working
+  // Updates dial decides delivery, so an elicitation can flush its setup
+  // message (U7) even when the dial suppressed it. `deliveredProseIds` tracks
+  // which prose activity ids already reached the channel so the flush stays
+  // idempotent.
+  private readonly turnProseCapture = new Map<
+    string,
+    { activityId: string; text: string }
+  >();
+  private readonly deliveredProseIds = new Map<string, Set<string>>();
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
   private readonly pendingFullAccessNewThreadPrompts = new Map<
@@ -1120,10 +1132,14 @@ export class MessagingController {
         (isTerminalTurnLifecycle(lifecycle) ||
           (isThreadStatusIdleEvent(event) && activeTurn))
       ) {
+        const terminalTurnId = turnIdForBackendEvent(event) ?? activeTurn?.turnId;
         await this.flushToolUpdatesForBinding(binding, {
           clear: true,
-          turnId: turnIdForBackendEvent(event) ?? activeTurn?.turnId,
+          turnId: terminalTurnId,
         });
+        if (terminalTurnId) {
+          this.clearTurnProse(binding.id, terminalTurnId);
+        }
       }
 
       const assistantDelta = assistantDeltaForBackendEvent(event);
@@ -1135,14 +1151,6 @@ export class MessagingController {
 
       const assistantText = assistantTextForBackendEvent(event);
       if (assistantText) {
-        // Suppress NON-final agentMessage completions (e.g. Codex "commentary"
-        // phases the agent emits while thinking) on every turn, not just
-        // automation ones. Each such `item/completed` otherwise posts its own
-        // message, so a single turn fans out into a burst of separate messages
-        // on the channel — the "pinged a dozen times" flood. Messaging shows
-        // the agent's final answer (streamed into one message when streaming is
-        // on); intermediate commentary stays on the desktop transcript. Items
-        // with no phase, or phase "final"/"final_answer", still post.
         if (!isNonFinalAssistantTextForBackendEvent(event)) {
           const deliveredFinalStream = await this.flushAssistantStreamForEvent(
             event,
@@ -1154,6 +1162,20 @@ export class MessagingController {
           } else {
             await this.deliverAssistantMessage(assistantText, event, binding);
           }
+        } else if (!automationTurnEvent) {
+          // NON-final agentMessage completions (e.g. Codex "commentary" phases
+          // the agent emits while thinking) are the agent's in-turn prose. They
+          // flow through the Working Updates dial: suppressed at None, coalesced
+          // into batches at Less/Some/More, sent individually at All — the same
+          // policy that governs tool activity. This replaces the old outright
+          // drop that was added to stop the "pinged a dozen times" flood; the
+          // coalescing preserves that anti-flood intent at low dial settings.
+          await this.deliverAssistantProseForBackendEvent(
+            event,
+            binding,
+            assistantText,
+            activeTurn?.turnId,
+          );
         }
       } else if (isTerminalTurnLifecycle(activeTurn) && !assistantDelta) {
         // Only flush buffered stream text on a genuine terminal event (e.g.
@@ -11240,6 +11262,83 @@ export class MessagingController {
     }
   }
 
+  /**
+   * Route the agent's in-turn (non-final) prose through the Working Updates
+   * dial, mirroring {@link deliverToolActivityForBackendEvent} for tools. The
+   * prose is captured un-gated first (so U7's elicitation flush can surface a
+   * suppressed setup message), then handed to the same coalescing policy so it
+   * is dropped at None, batched at Less/Some/More, or sent individually at All.
+   */
+  private async deliverAssistantProseForBackendEvent(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+    assistantText: string,
+    activeTurnId?: string,
+  ): Promise<void> {
+    const turnId = turnIdForBackendEvent(event) ?? activeTurnId;
+    if (!turnId) {
+      return;
+    }
+    if (this.isAutomationTurnEvent(event, binding, activeTurnId)) {
+      return;
+    }
+
+    const activity: MessagingToolActivity = {
+      id: proseActivityIdForBackendEvent(event, turnId, assistantText),
+      kind: "prose",
+      status: "completed",
+      title: assistantText,
+    };
+    this.turnProseCapture.set(this.turnProseKey(binding.id, turnId), {
+      activityId: activity.id,
+      text: assistantText,
+    });
+
+    const mode = resolveMessagingToolUpdateMode(
+      binding,
+      await this.resolveToolUpdateDefaultMode(),
+    );
+    const deliveries = this.toolUpdatePolicy.processActivity({
+      activity,
+      bindingId: binding.id,
+      mode,
+      turnId,
+    });
+    for (const delivery of deliveries) {
+      await this.deliverToolUpdateDelivery(delivery, binding);
+    }
+  }
+
+  private turnProseKey(bindingId: string, turnId: string): string {
+    return `${bindingId}\0${turnId}`;
+  }
+
+  private markProseActivitiesDelivered(
+    delivery: MessagingToolUpdatePolicyDelivery,
+  ): void {
+    const proseIds = delivery.activities
+      .filter((activity) => activity.kind === "prose")
+      .map((activity) => activity.id);
+    if (proseIds.length === 0) {
+      return;
+    }
+    const key = this.turnProseKey(delivery.bindingId, delivery.turnId);
+    let delivered = this.deliveredProseIds.get(key);
+    if (!delivered) {
+      delivered = new Set();
+      this.deliveredProseIds.set(key, delivered);
+    }
+    for (const id of proseIds) {
+      delivered.add(id);
+    }
+  }
+
+  private clearTurnProse(bindingId: string, turnId: string): void {
+    const key = this.turnProseKey(bindingId, turnId);
+    this.turnProseCapture.delete(key);
+    this.deliveredProseIds.delete(key);
+  }
+
   private async flushToolUpdatesForBinding(
     binding: MessagingBindingRecord,
     options: { clear: boolean; turnId?: string },
@@ -11280,6 +11379,7 @@ export class MessagingController {
             createdAt: this.now(),
             id: this.newIntentId("tool-update-batch"),
           });
+    this.markProseActivitiesDelivered(delivery);
     await this.deliver(intent, binding);
   }
 
@@ -13487,6 +13587,32 @@ function isNonFinalAssistantTextForBackendEvent(event: AgentEvent): boolean {
   }
   const phase = typeof params.item.phase === "string" ? params.item.phase : undefined;
   return Boolean(phase && phase !== "final" && phase !== "final_answer");
+}
+
+/**
+ * Stable id for an in-turn prose activity so the coalescing policy dedups
+ * re-emitted events. Prefers the backend item id; falls back to a
+ * turn-scoped signature of the text (distinct prose blocks differ, and verbatim
+ * repeats are intentionally deduped).
+ */
+function proseActivityIdForBackendEvent(
+  event: AgentEvent,
+  turnId: string,
+  text: string,
+): string {
+  if (event.notification.method === "item/completed") {
+    const item = (event.notification.params as { item?: Record<string, unknown> })
+      .item;
+    const rawId =
+      (typeof item?.id === "string" && item.id) ||
+      (typeof item?.itemId === "string" && item.itemId) ||
+      (typeof item?.item_id === "string" && item.item_id) ||
+      undefined;
+    if (rawId) {
+      return `prose:${rawId}`;
+    }
+  }
+  return `prose:${turnId}:${text.length}:${text.slice(0, 24)}`;
 }
 
 function isTerminalTurnLifecycle(
