@@ -17,10 +17,11 @@
     "op:run": "node ./scripts/op-run.mjs run",
     "licenses:check": "node ./scripts/check-package-licenses.mjs && node ./scripts/generate-third-party-licenses.mjs --check",
     "licenses:generate": "node ./scripts/generate-third-party-licenses.mjs",
-    "lint": "pnpm lint:sql && pnpm lint:codex-storage && pnpm lint:colors && pnpm licenses:check && pnpm typecheck && pnpm lint:boundaries",
+    "lint": "pnpm lint:sql && pnpm lint:codex-storage && pnpm lint:colors && pnpm licenses:check && pnpm lint:eslint && pnpm typecheck && pnpm lint:boundaries",
     "lint:boundaries": "depcruise --config .dependency-cruiser.cjs packages/ apps/desktop/src/",
     "lint:codex-storage": "node ./scripts/check-codex-storage-boundary.mjs",
     "lint:colors": "node ./scripts/lint-renderer-colors.mjs",
+    "lint:eslint": "eslint \"packages/**/*.{ts,tsx}\" \"apps/desktop/src/**/*.{ts,tsx}\"",
     "lint:sql": "node ./scripts/lint-sql-templates.mjs",
     "release:check": "node ./scripts/check-desktop-release-metadata.mjs",
     "test:desktop-e2e": "pnpm --filter @pwragent/desktop test:e2e",
@@ -35,10 +36,15 @@
     "typecheck": "pnpm -r --if-present typecheck"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^24.12.4",
     "dependency-cruiser": "^17.3.10",
+    "eslint": "^10.6.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
     "jsdom": "^29.0.2",
     "typescript": "^6.0.2",
+    "typescript-eslint": "^8.62.0",
     "vitest": "^4.1.4"
   },
   "pnpm": {
