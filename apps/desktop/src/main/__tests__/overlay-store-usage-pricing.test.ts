@@ -124,6 +124,48 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     expect(pricing.summaries[0]).not.toHaveProperty("observedColdReplayCount");
   });
 
+  it("keeps an observed live line when transcript hydration arrives for the turn", async () => {
+    // Live turn we observed replays for.
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        observedColdReplayCount: 1,
+        observedColdReplayUncachedTokens: 150_000,
+        observedHotReplayCount: 4,
+        observedHotReplayCachedTokens: 600_000,
+        source: "live",
+        status: "pending",
+        usageLineId: "live:thread-1:turn-1",
+      }),
+    });
+
+    // Transcript hydration for the same turn (no observed tally, different id) —
+    // this is what readThread persists on every thread open.
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        source: "hydration",
+        status: "finalized",
+        usageLineId: "codex:thread-1:turn-1:total:item-9",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    // Exactly one line for the turn — ours — with the observed tally intact.
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      usageLineId: "live:thread-1:turn-1",
+      source: "live",
+      observedColdReplayCount: 1,
+      observedHotReplayCount: 4,
+      observedHotReplayCachedTokens: 600_000,
+    });
+    // No double-counting: the hydration copy was ignored, not added.
+    expect(pricing.summaries[0]?.usageLineCount).toBe(1);
+  });
+
   it("keeps the original usage line timestamp when live usage is updated", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({

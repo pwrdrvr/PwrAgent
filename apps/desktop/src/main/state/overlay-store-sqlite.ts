@@ -620,6 +620,34 @@ export class SqliteOverlayStore {
     const now = Date.now();
     let line = repriceOpenAiUsageLine(normalizeThreadUsageLine(params.line, now));
     const upsert = this.stateDb.raw.transaction(() => {
+      // Keep observed context-replay data: a transcript-hydration/backfill line
+      // for a turn we already watched live carries no observed replay tally (the
+      // tally is derived data the Codex transcript can't reproduce). Letting it
+      // through would supersede our live line and drop the tally, so when an
+      // observed live line already exists for this turn we ignore the transcript
+      // copy and keep ours. This is what makes observed counts survive a thread
+      // re-read / app restart.
+      if (
+        (line.source === "hydration" || line.source === "backfill") &&
+        line.turnId
+      ) {
+        const preserved = this.readLiveTurnLineWithObservedReplaysSync({
+          backend: line.backend,
+          provider: line.provider,
+          threadId: line.threadId,
+          turnId: line.turnId,
+        });
+        if (preserved) {
+          line = preserved;
+          return this.recomputeThreadPricingSummarySync({
+            backend: preserved.backend,
+            currency: preserved.currency,
+            provider: preserved.provider,
+            threadId: preserved.parentThreadId ?? preserved.threadId,
+            updatedAt: now,
+          });
+        }
+      }
       const existing = this.readThreadUsageLineSync(line.usageLineId);
       if (existing) {
         line = mergeThreadUsageLineForUpsert(line, existing);
@@ -2095,6 +2123,39 @@ export class SqliteOverlayStore {
     const row = this.stateDb.raw
       .prepare("SELECT * FROM thread_usage_lines WHERE usage_line_id = ?")
       .get(usageLineId) as ThreadUsageLineRow | undefined;
+    return row ? threadUsageLineFromRow(row) : undefined;
+  }
+
+  // The active (non-superseded) live usage line for a turn that carries an
+  // observed context-replay tally, if any. Used to keep observed data when
+  // transcript hydration would otherwise supersede the live line.
+  private readLiveTurnLineWithObservedReplaysSync(params: {
+    backend: string;
+    provider: string;
+    threadId: string;
+    turnId: string;
+  }): ThreadUsageLineRecord | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT *
+           FROM thread_usage_lines
+          WHERE provider = ?
+            AND backend = ?
+            AND thread_id = ?
+            AND turn_id = ?
+            AND source = 'live'
+            AND status != 'superseded'
+            AND (COALESCE(observed_cold_replay_count, 0) > 0
+                 OR COALESCE(observed_hot_replay_count, 0) > 0)
+          ORDER BY created_at DESC, usage_line_id DESC
+          LIMIT 1`,
+      )
+      .get(
+        params.provider,
+        params.backend,
+        params.threadId,
+        params.turnId,
+      ) as ThreadUsageLineRow | undefined;
     return row ? threadUsageLineFromRow(row) : undefined;
   }
 

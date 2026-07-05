@@ -290,18 +290,17 @@ step.
   `thread_usage_lines` because the renderer reads persisted lines (not the
   in-memory line), so persistence is required even for the active-turn display.
   Implemented as four columns + a migration to `user_version` 24.
-  **Known limitation discovered:** `readThread` (every thread open/refresh)
-  calls `persistReplayUsageLines`, which upserts transcript-**hydration** lines
-  that supersede the `source: "live"` line for the same turn
-  (`overlay-store-sqlite` supersede clause). The observed tally is derived data
-  not present in the Codex transcript, so hydration cannot reproduce it and
-  actively hides the line that holds it. Net behavior shipped: observed counts
-  show for the **active turn** and for **completed turns while the thread stays
-  open**, but do **not** survive a thread re-read / app restart. Durable
-  retention would require carrying the tally onto the per-turn record
-  (`thread_usage_turns`, which hydration updates in place) or preserving
-  observed fields through the supersede — tracked as a follow-up, not done in
-  this increment.
+  **Hydration/supersede interaction — resolved:** `readThread` (every thread
+  open/refresh) calls `persistReplayUsageLines`, which upserts
+  transcript-**hydration** lines that would supersede the `source: "live"` line
+  for the same turn. The observed tally is derived data not present in the Codex
+  transcript, so hydration cannot reproduce it. Fixed in
+  `overlay-store-sqlite.upsertThreadUsageLine`: when a hydration/backfill line
+  arrives for a turn that already has a non-superseded `source: "live"` line
+  carrying an observed tally (`readLiveTurnLineWithObservedReplaysSync`), the
+  transcript copy is **ignored and our line kept** — so exactly one line per
+  turn survives and the observed counts persist across thread re-read and app
+  restart. Turns we never observed hydrate normally (unchanged behavior).
 
 ---
 
