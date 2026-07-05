@@ -121,6 +121,33 @@ export function MessagingSettings(props: {
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
   const showStreamingOption = props.snapshot.messaging.showStreamingOption;
   const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
+  const [streamingNudgeProvider, setStreamingNudgeProvider] = useState<
+    string | null
+  >(null);
+  // When an operator turns on provider-level streaming, offer once to reveal the
+  // per-thread streaming control (the global show-option, default off). Guarded
+  // by shouldOfferStreamingNudge so it doesn't nag: skip if the global option is
+  // already on, or if another provider already streams (choice already made).
+  const maybeNudgeForStreaming = (
+    providerKey: string,
+    providerLabel: string,
+  ): void => {
+    const offer = shouldOfferStreamingNudge({
+      showStreamingOption: showStreamingOption.value,
+      enabledProviderKey: providerKey,
+      providerStreaming: {
+        telegram: telegram.streamingResponses.value,
+        discord: discord.streamingResponses.value,
+        mattermost: mattermost.streamingResponses.value,
+        slack: slack.streamingResponses.value,
+        feishu: feishu.streamingResponses.value,
+        line: line.streamingResponses.value,
+      },
+    });
+    if (offer) {
+      setStreamingNudgeProvider(providerLabel);
+    }
+  };
   const imageProfile = props.snapshot.messaging.attachments.imageProfile;
   const runtimeMessaging = props.snapshot.runtime.messaging;
   const masterEnabled = runtimeMessaging.overrideActive
@@ -221,6 +248,45 @@ export function MessagingSettings(props: {
               void props.onShowStreamingOptionChange(enabled);
             }}
           />
+          {streamingNudgeProvider ? (
+            <section
+              className="settings-panel settings-panel--warning"
+              role="status"
+            >
+              <div className="settings-panel__header">
+                <div>
+                  <p className="eyebrow">Streaming enabled</p>
+                  <h2>Show the streaming option on thread cards?</h2>
+                </div>
+              </div>
+              <p className="settings-row__description">
+                You turned on streaming for {streamingNudgeProvider}. Show the
+                per-thread streaming toggle in chat status cards and the New
+                Thread menu so you can pick it per thread? It stays an advanced
+                option — most people leave it off.
+              </p>
+              <div className="settings-inline-actions">
+                <button
+                  className="button button--secondary"
+                  disabled={props.saving}
+                  onClick={() => {
+                    setStreamingNudgeProvider(null);
+                    void props.onShowStreamingOptionChange(true);
+                  }}
+                  type="button"
+                >
+                  Show it on thread cards
+                </button>
+                <button
+                  className="button button--ghost"
+                  onClick={() => setStreamingNudgeProvider(null)}
+                  type="button"
+                >
+                  Not now
+                </button>
+              </div>
+            </section>
+          ) : null}
           <NumberField
             disabled={props.saving}
             label="Input debounce"
@@ -353,6 +419,7 @@ export function MessagingSettings(props: {
             help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(telegram.streamingResponses)}
             onChange={(streamingResponses) => {
+              if (streamingResponses) maybeNudgeForStreaming("telegram", "Telegram");
               void props.onSaveTelegram({
                 ...telegram,
                 streamingResponses: {
@@ -470,6 +537,7 @@ export function MessagingSettings(props: {
             help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(discord.streamingResponses)}
             onChange={(streamingResponses) => {
+              if (streamingResponses) maybeNudgeForStreaming("discord", "Discord");
               void props.onSaveDiscord({
                 ...discord,
                 streamingResponses: {
@@ -623,6 +691,7 @@ export function MessagingSettings(props: {
             help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(mattermost.streamingResponses)}
             onChange={(streamingResponses) => {
+              if (streamingResponses) maybeNudgeForStreaming("mattermost", "Mattermost");
               void props.onSaveMattermost({
                 ...mattermost,
                 streamingResponses: {
@@ -1103,6 +1172,7 @@ export function MessagingSettings(props: {
             help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(slack.streamingResponses)}
             onChange={(streamingResponses) => {
+              if (streamingResponses) maybeNudgeForStreaming("slack", "Slack");
               void props.onSaveSlack({
                 ...slack,
                 streamingResponses: {
@@ -1265,6 +1335,7 @@ export function MessagingSettings(props: {
             help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(feishu.streamingResponses)}
             onChange={(streamingResponses) => {
+              if (streamingResponses) maybeNudgeForStreaming("feishu", "Feishu");
               void props.onSaveFeishu({
                 ...feishu,
                 streamingResponses: {
@@ -1652,6 +1723,26 @@ const FEISHU_INBOUND_MODE_OPTIONS: Array<{
   { label: "Persistent", value: "persistent" },
   { label: "Webhook", value: "webhook" },
 ];
+
+/**
+ * Whether to offer the "show streaming option on thread cards" nudge when a
+ * provider's streaming is switched on. Skips when the global option is already
+ * on, or when any OTHER provider already streams (the operator has made this
+ * choice before, so a repeat prompt would nag).
+ */
+export function shouldOfferStreamingNudge(params: {
+  showStreamingOption: boolean;
+  enabledProviderKey: string;
+  providerStreaming: Record<string, boolean>;
+}): boolean {
+  if (params.showStreamingOption) {
+    return false;
+  }
+  const anyOtherStreaming = Object.entries(params.providerStreaming).some(
+    ([key, enabled]) => key !== params.enabledProviderKey && enabled,
+  );
+  return !anyOtherStreaming;
+}
 
 const STREAMING_RESPONSES_WARNING =
   "Advanced. Leave this off unless you specifically need live message edits. It does not make turns finish sooner; it repeatedly edits the same platform message, which can break voice readers and reach platform rate limits much sooner.";
