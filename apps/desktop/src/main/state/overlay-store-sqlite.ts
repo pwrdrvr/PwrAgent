@@ -2498,6 +2498,21 @@ function mergeThreadUsageLineForUpsert(
   const merged: ThreadUsageLineRecord = {
     ...line,
     createdAt: Math.min(existing.createdAt, line.createdAt),
+    // Observation-derived tallies are never present on transcript-sourced
+    // lines, and a live re-upsert can momentarily omit them (e.g. the in-memory
+    // accumulator was reset). Never let an incoming line without a tally erase a
+    // previously-persisted one. `?? existing` (not `||`) preserves a legitimate
+    // observed count of 0.
+    observedColdReplayCount:
+      line.observedColdReplayCount ?? existing.observedColdReplayCount,
+    observedColdReplayUncachedTokens:
+      line.observedColdReplayUncachedTokens ??
+      existing.observedColdReplayUncachedTokens,
+    observedHotReplayCachedTokens:
+      line.observedHotReplayCachedTokens ??
+      existing.observedHotReplayCachedTokens,
+    observedHotReplayCount:
+      line.observedHotReplayCount ?? existing.observedHotReplayCount,
     ...(line.fastMode !== undefined
       ? { fastMode: line.fastMode }
       : existing.fastMode !== undefined

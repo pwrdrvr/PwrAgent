@@ -629,7 +629,14 @@ function formatContextReplayEstimate(params: {
   displayOptions: PricingDisplayOptions;
   line: PricingUsageLine;
 }): string[] {
-  if (isEstimatedUsageGap(params.line) || isHistoricalUsageSummary(params.line)) {
+  // Context replays are a per-turn concept; only turn-scoped lines carry the
+  // observed tally. Guarding on scope keeps monitor/total/backfill rows from
+  // ever rendering replay estimates even if they somehow carried the fields.
+  if (
+    params.line.scope !== "turn" ||
+    isEstimatedUsageGap(params.line) ||
+    isHistoricalUsageSummary(params.line)
+  ) {
     return [];
   }
 

@@ -12755,6 +12755,27 @@ export class DesktopBackendRegistry {
     return tally;
   }
 
+  // Drop a turn's in-memory replay tally once the turn ends. The final counts
+  // are already frozen on the persisted usage line, so this only bounds the
+  // per-turn map's growth over a long session. The per-thread input cursor is
+  // deliberately kept: it lets any late duplicate re-emission for this turn
+  // dedup (its cumulative input does not grow, so it is a no-op) instead of
+  // re-seeding and re-counting from scratch.
+  private forgetCompletedTurnReplayObservations(event: AgentEvent): void {
+    const method = event.notification.method;
+    if (method !== "turn/completed" && method !== "turn/failed") {
+      return;
+    }
+    const threadId = event.notification.params.threadId;
+    const turnId = turnIdFromTerminalNotification(event.notification);
+    if (!threadId || !turnId) {
+      return;
+    }
+    this.liveThreadReplayObservations.delete(
+      [event.backend, threadId, turnId].join(":"),
+    );
+  }
+
   private async recordLiveThreadUsage(event: AgentEvent): Promise<void> {
     const notification = event.notification;
     if (notification.method !== "thread/tokenUsage/updated") {
@@ -19633,6 +19654,7 @@ export class DesktopBackendRegistry {
     }
 
     await this.recordLiveThreadUsage(event);
+    this.forgetCompletedTurnReplayObservations(event);
     await this.recordCodexNativeSubAgentActivity(event);
     await this.recordCodexNativeSubAgentNotifications(event);
     await this.recordCodexNativeSubAgentNames(event);

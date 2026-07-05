@@ -124,6 +124,43 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     expect(pricing.summaries[0]).not.toHaveProperty("observedColdReplayCount");
   });
 
+  it("preserves a persisted observed tally when the same line re-upserts without one", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        observedColdReplayCount: 1,
+        observedColdReplayUncachedTokens: 150_000,
+        observedHotReplayCount: 3,
+        observedHotReplayCachedTokens: 450_000,
+        source: "live",
+        status: "pending",
+        usageLineId: "live:thread-1:turn-1",
+      }),
+    });
+
+    // Same usageLineId re-upserts (e.g. accumulator reset after restart) with no
+    // observed fields — the persisted tally must not be erased.
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        source: "live",
+        status: "pending",
+        usageLineId: "live:thread-1:turn-1",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      observedColdReplayCount: 1,
+      observedColdReplayUncachedTokens: 150_000,
+      observedHotReplayCount: 3,
+      observedHotReplayCachedTokens: 450_000,
+    });
+  });
+
   it("keeps an observed live line when transcript hydration arrives for the turn", async () => {
     // Live turn we observed replays for.
     await store.upsertThreadUsageLine({

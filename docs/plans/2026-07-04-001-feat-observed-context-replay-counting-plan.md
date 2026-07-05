@@ -304,6 +304,41 @@ step.
 
 ---
 
+## 8b. Review hardening (2026-07-05)
+
+Multi-agent review of the implementation PR (#933). Fixed:
+
+- **Merge no longer erases a persisted tally.** `mergeThreadUsageLineForUpsert`
+  now preserves `observed_*` via `?? existing` when an incoming same-id line
+  omits them (guards the accumulator-reset-after-restart footgun; `??` keeps a
+  legitimate 0).
+- **Per-turn tally is wiped at turn end.** `forgetCompletedTurnReplayObservations`
+  deletes the `liveThreadReplayObservations` entry on `turn/completed`/`failed`
+  (final counts are already frozen on the line). The per-thread input cursor is
+  intentionally kept so a late duplicate re-emission dedups instead of
+  re-counting — and the merge preservation above makes that safe.
+- **Renderer scope guard.** `formatContextReplayEstimate` returns nothing for
+  non-`turn`-scoped lines, re-establishing the invariant the removed active-turn
+  gate used to enforce.
+
+Reviewed and consciously deferred (documented, not fixed):
+
+- **Refuted:** "compaction stalls counting" — `total.inputTokens` is a
+  cumulative billing counter (observed ~19M vs 258k window) that does not drop
+  on compaction, so the monotonic cursor never falsely stalls.
+- **Non-issue:** hydration skips refreshing `thread_usage_turns` metadata — that
+  table has no read path (not shown in the pricing panel), so the staleness is
+  invisible.
+- **Declined:** a fast-out for the per-line guard `SELECT` — it is an indexed
+  point lookup with negligible cost, and the obvious in-memory fast-out would
+  break cross-restart durability (persisted-but-not-yet-read observed rows).
+- **Follow-ups:** (a) the tally would live more naturally on `thread_usage_turns`
+  (removes the supersede guard entirely) — larger refactor; (b) the private
+  `observeLiveThreadContextReplay` map-keying is only covered transitively via
+  the fixture test's re-implemented bookkeeping; (c) a narrow race where
+  hydration arriving before a turn's first ≥32k request supersedes the
+  still-zero live line.
+
 ## 9. Non-goals
 
 - Reconstructing replay counts for historical turns we never observed live.
