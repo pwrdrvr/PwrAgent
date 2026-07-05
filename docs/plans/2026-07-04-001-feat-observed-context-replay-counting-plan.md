@@ -342,8 +342,17 @@ Reviewed and consciously deferred (documented, not fixed):
 - **Declined:** a fast-out for the per-line guard `SELECT` — it is an indexed
   point lookup with negligible cost, and the obvious in-memory fast-out would
   break cross-restart durability (persisted-but-not-yet-read observed rows).
-- **Follow-ups:** (a) the tally would live more naturally on `thread_usage_turns`
-  (removes the supersede guard entirely) — larger refactor; (b) the private
+- **Follow-ups:** (a) **DONE** (stacked refactor
+  `refactor/context-replay-tally-on-turn-record`): the tally now lives on
+  `thread_usage_turns` (`user_version` 25), refreshed via COALESCE and immune to
+  the usage-*line* supersession lifecycle, and re-attached to the displayed line
+  at read time in `readThreadPricing`. This removed the `upsertThreadUsageLine`
+  preserve guard, `readLiveTurnLineWithObservedReplaysSync`, and the
+  `mergeThreadUsageLineForUpsert` `?? existing` observed-field preservation
+  entirely; hydration now supersedes the live line normally. The tally is
+  temporarily **dual-written** to the (now deprecated) `thread_usage_lines`
+  columns so older locally-run builds sharing the profile DB keep working during
+  the transition; removal tracked in issue #947. (b) the private
   `observeLiveThreadContextReplay` map-keying is only covered transitively via
   the fixture test's re-implemented bookkeeping; (c) a narrow race where
   hydration arriving before a turn's first ≥32k request supersedes the

@@ -99,7 +99,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
-  it("round-trips observed context-replay tallies on usage lines", async () => {
+  it("round-trips observed context-replay tallies through the turn record", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
         observedColdReplayCount: 2,
@@ -114,11 +114,58 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       threadId: "thread-1",
     });
 
+    // The tally is stored on thread_usage_turns and re-attached to the displayed
+    // line at read time.
     expect(pricing.lines[0]).toMatchObject({
       observedColdReplayCount: 2,
       observedColdReplayUncachedTokens: 322_900,
       observedHotReplayCachedTokens: 672_200,
       observedHotReplayCount: 4,
+    });
+    const turn = stateDb.raw
+      .prepare(
+        `SELECT observed_cold_replay_count,
+                observed_cold_replay_uncached_tokens,
+                observed_hot_replay_cached_tokens,
+                observed_hot_replay_count
+         FROM thread_usage_turns
+         WHERE usage_turn_id = ?`,
+      )
+      .get(pricing.lines[0]?.usageTurnId) as {
+        observed_cold_replay_count: number | null;
+        observed_cold_replay_uncached_tokens: number | null;
+        observed_hot_replay_cached_tokens: number | null;
+        observed_hot_replay_count: number | null;
+      };
+    expect(turn).toEqual({
+      observed_cold_replay_count: 2,
+      observed_cold_replay_uncached_tokens: 322_900,
+      observed_hot_replay_cached_tokens: 672_200,
+      observed_hot_replay_count: 4,
+    });
+    // DEPRECATED dual-write (issue #947): the tally is also mirrored onto
+    // thread_usage_lines so older locally-run builds keep displaying it. Remove
+    // this assertion when the dual-write is dropped.
+    const line = stateDb.raw
+      .prepare(
+        `SELECT observed_cold_replay_count,
+                observed_cold_replay_uncached_tokens,
+                observed_hot_replay_cached_tokens,
+                observed_hot_replay_count
+         FROM thread_usage_lines
+         WHERE usage_line_id = ?`,
+      )
+      .get(pricing.lines[0]?.usageLineId) as {
+        observed_cold_replay_count: number | null;
+        observed_cold_replay_uncached_tokens: number | null;
+        observed_hot_replay_cached_tokens: number | null;
+        observed_hot_replay_count: number | null;
+      };
+    expect(line).toEqual({
+      observed_cold_replay_count: 2,
+      observed_cold_replay_uncached_tokens: 322_900,
+      observed_hot_replay_cached_tokens: 672_200,
+      observed_hot_replay_count: 4,
     });
     // Observation-derived tallies must not leak into the priced summary totals.
     expect(pricing.summaries[0]).not.toHaveProperty("observedColdReplayCount");
@@ -138,7 +185,8 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
 
     // Same usageLineId re-upserts (e.g. accumulator reset after restart) with no
-    // observed fields — the persisted tally must not be erased.
+    // observed fields — the turn-record COALESCE must not erase the persisted
+    // tally.
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
         source: "live",
@@ -161,24 +209,31 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
-  it("keeps an observed live line when transcript hydration arrives for the turn", async () => {
+  it("keeps the observed tally on the turn record when hydration supersedes the live line", async () => {
     // Live turn we observed replays for.
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
+        completedAt: undefined,
+        model: "gpt-5.5",
         observedColdReplayCount: 1,
         observedColdReplayUncachedTokens: 150_000,
         observedHotReplayCount: 4,
         observedHotReplayCachedTokens: 600_000,
+        serviceTier: "standard",
         source: "live",
         status: "pending",
         usageLineId: "live:thread-1:turn-1",
       }),
     });
 
-    // Transcript hydration for the same turn (no observed tally, different id) —
-    // this is what readThread persists on every thread open.
+    // Transcript hydration for the same turn (no observed tally, different id,
+    // distinct turn metadata) — this is what readThread persists on every thread
+    // open. It now supersedes the live line normally.
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
+        completedAt: 55_000,
+        model: "gpt-5.5-codex",
+        serviceTier: "priority",
         source: "hydration",
         status: "finalized",
         usageLineId: "codex:thread-1:turn-1:total:item-9",
@@ -190,17 +245,47 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       threadId: "thread-1",
     });
 
-    // Exactly one line for the turn — ours — with the observed tally intact.
+    // Exactly one line survives — the hydration line — and the observed tally,
+    // stored on the turn record, is re-attached to it.
     expect(pricing.lines).toHaveLength(1);
     expect(pricing.lines[0]).toMatchObject({
-      usageLineId: "live:thread-1:turn-1",
-      source: "live",
+      usageLineId: "codex:thread-1:turn-1:total:item-9",
+      source: "hydration",
+      model: "gpt-5.5-codex",
       observedColdReplayCount: 1,
+      observedColdReplayUncachedTokens: 150_000,
       observedHotReplayCount: 4,
       observedHotReplayCachedTokens: 600_000,
     });
-    // No double-counting: the hydration copy was ignored, not added.
+    // No double-counting: hydration superseded the live line, not added to it.
     expect(pricing.summaries[0]?.usageLineCount).toBe(1);
+
+    // Turn metadata now reflects the hydration line (COALESCE let it win), while
+    // the observed tally is preserved.
+    const turn = stateDb.raw
+      .prepare(
+        `SELECT model,
+                service_tier,
+                completed_at,
+                observed_cold_replay_count,
+                observed_hot_replay_count
+         FROM thread_usage_turns
+         WHERE usage_turn_id = ?`,
+      )
+      .get(pricing.lines[0]?.usageTurnId) as {
+        model: string | null;
+        service_tier: string | null;
+        completed_at: number | null;
+        observed_cold_replay_count: number | null;
+        observed_hot_replay_count: number | null;
+      };
+    expect(turn).toEqual({
+      model: "gpt-5.5-codex",
+      service_tier: "priority",
+      completed_at: 55_000,
+      observed_cold_replay_count: 1,
+      observed_hot_replay_count: 4,
+    });
   });
 
   it("keeps the original usage line timestamp when live usage is updated", async () => {
