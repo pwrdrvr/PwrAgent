@@ -2348,11 +2348,11 @@ describe("MessagingController", () => {
       text: expect.stringContaining("Binding: Thread one"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
-      text: expect.stringContaining("Tool updates: Some"),
+      text: expect.stringContaining("Working Updates: Some"),
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "status:tool-updates",
-          label: "Tools: Some",
+          label: "Working Updates: Some",
           fallbackText: "tools",
         }),
         expect.objectContaining({
@@ -13716,7 +13716,7 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Tool updates: Few"),
+      text: expect.stringContaining("Working Updates: Few"),
     });
 
     await harness.controller.handleInboundEvent(
@@ -13725,7 +13725,7 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "single_select",
-      prompt: "Select Tools",
+      prompt: expect.stringContaining("Working Updates"),
       choices: expect.arrayContaining([
         expect.objectContaining({
           id: "status:set-tool-updates",
@@ -13743,7 +13743,7 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Tool updates: Some"),
+      text: expect.stringContaining("Working Updates: Some"),
     });
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
@@ -13771,7 +13771,7 @@ describe("MessagingController", () => {
       );
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "single_select",
-        prompt: "Select Tools",
+        prompt: expect.stringContaining("Working Updates"),
       });
       await harness.controller.handleInboundEvent(
         buildCallbackEvent({
@@ -13781,7 +13781,7 @@ describe("MessagingController", () => {
       );
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "status",
-        text: expect.stringContaining(`Tool updates: ${expected}`),
+        text: expect.stringContaining(`Working Updates: ${expected}`),
       });
     }
   });

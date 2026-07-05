@@ -165,7 +165,7 @@ export function buildBindingStatusIntent(params: {
       supportsFastMode ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
       planDeliveryLine(params.capabilityProfile),
       `Permissions: ${permissionsLineLabel}`,
-      `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
+      `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       `Streaming: ${streamingLabel}`,
       params.binding.pendingSkillSelection
         ? `Pending skill: $${params.binding.pendingSkillSelection.name}`
@@ -493,7 +493,7 @@ function buildStatusActions(params: {
       : []),
     {
       id: "status:tool-updates",
-      label: `Tools: ${formatMessagingToolUpdateModeLabel(params.toolUpdateMode)}`,
+      label: `Working Updates: ${formatMessagingToolUpdateModeLabel(params.toolUpdateMode)}`,
       style: "secondary",
       fallbackText: "tools",
       priority: 9,
@@ -1313,8 +1313,12 @@ export function buildStatusToolUpdateModePickerIntent(params: {
       fallback: "present_new",
     },
     targetSurface: params.binding.statusSurface,
-    fallbackText: "Reply with a tools option number, Back, or Cancel.",
-    prompt: "Select Tools",
+    fallbackText: "Reply with a Working Updates option number, Back, or Cancel.",
+    prompt:
+      "Working Updates — how much of the agent's in-progress work is bridged here.\n\n"
+      + "None: only final answers and questions.\n"
+      + "Less / Some / More: coalesced batches that respect platform rate limits.\n"
+      + "All: the most (the rate budget may still hold some back).",
     choices: applyActionCapabilityLimits(
       [
         ...params.choices.map((choice, index) => ({

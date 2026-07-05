@@ -200,8 +200,8 @@ export function MessagingSettings(props: {
           />
           <SegmentedField
             disabled={props.saving}
-            label="Tool usage notifications"
-            sub="How chatty bridged messages are when the agent runs tools."
+            label="Working Updates"
+            sub="How much of the agent's in-progress work — tool activity and in-turn messages — is bridged. None sends only final answers and questions; higher settings send coalesced batches that respect platform rate limits."
             options={TOOL_UPDATE_MODE_OPTIONS}
             source={sourceBadge(toolUpdateMode)}
             value={toolUpdateMode.value}
