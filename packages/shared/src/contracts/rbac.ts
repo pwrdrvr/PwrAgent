@@ -642,8 +642,14 @@ export type MessagingDynamicToolCategory =
  * hold for the agent to run it. Returns `undefined` for tools that are always
  * allowed (they can't reach beyond the current conversation).
  *
- * The gate is category-level, matching the "manage this instance" grouping:
- *   - thread_inspection  → `tools.thread_inspection`  (search/read/inspect other threads)
+ * The gate is category-level EXCEPT where a tool doesn't fit its catalog:
+ *   - thread_inspection is READ-ONLY → `tools.thread_inspection` (search / read /
+ *     status). Two writes ship in that catalog and are re-homed:
+ *       · `mutate_thread` returns `undefined` here — it changes thread settings
+ *         (model, reasoning, fast mode, rename, execution mode) and is gated
+ *         PER FIELD via `permissionsForThreadMutation`, at parity with the
+ *         status-card buttons (including the Full Access danger gate).
+ *       · `attach_thread_pull_request` is a write → `tools.thread_orchestration`.
  *   - thread_orchestration → `tools.thread_orchestration` (inject messages, handoff, attach dirs)
  *   - app_management / automation_inspection → `tools.instance_management`
  *   - messaging_context: `get_current_messaging_surface` is benign (ungated);
@@ -655,6 +661,13 @@ export function permissionForDynamicTool(
 ): MessagingPermissionId | undefined {
   switch (category) {
     case "thread_inspection":
+      if (tool === "mutate_thread") {
+        // Handled per-field by permissionsForThreadMutation (args-aware).
+        return undefined;
+      }
+      if (tool === "attach_thread_pull_request") {
+        return "tools.thread_orchestration";
+      }
       return "tools.thread_inspection";
     case "thread_orchestration":
       return "tools.thread_orchestration";
@@ -666,6 +679,46 @@ export function permissionForDynamicTool(
     default:
       return undefined;
   }
+}
+
+/** The mutating fields of a `mutate_thread` dynamic-tool call. */
+export type ThreadMutationFields = {
+  title?: unknown;
+  model?: unknown;
+  serviceTier?: unknown;
+  reasoningEffort?: unknown;
+  fastMode?: unknown;
+  executionMode?: unknown;
+};
+
+/**
+ * The permissions a `mutate_thread` call requires, one per field it changes —
+ * the SAME permissions the status-card buttons use, so the agent-tool path can
+ * never do more than the button path. `executionMode: "full-access"` requires
+ * the escalation-equivalent danger permission ON TOP of the execution-mode
+ * permission, mirroring the controller's full-access double-gate. The caller
+ * must require the actor to hold ALL returned permissions.
+ */
+export function permissionsForThreadMutation(
+  args: ThreadMutationFields | null | undefined,
+): MessagingPermissionId[] {
+  if (!args || typeof args !== "object") {
+    return [];
+  }
+  const required = new Set<MessagingPermissionId>();
+  if (args.title !== undefined) required.add("thread.settings.name");
+  if (args.model !== undefined || args.serviceTier !== undefined) {
+    required.add("thread.settings.model");
+  }
+  if (args.reasoningEffort !== undefined) required.add("thread.settings.reasoning");
+  if (args.fastMode !== undefined) required.add("thread.settings.fast_mode");
+  if (args.executionMode !== undefined) {
+    required.add("thread.settings.execution_mode");
+    if (args.executionMode === "full-access") {
+      required.add("thread.execution.full_access");
+    }
+  }
+  return [...required];
 }
 
 // ---------------------------------------------------------------------------

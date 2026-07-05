@@ -21980,16 +21980,21 @@ export class DesktopBackendRegistry {
   private dynamicToolPermissionDenied(
     backend: AppServerBackendKind,
     category: MessagingDynamicToolCategory,
-    call: { threadId: string; turnId?: string; tool: string },
+    call: { threadId: string; turnId?: string; tool: string; arguments?: unknown },
   ): string | null {
     const service = this.messagingAgentToolService;
     if (!service) return null;
+    const args =
+      call.arguments && typeof call.arguments === "object"
+        ? (call.arguments as Record<string, unknown>)
+        : null;
     const result = service.checkDynamicToolPermission({
       backend,
       threadId: call.threadId,
       turnId: call.turnId,
       category,
       tool: call.tool,
+      arguments: args,
     });
     if (result.allowed) return null;
     backendRegistryLog.warn("denying dynamic tool call: messaging RBAC", {

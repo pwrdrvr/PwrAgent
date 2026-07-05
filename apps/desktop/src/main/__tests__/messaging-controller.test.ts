@@ -21420,6 +21420,72 @@ describe("RBAC capability enforcement", () => {
       }),
     ).toEqual({ owns: true, allowed: true });
   });
+
+  it("gates mutate_thread per field, including the full-access double-gate", async () => {
+    // Power User + Tools: can change settings, cannot escalate to full access.
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "thread.settings.model",
+        "thread.settings.reasoning",
+        "thread.settings.fast_mode",
+        "thread.settings.name",
+        "thread.settings.execution_mode",
+        "tools.thread_orchestration",
+      ]),
+    });
+    await driveOneTurn(harness, "tune it");
+    const mutate = (args: Record<string, unknown>) =>
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "thread_inspection",
+        tool: "mutate_thread",
+        arguments: args,
+      });
+
+    // Allowed: renaming + model + reasoning + fast + non-full-access mode.
+    expect(mutate({ title: "renamed", model: "m", fastMode: true })).toEqual({
+      owns: true,
+      allowed: true,
+    });
+    expect(mutate({ executionMode: "default" })).toEqual({
+      owns: true,
+      allowed: true,
+    });
+    // DENIED: escalating to full access needs the danger permission.
+    expect(mutate({ executionMode: "full-access" })).toEqual({
+      owns: true,
+      allowed: false,
+      permission: "thread.execution.full_access",
+    });
+  });
+
+  it("blocks a Chat User's agent from mutating thread settings", async () => {
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "elicitation.answer",
+        "thread.status.view",
+      ]), // Chat User
+    });
+    await driveOneTurn(harness, "change the model");
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "thread_inspection",
+        tool: "mutate_thread",
+        arguments: { model: "gpt-whatever" },
+      }),
+    ).toEqual({
+      owns: true,
+      allowed: false,
+      permission: "thread.settings.model",
+    });
+  });
 });
 
 async function createHarness(options?: {

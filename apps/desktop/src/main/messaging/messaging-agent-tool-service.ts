@@ -13,6 +13,12 @@ export type DynamicToolPermissionCheck = {
   turnId?: string;
   category: MessagingDynamicToolCategory;
   tool: string;
+  /**
+   * The call's arguments, used for args-aware, per-field gating of
+   * `mutate_thread` (model / reasoning / fast mode / rename / execution mode).
+   * Ignored for every other tool.
+   */
+  arguments?: Record<string, unknown> | null;
 };
 
 export type DynamicToolPermissionResult = {

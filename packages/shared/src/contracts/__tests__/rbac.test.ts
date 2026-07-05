@@ -10,6 +10,7 @@ import {
   permissionForActionId,
   permissionForCommandVerb,
   permissionForDynamicTool,
+  permissionsForThreadMutation,
   resolveEffectivePermissions,
   roleIsDangerous,
   type MessagingPermissionId,
@@ -323,9 +324,20 @@ describe("action → permission lookup tables", () => {
   });
 
   it("maps dynamic tool categories to the right agent-tool permission", () => {
+    // thread_inspection is read-only.
     expect(permissionForDynamicTool("thread_inspection", "search_threads")).toBe(
       "tools.thread_inspection",
     );
+    expect(permissionForDynamicTool("thread_inspection", "read_thread")).toBe(
+      "tools.thread_inspection",
+    );
+    // The two writes shipped in that catalog are re-homed.
+    expect(
+      permissionForDynamicTool("thread_inspection", "mutate_thread"),
+    ).toBeUndefined(); // gated per-field instead
+    expect(
+      permissionForDynamicTool("thread_inspection", "attach_thread_pull_request"),
+    ).toBe("tools.thread_orchestration");
     expect(
       permissionForDynamicTool("thread_orchestration", "send_message_to_thread"),
     ).toBe("tools.thread_orchestration");
@@ -342,6 +354,30 @@ describe("action → permission lookup tables", () => {
     expect(
       permissionForDynamicTool("messaging_context", "attach_thread_here"),
     ).toBe("thread.resume");
+  });
+
+  it("gates mutate_thread per field, at parity with the status buttons", () => {
+    expect(permissionsForThreadMutation(null)).toEqual([]);
+    expect(permissionsForThreadMutation({ dryRun: true } as never)).toEqual([]);
+    expect(permissionsForThreadMutation({ title: "x" })).toEqual([
+      "thread.settings.name",
+    ]);
+    expect(new Set(permissionsForThreadMutation({ model: "m", reasoningEffort: "high" }))).toEqual(
+      new Set(["thread.settings.model", "thread.settings.reasoning"]),
+    );
+    expect(permissionsForThreadMutation({ fastMode: true })).toEqual([
+      "thread.settings.fast_mode",
+    ]);
+    // Non-full-access execution mode needs only the settings permission.
+    expect(permissionsForThreadMutation({ executionMode: "default" })).toEqual([
+      "thread.settings.execution_mode",
+    ]);
+    // Escalating to full access double-gates on the danger permission.
+    expect(
+      new Set(permissionsForThreadMutation({ executionMode: "full-access" })),
+    ).toEqual(
+      new Set(["thread.settings.execution_mode", "thread.execution.full_access"]),
+    );
   });
 
   it("resolves prefixed action ids for render-time filtering", () => {

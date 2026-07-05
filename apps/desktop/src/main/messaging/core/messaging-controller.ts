@@ -14,6 +14,7 @@ import {
   permissionForActionId,
   permissionForCommandVerb,
   permissionForDynamicTool,
+  permissionsForThreadMutation,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
   stripCodexGitActionDirectives,
@@ -16751,6 +16752,7 @@ export class MessagingController {
     turnId?: string;
     category: MessagingDynamicToolCategory;
     tool: string;
+    arguments?: Record<string, unknown> | null;
   }): { owns: boolean; allowed: boolean; permission?: string } {
     if (!params.turnId) {
       return { owns: false, allowed: true };
@@ -16766,21 +16768,33 @@ export class MessagingController {
       // Legacy-compatible mode: full capability, exactly as before RBAC.
       return { owns: true, allowed: true };
     }
-    const permission = permissionForDynamicTool(params.category, params.tool);
-    if (!permission) {
-      // Benign tool (e.g. get_current_messaging_surface) — never gated.
+    // `mutate_thread` is gated PER FIELD (model/reasoning/fast/rename/execution
+    // mode) at parity with the status buttons, including the Full Access danger
+    // gate; every other tool needs a single category permission.
+    const required =
+      params.category === "thread_inspection" && params.tool === "mutate_thread"
+        ? permissionsForThreadMutation(params.arguments)
+        : ((): MessagingPermissionId[] => {
+            const permission = permissionForDynamicTool(params.category, params.tool);
+            return permission ? [permission] : [];
+          })();
+    if (required.length === 0) {
+      // Benign tool (e.g. get_current_messaging_surface, or a no-op mutation).
       return { owns: true, allowed: true };
     }
-    if (resolution.permissions.has(permission)) {
+    const missing = required.find(
+      (permission) => !resolution.permissions.has(permission),
+    );
+    if (!missing) {
       return { owns: true, allowed: true };
     }
     this.recordCapabilityDenied(
       origin.event,
-      permission,
+      missing,
       resolution.roleIds,
       `tool:${params.category}:${params.tool}`,
     );
-    return { owns: true, allowed: false, permission };
+    return { owns: true, allowed: false, permission: missing };
   }
 
   private newIntentId(prefix: string): string {
