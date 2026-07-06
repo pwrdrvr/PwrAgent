@@ -953,15 +953,16 @@ function isForkBaselineLine(line: ThreadUsageLineRecord): boolean {
   return line.scope === "fork-baseline";
 }
 
+// A row is a whole-thread/historical summary when its scope says so, or when
+// the live builder recorded that it could not attribute the usage to this turn
+// (turnUsageAttributed === false) — e.g. a first observed event that carried a
+// whole-thread total we couldn't decompose. Legacy rows predating the flag are
+// backfilled by the state-db migration (user_version 26). No token-count guess.
 function isHistoricalUsageSummary(line: ThreadUsageLineRecord): boolean {
-  if (line.scope === "total" || line.scope === "backfill") {
-    return true;
-  }
   return (
-    line.source === "live" &&
-    line.status === "pending" &&
-    line.cumulativeTotalTokens === undefined &&
-    line.totalTokens >= 1_000_000
+    line.scope === "total" ||
+    line.scope === "backfill" ||
+    line.turnUsageAttributed === false
   );
 }
 

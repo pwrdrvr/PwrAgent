@@ -1623,9 +1623,10 @@ describe("ThreadContextPanel", () => {
   });
 
   it("keeps the running duration on an active turn that trips the historical-summary heuristic", () => {
-    // A live turn whose first usage event carries no cumulative snapshot and
-    // whose own totalTokens is >= 1M satisfies isHistoricalUsageSummary. It is
-    // still the active turn, so it must keep its Live chip AND running clock.
+    // An active live turn the builder couldn't attribute (turnUsageAttributed
+    // false) classifies as a historical summary. It is still the active turn,
+    // so it must keep its Live chip AND running clock (guard-order in
+    // formatUsageLineDuration puts the active branch before the summary guard).
     const startedAt = 1_800_000_000_000;
     vi.useFakeTimers();
     vi.setSystemTime(startedAt + 65_000);
@@ -1656,6 +1657,7 @@ describe("ThreadContextPanel", () => {
             totalCostMicros: 1_000,
             totalTokens: 1_500_010,
             turnId: "turn-live",
+            turnUsageAttributed: false,
             uncachedInputCostMicros: 0,
             uncachedInputTokens: 0,
             usageLineId: "line-live-huge",
@@ -1868,7 +1870,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Sub-agent usage")).toBeInTheDocument();
   });
 
-  it("labels legacy live rows without cumulative context as historical summaries", () => {
+  it("labels unattributed live rows as historical summaries", () => {
     renderPanel({
       activeTab: "pricing",
       pinned: true,
@@ -1894,6 +1896,7 @@ describe("ThreadContextPanel", () => {
             totalCostMicros: 55_830_000,
             totalTokens: 73_473_538,
             turnId: "turn-legacy",
+            turnUsageAttributed: false,
             uncachedInputCostMicros: 6_830_000,
             uncachedInputTokens: 2_788_759,
             usageLineId: "line-legacy",
@@ -1925,6 +1928,50 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Historical usage summary")).toBeInTheDocument();
     expect(screen.getByText("$55.83 list price")).toBeInTheDocument();
     expect(screen.queryByText("$55.83 list price this turn")).not.toBeInTheDocument();
+  });
+
+  it("treats a large attributed live turn as a turn, not a summary", () => {
+    // Same size as the unattributed row above, but attributed to the turn — it
+    // must read as a normal (large) turn. No token-count threshold reclassifies it.
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 7_000_000,
+            cachedInputTokens: 70_463_104,
+            createdAt: 1_800_000_000_000,
+            currency: "USD",
+            inputTokens: 73_251_863,
+            model: "gpt-5.5",
+            outputCostMicros: 42_000_000,
+            outputTokens: 221_675,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 37_030,
+            scope: "turn",
+            source: "live",
+            status: "pending",
+            threadId: "thread-1",
+            totalCostMicros: 55_830_000,
+            totalTokens: 73_473_538,
+            turnId: "turn-big",
+            turnUsageAttributed: true,
+            uncachedInputCostMicros: 6_830_000,
+            uncachedInputTokens: 2_788_759,
+            usageLineId: "line-big",
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("Turn usage")).toBeInTheDocument();
+    expect(screen.queryByText("Historical usage summary")).not.toBeInTheDocument();
+    expect(screen.getByText("$55.83 list price this turn")).toBeInTheDocument();
   });
 
   it("hides the hover rail when document mouse movement resumes outside the rail", async () => {

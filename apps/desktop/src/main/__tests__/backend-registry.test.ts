@@ -12782,9 +12782,69 @@ command = "pnpm dev"
       reasoningOutputTokens: 10,
       totalTokens: 1_060,
       turnId: "turn-2",
+      turnUsageAttributed: true,
       uncachedInputTokens: 800,
     });
     expect(pricing.lines[0]?.cumulativeTotalCostMicros).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("marks a whole-thread total with no per-request usage as unattributed", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-5.5",
+          serviceTier: "standard",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    // Only a cumulative total, no per-request `last` snapshot to isolate the
+    // turn: the builder can't attribute this to the turn, so it records
+    // turnUsageAttributed: false and the row reads as a whole-thread summary.
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-3",
+        tokenUsage: {
+          total_token_usage: {
+            input_tokens: 11_000,
+            cached_input_tokens: 10_200,
+            output_tokens: 500,
+            reasoning_output_tokens: 100,
+            total_tokens: 11_600,
+          },
+        },
+      },
+    });
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      totalTokens: 11_600,
+      turnId: "turn-3",
+      turnUsageAttributed: false,
+    });
 
     await registry.close();
   });
