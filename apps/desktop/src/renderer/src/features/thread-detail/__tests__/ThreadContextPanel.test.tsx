@@ -45,6 +45,38 @@ const baseThread: NavigationThreadSummary = {
   },
 };
 
+// A monitor-scope pricing row for a sub-agent. `sourceItemId` is the join key
+// to a `ThreadSubAgentSummary.monitorId`.
+function buildMonitorLine(
+  overrides: Partial<ThreadUsageLineRecord> = {},
+): ThreadUsageLineRecord {
+  return {
+    backend: "codex",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 0,
+    createdAt: 1_800_000_000_000,
+    currency: "USD",
+    inputTokens: 100,
+    model: "gpt-5.5",
+    outputCostMicros: 0,
+    outputTokens: 10,
+    priceStatus: "priced",
+    provider: "openai",
+    reasoningOutputTokens: 0,
+    scope: "monitor",
+    source: "monitor",
+    sourceItemId: "mon-1",
+    status: "finalized",
+    threadId: "thread-1",
+    totalCostMicros: 1_000,
+    totalTokens: 110,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 100,
+    usageLineId: "mon-line-1",
+    ...overrides,
+  };
+}
+
 const baseBackend: BackendSummary = {
   kind: "codex",
   label: "OpenAI",
@@ -1685,6 +1717,114 @@ describe("ThreadContextPanel", () => {
     expect(screen.queryByText("Live")).not.toBeInTheDocument();
     const times = container.querySelector(".rail-card__times");
     expect(times?.textContent).toContain("· 2m 5s ·");
+  });
+
+  it("marks a running sub-agent row live with its name and a running clock", () => {
+    const startedAt = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt + 65_000);
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "mon-1",
+            task: "Review the diff",
+            status: "running",
+            agentName: "Reviewer",
+            createdAt: startedAt,
+            updatedAt: startedAt,
+          },
+        ],
+      },
+      pricing: {
+        lines: [buildMonitorLine({ createdAt: startedAt })],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const activeRow = container.querySelector(".pricing-usage-row--active");
+    expect(activeRow).not.toBeNull();
+    expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+    expect(within(activeRow as HTMLElement).getByText("Reviewer")).toBeInTheDocument();
+    const times = activeRow?.querySelector(".rail-card__times");
+    expect(times?.textContent).toContain("· 1m 5s");
+  });
+
+  it("shows a terminal sub-agent's name but no Live chip", () => {
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "mon-1",
+            task: "Review the diff",
+            status: "success",
+            agentName: "Reviewer",
+            createdAt: 1_800_000_000_000,
+            updatedAt: 1_800_000_000_000,
+          },
+        ],
+      },
+      pricing: {
+        lines: [buildMonitorLine({})],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
+    expect(screen.queryByText("Live")).not.toBeInTheDocument();
+    expect(screen.getByText("Reviewer")).toBeInTheDocument();
+  });
+
+  it("marks multiple concurrently-running sub-agents live", () => {
+    const startedAt = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt + 5_000);
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "mon-1",
+            task: "A",
+            status: "running",
+            agentName: "Alpha",
+            createdAt: startedAt,
+            updatedAt: startedAt,
+          },
+          {
+            monitorId: "mon-2",
+            task: "B",
+            status: "pending",
+            agentName: "Beta",
+            createdAt: startedAt,
+            updatedAt: startedAt,
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          buildMonitorLine({ sourceItemId: "mon-1", usageLineId: "mon-line-1" }),
+          buildMonitorLine({ sourceItemId: "mon-2", usageLineId: "mon-line-2" }),
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(container.querySelectorAll(".pricing-usage-row--active")).toHaveLength(2);
+    expect(screen.getAllByText("Live")).toHaveLength(2);
   });
 
   it("summarizes pricing rows when provider summaries are absent", () => {

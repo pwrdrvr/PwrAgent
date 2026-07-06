@@ -670,6 +670,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             pricing={props.pricing}
             displayOptions={props.pricingDisplayOptions}
             onScrollToTurn={props.onScrollToTurn}
+            subAgents={props.thread.subAgents}
           />
         );
       case "actions":

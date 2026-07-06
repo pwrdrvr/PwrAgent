@@ -1,5 +1,7 @@
 import type {
   ThreadPricingSummary,
+  ThreadSubAgentStatus,
+  ThreadSubAgentSummary,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -23,7 +25,22 @@ type PricingPanelProps = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
+  /**
+   * Durable sub-agent (task-monitor) summaries for this thread, joined to
+   * monitor-scope usage rows by `monitorId` === the row's `sourceItemId`.
+   * Supplies each sub-agent row's name and its live/terminal status.
+   */
+  subAgents?: ThreadSubAgentSummary[];
 };
+
+// Terminal sub-agent statuses — a sub-agent in any other status is still
+// running, so its usage row reads as live. Mirrors the main process
+// `codexNativeSubAgentIsTerminal`.
+const SUBAGENT_TERMINAL_STATUSES: ReadonlySet<ThreadSubAgentStatus> = new Set([
+  "success",
+  "failure",
+  "cancelled",
+]);
 
 type PricingDisplayOptions = {
   codexCredits: boolean;
@@ -50,12 +67,15 @@ export function PricingPanel(props: PricingPanelProps) {
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   const pricingTotals = buildPricingRunningTotals(displayLines);
   const activeTurnId = props.activeTurnId;
-  const hasActiveTurn = displayLines.some((line) =>
-    isActiveLiveTurnUsageLine({ activeTurnId, line }),
+  const subAgentsById = new Map(
+    (props.subAgents ?? []).map((subAgent) => [subAgent.monitorId, subAgent]),
   );
-  // Only tick while a turn is actually live, so completed threads render
-  // static and never spin a 1s interval in the background.
-  const now = useNowWhileActive(hasActiveTurn);
+  const hasActiveRow = displayLines.some((line) =>
+    isActiveUsageLine({ activeTurnId, line, subAgentsById }),
+  );
+  // Tick while any row is live — the main turn or any still-running sub-agent —
+  // so completed threads render static and never spin a 1s interval.
+  const now = useNowWhileActive(hasActiveRow);
 
   return (
     <section className="context-panel__section">
@@ -147,7 +167,11 @@ export function PricingPanel(props: PricingPanelProps) {
               line,
             });
             const runningTokens = formatUsageLineRunningTokens(line);
-            const isActive = isActiveLiveTurnUsageLine({ activeTurnId, line });
+            const subAgent =
+              line.scope === "monitor" && line.sourceItemId
+                ? subAgentsById.get(line.sourceItemId)
+                : undefined;
+            const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
             const duration = formatUsageLineDuration({ isActive, line, now });
 
             return (
@@ -171,6 +195,11 @@ export function PricingPanel(props: PricingPanelProps) {
                     </span>
                   ) : null}
                 </div>
+                {subAgent?.agentName ? (
+                  <p className="rail-card__agent-name" title={subAgent.agentName}>
+                    {subAgent.agentName}
+                  </p>
+                ) : null}
                 <p className="rail-card__model">
                   {line.model ?? "Unknown model"}
                   {line.reasoningEffort ? ` · ${line.reasoningEffort}` : ""}
@@ -948,6 +977,29 @@ function isActiveLiveTurnUsageLine(params: {
     Boolean(params.activeTurnId) &&
     params.line.turnId === params.activeTurnId
   );
+}
+
+// A row is live if it's the main active turn OR a monitor row whose sub-agent
+// is still running. Sub-agents run concurrently, so more than one row can be
+// live at once (e.g. a fan-out of spawn_agent calls in a single turn).
+function isActiveUsageLine(params: {
+  activeTurnId?: string;
+  line: PricingUsageLine;
+  subAgentsById: Map<string, ThreadSubAgentSummary>;
+}): boolean {
+  if (
+    isActiveLiveTurnUsageLine({
+      activeTurnId: params.activeTurnId,
+      line: params.line,
+    })
+  ) {
+    return true;
+  }
+  if (params.line.scope !== "monitor" || !params.line.sourceItemId) {
+    return false;
+  }
+  const subAgent = params.subAgentsById.get(params.line.sourceItemId);
+  return Boolean(subAgent && !SUBAGENT_TERMINAL_STATUSES.has(subAgent.status));
 }
 
 function PricingUsageTimestamp(props: {
