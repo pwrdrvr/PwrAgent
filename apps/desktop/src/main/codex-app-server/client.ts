@@ -136,6 +136,10 @@ const SUPPORTED_CODEX_MODEL_ORDER = [
 const SUPPORTED_CODEX_MODELS = new Set<string>(SUPPORTED_CODEX_MODEL_ORDER);
 const MAX_INLINE_FILE_DIFF_CHARS = 512 * 1024;
 
+type CodexReviewStartPayload = CodexReviewStartParams & {
+  cwd?: string;
+};
+
 type CodexClientOptions = {
   command?: string;
   args?: string[];
@@ -5114,12 +5118,18 @@ function buildReviewStartPayload(params: {
   threadId: string;
   target: AppServerReviewTarget;
   delivery?: AppServerReviewDelivery;
-}): CodexReviewStartParams {
-  return {
+  cwd?: string;
+}): CodexReviewStartPayload {
+  const payload: CodexReviewStartPayload = {
     threadId: params.threadId,
     target: params.target,
     delivery: params.delivery ?? "inline",
   };
+  const cwd = params.cwd?.trim();
+  if (cwd) {
+    payload.cwd = cwd;
+  }
+  return payload;
 }
 
 function buildThreadSettingsUpdatePayload(params: {

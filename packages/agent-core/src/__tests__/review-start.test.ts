@@ -1,6 +1,12 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { readReviewPrompt } from "../app-server/review-prompt.js";
-import { createTestHarness, FakeProvider } from "../testing/test-harness.js";
+import { createTemporaryTestDirectory, createTestHarness, FakeProvider } from "../testing/test-harness.js";
+
+const execFileAsync = promisify(execFile);
 
 async function flushAsync(): Promise<void> {
   await Promise.resolve();
@@ -29,6 +35,20 @@ const reviewOutput = {
   overall_explanation: "The patch has one review issue.",
   overall_confidence_score: 0.88,
 } as const;
+
+async function git(cwd: string, args: string[]): Promise<{ stdout: string }> {
+  const { stdout } = await execFileAsync("git", args, {
+    cwd,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_EMAIL: "test@example.com",
+      GIT_AUTHOR_NAME: "PwrAgent Test",
+      GIT_COMMITTER_EMAIL: "test@example.com",
+      GIT_COMMITTER_NAME: "PwrAgent Test",
+    },
+  });
+  return { stdout };
+}
 
 describe("Codex review start", () => {
   it("keeps the committed review prompt aligned with the Codex review schema", () => {
@@ -409,6 +429,59 @@ describe("Codex review start", () => {
         },
       },
     });
+  });
+
+  it("runs base-branch reviews from the requested cwd without changing thread metadata", async () => {
+    const temp = await createTemporaryTestDirectory();
+    try {
+      const originalCwd = path.join(temp.path, "giphy-services");
+      const selectedCwd = path.join(temp.path, "svc-infra");
+      await fs.mkdir(originalCwd);
+      await fs.mkdir(selectedCwd);
+
+      await git(selectedCwd, ["init"]);
+      await git(selectedCwd, ["checkout", "-b", "main"]);
+      await fs.writeFile(path.join(selectedCwd, "iam.tf"), "resource = \"base\"\n");
+      await git(selectedCwd, ["add", "iam.tf"]);
+      await git(selectedCwd, ["commit", "-m", "base"]);
+      const { stdout } = await git(selectedCwd, ["rev-parse", "HEAD"]);
+      const mergeBase = stdout.trim();
+      await git(selectedCwd, ["checkout", "-b", "feature"]);
+      await fs.writeFile(path.join(selectedCwd, "iam.tf"), "resource = \"feature\"\n");
+      await git(selectedCwd, ["add", "iam.tf"]);
+      await git(selectedCwd, ["commit", "-m", "feature"]);
+
+      const provider = new FakeProvider();
+      const { server } = createTestHarness({ provider });
+      await server.request("thread/start", { cwd: originalCwd });
+
+      await server.request("review/start", {
+        threadId: "thread-1",
+        cwd: selectedCwd,
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+
+      expect(provider.runs[0]?.thread.cwd).toBe(selectedCwd);
+      expect(provider.runs[0]?.input[0]).toEqual({
+        type: "text",
+        text: expect.stringContaining(
+          `The merge base commit for this comparison is ${mergeBase}.`,
+        ),
+      });
+
+      const replay = await server.request("thread/read", {
+        threadId: "thread-1",
+      });
+      expect(replay).toMatchObject({
+        thread: {
+          threadId: "thread-1",
+          cwd: originalCwd,
+        },
+      });
+    } finally {
+      await temp.cleanup();
+    }
   });
 
   it("emits a failed turn when the provider review run rejects", async () => {
