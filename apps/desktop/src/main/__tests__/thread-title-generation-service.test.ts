@@ -91,7 +91,7 @@ describe("ThreadTitleGenerationService", () => {
     expect(codexGenerator.generateTitle).not.toHaveBeenCalled();
   });
 
-  it("preserves recognized issue and PR references", async () => {
+  it("accepts recognized issue and PR references in generated titles", async () => {
     const service = new ThreadTitleGenerationService({
       generators: {
         codex: makeGenerator({ title: "PR 456 issue 123 followup" }),
@@ -146,7 +146,7 @@ describe("ThreadTitleGenerationService", () => {
     });
   });
 
-  it("rejects titles that drop ticket references from the prompt", async () => {
+  it("accepts titles that drop ticket references from the prompt", async () => {
     const service = new ThreadTitleGenerationService({
       generators: {
         codex: makeGenerator({ title: "Checkout crash followup" }),
@@ -158,13 +158,13 @@ describe("ThreadTitleGenerationService", () => {
         backend: "codex",
         userPrompt: "PROJECT-123 investigate checkout crash",
       })
-    ).resolves.toEqual({
-      status: "invalid",
-      reason: "ticket_reference_missing",
+    ).resolves.toMatchObject({
+      status: "generated",
+      title: "Checkout crash followup",
     });
   });
 
-  it("rejects titles that preserve only one of multiple references", async () => {
+  it("accepts titles that preserve only one of multiple references", async () => {
     const service = new ThreadTitleGenerationService({
       generators: {
         codex: makeGenerator({ title: "Issue 123 rename followup" }),
@@ -176,9 +176,28 @@ describe("ThreadTitleGenerationService", () => {
         backend: "codex",
         userPrompt: "In issue 123 and PR 456, why does rename fail?",
       })
-    ).resolves.toEqual({
-      status: "invalid",
-      reason: "ticket_reference_missing",
+    ).resolves.toMatchObject({
+      status: "generated",
+      title: "Issue 123 rename followup",
+    });
+  });
+
+  it("accepts generated titles that omit GitHub PR references from quoted context", async () => {
+    const service = new ThreadTitleGenerationService({
+      generators: {
+        codex: makeGenerator({ title: "PR attachment API mismatch" }),
+      },
+    });
+
+    await expect(
+      service.generateTitle({
+        backend: "codex",
+        userPrompt:
+          "> PRs created: > - #12998: https://github.com/Giphy/giphy-services/pull/12998 > - #12999 stacked on it: https://github.com/Giphy/giphy-services/pull/12999 Why could the agent not attach the PR to the thread?",
+      })
+    ).resolves.toMatchObject({
+      status: "generated",
+      title: "PR attachment API mismatch",
     });
   });
 
