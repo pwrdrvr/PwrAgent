@@ -440,6 +440,29 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    updateSubthreadOrder: async ({
+      backend,
+      parentThreadId,
+      threadIds,
+    }: {
+      backend: "codex" | "grok";
+      parentThreadId: string;
+      threadIds: string[];
+    }) => {
+      const key = `${backend}:${parentThreadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId: parentThreadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        subthreadOrder: threadIds,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return threadIds;
+    },
     setThreadAgent: async (settings: {
       backend: "codex" | "grok";
       threadId: string;
@@ -16013,6 +16036,121 @@ script = "printf setup"
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("groups handoffs from a subthread under the root parent", async () => {
+    const rootDirectory = {
+      id: expectedDir("/repo/app"),
+      kind: "local" as const,
+      label: "app",
+      path: expectedDir("/repo/app"),
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:root-thread": {
+          backend: "codex",
+          threadId: "root-thread",
+          executionMode: "default",
+          extraLinkedDirectories: [rootDirectory],
+          subthreadOrder: ["older-child", "source-child"],
+        },
+        "codex:source-child": {
+          backend: "codex",
+          threadId: "source-child",
+          executionMode: "default",
+          extraLinkedDirectories: [rootDirectory],
+          parentThreadId: "root-thread",
+        },
+      },
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "root-thread",
+          title: "Root Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [rootDirectory],
+          updatedAt: 1000,
+        },
+        {
+          id: "source-child",
+          title: "Source Child",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [rootDirectory],
+          updatedAt: 2000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "source-child",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "source-child",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Investigate the follow-up.",
+          title: "Follow-up",
+          groupingMode: "subthread",
+          workspaceMode: "none",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      threadId: "thread-1",
+      groupedUnderThreadId: "root-thread",
+      origin: {
+        sourceThreadId: "source-child",
+      },
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      parentThreadId: "root-thread",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "root-thread",
+      }),
+    ).resolves.toMatchObject({
+      subthreadOrder: ["older-child", "source-child", "thread-1"],
+    });
+
+    await registry.close();
   });
 
   it("queues same-thread workspace moves from a live dynamic tool call", async () => {

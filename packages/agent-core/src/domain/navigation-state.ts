@@ -120,6 +120,35 @@ function resolveNavigationObservedBranch(params: {
   return params.thread.observedGitBranch ?? params.overlay?.observedGitBranch;
 }
 
+function resolveNavigationParentThreadId(params: {
+  overlay?: ThreadOverlayState;
+  overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
+  source: AppServerThreadSummary["source"];
+  threadId: string;
+}): string | undefined {
+  const directParentThreadId = params.overlay?.parentThreadId?.trim();
+  if (!directParentThreadId) {
+    return undefined;
+  }
+
+  let parentThreadId = directParentThreadId;
+  const seen = new Set([params.threadId]);
+  while (!seen.has(parentThreadId)) {
+    seen.add(parentThreadId);
+    const parentOverlay =
+      params.overlayByThreadKey[
+        buildThreadIdentityKey(params.source, parentThreadId)
+      ];
+    const nextParentThreadId = parentOverlay?.parentThreadId?.trim();
+    if (!nextParentThreadId) {
+      return parentThreadId;
+    }
+    parentThreadId = nextParentThreadId;
+  }
+
+  return directParentThreadId;
+}
+
 export function materializeNavigationThreads(params: {
   firstSnapshot: boolean;
   now?: number;
@@ -146,6 +175,12 @@ export function materializeNavigationThreads(params: {
     ]);
     const gitBranch = resolveNavigationGitBranch({ overlay, thread });
     const observedGitBranch = resolveNavigationObservedBranch({ overlay, thread });
+    const parentThreadId = resolveNavigationParentThreadId({
+      overlay,
+      overlayByThreadKey: params.overlayByThreadKey,
+      source: thread.source,
+      threadId: thread.id,
+    });
     const messagingBindings = params.messagingBindingsByThreadKey?.[threadKey];
     const automationSummary = params.automationsByThreadKey?.[threadKey];
 
@@ -173,7 +208,7 @@ export function materializeNavigationThreads(params: {
       reactions: overlay?.reactions ?? [],
       subAgents: overlay?.subAgents ?? [],
       pinnedRank: overlay?.pinnedRank,
-      parentThreadId: overlay?.parentThreadId,
+      parentThreadId,
       subthreadOrder: overlay?.subthreadOrder,
       subthreadsCollapsed: overlay?.subthreadsCollapsed,
       prs: overlay?.prs ?? [],
