@@ -15909,6 +15909,34 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async resolveHandoffGroupParentThreadId(params: {
+    backend: AppServerBackendKind;
+    sourceOverlay: ThreadOverlayState;
+    sourceThreadId: string;
+  }): Promise<string> {
+    const directParentThreadId = params.sourceOverlay.parentThreadId?.trim();
+    if (!directParentThreadId) {
+      return params.sourceThreadId;
+    }
+
+    let parentThreadId = directParentThreadId;
+    const seen = new Set([params.sourceThreadId]);
+    while (!seen.has(parentThreadId)) {
+      seen.add(parentThreadId);
+      const parentOverlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: parentThreadId,
+      });
+      const nextParentThreadId = parentOverlay?.parentThreadId?.trim();
+      if (!nextParentThreadId) {
+        return parentThreadId;
+      }
+      parentThreadId = nextParentThreadId;
+    }
+
+    return directParentThreadId;
+  }
+
   private startPendingThreadWorkspaceMove(
     move: PendingThreadWorkspaceMoveSummary,
   ): PendingThreadWorkspaceMoveSummary {
@@ -16939,7 +16967,11 @@ export class DesktopBackendRegistry {
       request.args.groupingMode ?? "none";
     const groupedParentThreadId =
       groupingMode === "subthread"
-        ? sourceOverlay.parentThreadId?.trim() || sourceThreadId
+        ? await this.resolveHandoffGroupParentThreadId({
+            backend: sourceBackend,
+            sourceOverlay,
+            sourceThreadId,
+          })
         : undefined;
     const workspaceMode: HandoffTaskWorkspaceMode =
       request.args.workspaceMode === "same"
@@ -17227,7 +17259,10 @@ export class DesktopBackendRegistry {
           threadId: groupedParentThreadId,
         });
         const nextOrder = insertSubthreadIdAfter(
-          parentOverlay?.subthreadOrder ?? [],
+          groupedParentThreadId === sourceThreadId ||
+          parentOverlay?.subthreadOrder?.includes(sourceThreadId)
+            ? (parentOverlay?.subthreadOrder ?? [])
+            : [...(parentOverlay?.subthreadOrder ?? []), sourceThreadId],
           sourceThreadId,
           threadId,
         );

@@ -16038,7 +16038,7 @@ script = "printf setup"
     await rm(root, { recursive: true, force: true });
   });
 
-  it("groups handoffs from a subthread under the root parent", async () => {
+  it("groups handoffs from a persisted grandchild under the root parent", async () => {
     const rootDirectory = {
       id: expectedDir("/repo/app"),
       kind: "local" as const,
@@ -16052,14 +16052,22 @@ script = "printf setup"
           threadId: "root-thread",
           executionMode: "default",
           extraLinkedDirectories: [rootDirectory],
-          subthreadOrder: ["older-child", "source-child"],
+          subthreadOrder: ["older-child", "intermediate-child"],
         },
-        "codex:source-child": {
+        "codex:intermediate-child": {
           backend: "codex",
-          threadId: "source-child",
+          threadId: "intermediate-child",
           executionMode: "default",
           extraLinkedDirectories: [rootDirectory],
           parentThreadId: "root-thread",
+          subthreadOrder: ["source-grandchild"],
+        },
+        "codex:source-grandchild": {
+          backend: "codex",
+          threadId: "source-grandchild",
+          executionMode: "default",
+          extraLinkedDirectories: [rootDirectory],
+          parentThreadId: "intermediate-child",
         },
       },
     });
@@ -16075,12 +16083,20 @@ script = "printf setup"
           updatedAt: 1000,
         },
         {
-          id: "source-child",
-          title: "Source Child",
+          id: "intermediate-child",
+          title: "Intermediate Child",
           titleSource: "explicit",
           source: "codex",
           linkedDirectories: [rootDirectory],
           updatedAt: 2000,
+        },
+        {
+          id: "source-grandchild",
+          title: "Source Grandchild",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [rootDirectory],
+          updatedAt: 3000,
         },
       ],
     });
@@ -16097,7 +16113,7 @@ script = "printf setup"
       notification: {
         method: "turn/started",
         params: {
-          threadId: "source-child",
+          threadId: "source-grandchild",
           turnId: "turn-1",
           turn: { id: "turn-1" },
         },
@@ -16107,7 +16123,7 @@ script = "printf setup"
     const response = await codexClient.emitRequest({
       method: "item/tool/call",
       params: {
-        threadId: "source-child",
+        threadId: "source-grandchild",
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
@@ -16130,7 +16146,7 @@ script = "printf setup"
       threadId: "thread-1",
       groupedUnderThreadId: "root-thread",
       origin: {
-        sourceThreadId: "source-child",
+        sourceThreadId: "source-grandchild",
       },
     });
     await expect(
@@ -16147,7 +16163,12 @@ script = "printf setup"
         threadId: "root-thread",
       }),
     ).resolves.toMatchObject({
-      subthreadOrder: ["older-child", "source-child", "thread-1"],
+      subthreadOrder: [
+        "older-child",
+        "intermediate-child",
+        "source-grandchild",
+        "thread-1",
+      ],
     });
 
     await registry.close();
