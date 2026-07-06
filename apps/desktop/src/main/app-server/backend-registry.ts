@@ -12903,9 +12903,11 @@ export class DesktopBackendRegistry {
     }
     const threadKey = [params.backend, params.threadId].join(":");
     const turnKey = [params.backend, params.threadId, params.turnId].join(":");
+    const priorCursor = this.liveThreadReplayInputCursor.get(threadKey);
+    const priorTally = this.liveThreadReplayObservations.get(turnKey);
     const { cursor, tally } = foldObservedContextReplay({
-      cursor: this.liveThreadReplayInputCursor.get(threadKey),
-      tally: this.liveThreadReplayObservations.get(turnKey),
+      cursor: priorCursor,
+      tally: priorTally,
       tokenUsage: params.tokenUsage,
     });
     if (cursor) {
@@ -12914,7 +12916,87 @@ export class DesktopBackendRegistry {
     if (tally) {
       this.liveThreadReplayObservations.set(turnKey, tally);
     }
+    this.logObservedContextReplayDecision({
+      backend: params.backend,
+      cursor,
+      priorCursor,
+      priorTally,
+      tally,
+      threadId: params.threadId,
+      tokenUsage: params.tokenUsage,
+      turnId: params.turnId,
+    });
     return tally;
+  }
+
+  // Dev-only diagnostic: one line per genuinely new model request explaining how
+  // it was classified (hot/cold/not-counted) and the numbers behind the
+  // decision — the observed `last.input`/`cached`, the prior-context snapshot,
+  // the replayed portion, and the tokens attributed. Pure duplicate/no-op
+  // re-emissions are not logged. Reconstructs the decision from the tally delta
+  // rather than re-running classification, so the pure fold stays untouched.
+  // Gated on isDevelopment, so it does no parsing work in packaged builds.
+  private logObservedContextReplayDecision(params: {
+    backend: AppServerBackendKind;
+    cursor?: ObservedContextReplayCursor;
+    priorCursor?: ObservedContextReplayCursor;
+    priorTally?: ObservedContextReplayTally;
+    tally?: ObservedContextReplayTally;
+    threadId: string;
+    tokenUsage: unknown;
+    turnId: string;
+  }): void {
+    if (!isDevelopment) {
+      return;
+    }
+    const coldDelta =
+      (params.tally?.coldReplayCount ?? 0) - (params.priorTally?.coldReplayCount ?? 0);
+    const hotDelta =
+      (params.tally?.hotReplayCount ?? 0) - (params.priorTally?.hotReplayCount ?? 0);
+    const priorCumulative = params.priorCursor?.cumulativeInputTokens;
+    const nextCumulative = params.cursor?.cumulativeInputTokens;
+    const advanced =
+      typeof nextCumulative === "number" &&
+      (priorCumulative === undefined || nextCumulative > priorCumulative);
+    // Only a genuinely new request (cumulative input grew) or a counted replay
+    // is worth a line; skip duplicate re-emissions and no-ops.
+    if (!advanced && coldDelta === 0 && hotDelta === 0) {
+      return;
+    }
+    const last = readTaskMonitorTokenUsageRecords(params.tokenUsage)?.latestUsage;
+    const lastInput = typeof last?.inputTokens === "number" ? last.inputTokens : undefined;
+    const cached =
+      typeof last?.cachedInputTokens === "number" ? last.cachedInputTokens : undefined;
+    const priorContext = params.priorCursor?.lastContextTokens;
+    const replayed =
+      typeof lastInput === "number"
+        ? typeof priorContext === "number" && priorContext > 0
+          ? Math.min(lastInput, priorContext)
+          : lastInput
+        : undefined;
+    const classification =
+      coldDelta > 0 ? "cold" : hotDelta > 0 ? "hot" : "not-counted";
+    const attributed =
+      coldDelta > 0
+        ? (params.tally?.coldReplayUncachedTokens ?? 0) -
+          (params.priorTally?.coldReplayUncachedTokens ?? 0)
+        : hotDelta > 0
+          ? (params.tally?.hotReplayCachedTokens ?? 0) -
+            (params.priorTally?.hotReplayCachedTokens ?? 0)
+          : 0;
+    logDebug("contextReplay:classify", {
+      attributed,
+      backend: params.backend,
+      cached,
+      classification,
+      coldCount: params.tally?.coldReplayCount ?? 0,
+      hotCount: params.tally?.hotReplayCount ?? 0,
+      lastInput,
+      priorContext,
+      replayed,
+      threadId: params.threadId,
+      turnId: params.turnId,
+    });
   }
 
   // Drop a turn's in-memory replay tally once the turn ends. The final counts
