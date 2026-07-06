@@ -166,6 +166,7 @@ import {
   buildStatusReasoningPickerIntent,
   buildStatusToolUpdateModePickerIntent,
   formatExecutionModeLabel,
+  formatMessagingToolUpdateModeLabel,
   formatPermissionsActionDisplayLabel,
   formatPermissionsLineDisplayLabel,
   handoffRequestFromValue,
@@ -174,6 +175,7 @@ import {
   nextMessagingStreamingResponseMode,
   resolveMessagingStreamingResponseMode,
   resolveMessagingToolUpdateMode,
+  shouldShowStreamingControl,
   type MessagingWorkspaceHandoffContext,
 } from "./messaging-status-card.js";
 import {
@@ -198,6 +200,7 @@ import {
   type MessagingResolvedThreadState,
 } from "./messaging-thread-state.js";
 import { summarizeToolActivityFromBackendEvent } from "./messaging-tool-activity.js";
+import type { MessagingToolActivity } from "./messaging-tool-activity.js";
 import {
   MessagingToolUpdatePolicy,
   type MessagingToolUpdatePolicyDelivery,
@@ -241,7 +244,13 @@ const DEFAULT_INPUT_DEBOUNCE_MS = 500;
 // that completed long ago so a long-lived controller does not grow without
 // bound (one entry per automation run).
 const MAX_DELIVERED_AUTOMATION_KEYS = 1_000;
+const MAX_TRACKED_TURN_PROSE = 256;
 const MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS = 15_000;
+
+type MessagingTurnProseState = {
+  latest?: { activityId: string; text: string };
+  deliveredIds: Set<string>;
+};
 const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
 const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
   "You are an Agent thread created from messaging. Keep shared context for the attached messaging surfaces and use available Agent tools when they are relevant.";
@@ -570,6 +579,7 @@ export type MessagingControllerOptions = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   store: MessagingStoreLike;
   streamingResponsesDefault?: boolean;
+  showStreamingOption?: boolean | (() => boolean | Promise<boolean>);
   responseModeForConversation?: (
     channel: MessagingChannelRef,
   ) => Promise<MessagingResponseMode> | MessagingResponseMode;
@@ -627,7 +637,21 @@ export class MessagingController {
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly logger: MessagingControllerLogger;
   private readonly streamingResponsesDefault: boolean;
+  private readonly showStreamingOptionConfig:
+    | boolean
+    | (() => boolean | Promise<boolean>);
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
+  // Per-turn in-turn (non-final) prose bookkeeping, keyed by
+  // `${bindingId}\0${turnId}`:
+  //   - `latest` is the most-recent captured prose block, written before the
+  //     Working Updates dial decides delivery so U7 can flush an elicitation's
+  //     setup message even when the dial (None) suppressed it.
+  //   - `deliveredIds` records which prose activity ids already reached the
+  //     channel (individually, in a batch, or via the flush) so the flush stays
+  //     idempotent and a later batch does not re-post pre-flushed prose.
+  // Bounded so a turn that ends without a clean terminal event to clear it
+  // cannot grow the map without limit.
+  private readonly turnProse = new Map<string, MessagingTurnProseState>();
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
   private readonly pendingFullAccessNewThreadPrompts = new Map<
@@ -674,6 +698,7 @@ export class MessagingController {
     this.deliveryBudget = options.deliveryBudget;
     this.logger = options.logger ?? messagingControllerLog;
     this.streamingResponsesDefault = options.streamingResponsesDefault ?? false;
+    this.showStreamingOptionConfig = options.showStreamingOption ?? false;
     this.turnAdmission = new MessagingTurnAdmission({
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
       now: this.now,
@@ -1119,10 +1144,14 @@ export class MessagingController {
         (isTerminalTurnLifecycle(lifecycle) ||
           (isThreadStatusIdleEvent(event) && activeTurn))
       ) {
+        const terminalTurnId = turnIdForBackendEvent(event) ?? activeTurn?.turnId;
         await this.flushToolUpdatesForBinding(binding, {
           clear: true,
-          turnId: turnIdForBackendEvent(event) ?? activeTurn?.turnId,
+          turnId: terminalTurnId,
         });
+        if (terminalTurnId) {
+          this.clearTurnProse(binding.id, terminalTurnId);
+        }
       }
 
       const assistantDelta = assistantDeltaForBackendEvent(event);
@@ -1134,14 +1163,6 @@ export class MessagingController {
 
       const assistantText = assistantTextForBackendEvent(event);
       if (assistantText) {
-        // Suppress NON-final agentMessage completions (e.g. Codex "commentary"
-        // phases the agent emits while thinking) on every turn, not just
-        // automation ones. Each such `item/completed` otherwise posts its own
-        // message, so a single turn fans out into a burst of separate messages
-        // on the channel — the "pinged a dozen times" flood. Messaging shows
-        // the agent's final answer (streamed into one message when streaming is
-        // on); intermediate commentary stays on the desktop transcript. Items
-        // with no phase, or phase "final"/"final_answer", still post.
         if (!isNonFinalAssistantTextForBackendEvent(event)) {
           const deliveredFinalStream = await this.flushAssistantStreamForEvent(
             event,
@@ -1153,6 +1174,20 @@ export class MessagingController {
           } else {
             await this.deliverAssistantMessage(assistantText, event, binding);
           }
+        } else if (!automationTurnEvent) {
+          // NON-final agentMessage completions (e.g. Codex "commentary" phases
+          // the agent emits while thinking) are the agent's in-turn prose. They
+          // flow through the Working Updates dial: suppressed at None, coalesced
+          // into batches at Less/Some/More, sent individually at All — the same
+          // policy that governs tool activity. This replaces the old outright
+          // drop that was added to stop the "pinged a dozen times" flood; the
+          // coalescing preserves that anti-flood intent at low dial settings.
+          await this.deliverAssistantProseForBackendEvent(
+            event,
+            binding,
+            assistantText,
+            activeTurn?.turnId,
+          );
         }
       } else if (isTerminalTurnLifecycle(activeTurn) && !assistantDelta) {
         // Only flush buffered stream text on a genuine terminal event (e.g.
@@ -1330,6 +1365,10 @@ export class MessagingController {
         }
       }
       const pendingIntent = await this.storePendingIntent(intent, binding);
+      await this.flushPendingTurnProseBeforeElicitation(
+        binding,
+        request.params.turnId,
+      );
       const delivery = await this.deliver(intent, binding);
       let deliveredPendingIntent = pendingIntent;
       if (delivery.surface) {
@@ -4305,12 +4344,51 @@ export class MessagingController {
         nextSession.preferences?.streamingResponses ?? "inherit",
         this.streamingResponsesDefault,
       );
+      // Sticky-reveal so the control stays in the gate once enabled here, and
+      // carries onto the created binding.
+      const streamingControlRevealed =
+        nextSession.preferences?.streamingControlRevealed ||
+        streamingResponses === "enabled";
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
           preferences: {
             ...nextSession.preferences,
             streamingResponses,
+            ...(streamingControlRevealed
+              ? { streamingControlRevealed: true }
+              : {}),
+            updatedAt: this.now(),
+          },
+        },
+        event,
+        navigation,
+      );
+      return;
+    }
+    if (actionId === "browse:new:working-updates") {
+      const currentMode =
+        nextSession.preferences?.toolUpdateMode ??
+        (await this.resolveToolUpdateDefaultMode());
+      await this.presentNewThreadWorkingUpdatesPicker(
+        nextSession,
+        event,
+        currentMode,
+      );
+      return;
+    }
+    if (actionId === "browse:new:set-working-updates") {
+      const toolUpdateMode = readMessagingToolUpdateModeValue(event.value);
+      if (!toolUpdateMode) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      await this.presentNewThreadPromptGate(
+        {
+          ...nextSession,
+          preferences: {
+            ...nextSession.preferences,
+            toolUpdateMode,
             updatedAt: this.now(),
           },
         },
@@ -4930,6 +5008,14 @@ export class MessagingController {
     const supportsEnvironment =
       options.codexEnvironmentOptions.length > 0 ||
       Boolean(options.codexEnvironmentId);
+    const toolUpdateMode =
+      effectiveSession.preferences?.toolUpdateMode ??
+      (await this.resolveToolUpdateDefaultMode());
+    const showStreaming = shouldShowStreamingControl(
+      effectiveSession.preferences?.streamingResponses ?? "inherit",
+      await this.resolveShowStreamingOption(),
+      effectiveSession.preferences?.streamingControlRevealed,
+    );
     await this.options.store.upsertBrowseSession(effectiveSession);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
@@ -4943,7 +5029,13 @@ export class MessagingController {
           }
         : undefined,
       title: "Ready to start",
-      body: newThreadPromptGateBody(effectiveSession, options, selectedBackend),
+      body: newThreadPromptGateBody(
+        effectiveSession,
+        options,
+        selectedBackend,
+        toolUpdateMode,
+        showStreaming,
+      ),
       fallbackText: "Send your first instruction, or use the option buttons before sending it.",
       targetSurface: effectiveSession.surface,
       actions: [
@@ -5013,11 +5105,21 @@ export class MessagingController {
             ]
           : []),
         {
-          id: "browse:new:streaming",
-          label: options.streamingResponses ? "Stream: on" : "Stream: off",
+          id: "browse:new:working-updates",
+          label: `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
           style: "secondary",
-          fallbackText: "stream",
+          fallbackText: "working updates",
         },
+        ...(showStreaming
+          ? [
+              {
+                id: "browse:new:streaming",
+                label: options.streamingResponses ? "Stream: on" : "Stream: off",
+                style: "secondary" as const,
+                fallbackText: "stream",
+              },
+            ]
+          : []),
         ...(supportsModel
           ? [
               {
@@ -5758,6 +5860,58 @@ export class MessagingController {
           fallbackText: String(index + 1),
           priority: 10 + index,
           value: { reasoningEffort: effort },
+        })),
+        {
+          id: session.workMode === "worktree"
+            ? "browse:new:workspace:worktree"
+            : "browse:new:workspace:local",
+          label: "Back",
+          style: "secondary" as const,
+          fallbackText: "back",
+          priority: 1,
+        },
+      ],
+    });
+    await this.storePendingIntent(intent, undefined, event);
+    const result = await this.deliver(intent, undefined, event);
+    if (result.surface) {
+      await this.options.store.upsertBrowseSession({
+        ...session,
+        surface: result.surface,
+        updatedAt: this.now(),
+      });
+    }
+  }
+
+  private async presentNewThreadWorkingUpdatesPicker(
+    session: MessagingBrowseSessionRecord,
+    event: MessagingInboundEvent,
+    currentMode: MessagingToolUpdateMode,
+  ): Promise<void> {
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("new-thread-working-updates"),
+      capabilityProfile: this.capabilityProfile,
+      browseSessionId: session.id,
+      createdAt: this.now(),
+      delivery: session.surface
+        ? { mode: "update", replaceMarkup: true }
+        : undefined,
+      title: "Working Updates",
+      body:
+        "How much of the agent's in-progress work is bridged to this chat.\n\n"
+        + "None: only final answers and questions.\n"
+        + "Less / Some / More: coalesced batches that respect platform rate limits.\n"
+        + "All: the most (the rate budget may still hold some back).",
+      fallbackText: "Choose a Working Updates option, or reply back.",
+      targetSurface: session.surface,
+      actions: [
+        ...messagingToolUpdateModeChoices(currentMode).map((choice, index) => ({
+          id: "browse:new:set-working-updates",
+          label: `${choice.label}${choice.current ? " (current)" : ""}`,
+          style: "secondary" as const,
+          fallbackText: String(index + 1),
+          priority: 10 + index,
+          value: { toolUpdateMode: choice.mode },
         })),
         {
           id: session.workMode === "worktree"
@@ -9525,11 +9679,20 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<void> {
     const currentMode = resolveMessagingStreamingResponseMode(binding);
+    const nextMode = nextMessagingStreamingResponseMode(
+      currentMode,
+      this.streamingResponsesDefault,
+    );
+    // Sticky-reveal: once streaming has been enabled on this thread (now, or by
+    // this toggle), keep the control visible so it can be turned back on/off
+    // even after the global setting hides it for other threads.
+    const streamingControlRevealed =
+      binding.preferences?.streamingControlRevealed ||
+      currentMode === "enabled" ||
+      nextMode === "enabled";
     const updatedBinding = await this.updateBindingPreferences(binding, {
-      streamingResponses: nextMessagingStreamingResponseMode(
-        currentMode,
-        this.streamingResponsesDefault,
-      ),
+      streamingResponses: nextMode,
+      ...(streamingControlRevealed ? { streamingControlRevealed: true } : {}),
     });
     await this.renderBindingStatus(updatedBinding, event);
   }
@@ -9760,6 +9923,24 @@ export class MessagingController {
     }
   }
 
+  /**
+   * Resolve the global "show streaming option on thread cards" setting. Resolved
+   * live (like {@link resolveToolUpdateDefaultMode}) rather than snapshotted at
+   * construction, so toggling it in Settings takes effect on the next status
+   * render instead of only after a messaging restart.
+   */
+  private async resolveShowStreamingOption(): Promise<boolean> {
+    const configured = this.showStreamingOptionConfig;
+    try {
+      return typeof configured === "function" ? await configured() : configured;
+    } catch (error) {
+      this.logger.debug?.("messaging show-streaming-option resolution failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
   private async retireBindingStatus(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent | undefined,
@@ -9868,6 +10049,7 @@ export class MessagingController {
         ? handoffContextForBinding(binding, snapshot)
         : undefined,
       streamingResponsesDefault: this.streamingResponsesDefault,
+      showStreamingOption: await this.resolveShowStreamingOption(),
       threadState: resolveMessagingThreadState({
         activeTurn,
         binding,
@@ -11239,6 +11421,96 @@ export class MessagingController {
     }
   }
 
+  /**
+   * Route the agent's in-turn (non-final) prose through the Working Updates
+   * dial, mirroring {@link deliverToolActivityForBackendEvent} for tools. The
+   * prose is captured un-gated first (so U7's elicitation flush can surface a
+   * suppressed setup message), then handed to the same coalescing policy so it
+   * is dropped at None, batched at Less/Some/More, or sent individually at All.
+   */
+  private async deliverAssistantProseForBackendEvent(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+    assistantText: string,
+    activeTurnId?: string,
+  ): Promise<void> {
+    const turnId = turnIdForBackendEvent(event) ?? activeTurnId;
+    if (!turnId) {
+      return;
+    }
+    if (this.isAutomationTurnEvent(event, binding, activeTurnId)) {
+      return;
+    }
+
+    const activity: MessagingToolActivity = {
+      id: proseActivityIdForBackendEvent(event, turnId, assistantText),
+      kind: "prose",
+      status: "completed",
+      title: assistantText,
+    };
+    this.ensureTurnProseState(this.turnProseKey(binding.id, turnId)).latest = {
+      activityId: activity.id,
+      text: assistantText,
+    };
+
+    const mode = resolveMessagingToolUpdateMode(
+      binding,
+      await this.resolveToolUpdateDefaultMode(),
+    );
+    const deliveries = this.toolUpdatePolicy.processActivity({
+      activity,
+      bindingId: binding.id,
+      mode,
+      turnId,
+    });
+    for (const delivery of deliveries) {
+      await this.deliverToolUpdateDelivery(delivery, binding);
+    }
+  }
+
+  private turnProseKey(bindingId: string, turnId: string): string {
+    return `${bindingId}\0${turnId}`;
+  }
+
+  private ensureTurnProseState(key: string): MessagingTurnProseState {
+    let state = this.turnProse.get(key);
+    if (!state) {
+      state = { deliveredIds: new Set() };
+      this.turnProse.set(key, state);
+      // Backstop the terminal-event cleanup: evict the oldest turn(s) so a run
+      // that ends without a clean terminal event cannot grow the map unbounded.
+      while (this.turnProse.size > MAX_TRACKED_TURN_PROSE) {
+        const oldest = this.turnProse.keys().next().value;
+        if (oldest === undefined) {
+          break;
+        }
+        this.turnProse.delete(oldest);
+      }
+    }
+    return state;
+  }
+
+  private markProseActivitiesDelivered(
+    delivery: MessagingToolUpdatePolicyDelivery,
+  ): void {
+    const proseIds = delivery.activities
+      .filter((activity) => activity.kind === "prose")
+      .map((activity) => activity.id);
+    if (proseIds.length === 0) {
+      return;
+    }
+    const state = this.ensureTurnProseState(
+      this.turnProseKey(delivery.bindingId, delivery.turnId),
+    );
+    for (const id of proseIds) {
+      state.deliveredIds.add(id);
+    }
+  }
+
+  private clearTurnProse(bindingId: string, turnId: string): void {
+    this.turnProse.delete(this.turnProseKey(bindingId, turnId));
+  }
+
   private async flushToolUpdatesForBinding(
     binding: MessagingBindingRecord,
     options: { clear: boolean; turnId?: string },
@@ -11265,21 +11537,85 @@ export class MessagingController {
       return;
     }
 
+    // Drop prose already delivered out-of-band (e.g. flushed ahead of an
+    // elicitation by U7) so a later coalesced batch does not re-post it.
+    const activities = this.filterUndeliveredProseActivities(delivery);
+    if (activities.length === 0) {
+      return;
+    }
+
     const intent =
       delivery.kind === "individual"
         ? buildToolUpdateMessageIntent({
-            activity: delivery.activities[0]!,
+            activity: activities[0]!,
             bindingId: binding.id,
             createdAt: this.now(),
             id: this.newIntentId("tool-update"),
           })
         : buildToolUpdateBatchMessageIntent({
-            activities: delivery.activities,
+            activities,
             bindingId: binding.id,
             createdAt: this.now(),
             id: this.newIntentId("tool-update-batch"),
           });
+    this.markProseActivitiesDelivered({ ...delivery, activities });
     await this.deliver(intent, binding);
+  }
+
+  private filterUndeliveredProseActivities(
+    delivery: MessagingToolUpdatePolicyDelivery,
+  ): MessagingToolActivity[] {
+    const state = this.turnProse.get(
+      this.turnProseKey(delivery.bindingId, delivery.turnId),
+    );
+    if (!state) {
+      return delivery.activities;
+    }
+    return delivery.activities.filter(
+      (activity) =>
+        activity.kind !== "prose" || !state.deliveredIds.has(activity.id),
+    );
+  }
+
+  /**
+   * Deliver the agent's captured in-turn setup prose immediately before an
+   * elicitation (U7), so a questionnaire like "Option A or Option B?" carries
+   * the message that described the options — even when the Working Updates dial
+   * (None) would otherwise suppress it. Idempotent: prose already delivered this
+   * turn (individually, in a batch, or by a prior elicitation) is not re-sent.
+   */
+  private async flushPendingTurnProseBeforeElicitation(
+    binding: MessagingBindingRecord,
+    turnId: string | null | undefined,
+  ): Promise<void> {
+    if (!turnId) {
+      return;
+    }
+    const state = this.turnProse.get(this.turnProseKey(binding.id, turnId));
+    const latest = state?.latest;
+    if (!state || !latest || state.deliveredIds.has(latest.activityId)) {
+      return;
+    }
+    // Mark before delivering so a re-entrant elicitation for the same turn does
+    // not double-post the setup message...
+    state.deliveredIds.add(latest.activityId);
+    const result = await this.deliver(
+      {
+        id: this.newIntentId("assistant-prose"),
+        kind: "message",
+        bindingId: binding.id,
+        createdAt: this.now(),
+        role: "assistant",
+        parts: [{ type: "text", text: latest.text, markdown: "markdown" }],
+      },
+      binding,
+    );
+    // ...but if the delivery was skipped (e.g. budget-exhausted), roll the mark
+    // back so the setup prose can still ride the turn's coalesced batch rather
+    // than being silently recorded as delivered and filtered out.
+    if (!result.surface) {
+      state.deliveredIds.delete(latest.activityId);
+    }
   }
 
   private async attachThreadHereFromAgentMessagingOrigin(
@@ -12775,6 +13111,8 @@ function newThreadPromptGateBody(
   session: MessagingBrowseSessionRecord,
   options: NewThreadOptionsSummary,
   backend: BackendSummary,
+  toolUpdateMode: MessagingToolUpdateMode,
+  showStreaming: boolean,
 ): string {
   const acpRuntimeMode = isAcpBackendId(options.backend)
     ? buildMessagingAcpRuntimeModeSummary({
@@ -12806,7 +13144,10 @@ function newThreadPromptGateBody(
       ? `Reasoning: ${options.reasoningEffort}`
       : undefined,
     options.supportsFast ? `Fast mode: ${options.fastMode ? "on" : "off"}` : undefined,
-    `Streaming: ${options.streamingResponses ? "on" : "off"}`,
+    `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
+    showStreaming
+      ? `Streaming: ${options.streamingResponses ? "on" : "off"}`
+      : undefined,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
@@ -13486,6 +13827,32 @@ function isNonFinalAssistantTextForBackendEvent(event: AgentEvent): boolean {
   }
   const phase = typeof params.item.phase === "string" ? params.item.phase : undefined;
   return Boolean(phase && phase !== "final" && phase !== "final_answer");
+}
+
+/**
+ * Stable id for an in-turn prose activity so the coalescing policy dedups
+ * re-emitted events. Prefers the backend item id; falls back to a
+ * turn-scoped signature of the text (distinct prose blocks differ, and verbatim
+ * repeats are intentionally deduped).
+ */
+function proseActivityIdForBackendEvent(
+  event: AgentEvent,
+  turnId: string,
+  text: string,
+): string {
+  if (event.notification.method === "item/completed") {
+    const item = (event.notification.params as { item?: Record<string, unknown> })
+      .item;
+    const rawId =
+      (typeof item?.id === "string" && item.id) ||
+      (typeof item?.itemId === "string" && item.itemId) ||
+      (typeof item?.item_id === "string" && item.item_id) ||
+      undefined;
+    if (rawId) {
+      return `prose:${rawId}`;
+    }
+  }
+  return `prose:${turnId}:${text.length}:${text.slice(0, 24)}`;
 }
 
 function isTerminalTurnLifecycle(

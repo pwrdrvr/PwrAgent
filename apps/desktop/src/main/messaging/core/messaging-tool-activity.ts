@@ -7,6 +7,7 @@ export type MessagingToolActivityKind =
   | "command"
   | "file"
   | "mcp"
+  | "prose"
   | "search"
   | "tool";
 

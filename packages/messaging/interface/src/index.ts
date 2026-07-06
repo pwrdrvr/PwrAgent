@@ -1240,6 +1240,15 @@ export type MessagingBindingPreferences = {
   reasoningEffort?: string;
   serviceTier?: string;
   streamingResponses?: MessagingStreamingResponseMode;
+  /**
+   * Sticky once true: set when streaming has been enabled on this binding at
+   * least once (observed by the desktop app). Keeps the per-thread streaming
+   * control visible on this thread even after streaming is turned back off and
+   * while the global "show streaming option" setting is off — so a thread that
+   * had streaming on can always toggle it back. The global setting still governs
+   * threads that never had streaming enabled.
+   */
+  streamingControlRevealed?: boolean;
   toolUpdateMode?: MessagingToolUpdateMode;
   updatedAt: number;
 };

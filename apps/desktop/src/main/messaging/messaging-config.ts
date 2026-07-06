@@ -176,6 +176,7 @@ export type DesktopMessagingConfig = {
   slack?: SlackMessagingConfig;
   telegram?: TelegramMessagingConfig;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
+  showStreamingOption?: boolean;
 };
 
 export type DesktopMessagingFullAccessControls = {
@@ -211,6 +212,7 @@ export const DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS = {
   slack: "connection",
   telegram: "connection",
   toolUpdateDefaultMode: "irrelevant",
+  showStreamingOption: "irrelevant",
 } as const satisfies Record<
   keyof DesktopMessagingConfig,
   DesktopMessagingConfigFieldImpact
@@ -1130,6 +1132,7 @@ export async function loadDesktopMessagingConfigFromSettings(
     },
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
+    showStreamingOption: snapshot.messaging.showStreamingOption.value,
     attachmentPolicy,
     ...telegramConfig,
     ...discordConfig,

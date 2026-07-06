@@ -479,6 +479,7 @@ describe("App", () => {
         fullAccessWarning: { value: "dismissable", source: "default" },
         inputDebounceMs: { value: 500, source: "default" },
         toolUpdateMode: { value: "show_some", source: "default" },
+        showStreamingOption: { value: false, source: "default" },
         telegram: {
           enabled: { value: false, source: "default" },
           responseMode: { value: "every_message", source: "default" },

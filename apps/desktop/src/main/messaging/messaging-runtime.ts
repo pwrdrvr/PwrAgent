@@ -1002,6 +1002,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         config,
         adapter.channel,
       ),
+      showStreamingOption: async () =>
+        (await this.loadConfig()).showStreamingOption ?? false,
       responseModeForConversation: async (channel) =>
         responseModeForChannel(
           await this.loadConfig(),

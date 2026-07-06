@@ -93,6 +93,22 @@ export function buildToolUpdateMessageIntent(params: {
   createdAt: number;
   id: string;
 }): MessagingMessageIntent {
+  if (params.activity.kind === "prose") {
+    return {
+      id: params.id,
+      kind: "message",
+      bindingId: params.bindingId,
+      createdAt: params.createdAt,
+      role: "assistant",
+      parts: [
+        {
+          type: "text",
+          text: params.activity.title,
+          markdown: "markdown",
+        },
+      ],
+    };
+  }
   return {
     id: params.id,
     kind: "message",
@@ -115,21 +131,39 @@ export function buildToolUpdateBatchMessageIntent(params: {
   createdAt: number;
   id: string;
 }): MessagingMessageIntent {
-  const count = params.activities.length;
+  // A coalesced batch can blend the agent's in-turn prose with tool activity.
+  // Render the prose blocks verbatim (they are assistant markdown) and summarize
+  // the tool activity under its own header so prose is never mislabeled as a
+  // "ran N tools" line. Tool-only batches keep the original header/format so
+  // existing tool-update behavior is unchanged.
+  const proseActivities = params.activities.filter(
+    (activity) => activity.kind === "prose",
+  );
+  const toolActivities = params.activities.filter(
+    (activity) => activity.kind !== "prose",
+  );
+  const segments: string[] = proseActivities.map((activity) => activity.title);
+  if (toolActivities.length > 0) {
+    const count = toolActivities.length;
+    segments.push(
+      [
+        `Tool updates: ran ${count} tool${count === 1 ? "" : "s"}`,
+        ...toolActivities.map((activity) => `- ${formatToolActivityLine(activity)}`),
+      ].join("\n"),
+    );
+  }
+  const hasProse = proseActivities.length > 0;
   return {
     id: params.id,
     kind: "message",
     bindingId: params.bindingId,
     createdAt: params.createdAt,
-    role: "system",
+    role: hasProse ? "assistant" : "system",
     parts: [
       {
         type: "text",
-        text: [
-          `Tool updates: ran ${count} tool${count === 1 ? "" : "s"}`,
-          ...params.activities.map((activity) => `- ${formatToolActivityLine(activity)}`),
-        ].join("\n"),
-        markdown: "light",
+        text: segments.join("\n\n"),
+        markdown: hasProse ? "markdown" : "light",
       },
     ],
   };

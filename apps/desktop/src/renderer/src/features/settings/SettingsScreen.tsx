@@ -459,6 +459,13 @@ function SettingsSectionBody(props: {
             },
           });
         }}
+        onShowStreamingOptionChange={async (showStreamingOption) => {
+          await props.settings.writeConfig({
+            messaging: {
+              showStreamingOption,
+            },
+          });
+        }}
         onInputDebounceMsChange={async (inputDebounceMs) => {
           await props.settings.writeConfig({
             messaging: {

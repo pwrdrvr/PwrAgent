@@ -974,10 +974,16 @@ describe("MessagingController", () => {
       actions: expect.arrayContaining([
         expect.objectContaining({ id: "browse:new:permissions" }),
         expect.objectContaining({ id: "browse:new:fast" }),
-        expect.objectContaining({ id: "browse:new:streaming" }),
+        expect.objectContaining({
+          id: "browse:new:working-updates",
+          label: "Working Updates: Some",
+        }),
         expect.objectContaining({ id: "browse:new:model" }),
         expect.objectContaining({ id: "browse:new:reasoning" }),
       ]),
+    });
+    expect(readyIntent).toMatchObject({
+      body: expect.stringContaining("Working Updates: Some"),
     });
     expect(readyIntent).toMatchObject({
       actions: expect.not.arrayContaining([
@@ -986,9 +992,14 @@ describe("MessagingController", () => {
         expect.objectContaining({ id: "browse:new:workspace:worktree" }),
       ]),
     });
+    // Streaming is default-off/advanced, so the wizard hides it (button + body
+    // line) unless the operator opts in globally.
     expect(readyIntent).toMatchObject({
-      body: expect.stringContaining("Streaming: off"),
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:streaming" }),
+      ]),
     });
+    expect(JSON.stringify(readyIntent)).not.toContain("Streaming:");
     expect(readyIntent).toMatchObject({
       browseSessionId: expect.stringMatching(/^browse:/),
     });
@@ -1047,6 +1058,71 @@ describe("MessagingController", () => {
     );
     expect(harness.delivered.at(-1)).toMatchObject({
       text: expect.stringContaining("Directory: /repo/pwragent"),
+    });
+  });
+
+  it("sets Working Updates in the /new wizard before the thread is created", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    // Open the Working Updates picker before sending the first instruction, so
+    // the setting is chosen before the thread is born.
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:working-updates" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Working Updates",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-working-updates",
+          label: "Some (current)",
+          value: { toolUpdateMode: "show_some" },
+        }),
+        expect.objectContaining({
+          id: "browse:new:set-working-updates",
+          label: "More",
+          value: { toolUpdateMode: "show_more" },
+        }),
+      ]),
+    });
+
+    // Pick "More", which returns to the ready gate reflecting the choice.
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-working-updates",
+        value: { toolUpdateMode: "show_more" },
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:working-updates",
+          label: "Working Updates: More",
+        }),
+      ]),
+      body: expect.stringContaining("Working Updates: More"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({
+      preferences: expect.objectContaining({ toolUpdateMode: "show_more" }),
     });
   });
 
@@ -2348,23 +2424,24 @@ describe("MessagingController", () => {
       text: expect.stringContaining("Binding: Thread one"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
-      text: expect.stringContaining("Tool updates: Some"),
+      text: expect.stringContaining("Working Updates: Some"),
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "status:tool-updates",
-          label: "Tools: Some",
+          label: "Working Updates: Some",
           fallbackText: "tools",
-        }),
-        expect.objectContaining({
-          id: "status:streaming",
-          label: "Stream: Off",
-          fallbackText: "stream",
         }),
       ]),
     });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      text: expect.stringContaining("Streaming: Off"),
-    });
+    // Streaming is an advanced, default-off control: with the global
+    // show-streaming-option off and no per-binding override, it is hidden from
+    // both the status card actions and the overview text.
+    const boundStatus = harness.delivered.at(-1);
+    expect(boundStatus).toMatchObject({ kind: "status" });
+    expect(
+      (boundStatus as Extract<MessagingSurfaceIntent, { kind: "status" }>).actions,
+    ).not.toContainEqual(expect.objectContaining({ id: "status:streaming" }));
+    expect(JSON.stringify(boundStatus)).not.toContain("Streaming:");
   });
 
   it("uses the provider conversation-input profile for shared-chat mention instructions", async () => {
@@ -2410,7 +2487,7 @@ describe("MessagingController", () => {
   });
 
   it("cycles per-binding streaming mode from the status card", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ showStreamingOption: true });
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(
@@ -2462,8 +2539,37 @@ describe("MessagingController", () => {
     });
   });
 
+  it("sticks the streaming-control reveal once a thread has enabled streaming", async () => {
+    const harness = await createHarness({ showStreamingOption: true });
+    await bindThread(harness);
+
+    // Enable streaming on the thread (inherit -> enabled).
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:streaming" }),
+    );
+    const afterEnable = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(afterEnable?.preferences?.streamingResponses).toBe("enabled");
+    expect(afterEnable?.preferences?.streamingControlRevealed).toBe(true);
+
+    // Turn it back off (enabled -> disabled). The sticky reveal flag persists so
+    // the control stays reachable even though the current mode is off.
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:streaming" }),
+    );
+    const afterDisable = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(afterDisable?.preferences?.streamingResponses).toBe("disabled");
+    expect(afterDisable?.preferences?.streamingControlRevealed).toBe(true);
+  });
+
   it("shows and toggles the effective streaming default from the new-thread screen", async () => {
-    const harness = await createHarness({ streamingResponsesDefault: true });
+    const harness = await createHarness({
+      streamingResponsesDefault: true,
+      showStreamingOption: true,
+    });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
     await harness.controller.handleInboundEvent(
@@ -9638,6 +9744,7 @@ describe("MessagingController", () => {
   it("suppresses non-final commentary completions so a turn posts one message", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
+      toolUpdateDefaultMode: "show_none",
       deliver: async (intent) => {
         delivered.push(intent);
         return {
@@ -9652,8 +9759,9 @@ describe("MessagingController", () => {
     delivered.length = 0;
 
     // A regular (non-automation) turn where the backend emits intermediate
-    // "commentary" agentMessage completions before the final answer. Each of
-    // these used to post its own message — the multi-message channel flood.
+    // "commentary" agentMessage completions before the final answer. With the
+    // Working Updates dial at None (the agent-personality case), the commentary
+    // prose is suppressed — only the final answer and any elicitation post.
     for (const [phase, text] of [
       ["commentary", "I'll check the weather for 07747."],
       ["commentary", "Pulling current conditions now."],
@@ -9694,8 +9802,8 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    // Only the final answer is posted — the commentary phases are dropped, so
-    // the turn lands as a single message instead of a burst.
+    // Only the final answer is posted — the commentary phases are suppressed by
+    // the None dial, so the turn lands as a single message instead of a burst.
     expect(
       delivered.filter((intent) => intent.kind === "message" && intent.role === "assistant"),
     ).toEqual([
@@ -9711,6 +9819,53 @@ describe("MessagingController", () => {
     ]);
     expect(JSON.stringify(delivered)).not.toContain("I'll check the weather");
     expect(JSON.stringify(delivered)).not.toContain("Pulling current conditions");
+  });
+
+  it("posts intermediate prose through the Working Updates dial at Show All", async () => {
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_all",
+      deliver: async (intent) => {
+        delivered.push(intent);
+        return {
+          channel: "telegram" as const,
+          deliveredAt: 1000,
+          outcome: "presented" as const,
+          surface: { channel: "telegram" as const, id: `surface:${intent.id}` },
+        };
+      },
+    });
+    await bindThread(harness);
+    delivered.length = 0;
+
+    // With the dial at All, the agent's in-turn prose is bridged individually
+    // (still subject to the rate budget) rather than suppressed.
+    for (const [phase, text] of [
+      ["commentary", "I'll check the weather for 07747."],
+      ["commentary", "Pulling current conditions now."],
+      ["final", "For 07747 / Matawan, NJ: sunny and very hot."],
+    ] as const) {
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { id: `msg-${phase}-${text.length}`, type: "agentMessage", phase, text },
+          },
+        },
+      } satisfies AgentEvent);
+    }
+
+    const assistantTexts = delivered
+      .filter(
+        (intent): intent is Extract<MessagingSurfaceIntent, { kind: "message" }> =>
+          intent.kind === "message" && intent.role === "assistant",
+      )
+      .flatMap((intent) => intent.parts.map((part) => ("text" in part ? part.text : "")));
+    expect(assistantTexts).toContain("I'll check the weather for 07747.");
+    expect(assistantTexts).toContain("Pulling current conditions now.");
   });
 
   it("does not re-post buffered text when deltas arrive after the turn is terminal", async () => {
@@ -10554,6 +10709,263 @@ describe("MessagingController", () => {
       activity: "typing",
       state: "active",
     });
+  });
+
+  it("flushes the agent's setup prose before an elicitation even at None", async () => {
+    const harness = await createHarness({ toolUpdateDefaultMode: "show_none" });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    // Agent narrates the options mid-turn (non-final prose). At None this is
+    // suppressed from the channel by the Working Updates dial...
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "msg-setup",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Do you want Option A or Option B?",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    // ...but when the questionnaire arrives, the setup prose is flushed first so
+    // the terse question carries the context the agent just wrote.
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "request-1",
+        questions: [
+          {
+            id: "q1",
+            header: "Choice",
+            question: "Which one?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Option A", description: "A" },
+              { label: "Option B", description: "B" },
+            ],
+          },
+        ],
+      },
+    } satisfies AppServerPendingRequestNotification);
+
+    const sequence = harness.delivered.map((intent) => JSON.stringify(intent));
+    const proseIndex = sequence.findIndex(
+      (entry) =>
+        entry.includes("Do you want Option A or Option B?") &&
+        entry.includes('"role":"assistant"'),
+    );
+    const questionnaireIndex = sequence.findIndex((entry) =>
+      entry.includes('"kind":"questionnaire"'),
+    );
+    expect(proseIndex).toBeGreaterThanOrEqual(0);
+    expect(questionnaireIndex).toBeGreaterThanOrEqual(0);
+    expect(proseIndex).toBeLessThan(questionnaireIndex);
+  });
+
+  it("only flushes setup prose captured under the elicitation's own turn", async () => {
+    const harness = await createHarness({ toolUpdateDefaultMode: "show_none" });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    // Prose is captured under turn-1...
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "msg-setup",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Setup context for turn one.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    // ...but the elicitation belongs to a different turn, so its flush must not
+    // surface turn-1's prose (correlation is by turnId).
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-2",
+        requestId: "request-1",
+        questions: [
+          {
+            id: "q1",
+            header: "Choice",
+            question: "Which one?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Option A", description: "A" },
+              { label: "Option B", description: "B" },
+            ],
+          },
+        ],
+      },
+    } satisfies AppServerPendingRequestNotification);
+
+    expect(
+      harness.delivered.some((intent) => intent.kind === "questionnaire"),
+    ).toBe(true);
+    expect(JSON.stringify(harness.delivered)).not.toContain(
+      "Setup context for turn one.",
+    );
+  });
+
+  it("does not permanently mark setup prose delivered when its flush is skipped", async () => {
+    let dropNextProse = true;
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_none",
+      deliver: async (intent) => {
+        // Simulate a budget skip (no surface) for the FIRST setup-prose flush.
+        if (intent.id.startsWith("assistant-prose") && dropNextProse) {
+          dropNextProse = false;
+          return {
+            channel: "telegram" as const,
+            deliveredAt: 1000,
+            outcome: "discarded" as const,
+          };
+        }
+        delivered.push(intent);
+        return {
+          channel: "telegram" as const,
+          deliveredAt: 1000,
+          outcome: "presented" as const,
+          surface: { channel: "telegram" as const, id: `surface:${intent.id}` },
+        };
+      },
+    });
+    await bindThread(harness);
+    delivered.length = 0;
+    dropNextProse = true;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "msg-setup",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Setup context needing a retry.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    // First elicitation: the prose flush is budget-skipped and must be rolled
+    // back (not recorded as delivered)...
+    for (const requestId of ["request-1", "request-2"] as const) {
+      await harness.controller.handleBackendPendingRequest("codex", {
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId,
+          questions: [
+            {
+              id: "q1",
+              header: "Choice",
+              question: "Which one?",
+              isOther: false,
+              isSecret: false,
+              options: [
+                { label: "Option A", description: "A" },
+                { label: "Option B", description: "B" },
+              ],
+            },
+          ],
+        },
+      } satisfies AppServerPendingRequestNotification);
+    }
+
+    // ...so the second elicitation's flush retries and the setup prose reaches
+    // the channel exactly once. Without the rollback it would be marked
+    // delivered on the skipped attempt and never sent at all.
+    const proseDeliveries = delivered.filter((intent) => {
+      const entry = JSON.stringify(intent);
+      return (
+        entry.includes("Setup context needing a retry.") &&
+        entry.includes('"role":"assistant"')
+      );
+    });
+    expect(proseDeliveries).toHaveLength(1);
+  });
+
+  it("does not re-post setup prose the dial already delivered", async () => {
+    const harness = await createHarness({ toolUpdateDefaultMode: "show_all" });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    // At All the prose is bridged individually as it arrives...
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "msg-setup",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Do you want Option A or Option B?",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "request-1",
+        questions: [
+          {
+            id: "q1",
+            header: "Choice",
+            question: "Which one?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Option A", description: "A" },
+              { label: "Option B", description: "B" },
+            ],
+          },
+        ],
+      },
+    } satisfies AppServerPendingRequestNotification);
+
+    // ...so the elicitation flush must not re-post it — exactly one prose message.
+    const proseMessages = harness.delivered.filter((intent) => {
+      const entry = JSON.stringify(intent);
+      return (
+        entry.includes("Do you want Option A or Option B?") &&
+        entry.includes('"role":"assistant"')
+      );
+    });
+    expect(proseMessages).toHaveLength(1);
   });
 
   it("stops typing while presenting a Plan questionnaire for an active turn", async () => {
@@ -13714,7 +14126,7 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Tool updates: Few"),
+      text: expect.stringContaining("Working Updates: Few"),
     });
 
     await harness.controller.handleInboundEvent(
@@ -13723,7 +14135,7 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "single_select",
-      prompt: "Select Tools",
+      prompt: expect.stringContaining("Working Updates"),
       choices: expect.arrayContaining([
         expect.objectContaining({
           id: "status:set-tool-updates",
@@ -13741,7 +14153,7 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Tool updates: Some"),
+      text: expect.stringContaining("Working Updates: Some"),
     });
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
@@ -13769,7 +14181,7 @@ describe("MessagingController", () => {
       );
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "single_select",
-        prompt: "Select Tools",
+        prompt: expect.stringContaining("Working Updates"),
       });
       await harness.controller.handleInboundEvent(
         buildCallbackEvent({
@@ -13779,7 +14191,7 @@ describe("MessagingController", () => {
       );
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "status",
-        text: expect.stringContaining(`Tool updates: ${expected}`),
+        text: expect.stringContaining(`Working Updates: ${expected}`),
       });
     }
   });
@@ -14335,6 +14747,7 @@ async function createHarness(options?: {
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
+  showStreamingOption?: boolean;
 }): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
@@ -14740,6 +15153,7 @@ async function createHarness(options?: {
     store,
     responseModeForConversation: options?.responseModeForConversation,
     streamingResponsesDefault: options?.streamingResponsesDefault,
+    showStreamingOption: options?.showStreamingOption,
     toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
   });
   controllerRef = controller;

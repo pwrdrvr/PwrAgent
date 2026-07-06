@@ -51,6 +51,29 @@ export type MessagingWorkspaceHandoffContext = {
 export const BRANCH_PICKER_PAGE_SIZE = 8;
 export const HANDOFF_BRANCH_PAGE_SIZE = BRANCH_PICKER_PAGE_SIZE;
 
+/**
+ * The per-thread streaming control is an advanced, default-off feature. Show it
+ * when any of:
+ * - the operator opted in globally (`showStreamingOption`) — governs threads
+ *   that never had streaming on, and all new threads;
+ * - this thread has streaming enabled *right now* (`streamingMode === "enabled"`)
+ *   — covers pre-existing enabled bindings before the sticky flag was recorded;
+ * - this thread has had streaming enabled before (`streamingControlRevealed`) —
+ *   the sticky anti-stranding case, so a thread that turned streaming off can
+ *   always toggle it back even while the global setting is off.
+ */
+export function shouldShowStreamingControl(
+  streamingMode: MessagingStreamingResponseMode,
+  showStreamingOption?: boolean,
+  streamingControlRevealed?: boolean,
+): boolean {
+  return (
+    Boolean(showStreamingOption) ||
+    Boolean(streamingControlRevealed) ||
+    streamingMode === "enabled"
+  );
+}
+
 export function buildBindingStatusIntent(params: {
   allowFullAccessEscalation?: boolean;
   backendSummary?: BackendSummary;
@@ -61,6 +84,7 @@ export function buildBindingStatusIntent(params: {
   handoff?: MessagingWorkspaceHandoffContext;
   id: string;
   streamingResponsesDefault?: boolean;
+  showStreamingOption?: boolean;
   threadState: MessagingResolvedThreadState;
   toolUpdateMode?: MessagingToolUpdateMode;
 }): MessagingStatusIntent {
@@ -165,8 +189,14 @@ export function buildBindingStatusIntent(params: {
       supportsFastMode ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
       planDeliveryLine(params.capabilityProfile),
       `Permissions: ${permissionsLineLabel}`,
-      `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
-      `Streaming: ${streamingLabel}`,
+      `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
+      shouldShowStreamingControl(
+        streamingMode,
+        params.showStreamingOption,
+        params.binding.preferences?.streamingControlRevealed,
+      )
+        ? `Streaming: ${streamingLabel}`
+        : undefined,
       params.binding.pendingSkillSelection
         ? `Pending skill: $${params.binding.pendingSkillSelection.name}`
         : undefined,
@@ -195,6 +225,8 @@ export function buildBindingStatusIntent(params: {
       supportsReasoning,
       streamingMode,
       streamingResponsesDefault: params.streamingResponsesDefault,
+      showStreamingOption: params.showStreamingOption,
+      streamingControlRevealed: params.binding.preferences?.streamingControlRevealed,
       toolUpdateMode,
     }),
   };
@@ -426,6 +458,8 @@ function buildStatusActions(params: {
   supportsReasoning: boolean;
   streamingMode: MessagingStreamingResponseMode;
   streamingResponsesDefault?: boolean;
+  showStreamingOption?: boolean;
+  streamingControlRevealed?: boolean;
   toolUpdateMode: MessagingToolUpdateMode;
 }): MessagingSurfaceAction[] {
   const profile = params.capabilityProfile;
@@ -493,21 +527,29 @@ function buildStatusActions(params: {
       : []),
     {
       id: "status:tool-updates",
-      label: `Tools: ${formatMessagingToolUpdateModeLabel(params.toolUpdateMode)}`,
+      label: `Working Updates: ${formatMessagingToolUpdateModeLabel(params.toolUpdateMode)}`,
       style: "secondary",
       fallbackText: "tools",
       priority: 9,
     },
-    {
-      id: "status:streaming",
-      label: `Stream: ${formatMessagingStreamingResponseModeLabel(
-        params.streamingMode,
-        params.streamingResponsesDefault,
-      )}`,
-      style: "secondary",
-      fallbackText: "stream",
-      priority: 10,
-    },
+    ...(shouldShowStreamingControl(
+      params.streamingMode,
+      params.showStreamingOption,
+      params.streamingControlRevealed,
+    )
+      ? [
+          {
+            id: "status:streaming",
+            label: `Stream: ${formatMessagingStreamingResponseModeLabel(
+              params.streamingMode,
+              params.streamingResponsesDefault,
+            )}`,
+            style: "secondary" as const,
+            fallbackText: "stream",
+            priority: 10,
+          },
+        ]
+      : []),
     {
       id: "status:compact",
       label: "Compact",
@@ -1313,8 +1355,12 @@ export function buildStatusToolUpdateModePickerIntent(params: {
       fallback: "present_new",
     },
     targetSurface: params.binding.statusSurface,
-    fallbackText: "Reply with a tools option number, Back, or Cancel.",
-    prompt: "Select Tools",
+    fallbackText: "Reply with a Working Updates option number, Back, or Cancel.",
+    prompt:
+      "Working Updates — how much of the agent's in-progress work is bridged here.\n\n"
+      + "None: only final answers and questions.\n"
+      + "Less / Some / More: coalesced batches that respect platform rate limits.\n"
+      + "All: the most (the rate budget may still hold some back).",
     choices: applyActionCapabilityLimits(
       [
         ...params.choices.map((choice, index) => ({
