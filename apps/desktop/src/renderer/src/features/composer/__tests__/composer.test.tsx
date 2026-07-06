@@ -4215,6 +4215,79 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it("requires a project choice before reviewing a thread with multiple worktrees", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/GIPHY/giphy-services",
+              kind: "worktree",
+              label: "giphy-services",
+              path: "/Users/huntharo/GIPHY/giphy-services",
+              worktreePath:
+                "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9mnf9z/giphy-services",
+            },
+            {
+              id: "/Users/huntharo/GIPHY/gif-recommendations",
+              kind: "worktree",
+              label: "gif-recommendations",
+              path: "/Users/huntharo/GIPHY/gif-recommendations",
+              worktreePath:
+                "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9motar/gif-recommendations",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review main" },
+    });
+    await clickButton("Send");
+
+    expect(startReview).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Review project")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start review" })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Review project"), {
+      target: {
+        value:
+          "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9motar/gif-recommendations",
+      },
+    });
+    await clickButton("Start review");
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+        cwd: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9motar/gif-recommendations",
+      });
+    });
+  });
+
   it("starts slash reviews with the current composer model settings", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,

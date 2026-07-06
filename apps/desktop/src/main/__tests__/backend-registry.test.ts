@@ -12560,6 +12560,35 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("passes the selected review cwd to the Codex client", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["review/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+      cwd: "/repo/selected-worktree",
+    });
+
+    expect(codexClient.lastStartReviewParams).toMatchObject({
+      threadId: "thread-1",
+      cwd: "/repo/selected-worktree",
+      target: { type: "baseBranch", branch: "main" },
+    });
+
+    await registry.close();
+  });
+
   it("rejects Codex reviews with a selected model that is not in the discovered model list", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },

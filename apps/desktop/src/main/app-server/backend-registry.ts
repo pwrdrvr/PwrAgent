@@ -8633,14 +8633,16 @@ export class DesktopBackendRegistry {
               threadId: params.threadId,
             })
           : undefined;
-      const cwd =
-        params.backend === "codex"
-          ? await this.resolveThreadEnvironmentCwd(
-              params.backend,
-              params.threadId,
-              overlay,
-            )
-          : undefined;
+      let cwd: string | undefined;
+      if (params.backend === "codex") {
+        cwd =
+          params.cwd?.trim()
+          || await this.resolveThreadEnvironmentCwd(
+            params.backend,
+            params.threadId,
+            overlay,
+          );
+      }
 
       const startWithClient = async (
         client: BackendClient,

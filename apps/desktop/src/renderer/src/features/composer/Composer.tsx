@@ -260,6 +260,7 @@ type QueuedTurnDraft = {
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   reviewCommand?: {
+    cwd?: string;
     displayText: string;
     target: AppServerReviewTarget;
   };
@@ -328,6 +329,14 @@ type ReviewConfigState = {
   commit: string;
   customInstructions: string;
   target?: ReviewTargetChoice;
+  workspaceCwd?: string;
+};
+
+type ReviewWorkspaceOption = {
+  cwd: string;
+  key: string;
+  label: string;
+  path: string;
 };
 
 const DEFAULT_REASONING_EFFORT = "medium";
@@ -586,24 +595,81 @@ function getThreadComposerScopeKey(backend: string, threadId: string): string {
 function createReviewConfig(params: {
   directory?: NavigationDirectorySummary;
   thread?: NavigationThreadSummary;
+  reviewCommand?: {
+    cwd?: string;
+    target: AppServerReviewTarget;
+  };
 }): ReviewConfigState {
-  return {
+  const workspaceOptions = buildReviewWorkspaceOptions(params.thread);
+  const config: ReviewConfigState = {
     branch: buildReviewBranchOptions(params)[0] ?? "main",
     commit: "",
     customInstructions: "",
     target: "baseBranch",
+    workspaceCwd: params.reviewCommand?.cwd ?? (
+      workspaceOptions.length === 1 ? workspaceOptions[0]?.cwd : undefined
+    ),
   };
+  const target = params.reviewCommand?.target;
+  if (!target) {
+    return config;
+  }
+  if (target.type === "uncommittedChanges") {
+    return { ...config, target: "uncommittedChanges" };
+  }
+  if (target.type === "baseBranch") {
+    return { ...config, branch: target.branch, target: "baseBranch" };
+  }
+  if (target.type === "commit") {
+    return { ...config, commit: target.sha, target: "commit" };
+  }
+  return {
+    ...config,
+    customInstructions: target.instructions,
+    target: "custom",
+  };
+}
+
+function linkedDirectoryReviewCwd(
+  directory: NavigationThreadSummary["linkedDirectories"][number],
+): string | undefined {
+  const cwd = (directory.worktreePath ?? directory.path).trim();
+  return cwd || undefined;
+}
+
+function buildReviewWorkspaceOptions(
+  thread?: NavigationThreadSummary,
+): ReviewWorkspaceOption[] {
+  const options: ReviewWorkspaceOption[] = [];
+  const seen = new Set<string>();
+  for (const directory of thread?.linkedDirectories ?? []) {
+    const cwd = linkedDirectoryReviewCwd(directory);
+    if (!cwd || seen.has(cwd)) {
+      continue;
+    }
+    seen.add(cwd);
+    const label = directory.label.trim() || cwd;
+    options.push({
+      cwd,
+      key: `${directory.id}:${cwd}`,
+      label,
+      path: cwd,
+    });
+  }
+  return options;
 }
 
 function buildConfiguredReviewCommand(
   config: ReviewConfigState | undefined
-): { displayText: string; target: AppServerReviewTarget } | undefined {
+): { cwd?: string; displayText: string; target: AppServerReviewTarget } | undefined {
   if (!config?.target) {
     return undefined;
   }
+  const cwd = config.workspaceCwd?.trim() || undefined;
 
   if (config.target === "uncommittedChanges") {
     return {
+      ...(cwd ? { cwd } : {}),
       target: { type: "uncommittedChanges" },
       displayText: "Review current changes",
     };
@@ -613,6 +679,7 @@ function buildConfiguredReviewCommand(
     const branch = config.branch.trim();
     return branch
       ? {
+          ...(cwd ? { cwd } : {}),
           target: { type: "baseBranch", branch },
           displayText: `Review changes against ${branch}`,
         }
@@ -623,6 +690,7 @@ function buildConfiguredReviewCommand(
     const sha = config.commit.trim();
     return sha
       ? {
+          ...(cwd ? { cwd } : {}),
           target: { type: "commit", sha, title: null },
           displayText: `Review commit ${sha}`,
         }
@@ -632,6 +700,7 @@ function buildConfiguredReviewCommand(
   const instructions = config.customInstructions.trim();
   return instructions
     ? {
+        ...(cwd ? { cwd } : {}),
         target: { type: "custom", instructions },
         displayText: "Review custom instructions",
       }
@@ -919,6 +988,7 @@ function parseStaleInterruptError(error: unknown): boolean {
 }
 
 function reviewCommandToDraftText(command: {
+  cwd?: string;
   target: AppServerReviewTarget;
 }): string {
   const target = command.target;
@@ -935,18 +1005,20 @@ function reviewCommandToDraftText(command: {
 }
 
 function reviewSubmissionKey(command: {
+  cwd?: string;
   target: AppServerReviewTarget;
 }): string {
+  const cwdPart = command.cwd ? `:${command.cwd}` : "";
   const target = command.target;
   switch (target.type) {
     case "baseBranch":
-      return `review:baseBranch:${target.branch}`;
+      return `review:baseBranch${cwdPart}:${target.branch}`;
     case "commit":
-      return `review:commit:${target.sha}:${target.title ?? ""}`;
+      return `review:commit${cwdPart}:${target.sha}:${target.title ?? ""}`;
     case "custom":
-      return `review:custom:${target.instructions}`;
+      return `review:custom${cwdPart}:${target.instructions}`;
     default:
-      return `review:${JSON.stringify(target)}`;
+      return `review${cwdPart}:${JSON.stringify(target)}`;
   }
 }
 
@@ -2976,10 +3048,16 @@ export function Composer(props: ComposerProps) {
     () => buildReviewCommitOptions(props.directory),
     [props.directory],
   );
+  const reviewWorkspaceOptions = useMemo(
+    () => buildReviewWorkspaceOptions(props.thread),
+    [props.thread],
+  );
+  const reviewWorkspaceSelectionRequired = reviewWorkspaceOptions.length > 1;
+  const parsedReviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
   const isBareReviewCommand = draft.trim() === "/review";
   const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
   const isReviewComposerOpen = Boolean(
-    supportsReview && reviewConfig && isBareReviewCommand
+    supportsReview && reviewConfig && parsedReviewCommand
   );
 
   useEffect(() => {
@@ -3504,6 +3582,7 @@ export function Composer(props: ComposerProps) {
   ]);
 
   const submitReviewCommand = async (reviewCommand: {
+    cwd?: string;
     displayText: string;
     target: AppServerReviewTarget;
   }, options?: {
@@ -3532,6 +3611,21 @@ export function Composer(props: ComposerProps) {
     }
     if (!options?.queued && imageAttachments.length > 0) {
       setSendError("/review does not accept image attachments.");
+      return;
+    }
+    if (
+      !options?.queued &&
+      reviewWorkspaceSelectionRequired &&
+      !reviewCommand.cwd
+    ) {
+      setReviewConfig(
+        createReviewConfig({
+          directory: props.directory,
+          reviewCommand,
+          thread: props.thread,
+        })
+      );
+      setSendError("Choose a project to review.");
       return;
     }
     if (!options?.queued && shouldQueueThreadSubmit()) {
@@ -3598,6 +3692,7 @@ export function Composer(props: ComposerProps) {
         threadId: props.thread.id,
         target: reviewCommand.target,
         delivery: "inline",
+        ...(reviewCommand.cwd ? { cwd: reviewCommand.cwd } : {}),
         ...(selectedModelOption?.id ? { model: selectedModelOption.id } : {}),
         ...(supportsReasoning && selectedReasoningEffort
           ? { reasoningEffort: selectedReasoningEffort }
@@ -4100,6 +4195,7 @@ export function Composer(props: ComposerProps) {
   };
 
   const queueReviewCommand = (reviewCommand: {
+    cwd?: string;
     displayText: string;
     target: AppServerReviewTarget;
   }): void => {
@@ -4255,7 +4351,7 @@ export function Composer(props: ComposerProps) {
   };
 
   const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
-    const reviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
+    const reviewCommand = parsedReviewCommand;
     if (
       reviewCommand &&
       sendingRef.current &&
@@ -4283,6 +4379,17 @@ export function Composer(props: ComposerProps) {
       } else if (reviewCommand) {
         if (imageAttachments.length > 0) {
           setSendError("/review does not accept image attachments.");
+          return;
+        }
+        if (reviewWorkspaceSelectionRequired) {
+          setReviewConfig(
+            createReviewConfig({
+              directory: props.directory,
+              reviewCommand,
+              thread: props.thread,
+            })
+          );
+          setSendError("Choose a project to review.");
           return;
         }
         queueReviewCommand(reviewCommand);
@@ -6002,6 +6109,36 @@ export function Composer(props: ComposerProps) {
             onKeyDown={handleReviewConfigKeyDown}
           >
             <legend>Review target</legend>
+            {reviewWorkspaceSelectionRequired ? (
+              <label className="composer__review-field">
+                <span>Project</span>
+                <select
+                  aria-label="Review project"
+                  className="composer__review-input"
+                  value={reviewConfig?.workspaceCwd ?? ""}
+                  onChange={(event) => {
+                    setReviewConfig((current) => ({
+                      ...(current ??
+                        createReviewConfig({
+                          directory: props.directory,
+                          thread: props.thread,
+                        })),
+                      workspaceCwd: event.target.value,
+                    }));
+                    setSendError(undefined);
+                  }}
+                >
+                  <option value="" disabled>
+                    Choose project
+                  </option>
+                  {reviewWorkspaceOptions.map((option) => (
+                    <option key={option.key} value={option.cwd}>
+                      {option.label} - {option.path}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <div className="composer__review-options">
               {REVIEW_TARGET_OPTIONS.map((option, index) => (
                 <button
@@ -6106,7 +6243,10 @@ export function Composer(props: ComposerProps) {
               <button
                 type="button"
                 className="composer__primary-action"
-                disabled={!buildConfiguredReviewCommand(reviewConfig)}
+                disabled={
+                  !buildConfiguredReviewCommand(reviewConfig) ||
+                  (reviewWorkspaceSelectionRequired && !reviewConfig?.workspaceCwd)
+                }
                 onClick={() => {
                   void submitConfiguredReviewComposer();
                 }}
