@@ -245,6 +245,7 @@ export type StartReviewRequest = {
   threadId: ThreadIdentifier;
   target: AppServerReviewTarget;
   delivery?: AppServerReviewDelivery;
+  cwd?: string;
   model?: string;
   serviceTier?: string;
   reasoningEffort?: string;

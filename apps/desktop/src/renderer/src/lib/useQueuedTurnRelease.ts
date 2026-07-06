@@ -299,6 +299,7 @@ export function useQueuedTurnRelease(params: {
             threadId: releaseThread.id,
             target: reviewCommand.target,
             delivery: "inline",
+            ...(reviewCommand.cwd ? { cwd: reviewCommand.cwd } : {}),
             ...(releaseThread.model ? { model: releaseThread.model } : {}),
             ...(releaseThread.reasoningEffort
               ? { reasoningEffort: releaseThread.reasoningEffort }
