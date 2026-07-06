@@ -845,7 +845,6 @@ export class SlackAdapter implements SlackProviderAdapter {
       kind: "callback",
       isGroupDm: await this.resolveIsGroupDm({
         channelId: ids.channelId,
-        channelName: body.channel?.name,
       }),
       routingState,
       teamId: ids.teamId,
@@ -914,7 +913,6 @@ export class SlackAdapter implements SlackProviderAdapter {
       kind: "command",
       isGroupDm: await this.resolveIsGroupDm({
         channelId: ids.channelId,
-        channelName: body.channel_name,
       }),
       routingState,
       teamId: ids.teamId,
@@ -1689,9 +1687,8 @@ export class SlackAdapter implements SlackProviderAdapter {
   private async resolveIsGroupDm(params: {
     channelId: string;
     channelType?: string;
-    channelName?: string;
   }): Promise<boolean> {
-    if (isSlackGroupDm({ channelType: params.channelType, channelName: params.channelName })) {
+    if (isSlackGroupDm({ channelType: params.channelType })) {
       return true;
     }
     const cached = this.conversationGroupDmCache.get(params.channelId);
@@ -2244,17 +2241,18 @@ function slackGroupDmAccessMode(
 }
 
 /**
- * Detect a Slack multi-person DM (mpim / "group DM"). Message events carry
- * `channel_type: "mpim"`; interactive (block action) and slash payloads carry
- * only a channel name, but Slack always names group DMs `mpdm-…`. Both signals
- * are checked so every inbound path (message, callback, slash) agrees.
+ * Detect a Slack multi-person DM (mpim / "group DM") from the one synchronous
+ * signal we can trust: message events carry `channel_type: "mpim"`. We do NOT
+ * classify on the channel *name*: interactive (block action) and slash payloads
+ * carry only a name, and a name is attacker-influenceable. Slack names group DMs
+ * `mpdm-…`, but nothing stops a regular channel from being named `mpdm-…` too —
+ * trusting that prefix would route such a channel through the looser group-DM
+ * gate (`groupDmAccessMode` + authorized user), letting an authorized user slip
+ * past the team/channel allowlists. Name-only paths resolve authoritatively via
+ * `conversations.info.is_mpim` in `resolveIsGroupDm` instead.
  */
-function isSlackGroupDm(params: {
-  channelType?: string;
-  channelName?: string;
-}): boolean {
-  if (params.channelType === "mpim") return true;
-  return params.channelName?.startsWith("mpdm") ?? false;
+function isSlackGroupDm(params: { channelType?: string }): boolean {
+  return params.channelType === "mpim";
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {

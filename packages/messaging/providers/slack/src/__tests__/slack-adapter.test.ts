@@ -1462,6 +1462,55 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("does not treat a regular channel named mpdm-… as a group DM (no name-based gate bypass)", async () => {
+    const socket = fakeSocket();
+    // Lock the team/channel gates with empty allowlists and open group DMs, so
+    // a channel classified as a group DM would be accepted (authorized user)
+    // while a channel subject to the team/channel gates is rejected. The slash
+    // payload carries only a *name* — "mpdm-…" here — which is attacker-
+    // influenceable and must NOT drive classification: conversations.info
+    // (is_mpim: false) is authoritative, so this stays a channel and is gated.
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedTeamIds: [],
+        teamAuthorizationMode: "approved_only",
+        channelAuthorizationMode: "approved_only",
+        groupDmAccessMode: "authorized_users",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slash_commands", {
+      ack: async () => undefined,
+      body: {
+        channel_id: "C0SPOOFCHAN",
+        channel_name: "mpdm-spoof-not-a-group-dm",
+        command: "/status",
+        team_id: "T012ABCDEF0",
+        text: "",
+        user_id: "U012ABCDEF0",
+        user_name: "alice",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({ reason: "unauthorized-conversation" }),
+    ]);
+  });
+
   it("ignores (does not reject) a non-mention group DM message from a non-authorized participant", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
