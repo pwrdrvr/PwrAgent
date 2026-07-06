@@ -217,7 +217,7 @@ MIT
 - node-abi@3.92.0 | https://github.com/electron/node-abi
 - node-addon-api@7.1.1 | https://github.com/nodejs/node-addon-api
 - node-fetch@2.7.0 | https://github.com/bitinn/node-fetch
-- node-pty@1.2.0-beta.13 | https://github.com/microsoft/node-pty
+- node-pty@1.2.0-beta.14 | https://github.com/microsoft/node-pty
 - orderedmap@2.1.1 | https://github.com/marijnh/orderedmap
 - parse-entities@4.0.2 | wooorm/parse-entities
 - prebuild-install@7.1.3 | https://github.com/prebuild/prebuild-install
@@ -2892,13 +2892,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-node-pty@1.2.0-beta.13 (MIT)
+node-pty@1.2.0-beta.14 (MIT)
 ----------------------------
 
 Applies to:
-- node-pty@1.2.0-beta.13 (MIT)
+- node-pty@1.2.0-beta.14 (MIT)
 
-Representative file: node-pty@1.2.0-beta.13/LICENSE
+Representative file: node-pty@1.2.0-beta.14/LICENSE
 
 Copyright (c) 2012-2015, Christopher Jeffrey (https://github.com/chjj/)
 
