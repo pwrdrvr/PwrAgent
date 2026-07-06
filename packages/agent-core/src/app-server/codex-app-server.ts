@@ -330,10 +330,12 @@ export class CodexAppServer {
     if (!thread) {
       throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
     }
+    const cwd = asOptionalString(params.cwd);
+    const reviewThread = cwd ? { ...thread, cwd } : thread;
     const turnId = this.createTurnId();
     const itemId = `${turnId}-item`;
     const result = await this.reviewRunner.start({
-      thread,
+      thread: reviewThread,
       turnId,
       itemId,
       target: params.target,
