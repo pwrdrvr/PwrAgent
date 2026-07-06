@@ -414,6 +414,76 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("returns usage line start time for completed turn durations", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        completedAt: 20_000,
+        createdAt: 20_100,
+        startedAt: 10_000,
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      completedAt: 20_000,
+      createdAt: 20_100,
+      startedAt: 10_000,
+    });
+  });
+
+  it("lets hydration replace a live fallback start time with the turn start", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        completedAt: undefined,
+        createdAt: 20_000,
+        source: "live",
+        status: "pending",
+        usageLineId: "live:thread-1:turn-1",
+      }),
+    });
+
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        completedAt: 20_100,
+        createdAt: 20_100,
+        source: "hydration",
+        startedAt: 10_000,
+        status: "finalized",
+        usageLineId: "codex:thread-1:turn-1:latest-request:item-1",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const turn = stateDb.raw
+      .prepare(
+        `SELECT started_at, completed_at
+         FROM thread_usage_turns
+         WHERE usage_turn_id = ?`,
+      )
+      .get(pricing.lines[0]?.usageTurnId) as {
+        completed_at: number | null;
+        started_at: number | null;
+      };
+
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      completedAt: 20_100,
+      startedAt: 10_000,
+      usageLineId: "codex:thread-1:turn-1:latest-request:item-1",
+    });
+    expect(turn).toMatchObject({
+      completed_at: 20_100,
+      started_at: 10_000,
+    });
+  });
+
   it("does not erase known turn settings when usage updates omit them", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({

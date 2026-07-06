@@ -2930,6 +2930,7 @@ function summarizeTokenUsageActivity(
         settingsSource: "turn-context",
         source: "hydration",
         sourceItemId,
+        ...(typeof turn?.startedAt === "number" ? { startedAt: turn.startedAt } : {}),
         status: "finalized",
         threadId,
         totalCostMicros: cost?.totalCostMicros ?? 0,
