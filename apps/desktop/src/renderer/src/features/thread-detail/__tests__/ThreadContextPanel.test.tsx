@@ -1194,6 +1194,62 @@ describe("ThreadContextPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders observed replay counts on sub-agent monitor pricing cards", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "monitor-line-context-replays",
+      threadId: "monitor-thread-1",
+      parentThreadId: "thread-1",
+      turnId: "turn-review-1",
+      scope: "monitor",
+      source: "monitor",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 550_000,
+      uncachedInputTokens: 100_000,
+      cachedInputTokens: 450_000,
+      outputTokens: 2_000,
+      reasoningOutputTokens: 500,
+      totalTokens: 552_500,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 500_000,
+      cachedInputCostMicros: 225_000,
+      outputCostMicros: 75_000,
+      totalCostMicros: 800_000,
+      observedColdReplayCount: 1,
+      observedColdReplayUncachedTokens: 100_000,
+      observedHotReplayCount: 5,
+      observedHotReplayCachedTokens: 450_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [line],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    // Sub-agent ("monitor") lines carry the tally observed on the agent's own
+    // thread and render the same replay estimates as turn lines.
+    expect(screen.getByText("Sub-agent usage")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Estimated cold context replays: 1 (100,000 uncached · $0.50)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Estimated hot context replays: 5 (~90,000 cached avg; 450,000 cached bucket · $0.23)",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("shows observed replay counts on a completed turn (no active turn needed)", () => {
     // Regression guard for the #871 complaint: a finished turn keeps the counts
     // it observed live rather than losing them once it is no longer active.

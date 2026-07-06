@@ -3175,6 +3175,7 @@ function buildTaskMonitorUsageLine(params: {
   monitorId: string;
   monitorThreadId: string;
   monitorTurnId?: string;
+  observedReplays?: ObservedContextReplayTally;
   parentThreadId: string;
   serviceTier?: string;
   source: ThreadUsageLineRecord["source"];
@@ -3228,6 +3229,16 @@ function buildTaskMonitorUsageLine(params: {
     ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
     inputTokens,
     ...(model ? { model } : {}),
+    ...(params.observedReplays
+      ? {
+          observedColdReplayCount: params.observedReplays.coldReplayCount,
+          observedColdReplayUncachedTokens:
+            params.observedReplays.coldReplayUncachedTokens,
+          observedHotReplayCachedTokens:
+            params.observedReplays.hotReplayCachedTokens,
+          observedHotReplayCount: params.observedReplays.hotReplayCount,
+        }
+      : {}),
     outputCostMicros: cost?.outputCostMicros ?? 0,
     outputTokens,
     parentThreadId: params.parentThreadId,
@@ -12719,6 +12730,12 @@ export class DesktopBackendRegistry {
       }
       if (reviewRecord) {
         reviewRecord.latestUsage = usageSnapshot;
+        const observedReplays = this.observeLiveThreadContextReplay({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+          tokenUsage: notification.params.tokenUsage,
+          turnId: notification.params.turnId,
+        });
         await this.persistReviewSubAgent(reviewRecord, {
           monitorUsage: usageSnapshot,
         });
@@ -12730,6 +12747,7 @@ export class DesktopBackendRegistry {
             monitorId: reviewSubAgentId(reviewRecord.turnId),
             monitorThreadId: reviewRecord.reviewThreadId,
             monitorTurnId: reviewRecord.turnId,
+            observedReplays,
             parentThreadId: reviewRecord.parentThreadId,
             serviceTier,
             source: "monitor",
@@ -12754,6 +12772,12 @@ export class DesktopBackendRegistry {
         usage: usageSnapshot,
       });
       if (reviewUsagePersisted) {
+        const observedReplays = this.observeLiveThreadContextReplay({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+          tokenUsage: notification.params.tokenUsage,
+          turnId: notification.params.turnId,
+        });
         if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
           const line = buildTaskMonitorUsageLine({
             backend: event.backend,
@@ -12763,6 +12787,7 @@ export class DesktopBackendRegistry {
             monitorThreadId:
               completedReviewRecord?.reviewThreadId ?? notification.params.threadId,
             monitorTurnId: notification.params.turnId,
+            observedReplays,
             parentThreadId:
               completedReviewRecord?.parentThreadId ?? notification.params.threadId,
             serviceTier,
@@ -12799,6 +12824,12 @@ export class DesktopBackendRegistry {
     });
     if (usageSnapshot) {
       monitorRecord.latestUsage = usageSnapshot;
+      const observedReplays = this.observeLiveThreadContextReplay({
+        backend: event.backend,
+        threadId: notification.params.threadId,
+        tokenUsage: notification.params.tokenUsage,
+        turnId: notification.params.turnId ?? monitorRecord.monitorTurnId,
+      });
       await this.persistTaskMonitorSubAgent(monitorRecord, {
         monitorUsage: usageSnapshot,
       });
@@ -12809,6 +12840,7 @@ export class DesktopBackendRegistry {
           monitorId: monitorRecord.monitorId,
           monitorThreadId: monitorRecord.monitorThreadId ?? notification.params.threadId,
           monitorTurnId: monitorRecord.monitorTurnId,
+          observedReplays,
           parentThreadId: monitorRecord.parentThreadId,
           source: "monitor",
           usage: usageSnapshot,
@@ -13209,6 +13241,15 @@ export class DesktopBackendRegistry {
     if (!usageSnapshot) {
       return;
     }
+    const monitorTurnId =
+      readOptionalString(notificationParams, ["turnId", "turn_id"]) ??
+      existing.monitorTurnId;
+    const observedReplays = this.observeLiveThreadContextReplay({
+      backend: "codex",
+      threadId: event.notification.params.threadId,
+      tokenUsage: event.notification.params.tokenUsage,
+      turnId: monitorTurnId,
+    });
 
     await this.overlayStore.upsertThreadSubAgent({
       backend: "codex",
@@ -13236,9 +13277,8 @@ export class DesktopBackendRegistry {
         model,
         monitorId,
         monitorThreadId: event.notification.params.threadId,
-        monitorTurnId:
-          readOptionalString(notificationParams, ["turnId", "turn_id"]) ??
-          existing.monitorTurnId,
+        monitorTurnId,
+        observedReplays,
         parentThreadId,
         serviceTier,
         source: "monitor",
