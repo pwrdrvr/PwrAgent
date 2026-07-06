@@ -23,6 +23,7 @@ export type ComposerQueuedTurnSnapshot = {
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
   reviewCommand?: {
+    cwd?: string;
     displayText: string;
     target: AppServerReviewTarget;
   };

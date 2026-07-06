@@ -384,6 +384,7 @@ describe("useQueuedTurnRelease", () => {
       text: "/review main",
       imageAttachments: [],
       reviewCommand: {
+        cwd: "/repo/selected-worktree",
         displayText: "Review changes against main",
         target: {
           type: "baseBranch",
@@ -442,6 +443,7 @@ describe("useQueuedTurnRelease", () => {
           branch: "main",
         },
         delivery: "inline",
+        cwd: "/repo/selected-worktree",
         model: "gpt-5.5",
         reasoningEffort: "high",
         serviceTier: "priority",
@@ -714,6 +716,7 @@ describe("useQueuedTurnRelease", () => {
       text: "/review main",
       imageAttachments: [],
       reviewCommand: {
+        cwd: "/repo/background-worktree",
         displayText: "Review changes against main",
         target: { type: "baseBranch", branch: "main" },
       },
@@ -755,6 +758,7 @@ describe("useQueuedTurnRelease", () => {
         threadId: "thread-a",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        cwd: "/repo/background-worktree",
       });
     });
     expect(startTurn).not.toHaveBeenCalled();
@@ -796,6 +800,7 @@ describe("useQueuedTurnRelease", () => {
       text: "/review main",
       imageAttachments: [],
       reviewCommand: {
+        cwd: "/repo/polled-worktree",
         displayText: "Review changes against main",
         target: { type: "baseBranch", branch: "main" },
       },
@@ -875,6 +880,7 @@ describe("useQueuedTurnRelease", () => {
       text: "/review main",
       imageAttachments: [],
       reviewCommand: {
+        cwd: "/repo/retained-worktree",
         displayText: "Review changes against main",
         target: { type: "baseBranch", branch: "main" },
       },
@@ -955,6 +961,7 @@ describe("useQueuedTurnRelease", () => {
       text: "/review main",
       imageAttachments: [],
       reviewCommand: {
+        cwd: "/repo/retained-worktree",
         displayText: "Review changes against main",
         target: { type: "baseBranch", branch: "main" },
       },
@@ -1008,6 +1015,7 @@ describe("useQueuedTurnRelease", () => {
         threadId: "thread-a",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        cwd: "/repo/retained-worktree",
       });
     });
     expect(
@@ -1043,6 +1051,7 @@ describe("useQueuedTurnRelease", () => {
       text: "/review main",
       imageAttachments: [],
       reviewCommand: {
+        cwd: "/repo/polled-worktree",
         displayText: "Review changes against main",
         target: { type: "baseBranch", branch: "main" },
       },
@@ -1446,6 +1455,7 @@ describe("useQueuedTurnRelease", () => {
       text: "/review main",
       imageAttachments: [],
       reviewCommand: {
+        cwd: "/repo/polled-worktree",
         displayText: "Review changes against main",
         target: { type: "baseBranch", branch: "main" },
       },
@@ -1503,6 +1513,7 @@ describe("useQueuedTurnRelease", () => {
       text: "/review main",
       imageAttachments: [],
       reviewCommand: {
+        cwd: "/repo/polled-worktree",
         displayText: "Review changes against main",
         target: { type: "baseBranch", branch: "main" },
       },
@@ -1589,6 +1600,7 @@ describe("useQueuedTurnRelease", () => {
       text: "/review main",
       imageAttachments: [],
       reviewCommand: {
+        cwd: "/repo/polled-worktree",
         displayText: "Review changes against main",
         target: { type: "baseBranch", branch: "main" },
       },
@@ -1618,6 +1630,7 @@ describe("useQueuedTurnRelease", () => {
       threadId: "thread-a",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      cwd: "/repo/polled-worktree",
     });
     expect(
       composerDraftStore.getQueuedTurn("thread:codex:thread-a")
