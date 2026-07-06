@@ -713,7 +713,11 @@ export class SqliteOverlayStore {
                 THEN thread_usage_turns.settings_confidence
               ELSE excluded.settings_confidence
             END,
-            started_at = COALESCE(thread_usage_turns.started_at, excluded.started_at),
+            started_at = CASE
+              WHEN thread_usage_turns.started_at IS NULL THEN excluded.started_at
+              WHEN excluded.started_at IS NULL THEN thread_usage_turns.started_at
+              ELSE MIN(thread_usage_turns.started_at, excluded.started_at)
+            END,
             completed_at = excluded.completed_at,
             observed_at = MIN(thread_usage_turns.observed_at, excluded.observed_at),
             -- Observation-derived tallies are absent on transcript-hydration
