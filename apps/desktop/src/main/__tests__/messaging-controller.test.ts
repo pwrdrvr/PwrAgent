@@ -8429,7 +8429,7 @@ describe("MessagingController", () => {
     expect(binding).not.toHaveProperty("activeTurn");
   });
 
-  it("coalesces assistant stream deltas and flushes the final turn text", async () => {
+  it("coalesces assistant stream deltas with backoff and flushes the final turn text", async () => {
     let now = 1000;
     const recordPlatformResponseActivity = vi.fn();
     const harness = await createHarness({
@@ -8444,6 +8444,8 @@ describe("MessagingController", () => {
     recordPlatformResponseActivity.mockClear();
     harness.delivered.length = 0;
 
+    // First delta opens the ~400ms initial coalescing window; nothing is sent
+    // yet — the buffer waits so an opening burst becomes one edit, not many.
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
@@ -8456,27 +8458,10 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
+    expect(harness.delivered).toHaveLength(0);
 
-    expect(harness.delivered).toEqual([
-      expect.objectContaining({
-        kind: "stream_update",
-        markdown: "plain",
-        text: "Hello",
-        stream: expect.objectContaining({
-          isFinal: false,
-          itemId: "item-1",
-          sequence: 1,
-          turnId: "turn-1",
-        }),
-      }),
-    ]);
-    expect(recordPlatformResponseActivity).not.toHaveBeenCalled();
-    const firstStream = harness.delivered[0];
-    if (firstStream?.kind !== "stream_update") {
-      throw new Error("expected first stream update");
-    }
-
-    now += 500;
+    // A second delta 10ms later is still inside the initial window: coalesced.
+    now += 10;
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
@@ -8489,9 +8474,11 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
-    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered).toHaveLength(0);
+    expect(recordPlatformResponseActivity).not.toHaveBeenCalled();
 
-    now += 600;
+    // Past the initial window, the next delta releases one coalesced block.
+    now += 500;
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
@@ -8505,25 +8492,44 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered.at(-1)).toMatchObject({
-      delivery: {
-        mode: "update",
-        fallback: "fail",
-      },
+    expect(harness.delivered).toHaveLength(1);
+    const firstStream = harness.delivered[0];
+    if (firstStream?.kind !== "stream_update") {
+      throw new Error("expected first stream update");
+    }
+    expect(firstStream).toMatchObject({
       kind: "stream_update",
-      targetSurface: {
-        id: `surface:${firstStream.id}`,
-      },
+      markdown: "plain",
       text: "Hello world.",
       stream: {
         isFinal: false,
-        key: firstStream.stream.key,
+        itemId: "item-1",
         sequence: 3,
+        turnId: "turn-1",
       },
     });
     expect(recordPlatformResponseActivity).not.toHaveBeenCalled();
 
-    now += 100;
+    // A delta 20ms after the release is inside the next (1s) backoff window and
+    // is coalesced rather than emitted.
+    now += 20;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "!",
+        },
+      },
+    } satisfies AgentEvent);
+    expect(harness.delivered).toHaveLength(1);
+
+    // Turn completes: the final message flushes immediately (bypasses backoff)
+    // and edits the surface the release created.
+    now += 20;
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
@@ -8548,10 +8554,6 @@ describe("MessagingController", () => {
     const streamUpdates = harness.delivered.filter(
       (intent) => intent.kind === "stream_update",
     );
-    const previousStream = streamUpdates.at(-2);
-    if (!previousStream) {
-      throw new Error("expected previous stream update");
-    }
     expect(streamUpdates.at(-1)).toMatchObject({
       delivery: {
         mode: "update",
@@ -8560,13 +8562,12 @@ describe("MessagingController", () => {
       kind: "stream_update",
       markdown: "markdown",
       targetSurface: {
-        id: `surface:${previousStream.id}`,
+        id: `surface:${firstStream.id}`,
       },
       text: "Hello world.\n\nFinal answer.",
       stream: {
         isFinal: true,
         key: firstStream.stream.key,
-        sequence: 4,
       },
     });
     expect(recordPlatformResponseActivity).toHaveBeenCalledTimes(1);
@@ -8763,7 +8764,7 @@ describe("MessagingController", () => {
   });
 
   it("rechecks budget admission after a provider rate-limit rejection", async () => {
-    const now = 1000;
+    let now = 1000;
     let rejectNextStream = false;
     const scope: MessagingDeliveryScope = {
       platform: "telegram",
@@ -8811,6 +8812,7 @@ describe("MessagingController", () => {
     attempts.length = 0;
     rejectNextStream = true;
 
+    // First delta is coalesced (initial window); no send yet.
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
@@ -8823,11 +8825,28 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
+    expect(attempts).toEqual([]);
+
+    // Past the window, the next delta releases the coalesced block, which the
+    // provider rate-limits; the recheck then drops the partial during cool-off.
+    now += 500;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: " world",
+        },
+      },
+    } satisfies AgentEvent);
 
     expect(attempts).toEqual([
       expect.objectContaining({
         kind: "stream_update",
-        text: "Hello",
+        text: "Hello world",
       }),
     ]);
     expect(Object.keys((await harness.store.readSnapshot()).deliveries)).toHaveLength(
@@ -8836,7 +8855,7 @@ describe("MessagingController", () => {
   });
 
   it("does not replay non-retryable provider rate-limit failures", async () => {
-    const now = 1000;
+    let now = 1000;
     let rejectNextStream = false;
     const scope: MessagingDeliveryScope = {
       platform: "telegram",
@@ -8884,6 +8903,7 @@ describe("MessagingController", () => {
     attempts.length = 0;
     rejectNextStream = true;
 
+    // First delta is coalesced (initial window); no send yet.
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
@@ -8893,6 +8913,23 @@ describe("MessagingController", () => {
           turnId: "turn-1",
           itemId: "item-1",
           delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+    expect(attempts).toHaveLength(0);
+
+    // Past the window, the next delta releases the coalesced block; the
+    // non-retryable rate-limit failure is recorded and not replayed.
+    now += 500;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: " world",
         },
       },
     } satisfies AgentEvent);
@@ -9229,7 +9266,7 @@ describe("MessagingController", () => {
         delivered.push(intent);
         if (
           intent.kind === "stream_update" &&
-          intent.stream.sequence === 1 &&
+          !intent.stream.isFinal &&
           !releaseFirstDelivery
         ) {
           resolveFirstDeliveryStarted?.();
@@ -9253,7 +9290,8 @@ describe("MessagingController", () => {
     await bindThread(harness);
     delivered.length = 0;
 
-    const first = harness.controller.handleBackendEvent({
+    // First delta is coalesced (initial window); nothing is delivered yet.
+    await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
         method: "item/agentMessage/delta",
@@ -9265,10 +9303,12 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
-    await firstStreamStarted;
+    expect(delivered).toHaveLength(0);
 
-    now += 100;
-    await harness.controller.handleBackendEvent({
+    // Past the window, the next delta releases the first (non-final) edit, whose
+    // delivery blocks — the concurrent final flush must serialize behind it.
+    now += 500;
+    const first = harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
         method: "item/agentMessage/delta",
@@ -9280,6 +9320,7 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
+    await firstStreamStarted;
 
     now += 100;
     const final = harness.controller.handleBackendEvent({
@@ -9446,6 +9487,10 @@ describe("MessagingController", () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
       streamingResponsesDefault: true,
+      // Fixed clock: the single delta and the terminal event share a timestamp,
+      // so the delta is coalesced (no intermediate edit) and only the final
+      // discarded stream update fires before the fallback message.
+      now: () => 1000,
       deliver: async (intent) => {
         delivered.push(intent);
         return {
@@ -9498,11 +9543,6 @@ describe("MessagingController", () => {
     expect(delivered.filter((intent) => intent.kind === "stream_update")).toEqual([
       expect.objectContaining({
         stream: expect.objectContaining({
-          isFinal: false,
-        }),
-      }),
-      expect.objectContaining({
-        stream: expect.objectContaining({
           isFinal: true,
         }),
         text: "Hello final.",
@@ -9525,6 +9565,9 @@ describe("MessagingController", () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
       streamingResponsesDefault: true,
+      // Fixed clock: the single delta coalesces (no intermediate edit) and only
+      // the final discarded stream update fires before the fallback message.
+      now: () => 1000,
       deliver: async (intent) => {
         delivered.push(intent);
         return {
@@ -9572,12 +9615,6 @@ describe("MessagingController", () => {
     expect(delivered.filter((intent) => intent.kind === "stream_update")).toEqual([
       expect.objectContaining({
         stream: expect.objectContaining({
-          isFinal: false,
-        }),
-        text: "Gemini streamed the answer.",
-      }),
-      expect.objectContaining({
-        stream: expect.objectContaining({
           isFinal: true,
         }),
         text: "Gemini streamed the answer.",
@@ -9616,7 +9653,7 @@ describe("MessagingController", () => {
     await bindThread(harness);
     delivered.length = 0;
 
-    // Multiple deltas, each spaced beyond STREAM_UPDATE_REFRESH_MS. With
+    // Multiple deltas, each spaced beyond the coalescing backoff window. With
     // streaming enabled this would flush several partial `stream_update`
     // intents (each minting a fresh Slack surface → the ping flood we fixed).
     // With streaming disabled the controller must never generate them.

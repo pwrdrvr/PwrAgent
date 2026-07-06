@@ -209,6 +209,7 @@ import {
   MessagingDeliveryBudget,
   type MessagingDeliveryPriority,
 } from "./messaging-delivery-budget.js";
+import { coalesceBackoffMs } from "./messaging-coalesce-backoff.js";
 import {
   DEFAULT_MESSAGING_ATTACHMENT_POLICY,
   processMessagingAttachments,
@@ -258,9 +259,6 @@ const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 
 type PreparedInputStartResult = "failed" | "queued" | "started";
-// Provider adapters own stricter platform pacing; the generic layer only
-// coalesces noisy token deltas into human-visible refreshes.
-const STREAM_UPDATE_REFRESH_MS = 1_000;
 const messagingControllerLog = getMainLogger("pwragent:messaging");
 
 type MonitorCommandAction =
@@ -299,7 +297,13 @@ type AssistantStreamDelta = {
 };
 
 type AssistantStreamBuffer = AssistantStreamDelta & {
-  lastEmittedAt: number;
+  // Earliest time a non-final `stream_update` may be emitted for this message.
+  // Deltas arriving before it are coalesced into `text`; see
+  // {@link coalesceBackoffMs}. The final flush ignores this and emits at once.
+  nextReleaseAt: number;
+  // Count of non-final edits already emitted for this message, driving the
+  // exponential backoff between successive coalesced releases.
+  releaseCount: number;
   sequence: number;
   surface?: MessagingSurfaceRef;
   text: string;
@@ -3325,7 +3329,10 @@ export class MessagingController {
         }
       : {
           ...delta,
-          lastEmittedAt: 0,
+          // First receipt: hold the first coalesced block for the initial
+          // window so a burst of opening tokens becomes one edit, not many.
+          nextReleaseAt: now + coalesceBackoffMs(0),
+          releaseCount: 0,
           sequence: 1,
           text: delta.delta,
         };
@@ -3344,16 +3351,20 @@ export class MessagingController {
       return;
     }
 
-    if (
-      buffer.text.trim().length === 0 ||
-      (buffer.lastEmittedAt > 0 && now - buffer.lastEmittedAt < STREAM_UPDATE_REFRESH_MS)
-    ) {
+    // Coalesce: buffer this delta into `text` (already done above) and emit
+    // nothing until the stored release time passes. Each release then schedules
+    // the next one exponentially further out (~400ms → 1s → 2s → 4s → 8s → 16s
+    // cap) so a long stream settles to at most one edit every ~16s instead of
+    // one edit per delta. The final flush bypasses this timer entirely.
+    if (buffer.text.trim().length === 0 || now < buffer.nextReleaseAt) {
       return;
     }
 
+    const releaseCount = buffer.releaseCount + 1;
     this.assistantStreamBuffers.set(bufferKey, {
       ...buffer,
-      lastEmittedAt: now,
+      releaseCount,
+      nextReleaseAt: now + coalesceBackoffMs(releaseCount),
     });
     await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, false);
   }
@@ -3382,7 +3393,6 @@ export class MessagingController {
       this.assistantStreamBuffers.set(bufferKey, {
         ...buffer,
         delta: "",
-        lastEmittedAt: this.now(),
         sequence: buffer.sequence + 1,
         text: finalText,
       });
@@ -3423,7 +3433,6 @@ export class MessagingController {
       this.assistantStreamBuffers.set(bufferKey, {
         ...buffer,
         delta: "",
-        lastEmittedAt: this.now(),
         sequence: buffer.sequence + 1,
         text,
       });
@@ -3553,7 +3562,6 @@ export class MessagingController {
     const current = this.assistantStreamBuffers.get(bufferKey);
     this.assistantStreamBuffers.set(bufferKey, {
       ...(current && current.sequence >= buffer.sequence ? current : buffer),
-      lastEmittedAt: now,
       surface,
     });
     return result;
