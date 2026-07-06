@@ -25,6 +25,40 @@ function buildThread(
   };
 }
 
+describe("materializeNavigationThreads — subthread grouping", () => {
+  it("flattens persisted nested subthreads to the root parent", () => {
+    const threads = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:source-child": {
+          backend: "codex",
+          threadId: "source-child",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          parentThreadId: "root-thread",
+        },
+        "codex:nested-child": {
+          backend: "codex",
+          threadId: "nested-child",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          parentThreadId: "source-child",
+        },
+      },
+      previousKnownThreadKeys: [],
+      threads: [
+        buildThread({ id: "root-thread" }),
+        buildThread({ id: "source-child" }),
+        buildThread({ id: "nested-child" }),
+      ],
+    });
+
+    expect(
+      threads.find((thread) => thread.id === "nested-child")?.parentThreadId,
+    ).toBe("root-thread");
+  });
+});
+
 describe("buildDirectorySummaries", () => {
   it("groups linked threads under stable directory rows and counts needs-attention threads", () => {
     const directories = buildDirectorySummaries({
