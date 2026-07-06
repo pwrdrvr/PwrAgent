@@ -175,6 +175,7 @@ import {
   applyCodexEnvironmentActionRunUpdate,
   buildPendingRequestResponse,
   buildThreadIdentityKey,
+  insertSubthreadIdAfter,
   isAcpBackendId,
   isAppServerBackendKind,
   normalizePullRequestProvider,
@@ -15908,6 +15909,34 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async resolveHandoffGroupParentThreadId(params: {
+    backend: AppServerBackendKind;
+    sourceOverlay: ThreadOverlayState;
+    sourceThreadId: string;
+  }): Promise<string> {
+    const directParentThreadId = params.sourceOverlay.parentThreadId?.trim();
+    if (!directParentThreadId) {
+      return params.sourceThreadId;
+    }
+
+    let parentThreadId = directParentThreadId;
+    const seen = new Set([params.sourceThreadId]);
+    while (!seen.has(parentThreadId)) {
+      seen.add(parentThreadId);
+      const parentOverlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: parentThreadId,
+      });
+      const nextParentThreadId = parentOverlay?.parentThreadId?.trim();
+      if (!nextParentThreadId) {
+        return parentThreadId;
+      }
+      parentThreadId = nextParentThreadId;
+    }
+
+    return directParentThreadId;
+  }
+
   private startPendingThreadWorkspaceMove(
     move: PendingThreadWorkspaceMoveSummary,
   ): PendingThreadWorkspaceMoveSummary {
@@ -16936,6 +16965,14 @@ export class DesktopBackendRegistry {
     const seedMode: HandoffTaskSeedMode = request.args.seedMode ?? "clean";
     const groupingMode: HandoffTaskGroupingMode =
       request.args.groupingMode ?? "none";
+    const groupedParentThreadId =
+      groupingMode === "subthread"
+        ? await this.resolveHandoffGroupParentThreadId({
+            backend: sourceBackend,
+            sourceOverlay,
+            sourceThreadId,
+          })
+        : undefined;
     const workspaceMode: HandoffTaskWorkspaceMode =
       request.args.workspaceMode === "same"
         ? "same_workspace"
@@ -17151,8 +17188,8 @@ export class DesktopBackendRegistry {
         const forked = await this.forkThread({
           backend,
           sourceThreadId,
-          ...(groupingMode === "subthread"
-            ? { parentThreadId: sourceThreadId }
+          ...(groupedParentThreadId
+            ? { parentThreadId: groupedParentThreadId }
             : {}),
           executionMode,
           directoryLabel:
@@ -17208,13 +17245,32 @@ export class DesktopBackendRegistry {
         this.updatePendingThreadHandoff(handoffId, { threadId });
         inheritedSettings.codexEnvironmentRuntime = started.codexEnvironmentRuntime;
         codexEnvironmentStartupFailure = started.codexEnvironmentStartupFailure;
-        if (groupingMode === "subthread") {
+        if (groupedParentThreadId) {
           await this.overlayStore.setThreadParent?.({
             backend,
             threadId,
-            parentThreadId: sourceThreadId,
+            parentThreadId: groupedParentThreadId,
           });
         }
+      }
+      if (groupedParentThreadId && this.overlayStore.updateSubthreadOrder) {
+        const parentOverlay = await this.overlayStore.getThreadOverlayState({
+          backend,
+          threadId: groupedParentThreadId,
+        });
+        const nextOrder = insertSubthreadIdAfter(
+          groupedParentThreadId === sourceThreadId ||
+          parentOverlay?.subthreadOrder?.includes(sourceThreadId)
+            ? (parentOverlay?.subthreadOrder ?? [])
+            : [...(parentOverlay?.subthreadOrder ?? []), sourceThreadId],
+          sourceThreadId,
+          threadId,
+        );
+        await this.overlayStore.updateSubthreadOrder({
+          backend,
+          parentThreadId: groupedParentThreadId,
+          threadIds: nextOrder,
+        });
       }
       await this.renameThread({ backend, threadId, name: title }).catch(
         (error) => {
@@ -17345,8 +17401,8 @@ export class DesktopBackendRegistry {
         title,
         seedMode,
         groupingMode,
-        ...(groupingMode === "subthread"
-          ? { groupedUnderThreadId: sourceThreadId }
+        ...(groupedParentThreadId
+          ? { groupedUnderThreadId: groupedParentThreadId }
           : {}),
         inheritedSettings,
         origin,
