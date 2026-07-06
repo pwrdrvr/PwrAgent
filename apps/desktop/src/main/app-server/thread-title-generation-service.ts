@@ -143,7 +143,7 @@ export class ThreadTitleGenerationService {
       return result;
     }
 
-    const normalized = normalizeThreadTitleObject(result.object, userPrompt);
+    const normalized = normalizeThreadTitleObject(result.object);
     if (!normalized.title) {
       return {
         status: "invalid",
@@ -215,8 +215,7 @@ export class GrokThreadTitleGenerator implements ThreadTitleGenerator {
 }
 
 function normalizeThreadTitleObject(
-  object: unknown,
-  userPrompt: string
+  object: unknown
 ): { title?: string; reason: string } {
   if (!object || typeof object !== "object" || Array.isArray(object)) {
     return { reason: "title_payload_must_be_object" };
@@ -236,9 +235,6 @@ function normalizeThreadTitleObject(
   }
   if (countWords(cleaned) > MAX_TITLE_WORDS) {
     return { reason: "title_too_many_words" };
-  }
-  if (!preservesTicketReferences(userPrompt, cleaned)) {
-    return { reason: "ticket_reference_missing" };
   }
 
   return {
@@ -272,48 +268,4 @@ function stripMatchingQuotes(value: string): string {
 
 function countWords(value: string): number {
   return value.split(/\s+/).filter(Boolean).length;
-}
-
-function preservesTicketReferences(userPrompt: string, title: string): boolean {
-  const promptRefs = extractTicketReferences(userPrompt);
-  if (promptRefs.length === 0) {
-    return true;
-  }
-
-  const normalizedTitle = normalizeReferenceText(title);
-  return promptRefs.every((reference) =>
-    normalizedTitle.includes(normalizeReferenceText(reference))
-  );
-}
-
-function extractTicketReferences(value: string): string[] {
-  const references: string[] = [];
-  const contextualPatterns = [
-    /\b[A-Z][A-Z0-9]+-\d+\b/g,
-    /\b(?:issue|pr|pull request)\s+#?\d+\b/gi,
-  ];
-
-  for (const pattern of contextualPatterns) {
-    for (const match of value.matchAll(pattern)) {
-      references.push(match[0]);
-    }
-  }
-
-  for (const match of value.matchAll(/#\d+\b/g)) {
-    const index = match.index;
-    if (typeof index !== "number" || isBareHashTicketReference(value, index)) {
-      references.push(match[0]);
-    }
-  }
-
-  return references;
-}
-
-function isBareHashTicketReference(value: string, index: number): boolean {
-  const context = value.slice(Math.max(0, index - 32), index).toLowerCase();
-  return !/\b(?:agent|item|option|step|subagent|task|turn)\s*$/.test(context);
-}
-
-function normalizeReferenceText(value: string): string {
-  return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
