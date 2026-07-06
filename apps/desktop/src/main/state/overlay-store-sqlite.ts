@@ -748,6 +748,7 @@ export class SqliteOverlayStore {
             reasoning_effort,
             service_tier,
             fast_mode,
+            turn_usage_attributed,
             settings_source,
             settings_confidence,
             input_tokens,
@@ -796,6 +797,7 @@ export class SqliteOverlayStore {
             @reasoningEffort,
             @serviceTier,
             @fastMode,
+            @turnUsageAttributed,
             @settingsSource,
             @settingsConfidence,
             @inputTokens,
@@ -844,6 +846,7 @@ export class SqliteOverlayStore {
             reasoning_effort = excluded.reasoning_effort,
             service_tier = excluded.service_tier,
             fast_mode = excluded.fast_mode,
+            turn_usage_attributed = excluded.turn_usage_attributed,
             settings_source = excluded.settings_source,
             settings_confidence = excluded.settings_confidence,
             input_tokens = excluded.input_tokens,
@@ -2431,6 +2434,7 @@ type ThreadUsageLineRow = {
   reasoning_effort: string | null;
   service_tier: string | null;
   fast_mode: number | null;
+  turn_usage_attributed: number | null;
   settings_source: ThreadUsageLineRecord["settingsSource"] | null;
   settings_confidence: ThreadUsageLineRecord["settingsConfidence"] | null;
   input_tokens: number;
@@ -2704,6 +2708,12 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     cumulativeUncachedInputTokens: line.cumulativeUncachedInputTokens ?? null,
     currency: line.currency,
     fastMode: typeof line.fastMode === "boolean" ? (line.fastMode ? 1 : 0) : null,
+    turnUsageAttributed:
+      typeof line.turnUsageAttributed === "boolean"
+        ? line.turnUsageAttributed
+          ? 1
+          : 0
+        : null,
     inputTokens: line.inputTokens,
     model: line.model ?? null,
     observedColdReplayCount: line.observedColdReplayCount ?? null,
@@ -2774,6 +2784,9 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
       : {}),
     currency: row.currency,
     ...(row.fast_mode !== null ? { fastMode: Boolean(row.fast_mode) } : {}),
+    ...(row.turn_usage_attributed !== null
+      ? { turnUsageAttributed: Boolean(row.turn_usage_attributed) }
+      : {}),
     inputTokens: row.input_tokens,
     ...(row.model ? { model: row.model } : {}),
     outputCostMicros: row.output_cost_micros,

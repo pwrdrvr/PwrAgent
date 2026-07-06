@@ -3387,6 +3387,7 @@ function resolveLiveThreadUsageTiming(params: {
 }
 
 function buildLiveThreadUsageLine(params: {
+  attributed?: boolean;
   backend: AppServerBackendKind;
   cumulativeTokenUsage?: TaskMonitorTokenUsageBreakdown;
   completedAt?: number;
@@ -3489,6 +3490,9 @@ function buildLiveThreadUsageLine(params: {
     totalCostMicros: cost?.totalCostMicros ?? 0,
     totalTokens,
     ...(params.turnId ? { turnId: params.turnId } : {}),
+    ...(typeof params.attributed === "boolean"
+      ? { turnUsageAttributed: params.attributed }
+      : {}),
     uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
     uncachedInputTokens,
     usageLineId: [
@@ -12861,6 +12865,11 @@ export class DesktopBackendRegistry {
     tokenUsage: unknown;
     turnId?: string;
   }): {
+    // Whether turnTokenUsage is a real measurement of this turn — a per-turn
+    // delta or a per-request "last" snapshot — vs a fallback to a whole-thread
+    // total we couldn't decompose. Carried onto the persisted row so the
+    // renderer classifies summaries by fact, not a token-count guess.
+    attributed: boolean;
     cumulativeTokenUsage?: TaskMonitorTokenUsageBreakdown;
     turnTokenUsage: TaskMonitorTokenUsageBreakdown | unknown;
     /**
@@ -12873,11 +12882,14 @@ export class DesktopBackendRegistry {
   } {
     const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
     if (!records) {
-      return { turnTokenUsage: params.tokenUsage };
+      return { attributed: false, turnTokenUsage: params.tokenUsage };
     }
 
     if (!records.totalUsage || !params.turnId) {
       return {
+        // A "last" snapshot is this request's own usage; anything else here is
+        // a bare/whole payload we can't attribute to the turn.
+        attributed: Boolean(records.latestUsage),
         ...(records.totalUsage ? { cumulativeTokenUsage: records.totalUsage } : {}),
         turnTokenUsage:
           records.latestUsage ?? records.currentUsage ?? params.tokenUsage,
@@ -12907,6 +12919,9 @@ export class DesktopBackendRegistry {
       ? subtractTaskMonitorTokenUsage(records.totalUsage, baseline)
       : undefined;
     return {
+      // Attributed when we computed a per-turn delta or have this request's
+      // "last" snapshot; not when we fall back to the whole cumulative total.
+      attributed: Boolean(turnTokenUsage) || Boolean(records.latestUsage),
       cumulativeTokenUsage: records.totalUsage,
       turnTokenUsage:
         turnTokenUsage ??
@@ -13120,6 +13135,7 @@ export class DesktopBackendRegistry {
       turnId: notification.params.turnId ?? undefined,
     });
     const line = buildLiveThreadUsageLine({
+      attributed: derivedUsage.attributed,
       backend: event.backend,
       cumulativeTokenUsage: derivedUsage.cumulativeTokenUsage,
       ...usageTiming,

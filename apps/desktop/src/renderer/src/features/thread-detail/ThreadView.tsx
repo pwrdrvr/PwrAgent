@@ -2709,6 +2709,7 @@ export function ThreadView(props: ThreadViewProps) {
 
         <ThreadContextPanel
           activeTab={activeContextTab}
+          activeTurnId={props.activeTurnId}
           backendError={props.backendError}
           backends={props.backends}
           desktopApi={props.desktopApi}

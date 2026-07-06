@@ -45,6 +45,38 @@ const baseThread: NavigationThreadSummary = {
   },
 };
 
+// A monitor-scope pricing row for a sub-agent. `sourceItemId` is the join key
+// to a `ThreadSubAgentSummary.monitorId`.
+function buildMonitorLine(
+  overrides: Partial<ThreadUsageLineRecord> = {},
+): ThreadUsageLineRecord {
+  return {
+    backend: "codex",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 0,
+    createdAt: 1_800_000_000_000,
+    currency: "USD",
+    inputTokens: 100,
+    model: "gpt-5.5",
+    outputCostMicros: 0,
+    outputTokens: 10,
+    priceStatus: "priced",
+    provider: "openai",
+    reasoningOutputTokens: 0,
+    scope: "monitor",
+    source: "monitor",
+    sourceItemId: "mon-1",
+    status: "finalized",
+    threadId: "thread-1",
+    totalCostMicros: 1_000,
+    totalTokens: 110,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 100,
+    usageLineId: "mon-line-1",
+    ...overrides,
+  };
+}
+
 const baseBackend: BackendSummary = {
   kind: "codex",
   label: "OpenAI",
@@ -108,6 +140,7 @@ type PanelOverrides = Partial<
   Pick<
     ComponentProps<typeof ThreadContextPanel>,
     | "activeTab"
+    | "activeTurnId"
     | "backends"
     | "desktopApi"
     | "pinned"
@@ -1541,6 +1574,261 @@ describe("ThreadContextPanel", () => {
     expect(onScrollToTurn).toHaveBeenCalledWith("turn-1", 1_800_000_000_000);
   });
 
+  it("marks the active live turn with a Live chip and a running duration", () => {
+    const startedAt = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt + 65_000);
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      activeTurnId: "turn-live",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 0,
+            cachedInputTokens: 0,
+            createdAt: startedAt,
+            currency: "USD",
+            inputTokens: 100,
+            outputCostMicros: 0,
+            outputTokens: 10,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 0,
+            scope: "turn",
+            source: "live",
+            startedAt,
+            status: "pending",
+            threadId: "thread-1",
+            totalCostMicros: 1_000,
+            totalTokens: 110,
+            turnId: "turn-live",
+            uncachedInputCostMicros: 0,
+            uncachedInputTokens: 100,
+            usageLineId: "line-live",
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const activeRow = container.querySelector(".pricing-usage-row--active");
+    expect(activeRow).not.toBeNull();
+    expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+    const times = activeRow?.querySelector(".rail-card__times");
+    expect(times?.textContent).toContain("· 1m 5s ·");
+  });
+
+  it("keeps the running duration on an active turn that trips the historical-summary heuristic", () => {
+    // An active live turn the builder couldn't attribute (turnUsageAttributed
+    // false) classifies as a historical summary. It is still the active turn,
+    // so it must keep its Live chip AND running clock (guard-order in
+    // formatUsageLineDuration puts the active branch before the summary guard).
+    const startedAt = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt + 65_000);
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      activeTurnId: "turn-live",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 0,
+            cachedInputTokens: 1_500_000,
+            createdAt: startedAt,
+            currency: "USD",
+            inputTokens: 1_500_000,
+            outputCostMicros: 0,
+            outputTokens: 10,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 0,
+            scope: "turn",
+            source: "live",
+            startedAt,
+            status: "pending",
+            threadId: "thread-1",
+            totalCostMicros: 1_000,
+            totalTokens: 1_500_010,
+            turnId: "turn-live",
+            turnUsageAttributed: false,
+            uncachedInputCostMicros: 0,
+            uncachedInputTokens: 0,
+            usageLineId: "line-live-huge",
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const activeRow = container.querySelector(".pricing-usage-row--active");
+    expect(activeRow).not.toBeNull();
+    expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+    const times = activeRow?.querySelector(".rail-card__times");
+    expect(times?.textContent).toContain("· 1m 5s ·");
+  });
+
+  it("shows a finished duration and no Live chip on a completed turn", () => {
+    const startedAt = 1_800_000_000_000;
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      activeTurnId: "turn-other",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 0,
+            cachedInputTokens: 0,
+            completedAt: startedAt + 125_000,
+            createdAt: startedAt,
+            currency: "USD",
+            inputTokens: 100,
+            outputCostMicros: 0,
+            outputTokens: 10,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 0,
+            scope: "turn",
+            source: "live",
+            startedAt,
+            status: "finalized",
+            threadId: "thread-1",
+            totalCostMicros: 1_000,
+            totalTokens: 110,
+            turnId: "turn-done",
+            uncachedInputCostMicros: 0,
+            uncachedInputTokens: 100,
+            usageLineId: "line-done",
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
+    expect(screen.queryByText("Live")).not.toBeInTheDocument();
+    const times = container.querySelector(".rail-card__times");
+    expect(times?.textContent).toContain("· 2m 5s ·");
+  });
+
+  it("marks a running sub-agent row live with its name and a running clock", () => {
+    const startedAt = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt + 65_000);
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "mon-1",
+            task: "Review the diff",
+            status: "running",
+            agentName: "Reviewer",
+            createdAt: startedAt,
+            updatedAt: startedAt,
+          },
+        ],
+      },
+      pricing: {
+        lines: [buildMonitorLine({ createdAt: startedAt })],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const activeRow = container.querySelector(".pricing-usage-row--active");
+    expect(activeRow).not.toBeNull();
+    expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+    expect(within(activeRow as HTMLElement).getByText("Reviewer")).toBeInTheDocument();
+    const times = activeRow?.querySelector(".rail-card__times");
+    expect(times?.textContent).toContain("· 1m 5s");
+  });
+
+  it("shows a terminal sub-agent's name but no Live chip", () => {
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "mon-1",
+            task: "Review the diff",
+            status: "success",
+            agentName: "Reviewer",
+            createdAt: 1_800_000_000_000,
+            updatedAt: 1_800_000_000_000,
+          },
+        ],
+      },
+      pricing: {
+        lines: [buildMonitorLine({})],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
+    expect(screen.queryByText("Live")).not.toBeInTheDocument();
+    expect(screen.getByText("Reviewer")).toBeInTheDocument();
+  });
+
+  it("marks multiple concurrently-running sub-agents live", () => {
+    const startedAt = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt + 5_000);
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "mon-1",
+            task: "A",
+            status: "running",
+            agentName: "Alpha",
+            createdAt: startedAt,
+            updatedAt: startedAt,
+          },
+          {
+            monitorId: "mon-2",
+            task: "B",
+            status: "pending",
+            agentName: "Beta",
+            createdAt: startedAt,
+            updatedAt: startedAt,
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          buildMonitorLine({ sourceItemId: "mon-1", usageLineId: "mon-line-1" }),
+          buildMonitorLine({ sourceItemId: "mon-2", usageLineId: "mon-line-2" }),
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(container.querySelectorAll(".pricing-usage-row--active")).toHaveLength(2);
+    expect(screen.getAllByText("Live")).toHaveLength(2);
+  });
+
   it("summarizes pricing rows when provider summaries are absent", () => {
     renderPanel({
       activeTab: "pricing",
@@ -1582,7 +1870,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Sub-agent usage")).toBeInTheDocument();
   });
 
-  it("labels legacy live rows without cumulative context as historical summaries", () => {
+  it("labels unattributed live rows as historical summaries", () => {
     renderPanel({
       activeTab: "pricing",
       pinned: true,
@@ -1608,6 +1896,7 @@ describe("ThreadContextPanel", () => {
             totalCostMicros: 55_830_000,
             totalTokens: 73_473_538,
             turnId: "turn-legacy",
+            turnUsageAttributed: false,
             uncachedInputCostMicros: 6_830_000,
             uncachedInputTokens: 2_788_759,
             usageLineId: "line-legacy",
@@ -1639,6 +1928,50 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Historical usage summary")).toBeInTheDocument();
     expect(screen.getByText("$55.83 list price")).toBeInTheDocument();
     expect(screen.queryByText("$55.83 list price this turn")).not.toBeInTheDocument();
+  });
+
+  it("treats a large attributed live turn as a turn, not a summary", () => {
+    // Same size as the unattributed row above, but attributed to the turn — it
+    // must read as a normal (large) turn. No token-count threshold reclassifies it.
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            cachedInputCostMicros: 7_000_000,
+            cachedInputTokens: 70_463_104,
+            createdAt: 1_800_000_000_000,
+            currency: "USD",
+            inputTokens: 73_251_863,
+            model: "gpt-5.5",
+            outputCostMicros: 42_000_000,
+            outputTokens: 221_675,
+            priceStatus: "priced",
+            provider: "openai",
+            reasoningOutputTokens: 37_030,
+            scope: "turn",
+            source: "live",
+            status: "pending",
+            threadId: "thread-1",
+            totalCostMicros: 55_830_000,
+            totalTokens: 73_473_538,
+            turnId: "turn-big",
+            turnUsageAttributed: true,
+            uncachedInputCostMicros: 6_830_000,
+            uncachedInputTokens: 2_788_759,
+            usageLineId: "line-big",
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("Turn usage")).toBeInTheDocument();
+    expect(screen.queryByText("Historical usage summary")).not.toBeInTheDocument();
+    expect(screen.getByText("$55.83 list price this turn")).toBeInTheDocument();
   });
 
   it("hides the hover rail when document mouse movement resumes outside the rail", async () => {

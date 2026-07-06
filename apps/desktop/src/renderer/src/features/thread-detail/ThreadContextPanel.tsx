@@ -78,6 +78,7 @@ const CONTEXT_TABS: ContextTab[] = [
 ];
 
 type ThreadContextPanelProps = {
+  activeTurnId?: string;
   backendError?: string;
   backends: BackendSummary[];
   desktopApi?: DesktopApi;
@@ -665,9 +666,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       case "pricing":
         return (
           <PricingPanel
+            activeTurnId={props.activeTurnId}
             pricing={props.pricing}
             displayOptions={props.pricingDisplayOptions}
             onScrollToTurn={props.onScrollToTurn}
+            subAgents={props.thread.subAgents}
           />
         );
       case "actions":

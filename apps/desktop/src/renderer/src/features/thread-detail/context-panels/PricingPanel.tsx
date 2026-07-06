@@ -1,5 +1,7 @@
 import type {
   ThreadPricingSummary,
+  ThreadSubAgentStatus,
+  ThreadSubAgentSummary,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -7,17 +9,38 @@ import {
   estimateOpenAiTokenUsageCost,
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
+import { useEffect, useState } from "react";
+import {
+  formatDurationMs,
+  formatRunningDurationMs,
+} from "../../../lib/format-duration";
 import { formatTimestamp } from "./context-rail-shared";
 import { formatTokenCount } from "./subagent-format";
 
 type PricingPanelProps = {
+  activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
+  /**
+   * Durable sub-agent (task-monitor) summaries for this thread, joined to
+   * monitor-scope usage rows by `monitorId` === the row's `sourceItemId`.
+   * Supplies each sub-agent row's name and its live/terminal status.
+   */
+  subAgents?: ThreadSubAgentSummary[];
 };
+
+// Terminal sub-agent statuses — a sub-agent in any other status is still
+// running, so its usage row reads as live. Mirrors the main process
+// `codexNativeSubAgentIsTerminal`.
+const SUBAGENT_TERMINAL_STATUSES: ReadonlySet<ThreadSubAgentStatus> = new Set([
+  "success",
+  "failure",
+  "cancelled",
+]);
 
 type PricingDisplayOptions = {
   codexCredits: boolean;
@@ -43,6 +66,16 @@ export function PricingPanel(props: PricingPanelProps) {
     aggregateSummaries(displaySummaries) ?? aggregateUsageLines(displayLines);
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   const pricingTotals = buildPricingRunningTotals(displayLines);
+  const activeTurnId = props.activeTurnId;
+  const subAgentsById = new Map(
+    (props.subAgents ?? []).map((subAgent) => [subAgent.monitorId, subAgent]),
+  );
+  const hasActiveRow = displayLines.some((line) =>
+    isActiveUsageLine({ activeTurnId, line, subAgentsById }),
+  );
+  // Tick while any row is live — the main turn or any still-running sub-agent —
+  // so completed threads render static and never spin a 1s interval.
+  const now = useNowWhileActive(hasActiveRow);
 
   return (
     <section className="context-panel__section">
@@ -134,12 +167,39 @@ export function PricingPanel(props: PricingPanelProps) {
               line,
             });
             const runningTokens = formatUsageLineRunningTokens(line);
+            const subAgent =
+              line.scope === "monitor" && line.sourceItemId
+                ? subAgentsById.get(line.sourceItemId)
+                : undefined;
+            const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
+            const duration = formatUsageLineDuration({ isActive, line, now });
 
             return (
-              <li key={line.usageLineId} className="rail-card pricing-usage-row">
-                <p className="rail-card__title">
-                  {formatUsageLineTitle(line)}
-                </p>
+              <li
+                key={line.usageLineId}
+                className={`rail-card pricing-usage-row${
+                  isActive ? " pricing-usage-row--active" : ""
+                }`}
+              >
+                <div className="pricing-usage-row__header">
+                  <p className="rail-card__title">
+                    {formatUsageLineTitle(line)}
+                  </p>
+                  {isActive ? (
+                    <span className="rail-chip pricing-usage-row__live">
+                      <span
+                        className="rail-chip__dot rail-chip__dot--active"
+                        aria-hidden="true"
+                      />
+                      Live
+                    </span>
+                  ) : null}
+                </div>
+                {subAgent?.agentName ? (
+                  <p className="rail-card__agent-name" title={subAgent.agentName}>
+                    {subAgent.agentName}
+                  </p>
+                ) : null}
                 <p className="rail-card__model">
                   {line.model ?? "Unknown model"}
                   {line.reasoningEffort ? ` · ${line.reasoningEffort}` : ""}
@@ -154,6 +214,7 @@ export function PricingPanel(props: PricingPanelProps) {
                     : ""}
                 </p>
                 <PricingUsageTimestamp
+                  duration={duration}
                   line={line}
                   onScrollToTurn={props.onScrollToTurn}
                 />
@@ -892,19 +953,58 @@ function isForkBaselineLine(line: ThreadUsageLineRecord): boolean {
   return line.scope === "fork-baseline";
 }
 
+// A row is a whole-thread/historical summary when its scope says so, or when
+// the live builder recorded that it could not attribute the usage to this turn
+// (turnUsageAttributed === false) — e.g. a first observed event that carried a
+// whole-thread total we couldn't decompose. Legacy rows predating the flag are
+// backfilled by the state-db migration (user_version 26). No token-count guess.
 function isHistoricalUsageSummary(line: ThreadUsageLineRecord): boolean {
-  if (line.scope === "total" || line.scope === "backfill") {
-    return true;
-  }
   return (
-    line.source === "live" &&
-    line.status === "pending" &&
-    line.cumulativeTotalTokens === undefined &&
-    line.totalTokens >= 1_000_000
+    line.scope === "total" ||
+    line.scope === "backfill" ||
+    line.turnUsageAttributed === false
   );
 }
 
+// The in-progress turn: the live, still-pending turn row whose id matches the
+// session's active turn. Drives the Live chip + running duration.
+function isActiveLiveTurnUsageLine(params: {
+  activeTurnId?: string;
+  line: PricingUsageLine;
+}): boolean {
+  return (
+    params.line.scope === "turn" &&
+    params.line.source === "live" &&
+    Boolean(params.activeTurnId) &&
+    params.line.turnId === params.activeTurnId
+  );
+}
+
+// A row is live if it's the main active turn OR a monitor row whose sub-agent
+// is still running. Sub-agents run concurrently, so more than one row can be
+// live at once (e.g. a fan-out of spawn_agent calls in a single turn).
+function isActiveUsageLine(params: {
+  activeTurnId?: string;
+  line: PricingUsageLine;
+  subAgentsById: Map<string, ThreadSubAgentSummary>;
+}): boolean {
+  if (
+    isActiveLiveTurnUsageLine({
+      activeTurnId: params.activeTurnId,
+      line: params.line,
+    })
+  ) {
+    return true;
+  }
+  if (params.line.scope !== "monitor" || !params.line.sourceItemId) {
+    return false;
+  }
+  const subAgent = params.subAgentsById.get(params.line.sourceItemId);
+  return Boolean(subAgent && !SUBAGENT_TERMINAL_STATUSES.has(subAgent.status));
+}
+
 function PricingUsageTimestamp(props: {
+  duration?: string;
   line: ThreadUsageLineRecord;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
 }) {
@@ -929,9 +1029,71 @@ function PricingUsageTimestamp(props: {
       ) : (
         timestamp
       )}
+      {props.duration ? ` · ${props.duration}` : ""}
       {props.line.turnId ? ` · ${props.line.turnId}` : ""}
     </p>
   );
+}
+
+/**
+ * The start-anchored timestamp on each card carries the "when", so the card
+ * pairs it with a single duration rather than a second minute-resolution stop
+ * stamp (two coarse stamps can't reconstruct a sub-minute turn anyway).
+ *
+ * - Live turn: elapsed since start, ticking once per second.
+ * - Finished turn: completedAt − start, in the coarse `2h 3m 4s` style.
+ * - Estimates / historical summaries / sub-agent rollups: no duration — the
+ *   span isn't a single measurable turn.
+ */
+function formatUsageLineDuration(params: {
+  isActive: boolean;
+  line: PricingUsageLine;
+  now: number;
+}): string {
+  const { isActive, line, now } = params;
+  const start = line.startedAt ?? line.createdAt;
+  // The active turn always shows its running clock: if it's wearing the Live
+  // chip, the duration must agree. Checked before the scope/estimate/historical
+  // guards because a live turn can trip isHistoricalUsageSummary (a >= 1M-token
+  // request with no cumulative snapshot yet), which would otherwise strand the
+  // Live chip with no ticking duration.
+  if (isActive) {
+    return formatRunningDurationMs(Math.max(0, now - start));
+  }
+  if (
+    line.scope === "monitor" ||
+    isEstimatedUsageGap(line) ||
+    isHistoricalUsageSummary(line)
+  ) {
+    return "";
+  }
+  const end = line.completedAt;
+  if (end === undefined || end <= start) {
+    return "";
+  }
+  return formatDurationMs(end - start);
+}
+
+/**
+ * `Date.now()` that re-renders once per second, but only while a live turn is
+ * present. When nothing is active the interval is torn down, so a settled
+ * pricing panel never keeps a timer running.
+ */
+function useNowWhileActive(enabled: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+    setNow(Date.now());
+    const intervalId = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1_000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [enabled]);
+  return now;
 }
 
 function aggregateSummaries(
