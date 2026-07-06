@@ -954,7 +954,7 @@ export class SqliteOverlayStore {
       .all(params.backend, params.threadId) as ThreadPricingSummaryRow[];
 
     const lines = lineRows.map(threadUsageLineFromRow);
-    this.attachObservedReplayTalliesSync(params.backend, params.threadId, lines);
+    this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
 
     return {
       lines,
@@ -962,14 +962,14 @@ export class SqliteOverlayStore {
     };
   }
 
-  // The observed context-replay tally lives on the per-turn record
-  // (thread_usage_turns), not on the usage line — the turn record is refreshed
+  // Per-turn metadata lives on thread_usage_turns. The turn record is refreshed
   // via COALESCE and is immune to the line supersession lifecycle, so a
-  // transcript-hydration line can supersede the live line without dropping the
-  // tally. Attach it back onto the displayed line at read time so the renderer
-  // keeps reading the observed fields off ThreadUsageLineRecord. Deliberately
-  // NOT summed into pricing summaries.
-  private attachObservedReplayTalliesSync(
+  // transcript-hydration line can supersede the live line without dropping
+  // start timing or observed replay tallies. Attach it back onto displayed
+  // lines at read time so the renderer can compute finished durations and keep
+  // reading observed fields off ThreadUsageLineRecord. Deliberately NOT summed
+  // into pricing summaries.
+  private attachUsageTurnMetadataSync(
     backend: string,
     threadId: string,
     lines: ThreadUsageLineRecord[],
@@ -980,6 +980,8 @@ export class SqliteOverlayStore {
     const turnRows = this.stateDb.raw
       .prepare(
         `SELECT usage_turn_id,
+                started_at,
+                completed_at,
                 observed_cold_replay_count,
                 observed_cold_replay_uncached_tokens,
                 observed_hot_replay_cached_tokens,
@@ -989,6 +991,8 @@ export class SqliteOverlayStore {
             AND thread_id = ?
           UNION ALL
          SELECT usage_turn_id,
+                started_at,
+                completed_at,
                 observed_cold_replay_count,
                 observed_cold_replay_uncached_tokens,
                 observed_hot_replay_cached_tokens,
@@ -999,6 +1003,8 @@ export class SqliteOverlayStore {
             AND thread_id != ?`,
       )
       .all(backend, threadId, backend, threadId, threadId) as Array<{
+      completed_at: number | null;
+      started_at: number;
       usage_turn_id: string;
       observed_cold_replay_count: number | null;
       observed_cold_replay_uncached_tokens: number | null;
@@ -1016,6 +1022,10 @@ export class SqliteOverlayStore {
       const turn = byTurnId.get(line.usageTurnId);
       if (!turn) {
         continue;
+      }
+      line.startedAt = turn.started_at;
+      if (line.completedAt === undefined && turn.completed_at !== null) {
+        line.completedAt = turn.completed_at;
       }
       if (turn.observed_cold_replay_count !== null) {
         line.observedColdReplayCount = turn.observed_cold_replay_count;

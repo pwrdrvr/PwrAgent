@@ -3478,6 +3478,7 @@ describe("CodexAppServerClient", () => {
             id: "turn-gpt-55",
             status: "completed",
             startedAt: 1_781_616_000,
+            completedAt: 1_781_616_020,
             items: [
               {
                 type: "turn_context",
@@ -3502,6 +3503,7 @@ describe("CodexAppServerClient", () => {
             id: "turn-gpt-54",
             status: "completed",
             startedAt: 1_781_616_060,
+            completedAt: 1_781_616_085,
             items: [
               {
                 type: "turn_context",
@@ -3546,6 +3548,21 @@ describe("CodexAppServerClient", () => {
     expect(usageEntries.map((entry) => entry.usageLine?.totalCostMicros)).toEqual([
       5_000_000,
       2_500_000,
+    ]);
+    expect(
+      usageEntries.map((entry) => ({
+        completedAt: entry.usageLine?.completedAt,
+        startedAt: entry.usageLine?.startedAt,
+      })),
+    ).toEqual([
+      {
+        completedAt: 1_781_616_020_000,
+        startedAt: 1_781_616_000_000,
+      },
+      {
+        completedAt: 1_781_616_085_000,
+        startedAt: 1_781_616_060_000,
+      },
     ]);
     expect(usageEntries.map((entry) => entry.details.at(-1)?.label)).toEqual([
       "Cost: $5.00 list price for GPT-5.5 Standard",
