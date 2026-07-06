@@ -1,4 +1,5 @@
 import type { MessagingChannelKind } from "./messaging";
+import type { MutateThreadToolArgs } from "./thread-tools";
 
 /**
  * Additive RBAC for messaging-platform actors (issue #260).
@@ -622,6 +623,12 @@ export function permissionForActionId(
   if (actionId.startsWith("questionnaire:")) {
     return "elicitation.answer";
   }
+  // Every skills sub-action (select / remove / paging / search) is gated on the
+  // same permission as the `status:skills` entry button, so the sub-nav can't
+  // be driven — or drift ungated — by an actor who can't open the browser.
+  if (actionId.startsWith("skills:")) {
+    return "thread.settings.skills";
+  }
   return STATUS_ACTION_PERMISSIONS[actionId];
 }
 
@@ -681,41 +688,61 @@ export function permissionForDynamicTool(
   }
 }
 
-/** The mutating fields of a `mutate_thread` dynamic-tool call. */
-export type ThreadMutationFields = {
-  title?: unknown;
-  model?: unknown;
-  serviceTier?: unknown;
-  reasoningEffort?: unknown;
-  fastMode?: unknown;
-  executionMode?: unknown;
+/**
+ * The mutating fields of a `mutate_thread` call — derived from the tool's own
+ * arg type (minus the non-mutating envelope fields) so the two CANNOT drift.
+ * Add a new mutable field to `MutateThreadToolArgs` and the
+ * `THREAD_MUTATION_FIELD_PERMISSIONS` map below fails to compile until you gate
+ * it, closing the "new field ships ungated" hazard.
+ */
+export type ThreadMutationFields = Omit<
+  MutateThreadToolArgs,
+  "backend" | "threadId" | "dryRun"
+>;
+
+type ThreadMutationFieldRule = (value: unknown) => MessagingPermissionId[];
+
+/**
+ * Every mutable field → the permission(s) it requires, at parity with the
+ * status-card buttons. `Record<keyof ThreadMutationFields, ...>` makes this
+ * exhaustive: a new field added to `MutateThreadToolArgs` is a compile error
+ * here until mapped. `executionMode: "full-access"` double-gates on the
+ * escalation-equivalent danger permission, mirroring the controller.
+ */
+const THREAD_MUTATION_FIELD_PERMISSIONS: Record<
+  keyof ThreadMutationFields,
+  ThreadMutationFieldRule
+> = {
+  title: () => ["thread.settings.name"],
+  model: () => ["thread.settings.model"],
+  serviceTier: () => ["thread.settings.model"],
+  reasoningEffort: () => ["thread.settings.reasoning"],
+  fastMode: () => ["thread.settings.fast_mode"],
+  executionMode: (value) =>
+    value === "full-access"
+      ? ["thread.settings.execution_mode", "thread.execution.full_access"]
+      : ["thread.settings.execution_mode"],
 };
 
 /**
- * The permissions a `mutate_thread` call requires, one per field it changes —
- * the SAME permissions the status-card buttons use, so the agent-tool path can
- * never do more than the button path. `executionMode: "full-access"` requires
- * the escalation-equivalent danger permission ON TOP of the execution-mode
- * permission, mirroring the controller's full-access double-gate. The caller
- * must require the actor to hold ALL returned permissions.
+ * The permissions a `mutate_thread` call requires — the union of the per-field
+ * rules for every field it actually sets. The caller must require the actor to
+ * hold ALL returned permissions.
  */
 export function permissionsForThreadMutation(
-  args: ThreadMutationFields | null | undefined,
+  args: Record<string, unknown> | null | undefined,
 ): MessagingPermissionId[] {
   if (!args || typeof args !== "object") {
     return [];
   }
   const required = new Set<MessagingPermissionId>();
-  if (args.title !== undefined) required.add("thread.settings.name");
-  if (args.model !== undefined || args.serviceTier !== undefined) {
-    required.add("thread.settings.model");
-  }
-  if (args.reasoningEffort !== undefined) required.add("thread.settings.reasoning");
-  if (args.fastMode !== undefined) required.add("thread.settings.fast_mode");
-  if (args.executionMode !== undefined) {
-    required.add("thread.settings.execution_mode");
-    if (args.executionMode === "full-access") {
-      required.add("thread.execution.full_access");
+  for (const field of Object.keys(
+    THREAD_MUTATION_FIELD_PERMISSIONS,
+  ) as (keyof ThreadMutationFields)[]) {
+    const value = args[field];
+    if (value === undefined) continue;
+    for (const permission of THREAD_MUTATION_FIELD_PERMISSIONS[field](value)) {
+      required.add(permission);
     }
   }
   return [...required];

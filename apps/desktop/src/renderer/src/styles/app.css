@@ -23609,7 +23609,7 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 12px 14px;
   border: 1px solid var(--accent-border);
   background: var(--accent-soft);
-  border-radius: 10px;
+  border-radius: 8px;
   margin-bottom: 12px;
 }
 .rbac-callout.is-danger {
@@ -23651,7 +23651,7 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 12px 14px;
   border: 1px solid var(--accent-border);
   background: var(--accent-soft);
-  border-radius: 10px;
+  border-radius: 8px;
   margin-bottom: 12px;
 }
 .rbac-banner__title {
@@ -23733,7 +23733,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .rbac-graph {
   position: relative;
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: 8px;
   background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-app) 100%);
   padding: 18px 18px 22px;
   overflow: hidden;
@@ -23818,7 +23818,7 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 10px;
   padding: 10px 12px;
   border: 1px solid var(--border-subtle);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--bg-panel);
   cursor: pointer;
   text-align: left;
@@ -23977,7 +23977,7 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 12px 14px;
   border: 1px dashed var(--danger-border);
   background: color-mix(in srgb, var(--danger-base) 6%, transparent);
-  border-radius: 10px;
+  border-radius: 8px;
   display: flex; align-items: center; gap: 10px;
 }
 .rbac-reject__icon {
@@ -24012,7 +24012,7 @@ a.transcript-message__messaging-origin:focus-visible {
   width: 280px;
   background: var(--bg-panel-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: 0 12px 32px color-mix(in srgb, var(--bg-app) 70%, transparent);
   padding: 10px 12px;
   pointer-events: none;
@@ -24060,7 +24060,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .rbac-editor {
   margin-top: 14px;
   padding: 14px;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid var(--accent-border);
   background: var(--bg-panel);
 }

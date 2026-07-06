@@ -388,6 +388,10 @@ describe("action → permission lookup tables", () => {
     expect(permissionForActionId("questionnaire:submit")).toBe(
       "elicitation.answer",
     );
+    // Every skills sub-action is gated like the status:skills entry button.
+    expect(permissionForActionId("skills:select")).toBe("thread.settings.skills");
+    expect(permissionForActionId("skills:remove")).toBe("thread.settings.skills");
+    expect(permissionForActionId("skills:next")).toBe("thread.settings.skills");
     // Ungated chrome resolves to undefined (rendered for everyone).
     expect(permissionForActionId("help:cancel")).toBeUndefined();
     expect(permissionForActionId("command:help")).toBeUndefined();

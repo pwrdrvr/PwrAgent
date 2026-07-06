@@ -4354,14 +4354,18 @@ export class MessagingController {
         (candidate) => candidate.id === (event.actionId ?? event.interaction.id),
       );
       if (action && pendingIntent.intent.kind === "approval") {
-        // RBAC: escalation approvals (network / exec / filesystem — the ones
-        // carrying an approval context) require the escalation permission;
-        // context-less approvals require the baseline approval permission.
-        const approvalPermission = approvalIntentIsEscalation(pendingIntent.intent)
-          ? "approval.respond.escalation"
-          : "approval.respond.default";
+        // RBAC (fail closed): a pending-request approval is the agent asking to
+        // act OUTSIDE its sandbox (run a command, touch the network/filesystem).
+        // We can't reliably prove any such request is benign, so every one
+        // requires the escalation permission — never the weaker default. This
+        // avoids under-classifying an exec/network approval whose payload lacks
+        // the subject fields (path/grantRoot/diff/files) we can recognize.
         if (
-          !(await this.requirePermission(event, approvalPermission, "approval:respond"))
+          !(await this.requirePermission(
+            event,
+            "approval.respond.escalation",
+            "approval:respond",
+          ))
         ) {
           return;
         }
@@ -16650,19 +16654,6 @@ export class MessagingController {
   }
 
   /**
-   * Effective permission set for render-time button filtering, or `undefined`
-   * in legacy mode (→ render the full surface unfiltered). Proactive re-renders
-   * without a triggering actor also get `undefined`.
-   */
-  private effectivePermissionsForEvent(
-    event?: MessagingInboundEvent,
-  ): Set<MessagingPermissionId> | undefined {
-    if (!event) return undefined;
-    const resolution = this.resolveActorPermissions(event);
-    return resolution?.permissions;
-  }
-
-  /**
    * Gate a single action. Returns true (proceed) in legacy mode or when the
    * actor holds `permission`; otherwise records an audit row, optionally
    * notifies the user, and returns false. `notify: false` silently drops (used
@@ -16820,25 +16811,6 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
   return match?.[1]?.toLowerCase();
 }
 
-/**
- * Whether an approval intent represents a sandbox escalation (network / exec /
- * filesystem / grant-root) versus a benign confirmation. Pending-request
- * approvals carry an approval context describing the requested action, path, or
- * grant root; a populated context marks the request as an escalation.
- */
-function approvalIntentIsEscalation(
-  intent: Extract<MessagingSurfaceIntent, { kind: "approval" }>,
-): boolean {
-  const context = intent.context;
-  if (!context) return false;
-  return Boolean(
-    context.action ||
-      context.path ||
-      context.grantRoot ||
-      context.diff ||
-      (context.files && context.files.length > 0),
-  );
-}
 
 /**
  * Narrow an `AppServerNotification` to the `thread/executionMode/queued`

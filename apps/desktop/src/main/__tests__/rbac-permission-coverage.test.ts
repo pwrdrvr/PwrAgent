@@ -54,6 +54,10 @@ describe("rbac permission coverage", () => {
       "status:handoff",
       "handoff:confirm",
       "handoff:move-branch",
+      "skills:select",
+      "skills:remove",
+      "skills:next",
+      "skills:search",
     ];
     for (const actionId of GATED_STATUS_ACTIONS) {
       const permission = permissionForActionId(actionId);
