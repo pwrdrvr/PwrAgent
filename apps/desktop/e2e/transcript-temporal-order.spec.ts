@@ -52,6 +52,10 @@ test("transcript preserves temporal order across live activity and hydration", a
     await app.advance({ stepId: "turn-completed-1" });
 
     await expect(transcript.getByText("I added the controller hook")).toBeVisible();
+    // Turn completion introduces the work-group summary labels; wait for them to
+    // render before the synchronous innerText() snapshot so we don't race the DOM.
+    await expect(transcript).toContainText("Worked for 1m 10s");
+    await expect(transcript).toContainText("More work");
     transcriptText = await transcript.innerText();
     assertOrdered(transcriptText, [
       "Show the temporal transcript order.",
