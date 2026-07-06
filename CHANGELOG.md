@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.0-beta.43 - 2026-07-06
+
+- Messaging Working Updates - Reworked messaging progress controls around a single Working Updates dial, with in-turn prose routed through the same coalescing policy and streaming controls hidden by default unless explicitly enabled.
+- Messaging Streaming - Fixed provider streaming edits to coalesce with exponential backoff and flush final answers immediately, reducing Telegram/Slack/Mattermost rate-limit pressure during long turns.
+- Inbound Automations - Hardened inbound-triggered automations with restart-safe hourly run caps, visible skipped-run markers for throttled messages, and provider-aware destination pickers that preserve friendly conversation titles.
+- Slack Authorization - Fixed group-DM detection so Slack slash commands and block actions no longer trust spoofable `mpdm-` channel names when applying conversation access gates.
+- Pricing - Added Live turn markers, running per-turn durations, observed cold/hot context replay counts, and sub-agent replay visibility so token usage and cost attribution match what the app actually observed.
+- Forked Threads - Fixed forked-thread pricing so inherited parent context is shown as a zero-cost fork point instead of being re-billed as a historical usage estimate.
+- Messaging Activity - Fixed the MSG titlebar popover hover path so operators can move from the status button into the panel without pinning it open.
+- Tooling - Added correctness-only ESLint in CI without adopting Prettier, then reduced the baseline warning count by removing dead code and low-risk hygiene issues.
+
 ## v1.0.0-beta.42 - 2026-07-04
 
 - Updates - Fixed macOS restart-to-update so Squirrel.Mac can finish swapping the downloaded app before PwrAgent quits or relaunches, preventing relaunch into the old version or exiting without applying the update.
