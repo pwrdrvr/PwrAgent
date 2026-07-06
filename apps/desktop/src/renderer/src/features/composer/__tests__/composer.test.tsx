@@ -5449,6 +5449,65 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Base branch")).toHaveValue("main");
   });
 
+  it("prefers the thread git-derived worktree base branch over main for reviews", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "channelsv2",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "channelsv2-get-tagged-channels-by-asset-id",
+          gitWorkingState: {
+            dirtyFiles: 0,
+            dirtyAdditions: 0,
+            dirtyDeletions: 0,
+            untrackedFiles: 0,
+            unpushedCommits: 1,
+            baseBranch: "origin/develop",
+          },
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    const form = reviewTarget.closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "origin/develop" },
+        delivery: "inline",
+      });
+    });
+  });
+
   it("suggests recent commits for commit reviews and caps the list at twenty", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,

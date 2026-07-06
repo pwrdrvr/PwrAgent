@@ -519,24 +519,16 @@ function buildReviewBranchOptions(params: {
     pushIfKnown(value);
   };
 
-  const reportedDefaultBranch = params.directory?.gitStatus?.defaultBranch
-    ?.trim()
-    .replace(/^origin\//, "");
-  if (
-    reportedDefaultBranch &&
-    REVIEW_PREFERRED_BASE_BRANCHES.includes(reportedDefaultBranch)
-  ) {
-    pushPreferredDefault(reportedDefaultBranch);
-  }
+  push(params.thread?.gitWorkingState?.baseBranch);
+  pushPreferredDefault(params.directory?.gitStatus?.defaultBranch);
+  pushIfKnown(upstreamBranch);
   for (const branch of REVIEW_PREFERRED_BASE_BRANCHES) {
     pushPreferredDefault(branch);
   }
   push("main", { allowCurrent: true });
-  pushIfKnown(upstreamBranch);
   for (const candidate of baseBranches) {
     push(candidate);
   }
-  pushPreferredDefault(params.directory?.gitStatus?.defaultBranch);
   push(params.thread?.gitBranch);
   push(params.thread?.observedGitBranch);
   push(params.directory?.gitStatus?.currentBranch);
