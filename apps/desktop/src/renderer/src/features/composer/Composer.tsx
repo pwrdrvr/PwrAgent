@@ -457,11 +457,18 @@ function buildReviewBranchOptions(params: {
   directory?: NavigationDirectorySummary;
   thread?: NavigationThreadSummary;
 }): string[] {
+  const threadCurrentBranches = [
+    params.thread?.gitBranch,
+    params.thread?.observedGitBranch,
+  ]
+    .map((branch) => branch?.trim())
+    .filter((branch): branch is string => Boolean(branch));
   const currentBranches = new Set(
     [
-      params.thread?.gitBranch,
-      params.thread?.observedGitBranch,
-      params.directory?.gitStatus?.currentBranch,
+      ...threadCurrentBranches,
+      ...(threadCurrentBranches.length === 0
+        ? [params.directory?.gitStatus?.currentBranch]
+        : []),
     ]
       .map((branch) => branch?.trim())
       .filter((branch): branch is string => Boolean(branch)),
@@ -483,6 +490,12 @@ function buildReviewBranchOptions(params: {
     /^origin\//,
     "",
   );
+  const directoryCurrentBranch = params.directory?.gitStatus?.currentBranch
+    ?.trim()
+    .replace(/^origin\//, "");
+  const directoryDefaultBranch = params.directory?.gitStatus?.defaultBranch
+    ?.trim()
+    .replace(/^origin\//, "");
   const baseBranches = params.directory?.gitStatus?.baseBranches ?? [];
   const knownBranches = new Set(
     [
@@ -521,6 +534,19 @@ function buildReviewBranchOptions(params: {
     pushIfKnown(`origin/${value}`);
     pushIfKnown(value);
   };
+  const pushDirectoryDefault = (): void => {
+    if (!directoryDefaultBranch) {
+      return;
+    }
+    if (
+      threadCurrentBranches.length > 0 &&
+      directoryDefaultBranch === directoryCurrentBranch &&
+      !REVIEW_REMOTE_AGNOSTIC_BASE_BRANCH_PATTERN.test(directoryDefaultBranch)
+    ) {
+      return;
+    }
+    pushPreferredDefault(directoryDefaultBranch);
+  };
   const pushInferredBaseBranch = (candidate?: string): void => {
     const value = candidate?.trim();
     if (!value) {
@@ -544,7 +570,7 @@ function buildReviewBranchOptions(params: {
   };
 
   pushInferredBaseBranch(params.thread?.gitWorkingState?.baseBranch);
-  pushPreferredDefault(params.directory?.gitStatus?.defaultBranch);
+  pushDirectoryDefault();
   pushIfKnown(upstreamBranch);
   for (const branch of REVIEW_PREFERRED_BASE_BRANCHES) {
     pushPreferredDefault(branch);
@@ -572,9 +598,9 @@ function buildReviewBranchPickerOptions(params: {
     [];
   const detailByName = new Map(details.map((detail) => [detail.name, detail]));
   const currentBranch = normalizeSelectableLaunchpadBranch(
-    params.directory?.gitStatus?.currentBranch ??
-      params.thread?.gitBranch ??
-      params.thread?.observedGitBranch,
+    params.thread?.gitBranch ??
+      params.thread?.observedGitBranch ??
+      params.directory?.gitStatus?.currentBranch,
   );
   const defaultBranch = normalizeSelectableLaunchpadBranch(
     params.directory?.gitStatus?.defaultBranch,

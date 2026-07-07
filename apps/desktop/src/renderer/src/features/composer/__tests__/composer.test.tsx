@@ -5586,6 +5586,67 @@ describe("Composer", () => {
     });
   });
 
+  it("does not exclude the default review base just because the local directory is on it", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/GIPHY/giphy-services",
+          kind: "directory",
+          label: "giphy-services",
+          path: "/Users/huntharo/GIPHY/giphy-services",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "develop",
+            defaultBranch: "develop",
+            branches: [
+              "develop",
+              "fix-channels-tagged-magic-tags-table",
+            ],
+            baseBranches: [
+              "develop",
+              "origin/develop",
+              "origin/master",
+            ],
+            syncState: "in-sync",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "channelsv2",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "fix-channels-tagged-magic-tags-table",
+          executionMode: "default",
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+              kind: "worktree",
+              label: "giphy-services",
+              path: "/Users/huntharo/GIPHY/giphy-services",
+              worktreePath:
+                "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+  });
+
   it("updates an auto-selected review base when directory branch metadata hydrates", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
