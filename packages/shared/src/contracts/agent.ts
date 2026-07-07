@@ -25,8 +25,7 @@ import type {
 export type StartThreadRequest = {
   backend: AppServerBackendKind;
   /**
-   * When present, start the thread as an Agent/persona thread and attach
-   * Agent-scoped tool catalogs during backend startup.
+   * When present, start the thread with Agent/persona metadata.
    */
   agent?: {
     name: string;
@@ -495,8 +494,7 @@ export type MaterializeDirectoryLaunchpadRequest = {
   directoryKey: string;
   launchpad?: NavigationLaunchpadDraft;
   /**
-   * When present, materialize the launchpad into an Agent/persona thread and
-   * attach Agent-scoped tool catalogs during backend startup.
+   * When present, materialize the launchpad with Agent/persona metadata.
    */
   agent?: StartThreadRequest["agent"];
   input?: AppServerTurnInputItem[];

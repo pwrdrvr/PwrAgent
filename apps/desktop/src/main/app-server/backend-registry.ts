@@ -4872,7 +4872,7 @@ function buildHandoffTaskPrompt(params: {
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
 }): string {
   const lines = [
-    "You are a PwrAgent handoff thread created by another Agent thread.",
+    "You are a PwrAgent handoff thread created by another PwrAgent thread.",
     "",
     "Task:",
     params.task,
@@ -16941,7 +16941,7 @@ export class DesktopBackendRegistry {
     if (backend !== "codex") {
       return threadOrchestrationFailure(
         "unsupported_backend",
-        "Thread handoff can currently create only Codex Agent threads.",
+        "Thread handoff can currently create only Codex threads.",
       );
     }
 
@@ -17137,11 +17137,6 @@ export class DesktopBackendRegistry {
         ? sourceOverlay.codexEnvironmentRuntime
         : undefined,
     };
-    const agent = {
-      name: title,
-      instructions:
-        "Work only on the delegated task from the parent PwrAgent thread. Keep progress and results in this thread.",
-    };
     const projectLocalCwd =
       workspaceMode === "project_local"
         ? await this.resolveProjectLocalHandoffCwd({
@@ -17216,11 +17211,6 @@ export class DesktopBackendRegistry {
         codexEnvironmentStartupFailure = forked.codexEnvironmentStartupFailure;
         createdWorkspaceMode =
           forked.workMode === "worktree" ? "new_worktree" : workspaceMode;
-        await this.overlayStore.setThreadAgent({
-          backend,
-          threadId,
-          agent,
-        });
       } else {
         this.updatePendingThreadHandoff(handoffId, {
           phase: "starting_thread",
@@ -17241,7 +17231,6 @@ export class DesktopBackendRegistry {
           approvalPolicy: inheritedSettings.approvalPolicy,
           sandbox: inheritedSettings.sandbox,
           codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
-          agent,
         });
         threadId = started.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });
@@ -17448,7 +17437,7 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
         placement,
-        targetKind: "agent_thread",
+        targetKind: "thread",
         title: params.title,
       },
     });
