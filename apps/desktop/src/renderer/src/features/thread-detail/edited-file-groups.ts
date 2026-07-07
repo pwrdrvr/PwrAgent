@@ -139,11 +139,14 @@ function mergeFileDiffDetail(
 export function collectEditedFileGroups(params: {
   entries: readonly AppServerThreadEntry[];
   activeTurnId?: string;
+  forkCreatedAt?: number;
   livePendingEntry?: AppServerThreadActivityEntry;
 }): EditedFileGroup[] {
   const turnOrder: string[] = [];
   const orderIndexByKey = new Map<string, number>();
   const buckets = new Map<string, TurnBucket>();
+  const forkCreatedAt = params.forkCreatedAt;
+  let pastForkBoundary = typeof forkCreatedAt !== "number";
 
   const ensureTurnIndex = (key: string): number => {
     let index = orderIndexByKey.get(key);
@@ -177,6 +180,24 @@ export function collectEditedFileGroups(params: {
   };
 
   for (const entry of params.entries) {
+    if (typeof forkCreatedAt === "number" && !pastForkBoundary) {
+      // Forked Codex threads replay ancestor entries before their own turns.
+      // Start the edit history at the fork thread's creation boundary.
+      const entryCreatedAt =
+        typeof entry.createdAt === "number"
+          ? entry.createdAt
+          : typeof entry.turn?.completedAt === "number"
+            ? entry.turn.completedAt
+            : entry.turn?.startedAt;
+      if (
+        typeof entryCreatedAt !== "number" ||
+        entryCreatedAt < forkCreatedAt
+      ) {
+        continue;
+      }
+      pastForkBoundary = true;
+    }
+
     const turnKey = entry.turn?.id;
     if (entry.type !== "activity") {
       continue;

@@ -49,6 +49,7 @@ function fileDiffDetail(params: {
 }
 
 function activityEntry(params: {
+  createdAt?: number;
   id: string;
   turnId?: string;
   details: AppServerThreadActivityDetail[];
@@ -56,6 +57,7 @@ function activityEntry(params: {
   return {
     type: "activity",
     id: params.id,
+    ...(params.createdAt !== undefined ? { createdAt: params.createdAt } : {}),
     summary: "activity",
     details: params.details,
     ...(params.turnId ? { turn: { id: params.turnId } } : {}),
@@ -200,6 +202,30 @@ describe("collectEditedFileGroups", () => {
       "turn-2",
       "turn-1",
     ]);
+  });
+
+  it("starts forked-thread edit history at the fork boundary", () => {
+    const groups = collectEditedFileGroups({
+      entries: [
+        activityEntry({
+          id: "ancestor-a1",
+          createdAt: 1_000,
+          turnId: "ancestor-turn-1",
+          details: [fileDiffDetail({ path: "src/ancestor.ts", additions: 3 })],
+        }),
+        activityEntry({
+          id: "fork-a1",
+          createdAt: 2_000,
+          turnId: "fork-turn-1",
+          details: [fileDiffDetail({ path: "src/fork.ts", additions: 5 })],
+        }),
+      ],
+      forkCreatedAt: 1_500,
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].key).toBe("fork-turn-1");
+    expect(groups[0].details.map((detail) => detail.path)).toEqual(["src/fork.ts"]);
   });
 
   it("renders the live pending cumulative diff as the newest group", () => {
