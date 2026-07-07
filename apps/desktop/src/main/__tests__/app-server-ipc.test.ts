@@ -204,6 +204,7 @@ type WorkingStateEntry = {
     dirtyDeletions: number;
     untrackedFiles: number;
     unpushedCommits: number;
+    baseBranch?: string;
   };
 };
 const readWorktreeWorkingStateEntries = vi.fn(
@@ -3480,6 +3481,65 @@ describe("app server ipc", () => {
           gitWorkingState,
         }),
       },
+    });
+  });
+
+  it("hydrates working state from linked worktrees when the thread has no project key", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    const worktreePath =
+      "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services";
+    const gitWorkingState = {
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 0,
+      baseBranch: "develop",
+    };
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [
+          {
+            id: worktreePath,
+            label: "giphy-services",
+            path: "/Users/huntharo/GIPHY/giphy-services",
+            worktreePath,
+            kind: "worktree",
+          },
+        ],
+        updatedAt: 2000,
+      },
+    ] as never);
+    readThreadGitWorkingStateCache.mockResolvedValueOnce({
+      [worktreePath]: {
+        worktreePath,
+        fetchedAt: 1000,
+        gitWorkingState,
+      },
+    });
+
+    registerAppServerIpcHandlers();
+    const snapshot = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    expect(snapshot).toMatchObject({
+      threads: [
+        expect.objectContaining({
+          id: "thread-1",
+          gitWorkingState,
+        }),
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(readWorktreeWorkingStateEntries).toHaveBeenCalledWith(
+        [worktreePath],
+        expect.any(Object),
+      );
     });
   });
 
