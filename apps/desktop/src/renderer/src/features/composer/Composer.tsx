@@ -571,11 +571,11 @@ function buildReviewBranchOptions(params: {
 
   pushInferredBaseBranch(params.thread?.gitWorkingState?.baseBranch);
   pushDirectoryDefault();
-  pushIfKnown(upstreamBranch);
   for (const branch of REVIEW_PREFERRED_BASE_BRANCHES) {
     pushPreferredDefault(branch);
   }
   push("main", { allowCurrent: true });
+  pushIfKnown(upstreamBranch);
   for (const candidate of baseBranches) {
     push(candidate);
   }
@@ -1776,7 +1776,7 @@ function ReviewBranchPicker(props: {
       }
       return;
     }
-    if (event.key === "Escape" && open && visibleOptions.length > 0) {
+    if (event.key === "Escape" && open) {
       event.preventDefault();
       event.stopPropagation();
       setOpen(false);

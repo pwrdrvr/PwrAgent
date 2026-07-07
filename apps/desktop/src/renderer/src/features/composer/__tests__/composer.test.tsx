@@ -5322,6 +5322,60 @@ describe("Composer", () => {
     expect(baseBranchInput).toHaveValue("release");
   });
 
+  it("closes an empty review branch filter menu with Escape", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "feature/review",
+            defaultBranch: "main",
+            branches: ["feature/review", "release", "main"],
+            baseBranches: ["main", "release", "hotfix"],
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    fireEvent.click(screen.getByLabelText("Base branch"));
+    const filterInput = screen.getByLabelText("Find a branch");
+    fireEvent.change(filterInput, { target: { value: "no-such-branch" } });
+
+    expect(screen.getByText("No branches match your filter.")).toBeInTheDocument();
+
+    fireEvent.keyDown(filterInput, { key: "Escape" });
+
+    expect(
+      screen.queryByText("No branches match your filter."),
+    ).not.toBeInTheDocument();
+  });
+
   it("accepts a custom review base ref that is not in the branch picker options", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
@@ -5503,6 +5557,60 @@ describe("Composer", () => {
     await clickButton("Send");
 
     expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+  });
+
+  it("keeps an unrelated directory upstream behind safe review bases", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/GIPHY/giphy-services",
+          kind: "directory",
+          label: "giphy-services",
+          path: "/Users/huntharo/GIPHY/giphy-services",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "search-gha-deploy-cutover",
+            defaultBranch: "search-gha-deploy-cutover",
+            upstreamBranch: "origin/search-gha-deploy-cutover",
+            branches: [
+              "search-gha-deploy-cutover",
+              "main",
+            ],
+            baseBranches: [
+              "search-gha-deploy-cutover",
+              "origin/search-gha-deploy-cutover",
+              "origin/main",
+              "main",
+            ],
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "channelsv2",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "fix-channels-tagged-magic-tags-table",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
   });
 
   it("prefers the thread git-derived worktree base branch over main for reviews", async () => {
