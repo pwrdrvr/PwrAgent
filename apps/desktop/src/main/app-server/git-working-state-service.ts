@@ -710,14 +710,49 @@ async function expandUntrackedDirectoryEntry(
 async function summarizeUntrackedChanges(
   cwd: string,
   statusOutput: string,
+  runGit: GitCommandRunner,
+  gitEnv?: NodeJS.ProcessEnv,
 ): Promise<{ files: number; additions: number }> {
   const untrackedEntries = parseStatusPorcelain(statusOutput, cwd).filter(
     (entry) => entry.status === "untracked",
   );
-  const visibleEntries = untrackedEntries.slice(0, DEFAULT_OTHER_CHANGES_MAX_FILES);
+  const visibleEntries: WorktreeOtherChangeEntry[] = [];
+  let files = 0;
+  for (const entry of untrackedEntries) {
+    if (isCollapsedUntrackedDirectoryEntry(entry)) {
+      const remaining = Math.max(
+        0,
+        DEFAULT_OTHER_CHANGES_MAX_FILES - visibleEntries.length,
+      );
+      const expanded = await expandUntrackedDirectoryEntry(
+        cwd,
+        entry,
+        remaining,
+        () => true,
+        runGit,
+        gitEnv,
+      );
+      files += expanded.changes.length;
+      if (expanded.truncated || expanded.changes.length === 0) {
+        files += 1;
+      }
+      visibleEntries.push(
+        ...expanded.changes.slice(
+          0,
+          Math.max(0, DEFAULT_OTHER_CHANGES_MAX_FILES - visibleEntries.length),
+        ),
+      );
+      continue;
+    }
+
+    files += 1;
+    if (visibleEntries.length < DEFAULT_OTHER_CHANGES_MAX_FILES) {
+      visibleEntries.push(entry);
+    }
+  }
   await Promise.all(visibleEntries.map((entry) => enrichUntrackedChangeStats(entry)));
   return {
-    files: untrackedEntries.length,
+    files,
     additions: visibleEntries.reduce(
       (sum, entry) => sum + (entry.additions ?? 0),
       0,
@@ -807,7 +842,12 @@ export async function probeWorktreeWorkingState(
   }
 
   const numstat = parseNumstat(numstatOutput ?? "");
-  const untracked = await summarizeUntrackedChanges(worktreePath, statusOutput ?? "");
+  const untracked = await summarizeUntrackedChanges(
+    worktreePath,
+    statusOutput ?? "",
+    runGit,
+    gitEnv,
+  );
 
   // "Unpushed" means reachable from HEAD but on no remote ref. With no
   // remotes configured, every commit would count — meaningless for a

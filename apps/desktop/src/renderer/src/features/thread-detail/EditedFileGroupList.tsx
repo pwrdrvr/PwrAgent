@@ -91,6 +91,12 @@ type EditedFileGroupListProps = {
   /** Scroll the transcript to a group's turn (clickable timestamp). */
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   /**
+   * Optional exact current-worktree details for the flat All files view. When
+   * absent, the list falls back to the accumulated historical transcript
+   * details.
+   */
+  flatDetailsOverride?: AppServerThreadActivityDetail[];
+  /**
    * Keep the per-turn group header when there is only one group. The
    * above-composer rail already carries the single-group summary in its outer
    * header, but the sidebar Edits panel needs the group header for timestamp
@@ -238,7 +244,10 @@ export function EditedFileGroupList(props: EditedFileGroupListProps) {
           );
         })()
       ) : (
-        <EditedFileFlatSection groups={props.groups} />
+        <EditedFileFlatSection
+          groups={props.groups}
+          detailsOverride={props.flatDetailsOverride}
+        />
       );
   }
 }
@@ -247,10 +256,15 @@ function formatEditedFileCount(count: number): string {
   return `Edited ${count.toLocaleString()} ${count === 1 ? "file" : "files"}`;
 }
 
-function EditedFileFlatSection(props: { groups: EditedFileGroup[] }) {
+function EditedFileFlatSection(props: {
+  groups: EditedFileGroup[];
+  detailsOverride?: AppServerThreadActivityDetail[];
+}) {
+  const headerRef = useRef<HTMLDivElement>(null);
+  const headerHeight = useMeasuredHeight(headerRef);
   const details = useMemo(
-    () => flattenEditedFileGroups(props.groups),
-    [props.groups],
+    () => props.detailsOverride ?? flattenEditedFileGroups(props.groups),
+    [props.groups, props.detailsOverride],
   );
   const totals = details.reduce(
     (sum, detail) => ({
@@ -261,8 +275,20 @@ function EditedFileFlatSection(props: { groups: EditedFileGroup[] }) {
   );
 
   return (
-    <>
-      <div className="edited-file-groups__group-header edited-file-groups__flat-header">
+    <section
+      className="edited-file-groups__group edited-file-groups__flat-section"
+      style={
+        headerHeight != null
+          ? ({
+              "--edits-group-header-height": `${headerHeight}px`,
+            } as CSSProperties)
+          : undefined
+      }
+    >
+      <div
+        ref={headerRef}
+        className="edited-file-groups__group-header edited-file-groups__flat-header"
+      >
         <div className="edited-file-groups__flat-summary">
           <span className="edited-file-groups__group-summary">
             {formatEditedFileCount(details.length)}
@@ -275,7 +301,7 @@ function EditedFileFlatSection(props: { groups: EditedFileGroup[] }) {
         />
       </div>
       <EditedFileList details={details} />
-    </>
+    </section>
   );
 }
 
