@@ -662,6 +662,127 @@ describe("MessagingController", () => {
     });
   });
 
+  it("creates a child conversation from an active handoff thread binding", async () => {
+    const now = Date.UTC(2026, 5, 9, 23, 5);
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      handoffOrigin: {
+        sourceBackend: "codex",
+        sourceThreadId: "parent-thread",
+        taskTitle: "Delegated child",
+        seedMode: "clean",
+        groupingMode: "none",
+        createdAt: 1000,
+        workspace: {
+          mode: "same",
+          cwd: "/repo/pwragent",
+          git: {
+            kind: "git_local",
+            worktreeCreationAvailable: true,
+          },
+        },
+      },
+    };
+    navigation.threads.push({
+      id: "thread-2",
+      title: "Nested child",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [
+        {
+          id: "directory:pwragent",
+          kind: "local",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      ],
+      inbox: {
+        inInbox: false,
+      },
+      updatedAt: now - 60_000,
+    });
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: {
+        id: "501",
+        kind: "topic" as const,
+        parentId: "-1001",
+        parentTitle: "Ops",
+        title: "Nested child",
+      },
+      outcome: "created" as const,
+      routingState: { opaque: { chatId: -1001, messageThreadId: 501 } },
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({
+      createManagedConversation,
+      navigation,
+      now: () => now,
+    });
+    const channelEvent = buildTelegramChannelCommandEvent("/resume");
+    const event = buildTextEvent("spin off the nested task", {
+      channel: channelEvent.channel,
+      routingState: channelEvent.routingState,
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:channel::-1001:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+    harness.delivered.splice(0);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "attach_thread_here",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {
+          backend: "codex",
+          threadId: "thread-2",
+          placement: "new_child",
+          targetKind: "thread",
+          title: "Nested child",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        binding: {
+          backend: "codex",
+          targetKind: "thread",
+          threadId: "thread-2",
+        },
+        conversation: {
+          id: "501",
+          kind: "topic",
+          title: "Nested child",
+        },
+        outcome: "created_and_attached",
+        placement: "new_child",
+      },
+    });
+    expect(createManagedConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: event.actor,
+        parent: event.channel,
+        routingState: event.routingState,
+        title: "Nested child",
+      }),
+    );
+  });
+
   it("does not create a child conversation for an inactive attach target", async () => {
     const createManagedConversation = vi.fn(async () => ({
       channel: "telegram" as const,
@@ -15716,4 +15837,3 @@ function buildCallbackEvent(params: {
     value: params.value,
   };
 }
-

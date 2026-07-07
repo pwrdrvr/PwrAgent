@@ -2177,6 +2177,7 @@ export class MessagingController {
       this.rememberAgentMessagingOrigin({
         binding: params.binding,
         event: params.event,
+        navigation,
         turnId: started.turnId,
       });
       await this.signalTurnActivity(params.binding, activeTurn, {
@@ -2266,6 +2267,7 @@ export class MessagingController {
     this.rememberAgentMessagingOrigin({
       binding: params.binding,
       event: params.event,
+      navigation: params.navigation,
       turnId: params.turnId,
     });
     await this.signalTurnActivity(params.binding, activeTurn, {
@@ -10720,9 +10722,13 @@ export class MessagingController {
   private rememberAgentMessagingOrigin(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
+    navigation: NavigationSnapshot;
     turnId: string;
   }): void {
-    if (!params.event || params.binding.targetKind !== "agent_thread") {
+    if (
+      !params.event ||
+      !isMessagingToolOriginBinding(params.binding, params.navigation)
+    ) {
       return;
     }
     this.activeAgentMessagingOriginsByTurnKey.set(
@@ -11874,18 +11880,30 @@ export class MessagingController {
       return { ok: true, origin };
     }
 
+    let navigation: NavigationSnapshot | undefined;
+    try {
+      navigation = await this.options.backend.getNavigationSnapshot({
+        backend: context.backend,
+      });
+    } catch {
+      navigation = undefined;
+    }
+
     const bindings = this.filterBindingsForChannel(
       await this.options.store.findActiveBindingsForThread({
         backend: context.backend,
         threadId: context.threadId,
       }),
-    ).filter((binding) => binding.targetKind === "agent_thread");
+    ).filter((binding) =>
+      isMessagingToolOriginBinding(binding, navigation)
+    );
     if (bindings.length === 0) {
       return {
         ok: false,
         error: {
           code: "not_found",
-          message: "No active messaging binding is attached to this Agent thread.",
+          message:
+            "No active messaging binding is attached to this Agent or handoff thread.",
         },
       };
     }
@@ -11895,7 +11913,7 @@ export class MessagingController {
         error: {
           code: "ambiguous_location",
           message:
-            "This Agent thread is attached to more than one messaging surface; call from an active messaging turn so PwrAgent can resolve here.",
+            "This Agent or handoff thread is attached to more than one messaging surface; call from an active messaging turn so PwrAgent can resolve here.",
         },
       };
     }
@@ -13674,6 +13692,24 @@ function summarizeMessagingBinding(
     displayName: binding.displayName,
     ...(thread ? { thread } : {}),
   };
+}
+
+function isMessagingToolOriginBinding(
+  binding: MessagingBindingRecord,
+  navigation: NavigationSnapshot | undefined,
+): boolean {
+  if (binding.targetKind === "agent_thread") {
+    return true;
+  }
+  if (binding.targetKind !== "thread" || !navigation) {
+    return false;
+  }
+  return navigation.threads.some(
+    (thread) =>
+      thread.source === binding.backend &&
+      thread.id === binding.threadId &&
+      Boolean(thread.handoffOrigin),
+  );
 }
 
 function summarizeNavigationThreadForMessaging(
