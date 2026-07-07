@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.0-beta.44 - 2026-07-07
+
+- Review Command - Fixed `/review` in multi-worktree threads so PwrAgent requires the intended project when ambiguous, runs the review from the selected workspace, and uses the thread-derived base branch instead of guessing `main` or `master`.
+- Edits Panel - Corrected edited-file diff stats so dirty chips expand collapsed untracked directories, zero-line changes use file-count labels, and the All files view shows the current net worktree diff instead of historical summed edits.
+- Forked Threads - Kept forked-thread Edits views scoped to work done after the fork, so copied ancestor history no longer appears as edits made in the fork.
+- Agent Handoffs - Fixed grouped handoffs launched from subthreads so new delegated threads stay visible as siblings under the root thread instead of disappearing as hidden grandchildren.
+- Pricing - Preserved completed-turn usage durations after a turn settles or a thread is reopened, keeping elapsed-time cards consistent with live turns.
+- Thread Titles - Stopped rejecting generated titles solely because they omit ticket or PR references from quoted prompt context.
+- Dependencies - Refreshed production and development dependencies, including `node-pty`, Vite toolchain packages, and npm patch groups.
+
 ## v1.0.0-beta.43 - 2026-07-06
 
 - Messaging Working Updates - Reworked messaging progress controls around a single Working Updates dial, with in-turn prose routed through the same coalescing policy and streaming controls hidden by default unless explicitly enabled.
