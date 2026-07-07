@@ -5586,6 +5586,176 @@ describe("Composer", () => {
     });
   });
 
+  it("updates an auto-selected review base when directory branch metadata hydrates", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const desktopApi = {
+      onAgentEvent: () => () => undefined,
+      startReview,
+    };
+    const thread = {
+      id: "thread-1",
+      title: "channelsv2",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      gitBranch: "fix-channels-tagged-magic-tags-table",
+      executionMode: "default" as const,
+      linkedDirectories: [
+        {
+          id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+          kind: "worktree" as const,
+          label: "giphy-services",
+          path: "/Users/huntharo/GIPHY/giphy-services",
+          worktreePath:
+            "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+        },
+      ],
+      inbox: { inInbox: false },
+    };
+    const hydratedDirectory = {
+      key: "directory:/Users/huntharo/GIPHY/giphy-services",
+      kind: "directory" as const,
+      label: "giphy-services",
+      path: "/Users/huntharo/GIPHY/giphy-services",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "fix-channels-tagged-magic-tags-table",
+        defaultBranch: "develop",
+        branches: [
+          "fix-channels-tagged-magic-tags-table",
+          "develop",
+        ],
+        baseBranches: [
+          "fix-channels-tagged-magic-tags-table",
+          "origin/fix-channels-tagged-magic-tags-table",
+          "develop",
+          "origin/develop",
+          "origin/master",
+        ],
+        syncState: "untracked" as const,
+      },
+    };
+
+    const { rerender } = render(
+      <Composer
+        desktopApi={desktopApi}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+
+    rerender(
+      <Composer
+        desktopApi={desktopApi}
+        directory={hydratedDirectory}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "origin/develop" },
+        delivery: "inline",
+        cwd:
+          "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+      });
+    });
+  });
+
+  it("keeps a user-entered review base when directory branch metadata hydrates", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const desktopApi = {
+      onAgentEvent: () => () => undefined,
+      startReview,
+    };
+    const thread = {
+      id: "thread-1",
+      title: "channelsv2",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      gitBranch: "fix-channels-tagged-magic-tags-table",
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const hydratedDirectory = {
+      key: "directory:/Users/huntharo/GIPHY/giphy-services",
+      kind: "directory" as const,
+      label: "giphy-services",
+      path: "/Users/huntharo/GIPHY/giphy-services",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "fix-channels-tagged-magic-tags-table",
+        defaultBranch: "develop",
+        branches: ["fix-channels-tagged-magic-tags-table", "develop"],
+        baseBranches: ["origin/develop", "develop"],
+        syncState: "untracked" as const,
+      },
+    };
+
+    const { rerender } = render(
+      <Composer
+        desktopApi={desktopApi}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    const baseBranchInput = screen.getByLabelText("Base branch");
+    fireEvent.change(baseBranchInput, {
+      target: { value: "origin/release-candidate" },
+    });
+
+    rerender(
+      <Composer
+        desktopApi={desktopApi}
+        directory={hydratedDirectory}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue(
+      "origin/release-candidate",
+    );
+  });
+
   it("suggests recent commits for commit reviews and caps the list at twenty", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,

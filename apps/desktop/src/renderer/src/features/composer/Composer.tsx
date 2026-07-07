@@ -326,6 +326,7 @@ const CONTEXT_MOON_PHASES = [
 
 type ReviewConfigState = {
   branch: string;
+  branchSource?: "auto" | "user";
   commit: string;
   customInstructions: string;
   target?: ReviewTargetChoice;
@@ -618,6 +619,7 @@ function createReviewConfig(params: {
   const workspaceOptions = buildReviewWorkspaceOptions(params.thread);
   const config: ReviewConfigState = {
     branch: buildReviewBranchOptions(params)[0] ?? "main",
+    branchSource: "auto",
     commit: "",
     customInstructions: "",
     target: "baseBranch",
@@ -633,7 +635,12 @@ function createReviewConfig(params: {
     return { ...config, target: "uncommittedChanges" };
   }
   if (target.type === "baseBranch") {
-    return { ...config, branch: target.branch, target: "baseBranch" };
+    return {
+      ...config,
+      branch: target.branch,
+      branchSource: "user",
+      target: "baseBranch",
+    };
   }
   if (target.type === "commit") {
     return { ...config, commit: target.sha, target: "commit" };
@@ -3059,6 +3066,14 @@ export function Composer(props: ComposerProps) {
       }),
     [props.directory, props.thread],
   );
+  const defaultReviewBranch = useMemo(
+    () =>
+      buildReviewBranchOptions({
+        directory: props.directory,
+        thread: props.thread,
+      })[0] ?? "main",
+    [props.directory, props.thread],
+  );
   const reviewCommitOptions = useMemo(
     () => buildReviewCommitOptions(props.directory),
     [props.directory],
@@ -3091,6 +3106,38 @@ export function Composer(props: ComposerProps) {
       setReviewConfig(undefined);
     }
   }, [reviewConfig, supportsReview]);
+
+  useEffect(() => {
+    if (
+      !isReviewComposerOpen ||
+      reviewConfig?.target !== "baseBranch" ||
+      reviewConfig.branchSource !== "auto" ||
+      reviewConfig.branch === defaultReviewBranch
+    ) {
+      return;
+    }
+
+    setReviewConfig((current) => {
+      if (
+        current?.target !== "baseBranch" ||
+        current.branchSource !== "auto" ||
+        current.branch === defaultReviewBranch
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        branch: defaultReviewBranch,
+      };
+    });
+  }, [
+    defaultReviewBranch,
+    isReviewComposerOpen,
+    reviewConfig?.branch,
+    reviewConfig?.branchSource,
+    reviewConfig?.target,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -6194,6 +6241,7 @@ export function Composer(props: ComposerProps) {
                           thread: props.thread,
                         })),
                       branch,
+                      branchSource: "user",
                       target: "baseBranch",
                     }));
                     setSendError(undefined);
