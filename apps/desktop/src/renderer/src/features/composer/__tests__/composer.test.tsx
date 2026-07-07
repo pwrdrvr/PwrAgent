@@ -5266,6 +5266,62 @@ describe("Composer", () => {
     });
   });
 
+  it("filters review base branch options without replacing the selected branch text", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "feature/review",
+            defaultBranch: "main",
+            branches: ["feature/review", "release", "main"],
+            baseBranches: ["main", "release", "hotfix"],
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    const baseBranchInput = screen.getByLabelText("Base branch");
+    expect(baseBranchInput).toHaveValue("main");
+    fireEvent.click(baseBranchInput);
+    fireEvent.change(screen.getByLabelText("Find a branch"), {
+      target: { value: "rel" },
+    });
+
+    expect(baseBranchInput).toHaveValue("main");
+    expect(screen.getByRole("option", { name: "release" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "hotfix" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("option", { name: "release" }));
+    expect(baseBranchInput).toHaveValue("release");
+  });
+
   it("accepts a custom review base ref that is not in the branch picker options", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,

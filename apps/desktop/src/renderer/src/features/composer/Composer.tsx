@@ -1783,8 +1783,8 @@ function ReviewBranchPicker(props: {
     }
   };
 
-  const shouldShowMenu = open && visibleOptions.length > 0;
-  const activeOptionId = shouldShowMenu
+  const shouldShowMenu = open && props.options.length > 0;
+  const activeOptionId = shouldShowMenu && visibleOptions.length > 0
     ? `${listboxId}-option-${activeIndex}`
     : undefined;
 
@@ -1817,80 +1817,101 @@ function ReviewBranchPicker(props: {
         onKeyDown={handleKeyDown}
       />
       {shouldShowMenu ? (
-        <div
-          aria-label={props.ariaLabel}
-          className="branch-picker__menu review-branch-picker__menu"
-          id={listboxId}
-          role="listbox"
-        >
-          <div className="branch-picker__list">
-            {visibleOptions.map((option, index) => {
-              const isSelected = option.name === props.value.trim();
-              const relativeTime = formatBranchRelativeTime(
-                option.lastCommitAt,
-                nowMs,
-              );
-              return (
-                <button
-                  aria-label={option.name}
-                  aria-selected={isSelected}
-                  className={[
-                    "branch-picker__option",
-                    index === activeIndex ? "is-active" : "",
-                    isSelected ? "is-selected" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  id={`${listboxId}-option-${index}`}
-                  key={option.name}
-                  ref={(element) => {
-                    optionRefs.current[index] = element;
-                  }}
-                  role="option"
-                  tabIndex={-1}
-                  type="button"
-                  onClick={() => commit(option.name)}
-                  onMouseEnter={() => setActiveIndex(index)}
-                >
-                  <span aria-hidden="true" className="branch-picker__option-check">
-                    {isSelected ? "✓" : ""}
-                  </span>
-                  <span aria-hidden="true" className="branch-picker__option-icon">
-                    <BranchIcon size={12} />
-                  </span>
-                  <span className="branch-picker__option-name">{option.name}</span>
-                  {option.current ? (
-                    <span
-                      aria-hidden="true"
-                      className="branch-picker__badge branch-picker__badge--current"
-                    >
-                      Current
+        <div className="branch-picker__menu review-branch-picker__menu">
+          <div className="branch-picker__search">
+            <span aria-hidden="true" className="branch-picker__search-icon">
+              <SearchIcon size={13} />
+            </span>
+            <input
+              aria-label="Find a branch"
+              className="branch-picker__search-input"
+              placeholder="Find a branch"
+              type="text"
+              value={filterText}
+              onChange={(event) => {
+                setFilterText(event.target.value);
+                setActiveIndex(0);
+              }}
+              onKeyDown={handleKeyDown}
+            />
+          </div>
+          <div
+            aria-label={`${props.ariaLabel} options`}
+            className="branch-picker__list"
+            id={listboxId}
+            role="listbox"
+          >
+            {visibleOptions.length === 0 ? (
+              <p className="branch-picker__empty">No branches match your filter.</p>
+            ) : (
+              visibleOptions.map((option, index) => {
+                const isSelected = option.name === props.value.trim();
+                const relativeTime = formatBranchRelativeTime(
+                  option.lastCommitAt,
+                  nowMs,
+                );
+                return (
+                  <button
+                    aria-label={option.name}
+                    aria-selected={isSelected}
+                    className={[
+                      "branch-picker__option",
+                      index === activeIndex ? "is-active" : "",
+                      isSelected ? "is-selected" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    id={`${listboxId}-option-${index}`}
+                    key={option.name}
+                    ref={(element) => {
+                      optionRefs.current[index] = element;
+                    }}
+                    role="option"
+                    tabIndex={-1}
+                    type="button"
+                    onClick={() => commit(option.name)}
+                    onMouseEnter={() => setActiveIndex(index)}
+                  >
+                    <span aria-hidden="true" className="branch-picker__option-check">
+                      {isSelected ? "✓" : ""}
                     </span>
-                  ) : null}
-                  {option.isDefault ? (
-                    <span
-                      aria-hidden="true"
-                      className="branch-picker__badge branch-picker__badge--default"
-                    >
-                      Default
+                    <span aria-hidden="true" className="branch-picker__option-icon">
+                      <BranchIcon size={12} />
                     </span>
-                  ) : null}
-                  {option.inUse ? (
-                    <span
-                      aria-hidden="true"
-                      className="branch-picker__badge branch-picker__badge--in-use"
-                    >
-                      In use
-                    </span>
-                  ) : null}
-                  {relativeTime ? (
-                    <span aria-hidden="true" className="branch-picker__option-time">
-                      {relativeTime}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
+                    <span className="branch-picker__option-name">{option.name}</span>
+                    {option.current ? (
+                      <span
+                        aria-hidden="true"
+                        className="branch-picker__badge branch-picker__badge--current"
+                      >
+                        Current
+                      </span>
+                    ) : null}
+                    {option.isDefault ? (
+                      <span
+                        aria-hidden="true"
+                        className="branch-picker__badge branch-picker__badge--default"
+                      >
+                        Default
+                      </span>
+                    ) : null}
+                    {option.inUse ? (
+                      <span
+                        aria-hidden="true"
+                        className="branch-picker__badge branch-picker__badge--in-use"
+                      >
+                        In use
+                      </span>
+                    ) : null}
+                    {relativeTime ? (
+                      <span aria-hidden="true" className="branch-picker__option-time">
+                        {relativeTime}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })
+            )}
           </div>
         </div>
       ) : null}
