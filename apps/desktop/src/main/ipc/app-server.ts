@@ -1264,7 +1264,7 @@ class DesktopAppServerService {
   ): string[] {
     const paths = new Set<string>();
     for (const thread of threads) {
-      const worktreePath = thread.projectKey?.trim();
+      const worktreePath = this.resolveThreadWorkingStatePath(thread);
       if (worktreePath) {
         paths.add(worktreePath);
       }
@@ -1277,7 +1277,7 @@ class DesktopAppServerService {
   ): void {
     for (const thread of threads) {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      const worktreePath = thread.projectKey?.trim();
+      const worktreePath = this.resolveThreadWorkingStatePath(thread);
       if (worktreePath) {
         this.worktreePathByThreadKey.set(threadKey, worktreePath);
       } else {
@@ -1346,7 +1346,7 @@ class DesktopAppServerService {
       this.rememberMergedPrCommitShasForThread({
         backend: thread.source,
         threadId: thread.id,
-        worktreePath: thread.projectKey,
+        worktreePath: this.resolveThreadWorkingStatePath(thread),
         prs: [
           ...(thread.prs ?? []),
           ...(detachedPrsByThreadKey.get(threadKey) ?? []),
@@ -1405,7 +1405,7 @@ class DesktopAppServerService {
   private applyCachedWorktreeWorkingState(
     thread: NavigationSnapshot["threads"][number],
   ): NavigationSnapshot["threads"][number] {
-    const worktreePath = thread.projectKey?.trim();
+    const worktreePath = this.resolveThreadWorkingStatePath(thread);
     const cached = worktreePath
       ? this.workingStateByWorktree.get(worktreePath)
       : undefined;
@@ -1416,6 +1416,37 @@ class DesktopAppServerService {
       return { ...thread, gitWorkingState: cached.gitWorkingState };
     }
     return thread;
+  }
+
+  private resolveThreadWorkingStatePath(
+    thread: Pick<
+      NavigationSnapshot["threads"][number],
+      "projectKey" | "linkedDirectories"
+    >,
+  ): string | undefined {
+    const projectKey = thread.projectKey?.trim();
+    if (projectKey) {
+      return projectKey;
+    }
+
+    for (const directory of thread.linkedDirectories ?? []) {
+      const worktreePath = directory.worktreePath?.trim();
+      if (worktreePath) {
+        return worktreePath;
+      }
+    }
+
+    for (const directory of thread.linkedDirectories ?? []) {
+      if (directory.kind !== "local") {
+        continue;
+      }
+      const directoryPath = directory.path?.trim();
+      if (directoryPath) {
+        return directoryPath;
+      }
+    }
+
+    return undefined;
   }
 
   async refreshDirectoryGitStatusesForKeys(

@@ -326,6 +326,7 @@ const CONTEXT_MOON_PHASES = [
 
 type ReviewConfigState = {
   branch: string;
+  branchSource?: "auto" | "user";
   commit: string;
   customInstructions: string;
   target?: ReviewTargetChoice;
@@ -423,6 +424,8 @@ const REVIEW_TARGET_OPTIONS: Array<{
 ];
 
 const REVIEW_PREFERRED_BASE_BRANCHES = ["main", "master", "develop", "trunk"];
+const REVIEW_REMOTE_AGNOSTIC_BASE_BRANCH_PATTERN =
+  /^(main|master|develop|development|trunk)$|^(release|releases|stable|support|maintenance)\//;
 
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
@@ -454,11 +457,18 @@ function buildReviewBranchOptions(params: {
   directory?: NavigationDirectorySummary;
   thread?: NavigationThreadSummary;
 }): string[] {
+  const threadCurrentBranches = [
+    params.thread?.gitBranch,
+    params.thread?.observedGitBranch,
+  ]
+    .map((branch) => branch?.trim())
+    .filter((branch): branch is string => Boolean(branch));
   const currentBranches = new Set(
     [
-      params.thread?.gitBranch,
-      params.thread?.observedGitBranch,
-      params.directory?.gitStatus?.currentBranch,
+      ...threadCurrentBranches,
+      ...(threadCurrentBranches.length === 0
+        ? [params.directory?.gitStatus?.currentBranch]
+        : []),
     ]
       .map((branch) => branch?.trim())
       .filter((branch): branch is string => Boolean(branch)),
@@ -480,6 +490,12 @@ function buildReviewBranchOptions(params: {
     /^origin\//,
     "",
   );
+  const directoryCurrentBranch = params.directory?.gitStatus?.currentBranch
+    ?.trim()
+    .replace(/^origin\//, "");
+  const directoryDefaultBranch = params.directory?.gitStatus?.defaultBranch
+    ?.trim()
+    .replace(/^origin\//, "");
   const baseBranches = params.directory?.gitStatus?.baseBranches ?? [];
   const knownBranches = new Set(
     [
@@ -518,16 +534,43 @@ function buildReviewBranchOptions(params: {
     pushIfKnown(`origin/${value}`);
     pushIfKnown(value);
   };
+  const pushDirectoryDefault = (): void => {
+    if (!directoryDefaultBranch) {
+      return;
+    }
+    if (
+      threadCurrentBranches.length > 0 &&
+      directoryDefaultBranch === directoryCurrentBranch &&
+      !REVIEW_REMOTE_AGNOSTIC_BASE_BRANCH_PATTERN.test(directoryDefaultBranch)
+    ) {
+      return;
+    }
+    pushPreferredDefault(directoryDefaultBranch);
+  };
+  const pushInferredBaseBranch = (candidate?: string): void => {
+    const value = candidate?.trim();
+    if (!value) {
+      return;
+    }
 
-  const reportedDefaultBranch = params.directory?.gitStatus?.defaultBranch
-    ?.trim()
-    .replace(/^origin\//, "");
-  if (
-    reportedDefaultBranch &&
-    REVIEW_PREFERRED_BASE_BRANCHES.includes(reportedDefaultBranch)
-  ) {
-    pushPreferredDefault(reportedDefaultBranch);
-  }
+    const optionCount = options.size;
+    if (value.startsWith("origin/")) {
+      pushIfKnown(value);
+      pushIfKnown(value.slice("origin/".length));
+    } else if (REVIEW_REMOTE_AGNOSTIC_BASE_BRANCH_PATTERN.test(value)) {
+      pushIfKnown(`origin/${value}`);
+      pushIfKnown(value);
+    } else {
+      pushIfKnown(value);
+    }
+
+    if (options.size === optionCount) {
+      push(value);
+    }
+  };
+
+  pushInferredBaseBranch(params.thread?.gitWorkingState?.baseBranch);
+  pushDirectoryDefault();
   for (const branch of REVIEW_PREFERRED_BASE_BRANCHES) {
     pushPreferredDefault(branch);
   }
@@ -536,7 +579,6 @@ function buildReviewBranchOptions(params: {
   for (const candidate of baseBranches) {
     push(candidate);
   }
-  pushPreferredDefault(params.directory?.gitStatus?.defaultBranch);
   push(params.thread?.gitBranch);
   push(params.thread?.observedGitBranch);
   push(params.directory?.gitStatus?.currentBranch);
@@ -556,9 +598,9 @@ function buildReviewBranchPickerOptions(params: {
     [];
   const detailByName = new Map(details.map((detail) => [detail.name, detail]));
   const currentBranch = normalizeSelectableLaunchpadBranch(
-    params.directory?.gitStatus?.currentBranch ??
-      params.thread?.gitBranch ??
-      params.thread?.observedGitBranch,
+    params.thread?.gitBranch ??
+      params.thread?.observedGitBranch ??
+      params.directory?.gitStatus?.currentBranch,
   );
   const defaultBranch = normalizeSelectableLaunchpadBranch(
     params.directory?.gitStatus?.defaultBranch,
@@ -603,6 +645,7 @@ function createReviewConfig(params: {
   const workspaceOptions = buildReviewWorkspaceOptions(params.thread);
   const config: ReviewConfigState = {
     branch: buildReviewBranchOptions(params)[0] ?? "main",
+    branchSource: "auto",
     commit: "",
     customInstructions: "",
     target: "baseBranch",
@@ -618,7 +661,12 @@ function createReviewConfig(params: {
     return { ...config, target: "uncommittedChanges" };
   }
   if (target.type === "baseBranch") {
-    return { ...config, branch: target.branch, target: "baseBranch" };
+    return {
+      ...config,
+      branch: target.branch,
+      branchSource: "user",
+      target: "baseBranch",
+    };
   }
   if (target.type === "commit") {
     return { ...config, commit: target.sha, target: "commit" };
@@ -1728,15 +1776,15 @@ function ReviewBranchPicker(props: {
       }
       return;
     }
-    if (event.key === "Escape" && open && visibleOptions.length > 0) {
+    if (event.key === "Escape" && open) {
       event.preventDefault();
       event.stopPropagation();
       setOpen(false);
     }
   };
 
-  const shouldShowMenu = open && visibleOptions.length > 0;
-  const activeOptionId = shouldShowMenu
+  const shouldShowMenu = open && props.options.length > 0;
+  const activeOptionId = shouldShowMenu && visibleOptions.length > 0
     ? `${listboxId}-option-${activeIndex}`
     : undefined;
 
@@ -1769,80 +1817,101 @@ function ReviewBranchPicker(props: {
         onKeyDown={handleKeyDown}
       />
       {shouldShowMenu ? (
-        <div
-          aria-label={props.ariaLabel}
-          className="branch-picker__menu review-branch-picker__menu"
-          id={listboxId}
-          role="listbox"
-        >
-          <div className="branch-picker__list">
-            {visibleOptions.map((option, index) => {
-              const isSelected = option.name === props.value.trim();
-              const relativeTime = formatBranchRelativeTime(
-                option.lastCommitAt,
-                nowMs,
-              );
-              return (
-                <button
-                  aria-label={option.name}
-                  aria-selected={isSelected}
-                  className={[
-                    "branch-picker__option",
-                    index === activeIndex ? "is-active" : "",
-                    isSelected ? "is-selected" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  id={`${listboxId}-option-${index}`}
-                  key={option.name}
-                  ref={(element) => {
-                    optionRefs.current[index] = element;
-                  }}
-                  role="option"
-                  tabIndex={-1}
-                  type="button"
-                  onClick={() => commit(option.name)}
-                  onMouseEnter={() => setActiveIndex(index)}
-                >
-                  <span aria-hidden="true" className="branch-picker__option-check">
-                    {isSelected ? "✓" : ""}
-                  </span>
-                  <span aria-hidden="true" className="branch-picker__option-icon">
-                    <BranchIcon size={12} />
-                  </span>
-                  <span className="branch-picker__option-name">{option.name}</span>
-                  {option.current ? (
-                    <span
-                      aria-hidden="true"
-                      className="branch-picker__badge branch-picker__badge--current"
-                    >
-                      Current
+        <div className="branch-picker__menu review-branch-picker__menu">
+          <div className="branch-picker__search">
+            <span aria-hidden="true" className="branch-picker__search-icon">
+              <SearchIcon size={13} />
+            </span>
+            <input
+              aria-label="Find a branch"
+              className="branch-picker__search-input"
+              placeholder="Find a branch"
+              type="text"
+              value={filterText}
+              onChange={(event) => {
+                setFilterText(event.target.value);
+                setActiveIndex(0);
+              }}
+              onKeyDown={handleKeyDown}
+            />
+          </div>
+          <div
+            aria-label={`${props.ariaLabel} options`}
+            className="branch-picker__list"
+            id={listboxId}
+            role="listbox"
+          >
+            {visibleOptions.length === 0 ? (
+              <p className="branch-picker__empty">No branches match your filter.</p>
+            ) : (
+              visibleOptions.map((option, index) => {
+                const isSelected = option.name === props.value.trim();
+                const relativeTime = formatBranchRelativeTime(
+                  option.lastCommitAt,
+                  nowMs,
+                );
+                return (
+                  <button
+                    aria-label={option.name}
+                    aria-selected={isSelected}
+                    className={[
+                      "branch-picker__option",
+                      index === activeIndex ? "is-active" : "",
+                      isSelected ? "is-selected" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    id={`${listboxId}-option-${index}`}
+                    key={option.name}
+                    ref={(element) => {
+                      optionRefs.current[index] = element;
+                    }}
+                    role="option"
+                    tabIndex={-1}
+                    type="button"
+                    onClick={() => commit(option.name)}
+                    onMouseEnter={() => setActiveIndex(index)}
+                  >
+                    <span aria-hidden="true" className="branch-picker__option-check">
+                      {isSelected ? "✓" : ""}
                     </span>
-                  ) : null}
-                  {option.isDefault ? (
-                    <span
-                      aria-hidden="true"
-                      className="branch-picker__badge branch-picker__badge--default"
-                    >
-                      Default
+                    <span aria-hidden="true" className="branch-picker__option-icon">
+                      <BranchIcon size={12} />
                     </span>
-                  ) : null}
-                  {option.inUse ? (
-                    <span
-                      aria-hidden="true"
-                      className="branch-picker__badge branch-picker__badge--in-use"
-                    >
-                      In use
-                    </span>
-                  ) : null}
-                  {relativeTime ? (
-                    <span aria-hidden="true" className="branch-picker__option-time">
-                      {relativeTime}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
+                    <span className="branch-picker__option-name">{option.name}</span>
+                    {option.current ? (
+                      <span
+                        aria-hidden="true"
+                        className="branch-picker__badge branch-picker__badge--current"
+                      >
+                        Current
+                      </span>
+                    ) : null}
+                    {option.isDefault ? (
+                      <span
+                        aria-hidden="true"
+                        className="branch-picker__badge branch-picker__badge--default"
+                      >
+                        Default
+                      </span>
+                    ) : null}
+                    {option.inUse ? (
+                      <span
+                        aria-hidden="true"
+                        className="branch-picker__badge branch-picker__badge--in-use"
+                      >
+                        In use
+                      </span>
+                    ) : null}
+                    {relativeTime ? (
+                      <span aria-hidden="true" className="branch-picker__option-time">
+                        {relativeTime}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })
+            )}
           </div>
         </div>
       ) : null}
@@ -3044,6 +3113,14 @@ export function Composer(props: ComposerProps) {
       }),
     [props.directory, props.thread],
   );
+  const defaultReviewBranch = useMemo(
+    () =>
+      buildReviewBranchOptions({
+        directory: props.directory,
+        thread: props.thread,
+      })[0] ?? "main",
+    [props.directory, props.thread],
+  );
   const reviewCommitOptions = useMemo(
     () => buildReviewCommitOptions(props.directory),
     [props.directory],
@@ -3076,6 +3153,38 @@ export function Composer(props: ComposerProps) {
       setReviewConfig(undefined);
     }
   }, [reviewConfig, supportsReview]);
+
+  useEffect(() => {
+    if (
+      !isReviewComposerOpen ||
+      reviewConfig?.target !== "baseBranch" ||
+      reviewConfig.branchSource !== "auto" ||
+      reviewConfig.branch === defaultReviewBranch
+    ) {
+      return;
+    }
+
+    setReviewConfig((current) => {
+      if (
+        current?.target !== "baseBranch" ||
+        current.branchSource !== "auto" ||
+        current.branch === defaultReviewBranch
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        branch: defaultReviewBranch,
+      };
+    });
+  }, [
+    defaultReviewBranch,
+    isReviewComposerOpen,
+    reviewConfig?.branch,
+    reviewConfig?.branchSource,
+    reviewConfig?.target,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -6179,6 +6288,7 @@ export function Composer(props: ComposerProps) {
                           thread: props.thread,
                         })),
                       branch,
+                      branchSource: "user",
                       target: "baseBranch",
                     }));
                     setSendError(undefined);

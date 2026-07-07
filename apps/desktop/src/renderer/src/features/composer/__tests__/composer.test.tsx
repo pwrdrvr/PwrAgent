@@ -5266,6 +5266,116 @@ describe("Composer", () => {
     });
   });
 
+  it("filters review base branch options without replacing the selected branch text", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "feature/review",
+            defaultBranch: "main",
+            branches: ["feature/review", "release", "main"],
+            baseBranches: ["main", "release", "hotfix"],
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    const baseBranchInput = screen.getByLabelText("Base branch");
+    expect(baseBranchInput).toHaveValue("main");
+    fireEvent.click(baseBranchInput);
+    fireEvent.change(screen.getByLabelText("Find a branch"), {
+      target: { value: "rel" },
+    });
+
+    expect(baseBranchInput).toHaveValue("main");
+    expect(screen.getByRole("option", { name: "release" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "hotfix" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("option", { name: "release" }));
+    expect(baseBranchInput).toHaveValue("release");
+  });
+
+  it("closes an empty review branch filter menu with Escape", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "feature/review",
+            defaultBranch: "main",
+            branches: ["feature/review", "release", "main"],
+            baseBranches: ["main", "release", "hotfix"],
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    fireEvent.click(screen.getByLabelText("Base branch"));
+    const filterInput = screen.getByLabelText("Find a branch");
+    fireEvent.change(filterInput, { target: { value: "no-such-branch" } });
+
+    expect(screen.getByText("No branches match your filter.")).toBeInTheDocument();
+
+    fireEvent.keyDown(filterInput, { key: "Escape" });
+
+    expect(
+      screen.queryByText("No branches match your filter."),
+    ).not.toBeInTheDocument();
+  });
+
   it("accepts a custom review base ref that is not in the branch picker options", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
@@ -5447,6 +5557,428 @@ describe("Composer", () => {
     await clickButton("Send");
 
     expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+  });
+
+  it("keeps an unrelated directory upstream behind safe review bases", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/GIPHY/giphy-services",
+          kind: "directory",
+          label: "giphy-services",
+          path: "/Users/huntharo/GIPHY/giphy-services",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "search-gha-deploy-cutover",
+            defaultBranch: "search-gha-deploy-cutover",
+            upstreamBranch: "origin/search-gha-deploy-cutover",
+            branches: [
+              "search-gha-deploy-cutover",
+              "main",
+            ],
+            baseBranches: [
+              "search-gha-deploy-cutover",
+              "origin/search-gha-deploy-cutover",
+              "origin/main",
+              "main",
+            ],
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "channelsv2",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "fix-channels-tagged-magic-tags-table",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+  });
+
+  it("prefers the thread git-derived worktree base branch over main for reviews", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "channelsv2",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "channelsv2-get-tagged-channels-by-asset-id",
+          gitWorkingState: {
+            dirtyFiles: 0,
+            dirtyAdditions: 0,
+            dirtyDeletions: 0,
+            untrackedFiles: 0,
+            unpushedCommits: 1,
+            baseBranch: "origin/develop",
+          },
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    const form = reviewTarget.closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "origin/develop" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("resolves a remote-agnostic git-derived review base to a known remote ref", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/GIPHY/giphy-services",
+          kind: "directory",
+          label: "giphy-services",
+          path: "/Users/huntharo/GIPHY/giphy-services",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "channelsv2-get-tagged-channels-by-asset-id",
+            defaultBranch: "develop",
+            branches: [
+              "channelsv2-get-tagged-channels-by-asset-id",
+              "main",
+            ],
+            baseBranches: [
+              "channelsv2-get-tagged-channels-by-asset-id",
+              "origin/main",
+              "origin/develop",
+            ],
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "channelsv2",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "channelsv2-get-tagged-channels-by-asset-id",
+          gitWorkingState: {
+            dirtyFiles: 0,
+            dirtyAdditions: 0,
+            dirtyDeletions: 0,
+            untrackedFiles: 0,
+            unpushedCommits: 1,
+            baseBranch: "develop",
+          },
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "origin/develop" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("does not exclude the default review base just because the local directory is on it", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/GIPHY/giphy-services",
+          kind: "directory",
+          label: "giphy-services",
+          path: "/Users/huntharo/GIPHY/giphy-services",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "develop",
+            defaultBranch: "develop",
+            branches: [
+              "develop",
+              "fix-channels-tagged-magic-tags-table",
+            ],
+            baseBranches: [
+              "develop",
+              "origin/develop",
+              "origin/master",
+            ],
+            syncState: "in-sync",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "channelsv2",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "fix-channels-tagged-magic-tags-table",
+          executionMode: "default",
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+              kind: "worktree",
+              label: "giphy-services",
+              path: "/Users/huntharo/GIPHY/giphy-services",
+              worktreePath:
+                "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+  });
+
+  it("updates an auto-selected review base when directory branch metadata hydrates", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const desktopApi = {
+      onAgentEvent: () => () => undefined,
+      startReview,
+    };
+    const thread = {
+      id: "thread-1",
+      title: "channelsv2",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      gitBranch: "fix-channels-tagged-magic-tags-table",
+      executionMode: "default" as const,
+      linkedDirectories: [
+        {
+          id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+          kind: "worktree" as const,
+          label: "giphy-services",
+          path: "/Users/huntharo/GIPHY/giphy-services",
+          worktreePath:
+            "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+        },
+      ],
+      inbox: { inInbox: false },
+    };
+    const hydratedDirectory = {
+      key: "directory:/Users/huntharo/GIPHY/giphy-services",
+      kind: "directory" as const,
+      label: "giphy-services",
+      path: "/Users/huntharo/GIPHY/giphy-services",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "fix-channels-tagged-magic-tags-table",
+        defaultBranch: "develop",
+        branches: [
+          "fix-channels-tagged-magic-tags-table",
+          "develop",
+        ],
+        baseBranches: [
+          "fix-channels-tagged-magic-tags-table",
+          "origin/fix-channels-tagged-magic-tags-table",
+          "develop",
+          "origin/develop",
+          "origin/master",
+        ],
+        syncState: "untracked" as const,
+      },
+    };
+
+    const { rerender } = render(
+      <Composer
+        desktopApi={desktopApi}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+
+    rerender(
+      <Composer
+        desktopApi={desktopApi}
+        directory={hydratedDirectory}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "origin/develop" },
+        delivery: "inline",
+        cwd:
+          "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+      });
+    });
+  });
+
+  it("keeps a user-entered review base when directory branch metadata hydrates", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const desktopApi = {
+      onAgentEvent: () => () => undefined,
+      startReview,
+    };
+    const thread = {
+      id: "thread-1",
+      title: "channelsv2",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      gitBranch: "fix-channels-tagged-magic-tags-table",
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const hydratedDirectory = {
+      key: "directory:/Users/huntharo/GIPHY/giphy-services",
+      kind: "directory" as const,
+      label: "giphy-services",
+      path: "/Users/huntharo/GIPHY/giphy-services",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "fix-channels-tagged-magic-tags-table",
+        defaultBranch: "develop",
+        branches: ["fix-channels-tagged-magic-tags-table", "develop"],
+        baseBranches: ["origin/develop", "develop"],
+        syncState: "untracked" as const,
+      },
+    };
+
+    const { rerender } = render(
+      <Composer
+        desktopApi={desktopApi}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    const baseBranchInput = screen.getByLabelText("Base branch");
+    fireEvent.change(baseBranchInput, {
+      target: { value: "origin/release-candidate" },
+    });
+
+    rerender(
+      <Composer
+        desktopApi={desktopApi}
+        directory={hydratedDirectory}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue(
+      "origin/release-candidate",
+    );
   });
 
   it("suggests recent commits for commit reviews and caps the list at twenty", async () => {
