@@ -423,6 +423,8 @@ const REVIEW_TARGET_OPTIONS: Array<{
 ];
 
 const REVIEW_PREFERRED_BASE_BRANCHES = ["main", "master", "develop", "trunk"];
+const REVIEW_REMOTE_AGNOSTIC_BASE_BRANCH_PATTERN =
+  /^(main|master|develop|development|trunk)$|^(release|releases|stable|support|maintenance)\//;
 
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
@@ -518,8 +520,29 @@ function buildReviewBranchOptions(params: {
     pushIfKnown(`origin/${value}`);
     pushIfKnown(value);
   };
+  const pushInferredBaseBranch = (candidate?: string): void => {
+    const value = candidate?.trim();
+    if (!value) {
+      return;
+    }
 
-  push(params.thread?.gitWorkingState?.baseBranch);
+    const optionCount = options.size;
+    if (value.startsWith("origin/")) {
+      pushIfKnown(value);
+      pushIfKnown(value.slice("origin/".length));
+    } else if (REVIEW_REMOTE_AGNOSTIC_BASE_BRANCH_PATTERN.test(value)) {
+      pushIfKnown(`origin/${value}`);
+      pushIfKnown(value);
+    } else {
+      pushIfKnown(value);
+    }
+
+    if (options.size === optionCount) {
+      push(value);
+    }
+  };
+
+  pushInferredBaseBranch(params.thread?.gitWorkingState?.baseBranch);
   pushPreferredDefault(params.directory?.gitStatus?.defaultBranch);
   pushIfKnown(upstreamBranch);
   for (const branch of REVIEW_PREFERRED_BASE_BRANCHES) {

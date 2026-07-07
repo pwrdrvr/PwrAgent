@@ -5508,6 +5508,84 @@ describe("Composer", () => {
     });
   });
 
+  it("resolves a remote-agnostic git-derived review base to a known remote ref", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        directory={{
+          key: "directory:/Users/huntharo/GIPHY/giphy-services",
+          kind: "directory",
+          label: "giphy-services",
+          path: "/Users/huntharo/GIPHY/giphy-services",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "channelsv2-get-tagged-channels-by-asset-id",
+            defaultBranch: "develop",
+            branches: [
+              "channelsv2-get-tagged-channels-by-asset-id",
+              "main",
+            ],
+            baseBranches: [
+              "channelsv2-get-tagged-channels-by-asset-id",
+              "origin/main",
+              "origin/develop",
+            ],
+            syncState: "untracked",
+          },
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "channelsv2",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "channelsv2-get-tagged-channels-by-asset-id",
+          gitWorkingState: {
+            dirtyFiles: 0,
+            dirtyAdditions: 0,
+            dirtyDeletions: 0,
+            untrackedFiles: 0,
+            unpushedCommits: 1,
+            baseBranch: "develop",
+          },
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "origin/develop" },
+        delivery: "inline",
+      });
+    });
+  });
+
   it("suggests recent commits for commit reviews and caps the list at twenty", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
