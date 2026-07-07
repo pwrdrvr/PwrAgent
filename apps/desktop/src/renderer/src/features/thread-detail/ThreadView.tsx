@@ -1543,9 +1543,18 @@ export function ThreadView(props: ThreadViewProps) {
       collectEditedFileGroups({
         entries: props.transcriptEntries,
         activeTurnId: props.activeTurnId,
+        forkCreatedAt: selectedThread?.forkSourceThreadId
+          ? selectedThread.createdAt
+          : undefined,
         livePendingEntry: pendingRailActivityEntry,
       }),
-    [props.transcriptEntries, props.activeTurnId, pendingRailActivityEntry],
+    [
+      props.transcriptEntries,
+      props.activeTurnId,
+      selectedThread?.createdAt,
+      selectedThread?.forkSourceThreadId,
+      pendingRailActivityEntry,
+    ],
   );
 
   // Git commit lifecycle per group, resolved against the live worktree.

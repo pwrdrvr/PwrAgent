@@ -71,6 +71,62 @@ function buildAutomationSummary(
   };
 }
 
+describe("navigation fork metadata", () => {
+  it("materializes fork origin metadata from thread overlays", () => {
+    const [thread] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          forkSourceThreadId: "thread-parent",
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread({ createdAt: 2_000 })],
+    });
+
+    expect(thread?.forkSourceThreadId).toBe("thread-parent");
+  });
+
+  it("includes fork origin metadata in the navigation snapshot hash", () => {
+    const [threadWithoutForkOrigin] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {},
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread({ createdAt: 2_000 })],
+    });
+    const [threadWithForkOrigin] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          forkSourceThreadId: "thread-parent",
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread({ createdAt: 2_000 })],
+    });
+
+    expect(
+      buildNavigationSnapshotHash({
+        backend: "codex",
+        threads: [threadWithoutForkOrigin!],
+      }),
+    ).not.toBe(
+      buildNavigationSnapshotHash({
+        backend: "codex",
+        threads: [threadWithForkOrigin!],
+      }),
+    );
+  });
+});
+
 describe("navigation automation summaries", () => {
   it("materializes compact automation summaries onto thread navigation rows", () => {
     const [thread] = materializeNavigationThreads({

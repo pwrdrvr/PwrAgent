@@ -209,6 +209,7 @@ export function materializeNavigationThreads(params: {
       subAgents: overlay?.subAgents ?? [],
       pinnedRank: overlay?.pinnedRank,
       parentThreadId,
+      forkSourceThreadId: overlay?.forkSourceThreadId,
       subthreadOrder: overlay?.subthreadOrder,
       subthreadsCollapsed: overlay?.subthreadsCollapsed,
       prs: overlay?.prs ?? [],
@@ -462,6 +463,7 @@ export function buildNavigationSnapshotHash(params: {
       reactions: thread.reactions ?? [],
       pinnedRank: thread.pinnedRank ?? null,
       parentThreadId: thread.parentThreadId ?? null,
+      forkSourceThreadId: thread.forkSourceThreadId ?? null,
       subthreadOrder: thread.subthreadOrder ?? [],
       subthreadsCollapsed: thread.subthreadsCollapsed ?? null,
       // Include prs in the hash so refreshThreadPullRequests writes to

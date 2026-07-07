@@ -62,6 +62,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * agent thread; this only controls sidebar grouping.
    */
   parentThreadId?: ThreadIdentifier;
+  /**
+   * Set only when this thread inherited copied context by forking another
+   * thread. Renderer surfaces use this to distinguish fork baseline history
+   * from edits made by the forked thread itself.
+   */
+  forkSourceThreadId?: ThreadIdentifier;
   /** User-curated child order, stored on the parent thread overlay. */
   subthreadOrder?: ThreadIdentifier[];
   /** Persisted disclosure state for the parent's child section. */
