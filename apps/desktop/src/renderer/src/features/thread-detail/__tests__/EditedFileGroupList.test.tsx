@@ -104,10 +104,15 @@ describe("EditedFileGroupList Show more / Show less", () => {
       },
     ];
 
-    render(<EditedFileGroupList groups={flatGroups} view="files" />);
+    const { container } = render(
+      <EditedFileGroupList groups={flatGroups} view="files" />,
+    );
 
     expect(screen.getByText("Edited 2 files")).toBeInTheDocument();
     expect(screen.getByLabelText("+5 -4")).toBeInTheDocument();
+    expect(
+      container.querySelector(".edited-file-groups__flat-section"),
+    ).not.toBeNull();
   });
 
   it("renders the git status badge only for the newest turn group", () => {

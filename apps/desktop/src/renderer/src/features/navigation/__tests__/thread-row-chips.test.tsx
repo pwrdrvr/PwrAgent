@@ -666,6 +666,26 @@ describe("ThreadRow chip flow", () => {
     expect(container.querySelector(".thread-row__chip--unpushed")).toBeNull();
   });
 
+  it("does not render degenerate +0/-0 dirty stats", () => {
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        gitWorkingState: {
+          dirtyFiles: 1,
+          dirtyAdditions: 0,
+          dirtyDeletions: 0,
+          untrackedFiles: 1,
+          unpushedCommits: 0,
+        },
+      },
+    });
+
+    const dirtyChip = container.querySelector(".thread-row__chip--dirty");
+    expect(dirtyChip).toHaveTextContent("1 new");
+    expect(dirtyChip).not.toHaveTextContent("+0");
+    expect(dirtyChip).not.toHaveTextContent("-0");
+  });
+
   it("renders no git working-state chips when the tree is clean and pushed", () => {
     const { container } = renderRow({
       thread: {

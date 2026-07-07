@@ -31,19 +31,27 @@ export function ThreadMetaChips({
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
-  const hasDirtySummary = Boolean(
+  const hasDirtyState = Boolean(
     gitWorking &&
       (gitWorking.dirtyFiles > 0 ||
         gitWorking.dirtyAdditions > 0 ||
         gitWorking.dirtyDeletions > 0),
   );
+  const hasDirtyLineStats = Boolean(
+    gitWorking &&
+      (gitWorking.dirtyAdditions > 0 || gitWorking.dirtyDeletions > 0),
+  );
   const hasUntracked = Boolean(gitWorking && gitWorking.untrackedFiles > 0);
   const dirtyTooltip = gitWorking
     ? [
-        hasDirtySummary
-          ? `Uncommitted changes: ${gitWorking.dirtyFiles} file${
-              gitWorking.dirtyFiles === 1 ? "" : "s"
-            }, +${gitWorking.dirtyAdditions.toLocaleString()}, -${gitWorking.dirtyDeletions.toLocaleString()}`
+        hasDirtyState
+          ? hasDirtyLineStats
+            ? `Uncommitted changes: ${gitWorking.dirtyFiles} file${
+                gitWorking.dirtyFiles === 1 ? "" : "s"
+              }, +${gitWorking.dirtyAdditions.toLocaleString()}, -${gitWorking.dirtyDeletions.toLocaleString()}`
+            : `Uncommitted changes: ${gitWorking.dirtyFiles} file${
+                gitWorking.dirtyFiles === 1 ? "" : "s"
+              }`
           : undefined,
         hasUntracked
           ? `${gitWorking.untrackedFiles} untracked file${
@@ -195,7 +203,7 @@ export function ThreadMetaChips({
         </CopyableThreadChip>
       ) : null}
 
-      {hasDirtySummary || hasUntracked ? (
+      {hasDirtyState || hasUntracked ? (
         <span
           aria-label={dirtyTooltip.replace(/\n/g, "; ")}
           role="img"
@@ -205,7 +213,7 @@ export function ThreadMetaChips({
           }
           onMouseLeave={gitStateTooltip.hide}
         >
-          {hasDirtySummary ? (
+          {hasDirtyLineStats ? (
             <>
               <span className="thread-row__chip-stat thread-row__chip-stat--added">
                 +{gitWorking!.dirtyAdditions.toLocaleString()}
@@ -216,7 +224,7 @@ export function ThreadMetaChips({
             </>
           ) : (
             <span className="thread-row__chip-stat">
-              {gitWorking!.untrackedFiles} new
+              {formatDirtyFileFallback(gitWorking!)}
             </span>
           )}
         </span>
@@ -238,6 +246,18 @@ export function ThreadMetaChips({
       {gitStateTooltip.tooltipNode}
     </>
   );
+}
+
+function formatDirtyFileFallback(
+  gitWorking: NonNullable<NavigationThreadSummary["gitWorkingState"]>,
+): string {
+  if (
+    gitWorking.untrackedFiles > 0 &&
+    gitWorking.dirtyFiles <= gitWorking.untrackedFiles
+  ) {
+    return `${gitWorking.untrackedFiles.toLocaleString()} new`;
+  }
+  return `${gitWorking.dirtyFiles.toLocaleString()} changed`;
 }
 
 function formatBranchCopyLabel(params: {

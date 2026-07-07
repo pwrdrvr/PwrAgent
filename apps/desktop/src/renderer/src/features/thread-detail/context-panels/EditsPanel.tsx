@@ -16,7 +16,10 @@ import {
   type EditedFileGroupView,
 } from "../EditedFileGroupList";
 import { TranscriptDiff } from "../TranscriptDiff";
-import type { EditedFileGroup } from "../edited-file-groups";
+import {
+  flattenEditedFileGroups,
+  type EditedFileGroup,
+} from "../edited-file-groups";
 import type { EditedFilesDock } from "./context-tab";
 
 type EditsPanelProps = {
@@ -46,6 +49,10 @@ const OTHER_CHANGE_DIFF_MAX_BYTES = 200_000;
 
 function isAbsolutePathLike(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, "/");
 }
 
 function toWorktreeAbsolutePath(
@@ -155,6 +162,108 @@ function useOtherWorktreeChanges(params: {
   return state;
 }
 
+function useCurrentEditedFileDetails(params: {
+  desktopApi?: Pick<DesktopApi, "getWorktreeOtherChangeDiff">;
+  enabled: boolean;
+  groups: readonly EditedFileGroup[];
+  refreshKey?: string;
+  worktreeRoot?: string;
+}) {
+  const fallbackDetails = useMemo(
+    () => flattenEditedFileGroups(params.groups),
+    [params.groups],
+  );
+  const editedPaths = useMemo(
+    () => collectEditedPaths(params.groups, params.worktreeRoot).sort(),
+    [params.groups, params.worktreeRoot],
+  );
+  const editedPathSignature = useMemo(
+    () => JSON.stringify(editedPaths),
+    [editedPaths],
+  );
+  const [details, setDetails] = useState<
+    AppServerThreadActivityDetail[] | undefined
+  >();
+
+  useEffect(() => {
+    const getDiff = params.desktopApi?.getWorktreeOtherChangeDiff;
+    const worktreePath = params.worktreeRoot?.trim();
+    if (!params.enabled || !getDiff || !worktreePath || editedPaths.length === 0) {
+      setDetails(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    setDetails([]);
+    void Promise.all(
+      editedPaths.map(async (filePath) => ({
+        filePath,
+        response: await getDiff({
+          worktreePath,
+          path: filePath,
+          maxBytes: OTHER_CHANGE_DIFF_MAX_BYTES,
+        }).catch(() => ({ detail: undefined })),
+      })),
+    ).then((results) => {
+      if (cancelled) {
+        return;
+      }
+
+      const currentByPath = new Map<string, AppServerThreadActivityDetail>();
+      for (const result of results) {
+        const detail = result.response.detail;
+        if (detail?.fileDiff) {
+          currentByPath.set(normalizePath(result.filePath), detail);
+        }
+      }
+      if (currentByPath.size === 0) {
+        setDetails([]);
+        return;
+      }
+
+      setDetails(
+        fallbackDetails.flatMap((detail) => {
+          const detailPath = detail.path?.trim();
+          if (!detailPath) {
+            return [];
+          }
+          const absolutePath = toWorktreeAbsolutePath(
+            detailPath,
+            params.worktreeRoot,
+          );
+          const current = absolutePath
+            ? currentByPath.get(normalizePath(absolutePath))
+            : undefined;
+          return current?.fileDiff
+            ? [
+                {
+                  ...detail,
+                  path: current.path ?? detail.path,
+                  status: current.status ?? detail.status,
+                  fileDiff: current.fileDiff,
+                },
+              ]
+            : [];
+        }),
+      );
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    editedPathSignature,
+    editedPaths,
+    fallbackDetails,
+    params.desktopApi?.getWorktreeOtherChangeDiff,
+    params.enabled,
+    params.refreshKey,
+    params.worktreeRoot,
+  ]);
+
+  return details;
+}
+
 function statusAction(status: WorktreeOtherChangeStatus): string {
   switch (status) {
     case "added":
@@ -246,6 +355,13 @@ export function EditsPanel(props: EditsPanelProps) {
     editedPaths,
     refreshKey: props.workingStateRefreshKey,
   });
+  const currentEditedFileDetails = useCurrentEditedFileDetails({
+    desktopApi: props.desktopApi,
+    enabled: view === "files",
+    groups: props.groups,
+    refreshKey: props.workingStateRefreshKey,
+    worktreeRoot: props.worktreeRoot,
+  });
   const hasOtherChanges = otherChanges.changes.length > 0;
 
   return (
@@ -295,6 +411,7 @@ export function EditsPanel(props: EditsPanelProps) {
             onOpenFile={props.onOpenFile}
             preferredEditor={props.preferredEditor}
             onScrollToTurn={props.onScrollToTurn}
+            flatDetailsOverride={currentEditedFileDetails}
             showSingleGroupHeader
           />
         ) : (

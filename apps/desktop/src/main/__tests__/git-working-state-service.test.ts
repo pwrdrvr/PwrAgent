@@ -282,6 +282,47 @@ describe("probeWorktreeWorkingState", () => {
       await rm(tmpRoot, { recursive: true, force: true });
     }
   });
+
+  it("expands collapsed untracked directories before computing dirty totals", async () => {
+    const tmpRoot = await mkdtemp(makeTempPrefix());
+    try {
+      const skillRoot = path.join(tmpRoot, ".codex", "skills", "diagnose-jvm-memory");
+      await mkdir(path.join(skillRoot, "agents"), { recursive: true });
+      await mkdir(path.join(skillRoot, "references"), { recursive: true });
+      await writeFile(path.join(skillRoot, "SKILL.md"), "one\ntwo\n", "utf8");
+      await writeFile(path.join(skillRoot, "agents", "openai.yaml"), "agent\n", "utf8");
+      await writeFile(
+        path.join(skillRoot, "references", "giphy-jvm-memory.md"),
+        "alpha\nbeta\ngamma\n",
+        "utf8",
+      );
+      const { runGit } = fakeGit((args) => {
+        if (args.includes("--numstat")) return "";
+        if (args.includes("status")) return "?? .codex/skills/\0";
+        if (args.includes("ls-files")) {
+          return [
+            ".codex/skills/diagnose-jvm-memory/SKILL.md",
+            ".codex/skills/diagnose-jvm-memory/agents/openai.yaml",
+            ".codex/skills/diagnose-jvm-memory/references/giphy-jvm-memory.md",
+          ].join("\0");
+        }
+        if (args[args.length - 1] === "remote") return "";
+        return undefined;
+      });
+
+      const state = await probeWorktreeWorkingState(tmpRoot, { runGit });
+
+      expect(state).toEqual({
+        dirtyFiles: 3,
+        dirtyAdditions: 6,
+        dirtyDeletions: 0,
+        untrackedFiles: 3,
+        unpushedCommits: 0,
+      });
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("GitWorkingStateService", () => {
