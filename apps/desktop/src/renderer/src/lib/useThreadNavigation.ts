@@ -150,6 +150,7 @@ function selectThreadWorkspace(
   directoryKind: NavigationDirectorySummary["kind"];
   directoryLabel: string;
   directoryPath?: string;
+  gitStatusSourcePath?: string;
   workMode: NavigationLaunchpadDraft["workMode"];
   branchName?: string;
 } {
@@ -171,6 +172,7 @@ function selectThreadWorkspace(
       directoryKind: repository ? "directory" : "workspace",
       directoryLabel: preferred?.label ?? thread.title,
       directoryPath: repository,
+      gitStatusSourcePath: worktree?.path ?? local?.path ?? repository,
       workMode: "worktree",
     };
   }
@@ -186,6 +188,10 @@ function selectThreadWorkspace(
         ? local?.label ?? thread.title
         : preferred?.label ?? thread.title,
     directoryPath: sameWorkspacePath,
+    gitStatusSourcePath:
+      mode === "local"
+        ? local?.path ?? sameWorkspacePath
+        : worktree?.path ?? local?.path ?? sameWorkspacePath,
     workMode: "local",
     ...(mode === "same-worktree" && namedBranch ? { branchName: namedBranch } : {}),
   };
@@ -205,11 +211,48 @@ function sortNavigationDirectories(
   return [...directories].sort(compareNavigationDirectoriesByLabel);
 }
 
+function findLaunchpadSourceDirectory(
+  directories: NavigationSnapshot["directories"],
+  launchpad: NavigationLaunchpadDraft,
+  sourcePath?: string,
+): NavigationSnapshot["directories"][number] | undefined {
+  const normalizedSourcePath = sourcePath?.trim();
+  if (normalizedSourcePath) {
+    const sourceDirectory = directories.find(
+      (directory) =>
+        directory.key !== launchpad.directoryKey &&
+        directory.path?.trim() === normalizedSourcePath,
+    );
+    if (sourceDirectory) {
+      return sourceDirectory;
+    }
+  }
+
+  const launchpadPath = launchpad.directoryPath?.trim();
+  if (!launchpadPath) {
+    return undefined;
+  }
+
+  return directories.find(
+    (directory) =>
+      directory.key !== launchpad.directoryKey &&
+      directory.path?.trim() === launchpadPath,
+  );
+}
+
 function upsertLaunchpadDirectory(
   directories: NavigationSnapshot["directories"],
   launchpad: NavigationLaunchpadDraft,
+  options?: {
+    gitStatusSourcePath?: string;
+  },
 ): NavigationSnapshot["directories"] {
   let foundDirectory = false;
+  const sourceDirectory = findLaunchpadSourceDirectory(
+    directories,
+    launchpad,
+    options?.gitStatusSourcePath,
+  );
   const nextDirectories = directories.map((directory) => {
     if (directory.key !== launchpad.directoryKey) {
       return directory;
@@ -221,6 +264,11 @@ function upsertLaunchpadDirectory(
       kind: launchpad.directoryKind,
       label: launchpad.directoryLabel,
       path: launchpad.directoryPath ?? directory.path,
+      ...(directory.gitStatus
+        ? {}
+        : sourceDirectory?.gitStatus
+          ? { gitStatus: sourceDirectory.gitStatus }
+          : {}),
       launchpad,
     };
   });
@@ -237,6 +285,9 @@ function upsertLaunchpadDirectory(
             path: launchpad.directoryPath,
             threadKeys: [],
             needsAttentionCount: 0,
+            ...(sourceDirectory?.gitStatus
+              ? { gitStatus: sourceDirectory.gitStatus }
+              : {}),
             launchpad,
           },
         ],
@@ -1617,7 +1668,10 @@ function applyThreadExecutionModeQueueCleared(
 function applyLaunchpadUpdate(
   snapshot: NavigationSnapshot | undefined,
   launchpad: NavigationLaunchpadDraft,
-  defaults: NavigationSnapshot["launchpadDefaults"]
+  defaults: NavigationSnapshot["launchpadDefaults"],
+  options?: {
+    gitStatusSourcePath?: string;
+  },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return {
@@ -1626,14 +1680,14 @@ function applyLaunchpadUpdate(
       unchanged: false,
       threads: [],
       inboxThreadKeys: [],
-      directories: upsertLaunchpadDirectory([], launchpad),
+      directories: upsertLaunchpadDirectory([], launchpad, options),
       launchpadDefaults: defaults,
     };
   }
 
   return {
     ...snapshot,
-    directories: upsertLaunchpadDirectory(snapshot.directories, launchpad),
+    directories: upsertLaunchpadDirectory(snapshot.directories, launchpad, options),
     launchpadDefaults: defaults,
   };
 }
@@ -3832,7 +3886,9 @@ export function useThreadNavigation(
         }));
         setState((current) => ({
           ...current,
-          response: applyLaunchpadUpdate(current.response, launchpad, defaults),
+          response: applyLaunchpadUpdate(current.response, launchpad, defaults, {
+            gitStatusSourcePath: directory.gitStatusSourcePath,
+          }),
         }));
         setSelectedItemKey(buildLaunchpadSelectionKey(directoryKey));
       } catch (error) {

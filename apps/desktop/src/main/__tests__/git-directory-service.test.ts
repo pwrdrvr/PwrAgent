@@ -322,6 +322,37 @@ describe("GitDirectoryService", () => {
     );
   });
 
+  it("reuses branch inventory across worktrees that share a common git directory", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const worktreePath = path.join(repoDir, ".worktrees", "release");
+    await mkdir(path.dirname(worktreePath), { recursive: true });
+    runGit(repoDir, ["worktree", "add", worktreePath, "release"]);
+    let forEachRefCalls = 0;
+    const runGitWithCounts = async (cwd: string, args: string[]) => {
+      if (args[0] === "for-each-ref") {
+        forEachRefCalls += 1;
+      }
+      return execFileSync("git", ["-C", cwd, ...args], {
+        encoding: "utf8",
+      }).trim();
+    };
+    const service = new GitDirectoryService({
+      cacheTtlMs: 60_000,
+      runGit: runGitWithCounts,
+    });
+
+    const primaryStatus = await service.readDirectoryStatus({ path: repoDir });
+    const worktreeStatus = await service.readDirectoryStatus({ path: worktreePath });
+
+    expect(primaryStatus?.currentBranch).toBe("main");
+    expect(worktreeStatus?.currentBranch).toBe("release");
+    expect(worktreeStatus?.branches).toEqual(primaryStatus?.branches);
+    // One local-branch scan and one local+remote base-branch scan total, not
+    // once per worktree path.
+    expect(forEachRefCalls).toBe(2);
+  });
+
   it("streams directory status lookups with bounded concurrency", async () => {
     const service = new GitDirectoryService({
       statusConcurrency: 2,
