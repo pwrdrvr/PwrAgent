@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.0-beta.45 - 2026-07-07
+
+- Agent Handoffs - Fixed delegated coding threads so handoff-created threads no longer appear as persona Agent threads, while explicit Agent flows and manually marked Agent threads keep their Agent marker.
+- Thread Navigation - Normalized existing handoff threads on read so accidental Agent badges from older handoff instructions disappear without clearing intentionally marked Agent metadata.
+- Worktree Branches - Improved grouped subthread branch pickers so they immediately show the full known branch inventory, reuse cached branch status across worktrees, and still keep per-worktree current branch and upstream state accurate.
+
 ## v1.0.0-beta.44 - 2026-07-07
 
 - Review Command - Fixed `/review` in multi-worktree threads so PwrAgent requires the intended project when ambiguous, runs the review from the selected workspace, and uses the thread-derived base branch instead of guessing `main` or `master`.
