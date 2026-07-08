@@ -100,6 +100,50 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
     reopenedDb.close();
   });
 
+  it("drops legacy auto-created handoff Agent metadata on read", async () => {
+    await store.setThreadAgent({
+      backend: "codex",
+      threadId: "child-thread",
+      agent: {
+        name: "Investigate issue XYZ",
+        instructions:
+          "Work only on the delegated task from the parent PwrAgent thread. Keep progress and results in this thread.",
+      },
+      now: 4_000,
+    });
+    await store.setThreadHandoffOrigin({
+      backend: "codex",
+      threadId: "child-thread",
+      handoffOrigin: {
+        sourceBackend: "codex",
+        sourceThreadId: "parent-thread",
+        taskTitle: "Investigate issue XYZ",
+        seedMode: "clean",
+        groupingMode: "none",
+        createdAt: 4_000,
+        workspace: {
+          mode: "same",
+          cwd: "/tmp/project",
+          git: {
+            kind: "git_local",
+            worktreeCreationAvailable: true,
+          },
+        },
+      },
+    });
+
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "child-thread",
+    });
+    expect(overlay).toMatchObject({
+      handoffOrigin: {
+        taskTitle: "Investigate issue XYZ",
+      },
+    });
+    expect(overlay).not.toHaveProperty("agent");
+  });
+
   it("rejects blank Agent names", async () => {
     await expect(
       store.setThreadAgent({

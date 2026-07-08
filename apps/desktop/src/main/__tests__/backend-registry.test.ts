@@ -15425,7 +15425,7 @@ command = "pnpm dev"
               id: "binding-child",
               backend: "codex",
               threadId: "thread-1",
-              targetKind: "agent_thread",
+              targetKind: "thread",
               displayName: "Investigate issue XYZ",
             },
             channel: "discord",
@@ -15558,7 +15558,7 @@ command = "pnpm dev"
           backend: "codex",
           threadId: "thread-1",
           placement: "new_child",
-          targetKind: "agent_thread",
+          targetKind: "thread",
           title: "Investigate issue XYZ",
         },
       },
@@ -15597,15 +15597,12 @@ command = "pnpm dev"
     expect(prompt).toContain("- CWD: ");
     expect(prompt).toContain("Additional context from parent:");
     expect(prompt).toContain("Parent already checked the latest CI run.");
-    await expect(
-      overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: "thread-1",
-      }),
-    ).resolves.toMatchObject({
-      agent: {
-        name: "Investigate issue XYZ",
-      },
+    const childOverlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(childOverlay?.agent).toBeUndefined();
+    expect(childOverlay).toMatchObject({
       handoffOrigin: {
         sourceBackend: "codex",
         sourceThreadId: "ordinary-thread",

@@ -273,6 +273,8 @@ function normalizeLaunchpadDefaults(
 
 const NAVIGATION_BROWSE_MODE_META_KEY = "navigation_browse_mode";
 const DEFAULT_NAVIGATION_BROWSE_MODE: NavigationBrowseMode = "inbox";
+const LEGACY_HANDOFF_AGENT_INSTRUCTIONS =
+  "Work only on the delegated task from the parent PwrAgent thread. Keep progress and results in this thread.";
 
 export function normalizeNavigationBrowseMode(
   value: unknown,
@@ -2075,7 +2077,7 @@ export class SqliteOverlayStore {
     const row = this.stateDb.raw
       .prepare("SELECT payload FROM threads WHERE thread_id = ?")
       .get(threadKey) as { payload: string } | undefined;
-    return row ? JSON.parse(row.payload) : undefined;
+    return row ? normalizeThreadOverlayState(JSON.parse(row.payload)) : undefined;
   }
 
   /**
@@ -2428,6 +2430,23 @@ function normalizeThreadAgent(
       instructionLineCount > AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
     updatedAt: now,
   };
+}
+
+function normalizeThreadOverlayState(
+  state: ThreadOverlayState,
+): ThreadOverlayState {
+  if (
+    state.agent?.instructions === LEGACY_HANDOFF_AGENT_INSTRUCTIONS &&
+    state.handoffOrigin &&
+    (
+      !state.handoffOrigin.taskTitle ||
+      state.agent.name === state.handoffOrigin.taskTitle
+    )
+  ) {
+    const { agent: _legacyHandoffAgent, ...withoutAgent } = state;
+    return withoutAgent;
+  }
+  return state;
 }
 
 type ThreadUsageLineRow = {

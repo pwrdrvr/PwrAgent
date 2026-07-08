@@ -52,7 +52,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
   /**
    * Optional Agent/persona marker. When present, this thread is intended
-   * to act as a personal Agent surface that automations can attach to.
+   * to act as a personal Agent surface.
    */
   agent?: ThreadAgentMetadata;
   /** User-curated position in the pinned section. Lower ranks sort first. */
