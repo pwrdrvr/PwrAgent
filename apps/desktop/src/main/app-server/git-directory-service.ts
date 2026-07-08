@@ -82,6 +82,21 @@ async function readGitRoot(
   }
 }
 
+async function readGitCommonDir(params: {
+  repoRoot: string;
+  runGit: GitCommandRunner;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string> {
+  const commonDir = await params
+    .runGit(params.repoRoot, ["rev-parse", "--git-common-dir"], params.env)
+    .catch(() => "");
+  const trimmed = commonDir.trim();
+  if (!trimmed) {
+    return path.resolve(params.repoRoot, ".git");
+  }
+  return path.resolve(params.repoRoot, trimmed);
+}
+
 export async function recordCodexWorktreeOwnerThread(params: {
   worktreePath: string;
   threadId: string;
@@ -584,6 +599,19 @@ type CachedDirectoryStatus = {
   status?: NavigationDirectoryGitStatus;
 };
 
+type BranchInventory = {
+  branchesOutput: string;
+  baseBranchesOutput: string;
+  remoteHead: string;
+  worktreeList: string;
+};
+
+type CachedBranchInventory = {
+  expiresAt: number;
+  inFlight?: Promise<BranchInventory>;
+  inventory?: BranchInventory;
+};
+
 export type DirectoryGitStatusEntry = {
   directoryKey: string;
   gitStatus?: NavigationDirectoryGitStatus;
@@ -604,6 +632,8 @@ type GitDirectoryServiceOptions = {
 
 export class GitDirectoryService {
   private readonly statusCache = new Map<string, CachedDirectoryStatus>();
+  private readonly branchInventoryCache = new Map<string, CachedBranchInventory>();
+  private readonly commonGitDirByCwd = new Map<string, string>();
   private readonly cacheTtlMs: number;
   private readonly statusConcurrency: number;
   private readonly statusMaxUnread: number;
@@ -711,6 +741,11 @@ export class GitDirectoryService {
     }
 
     this.statusCache.delete(normalizedPath);
+    const commonGitDir = this.commonGitDirByCwd.get(normalizedPath);
+    if (commonGitDir) {
+      this.branchInventoryCache.delete(commonGitDir);
+      this.commonGitDirByCwd.delete(normalizedPath);
+    }
   }
 
   private async loadDirectoryStatus(
@@ -723,46 +758,22 @@ export class GitDirectoryService {
       return undefined;
     }
 
+    const commonGitDir = await readGitCommonDir({
+      repoRoot,
+      runGit,
+      env: gitEnv,
+    });
+    this.commonGitDirByCwd.set(cwd, commonGitDir);
+
     const [
       rawCurrentBranch,
-      branchesOutput,
-      baseBranchesOutput,
-      remoteHead,
-      worktreeList,
+      branchInventory,
       recentCommitsOutput,
     ] = await Promise.all([
         runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
           () => "",
         ),
-        runGit(
-          repoRoot,
-          [
-            "for-each-ref",
-            "refs/heads",
-            "--sort=-committerdate",
-            "--format=%(refname:short)%09%(committerdate:unix)",
-          ],
-          gitEnv,
-        ).catch(() => ""),
-        runGit(
-          repoRoot,
-          [
-            "for-each-ref",
-            "refs/heads",
-            "refs/remotes",
-            "--sort=-committerdate",
-            "--format=%(refname)%09%(refname:short)%09%(committerdate:unix)%09%(symref)",
-          ],
-          gitEnv,
-        ).catch(() => ""),
-        runGit(
-          repoRoot,
-          ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
-          gitEnv,
-        ).catch(() => ""),
-        runGit(repoRoot, ["worktree", "list", "--porcelain"], gitEnv).catch(
-          () => "",
-        ),
+        this.readBranchInventory({ commonGitDir, repoRoot }),
         runGit(
           repoRoot,
           [
@@ -785,8 +796,12 @@ export class GitDirectoryService {
       ],
       gitEnv,
     ).catch(() => "");
-    const parsedBranchDetailsAll = parseGitBranchDetails(branchesOutput);
-    const parsedBaseBranchDetailsAll = parseGitBaseBranchDetails(baseBranchesOutput);
+    const parsedBranchDetailsAll = parseGitBranchDetails(
+      branchInventory.branchesOutput,
+    );
+    const parsedBaseBranchDetailsAll = parseGitBaseBranchDetails(
+      branchInventory.baseBranchesOutput,
+    );
     const recentCommits = parseGitCommitSummaries(recentCommitsOutput).slice(
       0,
       MAX_TRACKED_COMMITS,
@@ -795,20 +810,20 @@ export class GitDirectoryService {
     // `main` is still found, then cap everything we hold/persist downstream.
     const defaultBranch = resolveDefaultBranch({
       branches: parsedBranchDetailsAll.map((detail) => detail.name),
-      remoteHead,
+      remoteHead: branchInventory.remoteHead,
     });
     const parsedBranchDetails = capRecentBranchDetails(parsedBranchDetailsAll, {
       keep: [currentBranch, defaultBranch],
       limit: MAX_TRACKED_BRANCHES,
     });
     const parsedBaseBranchDetails = capRecentBranchDetails(parsedBaseBranchDetailsAll, {
-      keep: [currentBranch, defaultBranch, remoteHead.trim()],
+      keep: [currentBranch, defaultBranch, branchInventory.remoteHead.trim()],
       limit: MAX_TRACKED_BRANCHES,
     });
     const branches = parsedBranchDetails.map((detail) => detail.name);
     const baseBranches = parsedBaseBranchDetails.map((detail) => detail.name);
     const worktreeBranchNames = new Set(
-      parseGitWorktreeEntries(worktreeList)
+      parseGitWorktreeEntries(branchInventory.worktreeList)
         .map((entry) => entry.branch)
         .filter((branch): branch is string => Boolean(branch)),
     );
@@ -841,7 +856,7 @@ export class GitDirectoryService {
       branches,
       currentBranch,
       defaultBranch,
-      worktreeList,
+      worktreeList: branchInventory.worktreeList,
     });
 
     if (!upstreamBranch) {
@@ -890,6 +905,84 @@ export class GitDirectoryService {
       recentCommits,
       handoffBranches,
       syncState,
+    };
+  }
+
+  private async readBranchInventory(params: {
+    commonGitDir: string;
+    repoRoot: string;
+  }): Promise<BranchInventory> {
+    const cached = this.branchInventoryCache.get(params.commonGitDir);
+    const now = Date.now();
+    if (cached?.inFlight) {
+      return await cached.inFlight;
+    }
+
+    if (cached?.inventory && cached.expiresAt > now) {
+      return cached.inventory;
+    }
+
+    const inFlight = this.loadBranchInventory(params.repoRoot).then((inventory) => {
+      this.branchInventoryCache.set(params.commonGitDir, {
+        expiresAt: Date.now() + this.cacheTtlMs,
+        inventory,
+      });
+      return inventory;
+    });
+    this.branchInventoryCache.set(params.commonGitDir, {
+      expiresAt: cached?.expiresAt ?? 0,
+      inFlight,
+      inventory: cached?.inventory,
+    });
+
+    return await inFlight;
+  }
+
+  private async loadBranchInventory(repoRoot: string): Promise<BranchInventory> {
+    const runGit = this.runGitCommand;
+    const gitEnv = this.gitEnv;
+    const [
+      branchesOutput,
+      baseBranchesOutput,
+      remoteHead,
+      worktreeList,
+    ] = await Promise.all([
+      runGit(
+        repoRoot,
+        [
+          "for-each-ref",
+          "refs/heads",
+          "--sort=-committerdate",
+          "--format=%(refname:short)%09%(committerdate:unix)",
+        ],
+        gitEnv,
+      ).catch(() => ""),
+      runGit(
+        repoRoot,
+        [
+          "for-each-ref",
+          "refs/heads",
+          "refs/remotes",
+          "--sort=-committerdate",
+          "--format=%(refname)%09%(refname:short)%09%(committerdate:unix)%09%(symref)",
+        ],
+        gitEnv,
+      ).catch(() => ""),
+      runGit(
+        repoRoot,
+        ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
+        gitEnv,
+      ).catch(() => ""),
+      runGit(repoRoot, ["worktree", "list", "--porcelain"], gitEnv).catch(
+        () => "",
+      ),
+    ]);
+
+    return {
+      branchesOutput,
+      baseBranchesOutput,
+      remoteHead,
+      worktreeList,
     };
   }
 

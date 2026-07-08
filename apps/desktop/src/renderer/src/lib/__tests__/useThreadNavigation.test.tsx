@@ -4694,6 +4694,134 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("inherits repo git status for new-worktree sub-thread branch pickers", async () => {
+    const repoPath = "/repo/app";
+    const parentWorktreePath = "/repo/app/.worktrees/parent/app";
+    const parentThread = {
+      id: "thread-parent",
+      title: "Worktree parent",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [
+        {
+          id: parentWorktreePath,
+          label: "app",
+          path: repoPath,
+          worktreePath: parentWorktreePath,
+          kind: "worktree" as const,
+        },
+      ],
+      gitBranch: "feature/parent",
+      observedGitBranch: "feature/parent",
+      inbox: {
+        inInbox: true,
+        reason: "new-thread" as const,
+      },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey: "subthread:codex:thread-parent:new-worktree",
+        directoryKind: "directory" as const,
+        directoryLabel: "app",
+        directoryPath: parentWorktreePath,
+        workMode: "local" as const,
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const updateDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey: "subthread:codex:thread-parent:new-worktree",
+        directoryKind: "directory" as const,
+        directoryLabel: "app",
+        directoryPath: parentWorktreePath,
+        workMode: "worktree" as const,
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        branchName: "feature/parent",
+        parentThreadId: "thread-parent",
+        parentThreadTitle: "Worktree parent",
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const gitStatus = {
+      currentBranch: "feature/parent",
+      defaultBranch: "develop",
+      branches: ["feature/parent", "develop", "release"],
+      baseBranches: [
+        "feature/parent",
+        "develop",
+        "origin/develop",
+        "release",
+      ],
+      syncState: "untracked" as const,
+    };
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-parent"],
+      threads: [parentThread],
+      directories: [
+        {
+          key: `directory:${repoPath}`,
+          kind: "directory" as const,
+          label: "app",
+          path: repoPath,
+          threadKeys: ["codex:thread-parent"],
+          needsAttentionCount: 0,
+          gitStatus,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      updateDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-parent");
+    });
+
+    await act(async () => {
+      await result.current.createSubthread(parentThread, "new-worktree");
+    });
+
+    expect(result.current.selectedDirectory?.key).toBe(
+      "subthread:codex:thread-parent:new-worktree",
+    );
+    expect(result.current.selectedDirectory?.gitStatus).toMatchObject({
+      currentBranch: "feature/parent",
+      defaultBranch: "develop",
+      baseBranches: expect.arrayContaining(["develop", "origin/develop"]),
+    });
+    expect(result.current.selectedDirectory?.threadKeys).toEqual([]);
+  });
+
   it("opens same-worktree sub-thread launchpads on the parent worktree branch", async () => {
     const parentThread = {
       id: "thread-parent",
