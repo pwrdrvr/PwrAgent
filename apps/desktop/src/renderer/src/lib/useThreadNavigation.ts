@@ -4476,10 +4476,16 @@ export function useThreadNavigation(
         delete next[directoryKey];
         return next;
       });
-      setOptimisticThread(optimisticMaterializedThread);
       const shouldSelectMaterializedThread =
         selectionKeyAtMaterializationStart !== launchpadSelectionKey ||
         selectedItemKeyRef.current === launchpadSelectionKey;
+      const shouldProjectOptimisticThread =
+        shouldSelectMaterializedThread || !optimisticThreadRef.current;
+      setOptimisticThread((current) =>
+        shouldSelectMaterializedThread || !current
+          ? optimisticMaterializedThread
+          : current
+      );
       if (shouldSelectMaterializedThread) {
         setSelectedItemKey(nextThreadKey);
         setPendingSeenThreadKey(nextThreadKey);
@@ -4500,7 +4506,7 @@ export function useThreadNavigation(
       try {
         await refresh(
           shouldSelectMaterializedThread ? nextThreadKey : undefined,
-          optimisticMaterializedThread,
+          shouldProjectOptimisticThread ? optimisticMaterializedThread : undefined,
         );
       } catch (error) {
         setLaunchpadError(error instanceof Error ? error.message : String(error));

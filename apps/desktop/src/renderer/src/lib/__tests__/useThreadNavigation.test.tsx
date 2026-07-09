@@ -3138,6 +3138,170 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.id).toBe("thread-stay-put");
   });
 
+  it("does not let an older launchpad completion replace a newer optimistic selection", async () => {
+    const firstDirectoryKey = "directory:/Users/huntharo/github/PwrAgent";
+    const secondDirectoryKey = "directory:/Users/huntharo/github/OtherApp";
+    const defaults: NavigationLaunchpadDefaults = {
+      backend: "codex",
+      executionMode: "default",
+    };
+    const firstMaterialize = createDeferred<{
+      backend: "codex";
+      threadId: string;
+      executionMode: "default";
+      workMode: "worktree";
+    }>();
+    const secondMaterialize = createDeferred<{
+      backend: "codex";
+      threadId: string;
+      executionMode: "default";
+      workMode: "worktree";
+    }>();
+    const launchpadsByDirectory = new Map<string, NavigationLaunchpadDraft>(
+      [firstDirectoryKey, secondDirectoryKey].map((directoryKey) => [
+        directoryKey,
+        {
+          directoryKey,
+          directoryKind: "directory",
+          directoryLabel: directoryKey === firstDirectoryKey ? "PwrAgent" : "OtherApp",
+          directoryPath:
+            directoryKey === firstDirectoryKey
+              ? "/Users/huntharo/github/PwrAgent"
+              : "/Users/huntharo/github/OtherApp",
+          backend: "codex",
+          executionMode: "default",
+          prompt:
+            directoryKey === firstDirectoryKey
+              ? "Start the older pending launchpad"
+              : "Start the newer optimistic launchpad",
+          workMode: "worktree",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ])
+    );
+    const initialSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: firstDirectoryKey,
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+        {
+          key: secondDirectoryKey,
+          kind: "directory",
+          label: "OtherApp",
+          path: "/Users/huntharo/github/OtherApp",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: defaults,
+    };
+    const getNavigationSnapshot = vi.fn(async () => initialSnapshot);
+    const ensureDirectoryLaunchpad = vi.fn(
+      async ({ directoryKey }: { directoryKey: string }) => ({
+        launchpad: launchpadsByDirectory.get(directoryKey)!,
+        defaults,
+      })
+    );
+    const materializeDirectoryLaunchpad = vi.fn(
+      async ({ directoryKey }: { directoryKey: string }) =>
+        await (directoryKey === firstDirectoryKey
+          ? firstMaterialize.promise
+          : secondMaterialize.promise)
+    );
+
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.directories).toHaveLength(2);
+    });
+
+    await act(async () => {
+      await result.current.openDirectoryLaunchpad(
+        result.current.directories.find(
+          (directory) => directory.key === firstDirectoryKey,
+        )!,
+      );
+    });
+
+    let firstMaterializePromise: Promise<void> | undefined;
+    act(() => {
+      firstMaterializePromise =
+        result.current.materializeDirectoryLaunchpad(firstDirectoryKey);
+    });
+
+    await waitFor(() => {
+      expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+        directoryKey: firstDirectoryKey,
+        launchpad: expect.objectContaining({
+          directoryKey: firstDirectoryKey,
+        }),
+        input: undefined,
+        collaborationMode: undefined,
+        reviewTarget: undefined,
+      });
+    });
+
+    await act(async () => {
+      await result.current.openDirectoryLaunchpad(
+        result.current.directories.find(
+          (directory) => directory.key === secondDirectoryKey,
+        )!,
+      );
+    });
+
+    let secondMaterializePromise: Promise<void> | undefined;
+    act(() => {
+      secondMaterializePromise =
+        result.current.materializeDirectoryLaunchpad(secondDirectoryKey);
+    });
+
+    await act(async () => {
+      secondMaterialize.resolve({
+        backend: "codex",
+        threadId: "thread-newer",
+        executionMode: "default",
+        workMode: "worktree",
+      });
+      await secondMaterializePromise;
+    });
+
+    expect(result.current.selectedThread?.id).toBe("thread-newer");
+
+    await act(async () => {
+      firstMaterialize.resolve({
+        backend: "codex",
+        threadId: "thread-older",
+        executionMode: "default",
+        workMode: "worktree",
+      });
+      await firstMaterializePromise;
+    });
+
+    expect(result.current.selectedThread?.id).toBe("thread-newer");
+    expect(result.current.threads.map((thread) => thread.id)).toContain(
+      "thread-newer"
+    );
+  });
+
   it("does not keep a directory launchpad selected when a thread in that directory is selected", async () => {
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
