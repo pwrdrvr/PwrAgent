@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from "electron";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
+import { getIntegratedTerminalQuitSnapshot } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import {
@@ -24,15 +25,23 @@ export type RequestQuitOptions = {
   source: QuitRequestSource;
 };
 
+export type QuitBlockerSnapshot = {
+  count: number;
+  terminalSessionCount: number;
+  terminalThreadKeys: string[];
+  threadIds: string[];
+};
+
 export type QuitManagerDependencies = {
   confirm?: (params: {
     countdownSeconds: number;
     inProgressThreadCount: number;
+    terminalSessionCount: number;
     parent?: BrowserWindow | null;
   }) => Promise<QuitConfirmationDialogResult>;
   getConfirmationEnabled: () => boolean;
   getFocusedWindow?: () => BrowserWindow | null;
-  getInProgressThreads: () => { count: number; threadIds: string[] };
+  getQuitBlockers: () => QuitBlockerSnapshot;
   log: {
     info?: (message: string, meta?: Record<string, unknown>) => void;
     warn?: (message: string, meta?: Record<string, unknown>) => void;
@@ -59,9 +68,9 @@ export function createQuitManager(
       return true;
     }
 
-    const snapshot = dependencies.getInProgressThreads();
+    const snapshot = dependencies.getQuitBlockers();
     if (snapshot.count <= 0) {
-      dependencies.log.info?.("quit requested with no in-progress threads", {
+      dependencies.log.info?.("quit requested with no active work", {
         source: options.source,
       });
       quitAllowed = true;
@@ -71,10 +80,12 @@ export function createQuitManager(
 
     if (!dependencies.getConfirmationEnabled()) {
       dependencies.log.warn?.(
-        "quit requested with in-progress threads; confirmation disabled",
+        "quit requested with active work; confirmation disabled",
         {
           count: snapshot.count,
           source: options.source,
+          terminalSessionCount: snapshot.terminalSessionCount,
+          terminalThreadKeys: snapshot.terminalThreadKeys,
           threadIds: snapshot.threadIds,
         },
       );
@@ -90,9 +101,11 @@ export function createQuitManager(
       return await promptPromise;
     }
 
-    dependencies.log.warn?.("quit requested with in-progress threads", {
+    dependencies.log.warn?.("quit requested with active work", {
       count: snapshot.count,
       source: options.source,
+      terminalSessionCount: snapshot.terminalSessionCount,
+      terminalThreadKeys: snapshot.terminalThreadKeys,
       threadIds: snapshot.threadIds,
     });
 
@@ -100,13 +113,16 @@ export function createQuitManager(
     promptPromise = (async () => {
       const resolution = await (dependencies.confirm ?? showQuitConfirmationDialog)({
         countdownSeconds: QUIT_CONFIRMATION_COUNTDOWN_SECONDS,
-        inProgressThreadCount: snapshot.count,
+        inProgressThreadCount: snapshot.threadIds.length,
+        terminalSessionCount: snapshot.terminalSessionCount,
         parent: dependencies.getFocusedWindow?.(),
       });
       dependencies.log.warn?.("quit confirmation resolved", {
         count: snapshot.count,
         resolution,
         source: options.source,
+        terminalSessionCount: snapshot.terminalSessionCount,
+        terminalThreadKeys: snapshot.terminalThreadKeys,
         threadIds: snapshot.threadIds,
       });
       if (resolution === "manual-cancel") {
@@ -133,14 +149,37 @@ export function createQuitManager(
   };
 }
 
+export function buildQuitBlockerSnapshot(params: {
+  inProgressThreads: {
+    count: number;
+    threadIds: string[];
+  };
+  terminalSessions: {
+    count: number;
+    threadKeys: string[];
+  };
+}): QuitBlockerSnapshot {
+  const threadIds = [...params.inProgressThreads.threadIds].sort();
+  return {
+    count: threadIds.length + params.terminalSessions.count,
+    terminalSessionCount: params.terminalSessions.count,
+    terminalThreadKeys: [...params.terminalSessions.threadKeys].sort(),
+    threadIds,
+  };
+}
+
 const quitLog = getMainLogger("pwragent:quit");
 
 export const appQuitManager = createQuitManager({
   getConfirmationEnabled: () =>
     getDesktopSettingsService().resolveConfirmQuitWithInProgressThreads(),
   getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
-  getInProgressThreads: () =>
-    getDesktopBackendRegistry().getInProgressThreadSnapshotForQuit(),
+  getQuitBlockers: () =>
+    buildQuitBlockerSnapshot({
+      inProgressThreads:
+        getDesktopBackendRegistry().getInProgressThreadSnapshotForQuit(),
+      terminalSessions: getIntegratedTerminalQuitSnapshot(),
+    }),
   log: quitLog,
   performQuit: () => {
     app.quit();

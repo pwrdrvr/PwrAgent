@@ -15,6 +15,14 @@ vi.mock("../app-server/backend-registry", () => ({
   })),
 }));
 
+vi.mock("../ipc/integrated-terminal", () => ({
+  getIntegratedTerminalQuitSnapshot: vi.fn(() => ({
+    count: 0,
+    sessionIds: [],
+    threadKeys: [],
+  })),
+}));
+
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: vi.fn(() => ({
     resolveConfirmQuitWithInProgressThreads: () => true,
@@ -36,7 +44,12 @@ describe("createQuitManager", () => {
     const manager = createQuitManager({
       confirm,
       getConfirmationEnabled: () => true,
-      getInProgressThreads: () => ({ count: 0, threadIds: [] }),
+      getQuitBlockers: () => ({
+        count: 0,
+        terminalSessionCount: 0,
+        terminalThreadKeys: [],
+        threadIds: [],
+      }),
       log: {},
       performQuit,
     });
@@ -55,8 +68,10 @@ describe("createQuitManager", () => {
     const manager = createQuitManager({
       confirm,
       getConfirmationEnabled: () => true,
-      getInProgressThreads: () => ({
+      getQuitBlockers: () => ({
         count: 2,
+        terminalSessionCount: 0,
+        terminalThreadKeys: [],
         threadIds: ["acp:grok:thread-2", "codex:thread-1"],
       }),
       log: { warn },
@@ -71,12 +86,52 @@ describe("createQuitManager", () => {
       expect.objectContaining({
         countdownSeconds: 10,
         inProgressThreadCount: 2,
+        terminalSessionCount: 0,
       }),
     );
     expect(performQuit).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      "quit requested with in-progress threads",
+      "quit requested with active work",
       expect.objectContaining({ count: 2 }),
+    );
+  });
+
+  it("shows confirmation when integrated terminals are running", async () => {
+    const { createQuitManager } = await import("../quit-manager");
+    const performQuit = vi.fn();
+    const warn = vi.fn();
+    const confirm = vi.fn(async () => "manual-confirm" as const);
+    const manager = createQuitManager({
+      confirm,
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () => ({
+        count: 1,
+        terminalSessionCount: 1,
+        terminalThreadKeys: ["codex:thread-terminal"],
+        threadIds: [],
+      }),
+      log: { warn },
+      performQuit,
+    });
+
+    await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(true);
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        countdownSeconds: 10,
+        inProgressThreadCount: 0,
+        terminalSessionCount: 1,
+      }),
+    );
+    expect(performQuit).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "quit requested with active work",
+      expect.objectContaining({
+        count: 1,
+        terminalSessionCount: 1,
+        terminalThreadKeys: ["codex:thread-terminal"],
+        threadIds: [],
+      }),
     );
   });
 
@@ -87,8 +142,10 @@ describe("createQuitManager", () => {
     const manager = createQuitManager({
       confirm,
       getConfirmationEnabled: () => true,
-      getInProgressThreads: () => ({
+      getQuitBlockers: () => ({
         count: 1,
+        terminalSessionCount: 0,
+        terminalThreadKeys: [],
         threadIds: ["codex:thread-1"],
       }),
       log: {},
@@ -114,8 +171,10 @@ describe("createQuitManager", () => {
     const manager = createQuitManager({
       confirm,
       getConfirmationEnabled: () => true,
-      getInProgressThreads: () => ({
+      getQuitBlockers: () => ({
         count: 1,
+        terminalSessionCount: 0,
+        terminalThreadKeys: [],
         threadIds: ["codex:thread-1"],
       }),
       log: {},
@@ -143,8 +202,10 @@ describe("createQuitManager", () => {
     const manager = createQuitManager({
       confirm,
       getConfirmationEnabled: () => false,
-      getInProgressThreads: () => ({
+      getQuitBlockers: () => ({
         count: 1,
+        terminalSessionCount: 0,
+        terminalThreadKeys: [],
         threadIds: ["codex:thread-1"],
       }),
       log: {},
