@@ -2637,6 +2637,7 @@ export function ThreadView(props: ThreadViewProps) {
             composerImplementation={props.composerImplementation}
             draftStore={props.composerDraftStore}
             directory={props.selectedDirectory}
+            directories={props.directories}
             disabled={props.composerDisabled}
             unavailableReason={selectedThreadBackend?.unavailableReason}
             contextWindow={props.contextWindow}
