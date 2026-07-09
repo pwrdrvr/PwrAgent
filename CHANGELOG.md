@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0-beta.46 - 2026-07-09
+
+- Linked Projects - Fixed attached managed worktrees so their observed branch stays scoped to the linked directory instead of overwriting the thread-wide branch, preventing false branch drift and stale branch chips.
+- Pull Request Discovery - Updated post-turn PR refresh to use branch/path context per linked workspace, so secondary attached worktrees can attach matching PRs without corrupting primary workspace metadata.
+- Review Command - Fixed the `/review` project picker so switching projects refreshes the base branch list, default branch, commit suggestions, and review working directory for the selected workspace.
+- Launchpad - Preserved the operator's current thread selection while a directory launchpad is still materializing, so late setup completion no longer yanks focus back to the newly created thread.
+- Worktree Branch Picker - Fixed grouped new-worktree subthreads so branch pickers keep the full branch inventory when git status arrives before the synthetic launchpad row exists.
+
 ## v1.0.0-beta.45 - 2026-07-07
 
 - Agent Handoffs - Fixed delegated coding threads so handoff-created threads no longer appear as persona Agent threads, while explicit Agent flows and manually marked Agent threads keep their Agent marker.
