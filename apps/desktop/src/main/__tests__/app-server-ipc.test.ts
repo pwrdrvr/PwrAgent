@@ -4023,6 +4023,73 @@ describe("app server ipc", () => {
     });
   });
 
+  it("refreshes post-turn pull requests for a scoped linked worktree branch", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/primary",
+        linkedDirectories: [
+          {
+            id: "directory:/repo/primary",
+            label: "primary",
+            path: "/repo/primary",
+            kind: "local",
+          },
+          {
+            id: "directory:/repo/kube-manifests",
+            label: "kube-manifests",
+            path: "/repo/kube-manifests",
+            kind: "worktree",
+            worktreePath: "/worktrees/kube-manifests",
+            gitBranch: "fix/channelsv2-live-pods",
+          },
+        ],
+        gitBranch: "main",
+        observedGitBranch: "main",
+        updatedAt: 2000,
+      },
+    ] as never);
+    detectPullRequestsForThread.mockResolvedValue([]);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
+    });
+    detectPullRequestsForThread.mockClear();
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "t1",
+          turn: { id: "t1", status: "completed" },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+        fetcher: expect.any(Object),
+        branch: "main",
+        directoryPaths: ["/repo/primary"],
+      });
+      expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+        fetcher: expect.any(Object),
+        branch: "fix/channelsv2-live-pods",
+        directoryPaths: ["/worktrees/kube-manifests"],
+      });
+    });
+  });
+
   it("ignores a completed non-git command for working-state refresh", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");

@@ -36,7 +36,6 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
   const [detachingDirectoryId, setDetachingDirectoryId] = useState<string>();
   const directories = dedupeLinkedProjectDirectories(props.thread.linkedDirectories);
   const prs = props.thread.prs ?? [];
-  const branch = props.thread.gitBranch;
   const canAttachDirectory = Boolean(
     props.desktopApi?.pickDirectoryFromDisk && props.desktopApi.attachDirectoryToThread,
   );
@@ -120,6 +119,7 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
         <ul className="context-list linked-projects-list">
           {directories.map((directory, index) => {
             const worktreePath = directory.worktreePath ?? directory.path;
+            const branch = directory.gitBranch ?? props.thread.gitBranch;
             const canDetachDirectory = Boolean(
               props.desktopApi?.detachDirectoryFromThread
                 && directories.length > 1
