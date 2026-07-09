@@ -897,18 +897,128 @@ describe("settings ipc", () => {
 
       expect(
         localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
-      ).toHaveBeenCalledWith({
-        preferences: {
-          grok: { overridePath: "/opt/pwragent/bin/grok" },
-          qwen: { overridePath: "/opt/pwragent/bin/qwen" },
-        },
-      });
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enabledRegistryIds: ["gemini", "grok", "kimi", "qwen"],
+          preferences: {
+            grok: { overridePath: "/opt/pwragent/bin/grok" },
+            qwen: { overridePath: "/opt/pwragent/bin/qwen" },
+          },
+        }),
+      );
     } finally {
       disposeAppState();
     }
     // Dynamic `import()` of the main app-state graph + IPC discovery round-trip
     // runs right at the 5s default under CI load; give it headroom so the slow
     // setup doesn't flake the suite.
+  }, 20_000);
+
+  it("skips local discovery and runtime probes for disabled ACP agents", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const profileConfigPath = path.join(
+      tempRoot,
+      "profiles",
+      "default",
+      "config.toml",
+    );
+    fs.mkdirSync(path.dirname(profileConfigPath), { recursive: true });
+    fs.writeFileSync(
+      profileConfigPath,
+      [
+        "[acp_agents.gemini]",
+        "enabled = false",
+        "",
+        "[acp_agents.kimi]",
+        "cli_path = \"/opt/pwragent/bin/kimi\"",
+        "",
+      ].join("\n"),
+    );
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockImplementation(
+      async () => [],
+    );
+    const { initializeAppState, disposeAppState, getAppStateDb } = await import(
+      "../state/app-state"
+    );
+    const { AcpAgentStore } = await import("../acp/acp-agent-store");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState();
+    try {
+      new AcpAgentStore(getAppStateDb()).upsertInstalledAgent({
+        backendId: "acp:gemini",
+        registryId: "gemini",
+        name: "Gemini CLI",
+        version: "0.42.0",
+        distributionKind: "local",
+        distributionSource: "gemini --acp --skip-trust",
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-gemini-cli",
+        installedAt: 1234,
+        updatedAt: 1234,
+        launchDescriptor: {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          distributionKind: "local",
+          command: "gemini",
+          args: ["--acp", "--skip-trust"],
+          env: {},
+        },
+      });
+      registerSettingsIpcHandlers(service);
+
+      const refreshed = (await handlers
+        .get(ACP_AGENTS_LIST_CHANNEL)
+        ?.({}, { refresh: true, force: true })) as
+        | { entries?: Array<{ registryId: string; installed: boolean }> }
+        | undefined;
+
+      expect(
+        localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enabledRegistryIds: ["grok", "kimi", "qwen"],
+          preferences: {
+            kimi: { overridePath: "/opt/pwragent/bin/kimi" },
+          },
+        }),
+      );
+      expect(
+        localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
+      ).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          preferences: expect.objectContaining({
+            gemini: expect.anything(),
+          }),
+        }),
+      );
+      expect(
+        acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities,
+      ).not.toHaveBeenCalled();
+      expect(refreshed?.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            registryId: "gemini",
+            installed: true,
+          }),
+        ]),
+      );
+    } finally {
+      disposeAppState();
+    }
   }, 20_000);
 
   it("reuses cached ACP capabilities across refreshes and re-probes only when forced", async () => {
