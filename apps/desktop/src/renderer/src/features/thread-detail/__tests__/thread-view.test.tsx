@@ -11,6 +11,7 @@ import type {
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
+  StartReviewRequest,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { PendingMcpInteractionState } from "../mcp-elicitation";
@@ -357,6 +358,141 @@ describe("ThreadView", () => {
     expect(screen.getByRole("tab", { name: "Provider status" })).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("passes directory summaries to the thread review composer for project switching", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const giphyDirectory: NavigationDirectorySummary = {
+      key: "directory:/Users/huntharo/GIPHY/giphy-services",
+      kind: "directory",
+      label: "giphy-services",
+      path: "/Users/huntharo/GIPHY/giphy-services",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "fix-channels-tagged-magic-tags-table",
+        defaultBranch: "main",
+        branches: ["fix-channels-tagged-magic-tags-table", "main"],
+        baseBranches: [
+          "origin/main",
+          "main",
+          "fix-channels-tagged-magic-tags-table",
+        ],
+        syncState: "untracked",
+      },
+    };
+    const kubeDirectory: NavigationDirectorySummary = {
+      key: "directory:/Users/huntharo/infra/kube-manifests",
+      kind: "directory",
+      label: "kube-manifests",
+      path: "/Users/huntharo/infra/kube-manifests",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "deploy/search-grpc",
+        defaultBranch: "develop",
+        branches: ["deploy/search-grpc", "develop"],
+        baseBranches: [
+          "origin/develop",
+          "develop",
+          "deploy/search-grpc",
+        ],
+        syncState: "untracked",
+      },
+    };
+
+    render(
+      <ThreadView
+        addOptimisticReviewEntry={(_text) => "optimistic-review-1"}
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        directories={[giphyDirectory, kubeDirectory]}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedDirectory={giphyDirectory}
+        selectedThread={{
+          id: "thread-1",
+          title: "Build Search gRPC",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "deploy/search-grpc",
+          executionMode: "default",
+          updatedAt: Date.now(),
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/GIPHY/giphy-services",
+              kind: "worktree",
+              label: "giphy-services",
+              path: "/Users/huntharo/GIPHY/giphy-services",
+              worktreePath:
+                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/giphy-services",
+            },
+            {
+              id: "/Users/huntharo/infra/kube-manifests",
+              kind: "worktree",
+              label: "kube-manifests",
+              path: "/Users/huntharo/infra/kube-manifests",
+              worktreePath:
+                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+            },
+          ],
+          inbox: { inInbox: true },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+
+    fireEvent.change(screen.getByLabelText("Review project"), {
+      target: {
+        value:
+          "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "origin/develop" },
+        delivery: "inline",
+        cwd:
+          "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+      });
+    });
   });
 
   it("keeps the integrated terminal open state per selected thread", async () => {
