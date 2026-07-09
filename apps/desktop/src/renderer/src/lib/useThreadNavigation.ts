@@ -2276,6 +2276,7 @@ export function useThreadNavigation(
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
   const retainedUnreadThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
+  const selectedItemKeyRef = useRef<string | undefined>(undefined);
   const manuallySelectedThreadKeysRef = useRef(new Set<string>());
   const submittedSeenUpdatedAtByThreadKeyRef = useRef(new Map<string, number | undefined>());
   const refreshInFlightRef = useRef(false);
@@ -2309,6 +2310,7 @@ export function useThreadNavigation(
 
   optimisticThreadRef.current = optimisticThread;
   retainedUnreadThreadRef.current = retainedUnreadThread;
+  selectedItemKeyRef.current = selectedItemKey;
   stateRef.current = state;
 
   useEffect(() => {
@@ -4405,6 +4407,8 @@ export function useThreadNavigation(
       // The draft carries the group root (sub-threading a child re-parents to
       // the root); prefer it over the key-parsed source so the new thread links
       // to the root and renders one level deep.
+      const launchpadSelectionKey = buildLaunchpadSelectionKey(directoryKey);
+      const selectionKeyAtMaterializationStart = selectedItemKeyRef.current;
       const materializeParentThreadId =
         parentThreadId ??
         launchpad.parentThreadId ??
@@ -4473,8 +4477,13 @@ export function useThreadNavigation(
         return next;
       });
       setOptimisticThread(optimisticMaterializedThread);
-      setSelectedItemKey(nextThreadKey);
-      setPendingSeenThreadKey(nextThreadKey);
+      const shouldSelectMaterializedThread =
+        selectionKeyAtMaterializationStart !== launchpadSelectionKey ||
+        selectedItemKeyRef.current === launchpadSelectionKey;
+      if (shouldSelectMaterializedThread) {
+        setSelectedItemKey(nextThreadKey);
+        setPendingSeenThreadKey(nextThreadKey);
+      }
       if (response.turnStartFailure) {
         setLaunchpadError(response.turnStartFailure.message);
       }
@@ -4489,7 +4498,10 @@ export function useThreadNavigation(
           : current.response,
       }));
       try {
-        await refresh(nextThreadKey, optimisticMaterializedThread);
+        await refresh(
+          shouldSelectMaterializedThread ? nextThreadKey : undefined,
+          optimisticMaterializedThread,
+        );
       } catch (error) {
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
