@@ -277,7 +277,7 @@ function AcpAgentSection(props: {
 
         <SettingsField
           label="Re-probe"
-          sub="Re-run discovery for every agent (versions, installs, capabilities)."
+          sub="Re-run discovery for enabled agents (versions, installs, capabilities)."
           control={
             <div className="settings-inline-actions">
               <button

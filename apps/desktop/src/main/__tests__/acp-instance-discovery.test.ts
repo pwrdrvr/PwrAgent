@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AcpAgentInstance } from "@pwragent/shared";
+import type { LocalAcpDiscoveryOptions } from "@pwrdrvr/agent-acp";
 import { resolveActiveAcpInstance } from "../acp/acp-instance-resolver";
 import {
   discoverAcpAgentInstances,
@@ -121,6 +122,25 @@ describe("discoverAcpAgentInstances", () => {
     expect(discover).toHaveBeenCalledWith(expect.not.objectContaining({ overrides: expect.anything() }));
   });
 
+  it("passes only enabled strategies to the kit", async () => {
+    const discover = vi.fn(
+      async (_options?: LocalAcpDiscoveryOptions) => [
+        group("kimi", [instance("/Users/me/.kimi-code/bin/kimi", "fallback")]),
+      ],
+    );
+
+    await discoverAcpAgentInstances({
+      discover,
+      enabledRegistryIds: ["kimi", "qwen"],
+    });
+
+    const options = discover.mock.calls[0]?.[0];
+    expect(options?.strategies?.map((strategy) => strategy.id)).toEqual([
+      "kimi",
+      "qwen",
+    ]);
+  });
+
   it("omits agents with no installed instances", async () => {
     const discover = vi.fn(async () => [group("gemini", [])]);
     const result = await discoverAcpAgentInstances({ discover });
@@ -166,5 +186,14 @@ describe("discoverLocalAcpAgentRecords", () => {
     const discover = vi.fn(async () => [group("gemini", [])]);
     const records = await discoverLocalAcpAgentRecords({ discover });
     expect(records).toEqual([]);
+  });
+
+  it("passes an empty strategy list when every provider is disabled", async () => {
+    const discover = vi.fn(async () => []);
+    await discoverLocalAcpAgentRecords({
+      discover,
+      enabledRegistryIds: [],
+    });
+    expect(discover).toHaveBeenCalledWith(expect.objectContaining({ strategies: [] }));
   });
 });

@@ -2505,6 +2505,60 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("filters disabled ACP agents before default backend discovery", async () => {
+    const tempRoot = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-backend-registry-"),
+    );
+    const previousHome = process.env.PWRAGENT_HOME;
+    const profileDir = path.join(tempRoot, "profiles", "default");
+    await mkdir(profileDir, { recursive: true });
+    await writeFile(
+      path.join(profileDir, "config.toml"),
+      [
+        "[acp_agents.gemini]",
+        "enabled = false",
+        "",
+        "[acp_agents.kimi]",
+        "cli_path = \"/opt/pwragent/bin/kimi\"",
+        "",
+      ].join("\n"),
+    );
+    process.env.PWRAGENT_HOME = tempRoot;
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockReset();
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([]);
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+    });
+
+    try {
+      await registry.listBackends({ includeUnavailable: true });
+
+      expect(
+        localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enabledRegistryIds: ["grok", "kimi", "qwen"],
+          preferences: {
+            kimi: { overridePath: "/opt/pwragent/bin/kimi" },
+          },
+        }),
+      );
+    } finally {
+      await registry.close();
+      localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockReset();
+      localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([]);
+      if (previousHome === undefined) {
+        delete process.env.PWRAGENT_HOME;
+      } else {
+        process.env.PWRAGENT_HOME = previousHome;
+      }
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("lists persisted ACP sessions as thread summaries", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),

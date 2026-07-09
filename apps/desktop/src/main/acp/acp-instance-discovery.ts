@@ -9,8 +9,10 @@
 // via the shared instance resolver.
 
 import {
+  BUILT_IN_ACP_STRATEGIES,
   discoverLocalAcpAgentInstances,
   strategyById,
+  type AcpAgentStrategy,
   type DiscoveredAcpAgentGroup,
   type LocalAcpDiscoveryOptions,
 } from "@pwrdrvr/agent-acp";
@@ -37,6 +39,8 @@ export type AcpInstanceDiscovery = {
 export type DiscoverAcpAgentInstancesOptions = {
   /** Per-agent (registryId) path preferences (override + picked). */
   preferences?: Record<string, AcpAgentPreference>;
+  /** Registry ids to discover. Undefined means all built-in strategies. */
+  enabledRegistryIds?: readonly string[];
   /** Env used for PATH enumeration + (default probe) spawns. */
   env?: NodeJS.ProcessEnv;
   /** Injectable clock (tests). */
@@ -58,6 +62,7 @@ export async function discoverAcpAgentInstances(
   options?: DiscoverAcpAgentInstancesOptions,
 ): Promise<Map<string, AcpInstanceDiscovery>> {
   const preferences = options?.preferences ?? {};
+  const strategies = strategiesForEnabledRegistryIds(options?.enabledRegistryIds);
 
   const overrides: Record<string, string> = {};
   for (const [registryId, pref] of Object.entries(preferences)) {
@@ -69,6 +74,7 @@ export async function discoverAcpAgentInstances(
 
   const discover = options?.discover ?? discoverLocalAcpAgentInstances;
   const groups = await discover({
+    ...(strategies !== undefined ? { strategies } : {}),
     ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     ...(options?.env ? { env: options.env } : {}),
     ...(options?.now ? { now: options.now } : {}),
@@ -108,6 +114,7 @@ export async function discoverLocalAcpAgentRecords(
   options?: DiscoverAcpAgentInstancesOptions,
 ): Promise<AcpInstalledAgentRecord[]> {
   const preferences = options?.preferences ?? {};
+  const strategies = strategiesForEnabledRegistryIds(options?.enabledRegistryIds);
 
   const overrides: Record<string, string> = {};
   for (const [registryId, pref] of Object.entries(preferences)) {
@@ -119,6 +126,7 @@ export async function discoverLocalAcpAgentRecords(
 
   const discover = options?.discover ?? discoverLocalAcpAgentInstances;
   const groups = await discover({
+    ...(strategies !== undefined ? { strategies } : {}),
     ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     ...(options?.env ? { env: options.env } : {}),
     ...(options?.now ? { now: options.now } : {}),
@@ -188,4 +196,14 @@ export async function discoverLocalAcpAgentRecords(
     });
   }
   return records;
+}
+
+function strategiesForEnabledRegistryIds(
+  enabledRegistryIds: readonly string[] | undefined,
+): readonly AcpAgentStrategy[] | undefined {
+  if (enabledRegistryIds === undefined) {
+    return undefined;
+  }
+  const enabled = new Set(enabledRegistryIds);
+  return BUILT_IN_ACP_STRATEGIES.filter((strategy) => enabled.has(strategy.id));
 }

@@ -55,6 +55,7 @@ import {
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import {
+  acpAgentEnabledFor,
   acpCliPathOverrideFor,
   readDesktopSettingsConfigSafe,
 } from "../settings/desktop-config";
@@ -295,13 +296,17 @@ async function listInstalledAndLocalAcpAgents(
     try {
       const config = readDesktopSettingsConfigSafe();
       const preferences: Record<string, AcpAgentPreference> = {};
-      for (const registryId of ["gemini", "grok", "kimi", "qwen"]) {
+      const enabledRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
+        (registryId) => acpAgentEnabledFor(config, registryId),
+      );
+      for (const registryId of enabledRegistryIds) {
         const override = acpCliPathOverrideFor(config, registryId);
         if (override) {
           preferences[registryId] = { overridePath: override };
         }
       }
       discovered = await discoverLocalAcpAgentRecords({
+        enabledRegistryIds,
         ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
       });
       const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();

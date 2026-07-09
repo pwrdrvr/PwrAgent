@@ -729,20 +729,20 @@ export class AcpBackendAdapter {
         // not once per lookup.
         const config = readDesktopSettingsConfigSafe();
         const preferences: Record<string, AcpAgentPreference> = {};
-        for (const registryId of ["gemini", "grok", "kimi", "qwen"]) {
+        const enabledRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
+          (registryId) => acpAgentEnabledFor(config, registryId),
+        );
+        for (const registryId of enabledRegistryIds) {
           const override = acpCliPathOverrideFor(config, registryId);
           if (override) {
             preferences[registryId] = { overridePath: override };
           }
         }
         const records = await discoverLocalAcpAgentRecords({
+          enabledRegistryIds,
           ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
         });
-        // Drop agents the user disabled in Settings → AI Providers so they
-        // never surface as launchable chat backends. Defaults to enabled.
-        return records.filter((record) =>
-          acpAgentEnabledFor(config, record.registryId),
-        );
+        return records;
       });
     this.createAcpTransport = options.createAcpTransport;
     this.createAcpClient =
