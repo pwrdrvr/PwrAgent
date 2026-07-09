@@ -707,6 +707,77 @@ function buildReviewWorkspaceOptions(
   return options;
 }
 
+function normalizeReviewWorkspacePath(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function reviewWorkspacePathMatches(
+  left?: string,
+  right?: string,
+): boolean {
+  const normalizedLeft = normalizeReviewWorkspacePath(left);
+  const normalizedRight = normalizeReviewWorkspacePath(right);
+  return Boolean(
+    normalizedLeft &&
+      normalizedRight &&
+      normalizedLeft === normalizedRight,
+  );
+}
+
+function findReviewDirectoryForWorkspace(params: {
+  directories?: NavigationDirectorySummary[];
+  directory?: NavigationDirectorySummary;
+  thread?: NavigationThreadSummary;
+  workspaceCwd?: string;
+}): NavigationDirectorySummary | undefined {
+  const workspaceCwd = normalizeReviewWorkspacePath(params.workspaceCwd);
+  if (!workspaceCwd) {
+    return params.directory;
+  }
+
+  const directories = [
+    params.directory,
+    ...(params.directories ?? []),
+  ].filter((directory): directory is NavigationDirectorySummary =>
+    Boolean(directory)
+  );
+  const directMatch = directories.find((directory) =>
+    reviewWorkspacePathMatches(directory.path, workspaceCwd) ||
+      reviewWorkspacePathMatches(
+        directory.key.startsWith("directory:")
+          ? directory.key.slice("directory:".length)
+          : directory.key,
+        workspaceCwd,
+      )
+  );
+  if (directMatch) {
+    return directMatch;
+  }
+
+  const linkedDirectory = params.thread?.linkedDirectories.find((directory) =>
+    reviewWorkspacePathMatches(directory.worktreePath, workspaceCwd) ||
+      reviewWorkspacePathMatches(directory.path, workspaceCwd)
+  );
+  if (!linkedDirectory) {
+    return params.directory;
+  }
+
+  return directories.find((directory) =>
+    reviewWorkspacePathMatches(directory.path, linkedDirectory.path) ||
+      reviewWorkspacePathMatches(directory.path, linkedDirectory.worktreePath) ||
+      reviewWorkspacePathMatches(
+        directory.key.startsWith("directory:")
+          ? directory.key.slice("directory:".length)
+          : directory.key,
+        linkedDirectory.path,
+      )
+  ) ?? params.directory;
+}
+
 function buildConfiguredReviewCommand(
   config: ReviewConfigState | undefined
 ): { cwd?: string; displayText: string; target: AppServerReviewTarget } | undefined {
@@ -3105,25 +3176,40 @@ export function Composer(props: ComposerProps) {
     autocompleteListboxId && autocompleteKind
       ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
       : undefined;
+  const reviewDirectory = useMemo(
+    () =>
+      findReviewDirectoryForWorkspace({
+        directories: props.directories,
+        directory: props.directory,
+        thread: props.thread,
+        workspaceCwd: reviewConfig?.workspaceCwd,
+      }),
+    [
+      props.directories,
+      props.directory,
+      props.thread,
+      reviewConfig?.workspaceCwd,
+    ],
+  );
   const reviewBranchPickerOptions = useMemo(
     () =>
       buildReviewBranchPickerOptions({
-        directory: props.directory,
+        directory: reviewDirectory,
         thread: props.thread,
       }),
-    [props.directory, props.thread],
+    [reviewDirectory, props.thread],
   );
   const defaultReviewBranch = useMemo(
     () =>
       buildReviewBranchOptions({
-        directory: props.directory,
+        directory: reviewDirectory,
         thread: props.thread,
       })[0] ?? "main",
-    [props.directory, props.thread],
+    [reviewDirectory, props.thread],
   );
   const reviewCommitOptions = useMemo(
-    () => buildReviewCommitOptions(props.directory),
-    [props.directory],
+    () => buildReviewCommitOptions(reviewDirectory),
+    [reviewDirectory],
   );
   const reviewWorkspaceOptions = useMemo(
     () => buildReviewWorkspaceOptions(props.thread),
@@ -6226,13 +6312,27 @@ export function Composer(props: ComposerProps) {
                   className="composer__review-input"
                   value={reviewConfig?.workspaceCwd ?? ""}
                   onChange={(event) => {
+                    const workspaceCwd = event.target.value;
+                    const directory = findReviewDirectoryForWorkspace({
+                      directories: props.directories,
+                      directory: props.directory,
+                      thread: props.thread,
+                      workspaceCwd,
+                    });
+                    const branch =
+                      buildReviewBranchOptions({
+                        directory,
+                        thread: props.thread,
+                      })[0] ?? "main";
                     setReviewConfig((current) => ({
                       ...(current ??
                         createReviewConfig({
-                          directory: props.directory,
+                          directory,
                           thread: props.thread,
                         })),
-                      workspaceCwd: event.target.value,
+                      branch,
+                      branchSource: "auto",
+                      workspaceCwd,
                     }));
                     setSendError(undefined);
                   }}
