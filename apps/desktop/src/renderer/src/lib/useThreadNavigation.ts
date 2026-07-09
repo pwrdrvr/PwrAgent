@@ -10,6 +10,7 @@ import type {
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
   NavigationBrowseMode,
+  NavigationDirectoryGitStatus,
   NavigationDirectoryGitStatusUpdatedNotification,
   NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
@@ -244,6 +245,7 @@ function upsertLaunchpadDirectory(
   directories: NavigationSnapshot["directories"],
   launchpad: NavigationLaunchpadDraft,
   options?: {
+    gitStatus?: NavigationDirectoryGitStatus | null;
     gitStatusSourcePath?: string;
   },
 ): NavigationSnapshot["directories"] {
@@ -253,24 +255,34 @@ function upsertLaunchpadDirectory(
     launchpad,
     options?.gitStatusSourcePath,
   );
+  const hasGitStatusOverride =
+    options && Object.prototype.hasOwnProperty.call(options, "gitStatus");
+  const inheritedGitStatus = hasGitStatusOverride
+    ? options.gitStatus ?? undefined
+    : sourceDirectory?.gitStatus;
   const nextDirectories = directories.map((directory) => {
     if (directory.key !== launchpad.directoryKey) {
       return directory;
     }
 
     foundDirectory = true;
-    return {
+    const next: NavigationSnapshot["directories"][number] = {
       ...directory,
       kind: launchpad.directoryKind,
       label: launchpad.directoryLabel,
       path: launchpad.directoryPath ?? directory.path,
-      ...(directory.gitStatus
-        ? {}
-        : sourceDirectory?.gitStatus
-          ? { gitStatus: sourceDirectory.gitStatus }
-          : {}),
       launchpad,
     };
+    if (hasGitStatusOverride) {
+      if (inheritedGitStatus) {
+        next.gitStatus = inheritedGitStatus;
+      } else {
+        delete next.gitStatus;
+      }
+    } else if (!directory.gitStatus && inheritedGitStatus) {
+      next.gitStatus = inheritedGitStatus;
+    }
+    return next;
   });
 
   return sortNavigationDirectories(
@@ -285,8 +297,8 @@ function upsertLaunchpadDirectory(
             path: launchpad.directoryPath,
             threadKeys: [],
             needsAttentionCount: 0,
-            ...(sourceDirectory?.gitStatus
-              ? { gitStatus: sourceDirectory.gitStatus }
+            ...(inheritedGitStatus
+              ? { gitStatus: inheritedGitStatus }
               : {}),
             launchpad,
           },
@@ -1670,6 +1682,7 @@ function applyLaunchpadUpdate(
   launchpad: NavigationLaunchpadDraft,
   defaults: NavigationSnapshot["launchpadDefaults"],
   options?: {
+    gitStatus?: NavigationDirectoryGitStatus | null;
     gitStatusSourcePath?: string;
   },
 ): NavigationSnapshot | undefined {
@@ -2304,6 +2317,9 @@ export function useThreadNavigation(
   const backgroundRefreshIdleRef = useRef(false);
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
   const pendingPickedLaunchpadRef = useRef(new Map<string, NavigationLaunchpadDraft>());
+  const pendingDirectoryGitStatusRef = useRef(
+    new Map<string, NavigationDirectoryGitStatus | null>(),
+  );
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
   const stateRef = useRef(state);
 
@@ -2539,6 +2555,18 @@ export function useThreadNavigation(
   const refreshNavigation = useCallback(async (): Promise<void> => {
     await refresh();
   }, [refresh]);
+
+  const takePendingDirectoryGitStatus = useCallback(
+    (directoryKey: string): NavigationDirectoryGitStatus | null | undefined => {
+      if (!pendingDirectoryGitStatusRef.current.has(directoryKey)) {
+        return undefined;
+      }
+      const gitStatus = pendingDirectoryGitStatusRef.current.get(directoryKey);
+      pendingDirectoryGitStatusRef.current.delete(directoryKey);
+      return gitStatus ?? null;
+    },
+    [],
+  );
 
   const scheduleRefresh = useCallback(
     (
@@ -2795,10 +2823,28 @@ export function useThreadNavigation(
       if (method === "navigation/directoryGitStatus/updated") {
         const params = event.notification
           .params as NavigationDirectoryGitStatusUpdatedNotification["params"];
-        setState((current) => ({
-          ...current,
-          response: applyDirectoryGitStatusUpdate(current.response, params),
-        }));
+        const hasDirectoryNow = stateRef.current.response?.directories.some(
+          (directory) => directory.key === params.directoryKey,
+        ) ?? false;
+        if (!hasDirectoryNow) {
+          pendingDirectoryGitStatusRef.current.set(
+            params.directoryKey,
+            params.gitStatus,
+          );
+        }
+        setState((current) => {
+          const hasDirectory = current.response?.directories.some(
+            (directory) => directory.key === params.directoryKey,
+          ) ?? false;
+          if (!hasDirectory) {
+            return current;
+          }
+          pendingDirectoryGitStatusRef.current.delete(params.directoryKey);
+          return {
+            ...current,
+            response: applyDirectoryGitStatusUpdate(current.response, params),
+          };
+        });
         return;
       }
 
@@ -3672,9 +3718,17 @@ export function useThreadNavigation(
           ...current,
           [directoryKey]: launchpad,
         }));
+        const pendingGitStatus = takePendingDirectoryGitStatus(directoryKey);
         setState((current) => ({
           ...current,
-          response: applyLaunchpadUpdate(current.response, launchpad, defaults),
+          response: applyLaunchpadUpdate(
+            current.response,
+            launchpad,
+            defaults,
+            pendingGitStatus !== undefined
+              ? { gitStatus: pendingGitStatus }
+              : undefined,
+          ),
         }));
         const selectionKey = buildLaunchpadSelectionKey(directoryKey);
         pendingPickedLaunchpadRef.current.set(directoryKey, launchpad);
@@ -3704,7 +3758,14 @@ export function useThreadNavigation(
         setCreatingThread(undefined);
       }
     },
-    [desktopApi, directories, refresh, selectedDirectory, selectedThreadKey]
+    [
+      desktopApi,
+      directories,
+      refresh,
+      selectedDirectory,
+      selectedThreadKey,
+      takePendingDirectoryGitStatus,
+    ]
   );
 
   /**
@@ -3884,9 +3945,13 @@ export function useThreadNavigation(
           ...current,
           [directoryKey]: launchpad,
         }));
+        const pendingGitStatus = takePendingDirectoryGitStatus(directoryKey);
         setState((current) => ({
           ...current,
           response: applyLaunchpadUpdate(current.response, launchpad, defaults, {
+            ...(pendingGitStatus !== undefined
+              ? { gitStatus: pendingGitStatus }
+              : {}),
             gitStatusSourcePath: directory.gitStatusSourcePath,
           }),
         }));
@@ -3897,7 +3962,7 @@ export function useThreadNavigation(
         setCreatingThread(undefined);
       }
     },
-    [desktopApi, resolveGroupRoot],
+    [desktopApi, resolveGroupRoot, takePendingDirectoryGitStatus],
   );
 
   const forkThread = useCallback(
