@@ -2194,6 +2194,37 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByLabelText("Path for PwrAgent Other")).toBeInTheDocument();
   });
 
+  it("shows scoped linked-project branches before the thread branch", () => {
+    renderPanel({
+      activeTab: "projects",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        gitBranch: "main",
+        linkedDirectories: [
+          {
+            id: "primary-dir",
+            kind: "local",
+            label: "PwrAgent",
+            path: "/Users/huntharo/github/PwrAgent",
+          },
+          {
+            id: "kube-dir",
+            kind: "worktree",
+            label: "kube-manifests",
+            path: "/Users/huntharo/github/kube-manifests",
+            worktreePath:
+              "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+            gitBranch: "fix/channelsv2-live-pods",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByText("main")).toBeInTheDocument();
+    expect(screen.getByText("fix/channelsv2-live-pods")).toBeInTheDocument();
+  });
+
   it("detaches a secondary linked project from the Linked Projects tab", async () => {
     const detachDirectoryFromThread = vi.fn(async () => ({
       ok: true as const,

@@ -16127,7 +16127,7 @@ export class DesktopBackendRegistry {
         return trustFailure;
       }
 
-      const directory =
+      let directory =
         workspaceMode === "new_worktree"
           ? await this.createAttachedWorktreeDirectory({
               backend,
@@ -16139,6 +16139,17 @@ export class DesktopBackendRegistry {
               return result.directory;
             })
           : await this.createAttachedLocalDirectory(repositoryPath);
+      const branchSource = directory.worktreePath ?? directory.path;
+      const branch = branchSource
+        ? await readCurrentGitBranch(branchSource).catch(() => undefined)
+        : undefined;
+      const normalizedBranch = branch?.trim() || undefined;
+      if (workspaceMode === "new_worktree" && normalizedBranch) {
+        directory = {
+          ...directory,
+          gitBranch: normalizedBranch,
+        };
+      }
 
       const overlay = await this.overlayStore.addLinkedDirectory({
         backend,
@@ -16157,10 +16168,6 @@ export class DesktopBackendRegistry {
         },
       });
 
-      const branchSource = directory.worktreePath ?? directory.path;
-      const branch = branchSource
-        ? await readCurrentGitBranch(branchSource).catch(() => undefined)
-        : undefined;
       return {
         ok: true,
         data: {
@@ -16170,7 +16177,7 @@ export class DesktopBackendRegistry {
             (current) => current.id === directory.id,
           ) ?? directory,
           workspaceMode,
-          ...(branch ? { branch } : {}),
+          ...(normalizedBranch ? { branch: normalizedBranch } : {}),
           message:
             workspaceMode === "new_worktree"
               ? "Attached a managed worktree directory to this thread."

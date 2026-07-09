@@ -19857,6 +19857,143 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("records the observed branch on an attached managed worktree", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-attach-worktree-"));
+    const repoPath = path.join(root, "kube-manifests");
+    const worktreePath = path.join(root, "worktrees", "kube-manifests");
+    await mkdir(repoPath, { recursive: true });
+    try {
+      await git(repoPath, ["init", "-b", "master"]);
+    } catch {
+      await git(repoPath, ["init"]);
+      await git(repoPath, ["checkout", "-b", "master"]);
+    }
+    await writeFile(path.join(repoPath, "README.md"), "kube manifests\n", "utf8");
+    await git(repoPath, ["add", "README.md"]);
+    await git(repoPath, [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=tests@pwragent.local",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    await mkdir(path.dirname(worktreePath), { recursive: true });
+    await git(repoPath, [
+      "worktree",
+      "add",
+      "-b",
+      "fix/channelsv2-live-pods",
+      worktreePath,
+      "master",
+    ]);
+
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:agent-thread": {
+          ...createAgentOverlay(),
+          executionMode: "full-access",
+          gitBranch: "HEAD",
+          observedGitBranch: "HEAD",
+        },
+      },
+    });
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: worktreePath,
+      repositoryPath: repoPath,
+      rollback: vi.fn(async () => undefined),
+      workMode: "worktree" as const,
+    }));
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => undefined);
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread,
+        resolvePrimaryWorkspacePath: vi.fn(async () => repoPath),
+      } as never,
+      overlayStore,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    try {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "agent-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          callId: "call-1",
+          requestId: "call-1",
+          namespace: "pwragent",
+          tool: "attach_thread_directory",
+          arguments: {
+            path: repoPath,
+            workspaceMode: "new_worktree",
+            branchName: "master",
+            worktreeBranchMode: "attached",
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(response).toMatchObject({ success: true });
+      const payload = JSON.parse(
+        (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+      );
+      expect(payload).toMatchObject({
+        branch: "fix/channelsv2-live-pods",
+      });
+      const overlay = await overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "agent-thread",
+      });
+      expect(overlay).toMatchObject({
+        gitBranch: "HEAD",
+        observedGitBranch: "HEAD",
+      });
+      expect(overlay?.extraLinkedDirectories).toEqual([
+        expect.objectContaining({
+          gitBranch: "fix/channelsv2-live-pods",
+          kind: "worktree",
+          path: expectedDir(repoPath),
+          worktreePath: expectedDir(worktreePath),
+        }),
+      ]);
+      expect(
+        events.some(
+          (event) =>
+            event.notification.method === "thread/branch/updated" &&
+            event.notification.params.threadId === "agent-thread" &&
+            event.notification.params.branch === "fix/channelsv2-live-pods",
+        ),
+      ).toBe(false);
+    } finally {
+      unsubscribe();
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("requires confirmation before attaching an untrusted directory in Default Access", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },

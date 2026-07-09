@@ -441,8 +441,10 @@ export function buildNavigationSnapshotHash(params: {
       ),
       linkedDirectories: thread.linkedDirectories.map((directory) => ({
         id: directory.id,
+        gitBranch: directory.gitBranch ?? null,
         kind: directory.kind,
         path: directory.path,
+        worktreePath: directory.worktreePath ?? null,
       })),
       worktreeSnapshots: (thread.worktreeSnapshots ?? []).map((snapshot) => ({
         id: snapshot.id,

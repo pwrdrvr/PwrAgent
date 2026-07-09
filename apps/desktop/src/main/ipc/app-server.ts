@@ -218,6 +218,15 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     | "readThreadGitWorkingStateCache"
     | "writeThreadGitWorkingStateCacheEntry"
   >;
+
+type ThreadPrRefreshContext = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  branch: string;
+  directoryPaths: string[];
+  branchScoped: boolean;
+};
+
 const appServerLog = getMainLogger("pwragent:app-server");
 
 /**
@@ -794,12 +803,7 @@ class DesktopAppServerService {
   private readonly worktreePathByThreadKey = new Map<string, string>();
   private readonly prRefreshContextByThreadKey = new Map<
     string,
-    {
-      backend: AppServerBackendKind;
-      threadId: string;
-      branch: string;
-      directoryPaths: string[];
-    }
+    ThreadPrRefreshContext[]
   >();
   // Merged PR commits are accepted as "pushed" even when the PR head branch
   // has been deleted and no remote ref still contains those SHAs locally.
@@ -1291,19 +1295,12 @@ class DesktopAppServerService {
   ): void {
     for (const thread of threads) {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      const branch =
-        thread.observedGitBranch?.trim() || thread.gitBranch?.trim() || "";
-      const directoryPaths = resolveThreadPullRequestDirectoryPaths(thread);
-      if (!branch || directoryPaths.length === 0) {
+      const contexts = resolveThreadPullRequestContexts(thread);
+      if (contexts.length === 0) {
         this.prRefreshContextByThreadKey.delete(threadKey);
         continue;
       }
-      this.prRefreshContextByThreadKey.set(threadKey, {
-        backend: thread.source,
-        threadId: thread.id,
-        branch,
-        directoryPaths,
-      });
+      this.prRefreshContextByThreadKey.set(threadKey, contexts);
     }
   }
 
@@ -1892,12 +1889,14 @@ class DesktopAppServerService {
     const threadKey = buildThreadIdentityKey(event.backend, threadId);
     if (method === "thread/branch/updated") {
       const branch = params.branch?.trim();
-      const existingContext = this.prRefreshContextByThreadKey.get(threadKey);
-      if (branch && existingContext) {
-        this.prRefreshContextByThreadKey.set(threadKey, {
-          ...existingContext,
-          branch,
-        });
+      const existingContexts = this.prRefreshContextByThreadKey.get(threadKey);
+      if (branch && existingContexts) {
+        this.prRefreshContextByThreadKey.set(
+          threadKey,
+          existingContexts.map((context) =>
+            context.branchScoped ? context : { ...context, branch },
+          ),
+        );
       }
     }
 
@@ -1914,18 +1913,20 @@ class DesktopAppServerService {
     }
 
     if (method === "turn/completed") {
-      const prContext = this.prRefreshContextByThreadKey.get(threadKey);
-      if (prContext) {
-        void this.refreshThreadPullRequests({
-          ...prContext,
-          provider: "github.com",
-          trigger: "post-turn",
-        }).catch((error) => {
-          appServerLog.warn("post-turn PR refresh failed", {
-            threadId,
-            error: error instanceof Error ? error.message : String(error),
+      const prContexts = this.prRefreshContextByThreadKey.get(threadKey);
+      if (prContexts?.length) {
+        for (const prContext of prContexts) {
+          void this.refreshThreadPullRequests({
+            ...prContext,
+            provider: "github.com",
+            trigger: "post-turn",
+          }).catch((error) => {
+            appServerLog.warn("post-turn PR refresh failed", {
+              threadId,
+              error: error instanceof Error ? error.message : String(error),
+            });
           });
-        });
+        }
       }
     }
   }
@@ -3515,17 +3516,61 @@ function isFreshWorktreeWorkingStateCacheEntry(
   return Date.now() - entry.fetchedAt < WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS;
 }
 
+function resolveThreadPullRequestContexts(
+  thread: Pick<
+    AppServerThreadSummary,
+    "gitBranch" | "id" | "linkedDirectories" | "observedGitBranch" | "source"
+  >,
+): ThreadPrRefreshContext[] {
+  const contexts: ThreadPrRefreshContext[] = [];
+  const threadBranch =
+    thread.observedGitBranch?.trim() || thread.gitBranch?.trim() || "";
+  const unscopedDirectoryPaths = resolveThreadPullRequestDirectoryPaths({
+    linkedDirectories: (thread.linkedDirectories ?? []).filter(
+      (directory) => !directory.gitBranch?.trim(),
+    ),
+  });
+  if (threadBranch && unscopedDirectoryPaths.length > 0) {
+    contexts.push({
+      backend: thread.source,
+      threadId: thread.id,
+      branch: threadBranch,
+      directoryPaths: unscopedDirectoryPaths,
+      branchScoped: false,
+    });
+  }
+
+  const seenScopedKeys = new Set<string>();
+  for (const directory of thread.linkedDirectories ?? []) {
+    const branch = directory.gitBranch?.trim();
+    const directoryPath = resolvePullRequestDirectoryPath(directory);
+    if (!branch || branch === "HEAD" || !directoryPath) {
+      continue;
+    }
+    const key = `${branch}\0${directoryPath}`;
+    if (seenScopedKeys.has(key)) {
+      continue;
+    }
+    seenScopedKeys.add(key);
+    contexts.push({
+      backend: thread.source,
+      threadId: thread.id,
+      branch,
+      directoryPaths: [directoryPath],
+      branchScoped: true,
+    });
+  }
+
+  return contexts;
+}
+
 function resolveThreadPullRequestDirectoryPaths(
   thread: Pick<AppServerThreadSummary, "linkedDirectories">,
 ): string[] {
   const seen = new Set<string>();
   const paths: string[] = [];
   for (const directory of thread.linkedDirectories ?? []) {
-    const candidate =
-      directory.kind === "worktree"
-        ? directory.worktreePath ?? directory.path
-        : directory.path;
-    const normalized = candidate?.trim();
+    const normalized = resolvePullRequestDirectoryPath(directory);
     if (!normalized || seen.has(normalized)) {
       continue;
     }
@@ -3533,6 +3578,16 @@ function resolveThreadPullRequestDirectoryPaths(
     paths.push(normalized);
   }
   return paths;
+}
+
+function resolvePullRequestDirectoryPath(
+  directory: AppServerThreadSummary["linkedDirectories"][number],
+): string | undefined {
+  const candidate =
+    directory.kind === "worktree"
+      ? directory.worktreePath ?? directory.path
+      : directory.path;
+  return candidate?.trim() || undefined;
 }
 
 /**

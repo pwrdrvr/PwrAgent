@@ -107,6 +107,8 @@ export type LinkedDirectorySummary = {
    * commands, VS Code, and terminal launches should prefer this over path.
    */
   worktreePath?: string;
+  /** Best-effort branch observed for this linked directory/worktree. */
+  gitBranch?: string;
   kind: "local" | "worktree";
 };
 
