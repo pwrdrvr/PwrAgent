@@ -132,6 +132,7 @@ import {
   type ProfileFocusRequestWatcher,
 } from "./profile";
 import { SECRET_STORAGE_DISABLED_ENV } from "./settings/desktop-secret-store";
+import { shouldStepAsideForUpdateInstall } from "./update-handoff-marker";
 import { isUpdateInstallInProgress } from "./update-install-state";
 
 const APP_NAME = "PwrAgent";
@@ -675,6 +676,22 @@ export function bootstrapApp(): void {
   initializeMainLogger({
     profileName: resolveMainLogProfileName(bootDecision),
   });
+
+  // A Squirrel/ShipIt bundle swap won't run while any instance of the app is
+  // alive ("App Still Running Error"). If this launch is racing an in-flight
+  // install — most commonly the user reopening the app during the brief,
+  // feedback-less update gap — quit immediately so ShipIt can swap the bundle
+  // and relaunch the updated build. Done here, before any handler is registered
+  // or window opened, so the "running" instance ShipIt sees is as short-lived
+  // as possible. Fails open (see shouldStepAsideForUpdateInstall).
+  if (shouldStepAsideForUpdateInstall(app.getVersion())) {
+    mainLog.info(
+      "update install in progress; quitting to let ShipIt finish the bundle swap",
+    );
+    app.exit(0);
+    return;
+  }
+
   installProcessShutdownHandlers();
   installBootErrorHandlers();
 

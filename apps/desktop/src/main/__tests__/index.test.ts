@@ -99,6 +99,7 @@ const getAppPathMock = vi.fn(() => "/test/app");
 const getVersionMock = vi.fn(() => "1.0.0-alpha.0");
 const whenReadyMock = vi.fn(() => Promise.resolve());
 const quitMock = vi.fn();
+const exitMock = vi.fn();
 const getAllWindowsMock = vi.fn(() => []);
 const dockSetIconMock = vi.fn();
 const protocolHandleMock = vi.fn();
@@ -155,6 +156,7 @@ vi.mock("electron", () => ({
       appEventHandlers.set(event, handler);
     }),
     quit: quitMock,
+    exit: exitMock,
   },
   BrowserWindow: {
     getAllWindows: getAllWindowsMock,
@@ -235,6 +237,11 @@ vi.mock("../auto-updater", () => ({
 const isUpdateInstallInProgressMock = vi.fn(() => false);
 vi.mock("../update-install-state", () => ({
   isUpdateInstallInProgress: () => isUpdateInstallInProgressMock(),
+}));
+
+const shouldStepAsideForUpdateInstallMock = vi.fn(() => false);
+vi.mock("../update-handoff-marker", () => ({
+  shouldStepAsideForUpdateInstall: () => shouldStepAsideForUpdateInstallMock(),
 }));
 
 vi.mock("../app-log-window", () => ({
@@ -533,6 +540,9 @@ describe("bootstrapApp", () => {
     whenReadyMock.mockReset();
     whenReadyMock.mockReturnValue(Promise.resolve());
     quitMock.mockReset();
+    exitMock.mockReset();
+    shouldStepAsideForUpdateInstallMock.mockReset();
+    shouldStepAsideForUpdateInstallMock.mockReturnValue(false);
     getAllWindowsMock.mockReset();
     getAllWindowsMock.mockReturnValue([]);
     protocolHandleMock.mockReset();
@@ -561,6 +571,20 @@ describe("bootstrapApp", () => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  it("steps aside without opening a window while an update install is mid-flight", async () => {
+    shouldStepAsideForUpdateInstallMock.mockReturnValue(true);
+
+    await import("../index");
+    await flushMicrotasks();
+
+    // A ShipIt bundle swap can't run while any instance of the app is alive, so
+    // a launch that races the install must exit immediately and let ShipIt
+    // finish — booting a window would abort the update with "App Still Running".
+    expect(exitMock).toHaveBeenCalledWith(0);
+    expect(whenReadyMock).not.toHaveBeenCalled();
+    expect(createMainWindowMock).not.toHaveBeenCalled();
   });
 
   it("awaits startup CPU profiling before creating the first window", async () => {

@@ -17,6 +17,7 @@ import type {
 } from "../shared/app-metadata";
 import { getMainLogger } from "./log";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
+import { writeUpdateHandoffMarker } from "./update-handoff-marker";
 import { markUpdateInstallInProgress } from "./update-install-state";
 
 const log = getMainLogger("pwragent:updater");
@@ -565,7 +566,14 @@ export async function installDownloadedAppUpdate(options?: {
       // so the app's own window-all-closed / before-quit handlers don't race it
       // with a competing app.quit() that would strand us on the old version.
       markUpdateInstallInProgress();
-      autoUpdater.quitAndInstall();
+      // Persist a cross-boot marker so a launch that races this install — the
+      // classic "user reopens the app during the install gap" — steps aside on
+      // boot instead of tripping ShipIt's "App Still Running" abort loop.
+      writeUpdateHandoffMarker(version);
+      // isForceRunAfter=true relaunches the updated app after the swap. Without
+      // it ShipIt leaves the app closed, which is exactly what prompts people to
+      // reopen it mid-install and trigger the failure the marker guards against.
+      autoUpdater.quitAndInstall(false, true);
     };
     if (options?.requestQuit) {
       const quitAccepted = await options.requestQuit(performQuit);

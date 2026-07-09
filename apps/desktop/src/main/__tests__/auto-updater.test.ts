@@ -71,6 +71,12 @@ vi.mock("../update-install-state", () => ({
   markUpdateInstallInProgress: () => markUpdateInstallInProgressMock(),
 }));
 
+const writeUpdateHandoffMarkerMock = vi.fn();
+vi.mock("../update-handoff-marker", () => ({
+  writeUpdateHandoffMarker: (version: string) =>
+    writeUpdateHandoffMarkerMock(version),
+}));
+
 async function importAutoUpdater() {
   return await import("../auto-updater");
 }
@@ -149,6 +155,7 @@ describe("auto updater", () => {
     autoUpdaterMock.on.mockClear();
     autoUpdaterMock.quitAndInstall.mockReset();
     markUpdateInstallInProgressMock.mockReset();
+    writeUpdateHandoffMarkerMock.mockReset();
   });
 
   afterEach(() => {
@@ -379,6 +386,10 @@ describe("auto updater", () => {
     await expect(install?.()).resolves.toEqual({ status: "restarting" });
     expect(requestQuit).toHaveBeenCalledTimes(1);
     expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+    // isForceRunAfter=true so ShipIt relaunches the updated app after the swap.
+    expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledWith(false, true);
+    // The cross-boot marker is persisted so a racing relaunch steps aside.
+    expect(writeUpdateHandoffMarkerMock).toHaveBeenCalledWith("1.0.0-beta.8");
   });
 
   it("latches update-install-in-progress before handing off to quitAndInstall", async () => {
