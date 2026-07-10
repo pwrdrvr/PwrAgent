@@ -764,7 +764,13 @@ export type ThreadViewProps = {
   onSelectNoDirectoryFromPicker?: () => void;
   onPickAndRegisterDirectory?: () => void;
   onPickAndAttachDirectoryToThread?: () => void;
-  onAttachDirectoryReferences?: (paths: string[]) => void;
+  onAttachDirectoryReferences?: (
+    paths: string[],
+    target: {
+      backend: NavigationThreadSummary["source"];
+      threadId: string;
+    },
+  ) => void;
   onClearPickDirectoryError?: () => void;
   setExecutionModeError?: string;
   setThreadModelSettingsError?: string;

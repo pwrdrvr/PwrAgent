@@ -2135,11 +2135,18 @@ export function useThreadNavigation(
   /** Existing-thread picker: OS dialog -> validate -> attach as an extra linked directory. */
   pickAndAttachDirectoryToSelectedThread: () => Promise<void>;
   /**
-   * Attach known directory paths (composer `@`-references) to the selected
-   * thread. Per-path failures are non-fatal — the turn already carries the
-   * path as text, so a failed link only loses the sidebar association.
+   * Attach known directory paths (composer `@`-references) to a specific
+   * thread. The target is explicit — the composer resolves it from the
+   * turn it just sent — so a selection change while the turn request was
+   * in flight (or a queued turn firing later) cannot link the directories
+   * to the wrong thread. Per-path failures are non-fatal — the turn
+   * already carries the path as text, so a failed link only loses the
+   * sidebar association.
    */
-  attachDirectoryPathsToSelectedThread: (paths: string[]) => Promise<void>;
+  attachDirectoryPathsToThread: (
+    target: { backend: AppServerBackendKind; threadId: string },
+    paths: string[],
+  ) => Promise<void>;
   pickDirectoryError?: string;
   pickingDirectory: boolean;
   clearPickDirectoryError: () => void;
@@ -4277,28 +4284,28 @@ export function useThreadNavigation(
     }
   }, [desktopApi, refresh, selectedThread]);
 
-  const attachDirectoryPathsToSelectedThread = useCallback(
-    async (paths: string[]): Promise<void> => {
+  const attachDirectoryPathsToThread = useCallback(
+    async (
+      target: { backend: AppServerBackendKind; threadId: string },
+      paths: string[],
+    ): Promise<void> => {
       // Composer `@`-reference links (no OS dialog — the paths are already
-      // known). Failures stay non-fatal: the sent turn carries the path as
-      // text either way, so a failed link only loses the association.
-      if (
-        !desktopApi?.attachDirectoryToThread ||
-        !selectedThread ||
-        paths.length === 0
-      ) {
+      // known). The caller names the thread explicitly so a selection
+      // change during the send cannot misdirect the attach. Failures stay
+      // non-fatal: the sent turn carries the path as text either way, so a
+      // failed link only loses the association.
+      if (!desktopApi?.attachDirectoryToThread || paths.length === 0) {
         return;
       }
 
-      const thread = selectedThread;
       let attachedAny = false;
       for (const path of paths) {
         try {
           const result = await desktopApi.attachDirectoryToThread({
-            backend: thread.source,
-            threadId: thread.id,
+            backend: target.backend,
+            threadId: target.threadId,
             path,
-            preferredBackend: thread.source,
+            preferredBackend: target.backend,
           });
           if (result.ok) {
             attachedAny = true;
@@ -4315,10 +4322,19 @@ export function useThreadNavigation(
         }
       }
       if (attachedAny) {
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        try {
+          await refresh(
+            buildThreadIdentityKey(target.backend, target.threadId),
+          );
+        } catch (error) {
+          // The attach itself landed and the threadDirectories/updated
+          // event will still reach the snapshot; a failed refresh here is
+          // not worth surfacing (and the caller fire-and-forgets us).
+          console.warn("Could not refresh after linking directories:", error);
+        }
       }
     },
-    [desktopApi, refresh, selectedThread],
+    [desktopApi, refresh],
   );
 
   const clearPickDirectoryError = useCallback((): void => {
@@ -5539,7 +5555,7 @@ export function useThreadNavigation(
     openWorkspaceLaunchpad,
     pickAndRegisterDirectory,
     pickAndAttachDirectoryToSelectedThread,
-    attachDirectoryPathsToSelectedThread,
+    attachDirectoryPathsToThread,
     pickDirectoryError,
     pickingDirectory,
     clearPickDirectoryError,

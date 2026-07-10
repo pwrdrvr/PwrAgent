@@ -13,6 +13,7 @@ import {
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
+  type AppServerBackendKind,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
@@ -1006,8 +1007,11 @@ function DesktopAppShell(props: {
     onPickAndAttachDirectoryToThread: () => {
       void navigation.pickAndAttachDirectoryToSelectedThread();
     },
-    onAttachDirectoryReferences: (paths: string[]) => {
-      void navigation.attachDirectoryPathsToSelectedThread(paths);
+    onAttachDirectoryReferences: (
+      paths: string[],
+      target: { backend: AppServerBackendKind; threadId: string }
+    ) => {
+      void navigation.attachDirectoryPathsToThread(target, paths);
     },
     onClearPickDirectoryError: navigation.clearPickDirectoryError,
     setExecutionModeError: navigation.setThreadExecutionModeError,

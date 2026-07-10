@@ -9495,9 +9495,10 @@ describe("Composer", () => {
       await waitFor(() => {
         expect(startTurn).toHaveBeenCalled();
       });
-      expect(onAttachDirectoryReferences).toHaveBeenCalledWith([
-        "/Users/huntharo/GIPHY/search-product",
-      ]);
+      expect(onAttachDirectoryReferences).toHaveBeenCalledWith(
+        ["/Users/huntharo/GIPHY/search-product"],
+        { backend: "codex", threadId: "thread-1" },
+      );
     } finally {
       delete (window as unknown as { __pwragentHomeDir?: string })
         .__pwragentHomeDir;

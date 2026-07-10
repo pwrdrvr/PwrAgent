@@ -198,12 +198,20 @@ type ComposerProps = {
   onPickAndRegisterDirectory?: () => void;
   onPickAndAttachDirectoryToThread?: () => void;
   /**
-   * Link draft-referenced directories to the existing thread after a turn
-   * is sent (the launchpad path rides on `onMaterializeLaunchpad`'s
-   * `extraDirectoryPaths` instead). Fire-and-forget; failures must not
-   * block the turn.
+   * Link draft-referenced directories to the thread the turn was sent to
+   * (the launchpad path rides on `onMaterializeLaunchpad`'s
+   * `extraDirectoryPaths` instead). The composer names the target thread
+   * explicitly so a selection change while the send was in flight — or a
+   * queued turn firing later — cannot attach to the wrong thread.
+   * Fire-and-forget; failures must not block the turn.
    */
-  onAttachDirectoryReferences?: (paths: string[]) => void;
+  onAttachDirectoryReferences?: (
+    paths: string[],
+    target: {
+      backend: NavigationThreadSummary["source"];
+      threadId: string;
+    },
+  ) => void;
   onClearPickDirectoryError?: () => void;
   pickDirectoryError?: string;
   pickingDirectory?: boolean;
@@ -4492,7 +4500,10 @@ export function Composer(props: ComposerProps) {
         .map((directory) => directory.path)
         .filter((path): path is string => Boolean(path));
       if (sentReferencedDirectoryPaths.length > 0) {
-        props.onAttachDirectoryReferences?.(sentReferencedDirectoryPaths);
+        props.onAttachDirectoryReferences?.(sentReferencedDirectoryPaths, {
+          backend: props.thread.source,
+          threadId: props.thread.id,
+        });
       }
       if (queued) {
         if (!options?.queueClaimed) {
@@ -6259,6 +6270,7 @@ export function Composer(props: ComposerProps) {
   const handleComposerClick = (): void => {
     setActiveSkillIndex(0);
     setActiveSlashIndex(0);
+    setActiveDirectoryRefIndex(0);
   };
   const handlePlainComposerKeyDown = (
     event: ReactKeyboardEvent<HTMLElement>,
