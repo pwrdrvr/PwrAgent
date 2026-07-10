@@ -764,6 +764,7 @@ export type ThreadViewProps = {
   onSelectNoDirectoryFromPicker?: () => void;
   onPickAndRegisterDirectory?: () => void;
   onPickAndAttachDirectoryToThread?: () => void;
+  onAttachDirectoryReferences?: (paths: string[]) => void;
   onClearPickDirectoryError?: () => void;
   setExecutionModeError?: string;
   setThreadModelSettingsError?: string;
@@ -834,7 +835,8 @@ export type ThreadViewProps = {
     directoryKey: string,
     input?: AppServerTurnInputItem[],
     collaborationMode?: AppServerCollaborationModeRequest,
-    reviewTarget?: AppServerReviewTarget
+    reviewTarget?: AppServerReviewTarget,
+    extraDirectoryPaths?: string[]
   ) => Promise<void>;
   onCancelLaunchpad?: (directoryKey: string) => void;
   onPendingStatusChange?: (status?: string) => void;
@@ -2226,7 +2228,13 @@ export function ThreadView(props: ThreadViewProps) {
     );
     const handleMaterializeLaunchpad: NonNullable<
       ThreadViewProps["onMaterializeLaunchpad"]
-    > = async (directoryKey, input, collaborationMode, reviewTarget) => {
+    > = async (
+      directoryKey,
+      input,
+      collaborationMode,
+      reviewTarget,
+      extraDirectoryPaths
+    ) => {
       if (!props.onMaterializeLaunchpad) {
         return;
       }
@@ -2238,7 +2246,8 @@ export function ThreadView(props: ThreadViewProps) {
           directoryKey,
           input,
           collaborationMode,
-          reviewTarget
+          reviewTarget,
+          extraDirectoryPaths
         );
       } catch (error) {
         setLaunchpadMaterializeError(
@@ -2637,6 +2646,7 @@ export function ThreadView(props: ThreadViewProps) {
             onSetAcpRuntimeOption={props.onSetAcpRuntimeOption}
             onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
+            onAttachDirectoryReferences={props.onAttachDirectoryReferences}
             pendingRequestActive={Boolean(props.pendingRequest)}
             pendingUserInputActive={Boolean(
               props.pendingUserInput || props.pendingMcpInteraction

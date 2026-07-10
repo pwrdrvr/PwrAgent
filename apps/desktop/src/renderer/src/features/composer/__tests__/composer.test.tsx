@@ -9360,6 +9360,150 @@ describe("Composer", () => {
     });
   });
 
+  it("inserts a tilde path from the @ directory autocomplete and links it on start", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "Repo",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const repoDirectory: NavigationDirectorySummary = {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 20,
+      };
+      const searchProductDirectory: NavigationDirectorySummary = {
+        key: "directory:/Users/huntharo/GIPHY/search-product",
+        kind: "directory",
+        label: "search-product",
+        path: "/Users/huntharo/GIPHY/search-product",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 10,
+      };
+      const onMaterializeLaunchpad = vi.fn(async () => undefined);
+
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          directory={repoDirectory}
+          directories={[repoDirectory, searchProductDirectory]}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={onMaterializeLaunchpad}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("New thread"), {
+        target: { value: "Read SEARCH-4803 in @search" },
+      });
+
+      const listbox = screen.getByRole("listbox", { name: "Directories" });
+      fireEvent.click(
+        within(listbox).getByRole("button", { name: /search-product/ })
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("New thread")).toHaveValue(
+          "Read SEARCH-4803 in ~/GIPHY/search-product "
+        );
+      });
+      expect(
+        screen.queryByRole("listbox", { name: "Directories" })
+      ).not.toBeInTheDocument();
+
+      await clickButton("Start thread");
+
+      await waitFor(() => {
+        expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+          "directory:/repo",
+          [{ type: "text", text: "Read SEARCH-4803 in ~/GIPHY/search-product" }],
+          undefined,
+          undefined,
+          ["/Users/huntharo/GIPHY/search-product"]
+        );
+      });
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("links a hand-typed directory reference after sending a reply", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const onAttachDirectoryReferences = vi.fn();
+      const searchProductDirectory: NavigationDirectorySummary = {
+        key: "directory:/Users/huntharo/GIPHY/search-product",
+        kind: "directory",
+        label: "search-product",
+        path: "/Users/huntharo/GIPHY/search-product",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 10,
+      };
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            startTurn,
+          }}
+          directories={[searchProductDirectory]}
+          disabled={false}
+          skills={[]}
+          onAttachDirectoryReferences={onAttachDirectoryReferences}
+          thread={{
+            id: "thread-1",
+            title: "Search cleanup",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "It might be in ~/GIPHY/search-product." },
+      });
+      await clickButton("Send");
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalled();
+      });
+      expect(onAttachDirectoryReferences).toHaveBeenCalledWith([
+        "/Users/huntharo/GIPHY/search-product",
+      ]);
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
   it("does not restore a submitted launchpad draft when materialization unmounts before local clear", async () => {
     const draftStore = createComposerDraftStore();
     const launchpad: NavigationLaunchpadDraft = {
@@ -9409,7 +9553,9 @@ describe("Composer", () => {
       expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
         "directory:/repo",
         [{ type: "text", text: "Submitted launchpad should not come back" }],
-        undefined
+        undefined,
+        undefined,
+        []
       );
     });
 
@@ -9484,7 +9630,8 @@ describe("Composer", () => {
         "directory:/repo",
         undefined,
         undefined,
-        { type: "baseBranch", branch: "main" }
+        { type: "baseBranch", branch: "main" },
+        []
       );
     });
 

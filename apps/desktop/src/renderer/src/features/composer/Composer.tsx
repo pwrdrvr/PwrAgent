@@ -60,6 +60,12 @@ import {
   getAcpRuntimeModeControl,
 } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
+import {
+  buildDirectoryReferenceInsertText,
+  filterDirectoryReferenceCandidates,
+  findDirectoryReferenceTrigger,
+  listReferencedDirectories,
+} from "../../lib/directory-references";
 import { normalizeImageFile } from "../../lib/image-normalization";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
@@ -134,7 +140,12 @@ type ComposerProps = {
     directoryKey: string,
     input?: AppServerTurnInputItem[],
     collaborationMode?: AppServerCollaborationModeRequest,
-    reviewTarget?: AppServerReviewTarget
+    reviewTarget?: AppServerReviewTarget,
+    /**
+     * Paths of tracked directories the draft references (`@`-inserted or
+     * typed by hand). Linked to the new thread right after it is created.
+     */
+    extraDirectoryPaths?: string[]
   ) => Promise<void>;
   /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
   onCancelLaunchpad?: (directoryKey: string) => void;
@@ -186,6 +197,13 @@ type ComposerProps = {
   onSelectNoDirectoryFromPicker?: () => void;
   onPickAndRegisterDirectory?: () => void;
   onPickAndAttachDirectoryToThread?: () => void;
+  /**
+   * Link draft-referenced directories to the existing thread after a turn
+   * is sent (the launchpad path rides on `onMaterializeLaunchpad`'s
+   * `extraDirectoryPaths` instead). Fire-and-forget; failures must not
+   * block the turn.
+   */
+  onAttachDirectoryReferences?: (paths: string[]) => void;
   onClearPickDirectoryError?: () => void;
   pickDirectoryError?: string;
   pickingDirectory?: boolean;
@@ -313,7 +331,7 @@ type SlashCommandSuggestion = {
   sourceLabel: string;
 };
 
-type AutocompleteKind = "skills" | "slash";
+type AutocompleteKind = "skills" | "slash" | "directories";
 type ReviewTargetChoice = AppServerReviewTarget["type"];
 
 const CONTEXT_MOON_PHASES = [
@@ -2359,6 +2377,7 @@ export function Composer(props: ComposerProps) {
   const reviewCustomTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const skillListboxId = useId();
   const slashListboxId = useId();
+  const directoryRefListboxId = useId();
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
   const pendingProgrammaticComposerChangeRef =
     useRef<PendingProgrammaticComposerChange | undefined>(undefined);
@@ -2524,6 +2543,7 @@ export function Composer(props: ComposerProps) {
   }>();
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
+  const [activeDirectoryRefIndex, setActiveDirectoryRefIndex] = useState(0);
   const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
 
   const setThreadEnvActionStarting = (
@@ -3248,6 +3268,7 @@ export function Composer(props: ComposerProps) {
   };
   const trigger = findSkillTrigger(draft, selectionStart);
   const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
+  const directoryRefTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
   const filteredSkills = useMemo(() => {
     if (!trigger) {
       return [];
@@ -3297,17 +3318,31 @@ export function Composer(props: ComposerProps) {
       );
     });
   }, [slashCommandSuggestions, slashTrigger?.query]);
+  const filteredDirectoryRefs = useMemo(() => {
+    if (!directoryRefTrigger) {
+      return [];
+    }
+
+    return filterDirectoryReferenceCandidates(
+      props.directories ?? [],
+      directoryRefTrigger.query,
+    );
+  }, [props.directories, directoryRefTrigger]);
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
       ? "slash"
-      : undefined;
+      : directoryRefTrigger && filteredDirectoryRefs.length > 0
+        ? "directories"
+        : undefined;
   const autocompleteKey =
     availableAutocompleteKind === "skills" && trigger
       ? `skills:${trigger.start}:${trigger.end}:${trigger.query}`
       : availableAutocompleteKind === "slash" && slashTrigger
         ? `slash:${slashTrigger.start}:${slashTrigger.end}:/${slashTrigger.query}`
-        : undefined;
+        : availableAutocompleteKind === "directories" && directoryRefTrigger
+          ? `directories:${directoryRefTrigger.start}:${directoryRefTrigger.end}:@${directoryRefTrigger.query}`
+          : undefined;
   const displayedAutocompleteKind =
     autocompleteKey && autocompleteKey === dismissedAutocompleteKey
       ? undefined
@@ -3317,21 +3352,51 @@ export function Composer(props: ComposerProps) {
     : displayedAutocompleteKind;
   const hasAutocomplete = Boolean(autocompleteKind);
   const activeAutocompleteIndex =
-    autocompleteKind === "skills" ? activeSkillIndex : activeSlashIndex;
+    autocompleteKind === "skills"
+      ? activeSkillIndex
+      : autocompleteKind === "directories"
+        ? activeDirectoryRefIndex
+        : activeSlashIndex;
   const autocompleteLength =
     autocompleteKind === "skills"
       ? filteredSkills.length
-      : filteredSlashCommands.length;
+      : autocompleteKind === "directories"
+        ? filteredDirectoryRefs.length
+        : filteredSlashCommands.length;
   const autocompleteListboxId =
     autocompleteKind === "skills"
       ? skillListboxId
       : autocompleteKind === "slash"
         ? slashListboxId
-        : undefined;
+        : autocompleteKind === "directories"
+          ? directoryRefListboxId
+          : undefined;
   const activeAutocompleteOptionId =
     autocompleteListboxId && autocompleteKind
       ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
       : undefined;
+  // Directories the given text references by path (`@`-inserted, typed by
+  // hand, or pasted). The draft text is the source of truth — deleting a
+  // path from the draft drops the reference. Directories that are already
+  // linked (the launchpad's own directory; a thread's linked directories,
+  // including worktree checkouts) are excluded so send-time attach only
+  // sees new references.
+  const listDraftReferencedDirectories = (
+    text: string,
+  ): NavigationDirectorySummary[] => {
+    const excludePaths = [
+      props.directory?.path,
+      props.launchpad?.directoryPath,
+      ...(props.thread?.linkedDirectories ?? []).flatMap((linked) => [
+        linked.path,
+        linked.worktreePath,
+      ]),
+    ].filter((path): path is string => Boolean(path));
+    return listReferencedDirectories(text, props.directories ?? [], {
+      excludePaths,
+    });
+  };
+  const referencedDirectories = listDraftReferencedDirectories(canonicalDraft);
   const reviewDirectory = useMemo(
     () =>
       findReviewDirectoryForWorkspace({
@@ -3522,6 +3587,10 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     setActiveSlashIndex(0);
   }, [slashTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
+
+  useEffect(() => {
+    setActiveDirectoryRefIndex(0);
+  }, [directoryRefTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
 
   useEffect(() => {
     if (!dismissedAutocompleteKey) {
@@ -4006,7 +4075,10 @@ export function Composer(props: ComposerProps) {
           props.launchpad.directoryKey,
           undefined,
           undefined,
-          reviewCommand.target
+          reviewCommand.target,
+          listDraftReferencedDirectories(canonicalDraft)
+            .map((directory) => directory.path)
+            .filter((path): path is string => Boolean(path))
         );
         clearSubmittedComposerDraft(submittedScopeKey);
         setReviewConfig(undefined);
@@ -4413,6 +4485,14 @@ export function Composer(props: ComposerProps) {
       } else {
         updateActiveTurnId(response.turnId);
         props.onActiveTurnIdChange?.(response.turnId);
+      }
+      const sentReferencedDirectoryPaths = listDraftReferencedDirectories(
+        queued ? queued.text : canonicalDraft,
+      )
+        .map((directory) => directory.path)
+        .filter((path): path is string => Boolean(path));
+      if (sentReferencedDirectoryPaths.length > 0) {
+        props.onAttachDirectoryReferences?.(sentReferencedDirectoryPaths);
       }
       if (queued) {
         if (!options?.queueClaimed) {
@@ -4919,7 +4999,11 @@ export function Composer(props: ComposerProps) {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
           payload.input,
-          collaborationMode
+          collaborationMode,
+          undefined,
+          listDraftReferencedDirectories(canonicalDraft)
+            .map((directory) => directory.path)
+            .filter((path): path is string => Boolean(path))
         );
         clearSubmittedComposerDraft(submittedScopeKey);
         if (collaborationMode) {
@@ -5072,6 +5156,62 @@ export function Composer(props: ComposerProps) {
 
     updateVisibleDraft(nextDraft);
     setActiveSlashIndex(0);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+    });
+  };
+
+  const applyDirectoryReference = (
+    directory: NavigationDirectorySummary,
+  ): void => {
+    if (!inputRef.current) {
+      return;
+    }
+
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const selectionEnd = Math.min(
+      inputRef.current.selectionEnd ?? selectionStart,
+      draft.length,
+    );
+    const refTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
+    const insertText = buildDirectoryReferenceInsertText(directory);
+    if (!refTrigger || !insertText) {
+      return;
+    }
+
+    const before = draft.slice(0, refTrigger.start);
+    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
+    const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
+    const nextDraft = `${before}${insertText}${needsTrailingSpace ? " " : ""}${after}`;
+    const nextSelection =
+      before.length + insertText.length + (needsTrailingSpace ? 1 : 0);
+    const nextSkillTokens = adjustSkillTokenIndexesForTextChange({
+      currentDraft: draft,
+      nextDraft,
+      skillTokens,
+    });
+
+    // Same protected-update dance as applySkill: the editability sync in
+    // ComposerTiptapInput re-emits the editor's (still pre-insert) content
+    // through onChange before the external-value sync applies the new
+    // draft. The pending-programmatic guard in handleComposerChange
+    // swallows that stale replay so the two sides can't ping-pong.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveDirectoryRefIndex(0);
+    });
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(nextSelection, nextSelection);
@@ -5825,6 +5965,13 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
+    if (autocompleteKind === "directories") {
+      applyDirectoryReference(
+        filteredDirectoryRefs[activeDirectoryRefIndex] ?? filteredDirectoryRefs[0]!,
+      );
+      return;
+    }
+
     const currentSlashText = slashTrigger
       ? `/${slashTrigger.query}`.toLowerCase()
       : undefined;
@@ -5912,6 +6059,8 @@ export function Composer(props: ComposerProps) {
     ): void => {
       if (autocompleteKind === "skills") {
         setActiveSkillIndex(updater);
+      } else if (autocompleteKind === "directories") {
+        setActiveDirectoryRefIndex(updater);
       } else {
         setActiveSlashIndex(updater);
       }
@@ -5964,6 +6113,7 @@ export function Composer(props: ComposerProps) {
       }
       setActiveSkillIndex(0);
       setActiveSlashIndex(0);
+      setActiveDirectoryRefIndex(0);
       requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
@@ -6964,6 +7114,51 @@ export function Composer(props: ComposerProps) {
               </button>
             ))}
           </div>
+        ) : autocompleteKind === "directories" ? (
+          <div
+            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+            ref={autocompleteListRef}
+            role="listbox"
+            aria-label="Directories"
+            id={directoryRefListboxId}
+            style={{ maxHeight: autocompleteLayout.maxHeight }}
+          >
+            {filteredDirectoryRefs.map((directory, index) => (
+              <button
+                key={directory.key}
+                id={`${directoryRefListboxId}-option-${index}`}
+                ref={(node) => {
+                  autocompleteOptionRefs.current[index] = node;
+                }}
+                aria-selected={index === activeDirectoryRefIndex}
+                className={`composer__autocomplete-option${index === activeDirectoryRefIndex ? " is-active" : ""}`}
+                tabIndex={index === activeDirectoryRefIndex ? 0 : -1}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  applyDirectoryReference(directory);
+                }}
+                onClick={() => {
+                  applyDirectoryReference(directory);
+                }}
+                onFocus={() => {
+                  setActiveDirectoryRefIndex(index);
+                }}
+                onKeyDown={handleAutocompleteKeyDown}
+              >
+                <span className="composer__autocomplete-title">
+                  <FolderIcon size={13} aria-hidden="true" />
+                  <HighlightedAutocompleteLabel
+                    label={directory.label}
+                    query={directoryRefTrigger?.query ?? ""}
+                  />
+                </span>
+                <span className="composer__autocomplete-meta">
+                  {buildDirectoryReferenceInsertText(directory)}
+                </span>
+              </button>
+            ))}
+          </div>
         ) : null}
       </div>
 
@@ -7148,6 +7343,19 @@ export function Composer(props: ComposerProps) {
               ) : null}
             </>
           ) : null}
+
+          {referencedDirectories.map((directory) => (
+            <span
+              key={directory.key}
+              className="composer__directory-reference tooltip-target"
+              data-tooltip={`${buildDirectoryReferenceInsertText(directory)} — linked to the thread when you send`}
+            >
+              <FolderIcon size={13} aria-hidden="true" />
+              <span className="composer__directory-reference-label">
+                {directory.label}
+              </span>
+            </span>
+          ))}
 
           {props.launchpad ? (
             <ComposerDropdown

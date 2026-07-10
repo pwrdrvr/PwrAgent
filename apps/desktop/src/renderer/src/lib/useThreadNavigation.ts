@@ -2116,6 +2116,7 @@ export function useThreadNavigation(
     collaborationMode?: AppServerCollaborationModeRequest,
     reviewTarget?: AppServerReviewTarget,
     parentThreadId?: string,
+    extraDirectoryPaths?: string[],
   ) => Promise<void>;
   /** Directory the New Thread button resolves to by default, or undefined for the directory-less workspace. */
   newThreadDirectoryLabel?: string;
@@ -2133,6 +2134,12 @@ export function useThreadNavigation(
   ) => Promise<void>;
   /** Existing-thread picker: OS dialog -> validate -> attach as an extra linked directory. */
   pickAndAttachDirectoryToSelectedThread: () => Promise<void>;
+  /**
+   * Attach known directory paths (composer `@`-references) to the selected
+   * thread. Per-path failures are non-fatal — the turn already carries the
+   * path as text, so a failed link only loses the sidebar association.
+   */
+  attachDirectoryPathsToSelectedThread: (paths: string[]) => Promise<void>;
   pickDirectoryError?: string;
   pickingDirectory: boolean;
   clearPickDirectoryError: () => void;
@@ -4270,6 +4277,50 @@ export function useThreadNavigation(
     }
   }, [desktopApi, refresh, selectedThread]);
 
+  const attachDirectoryPathsToSelectedThread = useCallback(
+    async (paths: string[]): Promise<void> => {
+      // Composer `@`-reference links (no OS dialog — the paths are already
+      // known). Failures stay non-fatal: the sent turn carries the path as
+      // text either way, so a failed link only loses the association.
+      if (
+        !desktopApi?.attachDirectoryToThread ||
+        !selectedThread ||
+        paths.length === 0
+      ) {
+        return;
+      }
+
+      const thread = selectedThread;
+      let attachedAny = false;
+      for (const path of paths) {
+        try {
+          const result = await desktopApi.attachDirectoryToThread({
+            backend: thread.source,
+            threadId: thread.id,
+            path,
+            preferredBackend: thread.source,
+          });
+          if (result.ok) {
+            attachedAny = true;
+          } else {
+            console.warn(
+              `Could not link referenced directory ${path}: ${result.message}`,
+            );
+          }
+        } catch (error) {
+          console.warn(
+            `Could not link referenced directory ${path}:`,
+            error,
+          );
+        }
+      }
+      if (attachedAny) {
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      }
+    },
+    [desktopApi, refresh, selectedThread],
+  );
+
   const clearPickDirectoryError = useCallback((): void => {
     setPickDirectoryError(undefined);
   }, []);
@@ -4456,6 +4507,7 @@ export function useThreadNavigation(
       collaborationMode?: AppServerCollaborationModeRequest,
       reviewTarget?: AppServerReviewTarget,
       parentThreadId?: string,
+      extraDirectoryPaths?: string[],
     ): Promise<void> => {
       if (!desktopApi?.materializeDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing materializeDirectoryLaunchpad().");
@@ -4559,6 +4611,29 @@ export function useThreadNavigation(
       }
       if (response.turnStartFailure) {
         setLaunchpadError(response.turnStartFailure.message);
+      }
+      // Link composer `@`-referenced directories to the just-created
+      // thread before the refresh below so the snapshot comes back with
+      // them. Non-fatal per path — the turn already carries the path as
+      // text, so a failed link only loses the sidebar association.
+      if (extraDirectoryPaths && extraDirectoryPaths.length > 0) {
+        for (const path of extraDirectoryPaths) {
+          try {
+            const attachResult = await desktopApi.attachDirectoryToThread?.({
+              backend: response.backend,
+              threadId: response.threadId,
+              path,
+              preferredBackend: response.backend,
+            });
+            if (attachResult && !attachResult.ok) {
+              console.warn(
+                `Could not link referenced directory ${path}: ${attachResult.message}`,
+              );
+            }
+          } catch (error) {
+            console.warn(`Could not link referenced directory ${path}:`, error);
+          }
+        }
       }
       setState((current) => ({
         ...current,
@@ -5464,6 +5539,7 @@ export function useThreadNavigation(
     openWorkspaceLaunchpad,
     pickAndRegisterDirectory,
     pickAndAttachDirectoryToSelectedThread,
+    attachDirectoryPathsToSelectedThread,
     pickDirectoryError,
     pickingDirectory,
     clearPickDirectoryError,

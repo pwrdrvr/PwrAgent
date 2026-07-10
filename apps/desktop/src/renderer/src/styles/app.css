@@ -14767,6 +14767,28 @@ textarea,
   gap: 6px;
 }
 
+/* Draft `@`-referenced directory (linked to the thread when the turn is
+   sent). Informational — the reference is removed by deleting the path
+   from the draft text, so the chip has no close affordance. */
+.composer__directory-reference {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.composer__directory-reference-label {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer__inline-error {
   max-width: min(320px, 100%);
   color: var(--danger-text);
