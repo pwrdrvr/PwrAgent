@@ -18,6 +18,7 @@ import type {
   NavigationThreadSummary,
   CodexEnvironmentActionRun,
   ThreadPricingSummary,
+  ThreadToolAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
@@ -103,6 +104,7 @@ type ThreadContextPanelProps = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
+  toolAccounting?: ThreadToolAccounting;
   pricingDisplayOptions?: {
     codexCredits: boolean;
     usd: boolean;
@@ -668,6 +670,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <PricingPanel
             activeTurnId={props.activeTurnId}
             pricing={props.pricing}
+            toolAccounting={props.toolAccounting}
             displayOptions={props.pricingDisplayOptions}
             onScrollToTurn={props.onScrollToTurn}
             subAgents={props.thread.subAgents}

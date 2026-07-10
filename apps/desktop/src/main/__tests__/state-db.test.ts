@@ -86,6 +86,29 @@ describe("StateDb", () => {
     ]);
   });
 
+  it("creates thread tool accounting tables", () => {
+    const tables = stateDb.raw
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?) ORDER BY name`,
+      )
+      .all(
+        "thread_tool_invocation_alerts",
+        "thread_tool_invocations",
+      ) as Array<{ name: string }>;
+
+    expect(tables.map((table) => table.name)).toEqual([
+      "thread_tool_invocation_alerts",
+      "thread_tool_invocations",
+    ]);
+    expect(indexNames("thread_tool_invocations")).toEqual(
+      expect.arrayContaining([
+        "idx_thread_tool_invocations_read_thread",
+        "idx_thread_tool_invocations_polling",
+        "idx_thread_tool_invocations_turn",
+      ]),
+    );
+  });
+
   it("carries observed context-replay columns on both the turn and the line", () => {
     // The tally's source of truth is thread_usage_turns. The line columns are a
     // DEPRECATED dual-write (issue #947) kept so older locally-run builds — which
@@ -1054,7 +1077,9 @@ function columnNames(
   return rows.map((row) => row.name);
 }
 
-function indexNames(tableName: "thread_usage_lines"): string[] {
+function indexNames(
+  tableName: "thread_tool_invocations" | "thread_usage_lines",
+): string[] {
   return (
     stateDb.raw.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
       name: string;

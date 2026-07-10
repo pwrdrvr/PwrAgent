@@ -4381,6 +4381,19 @@ export function useThreadSessionState(params: {
           };
         }
 
+        if (event.notification.method === "thread/toolAccounting/updated") {
+          return {
+            ...current,
+            lastTouchedAt: nextLastTouchedAt,
+            response: current.response
+              ? {
+                  ...current.response,
+                  toolAccounting: event.notification.params.toolAccounting,
+                }
+              : current.response,
+          };
+        }
+
         if (event.notification.method === "thread/tokenUsage/updated") {
           const contextWindow = normalizeThreadContextWindowState(
             event.notification.params.tokenUsage

@@ -38,6 +38,7 @@ import type {
   PendingRequestAction,
   ThreadExecutionMode,
   ThreadPricingSummary,
+  ThreadToolAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -728,6 +729,7 @@ export type ThreadViewProps = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
+  toolAccounting?: ThreadToolAccounting;
   pricingDisplayOptions?: {
     codexCredits: boolean;
     usd: boolean;
@@ -2749,6 +2751,7 @@ export function ThreadView(props: ThreadViewProps) {
           platform={props.platform}
           thread={selectedThread!}
           pricing={props.pricing}
+          toolAccounting={props.toolAccounting}
           pricingDisplayOptions={props.pricingDisplayOptions}
           threadPricingSummaryEnabled={threadPricingSummaryEnabled}
           worktreeArchiveError={props.worktreeArchiveError}

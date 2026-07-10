@@ -865,6 +865,7 @@ function DesktopAppShell(props: {
     messageCount: session.messages.length,
     contextWindow: session.contextWindow,
     pricing: session.response?.pricing,
+    toolAccounting: session.response?.toolAccounting,
     threadPricingSummaryEnabled:
       settings.snapshot?.experimental.threadPricingSummary?.value ?? true,
     pricingDisplayOptions: {
