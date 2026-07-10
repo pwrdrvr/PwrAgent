@@ -22,6 +22,36 @@ async function clickElement(element: HTMLElement): Promise<void> {
   });
 }
 
+function withMockScrollIntoView(): {
+  scrollIntoView: ReturnType<typeof vi.fn>;
+  restore: () => void;
+} {
+  const scrollIntoView = vi.fn();
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollIntoView",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrollIntoView,
+  });
+
+  return {
+    scrollIntoView,
+    restore: () => {
+      if (originalScrollIntoView) {
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "scrollIntoView",
+          originalScrollIntoView,
+        );
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+      }
+    },
+  };
+}
+
 const backends: BackendSummary[] = [
   {
     kind: "codex",
@@ -191,6 +221,152 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
+  it("scrolls a newly selected thread row into view", () => {
+    const { scrollIntoView, restore } = withMockScrollIntoView();
+    const nextThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-next",
+      title: "Next thread from history",
+    };
+
+    try {
+      const { rerender } = render(
+        <Sidebar
+          backends={backends}
+          browseMode="recents"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={[sharedThread, nextThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey="codex:thread-1"
+          threads={[sharedThread, nextThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+      scrollIntoView.mockClear();
+
+      rerender(
+        <Sidebar
+          backends={backends}
+          browseMode="recents"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={[sharedThread, nextThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey="codex:thread-next"
+          threads={[sharedThread, nextThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        block: "nearest",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("expands a user-collapsed directory and scrolls the selected thread into view", async () => {
+    const { scrollIntoView, restore } = withMockScrollIntoView();
+    const nextThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-in-projectb",
+      title: "History target inside ProjectB",
+      linkedDirectories: [
+        {
+          id: "dir-projectb",
+          label: "ProjectB",
+          path: "/Users/huntharo/pwrdrvr/ProjectB",
+          kind: "local" as const,
+        },
+      ],
+    };
+    const projectBDirectory: NavigationDirectorySummary = {
+      key: "directory:/Users/huntharo/pwrdrvr/ProjectB",
+      kind: "directory",
+      label: "ProjectB",
+      path: "/Users/huntharo/pwrdrvr/ProjectB",
+      threadKeys: ["codex:thread-in-projectb"],
+      needsAttentionCount: 0,
+      latestUpdatedAt: nextThread.updatedAt,
+    };
+
+    try {
+      const { rerender } = render(
+        <Sidebar
+          backends={backends}
+          browseMode="directories"
+          createThreadError={undefined}
+          directories={[directories[0]!, projectBDirectory]}
+          inboxThreads={[sharedThread, nextThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey="codex:thread-1"
+          threads={[sharedThread, nextThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      const projectBSummary = screen
+        .getAllByRole("button", { name: /ProjectB/i })
+        .find((button) => button.hasAttribute("aria-expanded"));
+      expect(projectBSummary).toBeDefined();
+      expect(projectBSummary).toHaveAttribute("aria-expanded", "false");
+
+      fireEvent.click(projectBSummary!);
+      expect(projectBSummary).toHaveAttribute("aria-expanded", "true");
+      fireEvent.click(projectBSummary!);
+      expect(projectBSummary).toHaveAttribute("aria-expanded", "false");
+      scrollIntoView.mockClear();
+
+      rerender(
+        <Sidebar
+          backends={backends}
+          browseMode="directories"
+          createThreadError={undefined}
+          directories={[directories[0]!, projectBDirectory]}
+          inboxThreads={[sharedThread, nextThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey="codex:thread-in-projectb"
+          threads={[sharedThread, nextThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(projectBSummary).toHaveAttribute("aria-expanded", "true");
+      });
+      expect(
+        screen.getByRole("button", { name: "History target inside ProjectB" }),
+      ).toBeInTheDocument();
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        block: "nearest",
+      });
+    } finally {
+      restore();
+    }
+  });
+
   it("renders Inbox as the first thread lens and keeps directory rows available", () => {
     const onOpenSettings = vi.fn();
     render(
