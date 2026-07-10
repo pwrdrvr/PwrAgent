@@ -23,6 +23,17 @@ const TERMINAL_TURN_METHODS = new Set([
 const BACKGROUND_QUEUE_RELEASE_INTERVAL_MS = 30_000;
 const globalInFlightScopeKeys = new Set<string>();
 
+function getQueuedTurnReleaseDelayMs(
+  queuedTurn: Pick<ComposerQueuedTurnSnapshot, "scheduledSendAt">,
+  now = Date.now(),
+): number {
+  const scheduledSendAt = queuedTurn.scheduledSendAt;
+  if (typeof scheduledSendAt !== "number" || !Number.isFinite(scheduledSendAt)) {
+    return 0;
+  }
+  return Math.max(0, scheduledSendAt - now);
+}
+
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
   return (
@@ -163,6 +174,9 @@ export function useQueuedTurnRelease(params: {
     if (!queuedTurn || isThreadSelected(current, thread)) {
       return;
     }
+    if (getQueuedTurnReleaseDelayMs(queuedTurn) > 0) {
+      return;
+    }
     const queuedTurnId = queuedTurn.id;
 
     const readReleaseCandidate = (candidateThread: NavigationThreadSummary) => {
@@ -174,6 +188,9 @@ export function useQueuedTurnRelease(params: {
       const releaseQueuedSnapshot =
         releaseState.composerDraftStore.getQueuedTurn(scopeKey);
       if (!releaseQueuedSnapshot || releaseQueuedSnapshot.id !== queuedTurnId) {
+        return undefined;
+      }
+      if (getQueuedTurnReleaseDelayMs(releaseQueuedSnapshot) > 0) {
         return undefined;
       }
 
@@ -449,4 +466,56 @@ export function useQueuedTurnRelease(params: {
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    const current = paramsRef.current;
+    let nextReleaseAt: number | undefined;
+    for (const thread of current.threads) {
+      if (
+        current.selectedThread?.source === thread.source &&
+        current.selectedThread.id === thread.id
+      ) {
+        continue;
+      }
+
+      const queuedTurn = current.composerDraftStore.getQueuedTurn(
+        getThreadScopeKey(thread),
+      );
+      const scheduledSendAt = queuedTurn?.scheduledSendAt;
+      if (
+        typeof scheduledSendAt !== "number" ||
+        !Number.isFinite(scheduledSendAt) ||
+        scheduledSendAt <= Date.now()
+      ) {
+        continue;
+      }
+
+      nextReleaseAt =
+        nextReleaseAt === undefined
+          ? scheduledSendAt
+          : Math.min(nextReleaseAt, scheduledSendAt);
+    }
+
+    if (nextReleaseAt === undefined) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const releaseState = paramsRef.current;
+      for (const thread of releaseState.threads) {
+        if (
+          releaseState.selectedThread?.source === thread.source &&
+          releaseState.selectedThread.id === thread.id
+        ) {
+          continue;
+        }
+
+        void releaseQueuedTurnForThread(thread, { verifyIdle: true });
+      }
+    }, Math.max(0, nextReleaseAt - Date.now()));
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [params.threads, params.selectedThread, params.composerDraftStore]);
 }

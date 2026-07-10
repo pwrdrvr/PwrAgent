@@ -22,6 +22,7 @@ export type ComposerQueuedTurnSnapshot = {
   input?: AppServerTurnInputItem[];
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
+  scheduledSendAt?: number;
   reviewCommand?: {
     cwd?: string;
     displayText: string;

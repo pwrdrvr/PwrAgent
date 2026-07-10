@@ -13627,6 +13627,15 @@ textarea,
   color: var(--status-warning);
 }
 
+.composer__queued--scheduled {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-soft) 36%, var(--bg-panel-elevated));
+}
+
+.composer__queued--scheduled .composer__queued-label {
+  color: var(--accent-bright);
+}
+
 .composer__queued-copy {
   display: flex;
   min-width: 0;
@@ -15773,6 +15782,64 @@ textarea,
   padding: 0 12px;
   border-radius: 999px;
   font-size: 13px;
+}
+
+.composer__send-split {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.composer__actions .composer__send-schedule-button {
+  width: 28px;
+  min-width: 28px;
+  justify-content: center;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.composer__send-split--open .composer__send-schedule-button,
+.composer__send-schedule-button:hover:not(:disabled),
+.composer__send-schedule-button:focus-visible:not(:disabled) {
+  background: var(--accent);
+  color: var(--button-text);
+}
+
+.composer__schedule-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 32;
+  min-width: 168px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.composer__schedule-menu-item {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.composer__schedule-menu-item:hover,
+.composer__schedule-menu-item:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
 }
 
 .context-window-moon {
