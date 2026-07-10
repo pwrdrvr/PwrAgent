@@ -5153,9 +5153,44 @@ export function Composer(props: ComposerProps) {
     const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
     const nextDraft = `${before}${command.insertText}${needsTrailingSpace ? " " : ""}${after}`;
     const nextSelection = before.length + command.insertText.length + (needsTrailingSpace ? 1 : 0);
+    const nextSkillTokens = adjustSkillTokenIndexesForTextChange({
+      currentDraft: draft,
+      nextDraft,
+      skillTokens,
+    });
 
-    updateVisibleDraft(nextDraft);
-    setActiveSlashIndex(0);
+    // Same protected-update dance as applySkill / applyDirectoryReference:
+    // the editability sync in ComposerTiptapInput re-emits the editor's
+    // (still pre-insert) content through onChange before the external-value
+    // sync applies the new draft. The pending-programmatic guard in
+    // handleComposerChange swallows that stale replay so the two sides
+    // can't ping-pong.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    // The caret lives in a ref, so the commit below re-renders with the
+    // PRE-insert caret still inside the inserted "/command" text — that
+    // prefix is itself a valid slash trigger, which would keep the popover
+    // open until the next interaction. Dismiss that phantom trigger's key;
+    // the dismissal self-clears as soon as the trigger key changes.
+    const lingeringTrigger = findSlashCommandTrigger(
+      nextDraft,
+      Math.min(selectionStart, nextDraft.length),
+    );
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveSlashIndex(0);
+      setDismissedAutocompleteKey(
+        lingeringTrigger
+          ? `slash:${lingeringTrigger.start}:${lingeringTrigger.end}:/${lingeringTrigger.query}`
+          : undefined,
+      );
+    });
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(nextSelection, nextSelection);

@@ -9504,6 +9504,55 @@ describe("Composer", () => {
     }
   });
 
+  it("commits a provider slash command insert without looping the draft", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "deployaudit",
+            description: "Audit the most recent deploy.",
+            backend: "codex",
+            scope: "backend",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Deploy audit",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, { target: { value: "/deploy" } });
+    expect(
+      within(screen.getByRole("listbox", { name: "Commands" })).getByRole(
+        "button",
+        { name: /\/deployaudit/i },
+      ),
+    ).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("/deployaudit ");
+    });
+    expect(
+      screen.queryByRole("listbox", { name: "Commands" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("does not restore a submitted launchpad draft when materialization unmounts before local clear", async () => {
     const draftStore = createComposerDraftStore();
     const launchpad: NavigationLaunchpadDraft = {
