@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.0-beta.47 - 2026-07-09
+
+- AI Providers - Fixed Refresh and backend discovery so disabled ACP providers are no longer probed, preventing disabled agents such as Gemini from triggering browser login flows while still allowing cached disabled entries to remain visible.
+- Codex Discovery - Updated Codex discovery so Settings can find Codex from renamed ChatGPT.app bundles and Homebrew installs even when PwrAgent launches with a sparse macOS PATH.
+
 ## v1.0.0-beta.46 - 2026-07-09
 
 - Linked Projects - Fixed attached managed worktrees so their observed branch stays scoped to the linked directory instead of overwriting the thread-wide branch, preventing false branch drift and stale branch chips.
