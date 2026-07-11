@@ -8488,6 +8488,40 @@ export class DesktopBackendRegistry {
     return this.threadTurnQueue.canStartImmediately(params);
   }
 
+  getActiveTurnForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): { backend: AppServerBackendKind; threadId: string; turnId: string } | undefined {
+    if (params.backend === "codex") {
+      for (const key of this.activeCodexTurnModes.keys()) {
+        const parsed = parseThreadTurnKeyBody(key);
+        if (
+          parsed?.threadId === params.threadId &&
+          !parsed.turnId.startsWith("pending:")
+        ) {
+          return {
+            backend: params.backend,
+            threadId: parsed.threadId,
+            turnId: parsed.turnId,
+          };
+        }
+      }
+      return undefined;
+    }
+
+    for (const key of this.activeTurnKeys) {
+      const parsed = parseActiveTurnKey(key);
+      if (
+        parsed?.backend === params.backend &&
+        parsed.threadId === params.threadId &&
+        !parsed.turnId.startsWith("pending:")
+      ) {
+        return parsed;
+      }
+    }
+    return undefined;
+  }
+
   getInProgressThreadSnapshotForQuit(): {
     count: number;
     threadIds: string[];

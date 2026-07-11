@@ -2289,7 +2289,11 @@ export class MessagingController {
   }
 
   private async deliverQueuedTurnNotice(entry: MessagingQueuedTurnEntry): Promise<void> {
-    const canSteer = this.canSteerQueuedTurn(entry);
+    const activeTurn = await this.resolveSteerableActiveTurn(
+      entry.binding,
+      "queued_turn_notice",
+    );
+    const canSteer = this.canSteerQueuedTurn(activeTurn);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("queued-turn"),
       capabilityProfile: this.capabilityProfile,
@@ -2318,8 +2322,9 @@ export class MessagingController {
     }
   }
 
-  private canSteerQueuedTurn(entry: MessagingQueuedTurnEntry): boolean {
-    const activeTurn = this.getActiveTurn(entry.binding);
+  private canSteerQueuedTurn(
+    activeTurn: MessagingActiveTurnSummary | undefined,
+  ): boolean {
     return Boolean(
       this.options.backend.steerTurn &&
         activeTurn &&
@@ -2395,7 +2400,7 @@ export class MessagingController {
       return;
     }
 
-    const activeTurn = await this.reconcileActiveTurnFromBackendStatus(
+    const activeTurn = await this.resolveSteerableActiveTurn(
       entry.binding,
       "queued_turn_steer",
     );
@@ -10573,6 +10578,45 @@ export class MessagingController {
       reason: `${reason}:thread_status_idle`,
     });
     return completedTurn;
+  }
+
+  private async resolveSteerableActiveTurn(
+    binding: MessagingBindingRecord,
+    reason: string,
+  ): Promise<MessagingActiveTurnSummary | undefined> {
+    const activeTurn = await this.reconcileActiveTurnFromBackendStatus(
+      binding,
+      reason,
+    );
+    if (activeTurn && ["working", "waiting"].includes(activeTurn.status)) {
+      return activeTurn;
+    }
+
+    const backendTurn = await this.options.backend.readActiveTurn?.({
+      backend: binding.backend,
+      threadId: binding.threadId,
+    });
+    if (!backendTurn?.turnId) {
+      return activeTurn;
+    }
+
+    const restoredTurn: MessagingActiveTurnSummary = {
+      turnId: backendTurn.turnId,
+      status: "working",
+      updatedAt: this.now(),
+    };
+    this.setActiveTurn(binding, restoredTurn);
+    this.logBindingTurnStateChange(
+      binding,
+      activeTurn,
+      restoredTurn,
+      `${reason}:active_turn_lookup`,
+    );
+    await this.signalTurnActivity(binding, restoredTurn, {
+      force: true,
+      reason: `${reason}:active_turn_lookup`,
+    });
+    return restoredTurn;
   }
 
   private async retireApprovalCallbackIfBackendIdle(
