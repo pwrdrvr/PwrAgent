@@ -367,6 +367,121 @@ describe("Sidebar", () => {
     }
   });
 
+  it("reveals a selected thread after its directory membership refreshes", async () => {
+    const { scrollIntoView, restore } = withMockScrollIntoView();
+    const refreshedThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-after-refresh",
+      title: "History target after refresh",
+      linkedDirectories: [
+        {
+          id: "dir-projectb",
+          label: "ProjectB",
+          path: "/Users/huntharo/pwrdrvr/ProjectB",
+          kind: "local" as const,
+        },
+      ],
+    };
+    const projectBWithoutThread: NavigationDirectorySummary = {
+      key: "directory:/Users/huntharo/pwrdrvr/ProjectB",
+      kind: "directory",
+      label: "ProjectB",
+      path: "/Users/huntharo/pwrdrvr/ProjectB",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: refreshedThread.updatedAt,
+    };
+    const projectBWithThread: NavigationDirectorySummary = {
+      ...projectBWithoutThread,
+      threadKeys: ["codex:thread-after-refresh"],
+    };
+
+    try {
+      const { rerender } = render(
+        <Sidebar
+          backends={backends}
+          browseMode="directories"
+          createThreadError={undefined}
+          directories={[directories[0]!, projectBWithoutThread]}
+          inboxThreads={[sharedThread, refreshedThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey="codex:thread-1"
+          threads={[sharedThread, refreshedThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      const projectBSummary = screen
+        .getAllByRole("button", { name: /ProjectB/i })
+        .find((button) => button.hasAttribute("aria-expanded"));
+      expect(projectBSummary).toBeDefined();
+      fireEvent.click(projectBSummary!);
+      expect(projectBSummary).toHaveAttribute("aria-expanded", "true");
+      fireEvent.click(projectBSummary!);
+      expect(projectBSummary).toHaveAttribute("aria-expanded", "false");
+      scrollIntoView.mockClear();
+
+      rerender(
+        <Sidebar
+          backends={backends}
+          browseMode="directories"
+          createThreadError={undefined}
+          directories={[directories[0]!, projectBWithoutThread]}
+          inboxThreads={[sharedThread, refreshedThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey="codex:thread-after-refresh"
+          threads={[sharedThread, refreshedThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+      expect(projectBSummary).toHaveAttribute("aria-expanded", "false");
+      expect(
+        screen.queryByRole("button", { name: "History target after refresh" }),
+      ).not.toBeInTheDocument();
+
+      rerender(
+        <Sidebar
+          backends={backends}
+          browseMode="directories"
+          createThreadError={undefined}
+          directories={[directories[0]!, projectBWithThread]}
+          inboxThreads={[sharedThread, refreshedThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey="codex:thread-after-refresh"
+          threads={[sharedThread, refreshedThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(projectBSummary).toHaveAttribute("aria-expanded", "true");
+      });
+      expect(
+        screen.getByRole("button", { name: "History target after refresh" }),
+      ).toBeInTheDocument();
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        block: "nearest",
+      });
+    } finally {
+      restore();
+    }
+  });
+
   it("renders Inbox as the first thread lens and keeps directory rows available", () => {
     const onOpenSettings = vi.fn();
     render(

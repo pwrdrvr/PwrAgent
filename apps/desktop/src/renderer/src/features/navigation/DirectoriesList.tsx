@@ -369,42 +369,42 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
   useEffect(() => {
     const selectedItemKey = props.selectedItemKey;
-    const previousSelectedItemKey = previousSelectedItemKeyRef.current;
-    previousSelectedItemKeyRef.current = selectedItemKey;
     if (!selectedItemKey) {
+      previousSelectedItemKeyRef.current = undefined;
       return;
     }
+    const matchingDirectory = props.directories.find(
+      (directory) =>
+        selectedItemKey === buildLaunchpadSelectionKey(directory.key) ||
+        directory.threadKeys.includes(selectedItemKey),
+    );
+    if (!matchingDirectory) {
+      return;
+    }
+
+    const previousSelectedItemKey = previousSelectedItemKeyRef.current;
     const selectedItemKeyChanged = selectedItemKey !== previousSelectedItemKey;
+    previousSelectedItemKeyRef.current = selectedItemKey;
 
     setExpandedByKey((current) => {
-      for (const directory of props.directories) {
-        if (
-          selectedItemKey === buildLaunchpadSelectionKey(directory.key) ||
-          directory.threadKeys.includes(selectedItemKey)
-        ) {
-          // Preserve explicit user collapse across unrelated
-          // directory snapshot changes, but allow a newly selected
-          // item (for example Back/Forward navigation to a hidden
-          // thread) to reopen its containing directory for reveal.
-          // Previously this checked `if (current[key])`, which
-          // treated `false` as "not yet expanded" and re-overrode
-          // the user's collapse every time `directories` changed
-          // reference (for example unpinning an unrelated sibling).
-          if (
-            current[directory.key] !== undefined &&
-            !selectedItemKeyChanged
-          ) {
-            return current;
-          }
-
-          return {
-            ...current,
-            [directory.key]: true,
-          };
-        }
+      // Preserve explicit user collapse across unrelated directory
+      // snapshot changes, but allow a newly selected item (for
+      // example Back/Forward navigation to a hidden thread) to
+      // reopen its containing directory for reveal. Only mark a
+      // selected key as consumed after a matching directory exists;
+      // showThread() can set selection before the refreshed
+      // directory snapshot includes the thread.
+      if (
+        current[matchingDirectory.key] !== undefined &&
+        !selectedItemKeyChanged
+      ) {
+        return current;
       }
 
-      return current;
+      return {
+        ...current,
+        [matchingDirectory.key]: true,
+      };
     });
   }, [props.directories, props.selectedItemKey]);
 
