@@ -2038,10 +2038,20 @@ export class SqliteOverlayStore {
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
+    const reasoningEffortsByModel = {
+      ...(current.reasoningEffortsByModel ?? {}),
+    };
+    if (params.model && params.reasoningEffort) {
+      reasoningEffortsByModel[params.model] = params.reasoningEffort;
+    }
     const nextState: ThreadOverlayState = {
       ...current,
       model: params.model,
       reasoningEffort: params.reasoningEffort,
+      reasoningEffortsByModel:
+        Object.keys(reasoningEffortsByModel).length > 0
+          ? reasoningEffortsByModel
+          : undefined,
       serviceTier: params.serviceTier,
       fastMode: params.fastMode,
     };
@@ -3073,7 +3083,7 @@ function mergeThreadUsageLineForUpsert(
       : existing.fastMode !== undefined
         ? { fastMode: existing.fastMode }
         : {}),
-    ...(line.model ? { model: line.model } : existing.model ? { model: existing.model } : {}),
+    ...(existing.model ? { model: existing.model } : line.model ? { model: line.model } : {}),
     ...(line.reasoningEffort
       ? { reasoningEffort: line.reasoningEffort }
       : existing.reasoningEffort

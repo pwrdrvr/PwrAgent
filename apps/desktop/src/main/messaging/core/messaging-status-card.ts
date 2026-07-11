@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  BackendModelOption,
   BackendSummary,
   CodexEnvironmentOption,
   HandoffThreadWorkspaceRequest,
@@ -35,6 +36,44 @@ import {
  * actions and rely on text rendering (Stop/Refresh/Detach via text reply).
  */
 const STATUS_CARD_MIN_ACTIONS = 3;
+
+function reasoningEffortsForModel(
+  backendSummary: BackendSummary | undefined,
+  modelOption: BackendModelOption | undefined,
+): string[] {
+  return modelOption?.reasoningEfforts ??
+    backendSummary?.launchpadOptions?.reasoningEfforts ??
+    [];
+}
+
+function defaultReasoningEffortForModel(
+  backendSummary: BackendSummary | undefined,
+  modelOption: BackendModelOption | undefined,
+): string | undefined {
+  const efforts = reasoningEffortsForModel(backendSummary, modelOption);
+  if (
+    modelOption?.defaultReasoningEffort &&
+    efforts.includes(modelOption.defaultReasoningEffort)
+  ) {
+    return modelOption.defaultReasoningEffort;
+  }
+  return efforts[0];
+}
+
+function resolveReasoningEffortForModel(
+  backendSummary: BackendSummary | undefined,
+  modelOption: BackendModelOption | undefined,
+  candidates: Array<string | undefined>,
+): string | undefined {
+  if (!backendSummary && !modelOption) {
+    return candidates.find((candidate): candidate is string => Boolean(candidate));
+  }
+  const efforts = reasoningEffortsForModel(backendSummary, modelOption);
+  const selected = candidates.find((candidate) =>
+    candidate ? efforts.includes(candidate) : false,
+  );
+  return selected ?? defaultReasoningEffortForModel(backendSummary, modelOption);
+}
 
 export type MessagingWorkspaceHandoffContext = {
   backend: AppServerBackendKind;
@@ -100,13 +139,20 @@ export function buildBindingStatusIntent(params: {
   const modelOption = params.backendSummary?.launchpadOptions?.models?.find(
     (option) => option.id === model,
   );
+  const reasoningEfforts = reasoningEffortsForModel(
+    params.backendSummary,
+    modelOption,
+  );
   const supportsReasoning =
     !params.backendSummary ||
-    Boolean(params.backendSummary.launchpadOptions?.reasoningEfforts?.length);
+    Boolean(modelOption?.supportsReasoning) ||
+    reasoningEfforts.length > 0;
   const reasoning = supportsReasoning
-    ? params.threadState.reasoningEffort ??
-      preferences?.reasoningEffort ??
-      defaults?.reasoningEffort ??
+    ? resolveReasoningEffortForModel(params.backendSummary, modelOption, [
+        params.threadState.reasoningEffort,
+        preferences?.reasoningEffort,
+        defaults?.reasoningEffort,
+      ]) ??
       unavailable()
     : undefined;
   const supportsFastMode = backendSupportsFastMode(

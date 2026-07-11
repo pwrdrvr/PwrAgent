@@ -1493,6 +1493,20 @@ describe("CodexAppServerClient", () => {
     MockTransport.modelListResult = {
       data: [
         {
+          id: "gpt-5.6-terra",
+          displayName: "GPT-5.6-Terra",
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [
+            { reasoningEffort: "low", description: "Fast responses" },
+            { reasoningEffort: "medium", description: "Balanced" },
+            { reasoningEffort: "high", description: "Deep reasoning" },
+            { reasoningEffort: "xhigh", description: "Extra high" },
+            { reasoningEffort: "max", description: "Maximum reasoning" },
+            { reasoningEffort: "ultra", description: "Maximum with delegation" },
+          ],
+          supportsReasoning: true,
+        },
+        {
           id: "gpt-5.2",
           displayName: "gpt-5.2",
           supportsReasoning: true,
@@ -1500,7 +1514,11 @@ describe("CodexAppServerClient", () => {
         {
           id: "gpt-5.5",
           displayName: "gpt-5.5",
-          current: true,
+          supportsReasoning: true,
+        },
+        {
+          id: "gpt-5.6-luna",
+          displayName: "GPT-5.6-Luna",
           supportsReasoning: true,
         },
         {
@@ -1529,6 +1547,12 @@ describe("CodexAppServerClient", () => {
           supportsReasoning: true,
         },
         {
+          id: "gpt-5.6-sol",
+          displayName: "GPT-5.6-Sol",
+          isDefault: true,
+          supportsReasoning: true,
+        },
+        {
           id: "gpt-5.1-codex-max",
           displayName: "gpt-5.1-codex-max",
           supportsReasoning: true,
@@ -1544,9 +1568,29 @@ describe("CodexAppServerClient", () => {
 
     await expect(client.listModels()).resolves.toEqual([
       {
+        id: "gpt-5.6-sol",
+        label: "GPT-5.6-Sol",
+        current: true,
+        supportsReasoning: true,
+      },
+      {
+        id: "gpt-5.6-terra",
+        label: "GPT-5.6-Terra",
+        current: undefined,
+        defaultReasoningEffort: "medium",
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        supportsReasoning: true,
+      },
+      {
+        id: "gpt-5.6-luna",
+        label: "GPT-5.6-Luna",
+        current: undefined,
+        supportsReasoning: true,
+      },
+      {
         id: "gpt-5.5",
         label: "GPT-5.5",
-        current: true,
+        current: undefined,
         supportsReasoning: true,
       },
       {
@@ -6531,6 +6575,47 @@ describe("CodexAppServerClient", () => {
         },
       ],
     });
+
+    await client.close();
+  });
+
+  it("passes GPT-5.6 max and ultra reasoning efforts through to turn/start", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Use maximum reasoning" }],
+      model: "gpt-5.6-terra",
+      reasoningEffort: "max",
+    });
+    await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Use delegated maximum reasoning" }],
+      model: "gpt-5.6-terra",
+      reasoningEffort: "ultra",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const turnStartPayloads = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .filter((payload) => payload.method === "turn/start");
+
+    expect(turnStartPayloads.map((payload) => payload.params)).toEqual([
+      expect.objectContaining({
+        model: "gpt-5.6-terra",
+        effort: "max",
+      }),
+      expect.objectContaining({
+        model: "gpt-5.6-terra",
+        effort: "ultra",
+      }),
+    ]);
 
     await client.close();
   });

@@ -299,6 +299,7 @@ export type NavigationLaunchpadProviderSettings = {
   executionMode?: ThreadExecutionMode;
   model?: string;
   reasoningEffort?: string;
+  reasoningEffortsByModel?: Record<string, string>;
   serviceTier?: string;
   fastMode?: boolean;
   acpRuntime?: BackendAcpSessionRuntimeState;
@@ -308,6 +309,7 @@ const NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS = [
   "executionMode",
   "model",
   "reasoningEffort",
+  "reasoningEffortsByModel",
   "serviceTier",
   "fastMode",
   "acpRuntime",
@@ -317,9 +319,10 @@ export function extractNavigationLaunchpadProviderSettings(
   source: Partial<NavigationLaunchpadDefaults>,
 ): NavigationLaunchpadProviderSettings {
   const settings: NavigationLaunchpadProviderSettings = {};
+  const providerSource = source as Partial<NavigationLaunchpadProviderSettings>;
   for (const key of NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS) {
-    if (key in source) {
-      settings[key] = source[key] as never;
+    if (key in providerSource) {
+      settings[key] = providerSource[key] as never;
     }
   }
   return settings;
@@ -353,6 +356,63 @@ function isEmptyNavigationLaunchpadProviderSettings(
   settings: NavigationLaunchpadProviderSettings | undefined,
 ): boolean {
   return !settings || Object.keys(settings).length === 0;
+}
+
+function normalizeReasoningEffortsByModel(
+  map: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!map) {
+    return undefined;
+  }
+  const entries = Object.entries(map).filter(
+    (entry): entry is [string, string] =>
+      typeof entry[0] === "string" &&
+      entry[0].trim().length > 0 &&
+      typeof entry[1] === "string" &&
+      entry[1].trim().length > 0,
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function applyNavigationLaunchpadModelReasoningMemory(
+  current: NavigationLaunchpadProviderSettings,
+  patch: NavigationLaunchpadProviderSettings,
+): NavigationLaunchpadProviderSettings {
+  const next = { ...patch };
+  const selectedModel =
+    typeof patch.model === "string" && patch.model.trim()
+      ? patch.model
+      : current.model;
+  const currentMap = normalizeReasoningEffortsByModel(
+    current.reasoningEffortsByModel,
+  );
+  const nextMap = currentMap ? { ...currentMap } : {};
+
+  if ("model" in patch && !("reasoningEffort" in patch)) {
+    const rememberedReasoning =
+      typeof patch.model === "string" ? nextMap[patch.model] : undefined;
+    if (rememberedReasoning) {
+      next.reasoningEffort = rememberedReasoning;
+    }
+  }
+
+  if ("reasoningEffort" in patch && selectedModel) {
+    if (typeof patch.reasoningEffort === "string" && patch.reasoningEffort.trim()) {
+      nextMap[selectedModel] = patch.reasoningEffort;
+    } else {
+      delete nextMap[selectedModel];
+    }
+  }
+
+  if (
+    Object.keys(nextMap).length > 0 ||
+    current.reasoningEffortsByModel !== undefined ||
+    "reasoningEffortsByModel" in patch
+  ) {
+    next.reasoningEffortsByModel = normalizeReasoningEffortsByModel(nextMap);
+  }
+
+  return next;
 }
 
 function seedNavigationLaunchpadProviderSettings<T extends NavigationLaunchpadDefaults>(
@@ -408,9 +468,14 @@ export function applyNavigationLaunchpadProviderSettingsPatch<
   const providerSettings = seedNavigationLaunchpadProviderSettings(launchpad);
 
   if (hasNavigationLaunchpadProviderSettingPatch(patch)) {
-    providerSettings[backend] = mergeNavigationLaunchpadProviderSettings(
-      providerSettings[backend] ?? {},
+    const currentProviderSettings = providerSettings[backend] ?? {};
+    const normalizedProviderPatch = applyNavigationLaunchpadModelReasoningMemory(
+      currentProviderSettings,
       providerPatch,
+    );
+    providerSettings[backend] = mergeNavigationLaunchpadProviderSettings(
+      currentProviderSettings,
+      normalizedProviderPatch,
     );
     if (isEmptyNavigationLaunchpadProviderSettings(providerSettings[backend])) {
       delete providerSettings[backend];
@@ -1093,6 +1158,7 @@ export type ThreadOverlayState = {
   executionMode?: ThreadExecutionMode;
   model?: string;
   reasoningEffort?: string;
+  reasoningEffortsByModel?: Record<string, string>;
   serviceTier?: string;
   fastMode?: boolean;
   gitBranch?: string;

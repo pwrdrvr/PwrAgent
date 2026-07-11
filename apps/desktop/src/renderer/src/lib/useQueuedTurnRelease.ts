@@ -33,19 +33,36 @@ function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefine
   );
 }
 
-function getDefaultReasoningEffort(backend?: BackendSummary): string | undefined {
-  const reasoningEfforts = backend?.launchpadOptions?.reasoningEfforts ?? [];
+function getReasoningEffortsForModel(
+  backend: BackendSummary | undefined,
+  model: ModelOption | undefined,
+): string[] {
+  return model?.reasoningEfforts ?? backend?.launchpadOptions?.reasoningEfforts ?? [];
+}
+
+function getDefaultReasoningEffort(
+  backend: BackendSummary | undefined,
+  model: ModelOption | undefined,
+): string | undefined {
+  const reasoningEfforts = getReasoningEffortsForModel(backend, model);
+  if (
+    model?.defaultReasoningEffort &&
+    reasoningEfforts.includes(model.defaultReasoningEffort)
+  ) {
+    return model.defaultReasoningEffort;
+  }
   return reasoningEfforts.includes("medium") ? "medium" : reasoningEfforts[0];
 }
 
 function getReasoningEffortValue(
   backend: BackendSummary | undefined,
+  model: ModelOption | undefined,
   currentValue: string | undefined,
 ): string | undefined {
-  const reasoningEfforts = backend?.launchpadOptions?.reasoningEfforts ?? [];
+  const reasoningEfforts = getReasoningEffortsForModel(backend, model);
   return reasoningEfforts.includes(currentValue ?? "")
     ? currentValue
-    : getDefaultReasoningEffort(backend);
+    : getDefaultReasoningEffort(backend, model);
 }
 
 function buildQueuedTurnInput(
@@ -369,7 +386,11 @@ export function useQueuedTurnRelease(params: {
           executionMode: releaseThread.executionMode,
           model: selectedModelOption?.id,
           reasoningEffort: supportsReasoning
-            ? getReasoningEffortValue(backend, releaseThread.reasoningEffort)
+            ? getReasoningEffortValue(
+                backend,
+                selectedModelOption,
+                releaseThread.reasoningEffort,
+              )
             : undefined,
           serviceTier:
             releaseThread.serviceTier ?? backend.launchpadOptions?.serviceTiers?.[0],

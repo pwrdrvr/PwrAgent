@@ -154,6 +154,8 @@ export type BackendModelOption = {
   id: string;
   label?: string;
   current?: boolean;
+  defaultReasoningEffort?: string;
+  reasoningEfforts?: string[];
   supportsReasoning?: boolean;
   supportsFast?: boolean;
   supportsSteering?: boolean;

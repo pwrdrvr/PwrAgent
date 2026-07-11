@@ -531,8 +531,24 @@ function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefine
   );
 }
 
-function getDefaultReasoningEffort(backend?: BackendSummary): string | undefined {
-  const reasoningEfforts = backend?.launchpadOptions?.reasoningEfforts ?? [];
+function getReasoningEffortsForModel(
+  backend: BackendSummary | undefined,
+  model: ModelOption | undefined,
+): string[] {
+  return model?.reasoningEfforts ?? backend?.launchpadOptions?.reasoningEfforts ?? [];
+}
+
+function getDefaultReasoningEffort(
+  backend: BackendSummary | undefined,
+  model: ModelOption | undefined,
+): string | undefined {
+  const reasoningEfforts = getReasoningEffortsForModel(backend, model);
+  if (
+    model?.defaultReasoningEffort &&
+    reasoningEfforts.includes(model.defaultReasoningEffort)
+  ) {
+    return model.defaultReasoningEffort;
+  }
   return reasoningEfforts.includes(DEFAULT_REASONING_EFFORT)
     ? DEFAULT_REASONING_EFFORT
     : reasoningEfforts[0];
@@ -540,12 +556,13 @@ function getDefaultReasoningEffort(backend?: BackendSummary): string | undefined
 
 function getReasoningEffortValue(
   backend: BackendSummary | undefined,
+  model: ModelOption | undefined,
   currentValue: string | undefined,
 ): string | undefined {
-  const reasoningEfforts = backend?.launchpadOptions?.reasoningEfforts ?? [];
+  const reasoningEfforts = getReasoningEffortsForModel(backend, model);
   return reasoningEfforts.includes(currentValue ?? "")
     ? currentValue
-    : getDefaultReasoningEffort(backend);
+    : getDefaultReasoningEffort(backend, model);
 }
 
 function buildReviewBranchOptions(params: {
@@ -5470,7 +5487,11 @@ export function Composer(props: ComposerProps) {
     selectedModelOption?.supportsReasoning ??
     Boolean(backend?.launchpadOptions?.reasoningEfforts?.length);
   const selectedReasoningEffort = supportsReasoning
-    ? getReasoningEffortValue(backend, currentSettings?.reasoningEffort)
+    ? getReasoningEffortValue(
+        backend,
+        selectedModelOption,
+        currentSettings?.reasoningEffort,
+      )
     : undefined;
   const supportsFast =
     backend?.kind === "codex"
@@ -6915,7 +6936,7 @@ export function Composer(props: ComposerProps) {
                     : "default",
                   model: nextModelOption?.id,
                   reasoningEffort: nextModelOption?.supportsReasoning
-                    ? getDefaultReasoningEffort(nextBackendSummary)
+                    ? getDefaultReasoningEffort(nextBackendSummary, nextModelOption)
                     : undefined,
                   serviceTier: undefined,
                   fastMode: undefined,
@@ -7179,17 +7200,25 @@ export function Composer(props: ComposerProps) {
                       backend.launchpadOptions?.supportsFastMode ??
                       false
                     : false;
-                const patch = {
-                  model,
-                  reasoningEffort: nextSupportsReasoning
-                    ? getReasoningEffortValue(backend, currentSettings?.reasoningEffort)
-                    : undefined,
-                  ...(nextSupportsFast ? {} : { fastMode: undefined }),
-                };
                 if (props.launchpad) {
-                  handleLaunchpadPatch(patch);
+                  handleLaunchpadPatch({
+                    model,
+                    ...(nextSupportsFast ? {} : { fastMode: undefined }),
+                  });
                   return;
                 }
+                if (nextSupportsReasoning) {
+                  handleThreadModelSettingsPatch({
+                    model,
+                    ...(nextSupportsFast ? {} : { fastMode: undefined }),
+                  });
+                  return;
+                }
+                const patch = {
+                  model,
+                  reasoningEffort: undefined,
+                  ...(nextSupportsFast ? {} : { fastMode: undefined }),
+                };
                 handleThreadModelSettingsPatch(patch);
               }}
             />
@@ -7197,13 +7226,16 @@ export function Composer(props: ComposerProps) {
 
           {(props.launchpad || props.thread) &&
           supportsReasoning &&
-          backend?.launchpadOptions?.reasoningEfforts?.length ? (
+          getReasoningEffortsForModel(backend, selectedModelOption).length ? (
             <ComposerDropdown
               id="composer-reasoning"
               ariaLabel="Reasoning"
               disabled={launchpadSubmitting}
               value={selectedReasoningEffort ?? ""}
-              options={backend.launchpadOptions.reasoningEfforts.map((effort) => ({
+              options={getReasoningEffortsForModel(
+                backend,
+                selectedModelOption,
+              ).map((effort) => ({
                 label: effort,
                 value: effort,
               }))}

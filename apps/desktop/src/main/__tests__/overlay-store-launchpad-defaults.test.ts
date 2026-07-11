@@ -97,6 +97,35 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     expect(listDefaultKeys()).not.toContain("serviceTier");
   });
 
+  it("remembers launchpad reasoning effort per selected model", async () => {
+    await store.setLaunchpadDefaults({
+      model: "gpt-5.6-terra",
+      reasoningEffort: "ultra",
+    });
+    await store.setLaunchpadDefaults({
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+    });
+
+    const defaults = await store.setLaunchpadDefaults({
+      model: "gpt-5.6-terra",
+    });
+
+    expect(defaults.reasoningEffort).toBe("ultra");
+    expect(defaults.providerSettings?.codex?.reasoningEffortsByModel).toEqual({
+      "gpt-5.6-luna": "medium",
+      "gpt-5.6-terra": "ultra",
+    });
+    expect(readDefaultValue("providerSettings")).toMatchObject({
+      codex: {
+        reasoningEffortsByModel: {
+          "gpt-5.6-luna": "medium",
+          "gpt-5.6-terra": "ultra",
+        },
+      },
+    });
+  });
+
   it("removes stale launchpad default rows when a setting is cleared", async () => {
     stateDb.raw
       .prepare("INSERT OR REPLACE INTO launchpad_defaults(key, value) VALUES (?, ?)")

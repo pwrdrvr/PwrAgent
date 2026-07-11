@@ -1455,11 +1455,49 @@ const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
   grok: "AgentCore - Grok",
 };
 
+const OPENAI_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"];
+const OPENAI_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const OPENAI_GPT56_ULTRA_REASONING_EFFORTS = [
+  ...OPENAI_GPT56_REASONING_EFFORTS,
+  "ultra",
+];
+const GROK_REASONING_EFFORTS = ["low", "medium", "high"];
+const DEFAULT_REASONING_EFFORT = "medium";
+
 const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
+  {
+    id: "gpt-5.6-sol",
+    label: "GPT-5.6-Sol",
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: OPENAI_GPT56_ULTRA_REASONING_EFFORTS,
+    supportsReasoning: true,
+    supportsFast: true,
+    supportsSteering: true,
+  },
+  {
+    id: "gpt-5.6-terra",
+    label: "GPT-5.6-Terra",
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: OPENAI_GPT56_ULTRA_REASONING_EFFORTS,
+    supportsReasoning: true,
+    supportsFast: true,
+    supportsSteering: true,
+  },
+  {
+    id: "gpt-5.6-luna",
+    label: "GPT-5.6-Luna",
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: OPENAI_GPT56_REASONING_EFFORTS,
+    supportsReasoning: true,
+    supportsFast: true,
+    supportsSteering: true,
+  },
   {
     id: "gpt-5.5",
     label: "GPT-5.5",
     current: true,
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: OPENAI_REASONING_EFFORTS,
     supportsReasoning: true,
     supportsFast: true,
     supportsSteering: true,
@@ -1467,6 +1505,8 @@ const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
   {
     id: "gpt-5.4",
     label: "GPT-5.4",
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: OPENAI_REASONING_EFFORTS,
     supportsReasoning: true,
     supportsFast: true,
     supportsSteering: true,
@@ -1474,12 +1514,16 @@ const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
   {
     id: "gpt-5.4-mini",
     label: "GPT-5.4-Mini",
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: OPENAI_REASONING_EFFORTS,
     supportsReasoning: true,
     supportsSteering: true,
   },
   {
     id: "gpt-5.2",
     label: "GPT-5.2",
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: OPENAI_REASONING_EFFORTS,
     supportsReasoning: true,
     supportsSteering: true,
   },
@@ -1528,10 +1572,6 @@ const GROK_FALLBACK_MODELS: BackendModelOption[] = [
     supportsSteering: false,
   },
 ];
-
-const OPENAI_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"];
-const GROK_REASONING_EFFORTS = ["low", "medium", "high"];
-const DEFAULT_REASONING_EFFORT = "medium";
 
 const EXECUTION_MODE_SUMMARIES: Record<
   ThreadExecutionMode,
@@ -3831,6 +3871,9 @@ function inferSupportsReasoning(
   if (typeof model.supportsReasoning === "boolean") {
     return model.supportsReasoning;
   }
+  if (model.reasoningEfforts?.length) {
+    return true;
+  }
 
   const id = model.id.toLowerCase();
   if (backend === "grok") {
@@ -3867,13 +3910,60 @@ function getBackendFallbackModels(backend: AppServerBackendKind): BackendModelOp
   return backend === "codex" ? OPENAI_FALLBACK_MODELS : GROK_FALLBACK_MODELS;
 }
 
-function getPreferredModelId(backend: AppServerBackendKind): string {
-  return backend === "codex" ? "gpt-5.5" : "grok-4.20-reasoning";
+function getPreferredModelId(
+  backend: AppServerBackendKind,
+  models?: BackendModelOption[],
+): string {
+  if (backend !== "codex") {
+    return "grok-4.20-reasoning";
+  }
+
+  if (models?.some((model) => model.id === "gpt-5.6-terra")) {
+    return "gpt-5.6-terra";
+  }
+
+  return "gpt-5.5";
+}
+
+function mergeStringOptions(
+  left?: readonly string[],
+  right?: readonly string[],
+): string[] | undefined {
+  const values = [
+    ...new Set(
+      [...(left ?? []), ...(right ?? [])]
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
+  return values.length > 0 ? values : undefined;
+}
+
+function sortReasoningEfforts(
+  backend: AppServerBackendKind,
+  efforts: readonly string[],
+): string[] {
+  const order = new Map(
+    (backend === "codex"
+      ? [
+          ...OPENAI_REASONING_EFFORTS,
+          ...OPENAI_GPT56_REASONING_EFFORTS,
+          "ultra",
+        ]
+      : GROK_REASONING_EFFORTS
+    ).map((effort, index) => [effort, index]),
+  );
+  return [...efforts].sort((left, right) => {
+    const leftOrder = order.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = order.get(right) ?? Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder || left.localeCompare(right);
+  });
 }
 
 function dedupeModelOptions(
   backend: AppServerBackendKind,
   models: BackendModelOption[],
+  options: { preferDiscoveredCodexDefault?: boolean } = {},
 ): BackendModelOption[] {
   const byId = new Map<string, BackendModelOption>();
   for (const model of models) {
@@ -3895,15 +3985,31 @@ function dedupeModelOptions(
       supportsReasoning: current?.supportsReasoning || normalizedModel.supportsReasoning,
       supportsFast: current?.supportsFast || normalizedModel.supportsFast,
       supportsSteering: current?.supportsSteering || normalizedModel.supportsSteering,
+      defaultReasoningEffort:
+        normalizedModel.defaultReasoningEffort ?? current?.defaultReasoningEffort,
+      reasoningEfforts: mergeStringOptions(
+        current?.reasoningEfforts,
+        normalizedModel.reasoningEfforts,
+      ),
     });
   }
 
   const deduped = [...byId.values()];
+  const preferredModelId = getPreferredModelId(
+    backend,
+    options.preferDiscoveredCodexDefault ? deduped : undefined,
+  );
+  if (deduped.some((model) => model.id === preferredModelId)) {
+    return deduped.map((model) => ({
+      ...model,
+      current: model.id === preferredModelId,
+    }));
+  }
+
   if (deduped.some((model) => model.current)) {
     return deduped;
   }
 
-  const preferredModelId = getPreferredModelId(backend);
   return deduped.map((model) => ({
     ...model,
     current: model.id === preferredModelId,
@@ -3916,13 +4022,15 @@ function buildLaunchpadOptions(
   options: { allowFallbackModels?: boolean } = {},
 ): BackendLaunchpadOptions | undefined {
   const allowFallbackModels = options.allowFallbackModels ?? true;
+  const hasDiscoveredModels = models.length > 0;
   const normalizedModels = dedupeModelOptions(
     backend,
-    models.length > 0
+    hasDiscoveredModels
       ? models
       : allowFallbackModels
         ? getBackendFallbackModels(backend)
         : [],
+    { preferDiscoveredCodexDefault: hasDiscoveredModels },
   );
   if (normalizedModels.length === 0) {
     return undefined;
@@ -3931,13 +4039,20 @@ function buildLaunchpadOptions(
   const supportsReasoning = normalizedModels.some((model) => model.supportsReasoning);
   const supportsFastMode =
     backend === "codex" && normalizedModels.some((model) => model.supportsFast);
+  const modelReasoningEfforts = mergeStringOptions(
+    normalizedModels.flatMap((model) =>
+      model.supportsReasoning ? model.reasoningEfforts ?? [] : [],
+    ),
+  );
 
   return {
     models: normalizedModels,
     reasoningEfforts: supportsReasoning
-      ? backend === "codex"
-        ? OPENAI_REASONING_EFFORTS
-        : GROK_REASONING_EFFORTS
+      ? sortReasoningEfforts(
+          backend,
+          modelReasoningEfforts ??
+            (backend === "codex" ? OPENAI_REASONING_EFFORTS : GROK_REASONING_EFFORTS),
+        )
       : undefined,
     supportsFastMode,
   };
@@ -3980,8 +4095,10 @@ async function readClientRateLimits(client: BackendClient): Promise<BackendRateL
 type ModelSettings = {
   model?: string;
   reasoningEffort?: string;
+  reasoningEffortsByModel?: Record<string, string>;
   serviceTier?: string;
   fastMode?: boolean;
+  providerSettings?: NavigationLaunchpadDefaults["providerSettings"];
 };
 
 function hasExplicitModelSettings(settings: ModelSettings): boolean {
@@ -4570,11 +4687,28 @@ function getDefaultModelOption(
   );
 }
 
-function getDefaultReasoningEffort(options?: BackendLaunchpadOptions): string | undefined {
-  const reasoningEfforts = options?.reasoningEfforts ?? [];
-  return reasoningEfforts.includes(DEFAULT_REASONING_EFFORT)
-    ? DEFAULT_REASONING_EFFORT
-    : reasoningEfforts[0];
+function getReasoningEffortsForModel(
+  options: BackendLaunchpadOptions | undefined,
+  model: BackendModelOption | undefined,
+): string[] {
+  return model?.reasoningEfforts ?? options?.reasoningEfforts ?? [];
+}
+
+function getDefaultReasoningEffort(
+  options: BackendLaunchpadOptions | undefined,
+  model: BackendModelOption | undefined,
+): string | undefined {
+  const reasoningEfforts = getReasoningEffortsForModel(options, model);
+  if (
+    model?.defaultReasoningEffort &&
+    reasoningEfforts.includes(model.defaultReasoningEffort)
+  ) {
+    return model.defaultReasoningEffort;
+  }
+  if (reasoningEfforts.includes(DEFAULT_REASONING_EFFORT)) {
+    return DEFAULT_REASONING_EFFORT;
+  }
+  return reasoningEfforts[0];
 }
 
 function resolveModelSettingsFromOptions(
@@ -4595,11 +4729,19 @@ function resolveModelSettingsFromOptions(
     models.find((model) => model.id === settings.model) ??
     getDefaultModelOption(backend, options);
   const supportsReasoning = Boolean(selectedModel?.supportsReasoning);
-  const reasoningEfforts = options?.reasoningEfforts ?? [];
+  const reasoningEfforts = getReasoningEffortsForModel(options, selectedModel);
+  const rememberedReasoningEffort = selectedModel
+    ? settings.reasoningEffortsByModel?.[selectedModel.id] ??
+      settings.providerSettings?.[backend]?.reasoningEffortsByModel?.[
+        selectedModel.id
+      ]
+    : undefined;
   const reasoningEffort = supportsReasoning
     ? reasoningEfforts.includes(settings.reasoningEffort ?? "")
       ? settings.reasoningEffort
-      : getDefaultReasoningEffort(options)
+      : reasoningEfforts.includes(rememberedReasoningEffort ?? "")
+        ? rememberedReasoningEffort
+      : getDefaultReasoningEffort(options, selectedModel)
     : undefined;
   const supportsFast = backend === "codex" && Boolean(selectedModel?.supportsFast);
   const shouldClearCodexFastTier =
@@ -9921,9 +10063,29 @@ export class DesktopBackendRegistry {
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
+    const current = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const modelChanged =
+      "model" in params &&
+      params.model !== undefined &&
+      params.model !== current?.model;
     const modelSettings = await this.resolveModelSettings(
       params.backend,
-      params,
+      {
+        model: "model" in params ? params.model : current?.model,
+        reasoningEffort:
+          "reasoningEffort" in params
+            ? params.reasoningEffort
+            : modelChanged
+              ? undefined
+              : current?.reasoningEffort,
+        reasoningEffortsByModel: current?.reasoningEffortsByModel,
+        serviceTier:
+          "serviceTier" in params ? params.serviceTier : current?.serviceTier,
+        fastMode: "fastMode" in params ? params.fastMode : current?.fastMode,
+      },
       "settings-refresh",
     );
     await this.overlayStore.setThreadModelSettings({
@@ -10558,7 +10720,7 @@ export class DesktopBackendRegistry {
       ...request.patch,
       ...("fastMode" in request.patch ? { serviceTier: undefined } : {}),
     };
-    const nextLaunchpad: NavigationLaunchpadDraft = {
+    const patchedLaunchpad: NavigationLaunchpadDraft = {
       ...applyNavigationLaunchpadProviderSettingsPatch(current, patch),
       directoryKey: request.directoryKey,
       settingsTouchedAt: request.stickySettingsChanged
@@ -10566,6 +10728,42 @@ export class DesktopBackendRegistry {
         : current.settingsTouchedAt,
       updatedAt: Date.now(),
     };
+    let nextLaunchpad = patchedLaunchpad;
+    if (
+      "model" in patch ||
+      "reasoningEffort" in patch ||
+      "serviceTier" in patch ||
+      "fastMode" in patch
+    ) {
+      const projectedLaunchpad =
+        projectNavigationLaunchpadProviderSettings(patchedLaunchpad);
+      const backend = await this.resolveLaunchpadBackend(projectedLaunchpad.backend);
+      const modelSettings = await this.resolveLaunchpadModelSettings(
+        backend,
+        projectedLaunchpad,
+      );
+      if ("fastMode" in patch) {
+        modelSettings.serviceTier = undefined;
+      }
+      nextLaunchpad = {
+        ...applyNavigationLaunchpadProviderSettingsPatch(
+          {
+            ...projectedLaunchpad,
+            backend: backend.kind,
+            executionMode: getAvailableExecutionMode(
+              backend,
+              projectedLaunchpad.executionMode,
+            ),
+          },
+          modelSettings,
+        ),
+        directoryKey: request.directoryKey,
+        settingsTouchedAt: request.stickySettingsChanged
+          ? Date.now()
+          : current.settingsTouchedAt,
+        updatedAt: Date.now(),
+      };
+    }
     const persisted = await this.overlayStore.upsertDirectoryLaunchpad(nextLaunchpad);
 
     const stickyPatch: Partial<NavigationLaunchpadDefaults> = {};
@@ -10595,10 +10793,21 @@ export class DesktopBackendRegistry {
       stickyPatch.workMode = request.patch.workMode;
     }
 
-    const defaults =
+    const storedDefaults =
       Object.keys(stickyPatch).length > 0
         ? await this.overlayStore.setLaunchpadDefaults(stickyPatch)
         : await this.overlayStore.getLaunchpadDefaults();
+    const shouldResolveStickyModelSettings =
+      "model" in stickyPatch ||
+      "reasoningEffort" in stickyPatch ||
+      "serviceTier" in stickyPatch ||
+      "fastMode" in stickyPatch;
+    const defaults = shouldResolveStickyModelSettings
+      ? await this.resolveLaunchpadDefaults(
+          storedDefaults,
+          stickyPatch.backend ?? persisted.backend,
+        )
+      : storedDefaults;
 
     return {
       launchpad: withCodexEnvironmentOptions(
@@ -12767,10 +12976,7 @@ export class DesktopBackendRegistry {
       serverVersion: successful[0]?.serverInfo?.version,
       methods,
       capabilities: buildCapabilities(methods, "codex"),
-      launchpadOptions: buildLaunchpadOptions(
-        "codex",
-        discoveredModels.length > 0 ? discoveredModels : OPENAI_FALLBACK_MODELS,
-      ),
+      launchpadOptions: buildLaunchpadOptions("codex", discoveredModels),
       executionModes: [
         {
           mode: "default",
