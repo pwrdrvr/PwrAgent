@@ -33,6 +33,15 @@ describe("tool invocation accounting", () => {
       category: "polling",
       normalizedCommand: "poll session 40500",
     });
+    expect(
+      normalizeToolInvocationCommand({
+        args: { chars: "q", session_id: 40500 },
+        toolName: "write_stdin",
+      }),
+    ).toEqual({
+      category: "shell",
+      normalizedCommand: "write stdin session 40500",
+    });
   });
 
   it("counts output volume and sbt-style warning/error/info/debug lines", () => {
@@ -96,6 +105,51 @@ describe("tool invocation accounting", () => {
     });
   });
 
+  it("marks completed command invocations failed from success false or exit code", () => {
+    const successFalseInvocation = toolInvocationFromNotification({
+      backend: "codex",
+      now: 1_800_000_030_000,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          item: {
+            id: "tool-1",
+            type: "commandExecution",
+            name: "exec_command",
+            success: false,
+          },
+        },
+      },
+    });
+    const exitCodeInvocation = toolInvocationFromNotification({
+      backend: "codex",
+      now: 1_800_000_030_000,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          item: {
+            id: "tool-2",
+            type: "commandExecution",
+            name: "exec_command",
+            data: {
+              exitCode: 1,
+            },
+          },
+        },
+      },
+    });
+
+    expect(successFalseInvocation).toMatchObject({
+      status: "failed",
+    });
+    expect(exitCodeInvocation).toMatchObject({
+      exitCode: 1,
+      status: "failed",
+    });
+  });
+
   it("detects repeated noisy write_stdin polling against one process session", () => {
     const records = [
       buildPollingInvocation("tool-1", 1_800_000_000_000, 9_000),
@@ -121,16 +175,33 @@ describe("tool invocation accounting", () => {
       "create_monitor_delegation",
     );
   });
+
+  it("does not flag non-empty stdin writes as polling", () => {
+    const records = [
+      buildPollingInvocation("tool-1", 1_800_000_000_000, 9_000),
+      buildPollingInvocation("tool-2", 1_800_000_030_000, 8_000),
+      buildPollingInvocation("tool-3", 1_800_000_060_000, 7_000, "shell"),
+    ];
+
+    const detection = detectNoisyPolling({
+      current: records[2]!,
+      now: records[2]!.observedAt,
+      recent: records.slice(0, 2),
+    });
+
+    expect(detection).toBeUndefined();
+  });
 });
 
 function buildPollingInvocation(
   invocationId: string,
   observedAt: number,
   outputChars: number,
+  category: ThreadToolInvocationRecord["category"] = "polling",
 ): ThreadToolInvocationRecord {
   return {
     backend: "codex",
-    category: "polling",
+    category,
     debugLines: 0,
     errorLines: 0,
     estimatedOutputTokens: Math.ceil(outputChars / 4),

@@ -127,10 +127,13 @@ export function toolInvocationFromNotification(params: {
     readString(args, "sessionId") ??
     readString(item, "sessionId") ??
     readString(item, "session_id");
-  const status = normalizeToolInvocationStatus(
-    readString(item, "status"),
-    params.notification.method,
-  );
+  const exitCode = readExitCode(item);
+  const status = normalizeToolInvocationStatus({
+    exitCode: exitCode.exitCode,
+    method: params.notification.method,
+    status: readString(item, "status"),
+    success: readToolSuccess(item),
+  });
 
   return {
     ...emptyInvocationMetrics(metrics),
@@ -161,7 +164,7 @@ export function toolInvocationFromNotification(params: {
       : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(processId ? { processId } : {}),
-    ...readExitCode(item),
+    ...exitCode,
   };
 }
 
@@ -214,10 +217,11 @@ export function normalizeToolInvocationCommand(params: {
     const sessionId = readString(params.args, "session_id") ??
       readString(params.args, "sessionId");
     const chars = readString(params.args, "chars");
+    const isPollingRead = chars === undefined || chars.length === 0;
     return {
-      category: "polling",
+      category: isPollingRead ? "polling" : "shell",
       normalizedCommand:
-        chars === undefined || chars.length === 0
+        isPollingRead
           ? `poll session ${sessionId ?? "unknown"}`
           : `write stdin session ${sessionId ?? "unknown"}`,
     };
@@ -392,15 +396,23 @@ function buildToolInvocationId(params: {
   ].join(":");
 }
 
-function normalizeToolInvocationStatus(
-  status: string | undefined,
-  method: "item/started" | "item/completed",
-): ThreadToolInvocationStatus {
-  if (method === "item/started") {
+function normalizeToolInvocationStatus(params: {
+  exitCode?: number;
+  method: "item/started" | "item/completed";
+  status: string | undefined;
+  success?: boolean;
+}): ThreadToolInvocationStatus {
+  if (params.method === "item/started") {
     return "in_progress";
   }
-  if (status === "failed" || status === "cancelled" || status === "completed") {
-    return status;
+  if (params.status === "failed" || params.success === false) {
+    return "failed";
+  }
+  if (params.exitCode !== undefined && params.exitCode !== 0) {
+    return "failed";
+  }
+  if (params.status === "cancelled" || params.status === "completed") {
+    return params.status;
   }
   return "completed";
 }
@@ -520,6 +532,18 @@ function readExitCode(
     readNumber(data, "exitCode") ??
     readNumber(data, "exit_code");
   return value === undefined ? {} : { exitCode: value };
+}
+
+function readToolSuccess(
+  item: Record<string, unknown> | undefined,
+): boolean | undefined {
+  const data = readRecord(item?.data);
+  return (
+    readBoolean(item, "success") ??
+    readBoolean(item, "ok") ??
+    readBoolean(data, "success") ??
+    readBoolean(data, "ok")
+  );
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
