@@ -143,7 +143,24 @@ function buildRefreshRequestKey(thread: NavigationThreadSummary): string | undef
 function resolvePullRequestLookupBranch(
   thread: NavigationThreadSummary,
 ): string | undefined {
-  return thread.observedGitBranch?.trim() || thread.gitBranch?.trim() || undefined;
+  const threadBranch = thread.observedGitBranch?.trim()
+    || thread.gitBranch?.trim()
+    || undefined;
+  if (threadBranch) {
+    return threadBranch;
+  }
+
+  const directoryBranches = thread.linkedDirectories
+    .map((directory) => directory.gitBranch?.trim())
+    .filter((branch): branch is string => Boolean(branch));
+  const nonHeadBranch = directoryBranches.find((branch) => branch !== "HEAD");
+  if (nonHeadBranch) {
+    return nonHeadBranch;
+  }
+  if ((thread.prs?.length ?? 0) > 0 && directoryBranches.includes("HEAD")) {
+    return "HEAD";
+  }
+  return undefined;
 }
 
 function prSummariesEqual(

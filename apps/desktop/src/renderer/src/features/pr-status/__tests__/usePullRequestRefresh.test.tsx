@@ -262,4 +262,42 @@ describe("usePullRequestRefresh", () => {
       });
     });
   });
+
+  it("prefetches retained PR chips from HEAD worktree links", async () => {
+    const refreshThreadPullRequests = vi.fn(async () => buildResponse({ prs: [] }));
+    const desktopApi = {
+      refreshThreadPullRequests,
+    } satisfies DesktopApi;
+
+    const { result } = renderHook(() =>
+      usePullRequestRefresh({
+        desktopApi,
+      }),
+    );
+
+    result.current.prefetch(buildThread({
+      gitBranch: undefined,
+      linkedDirectories: [
+        {
+          id: "/repo/app",
+          kind: "worktree",
+          label: "app",
+          path: "/repo/app",
+          worktreePath: "/repo/.worktrees/app",
+          gitBranch: "HEAD",
+        },
+      ],
+      prs: buildResponse().prs,
+    }));
+
+    await waitFor(() => {
+      expect(refreshThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "user",
+        branch: "HEAD",
+        directoryPaths: ["/repo/.worktrees/app"],
+      });
+    });
+  });
 });

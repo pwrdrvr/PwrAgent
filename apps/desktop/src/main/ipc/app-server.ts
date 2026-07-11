@@ -3518,16 +3518,25 @@ function isFreshWorktreeWorkingStateCacheEntry(
 
 function resolveThreadPullRequestContexts(
   thread: Pick<
-    AppServerThreadSummary,
-    "gitBranch" | "id" | "linkedDirectories" | "observedGitBranch" | "source"
+    NavigationSnapshot["threads"][number],
+    | "gitBranch"
+    | "id"
+    | "linkedDirectories"
+    | "observedGitBranch"
+    | "prs"
+    | "source"
   >,
 ): ThreadPrRefreshContext[] {
   const contexts: ThreadPrRefreshContext[] = [];
   const threadBranch =
     thread.observedGitBranch?.trim() || thread.gitBranch?.trim() || "";
+  const hasRetainedPrs = (thread.prs?.length ?? 0) > 0;
   const unscopedDirectoryPaths = resolveThreadPullRequestDirectoryPaths({
     linkedDirectories: (thread.linkedDirectories ?? []).filter(
-      (directory) => !directory.gitBranch?.trim(),
+      (directory) => {
+        const branch = directory.gitBranch?.trim();
+        return !branch || branch === "HEAD";
+      },
     ),
   });
   if (threadBranch && unscopedDirectoryPaths.length > 0) {
@@ -3536,6 +3545,20 @@ function resolveThreadPullRequestContexts(
       threadId: thread.id,
       branch: threadBranch,
       directoryPaths: unscopedDirectoryPaths,
+      branchScoped: false,
+    });
+  }
+  const headDirectoryPaths = resolveThreadPullRequestDirectoryPaths({
+    linkedDirectories: (thread.linkedDirectories ?? []).filter(
+      (directory) => directory.gitBranch?.trim() === "HEAD",
+    ),
+  });
+  if (!threadBranch && hasRetainedPrs && headDirectoryPaths.length > 0) {
+    contexts.push({
+      backend: thread.source,
+      threadId: thread.id,
+      branch: "HEAD",
+      directoryPaths: headDirectoryPaths,
       branchScoped: false,
     });
   }
