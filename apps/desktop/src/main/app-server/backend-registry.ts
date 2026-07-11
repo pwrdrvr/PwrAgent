@@ -1116,6 +1116,62 @@ function normalizeHandoffTaskCwd(cwd: string | undefined): string | undefined {
   return trimmed;
 }
 
+const HANDOFF_TASK_CWD_LABEL_PATTERN =
+  /\b(?:target\s+(?:repository|repo|project)|local\s+repo(?:sitory)?\s+path|repo(?:sitory)?\s+path|project\s+path)\b/i;
+
+function extractPathCandidatesFromHandoffText(text: string): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const context = [
+      lines[index - 2] ?? "",
+      lines[index - 1] ?? "",
+      line,
+    ].join("\n");
+    if (!HANDOFF_TASK_CWD_LABEL_PATTERN.test(context)) {
+      continue;
+    }
+    for (const match of line.matchAll(/`([^`]+)`|"([^"]+)"|'([^']+)'|((?:~|\/)[^\s`"'),;]+)/g)) {
+      const rawCandidate = (
+        match[1] ??
+        match[2] ??
+        match[3] ??
+        match[4] ??
+        ""
+      ).trim();
+      const candidate = normalizeHandoffTaskCwd(
+        rawCandidate.replace(/[.:\]]+$/g, ""),
+      );
+      if (!candidate || (!path.isAbsolute(candidate) && !candidate.startsWith("~"))) {
+        continue;
+      }
+      if (!seen.has(candidate)) {
+        seen.add(candidate);
+        candidates.push(candidate);
+      }
+    }
+  }
+  return candidates;
+}
+
+async function inferExplicitHandoffTaskCwd(params: {
+  task: string;
+  context?: string;
+}): Promise<string | undefined> {
+  const candidates = extractPathCandidatesFromHandoffText(
+    [params.task, params.context ?? ""].join("\n"),
+  );
+  for (const candidate of candidates) {
+    const info = await stat(candidate).catch(() => undefined);
+    if (info?.isDirectory()) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
 function sameResolvedPath(
   left: string | undefined,
   right: string | undefined,
@@ -17040,7 +17096,14 @@ export class DesktopBackendRegistry {
       overlay: sourceOverlay,
       thread: sourceThread,
     });
-    const requestedCwd = normalizeHandoffTaskCwd(request.args.cwd);
+    const requestedCwd =
+      normalizeHandoffTaskCwd(request.args.cwd) ??
+      (workspaceMode !== "none"
+        ? await inferExplicitHandoffTaskCwd({
+            task,
+            context: request.args.context,
+          })
+        : undefined);
     const sourceCwd = requestedCwd ?? callerCwd;
     const sourceLinkedDirectory = this.resolveHandoffLinkedDirectory({
       cwd: sourceCwd,
