@@ -103,6 +103,7 @@ export function ThreadRow(props: ThreadRowProps) {
   const isComposerSource = threadKey === props.composerSourceThreadKey;
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const rowButtonRef = useRef<HTMLButtonElement>(null);
   const addReactionRef = useRef<HTMLSpanElement>(null);
   const reactions = props.thread.reactions ?? [];
   const canReact = Boolean(props.onSetReaction);
@@ -125,6 +126,19 @@ export function ThreadRow(props: ThreadRowProps) {
       hoverTimerRef.current = undefined;
     }
   }, []);
+  useEffect(() => {
+    if (!selected) {
+      return;
+    }
+
+    if (typeof rowButtonRef.current?.scrollIntoView !== "function") {
+      return;
+    }
+
+    rowButtonRef.current.scrollIntoView({
+      block: "nearest",
+    });
+  }, [selected, threadKey]);
   const armHoverPrefetch = (): void => {
     if (!props.onPrefetchPullRequests) return;
     if (hoverTimerRef.current !== undefined) return;
@@ -190,6 +204,7 @@ export function ThreadRow(props: ThreadRowProps) {
         />
       ) : null}
       <button
+        ref={rowButtonRef}
         aria-label={props.thread.title}
         aria-pressed={selected}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
