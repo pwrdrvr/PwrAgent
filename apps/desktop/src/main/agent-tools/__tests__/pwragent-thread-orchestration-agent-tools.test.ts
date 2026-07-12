@@ -47,7 +47,7 @@ describe("pwragent thread orchestration agent tools", () => {
       expect.objectContaining({
         namespace: "pwragent",
         name: "handoff_task",
-        description: expect.stringContaining("backports"),
+        description: expect.stringContaining("cross-project handoffs are created ungrouped"),
         deferLoading: false,
         inputSchema: expect.objectContaining({
           required: ["task"],
@@ -57,6 +57,7 @@ describe("pwragent thread orchestration agent tools", () => {
             }),
             groupingMode: expect.objectContaining({
               enum: ["none", "subthread"],
+              description: expect.stringContaining("same-project sub-thread"),
             }),
             workspaceMode: expect.objectContaining({
               enum: ["same", "same_workspace", "project_local", "new_worktree", "none"],

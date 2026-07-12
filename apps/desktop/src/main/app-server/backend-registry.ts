@@ -1140,6 +1140,16 @@ function shouldInheritHandoffCodexEnvironmentRuntime(params: {
   );
 }
 
+function sameHandoffProjectBoundary(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
+  if (!left?.trim() || !right?.trim()) {
+    return true;
+  }
+  return sameResolvedPath(left, right);
+}
+
 function linkedDirectoryMatchesCwd(
   directory: LinkedDirectorySummary,
   cwd: string,
@@ -16972,21 +16982,13 @@ export class DesktopBackendRegistry {
     }
 
     const seedMode: HandoffTaskSeedMode = request.args.seedMode ?? "clean";
-    const groupingMode: HandoffTaskGroupingMode =
+    const requestedGroupingMode: HandoffTaskGroupingMode =
       request.args.groupingMode ?? "none";
-    const groupedParentThreadId =
-      groupingMode === "subthread"
-        ? await this.resolveHandoffGroupParentThreadId({
-            backend: sourceBackend,
-            sourceOverlay,
-            sourceThreadId,
-          })
-        : undefined;
     const workspaceMode: HandoffTaskWorkspaceMode =
       request.args.workspaceMode === "same"
         ? "same_workspace"
         : (request.args.workspaceMode ?? "new_worktree");
-    if (workspaceMode === "same_workspace" && groupingMode !== "subthread") {
+    if (workspaceMode === "same_workspace" && requestedGroupingMode !== "subthread") {
       return threadOrchestrationFailure(
         "invalid_arguments",
         'workspaceMode="same_workspace" is only valid for grouped subthread handoffs. Use workspaceMode="new_worktree" for a delegated thread with an isolated worktree, workspaceMode="project_local" for the project checkout, or workspaceMode="none" for an unscoped local thread.',
@@ -17015,7 +17017,7 @@ export class DesktopBackendRegistry {
       title,
       taskPreview: truncateThreadInspectionText(task, 240),
       seedMode,
-      groupingMode,
+      groupingMode: requestedGroupingMode,
       workspaceMode,
       ...(request.args.branchName ? { branchName: request.args.branchName } : {}),
       createdAt: handoffStartedAt,
@@ -17033,6 +17035,11 @@ export class DesktopBackendRegistry {
       sourceThreadId,
       sourceOverlay,
     );
+    const callerLinkedDirectory = this.resolveHandoffLinkedDirectory({
+      cwd: callerCwd,
+      overlay: sourceOverlay,
+      thread: sourceThread,
+    });
     const requestedCwd = normalizeHandoffTaskCwd(request.args.cwd);
     const sourceCwd = requestedCwd ?? callerCwd;
     const sourceLinkedDirectory = this.resolveHandoffLinkedDirectory({
@@ -17170,6 +17177,45 @@ export class DesktopBackendRegistry {
         : workspaceMode === "project_local"
           ? projectLocalCwd
           : sourceCwd;
+    const callerProjectBoundary = await this.resolveHandoffProjectBoundaryPath({
+      cwd: callerCwd,
+      linkedDirectory: callerLinkedDirectory,
+    });
+    const childProjectBoundary = await this.resolveHandoffProjectBoundaryPath({
+      cwd: cwdForChild,
+      linkedDirectory:
+        workspaceMode === "project_local"
+          ? sourceLinkedDirectory?.kind === "local"
+            ? sourceLinkedDirectory
+            : undefined
+          : sourceLinkedDirectory,
+    });
+    const groupingMode: HandoffTaskGroupingMode =
+      requestedGroupingMode === "subthread" &&
+      sameHandoffProjectBoundary(callerProjectBoundary, childProjectBoundary)
+        ? "subthread"
+        : "none";
+    if (groupingMode !== requestedGroupingMode) {
+      this.updatePendingThreadHandoff(handoffId, {
+        groupingMode,
+        message:
+          "Requested subthread grouping crosses a project boundary, so the child thread will be created ungrouped.",
+      });
+      if (workspaceMode === "same_workspace") {
+        const message =
+          'workspaceMode="same_workspace" is only valid for same-project grouped subthread handoffs. Use workspaceMode="new_worktree" for an isolated handoff, workspaceMode="project_local" for the project checkout, or workspaceMode="none" for an unscoped local thread.';
+        this.failPendingThreadHandoff(handoffId, new Error(message));
+        return threadOrchestrationFailure("invalid_arguments", message);
+      }
+    }
+    const groupedParentThreadId =
+      groupingMode === "subthread"
+        ? await this.resolveHandoffGroupParentThreadId({
+            backend: sourceBackend,
+            sourceOverlay,
+            sourceThreadId,
+          })
+        : undefined;
 
     let threadId: string;
     let createdLinkedDirectory: LinkedDirectorySummary | undefined;
@@ -17535,6 +17581,26 @@ export class DesktopBackendRegistry {
       return linkedDirectory.path.trim();
     }
     return params.sourceCwd?.trim();
+  }
+
+  private async resolveHandoffProjectBoundaryPath(params: {
+    cwd?: string;
+    linkedDirectory?: LinkedDirectorySummary;
+  }): Promise<string | undefined> {
+    const linkedDirectoryPath = params.linkedDirectory?.path?.trim();
+    if (linkedDirectoryPath) {
+      return path.resolve(linkedDirectoryPath);
+    }
+
+    const cwd = params.cwd?.trim();
+    if (!cwd) {
+      return undefined;
+    }
+
+    const primaryWorkspace = await this.gitDirectoryService
+      .resolvePrimaryWorkspacePath(cwd)
+      .catch(() => undefined);
+    return path.resolve(primaryWorkspace?.trim() || cwd);
   }
 
   private async buildThreadHandoffWorkspaceSummary(params: {
