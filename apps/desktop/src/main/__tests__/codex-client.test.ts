@@ -6160,7 +6160,7 @@ describe("CodexAppServerClient", () => {
       request.method === "thread/start" || request.method === "turn/start"
     )) {
       expect(request.params).toEqual(
-        expect.not.objectContaining({ serviceTier: expect.anything() })
+        expect.objectContaining({ serviceTier: null })
       );
     }
     const titleHelperWorkspace = path.join(os.tmpdir(), "pwragent", "codex-title-helper");
@@ -6172,6 +6172,7 @@ describe("CodexAppServerClient", () => {
           runtimeWorkspaceRoots: [titleHelperWorkspace],
           ephemeral: true,
           model: "gpt-5.4-mini",
+          serviceTier: null,
           config: {
             web_search: "disabled",
             include_permissions_instructions: false,
@@ -6204,6 +6205,7 @@ describe("CodexAppServerClient", () => {
         params: expect.objectContaining({
           threadId: "thread-title-helper",
           model: "gpt-5.4-mini",
+          serviceTier: null,
           effort: "low",
           outputSchema: expect.objectContaining({
             type: "object",
