@@ -10,6 +10,7 @@ import type {
 } from "@pwragent/messaging-interface";
 import type {
   AgentEvent,
+  InterruptTurnRequest,
   NavigationSnapshot,
   StartTurnRequest,
 } from "@pwragent/shared";
@@ -2111,6 +2112,119 @@ describe("TelegramAdapter", () => {
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "thread-1",
+    });
+  });
+
+  it("routes a persisted Telegram status Stop button after controller restart", async () => {
+    const harness = await createControllerHarness();
+
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        message_id: 100,
+        text: "/resume",
+      },
+    });
+    const bindCallbackData =
+      harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup?.inline_keyboard[0]?.[0]
+        ?.callback_data ?? "";
+    await harness.adapter.handleUpdate({
+      callback_query: {
+        data: bindCallbackData,
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        id: "callback-bind",
+        message: {
+          chat: {
+            id: 777,
+            type: "private",
+          },
+          message_id: 101,
+        },
+      },
+      update_id: 2,
+    });
+
+    await harness.adapter.handleUpdate({
+      update_id: 3,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        message_id: 102,
+        text: "start work",
+      },
+    });
+
+    const stopCallbackData =
+      harness.api.editMessageText.mock.calls.at(-1)?.[0].reply_markup
+        ?.inline_keyboard.flat()
+        .find((button: { text?: string }) => button.text === "Stop")
+        ?.callback_data ?? "";
+    expect(stopCallbackData).toMatch(/^tg:/);
+
+    const restartedInterruptTurn = vi.fn(
+      async (request: InterruptTurnRequest) => request,
+    );
+    const restartedController = new MessagingController({
+      adapter: harness.adapter,
+      authorizedActorIds: ["42"],
+      backend: {
+        getNavigationSnapshot: async () => buildNavigationSnapshot(),
+        interruptTurn: restartedInterruptTurn,
+        startTurn: async (request: StartTurnRequest) => ({
+          backend: request.backend,
+          threadId: request.threadId,
+          turnId: "turn-1",
+        }),
+      },
+      inputDebounceMs: 0,
+      now: () => 1000,
+      store: harness.store,
+    });
+    await harness.adapter.start((event) =>
+      restartedController.handleInboundEvent(event),
+    );
+
+    await harness.adapter.handleUpdate({
+      callback_query: {
+        data: stopCallbackData,
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        id: "callback-stop-after-restart",
+        message: {
+          chat: {
+            id: 777,
+            type: "private",
+          },
+          message_id: 101,
+        },
+      },
+      update_id: 4,
+    });
+
+    expect(restartedInterruptTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
     });
   });
 

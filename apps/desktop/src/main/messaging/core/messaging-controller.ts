@@ -9509,25 +9509,36 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
+    const requestedTurn = readStatusStopTurnValue(
+      event.kind === "callback" ? event.value : undefined,
+      binding,
+    );
     const activeTurn = this.getActiveTurn(binding);
-    if (!activeTurn || !["working", "waiting"].includes(activeTurn.status)) {
+    const targetTurn =
+      requestedTurn ??
+      (activeTurn && ["working", "waiting"].includes(activeTurn.status)
+        ? activeTurn
+        : undefined);
+    if (!targetTurn) {
       await this.renderBindingStatus(binding, event);
       return;
     }
     await this.options.backend.interruptTurn?.({
       backend: binding.backend,
       threadId: binding.threadId,
-      turnId: activeTurn.turnId,
+      turnId: targetTurn.turnId,
     });
-    const interruptedTurn: MessagingActiveTurnSummary = {
-      ...activeTurn,
-      status: "interrupted",
-      updatedAt: this.now(),
-    };
-    this.setActiveTurn(binding, interruptedTurn);
-    await this.signalTurnActivity(binding, interruptedTurn, {
-      force: true,
-    });
+    if (!activeTurn || activeTurn.turnId === targetTurn.turnId) {
+      const interruptedTurn: MessagingActiveTurnSummary = {
+        ...targetTurn,
+        status: "interrupted",
+        updatedAt: this.now(),
+      };
+      this.setActiveTurn(binding, interruptedTurn);
+      await this.signalTurnActivity(binding, interruptedTurn, {
+        force: true,
+      });
+    }
     await this.renderBindingStatus(binding, event);
   }
 
@@ -14837,6 +14848,33 @@ function readBindingTargetFromValue(
   }
 
   return undefined;
+}
+
+function readStatusStopTurnValue(
+  value: MessagingJsonValue | undefined,
+  binding: MessagingBindingRecord,
+): { turnId: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const backend = value.backend;
+  const threadId = value.threadId;
+  const turnId = value.turnId;
+  if (
+    typeof backend !== "string" ||
+    !isAppServerBackendKind(backend) ||
+    backend !== binding.backend ||
+    typeof threadId !== "string" ||
+    threadId !== binding.threadId ||
+    typeof turnId !== "string"
+  ) {
+    return undefined;
+  }
+
+  return {
+    turnId,
+  };
 }
 
 function readStringValue(
