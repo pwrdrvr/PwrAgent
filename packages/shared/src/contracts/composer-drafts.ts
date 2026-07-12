@@ -21,6 +21,12 @@ export type ComposerDraftSkillToken = {
   description?: string;
   shortDescription?: string;
   source?: string;
+  /**
+   * Absent for skill mentions (the original kind). "directory" marks a
+   * composer directory-reference chip: `name` is the tracked directory's
+   * label and `path` its absolute path.
+   */
+  kind?: "directory";
 };
 
 export type ComposerDraftSnapshotRecord = {

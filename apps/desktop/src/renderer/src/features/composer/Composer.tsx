@@ -62,6 +62,7 @@ import {
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
 import {
   buildDirectoryReferenceInsertText,
+  buildDirectoryReferenceTooltip,
   filterDirectoryReferenceCandidates,
   findDirectoryReferenceTrigger,
   listReferencedDirectories,
@@ -1309,6 +1310,19 @@ function createComposerSkillToken(
   };
 }
 
+function createComposerDirectoryToken(
+  directory: Pick<NavigationDirectorySummary, "label" | "path">,
+  index: number,
+): ComposerSkillToken {
+  return {
+    kind: "directory",
+    name: directory.label,
+    path: directory.path,
+    id: `${directory.path ?? directory.label}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    index,
+  };
+}
+
 function getComposerSkillTokensSignature(skillTokens: ComposerSkillToken[]): string {
   return JSON.stringify(
     skillTokens.map((token) => ({
@@ -1344,7 +1358,13 @@ function serializeDraftWithSkillTokens(
   for (const token of sortedTokens) {
     const index = clampSkillTokenIndex(token.index, draft);
     output += draft.slice(cursor, index);
-    output += buildSkillMentionMarkdown(token);
+    // Directory-reference chips serialize to the tilde path — plain,
+    // agent-readable text; the send-time scan re-derives the reference
+    // from it if the chip itself is ever lost (e.g. a prompt-only
+    // restore). Skills keep their `[$name](path)` markdown.
+    output += token.kind === "directory"
+      ? buildDirectoryReferenceInsertText(token)
+      : buildSkillMentionMarkdown(token);
     cursor = index;
   }
 
@@ -5223,23 +5243,30 @@ export function Composer(props: ComposerProps) {
       inputRef.current.selectionEnd ?? selectionStart,
       draft.length,
     );
-    const refTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
-    const insertText = buildDirectoryReferenceInsertText(directory);
-    if (!refTrigger || !insertText) {
+    const refTrigger =
+      findDirectoryReferenceTrigger(draft, selectionStart)
+      ?? findDirectoryReferenceTrigger(draft, draft.length);
+    if (!refTrigger || !directory.path) {
       return;
     }
 
+    // Mint a durable mention token (the `@label` chip) instead of
+    // splicing path text — mirrors applySkill. The chip is zero-width in
+    // the plain draft; serializeDraftWithSkillTokens splices the tilde
+    // path back in for the outgoing text and launchpad prompt.
     const before = draft.slice(0, refTrigger.start);
     const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
-    const nextDraft = `${before}${insertText}${needsTrailingSpace ? " " : ""}${after}`;
-    const nextSelection =
-      before.length + insertText.length + (needsTrailingSpace ? 1 : 0);
-    const nextSkillTokens = adjustSkillTokenIndexesForTextChange({
-      currentDraft: draft,
-      nextDraft,
-      skillTokens,
-    });
+    const nextAfter = after.length > 0 && !/^\s/.test(after) ? ` ${after}` : after;
+    const nextDraft = `${before}${nextAfter}`;
+    const tokenIndex = before.length;
+    const nextSkillTokens = [
+      ...adjustSkillTokenIndexesForTextChange({
+        currentDraft: draft,
+        nextDraft,
+        skillTokens,
+      }),
+      createComposerDirectoryToken(directory, tokenIndex),
+    ];
 
     // Same protected-update dance as applySkill: the editability sync in
     // ComposerTiptapInput re-emits the editor's (still pre-insert) content
@@ -5258,10 +5285,7 @@ export function Composer(props: ComposerProps) {
       setDraft(nextDraft);
       setActiveDirectoryRefIndex(0);
     });
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
-    });
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   const removeImageAttachment = (id: string): void => {
@@ -7395,7 +7419,7 @@ export function Composer(props: ComposerProps) {
             <span
               key={directory.key}
               className="composer__directory-reference tooltip-target"
-              data-tooltip={`${buildDirectoryReferenceInsertText(directory)} — linked to the thread when you send`}
+              data-tooltip={buildDirectoryReferenceTooltip(directory.path ?? "")}
             >
               <FolderIcon size={13} aria-hidden="true" />
               <span className="composer__directory-reference-label">

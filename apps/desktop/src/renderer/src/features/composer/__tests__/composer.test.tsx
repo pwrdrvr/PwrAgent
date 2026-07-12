@@ -9419,11 +9419,22 @@ describe("Composer", () => {
         within(listbox).getByRole("button", { name: /search-product/ })
       );
 
+      // The commit mints a zero-width chip: the plain draft keeps only
+      // the surrounding text, the editor shows an @label mention chip,
+      // and the serialized draft (asserted on materialize below) carries
+      // the tilde path.
       await waitFor(() => {
         expect(screen.getByLabelText("New thread")).toHaveValue(
-          "Read SEARCH-4803 in ~/GIPHY/search-product "
+          "Read SEARCH-4803 in "
         );
       });
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      const chip = within(richInput).getByText("@search-product");
+      expect(chip).toHaveAttribute("data-mention-kind", "directory");
+      expect(chip).toHaveAttribute(
+        "data-skill-path",
+        "/Users/huntharo/GIPHY/search-product"
+      );
       expect(
         screen.queryByRole("listbox", { name: "Directories" })
       ).not.toBeInTheDocument();

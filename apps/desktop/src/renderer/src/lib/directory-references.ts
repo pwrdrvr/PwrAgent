@@ -91,6 +91,14 @@ export function buildDirectoryReferenceInsertText(
   return tildifyPath(directory.path ?? "", homeDir);
 }
 
+/** Hover copy shared by the editor chip and the setup-row pill. */
+export function buildDirectoryReferenceTooltip(
+  path: string,
+  homeDir: string | undefined = getHomeDir(),
+): string {
+  return `${tildifyPath(path, homeDir)} — linked to the thread when you send`;
+}
+
 /**
  * Characters that may legally follow a referenced path in prose. A `/`
  * counts so a deeper reference (`~/dev/app/src/index.ts`) still resolves

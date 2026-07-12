@@ -11452,6 +11452,17 @@ textarea,
   border: 1px solid var(--border-subtle);
 }
 
+/* Composer directory-reference mention chip (`@label`). Same silhouette
+   as the skill chip; neutral surface so the accent stays reserved for
+   skills, per the one-accent rule. */
+.directory-chip {
+  max-width: 100%;
+  vertical-align: middle;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+}
+
 .skill-chip--removable {
   gap: 6px;
   padding-right: 4px;

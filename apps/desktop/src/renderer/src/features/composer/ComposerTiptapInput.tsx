@@ -21,6 +21,11 @@ import {
   repairNestedLanguageFences,
 } from "../../lib/markdown-fences";
 import { buildSkillTooltip, findSkillTrigger } from "../../lib/skill-mentions";
+import {
+  buildDirectoryReferenceTooltip,
+  findDirectoryReferenceTrigger,
+} from "../../lib/directory-references";
+import { tildifyPath } from "../../lib/tildify-path";
 import type {
   ComposerInputChangeMetadata,
   ComposerInputHandle,
@@ -107,6 +112,10 @@ const SkillMention = Mention.extend({
         parseHTML: (element) =>
           element.getAttribute("data-skill-short-description"),
       },
+      kind: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-mention-kind"),
+      },
     };
   },
 }).configure({
@@ -115,6 +124,29 @@ const SkillMention = Mention.extend({
     class: "chip skill-chip composer-tiptap-input__mention",
   },
   renderHTML: ({ node }) => {
+    if (node.attrs.kind === "directory") {
+      // Directory-reference chip: `name` is the tracked directory's
+      // label, `path` its absolute path. Reuses the data-skill-* attr
+      // names so the shared parseHTML fallbacks round-trip both kinds.
+      const label = String(node.attrs.name ?? "directory");
+      const path = typeof node.attrs.path === "string" ? node.attrs.path : "";
+      const tooltip = path ? buildDirectoryReferenceTooltip(path) : "";
+      return [
+        "span",
+        {
+          class: "chip directory-chip composer-tiptap-input__mention",
+          "data-type": "mention",
+          "data-mention-kind": "directory",
+          "data-composer-skill-token-id": String(node.attrs.id ?? ""),
+          "data-id": String(node.attrs.id ?? ""),
+          "data-label": label,
+          "data-skill-name": label,
+          ...(path ? { "data-skill-path": path } : {}),
+          ...(tooltip ? { "data-tooltip": tooltip } : {}),
+        },
+        `@${label}`,
+      ];
+    }
     const skill = getSkillSummary(node.attrs);
     const tooltip = buildSkillTooltip(skill);
     return [
@@ -138,7 +170,10 @@ const SkillMention = Mention.extend({
       `$${skill.name}`,
     ];
   },
-  renderText: ({ node }) => `$${String(node.attrs.name ?? node.attrs.id ?? "")}`,
+  renderText: ({ node }) =>
+    node.attrs.kind === "directory"
+      ? tildifyPath(String(node.attrs.path ?? node.attrs.name ?? ""))
+      : `$${String(node.attrs.name ?? node.attrs.id ?? "")}`,
   suggestion: {
     char: "\uFFFF",
     items: () => [],
@@ -629,6 +664,7 @@ function buildTiptapContent(
         path: skill.path ?? null,
         description: skill.description ?? null,
         shortDescription: skill.shortDescription ?? null,
+        kind: skill.kind ?? null,
       },
     });
     cursor = index;
@@ -800,6 +836,7 @@ function mentionAttrsToSkill(
       typeof attrs.shortDescription === "string"
         ? attrs.shortDescription
         : undefined,
+    ...(attrs.kind === "directory" ? { kind: "directory" as const } : {}),
   };
 }
 
@@ -1677,6 +1714,7 @@ function getSkillMentionAttrs(skill: ComposerSkillToken): Record<string, unknown
     path: skill.path ?? null,
     description: skill.description ?? null,
     shortDescription: skill.shortDescription ?? null,
+    kind: skill.kind ?? null,
   };
 }
 
@@ -1720,9 +1758,15 @@ function applyExternalSkillInsertion(params: {
     return false;
   }
 
+  // Re-locate the autocomplete trigger the token replaced — `@` for a
+  // directory-reference chip, `$` for a skill.
+  const findTrigger =
+    insertedSkill.kind === "directory"
+      ? findDirectoryReferenceTrigger
+      : findSkillTrigger;
   const trigger =
-    findSkillTrigger(params.current.value, params.selectionIndex) ??
-    findSkillTrigger(params.current.value, params.current.value.length);
+    findTrigger(params.current.value, params.selectionIndex) ??
+    findTrigger(params.current.value, params.current.value.length);
   if (!trigger || trigger.start !== insertedSkill.index) {
     return false;
   }
@@ -2395,6 +2439,16 @@ export const ComposerTiptapInput = forwardRef<
             attribute.value,
           ]),
         );
+        if (attrs["data-mention-kind"] === "directory") {
+          const path = attrs["data-skill-path"];
+          if (path) {
+            node.setAttribute(
+              "data-tooltip",
+              buildDirectoryReferenceTooltip(path),
+            );
+          }
+          return;
+        }
         const tooltip = buildSkillTooltip(
           getSkillSummary({
             name: node.textContent?.replace(/^\$/, ""),
