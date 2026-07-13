@@ -100,6 +100,20 @@ export function buildDirectoryReferenceTooltip(
 }
 
 /**
+ * Serialized form of a directory-reference chip in the canonical draft
+ * and outgoing text: `[@label](~/path)`. A markdown link keeps the path
+ * bounded — text typed flush against the chip cannot glue onto it the
+ * way a bare tilde path could — and gives the transcript renderer and
+ * `parseSkillMentionParts` a self-describing form to chip/hydrate from.
+ */
+export function buildDirectoryReferenceMarkdown(
+  reference: { label: string; path: string },
+  homeDir: string | undefined = getHomeDir(),
+): string {
+  return `[@${reference.label}](${tildifyPath(reference.path, homeDir)})`;
+}
+
+/**
  * Characters that may legally follow a referenced path in prose. A `/`
  * counts so a deeper reference (`~/dev/app/src/index.ts`) still resolves
  * to the tracked repo root it lives under.

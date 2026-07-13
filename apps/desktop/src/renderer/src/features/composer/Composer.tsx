@@ -62,11 +62,13 @@ import {
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
 import {
   buildDirectoryReferenceInsertText,
+  buildDirectoryReferenceMarkdown,
   buildDirectoryReferenceTooltip,
   filterDirectoryReferenceCandidates,
   findDirectoryReferenceTrigger,
   listReferencedDirectories,
 } from "../../lib/directory-references";
+import { expandTildePath } from "../../lib/tildify-path";
 import { normalizeImageFile } from "../../lib/image-normalization";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
@@ -1358,12 +1360,16 @@ function serializeDraftWithSkillTokens(
   for (const token of sortedTokens) {
     const index = clampSkillTokenIndex(token.index, draft);
     output += draft.slice(cursor, index);
-    // Directory-reference chips serialize to the tilde path — plain,
-    // agent-readable text; the send-time scan re-derives the reference
-    // from it if the chip itself is ever lost (e.g. a prompt-only
-    // restore). Skills keep their `[$name](path)` markdown.
+    // Directory-reference chips serialize to `[@label](~/path)` markdown
+    // — the parens bound the path so adjacent text can't glue onto it,
+    // the transcript renders it back as a chip, and hydrateComposerDraft
+    // rebuilds the token from a prompt-only restore. Skills keep their
+    // `[$name](path)` markdown.
     output += token.kind === "directory"
-      ? buildDirectoryReferenceInsertText(token)
+      ? buildDirectoryReferenceMarkdown({
+          label: token.name,
+          path: token.path ?? "",
+        })
       : buildSkillMentionMarkdown(token);
     cursor = index;
   }
@@ -1385,6 +1391,21 @@ function hydrateComposerDraft(
   for (const part of parseSkillMentionParts(canonicalDraft)) {
     if (part.type === "text") {
       draft += part.text;
+      continue;
+    }
+
+    if (part.type === "directory") {
+      // Serialized paths are tilde form; the token carries the absolute
+      // path so send-time attach can use it directly.
+      skillTokens.push(
+        createComposerDirectoryToken(
+          {
+            label: part.name,
+            path: expandTildePath(part.path),
+          },
+          draft.length,
+        ),
+      );
       continue;
     }
 
@@ -3403,14 +3424,15 @@ export function Composer(props: ComposerProps) {
     autocompleteListboxId && autocompleteKind
       ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
       : undefined;
-  // Directories the given text references by path (`@`-inserted, typed by
-  // hand, or pasted). The draft text is the source of truth — deleting a
-  // path from the draft drops the reference. Directories that are already
-  // linked (the launchpad's own directory; a thread's linked directories,
-  // including worktree checkouts) are excluded so send-time attach only
-  // sees new references.
+  // Directories the draft references: `@` chips (authoritative, from the
+  // token state) unioned with paths typed or pasted as plain text (from
+  // the serialized-draft scan). Deleting a chip or a typed path drops the
+  // reference. Directories that are already linked (the launchpad's own
+  // directory; a thread's linked directories, including worktree
+  // checkouts) are excluded so send-time attach only sees new references.
   const listDraftReferencedDirectories = (
     text: string,
+    tokens?: ComposerSkillToken[],
   ): NavigationDirectorySummary[] => {
     const excludePaths = [
       props.directory?.path,
@@ -3420,11 +3442,45 @@ export function Composer(props: ComposerProps) {
         linked.worktreePath,
       ]),
     ].filter((path): path is string => Boolean(path));
-    return listReferencedDirectories(text, props.directories ?? [], {
+    const excluded = new Set(excludePaths.map((path) => path.replace(/[/\\]+$/, "")));
+    const scanned = listReferencedDirectories(text, props.directories ?? [], {
       excludePaths,
     });
+    const seenPaths = new Set(
+      scanned
+        .map((directory) => directory.path?.replace(/[/\\]+$/, ""))
+        .filter((path): path is string => Boolean(path)),
+    );
+    const fromTokens: NavigationDirectorySummary[] = [];
+    for (const token of tokens ?? []) {
+      if (token.kind !== "directory" || !token.path) {
+        continue;
+      }
+      const path = token.path.replace(/[/\\]+$/, "");
+      if (!path || seenPaths.has(path) || excluded.has(path)) {
+        continue;
+      }
+      seenPaths.add(path);
+      const tracked = (props.directories ?? []).find(
+        (directory) => directory.path?.replace(/[/\\]+$/, "") === path,
+      );
+      fromTokens.push(
+        tracked ?? {
+          key: `directory-reference:${path}`,
+          kind: "directory",
+          label: token.name,
+          path: token.path,
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      );
+    }
+    return [...scanned, ...fromTokens];
   };
-  const referencedDirectories = listDraftReferencedDirectories(canonicalDraft);
+  const referencedDirectories = listDraftReferencedDirectories(
+    canonicalDraft,
+    skillTokens,
+  );
   const reviewDirectory = useMemo(
     () =>
       findReviewDirectoryForWorkspace({
@@ -4104,7 +4160,7 @@ export function Composer(props: ComposerProps) {
           undefined,
           undefined,
           reviewCommand.target,
-          listDraftReferencedDirectories(canonicalDraft)
+          listDraftReferencedDirectories(canonicalDraft, skillTokens)
             .map((directory) => directory.path)
             .filter((path): path is string => Boolean(path))
         );
@@ -4514,8 +4570,12 @@ export function Composer(props: ComposerProps) {
         updateActiveTurnId(response.turnId);
         props.onActiveTurnIdChange?.(response.turnId);
       }
+      // Queued turns only carry their serialized text, but that text is
+      // self-describing (`[@label](~/path)` markdown), so the scan alone
+      // recovers chip references there.
       const sentReferencedDirectoryPaths = listDraftReferencedDirectories(
         queued ? queued.text : canonicalDraft,
+        queued ? undefined : skillTokens,
       )
         .map((directory) => directory.path)
         .filter((path): path is string => Boolean(path));
@@ -5032,7 +5092,7 @@ export function Composer(props: ComposerProps) {
           payload.input,
           collaborationMode,
           undefined,
-          listDraftReferencedDirectories(canonicalDraft)
+          listDraftReferencedDirectories(canonicalDraft, skillTokens)
             .map((directory) => directory.path)
             .filter((path): path is string => Boolean(path))
         );

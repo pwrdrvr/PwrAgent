@@ -9444,10 +9444,89 @@ describe("Composer", () => {
       await waitFor(() => {
         expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
           "directory:/repo",
-          [{ type: "text", text: "Read SEARCH-4803 in ~/GIPHY/search-product" }],
+          [
+            {
+              type: "text",
+              text: "Read SEARCH-4803 in [@search-product](~/GIPHY/search-product)",
+            },
+          ],
           undefined,
           undefined,
           ["/Users/huntharo/GIPHY/search-product"]
+        );
+      });
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("rebuilds a directory chip from a prompt-only launchpad restore", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "Repo",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        // Serialized canonical prompt only — no editorDocument, as after
+        // an app restart that dropped the rich document.
+        prompt: "check [@agent-kit](~/pwrdrvr/agent-kit) please",
+        workMode: "local",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const onMaterializeLaunchpad = vi.fn(async () => undefined);
+
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          directory={{
+            key: "directory:/repo",
+            kind: "directory",
+            label: "Repo",
+            path: "/repo",
+            threadKeys: [],
+            needsAttentionCount: 0,
+          }}
+          directories={[]}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={onMaterializeLaunchpad}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      );
+
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      await waitFor(() => {
+        expect(within(richInput).getByText("@agent-kit")).toBeInTheDocument();
+      });
+      expect(within(richInput).getByText("@agent-kit")).toHaveAttribute(
+        "data-skill-path",
+        "/Users/huntharo/pwrdrvr/agent-kit"
+      );
+
+      await clickButton("Start thread");
+
+      // The token alone drives the attach — `directories` is empty, so
+      // the text scan cannot resolve this path against a tracked entry.
+      await waitFor(() => {
+        expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+          "directory:/repo",
+          [
+            {
+              type: "text",
+              text: "check [@agent-kit](~/pwrdrvr/agent-kit) please",
+            },
+          ],
+          undefined,
+          undefined,
+          ["/Users/huntharo/pwrdrvr/agent-kit"]
         );
       });
     } finally {

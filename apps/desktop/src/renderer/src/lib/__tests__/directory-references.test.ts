@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { NavigationDirectorySummary } from "@pwragent/shared";
 import {
   buildDirectoryReferenceInsertText,
+  buildDirectoryReferenceMarkdown,
   filterDirectoryReferenceCandidates,
   findDirectoryReferenceTrigger,
   listReferencedDirectories,
@@ -132,6 +133,29 @@ describe("buildDirectoryReferenceInsertText", () => {
     expect(
       buildDirectoryReferenceInsertText({ path: "/opt/work/app" }, HOME),
     ).toBe("/opt/work/app");
+  });
+});
+
+describe("buildDirectoryReferenceMarkdown", () => {
+  it("builds a bounded markdown link with the tilde path", () => {
+    expect(
+      buildDirectoryReferenceMarkdown(
+        { label: "search-product", path: `${HOME}/GIPHY/search-product` },
+        HOME,
+      ),
+    ).toBe("[@search-product](~/GIPHY/search-product)");
+  });
+
+  it("stays scannable when text glues onto the link", () => {
+    const markdown = buildDirectoryReferenceMarkdown(
+      { label: "search-product", path: `${HOME}/GIPHY/search-product` },
+      HOME,
+    );
+    expect(
+      listReferencedDirectories(`${markdown}are two of my fave projects`, [SEARCH], {
+        homeDir: HOME,
+      }).map((d) => d.key),
+    ).toEqual([SEARCH.key]);
   });
 });
 
