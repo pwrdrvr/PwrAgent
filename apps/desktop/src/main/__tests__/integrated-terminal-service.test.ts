@@ -198,6 +198,64 @@ describe("resolveTerminalShell", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(webContents.once).toHaveBeenCalledTimes(1);
   });
+
+  it("reports running terminal sessions for quit confirmation", async () => {
+    const pty = fakePty();
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
+    });
+
+    const response = await service.createOrAttach(
+      {
+        threadKey: "codex:thread-a",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(service.getQuitSnapshot()).toEqual({
+      count: 1,
+      sessionIds: [response.sessionId],
+      threadKeys: ["codex:thread-a"],
+    });
+  });
+
+  it("removes pty listeners before killing sessions during shutdown", async () => {
+    const disposable = { dispose: vi.fn() };
+    const pty = fakePty({
+      onData: vi.fn(() => disposable),
+      onExit: vi.fn(() => disposable),
+    });
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
+    });
+
+    await service.createOrAttach(
+      {
+        threadKey: "codex:thread-a",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    service.dispose();
+
+    expect(disposable.dispose).toHaveBeenCalledTimes(2);
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+    expect(service.getQuitSnapshot()).toEqual({
+      count: 0,
+      sessionIds: [],
+      threadKeys: [],
+    });
+  });
 });
 
 function fakeWebContents(): WebContents & {
@@ -214,7 +272,7 @@ function fakeWebContents(): WebContents & {
   };
 }
 
-function fakePty(): IPty {
+function fakePty(overrides: Partial<IPty> = {}): IPty {
   return {
     pid: 123,
     cols: 80,
@@ -229,5 +287,6 @@ function fakePty(): IPty {
     resume: vi.fn(),
     resize: vi.fn(),
     write: vi.fn(),
+    ...overrides,
   };
 }

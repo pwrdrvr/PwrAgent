@@ -13,6 +13,7 @@ import type {
   IntegratedTerminalWriteRequest,
 } from "../../shared/integrated-terminal";
 import { IntegratedTerminalService } from "../terminal/integrated-terminal-service";
+import type { IntegratedTerminalQuitSnapshot } from "../terminal/integrated-terminal-service";
 
 let service: IntegratedTerminalService | undefined;
 
@@ -61,4 +62,14 @@ export function disposeIntegratedTerminalIpcHandlers(): void {
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CLOSE_CHANNEL);
   service?.dispose();
   service = undefined;
+}
+
+export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnapshot {
+  return (
+    service?.getQuitSnapshot() ?? {
+      count: 0,
+      sessionIds: [],
+      threadKeys: [],
+    }
+  );
 }

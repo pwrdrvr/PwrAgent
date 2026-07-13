@@ -9,6 +9,7 @@ export type QuitConfirmationDialogResult =
 export type QuitConfirmationDialogOptions = {
   countdownSeconds: number;
   inProgressThreadCount: number;
+  terminalSessionCount: number;
   parent?: BrowserWindow | null;
 };
 
@@ -87,7 +88,7 @@ export async function showQuitConfirmationDialog(
   const palette = QUIT_DIALOG_PALETTES[colorScheme];
   const window = new BrowserWindow({
     width: 460,
-    height: 320,
+    height: 340,
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -154,6 +155,7 @@ export async function showQuitConfirmationDialog(
         buildQuitConfirmationHtml({
           countdownSeconds: options.countdownSeconds,
           inProgressThreadCount: options.inProgressThreadCount,
+          terminalSessionCount: options.terminalSessionCount,
           navigationPrefix,
           colorScheme,
           palette,
@@ -170,14 +172,19 @@ export async function showQuitConfirmationDialog(
 function buildQuitConfirmationHtml(options: {
   countdownSeconds: number;
   inProgressThreadCount: number;
+  terminalSessionCount: number;
   navigationPrefix: string;
   colorScheme: "dark" | "light";
   palette: QuitDialogPalette;
 }): string {
-  const countText =
-    options.inProgressThreadCount === 1
-      ? "1 thread has an agent turn in progress."
-      : `${options.inProgressThreadCount} threads have agent turns in progress.`;
+  const countText = describeQuitBlockers({
+    inProgressThreadCount: options.inProgressThreadCount,
+    terminalSessionCount: options.terminalSessionCount,
+  });
+  const interruptionText = describeQuitImpact({
+    inProgressThreadCount: options.inProgressThreadCount,
+    terminalSessionCount: options.terminalSessionCount,
+  });
   const p = options.palette;
   return `<!doctype html>
 <html lang="en">
@@ -345,7 +352,7 @@ function buildQuitConfirmationHtml(options: {
     <main class="content">
       <h1>Quit PwrAgent?</h1>
       <p>${escapeHtml(countText)}</p>
-      <p>If you quit now, those turns will be interrupted. You'll need to find each thread when you restart and tell them to continue.</p>
+      <p>${escapeHtml(interruptionText)}</p>
       <p class="countdown" id="countdown"></p>
       <div class="actions">
         <button id="stay" class="secondary" type="button">Stay Open</button>
@@ -383,6 +390,43 @@ function buildQuitConfirmationHtml(options: {
     </script>
   </body>
 </html>`;
+}
+
+function describeQuitBlockers(options: {
+  inProgressThreadCount: number;
+  terminalSessionCount: number;
+}): string {
+  const parts: string[] = [];
+  if (options.inProgressThreadCount === 1) {
+    parts.push("1 thread has an agent turn in progress");
+  } else if (options.inProgressThreadCount > 1) {
+    parts.push(`${options.inProgressThreadCount} threads have agent turns in progress`);
+  }
+  if (options.terminalSessionCount === 1) {
+    parts.push("1 integrated terminal is running");
+  } else if (options.terminalSessionCount > 1) {
+    parts.push(`${options.terminalSessionCount} integrated terminals are running`);
+  }
+  if (parts.length === 0) {
+    return "PwrAgent is ready to quit.";
+  }
+  if (parts.length === 1) {
+    return `${parts[0]}.`;
+  }
+  return `${parts[0]}, and ${parts[1]}.`;
+}
+
+function describeQuitImpact(options: {
+  inProgressThreadCount: number;
+  terminalSessionCount: number;
+}): string {
+  if (options.inProgressThreadCount > 0 && options.terminalSessionCount > 0) {
+    return "If you quit now, those turns will be interrupted and terminal processes will be killed. You'll need to reopen the threads and restart any terminal work.";
+  }
+  if (options.terminalSessionCount > 0) {
+    return "If you quit now, terminal processes will be killed. You'll need to restart any terminal work after reopening PwrAgent.";
+  }
+  return "If you quit now, those turns will be interrupted. You'll need to find each thread when you restart and tell them to continue.";
 }
 
 function escapeHtml(value: string): string {

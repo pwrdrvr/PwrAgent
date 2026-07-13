@@ -39,6 +39,12 @@ type TerminalSession = {
 
 type NodePtyModule = typeof import("node-pty");
 
+export type IntegratedTerminalQuitSnapshot = {
+  count: number;
+  sessionIds: string[];
+  threadKeys: string[];
+};
+
 type IntegratedTerminalServiceOptions = {
   loadNodePty?: () => Promise<Pick<NodePtyModule, "spawn">>;
 };
@@ -48,6 +54,7 @@ export class IntegratedTerminalService {
   private readonly sessionsByThread = new Map<string, TerminalSession>();
   private readonly sessionsById = new Map<string, TerminalSession>();
   private readonly loadNodePty: () => Promise<Pick<NodePtyModule, "spawn">>;
+  private disposing = false;
 
   constructor(options: IntegratedTerminalServiceOptions = {}) {
     this.loadNodePty = options.loadNodePty ?? loadNodePty;
@@ -148,9 +155,19 @@ export class IntegratedTerminalService {
   }
 
   dispose(): void {
+    this.disposing = true;
     for (const session of Array.from(this.sessionsById.values())) {
-      this.killSession(session);
+      this.disposeSessionForShutdown(session);
     }
+  }
+
+  getQuitSnapshot(): IntegratedTerminalQuitSnapshot {
+    const sessions = [...this.sessionsById.values()];
+    return {
+      count: sessions.length,
+      sessionIds: sessions.map((session) => session.sessionId).sort(),
+      threadKeys: sessions.map((session) => session.threadKey).sort(),
+    };
   }
 
   private toCreateResponse(
@@ -180,6 +197,9 @@ export class IntegratedTerminalService {
   }
 
   private handleOutput(session: TerminalSession, data: string): void {
+    if (this.disposing || this.sessionsById.get(session.sessionId) !== session) {
+      return;
+    }
     session.buffer = trimBufferedOutput(session.buffer + data);
     this.send(session, INTEGRATED_TERMINAL_OUTPUT_CHANNEL, {
       sessionId: session.sessionId,
@@ -192,6 +212,9 @@ export class IntegratedTerminalService {
     exitCode: number | undefined,
     signal: number | undefined,
   ): void {
+    if (this.disposing || this.sessionsById.get(session.sessionId) !== session) {
+      return;
+    }
     this.send(session, INTEGRATED_TERMINAL_EXIT_CHANNEL, {
       sessionId: session.sessionId,
       exitCode: exitCode ?? null,
@@ -217,12 +240,35 @@ export class IntegratedTerminalService {
   }
 
   private deleteSession(session: TerminalSession): void {
-    for (const disposable of session.disposables) {
-      disposable.dispose();
-    }
+    this.disposeSessionListeners(session);
     this.sessionsByThread.delete(session.threadKey);
     this.sessionsById.delete(session.sessionId);
     session.subscribers.clear();
+  }
+
+  private disposeSessionForShutdown(session: TerminalSession): void {
+    this.deleteSession(session);
+    try {
+      session.pty.kill();
+    } catch (error) {
+      this.logger.warn("shutdown-kill-failed", {
+        error: error instanceof Error ? error.message : String(error),
+        sessionId: session.sessionId,
+      });
+    }
+  }
+
+  private disposeSessionListeners(session: TerminalSession): void {
+    for (const disposable of session.disposables.splice(0)) {
+      try {
+        disposable.dispose();
+      } catch (error) {
+        this.logger.warn("listener-dispose-failed", {
+          error: error instanceof Error ? error.message : String(error),
+          sessionId: session.sessionId,
+        });
+      }
+    }
   }
 
   private send(session: TerminalSession, channel: string, payload: unknown): void {

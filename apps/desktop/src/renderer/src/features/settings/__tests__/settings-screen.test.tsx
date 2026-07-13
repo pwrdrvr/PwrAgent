@@ -514,12 +514,12 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("switch", {
-        name: "Confirm quit when threads are in progress",
+        name: "Confirm quit when threads or terminals are active",
       }),
     ).toHaveAttribute("aria-checked", "true");
     fireEvent.click(
       screen.getByRole("switch", {
-        name: "Confirm quit when threads are in progress",
+        name: "Confirm quit when threads or terminals are active",
       }),
     );
     await waitFor(() => {
