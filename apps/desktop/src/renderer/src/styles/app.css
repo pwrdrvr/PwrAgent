@@ -13627,6 +13627,15 @@ textarea,
   color: var(--status-warning);
 }
 
+.composer__queued--scheduled {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-soft) 36%, var(--bg-panel-elevated));
+}
+
+.composer__queued--scheduled .composer__queued-label {
+  color: var(--accent-bright);
+}
+
 .composer__queued-copy {
   display: flex;
   min-width: 0;
@@ -15773,6 +15782,138 @@ textarea,
   padding: 0 12px;
   border-radius: 999px;
   font-size: 13px;
+}
+
+/* Scheduled-send split button. One pill, two zones: a caret trigger that opens
+   the time menu and the primary Send action, joined by a hairline divider. The
+   pill owns the border, radius, and background; the inner zones are transparent
+   buttons clipped to the pill silhouette (overflow: hidden) so a hover fill
+   never bleeds past the rounded corners or hides the other zone's highlight.
+   When scheduling doesn't apply the caret isn't rendered and the pill collapses
+   to a plain Send button. */
+.composer__send-split {
+  position: relative;
+  display: inline-flex;
+}
+
+.composer__send-split-pill {
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--bg-row-active);
+}
+
+/* Dim the whole pill as one control. When the caret is present it shares the
+   Send button's disabled state, so this is always the uniform both-off case. */
+.composer__send-split-pill.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Inner zones shed their own chrome; the pill supplies border, radius, and bg. */
+.composer__actions .composer__send-split-pill .button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent-bright);
+}
+
+/* The pill already dims via .is-disabled; keep zones opaque so it isn't dimmed
+   twice into near-invisibility. */
+.composer__send-split-pill .button[disabled] {
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.composer__actions .composer__send-split-pill .composer__send-schedule-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+  border-right: 1px solid var(--accent-border);
+}
+
+/* The divider is a rest-only seam that hints the pill has two targets. Once a
+   zone fills — hover anywhere on the pill, or the menu is open — the fill's own
+   edge is the boundary, so the hairline would just read as a stray orange sliver
+   beside the filled caret. Fade it out (border-color transitions via .button). */
+.composer__send-split-pill:hover .composer__send-schedule-button,
+.composer__send-split--open .composer__send-split-pill .composer__send-schedule-button {
+  border-right-color: transparent;
+}
+
+.composer__send-schedule-button svg {
+  transition: transform 120ms ease;
+}
+
+.composer__send-split--open .composer__send-schedule-button svg {
+  transform: rotate(180deg);
+}
+
+/* Per-zone hover so it's always obvious which half a click will fire — the fix
+   for the old two-button version where one highlight hid under the other. */
+.composer__send-split-pill .button:not(:disabled):hover,
+.composer__send-split--open .composer__send-schedule-button:not(:disabled) {
+  background: var(--accent);
+  color: var(--button-text);
+}
+
+/* One focus ring around the whole pill. A per-zone outline would be cropped by
+   the pill's overflow clip; this reads as a single control regardless. */
+.composer__send-split-pill:has(:focus),
+.composer__send-split-pill:has(:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Kill the inner buttons' own focus outline on ANY :focus, not just
+   :focus-visible. A mouse click focuses the button without :focus-visible, so
+   the base `.button:focus` rule's 2px accent outline slipped through — and
+   because the pill clips with overflow:hidden, only the outline's interior edge
+   survived, showing as a thick orange bar at the seam that stuck until blur.
+   Focus is still shown by the pill ring above. */
+.composer__send-split-pill .button:focus {
+  outline: none;
+}
+
+.composer__schedule-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 32;
+  min-width: 168px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.composer__schedule-menu-item {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.composer__schedule-menu-item:hover,
+.composer__schedule-menu-item:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
 }
 
 .context-window-moon {

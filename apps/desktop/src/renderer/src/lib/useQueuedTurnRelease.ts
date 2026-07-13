@@ -5,9 +5,10 @@ import type {
   BackendSummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import type {
-  ComposerDraftStore,
-  ComposerQueuedTurnSnapshot,
+import {
+  getNextReleasableQueuedTurn,
+  type ComposerDraftStore,
+  type ComposerQueuedTurnSnapshot,
 } from "../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "./desktop-api";
 
@@ -159,7 +160,9 @@ export function useQueuedTurnRelease(params: {
       return;
     }
 
-    const queuedTurn = current.composerDraftStore.getQueuedTurn(scopeKey);
+    const queuedTurn = getNextReleasableQueuedTurn(
+      current.composerDraftStore.getQueuedTurns(scopeKey),
+    );
     if (!queuedTurn || isThreadSelected(current, thread)) {
       return;
     }
@@ -171,8 +174,9 @@ export function useQueuedTurnRelease(params: {
         return undefined;
       }
 
-      const releaseQueuedSnapshot =
-        releaseState.composerDraftStore.getQueuedTurn(scopeKey);
+      const releaseQueuedSnapshot = getNextReleasableQueuedTurn(
+        releaseState.composerDraftStore.getQueuedTurns(scopeKey),
+      );
       if (!releaseQueuedSnapshot || releaseQueuedSnapshot.id !== queuedTurnId) {
         return undefined;
       }
@@ -449,4 +453,57 @@ export function useQueuedTurnRelease(params: {
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    const current = paramsRef.current;
+    let nextReleaseAt: number | undefined;
+    for (const thread of current.threads) {
+      if (
+        current.selectedThread?.source === thread.source &&
+        current.selectedThread.id === thread.id
+      ) {
+        continue;
+      }
+
+      for (const queuedTurn of current.composerDraftStore.getQueuedTurns(
+        getThreadScopeKey(thread),
+      )) {
+        const scheduledSendAt = queuedTurn.scheduledSendAt;
+        if (
+          typeof scheduledSendAt !== "number" ||
+          !Number.isFinite(scheduledSendAt) ||
+          scheduledSendAt <= Date.now()
+        ) {
+          continue;
+        }
+
+        nextReleaseAt =
+          nextReleaseAt === undefined
+            ? scheduledSendAt
+            : Math.min(nextReleaseAt, scheduledSendAt);
+      }
+    }
+
+    if (nextReleaseAt === undefined) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const releaseState = paramsRef.current;
+      for (const thread of releaseState.threads) {
+        if (
+          releaseState.selectedThread?.source === thread.source &&
+          releaseState.selectedThread.id === thread.id
+        ) {
+          continue;
+        }
+
+        void releaseQueuedTurnForThread(thread, { verifyIdle: true });
+      }
+    }, Math.max(0, nextReleaseAt - Date.now()));
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [params.threads, params.selectedThread, params.composerDraftStore]);
 }

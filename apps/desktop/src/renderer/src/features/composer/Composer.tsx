@@ -39,6 +39,7 @@ import type {
 import { readCodexEnvironmentActionRuns } from "@pwragent/shared";
 import {
   BranchIcon,
+  ChevronUpIcon,
   CloseIcon,
   FileCodeIcon,
   FolderIcon,
@@ -83,6 +84,7 @@ import {
   formatRunningDurationMs,
 } from "../thread-detail/EnvActionRunsView";
 import {
+  getNextReleasableQueuedTurn,
   useComposerDraftStore,
   type ComposerDraftSnapshot,
   type ComposerDraftStore,
@@ -259,6 +261,7 @@ type QueuedTurnDraft = {
   id: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
+  scheduledSendAt?: number;
   reviewCommand?: {
     cwd?: string;
     displayText: string;
@@ -341,6 +344,18 @@ type ReviewWorkspaceOption = {
 };
 
 const DEFAULT_REASONING_EFFORT = "medium";
+const SCHEDULED_SEND_OPTIONS = [
+  { label: "Send in 15m", delayMs: 15 * 60_000 },
+  { label: "Send in 30m", delayMs: 30 * 60_000 },
+  { label: "Send in 1h", delayMs: 60 * 60_000 },
+  { label: "Send in 2h", delayMs: 2 * 60 * 60_000 },
+] as const;
+
+type ScheduledSendMenuOption = {
+  delayMs?: number;
+  label: string;
+  scheduledSendAt?: number;
+};
 
 let queuedTurnIdSequence = 0;
 
@@ -350,6 +365,86 @@ function createQueuedTurnId(): string {
 }
 
 const globalQueuedTurnReleaseScopeKeys = new Set<string>();
+
+function getFutureScheduledSendAt(
+  scheduledSendAt: number | undefined,
+  now = Date.now(),
+): number | undefined {
+  if (typeof scheduledSendAt !== "number" || !Number.isFinite(scheduledSendAt)) {
+    return undefined;
+  }
+  return scheduledSendAt > now ? scheduledSendAt : undefined;
+}
+
+function formatScheduledSendCountdown(
+  scheduledSendAt: number,
+  now = Date.now(),
+): string {
+  return formatRunningDurationMs(Math.max(0, scheduledSendAt - now));
+}
+
+function isFiveHourRateLimitName(value?: string): boolean {
+  return value?.toLowerCase().endsWith("5h limit") ?? false;
+}
+
+function rateLimitMatchesModel(
+  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
+  selectedModelOption?: ModelOption,
+): boolean {
+  const modelTerms = [
+    selectedModelOption?.id,
+    selectedModelOption?.label,
+  ]
+    .filter((term): term is string => Boolean(term))
+    .map((term) => term.toLowerCase());
+  if (modelTerms.length === 0) {
+    return false;
+  }
+
+  const searchable = [
+    rateLimit.limitId,
+    rateLimit.name,
+  ]
+    .filter((term): term is string => Boolean(term))
+    .map((term) => term.toLowerCase());
+  return modelTerms.some((term) =>
+    searchable.some((candidate) => candidate.includes(term))
+  );
+}
+
+function getFiveHourRateLimitResetAt(params: {
+  backend?: BackendSummary;
+  now: number;
+  selectedModelOption?: ModelOption;
+}): number | undefined {
+  const candidates = (params.backend?.rateLimits ?? []).filter((rateLimit) => {
+    const resetAt = rateLimit.resetAt;
+    return (
+      typeof resetAt === "number" &&
+      Number.isFinite(resetAt) &&
+      resetAt > params.now &&
+      (isFiveHourRateLimitName(rateLimit.name) ||
+        isFiveHourRateLimitName(rateLimit.limitId))
+    );
+  });
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const modelSpecific = candidates.filter((candidate) =>
+    rateLimitMatchesModel(candidate, params.selectedModelOption)
+  );
+  const generic = candidates.filter(
+    (candidate) => candidate.name.toLowerCase() === "5h limit",
+  );
+  const ordered =
+    modelSpecific.length > 0
+      ? modelSpecific
+      : generic.length > 0
+        ? generic
+        : candidates;
+  return Math.min(...ordered.map((candidate) => candidate.resetAt!));
+}
 
 const SLASH_COMMANDS: SlashCommandSuggestion[] = [
   {
@@ -2311,6 +2406,15 @@ export function Composer(props: ComposerProps) {
     workspaceMenuOpen,
     () => setWorkspaceMenuOpen(false),
   );
+  const [scheduleMenuOpen, setScheduleMenuOpen] = useState(false);
+  const scheduleMenuRef = useDismissableMenu<HTMLDivElement>(
+    scheduleMenuOpen,
+    () => setScheduleMenuOpen(false),
+  );
+  const [scheduleTick, setScheduleTick] = useState(() => Date.now());
+  const [scheduledDraftSendAt, setScheduledDraftSendAt] = useState<
+    number | undefined
+  >();
   const [handoffDialog, setHandoffDialog] = useState<
     HandoffThreadWorkspaceRequest["direction"] | undefined
   >();
@@ -2514,6 +2618,11 @@ export function Composer(props: ComposerProps) {
   const hasComposerContent =
     draft.trim().length > 0 || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
+  const nextReleasableQueuedTurn = getNextReleasableQueuedTurn(queuedTurns);
+  const futureScheduledDraftSendAt = getFutureScheduledSendAt(
+    scheduledDraftSendAt,
+    scheduleTick,
+  );
   launchpadUpdateRef.current = props.onUpdateLaunchpad;
   latestDraftSnapshotRef.current = {
     scopeKey: composerScopeKey,
@@ -3016,6 +3125,29 @@ export function Composer(props: ComposerProps) {
       return nextPendingSteer;
     });
   };
+  useEffect(() => {
+    const hasFutureScheduledQueue = queuedTurns.some((entry) =>
+      Boolean(getFutureScheduledSendAt(entry.scheduledSendAt))
+    );
+    if (!futureScheduledDraftSendAt && !hasFutureScheduledQueue) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setScheduleTick(Date.now());
+    }, 1_000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [futureScheduledDraftSendAt, queuedTurns]);
+
+  useEffect(() => {
+    if (scheduledDraftSendAt && !futureScheduledDraftSendAt) {
+      setScheduledDraftSendAt(undefined);
+    }
+  }, [futureScheduledDraftSendAt, scheduledDraftSendAt]);
+
   const markComposerDraftSubmitted = (scopeKey: string): void => {
     if (!isDraftStoreScope(scopeKey)) {
       return;
@@ -3325,6 +3457,8 @@ export function Composer(props: ComposerProps) {
     updateSending(false);
     setInterrupting(false);
     setSteering(false);
+    setScheduleMenuOpen(false);
+    setScheduledDraftSendAt(undefined);
     setServerQueuedTurnEntryIdState(
       serverQueuedTurnEntryIdsRef.current.get(composerScopeKey)
     );
@@ -4028,6 +4162,7 @@ export function Composer(props: ComposerProps) {
 
   const exitReviewComposer = (): void => {
     setReviewConfig(undefined);
+    setScheduledDraftSendAt(undefined);
     clearComposerDraft();
     setSendError(undefined);
     requestAnimationFrame(() => inputRef.current?.focus());
@@ -4044,6 +4179,13 @@ export function Composer(props: ComposerProps) {
     if (!configuredReviewCommand) {
       return;
     }
+    if (futureScheduledDraftSendAt) {
+      queueReviewCommand(configuredReviewCommand, {
+        scheduledSendAt: futureScheduledDraftSendAt,
+      });
+      return;
+    }
+
     await submitReviewCommand(configuredReviewCommand);
   };
 
@@ -4307,7 +4449,7 @@ export function Composer(props: ComposerProps) {
       return;
     }
     if (
-      !queuedTurn ||
+      !nextReleasableQueuedTurn ||
       globalQueuedTurnReleaseScopeKeys.has(composerScopeKey) ||
       props.threadBusy ||
       activeTurnId ||
@@ -4318,20 +4460,21 @@ export function Composer(props: ComposerProps) {
     ) {
       return;
     }
-    if (queuedAutoReleaseAttemptIdRef.current === queuedTurn.id) {
+    if (queuedAutoReleaseAttemptIdRef.current === nextReleasableQueuedTurn.id) {
       return;
     }
 
-    queuedAutoReleaseAttemptIdRef.current = queuedTurn.id;
+    queuedAutoReleaseAttemptIdRef.current = nextReleasableQueuedTurn.id;
     globalQueuedTurnReleaseScopeKeys.add(composerScopeKey);
     updateSending(true);
-    void sendQueuedTurn(queuedTurn).finally(() => {
+    void sendQueuedTurn(nextReleasableQueuedTurn).finally(() => {
       updateSending(false);
     });
   }, [
     activeTurnId,
-    queuedTurn,
+    nextReleasableQueuedTurn,
     serverQueuedTurnEntryId,
+    scheduleTick,
     sending,
     props.threadBusy,
     props.disabled,
@@ -4361,7 +4504,7 @@ export function Composer(props: ComposerProps) {
     setPendingSteer(undefined);
   }, [activeTurnId, pendingSteer, props.launchpad, queuedTurn]);
 
-  const queueCurrentDraft = (): void => {
+  const queueCurrentDraft = (options?: { scheduledSendAt?: number }): void => {
     if (!hasComposerContent && imageAttachments.length === 0) {
       return;
     }
@@ -4376,6 +4519,9 @@ export function Composer(props: ComposerProps) {
       input: payload.input,
       text: canonicalDraft,
       imageAttachments,
+      ...(options?.scheduledSendAt
+        ? { scheduledSendAt: options.scheduledSendAt }
+        : {}),
     });
     recordComposerDraftHistory(
       composerScopeKey,
@@ -4385,19 +4531,26 @@ export function Composer(props: ComposerProps) {
     clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
+    setScheduledDraftSendAt(undefined);
     setReviewConfig(undefined);
     setSendError(undefined);
   };
 
-  const queueReviewCommand = (reviewCommand: {
-    cwd?: string;
-    displayText: string;
-    target: AppServerReviewTarget;
-  }): void => {
+  const queueReviewCommand = (
+    reviewCommand: {
+      cwd?: string;
+      displayText: string;
+      target: AppServerReviewTarget;
+    },
+    options?: { scheduledSendAt?: number },
+  ): void => {
     enqueueQueuedTurn({
       id: createQueuedTurnId(),
       text: reviewCommandToDraftText(reviewCommand),
       imageAttachments: [],
+      ...(options?.scheduledSendAt
+        ? { scheduledSendAt: options.scheduledSendAt }
+        : {}),
       reviewCommand,
     });
     recordComposerDraftHistory(
@@ -4408,6 +4561,7 @@ export function Composer(props: ComposerProps) {
     clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
+    setScheduledDraftSendAt(undefined);
     setReviewConfig(undefined);
     setSendError(undefined);
   };
@@ -4418,6 +4572,48 @@ export function Composer(props: ComposerProps) {
       Boolean(activeTurnIdRef.current) ||
       Boolean(serverQueuedTurnEntryIdsRef.current.get(composerScopeKey)) ||
       sendingRef.current);
+
+  const scheduleCurrentDraft = (scheduledSendAt: number): void => {
+    if (props.launchpad || props.disabled) {
+      return;
+    }
+
+    const reviewCommand = parsedReviewCommand;
+    if (reviewCommand) {
+      if (isBareReviewCommand) {
+        setScheduledDraftSendAt(scheduledSendAt);
+        setReviewConfig(
+          reviewConfig ??
+            createReviewConfig({
+              directory: props.directory,
+              thread: props.thread,
+            })
+        );
+        setSendError(undefined);
+        return;
+      }
+      if (imageAttachments.length > 0) {
+        setSendError("/review does not accept image attachments.");
+        return;
+      }
+      if (reviewWorkspaceSelectionRequired) {
+        setScheduledDraftSendAt(scheduledSendAt);
+        setReviewConfig(
+          createReviewConfig({
+            directory: props.directory,
+            reviewCommand,
+            thread: props.thread,
+          })
+        );
+        setSendError("Choose a project to review.");
+        return;
+      }
+      queueReviewCommand(reviewCommand, { scheduledSendAt });
+      return;
+    }
+
+    queueCurrentDraft({ scheduledSendAt });
+  };
 
   const submitPendingSteer = async (pending: QueuedTurnDraft): Promise<void> => {
     const turnId = activeTurnIdRef.current;
@@ -4587,9 +4783,18 @@ export function Composer(props: ComposerProps) {
           setSendError("Choose a project to review.");
           return;
         }
-        queueReviewCommand(reviewCommand);
+        queueReviewCommand(
+          reviewCommand,
+          futureScheduledDraftSendAt
+            ? { scheduledSendAt: futureScheduledDraftSendAt }
+            : undefined,
+        );
       } else {
-        queueCurrentDraft();
+        queueCurrentDraft(
+          futureScheduledDraftSendAt
+            ? { scheduledSendAt: futureScheduledDraftSendAt }
+            : undefined,
+        );
       }
       return;
     }
@@ -4607,7 +4812,19 @@ export function Composer(props: ComposerProps) {
         return;
       }
 
+      if (futureScheduledDraftSendAt) {
+        queueReviewCommand(reviewCommand, {
+          scheduledSendAt: futureScheduledDraftSendAt,
+        });
+        return;
+      }
+
       await submitReviewCommand(reviewCommand);
+      return;
+    }
+
+    if (futureScheduledDraftSendAt) {
+      queueCurrentDraft({ scheduledSendAt: futureScheduledDraftSendAt });
       return;
     }
 
@@ -5278,6 +5495,58 @@ export function Composer(props: ComposerProps) {
     selectedModelOption?.supportsSteering !== false &&
     props.thread?.source !== "grok";
   const launchpadSubmitting = isLaunchpad && sending;
+  const fiveHourResetAt = getFiveHourRateLimitResetAt({
+    backend,
+    now: scheduleTick,
+    selectedModelOption,
+  });
+  const scheduledSendOptions: ScheduledSendMenuOption[] = [
+    ...SCHEDULED_SEND_OPTIONS.map((option) => ({
+      delayMs: option.delayMs,
+      label: option.label,
+    })),
+    ...(fiveHourResetAt
+      ? [
+          {
+            label: `Send in ${formatScheduledSendCountdown(
+              fiveHourResetAt,
+              scheduleTick,
+            )} (5h context reset)`,
+            scheduledSendAt: fiveHourResetAt,
+          },
+        ]
+      : []),
+  ];
+  const sendButtonDisabled =
+    props.disabled ||
+    steering ||
+    (!activeTurnId && sending) ||
+    (!hasComposerContent && imageAttachments.length === 0);
+  const scheduleButtonDisabled =
+    sendButtonDisabled ||
+    Boolean(props.launchpad) ||
+    !props.thread ||
+    isCompactCommand;
+  // Only surface the schedule caret where scheduling actually applies. In the
+  // launchpad, compact command, or a thread-less composer there is nothing to
+  // schedule, so the split collapses to a plain Send pill instead of parking a
+  // permanently-dimmed half-button next to it.
+  const scheduleAffordanceVisible =
+    Boolean(props.thread) && !props.launchpad && !isCompactCommand;
+  const submitButtonLabel = futureScheduledDraftSendAt
+    ? `Send in ${formatScheduledSendCountdown(
+        futureScheduledDraftSendAt,
+        scheduleTick,
+      )}`
+    : activeTurnId || serverQueuedTurnEntryId || props.threadBusy
+      ? "Queue"
+      : sending
+        ? props.launchpad
+          ? "Starting…"
+          : "Sending…"
+        : props.launchpad
+          ? "Start thread"
+          : "Send";
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
@@ -6087,6 +6356,7 @@ export function Composer(props: ComposerProps) {
         data-composer-implementation="tiptap-wysiwyg-markdown-chips"
         onSubmit={(event) => {
           event.preventDefault();
+          setScheduleMenuOpen(false);
           if (isReviewComposerOpen) {
             void submitConfiguredReviewComposer();
           } else {
@@ -6187,58 +6457,76 @@ export function Composer(props: ComposerProps) {
         </div>
       ) : null}
 
-      {queuedTurns.map((queued, index) => (
-        <div
-          className="composer__queued"
-          aria-label={index === 0 ? "Queued message" : `Queued message ${index + 1}`}
-          key={`${index}:${queued.text}:${queued.imageAttachments.length}`}
-        >
-          <div className="composer__queued-copy">
-            <span className="composer__queued-label">
-              {index === 0 ? "Queued next" : `Queued #${index + 1}`}
-            </span>
-            <span className="composer__queued-text">
-              {formatDraftPreview(queued)}
-            </span>
-          </div>
-          <QueuedImageAttachments attachments={queued.imageAttachments} />
-          <div className="composer__queued-actions">
-            {supportsSteering && !queued.reviewCommand ? (
+      {queuedTurns.map((queued, index) => {
+        const scheduledSendAt = getFutureScheduledSendAt(
+          queued.scheduledSendAt,
+          scheduleTick,
+        );
+        const queuedLabel = scheduledSendAt
+          ? `Sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleTick)}`
+          : index === 0
+            ? "Queued next"
+            : `Queued #${index + 1}`;
+
+        return (
+          <div
+            className={[
+              "composer__queued",
+              scheduledSendAt ? "composer__queued--scheduled" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            aria-label={index === 0 ? "Queued message" : `Queued message ${index + 1}`}
+            key={`${index}:${queued.text}:${queued.imageAttachments.length}:${queued.scheduledSendAt ?? ""}`}
+          >
+            <div className="composer__queued-copy">
+              <span className="composer__queued-label">
+                {queuedLabel}
+              </span>
+              <span className="composer__queued-text">
+                {formatDraftPreview(queued)}
+              </span>
+            </div>
+            <QueuedImageAttachments attachments={queued.imageAttachments} />
+            <div className="composer__queued-actions">
+              {supportsSteering && !queued.reviewCommand ? (
+                <button
+                  className="composer__secondary-action"
+                  disabled={props.disabled || steering || !activeTurnId}
+                  type="button"
+                  onClick={() => {
+                    steerQueuedTurn(queued);
+                  }}
+                >
+                  {steering ? "Steering..." : "Steer"}
+                </button>
+              ) : null}
               <button
                 className="composer__secondary-action"
-                disabled={props.disabled || steering || !activeTurnId}
                 type="button"
                 onClick={() => {
-                  steerQueuedTurn(queued);
+                  setComposerDraftFromCanonical(queued.text);
+                  setImageAttachments(queued.imageAttachments);
+                  setScheduledDraftSendAt(scheduledSendAt);
+                  removeQueuedTurnAt(index);
+                  requestAnimationFrame(() => inputRef.current?.focus());
                 }}
               >
-                {steering ? "Steering..." : "Steer"}
+                Edit
               </button>
-            ) : null}
-            <button
-              className="composer__secondary-action"
-              type="button"
-              onClick={() => {
-                setComposerDraftFromCanonical(queued.text);
-                setImageAttachments(queued.imageAttachments);
-                removeQueuedTurnAt(index);
-                requestAnimationFrame(() => inputRef.current?.focus());
-              }}
-            >
-              Edit
-            </button>
-            <button
-              className="composer__secondary-action"
-              type="button"
-              onClick={() => {
-                removeQueuedTurnAt(index);
-              }}
-            >
-              Delete
-            </button>
+              <button
+                className="composer__secondary-action"
+                type="button"
+                onClick={() => {
+                  removeQueuedTurnAt(index);
+                }}
+              >
+                Delete
+              </button>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       {imageAttachments.length > 0 ? (
         <div className="composer__attachments" aria-label="Pasted images">
@@ -6461,7 +6749,12 @@ export function Composer(props: ComposerProps) {
                   void submitConfiguredReviewComposer();
                 }}
               >
-                Start review
+                {futureScheduledDraftSendAt
+                  ? `Send in ${formatScheduledSendCountdown(
+                      futureScheduledDraftSendAt,
+                      scheduleTick,
+                    )}`
+                  : "Start review"}
               </button>
             </div>
           </fieldset>
@@ -7213,26 +7506,68 @@ export function Composer(props: ComposerProps) {
               Cancel
             </button>
           ) : null}
-          <button
-            className="button button--primary"
-            disabled={
-              props.disabled ||
-              steering ||
-              (!activeTurnId && sending) ||
-              (!hasComposerContent && imageAttachments.length === 0)
-            }
-            type="submit"
+          <div
+            className={[
+              "composer__send-split",
+              scheduleMenuOpen ? "composer__send-split--open" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            ref={scheduleMenuRef}
           >
-            {activeTurnId || serverQueuedTurnEntryId || props.threadBusy
-              ? "Queue"
-              : sending
-              ? props.launchpad
-                ? "Starting…"
-                : "Sending…"
-              : props.launchpad
-                ? "Start thread"
-                : "Send"}
-          </button>
+            <div
+              className={[
+                "composer__send-split-pill",
+                sendButtonDisabled ? "is-disabled" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
+              {scheduleAffordanceVisible ? (
+                <button
+                  aria-expanded={scheduleMenuOpen}
+                  aria-haspopup="menu"
+                  aria-label="Schedule message"
+                  className="button composer__send-schedule-button"
+                  disabled={scheduleButtonDisabled}
+                  type="button"
+                  onClick={() => {
+                    setScheduleTick(Date.now());
+                    setScheduleMenuOpen((current) => !current);
+                  }}
+                >
+                  <ChevronUpIcon size={14} />
+                </button>
+              ) : null}
+              <button
+                className="button composer__send-submit-button"
+                disabled={sendButtonDisabled}
+                type="submit"
+              >
+                {submitButtonLabel}
+              </button>
+            </div>
+            {scheduleAffordanceVisible && scheduleMenuOpen ? (
+              <div className="composer__schedule-menu" role="menu">
+                {scheduledSendOptions.map((option) => (
+                  <button
+                    className="composer__schedule-menu-item"
+                    key={option.label}
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setScheduleMenuOpen(false);
+                      scheduleCurrentDraft(
+                        option.scheduledSendAt ?? Date.now() + option.delayMs!,
+                      );
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
       </form>

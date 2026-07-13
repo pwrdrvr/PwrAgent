@@ -359,6 +359,163 @@ describe("useQueuedTurnRelease", () => {
     expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toBeUndefined();
   });
 
+  it("waits until a scheduled queued message is due before background release", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      turnId: "turn-next",
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startTurn,
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-scheduled",
+      text: "Future background reply",
+      imageAttachments: [],
+      scheduledSendAt: Date.now() + 15 * 60_000,
+      input: [{ type: "text", text: "Future background reply" }],
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/status/changed",
+            params: {
+              threadId: "thread-a",
+              status: { type: "idle" },
+            },
+          },
+        });
+      }
+    });
+
+    expect(startTurn).not.toHaveBeenCalled();
+
+    vi.setSystemTime(new Date("2026-07-10T12:15:00Z"));
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/status/changed",
+            params: {
+              threadId: "thread-a",
+              status: { type: "idle" },
+            },
+          },
+        });
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-a",
+        input: [{ type: "text", text: "Future background reply" }],
+      })
+    );
+  });
+
+  it("releases the due scheduled background turn ahead of an earlier future scheduled turn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      turnId: "turn-sooner",
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startTurn,
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurns("thread:codex:thread-a", [
+      {
+        id: "queued-later",
+        text: "Later background reply",
+        imageAttachments: [],
+        scheduledSendAt: Date.now() + 2 * 60 * 60_000,
+        input: [{ type: "text", text: "Later background reply" }],
+      },
+      {
+        id: "queued-sooner",
+        text: "Sooner background reply",
+        imageAttachments: [],
+        scheduledSendAt: Date.now() + 15 * 60_000,
+        input: [{ type: "text", text: "Sooner background reply" }],
+      },
+    ]);
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      })
+    );
+
+    vi.setSystemTime(new Date("2026-07-10T12:15:00Z"));
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/status/changed",
+            params: {
+              threadId: "thread-a",
+              status: { type: "idle" },
+            },
+          },
+        });
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-a",
+        input: [{ type: "text", text: "Sooner background reply" }],
+      })
+    );
+    expect(
+      composerDraftStore.getQueuedTurns("thread:codex:thread-a").map((entry) => entry.text)
+    ).toEqual(["Later background reply"]);
+  });
+
   it("releases a queued review with review/start for a non-focused thread", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const startTurn = vi.fn();
