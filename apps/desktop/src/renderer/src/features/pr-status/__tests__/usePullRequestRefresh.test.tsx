@@ -300,4 +300,50 @@ describe("usePullRequestRefresh", () => {
       });
     });
   });
+
+  it("scopes directory-derived branch refreshes to matching linked directories", async () => {
+    const refreshThreadPullRequests = vi.fn(async () => buildResponse({ prs: [] }));
+    const desktopApi = {
+      refreshThreadPullRequests,
+    } satisfies DesktopApi;
+
+    const { result } = renderHook(() =>
+      usePullRequestRefresh({
+        desktopApi,
+      }),
+    );
+
+    result.current.prefetch(buildThread({
+      gitBranch: undefined,
+      linkedDirectories: [
+        {
+          id: "/repo/app",
+          kind: "worktree",
+          label: "app",
+          path: "/repo/app",
+          worktreePath: "/repo/.worktrees/app",
+          gitBranch: "feat/app",
+        },
+        {
+          id: "/repo/docs",
+          kind: "worktree",
+          label: "docs",
+          path: "/repo/docs",
+          worktreePath: "/repo/.worktrees/docs",
+          gitBranch: "feat/docs",
+        },
+      ],
+      prs: [],
+    }));
+
+    await waitFor(() => {
+      expect(refreshThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "user",
+        branch: "feat/app",
+        directoryPaths: ["/repo/.worktrees/app"],
+      });
+    });
+  });
 });
