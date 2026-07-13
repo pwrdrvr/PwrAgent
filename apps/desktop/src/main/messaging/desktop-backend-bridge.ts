@@ -105,6 +105,20 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return response.threadStatus ?? response.replay.threadStatus;
   }
 
+  async readActiveTurn(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<
+    | {
+        backend: AppServerBackendKind;
+        threadId: string;
+        turnId: string;
+      }
+    | undefined
+  > {
+    return this.registry.getActiveTurnForThread(request);
+  }
+
   async readThreadLastAssistantMessage(request: {
     backend: AppServerBackendKind;
     threadId: string;

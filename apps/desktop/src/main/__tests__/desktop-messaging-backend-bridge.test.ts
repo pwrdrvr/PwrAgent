@@ -7,6 +7,28 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 
 describe("DesktopMessagingBackendBridge", () => {
+  it("reads active turns from the registry", async () => {
+    const bridge = createBridge({
+      entries: [],
+      messages: [],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+    });
+
+    await expect(
+      bridge.readActiveTurn({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-live",
+    });
+  });
+
   it("prefers newer transcript assistant entries over stale replay messages", async () => {
     const bridge = createBridge({
       entries: [
@@ -131,6 +153,11 @@ function createBridge(replay: AppServerThreadReplay): DesktopMessagingBackendBri
     replay,
   };
   const registry = {
+    getActiveTurnForThread: vi.fn(async () => ({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-live",
+    })),
     readThread: vi.fn(async () => response),
   } as unknown as DesktopBackendRegistry;
   return new DesktopMessagingBackendBridge(registry);

@@ -8169,6 +8169,59 @@ describe("MessagingController", () => {
     });
   });
 
+  it("offers Steer on queued input when the registry still knows the active turn", async () => {
+    const harness = await createHarness({
+      readActiveTurn: async () => ({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-live",
+      }),
+    });
+    await bindThread(harness);
+    harness.startTurn.mockRejectedValueOnce(
+      new Error("thread already has an active turn in progress"),
+    );
+
+    await harness.controller.handleInboundEvent(buildTextEvent("second turn"));
+
+    const queuedNotice = harness.delivered
+      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .at(-1);
+    if (!queuedNotice || !("actions" in queuedNotice)) {
+      throw new Error("Queued notice was not delivered");
+    }
+    const queuedActions = Array.isArray(queuedNotice.actions)
+      ? queuedNotice.actions
+      : [];
+    const steerAction = queuedActions.find((action) =>
+      action.id.startsWith("queued-turn:steer:"),
+    );
+    expect(queuedNotice).toEqual(
+      expect.objectContaining({
+        body: expect.stringContaining("click Steer"),
+      }),
+    );
+    expect(steerAction?.disabled).toBe(false);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: steerAction!.id,
+      }),
+    );
+
+    expect(harness.steerTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      expectedTurnId: "turn-live",
+      input: [
+        {
+          type: "text",
+          text: "second turn",
+        },
+      ],
+    });
+  });
+
   it("clears a staged skill when backend concurrent-start rejection queues the prefixed request", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -15059,6 +15112,7 @@ async function createHarness(options?: {
   readThreadLastAssistantReply?: NonNullable<
     MessagingBackendBridge["readThreadLastAssistantReply"]
   >;
+  readActiveTurn?: NonNullable<MessagingBackendBridge["readActiveTurn"]>;
   setAcpSessionRuntimeOption?: NonNullable<
     MessagingBackendBridge["setAcpSessionRuntimeOption"]
   >;
@@ -15081,6 +15135,7 @@ async function createHarness(options?: {
   onBindingChanged: ReturnType<typeof vi.fn>;
   readThreadLastAssistantMessage: ReturnType<typeof vi.fn>;
   readThreadLastAssistantReply: ReturnType<typeof vi.fn>;
+  readActiveTurn: ReturnType<typeof vi.fn>;
   readThreadStatus: ReturnType<typeof vi.fn>;
   recordMessagingBindingTransition: ReturnType<typeof vi.fn>;
   setAcpSessionRuntimeOption: ReturnType<typeof vi.fn>;
@@ -15409,6 +15464,9 @@ async function createHarness(options?: {
   const readThreadLastAssistantReply = vi.fn(
     options?.readThreadLastAssistantReply ?? (async () => undefined),
   );
+  const readActiveTurn = vi.fn(
+    options?.readActiveTurn ?? (async () => undefined),
+  );
   const readThreadStatus = vi.fn(async () => undefined);
   const recordMessagingBindingTransition = vi.fn(async () => undefined);
   const submitServerRequest = vi.fn(async (request: SubmitServerRequestRequest) => ({
@@ -15427,6 +15485,7 @@ async function createHarness(options?: {
     ...(listSkills ? { listSkills } : {}),
     listBackends,
     materializeDirectoryLaunchpad,
+    readActiveTurn,
     readThreadLastAssistantReply,
     readThreadLastAssistantMessage,
     readThreadStatus,
@@ -15489,6 +15548,7 @@ async function createHarness(options?: {
     listBackends,
     materializeDirectoryLaunchpad,
     onBindingChanged,
+    readActiveTurn,
     readThreadLastAssistantMessage,
     readThreadLastAssistantReply,
     readThreadStatus,

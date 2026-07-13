@@ -85,6 +85,12 @@ export type MessagingLastAssistantReply = {
   text: string;
 };
 
+export type MessagingActiveBackendTurn = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  turnId: string;
+};
+
 export type MessagingAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
@@ -127,6 +133,10 @@ export type MessagingBackendBridge = {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<AppServerThreadStatus | undefined>;
+  readActiveTurn?(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<MessagingActiveBackendTurn | undefined>;
   readThreadLastAssistantMessage?(request: {
     backend: AppServerBackendKind;
     threadId: string;
