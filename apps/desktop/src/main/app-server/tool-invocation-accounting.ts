@@ -6,6 +6,7 @@ import type {
   ThreadToolInvocationRecord,
   ThreadToolInvocationStatus,
 } from "@pwragent/shared";
+import { redactCommandText } from "../util/redact-command-text";
 
 const OUTPUT_TOKEN_CHAR_RATIO = 4;
 const NOISY_POLL_LOOKBACK_MS = 5 * 60 * 1000;
@@ -423,7 +424,7 @@ function normalizeShellCommand(command: string | undefined): string | undefined 
     return undefined;
   }
   const shellMatch = trimmed.match(/^\/?(?:bin\/)?(?:ba|z|)sh\s+-lc\s+['"](.+)['"]$/);
-  return shellMatch?.[1]?.trim() || trimmed;
+  return redactCommandText(shellMatch?.[1]?.trim() || trimmed);
 }
 
 function categoryForToolName(toolName: string): ThreadToolInvocationCategory {

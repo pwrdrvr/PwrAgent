@@ -44,6 +44,23 @@ describe("tool invocation accounting", () => {
     });
   });
 
+  it("redacts secret-like shell command fragments before persistence", () => {
+    const normalized = normalizeToolInvocationCommand({
+      command:
+        "/bin/zsh -lc 'XAI_API_KEY=sk-secret pnpm test --token abc123 --password hunter2'",
+      toolName: "exec_command",
+    });
+
+    expect(normalized).toEqual({
+      category: "build-test",
+      normalizedCommand:
+        "XAI_API_KEY=[redacted] pnpm test --token [redacted] --password [redacted]",
+    });
+    expect(normalized.normalizedCommand).not.toContain("sk-secret");
+    expect(normalized.normalizedCommand).not.toContain("abc123");
+    expect(normalized.normalizedCommand).not.toContain("hunter2");
+  });
+
   it("counts output volume and sbt-style warning/error/info/debug lines", () => {
     const metrics = buildToolOutputMetrics(
       [

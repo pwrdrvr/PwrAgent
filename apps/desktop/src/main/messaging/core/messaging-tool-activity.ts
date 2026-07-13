@@ -1,5 +1,9 @@
 import path from "node:path";
 import type { AgentEvent } from "@pwragent/shared";
+import {
+  redactCommandText,
+  safeCommandTitle as safeRedactedCommandTitle,
+} from "../../util/redact-command-text";
 
 export type MessagingToolActivityStatus = "completed" | "failed" | "cancelled";
 
@@ -19,11 +23,6 @@ export type MessagingToolActivity = {
   status: MessagingToolActivityStatus;
   title: string;
 };
-
-const SECRET_FRAGMENT_PATTERN =
-  /((?:--?)?(?:api[-_]?key|token|secret|password|authorization)(?:=|\s+))("[^"]*"|'[^']*'|\S+)/gi;
-const ASSIGNMENT_SECRET_PATTERN =
-  /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION)[A-Z0-9_]*=)("[^"]*"|'[^']*'|\S+)/g;
 
 export function summarizeToolActivityFromBackendEvent(
   event: AgentEvent,
@@ -227,7 +226,7 @@ function mcpToolTitle(item: Record<string, unknown>): string {
 function webSearchTitle(item: Record<string, unknown>): string {
   const query = readString(item, "query") ?? readToolArgument(item, "query");
   return query
-    ? truncateTitle(`Searched web: ${redactTitleText(query)}`)
+    ? truncateTitle(`Searched web: ${redactCommandText(query)}`)
     : "Searched web";
 }
 
@@ -308,7 +307,7 @@ function readDynamicPathBasename(
   }
 
   const basename = path.basename(value) || value;
-  return redactTitleText(basename);
+  return redactCommandText(basename);
 }
 
 function readSafeDynamicText(
@@ -316,7 +315,7 @@ function readSafeDynamicText(
   keys: string[],
 ): string | undefined {
   const value = readFirstString(args, keys);
-  return value ? redactTitleText(value) : undefined;
+  return value ? redactCommandText(value) : undefined;
 }
 
 function readFirstString(
@@ -355,23 +354,7 @@ function readToolArguments(
 }
 
 function safeCommandTitle(command: string | undefined): string {
-  if (!command) {
-    return "Ran command";
-  }
-
-  const stripped = command
-    .replace(/^\/bin\/[a-z]+ -lc /, "")
-    .replace(/^['"]|['"]$/g, "");
-  const collapsed = redactTitleText(stripped);
-  return collapsed ? truncateTitle(collapsed) : "Ran command";
-}
-
-function redactTitleText(value: string): string {
-  return value
-    .replace(SECRET_FRAGMENT_PATTERN, "$1[redacted]")
-    .replace(ASSIGNMENT_SECRET_PATTERN, "$1[redacted]")
-    .replace(/\s+/g, " ")
-    .trim();
+  return truncateTitle(safeRedactedCommandTitle(command));
 }
 
 function normalizeToolStatus(
