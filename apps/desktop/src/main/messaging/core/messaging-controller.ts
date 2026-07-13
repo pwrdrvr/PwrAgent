@@ -9514,11 +9514,17 @@ export class MessagingController {
       binding,
     );
     const activeTurn = this.getActiveTurn(binding);
-    const targetTurn =
-      requestedTurn ??
-      (activeTurn && ["working", "waiting"].includes(activeTurn.status)
+    const activeTurnIsInterruptible =
+      activeTurn && ["working", "waiting"].includes(activeTurn.status);
+    const targetTurn = requestedTurn
+      ? !activeTurn
+        ? requestedTurn
+        : activeTurnIsInterruptible && activeTurn.turnId === requestedTurn.turnId
+          ? activeTurn
+          : undefined
+      : activeTurnIsInterruptible
         ? activeTurn
-        : undefined);
+        : undefined;
     if (!targetTurn) {
       await this.renderBindingStatus(binding, event);
       return;
@@ -9528,7 +9534,10 @@ export class MessagingController {
       threadId: binding.threadId,
       turnId: targetTurn.turnId,
     });
-    if (!activeTurn || activeTurn.turnId === targetTurn.turnId) {
+    if (
+      !activeTurn ||
+      (activeTurnIsInterruptible && activeTurn.turnId === targetTurn.turnId)
+    ) {
       const interruptedTurn: MessagingActiveTurnSummary = {
         ...targetTurn,
         status: "interrupted",
