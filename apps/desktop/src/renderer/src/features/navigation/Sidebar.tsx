@@ -39,6 +39,7 @@ import {
   runtimeGitRefCopyValue,
 } from "../../lib/runtime-identity";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { formatPrimaryAccel } from "../../lib/keyboard-accel";
 import {
   DetachPullRequestWarning,
@@ -82,6 +83,11 @@ type SidebarProps = {
   settingsActive?: boolean;
   approvalRequestThreadKeys?: Record<string, boolean>;
   inputRequestThreadKeys?: Record<string, boolean>;
+  /**
+   * Identity key → pending outbound-message state, for the
+   * "Scheduled"/"Queued" thread-row chip. Absent key = no pending send.
+   */
+  queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   /** Identity key of the card to highlight as the open composer's source. */
   composerSourceThreadKey?: string;
   selectedItemKey?: string;
@@ -915,6 +921,7 @@ export function Sidebar(props: SidebarProps) {
             <DirectoriesList
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
+              queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               directories={props.directories}
               selectedItemKey={props.selectedItemKey}
@@ -944,6 +951,7 @@ export function Sidebar(props: SidebarProps) {
               <RecentsList
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                 inputRequestThreadKeys={props.inputRequestThreadKeys}
+                queuedMessageThreadKeys={props.queuedMessageThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 selectedThreadKey={props.selectedItemKey}
                 thinkingThreadKeys={props.thinkingThreadKeys}

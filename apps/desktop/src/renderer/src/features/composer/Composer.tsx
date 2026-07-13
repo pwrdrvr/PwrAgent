@@ -39,6 +39,7 @@ import type {
 import { readCodexEnvironmentActionRuns } from "@pwragent/shared";
 import {
   BranchIcon,
+  CheckIcon,
   ChevronUpIcon,
   CloseIcon,
   FileCodeIcon,
@@ -2432,6 +2433,11 @@ export function Composer(props: ComposerProps) {
   const [scheduledDraftSendAt, setScheduledDraftSendAt] = useState<
     number | undefined
   >();
+  // Whether the pending draft schedule (when one exists, e.g. after editing a
+  // scheduled item) is "armed". Armed → Send keeps the schedule (send later);
+  // unarmed → Send sends now. Defaults armed so a freshly-loaded schedule is
+  // preserved unless the operator explicitly unchecks it.
+  const [scheduleArmed, setScheduleArmed] = useState(true);
   const [handoffDialog, setHandoffDialog] = useState<
     HandoffThreadWorkspaceRequest["direction"] | undefined
   >();
@@ -3162,6 +3168,7 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     if (scheduledDraftSendAt && !futureScheduledDraftSendAt) {
       setScheduledDraftSendAt(undefined);
+      setScheduleArmed(true);
     }
   }, [futureScheduledDraftSendAt, scheduledDraftSendAt]);
 
@@ -3476,6 +3483,7 @@ export function Composer(props: ComposerProps) {
     setSteering(false);
     setScheduleMenuOpen(false);
     setScheduledDraftSendAt(undefined);
+    setScheduleArmed(true);
     setServerQueuedTurnEntryIdState(
       serverQueuedTurnEntryIdsRef.current.get(composerScopeKey)
     );
@@ -4180,6 +4188,7 @@ export function Composer(props: ComposerProps) {
   const exitReviewComposer = (): void => {
     setReviewConfig(undefined);
     setScheduledDraftSendAt(undefined);
+    setScheduleArmed(true);
     clearComposerDraft();
     setSendError(undefined);
     requestAnimationFrame(() => inputRef.current?.focus());
@@ -4460,6 +4469,27 @@ export function Composer(props: ComposerProps) {
     await sendThreadTurn(claimedQueuedTurn, { queueClaimed: true });
   };
 
+  // Operator-initiated "Send now" on a queued/scheduled entry. Bypasses the
+  // release schedule and fires the turn immediately. Mirrors the auto-release
+  // effect's coordination (global scope-key guard + sending flag) so the
+  // background releaser in useQueuedTurnRelease can't double-send the claimed
+  // turn.
+  const sendQueuedTurnNow = (queued: QueuedTurnDraft): void => {
+    if (
+      props.disabled ||
+      sending ||
+      activeTurnIdRef.current ||
+      globalQueuedTurnReleaseScopeKeys.has(composerScopeKey)
+    ) {
+      return;
+    }
+    globalQueuedTurnReleaseScopeKeys.add(composerScopeKey);
+    updateSending(true);
+    void sendQueuedTurn(queued).finally(() => {
+      updateSending(false);
+    });
+  };
+
   useEffect(() => {
     if (activeTurnId) {
       queuedAutoReleaseAttemptIdRef.current = undefined;
@@ -4549,6 +4579,7 @@ export function Composer(props: ComposerProps) {
     clearComposerDraft();
     setImageAttachments([]);
     setScheduledDraftSendAt(undefined);
+    setScheduleArmed(true);
     setReviewConfig(undefined);
     setSendError(undefined);
   };
@@ -4579,6 +4610,7 @@ export function Composer(props: ComposerProps) {
     clearComposerDraft();
     setImageAttachments([]);
     setScheduledDraftSendAt(undefined);
+    setScheduleArmed(true);
     setReviewConfig(undefined);
     setSendError(undefined);
   };
@@ -4599,6 +4631,7 @@ export function Composer(props: ComposerProps) {
     if (reviewCommand) {
       if (isBareReviewCommand) {
         setScheduledDraftSendAt(scheduledSendAt);
+        setScheduleArmed(true);
         setReviewConfig(
           reviewConfig ??
             createReviewConfig({
@@ -4615,6 +4648,7 @@ export function Composer(props: ComposerProps) {
       }
       if (reviewWorkspaceSelectionRequired) {
         setScheduledDraftSendAt(scheduledSendAt);
+        setScheduleArmed(true);
         setReviewConfig(
           createReviewConfig({
             directory: props.directory,
@@ -4802,14 +4836,14 @@ export function Composer(props: ComposerProps) {
         }
         queueReviewCommand(
           reviewCommand,
-          futureScheduledDraftSendAt
-            ? { scheduledSendAt: futureScheduledDraftSendAt }
+          effectiveScheduledSendAt
+            ? { scheduledSendAt: effectiveScheduledSendAt }
             : undefined,
         );
       } else {
         queueCurrentDraft(
-          futureScheduledDraftSendAt
-            ? { scheduledSendAt: futureScheduledDraftSendAt }
+          effectiveScheduledSendAt
+            ? { scheduledSendAt: effectiveScheduledSendAt }
             : undefined,
         );
       }
@@ -4829,22 +4863,30 @@ export function Composer(props: ComposerProps) {
         return;
       }
 
-      if (futureScheduledDraftSendAt) {
+      if (effectiveScheduledSendAt) {
         queueReviewCommand(reviewCommand, {
-          scheduledSendAt: futureScheduledDraftSendAt,
+          scheduledSendAt: effectiveScheduledSendAt,
         });
         return;
       }
 
+      // Unarmed schedule ("send now" on an edited scheduled review) — drop the
+      // pending time before firing so it doesn't linger and re-arm the toggle.
+      setScheduledDraftSendAt(undefined);
+      setScheduleArmed(true);
       await submitReviewCommand(reviewCommand);
       return;
     }
 
-    if (futureScheduledDraftSendAt) {
-      queueCurrentDraft({ scheduledSendAt: futureScheduledDraftSendAt });
+    if (effectiveScheduledSendAt) {
+      queueCurrentDraft({ scheduledSendAt: effectiveScheduledSendAt });
       return;
     }
 
+    // Unarmed schedule ("send now" on an edited scheduled message) — clear the
+    // pending time so the toggle doesn't reappear after the immediate send.
+    setScheduledDraftSendAt(undefined);
+    setScheduleArmed(true);
     const payload = buildTurnPayload(canonicalDraft, imageAttachments);
     const collaborationMode = planModeEnabled && supportsPlanMode
       ? ({
@@ -5554,12 +5596,17 @@ export function Composer(props: ComposerProps) {
   // permanently-dimmed half-button next to it.
   const scheduleAffordanceVisible =
     Boolean(props.thread) && !props.launchpad && !isCompactCommand;
-  const submitButtonLabel = futureScheduledDraftSendAt
-    ? `Send in ${formatScheduledSendCountdown(
-        futureScheduledDraftSendAt,
-        scheduleTick,
-      )}`
-    : activeTurnId || serverQueuedTurnEntryId || props.threadBusy
+  // A pending draft schedule (e.g. after editing a scheduled item) surfaces as
+  // a checkable toggle between the caret and Send rather than hijacking the
+  // Send label into a countdown. Armed → Send keeps the schedule; unarmed →
+  // Send fires now. The toggle only shows where scheduling applies.
+  const scheduleToggleVisible =
+    scheduleAffordanceVisible && Boolean(futureScheduledDraftSendAt);
+  const effectiveScheduledSendAt = scheduleArmed
+    ? futureScheduledDraftSendAt
+    : undefined;
+  const submitButtonLabel =
+    activeTurnId || serverQueuedTurnEntryId || props.threadBusy
       ? "Queue"
       : sending
         ? props.launchpad
@@ -6510,18 +6557,31 @@ export function Composer(props: ComposerProps) {
             </div>
             <QueuedImageAttachments attachments={queued.imageAttachments} />
             <div className="composer__queued-actions">
-              {supportsSteering && !queued.reviewCommand ? (
+              {activeTurnId ? (
+                supportsSteering && !queued.reviewCommand ? (
+                  <button
+                    className="composer__secondary-action"
+                    disabled={props.disabled || steering}
+                    type="button"
+                    onClick={() => {
+                      steerQueuedTurn(queued);
+                    }}
+                  >
+                    {steering ? "Steering..." : "Steer"}
+                  </button>
+                ) : null
+              ) : (
                 <button
                   className="composer__secondary-action"
-                  disabled={props.disabled || steering || !activeTurnId}
+                  disabled={props.disabled || sending}
                   type="button"
                   onClick={() => {
-                    steerQueuedTurn(queued);
+                    sendQueuedTurnNow(queued);
                   }}
                 >
-                  {steering ? "Steering..." : "Steer"}
+                  Send now
                 </button>
-              ) : null}
+              )}
               <button
                 className="composer__secondary-action"
                 type="button"
@@ -6529,6 +6589,7 @@ export function Composer(props: ComposerProps) {
                   setComposerDraftFromCanonical(queued.text);
                   setImageAttachments(queued.imageAttachments);
                   setScheduledDraftSendAt(scheduledSendAt);
+                  setScheduleArmed(true);
                   removeQueuedTurnAt(index);
                   requestAnimationFrame(() => inputRef.current?.focus());
                 }}
@@ -7569,6 +7630,49 @@ export function Composer(props: ComposerProps) {
                   }}
                 >
                   <ChevronUpIcon size={14} />
+                </button>
+              ) : null}
+              {scheduleToggleVisible ? (
+                <button
+                  aria-checked={scheduleArmed}
+                  aria-label={
+                    scheduleArmed
+                      ? `Send later, in ${formatScheduledSendCountdown(
+                          futureScheduledDraftSendAt!,
+                          scheduleTick,
+                        )}. Uncheck to send now.`
+                      : `Send now. Check to send later, in ${formatScheduledSendCountdown(
+                          futureScheduledDraftSendAt!,
+                          scheduleTick,
+                        )}.`
+                  }
+                  className={[
+                    "composer__send-schedule-toggle",
+                    scheduleArmed ? "is-armed" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  disabled={props.disabled}
+                  role="switch"
+                  type="button"
+                  onClick={() => {
+                    setScheduleTick(Date.now());
+                    setScheduleArmed((current) => !current);
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="composer__send-schedule-toggle-box"
+                  >
+                    {scheduleArmed ? <CheckIcon size={12} /> : null}
+                  </span>
+                  <span className="composer__send-schedule-toggle-label">
+                    in{" "}
+                    {formatScheduledSendCountdown(
+                      futureScheduledDraftSendAt!,
+                      scheduleTick,
+                    )}
+                  </span>
                 </button>
               ) : null}
               <button

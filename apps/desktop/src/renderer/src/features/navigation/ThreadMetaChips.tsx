@@ -5,10 +5,17 @@ import { BranchIcon, FolderIcon, PinIcon, WorktreeIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText } from "../../lib/copy-text";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 
 type ThreadMetaChipsProps = {
   hasApprovalRequest?: boolean;
   hasInputRequest?: boolean;
+  /**
+   * When set, renders the "Scheduled" (future send time) or "Queued"
+   * (waiting on the active turn) chip. Resolved upstream so a thread with
+   * both pending states shows only the higher-priority "Scheduled".
+   */
+  queuedMessageState?: ThreadQueuedMessageState;
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
   thread: NavigationThreadSummary;
@@ -17,6 +24,7 @@ type ThreadMetaChipsProps = {
 export function ThreadMetaChips({
   hasApprovalRequest = false,
   hasInputRequest = false,
+  queuedMessageState,
   includeLinkedDirectories = false,
   linkedDirectoryMode = "label",
   thread,
@@ -132,6 +140,24 @@ export function ThreadMetaChips({
       <span className="thread-row__chip thread-row__chip--backend">
         {formatBackendLabel(thread.source)}
       </span>
+
+      {queuedMessageState === "scheduled" ? (
+        <span
+          aria-label="A message is scheduled to send"
+          className="thread-row__chip thread-row__chip--scheduled"
+          title="A message is scheduled to send"
+        >
+          Scheduled
+        </span>
+      ) : queuedMessageState === "queued" ? (
+        <span
+          aria-label="A message is queued to send"
+          className="thread-row__chip thread-row__chip--queued"
+          title="A message is queued to send"
+        >
+          Queued
+        </span>
+      ) : null}
 
       {hasApprovalRequest ? (
         <span

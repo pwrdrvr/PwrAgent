@@ -28,6 +28,8 @@ function createComposerDraftStore(): ComposerDraftStore {
     getPendingSteer: vi.fn(),
     getQueuedTurn: (scopeKey) => queuedTurns.get(scopeKey)?.[0],
     getQueuedTurns: (scopeKey) => queuedTurns.get(scopeKey) ?? [],
+    getQueuedTurnVersion: () => 0,
+    subscribeQueuedTurns: () => () => {},
     removeQueuedTurnAt: (scopeKey, index) => {
       const current = queuedTurns.get(scopeKey) ?? [];
       const next = [...current];

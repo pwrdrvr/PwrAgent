@@ -62,6 +62,7 @@ import {
 import { setSidebarResizing } from "./lib/sidebar-resize-signal";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
+import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
@@ -655,6 +656,13 @@ function DesktopAppShell(props: {
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
   });
+  // Per-thread "Scheduled"/"Queued" chip state, derived from the same
+  // queued-turn store useQueuedTurnRelease drains. Keyed by thread identity
+  // key so it threads down beside approvalRequestThreadKeys.
+  const queuedMessageThreadKeys = useThreadQueuedMessageIndicators({
+    composerDraftStore,
+    threads: navigation.threads,
+  });
   // Fetch the boot info once at mount. Stable for the renderer's
   // lifetime — the main process records the decision before this
   // window opens, and graduating the bootstrap profile spawns a
@@ -1123,6 +1131,7 @@ function DesktopAppShell(props: {
           loading={navigation.loading}
           approvalRequestThreadKeys={session.approvalRequestThreadKeys}
           inputRequestThreadKeys={session.inputRequestThreadKeys}
+          queuedMessageThreadKeys={queuedMessageThreadKeys}
           composerSourceThreadKey={navigation.composerSourceThreadKey}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
