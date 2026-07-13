@@ -5324,7 +5324,11 @@ export function useThreadNavigation(
       }
 
       const nextSettings = {
-        ...("model" in patch ? { model: patch.model } : {}),
+        ...("model" in patch
+          ? { model: patch.model }
+          : thread.model
+            ? { model: thread.model }
+            : {}),
         ...("reasoningEffort" in patch
           ? { reasoningEffort: patch.reasoningEffort }
           : {}),

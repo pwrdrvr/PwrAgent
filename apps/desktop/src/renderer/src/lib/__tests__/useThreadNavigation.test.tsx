@@ -6182,6 +6182,66 @@ describe("useThreadNavigation", () => {
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the current thread model when patching non-model settings", async () => {
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          model: "gpt-5.6-sol",
+          reasoningEffort: "medium",
+          fastMode: false,
+          inbox: { inInbox: true, reason: "new-thread" as const },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const setThreadModelSettings = vi.fn(
+      async (
+        request: Parameters<
+          NonNullable<DesktopApi["setThreadModelSettings"]>
+        >[0],
+      ) => request,
+    );
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      setThreadModelSettings,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.model).toBe("gpt-5.6-sol");
+    });
+
+    await act(async () => {
+      await result.current.setThreadModelSettings(result.current.selectedThread!, {
+        reasoningEffort: "ultra",
+      });
+    });
+
+    expect(setThreadModelSettings).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "ultra",
+    });
+  });
+
   it("patches the snapshot for thread/codexEnvironment/updated without refetching", async () => {
     const listeners = new Set<(event: any) => void>();
     const getNavigationSnapshot = vi.fn(async () => ({
