@@ -18434,6 +18434,129 @@ script = "printf setup"
     }
   });
 
+  it("creates new-worktree handoffs from a labeled target repo path in the task", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-task-cwd-"));
+    const scratchPath = path.join(root, "scratch-workspace");
+    const repoPath = path.join(root, "PwrAgnt");
+    try {
+      await mkdir(scratchPath, { recursive: true });
+      await mkdir(repoPath, { recursive: true });
+      try {
+        await git(repoPath, ["init", "-b", "main"]);
+      } catch {
+        await git(repoPath, ["init"]);
+        await git(repoPath, ["checkout", "-b", "main"]);
+      }
+      await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
+      await git(repoPath, ["add", "README.md"]);
+      await git(repoPath, [
+        "-c",
+        "user.name=PwrAgent Tests",
+        "-c",
+        "user.email=tests@pwragent.local",
+        "commit",
+        "-m",
+        "initial",
+      ]);
+
+      const scratchDirectory = {
+        id: expectedDir(scratchPath),
+        kind: "local" as const,
+        label: "scratch-workspace",
+        path: expectedDir(scratchPath),
+      };
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+        threads: [
+          {
+            id: "ordinary-thread",
+            title: "Messaging Parent",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [scratchDirectory],
+            updatedAt: 1000,
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        }),
+        gitDirectoryService: new GitDirectoryService({
+          resolveWorktreeStorage: () => "in-repo",
+        }),
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:ordinary-thread": {
+              backend: "codex",
+              threadId: "ordinary-thread",
+              executionMode: "full-access",
+              extraLinkedDirectories: [scratchDirectory],
+            },
+          },
+        }),
+        threadTitleGenerationService: null,
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "ordinary-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId: "call-1",
+          requestId: "call-1",
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: {
+            task: [
+              "Investigate the messaging bug.",
+              "Target repository:",
+              `- "${repoPath}"`,
+            ].join("\n"),
+            title: "Messaging handoff target repo",
+            workspaceMode: "new_worktree",
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(response).toMatchObject({ success: true });
+      const handoffCwd = expectedDir(codexClient.lastStartThreadParams?.cwd ?? "");
+      expect(handoffCwd).toContain(
+        expectedDir(await realpath(path.join(repoPath, ".worktrees"))),
+      );
+      expect(handoffCwd).not.toContain(expectedDir(scratchPath));
+      const payload = JSON.parse(
+        (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+      );
+      expect(payload.workspace).toMatchObject({
+        mode: "new_worktree",
+        cwd: handoffCwd,
+        linkedDirectory: {
+          kind: "worktree",
+          label: "PwrAgnt",
+          path: expectedDir(await realpath(repoPath)),
+          worktreePath: handoffCwd,
+        },
+      });
+
+      await registry.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("requires confirmation before a default new-worktree handoff uses an explicit untrusted cwd", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-new-worktree-trust-"));
     const scratchPath = path.join(root, "scratch-workspace");
