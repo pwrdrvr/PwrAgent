@@ -713,6 +713,115 @@ describe("StateDb", () => {
     });
   });
 
+  it("reprices existing GPT-5.6 usage rows when the pricing catalog updates", () => {
+    stateDb.close();
+
+    const dbPath = path.join(tempDir, "gpt-5-6-pricing-repair-state.db");
+    stateDb = StateDb.open(dbPath);
+    stateDb.raw
+      .prepare(
+        `INSERT INTO thread_usage_lines (
+          usage_line_id,
+          provider,
+          backend,
+          thread_id,
+          source,
+          scope,
+          status,
+          created_at,
+          model,
+          input_tokens,
+          cached_input_tokens,
+          uncached_input_tokens,
+          output_tokens,
+          reasoning_output_tokens,
+          total_tokens,
+          price_status,
+          price_unavailable_reason,
+          currency,
+          uncached_input_cost_micros,
+          cached_input_cost_micros,
+          output_cost_micros,
+          total_cost_micros,
+          updated_at
+        ) VALUES (
+          'live-line-gpt-5-6-terra',
+          'openai',
+          'codex',
+          'thread-gpt-5-6',
+          'live',
+          'turn',
+          'pending',
+          ?,
+          'gpt-5.6-terra',
+          26291,
+          0,
+          26291,
+          15,
+          0,
+          26306,
+          'unpriced',
+          'missing-rate',
+          'USD',
+          0,
+          0,
+          0,
+          0,
+          ?
+        )`,
+      )
+      .run(
+        Date.UTC(2026, 6, 12, 22, 50, 30),
+        Date.UTC(2026, 6, 12, 22, 50, 30),
+      );
+    stateDb.raw.pragma("user_version = 26");
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    const line = stateDb.raw
+      .prepare(
+        `SELECT price_status, price_unavailable_reason, pricing_rate_id, total_cost_micros
+         FROM thread_usage_lines
+         WHERE usage_line_id = 'live-line-gpt-5-6-terra'`,
+      )
+      .get() as {
+        price_status: string;
+        price_unavailable_reason: string | null;
+        pricing_rate_id: string | null;
+        total_cost_micros: number;
+      };
+    const summary = stateDb.raw
+      .prepare(
+        `SELECT priced_usage_line_count, unpriced_usage_line_count, total_cost_micros
+         FROM thread_pricing_summaries
+         WHERE provider = 'openai'
+           AND backend = 'codex'
+           AND thread_id = 'thread-gpt-5-6'
+           AND currency = 'USD'`,
+      )
+      .get() as {
+        priced_usage_line_count: number;
+        total_cost_micros: number;
+        unpriced_usage_line_count: number;
+      };
+
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
+    expect(line).toEqual({
+      price_status: "priced",
+      price_unavailable_reason: null,
+      pricing_rate_id: "openai:2026-07-09:gpt-5.6-terra:standard",
+      total_cost_micros: 65_953,
+    });
+    expect(summary).toEqual({
+      priced_usage_line_count: 1,
+      total_cost_micros: 65_953,
+      unpriced_usage_line_count: 0,
+    });
+  });
+
   it("rebuilds pricing summaries for parented usage lines only on the parent thread", () => {
     stateDb.close();
 

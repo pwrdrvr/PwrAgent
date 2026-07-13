@@ -12010,6 +12010,66 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not overwrite remembered reasoning when messaging model selection changes", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.model = "gpt-5.6-terra";
+    navigation.threads[0]!.reasoningEffort = "ultra";
+    const harness = await createHarness({
+      navigation,
+      listBackends: async () => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            launchpadOptions: {
+              models: [
+                {
+                  id: "gpt-5.6-terra",
+                  reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+                  supportsReasoning: true,
+                },
+                {
+                  id: "gpt-5.6-luna",
+                  defaultReasoningEffort: "medium",
+                  reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+                  supportsReasoning: true,
+                },
+              ],
+              reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+            },
+          }),
+        ],
+      }),
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-model",
+        value: {
+          model: "gpt-5.6-luna",
+        },
+      }),
+    );
+
+    expect(harness.setThreadModelSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.6-luna",
+      }),
+    );
+    expect(harness.setThreadModelSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        reasoningEffort: "medium",
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.toMatchObject({
+      preferences: {
+        model: "gpt-5.6-luna",
+      },
+    });
+  });
+
   it("opens a reasoning picker and stores the selected effort", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults.reasoningEffort = "medium";
@@ -12066,6 +12126,64 @@ describe("MessagingController", () => {
         expect.objectContaining({ label: "high (current)" }),
       ]),
     });
+  });
+
+  it("uses model-specific reasoning choices for bound messaging threads", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.model = "gpt-5.6-luna";
+    navigation.threads[0]!.reasoningEffort = "max";
+    const harness = await createHarness({
+      navigation,
+      listBackends: async () => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            launchpadOptions: {
+              models: [
+                {
+                  id: "gpt-5.6-terra",
+                  reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+                  supportsReasoning: true,
+                },
+                {
+                  id: "gpt-5.6-luna",
+                  defaultReasoningEffort: "medium",
+                  reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+                  supportsReasoning: true,
+                },
+              ],
+              reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+            },
+          }),
+        ],
+      }),
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:reasoning" }),
+    );
+    const picker = harness.delivered.at(-1) as {
+      choices?: Array<{ label?: string }>;
+      kind?: string;
+    };
+    const labels = picker.choices?.map((choice) => choice.label) ?? [];
+    expect(picker.kind).toBe("single_select");
+    expect(labels).toEqual(expect.arrayContaining(["max (current)"]));
+    expect(labels).not.toEqual(expect.arrayContaining(["ultra"]));
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-reasoning",
+        value: {
+          reasoningEffort: "ultra",
+        },
+      }),
+    );
+
+    expect(harness.setThreadModelSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reasoningEffort: "ultra" }),
+    );
   });
 
   it("opens, searches, selects, removes, and consumes skills from the status menu", async () => {

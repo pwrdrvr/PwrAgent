@@ -22,6 +22,7 @@ import type {
   CodexEnvironmentOption,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
+  BackendModelOption,
   BackendSummary,
   AppServerPendingRequestNotification,
   AppServerToolRequestUserInputNotification,
@@ -4461,17 +4462,42 @@ export class MessagingController {
         await this.deliverInvalidBrowseSelection(event);
         return;
       }
-      await this.updateNewThreadStickySettings(nextSession, {
+      const backend = nextSession.backend ?? navigation.launchpadDefaults.backend;
+      const summary = await this.getBackendSummary(backend);
+      const models = summary?.launchpadOptions?.models ?? [];
+      const modelOption = models.find((candidate) => candidate.id === model);
+      if (summary && !modelOption) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      const directory = nextSession.selectedProject
+        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
+        : undefined;
+      const launchpadSettings = applyNavigationLaunchpadProviderSettingsPatch(
+        directory?.launchpad ?? navigation.launchpadDefaults,
+        { backend, model },
+      );
+      const reasoningEffort = summary
+        ? normalizeReasoningEffortForModel(summary, modelOption, [
+            launchpadSettings.reasoningEffort,
+            nextSession.preferences?.reasoningEffort,
+          ])
+        : nextSession.preferences?.reasoningEffort;
+      const preferences = {
+        ...nextSession.preferences,
         model,
-      });
+        updatedAt: this.now(),
+      };
+      if (summary && reasoningEffort === undefined) {
+        delete preferences.reasoningEffort;
+      } else if (reasoningEffort !== undefined) {
+        preferences.reasoningEffort = reasoningEffort;
+      }
+      await this.updateNewThreadStickySettings(nextSession, { model });
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
-          preferences: {
-            ...nextSession.preferences,
-            model,
-            updatedAt: this.now(),
-          },
+          preferences,
         },
         event,
         navigation,
@@ -5845,11 +5871,12 @@ export class MessagingController {
     backend: AppServerBackendKind,
   ): Promise<void> {
     const summary = await this.getBackendSummary(backend);
-    const efforts = summary?.launchpadOptions?.reasoningEfforts ?? [
-      "low",
-      "medium",
-      "high",
-    ];
+    const models = summary?.launchpadOptions?.models ?? [];
+    const modelOption =
+      models.find((model) => model.id === session.preferences?.model) ??
+      defaultBackendModel(models);
+    const efforts = reasoningEffortsForModel(summary, modelOption);
+    const fallbackEfforts = efforts.length > 0 ? efforts : ["low", "medium", "high"];
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-reasoning"),
       capabilityProfile: this.capabilityProfile,
@@ -5863,7 +5890,7 @@ export class MessagingController {
       fallbackText: "Choose a reasoning option, or reply back.",
       targetSurface: session.surface,
       actions: [
-        ...efforts.map((effort, index) => ({
+        ...fallbackEfforts.map((effort, index) => ({
           id: "browse:new:set-reasoning",
           label: effort,
           style: "secondary" as const,
@@ -8245,23 +8272,28 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<void> {
     const summary = await this.getBackendSummary(binding.backend);
-    const efforts = summary?.launchpadOptions?.reasoningEfforts ?? [
-      "low",
-      "medium",
-      "high",
-    ];
-    if (summary && efforts.length === 0) {
-      await this.renderBindingStatus(binding, event);
-      return;
-    }
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
     const thread = findThreadForBinding(navigation, binding);
+    const models = summary?.launchpadOptions?.models ?? [];
+    const modelOption =
+      models.find((model) => model.id === thread?.model) ??
+      models.find((model) => model.id === binding.preferences?.model) ??
+      models.find((model) => model.id === navigation.launchpadDefaults.model) ??
+      defaultBackendModel(models);
+    const efforts = reasoningEffortsForModel(summary, modelOption);
+    if (summary && efforts.length === 0) {
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
+    const fallbackEfforts = efforts.length > 0 ? efforts : ["low", "medium", "high"];
     const currentReasoningEffort =
-      thread?.reasoningEffort ??
-      binding.preferences?.reasoningEffort ??
-      navigation.launchpadDefaults.reasoningEffort;
+      resolveReasoningEffortForModel(summary, modelOption, [
+        thread?.reasoningEffort,
+        binding.preferences?.reasoningEffort,
+        navigation.launchpadDefaults.reasoningEffort,
+      ]);
 
     await this.deliver(
       buildStatusReasoningPickerIntent({
@@ -8270,7 +8302,7 @@ export class MessagingController {
         binding,
         createdAt: this.now(),
         currentReasoningEffort,
-        efforts,
+        efforts: fallbackEfforts,
       }),
       binding,
       event,
@@ -8375,25 +8407,43 @@ export class MessagingController {
       return;
     }
 
+    const summary = await this.getBackendSummary(binding.backend);
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
-    const updatedBinding = await this.updateBindingPreferences(binding, {
-      model,
-    });
-    await this.options.backend.setThreadModelSettings?.({
+    const thread = findThreadForBinding(navigation, binding);
+    const models = summary?.launchpadOptions?.models ?? [];
+    const modelOption = models.find((candidate) => candidate.id === model);
+    if (summary && !modelOption) {
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
+    let updatedBinding = await this.updateBindingPreferences(binding, { model });
+    const settingsResponse = await this.options.backend.setThreadModelSettings?.({
       backend: binding.backend,
       threadId: binding.threadId,
       model,
       fastMode: updatedBinding.preferences?.fastMode,
-      reasoningEffort: updatedBinding.preferences?.reasoningEffort,
       serviceTier: updatedBinding.preferences?.serviceTier,
     });
+    const reasoningEffort = settingsResponse?.reasoningEffort;
+    if (
+      settingsResponse &&
+      reasoningEffort !== updatedBinding.preferences?.reasoningEffort
+    ) {
+      updatedBinding = await this.updateBindingPreferences(updatedBinding, {
+        reasoningEffort,
+      });
+    }
     const optimisticNavigation: NavigationSnapshot = {
       ...navigation,
       threads: navigation.threads.map((candidate) =>
         candidate.source === binding.backend && candidate.id === binding.threadId
-          ? { ...candidate, model }
+          ? {
+              ...candidate,
+              model,
+              ...(settingsResponse ? { reasoningEffort } : {}),
+            }
           : candidate,
       ),
     };
@@ -8411,19 +8461,22 @@ export class MessagingController {
       return;
     }
     const summary = await this.getBackendSummary(binding.backend);
-    const efforts = summary?.launchpadOptions?.reasoningEfforts ?? [
-      "low",
-      "medium",
-      "high",
-    ];
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const thread = findThreadForBinding(navigation, binding);
+    const models = summary?.launchpadOptions?.models ?? [];
+    const modelOption =
+      models.find((model) => model.id === thread?.model) ??
+      models.find((model) => model.id === binding.preferences?.model) ??
+      models.find((model) => model.id === navigation.launchpadDefaults.model) ??
+      defaultBackendModel(models);
+    const efforts = reasoningEffortsForModel(summary, modelOption);
     if (summary && !efforts.includes(reasoningEffort)) {
       await this.renderBindingStatus(binding, event);
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
     const updatedBinding = await this.updateBindingPreferences(binding, {
       reasoningEffort,
     });
@@ -12969,12 +13022,20 @@ function normalizeNewThreadSessionForBackend(
   const selectedModel =
     models.find((model) => model.id === preferences.model) ??
     defaultBackendModel(models);
-  const reasoningEfforts = backend.launchpadOptions?.reasoningEfforts ?? [];
+  const reasoningEfforts = reasoningEffortsForModel(backend, selectedModel);
   if (preferences.reasoningEffort !== undefined) {
     if (reasoningEfforts.length === 0) {
       delete preferences.reasoningEffort;
     } else if (!reasoningEfforts.includes(preferences.reasoningEffort)) {
-      preferences.reasoningEffort = reasoningEfforts[0];
+      const defaultReasoningEffort = defaultReasoningEffortForModel(
+        backend,
+        selectedModel,
+      );
+      if (defaultReasoningEffort) {
+        preferences.reasoningEffort = defaultReasoningEffort;
+      } else {
+        delete preferences.reasoningEffort;
+      }
     }
   }
 
@@ -13010,6 +13071,53 @@ function defaultBackendModel(
   models: NonNullable<BackendSummary["launchpadOptions"]>["models"] = [],
 ) {
   return models.find((model) => model.current) ?? models[0];
+}
+
+function reasoningEffortsForModel(
+  backend: BackendSummary | undefined,
+  model: BackendModelOption | undefined,
+): string[] {
+  return model?.reasoningEfforts ?? backend?.launchpadOptions?.reasoningEfforts ?? [];
+}
+
+function defaultReasoningEffortForModel(
+  backend: BackendSummary | undefined,
+  model: BackendModelOption | undefined,
+): string | undefined {
+  const efforts = reasoningEffortsForModel(backend, model);
+  if (
+    model?.defaultReasoningEffort &&
+    efforts.includes(model.defaultReasoningEffort)
+  ) {
+    return model.defaultReasoningEffort;
+  }
+  return efforts[0];
+}
+
+function resolveReasoningEffortForModel(
+  backend: BackendSummary | undefined,
+  model: BackendModelOption | undefined,
+  candidates: Array<string | undefined>,
+): string | undefined {
+  if (!backend && !model) {
+    return candidates.find((candidate): candidate is string => Boolean(candidate));
+  }
+  const efforts = reasoningEffortsForModel(backend, model);
+  const selected = candidates.find((candidate) =>
+    candidate ? efforts.includes(candidate) : false,
+  );
+  return selected ?? defaultReasoningEffortForModel(backend, model);
+}
+
+function normalizeReasoningEffortForModel(
+  backend: BackendSummary,
+  model: BackendModelOption | undefined,
+  candidates: Array<string | undefined>,
+): string | undefined {
+  if (!candidates.some((candidate) => Boolean(candidate))) {
+    return undefined;
+  }
+  return resolveReasoningEffortForModel(backend, model, candidates);
 }
 
 type NewThreadOptionsSummary = {
@@ -13064,15 +13172,11 @@ function newThreadOptionsForSession(
     models.find((model) => model.id === launchpadDefaults.model) ??
     models.find((model) => model.current) ??
     models[0];
-  const reasoningEfforts = backend.launchpadOptions?.reasoningEfforts ?? [];
-  const reasoningEffort =
-    session.preferences?.reasoningEffort &&
-    reasoningEfforts.includes(session.preferences.reasoningEffort)
-      ? session.preferences.reasoningEffort
-      : launchpadDefaults.reasoningEffort &&
-          reasoningEfforts.includes(launchpadDefaults.reasoningEffort)
-        ? launchpadDefaults.reasoningEffort
-        : reasoningEfforts[0];
+  const reasoningEfforts = reasoningEffortsForModel(backend, modelOption);
+  const reasoningEffort = resolveReasoningEffortForModel(backend, modelOption, [
+    session.preferences?.reasoningEffort,
+    launchpadDefaults.reasoningEffort,
+  ]);
   const supportsFast =
     Boolean(backend.launchpadOptions?.supportsFastMode) ||
     Boolean(modelOption?.supportsFast);

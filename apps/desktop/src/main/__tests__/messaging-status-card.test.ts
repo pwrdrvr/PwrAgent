@@ -869,6 +869,69 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain("Permissions: Full Access");
   });
 
+  it("falls back to the selected model reasoning default when preferences are invalid", () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.model = "gpt-5.6-luna";
+    const binding = {
+      ...buildBinding(),
+      preferences: {
+        reasoningEffort: "ultra",
+        updatedAt: 1000,
+      },
+    } satisfies MessagingBindingRecord;
+
+    const intent = buildBindingStatusIntent({
+      id: "status-model-specific-reasoning",
+      backendSummary: {
+        kind: "codex",
+        label: "Codex",
+        available: true,
+        methods: [],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: false,
+          transcriptPagination: false,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [],
+        launchpadOptions: {
+          models: [
+            {
+              id: "gpt-5.6-luna",
+              defaultReasoningEffort: "medium",
+              reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+              supportsReasoning: true,
+            },
+          ],
+          reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        },
+      },
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Model: gpt-5.6-luna");
+    expect(intent.text).toContain("Reasoning: medium");
+    expect(intent.text).not.toContain("Reasoning: ultra");
+    expect(intent.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:reasoning",
+          label: "Reasoning: medium",
+        }),
+      ]),
+    );
+  });
+
   it("hides the Full Access escalation action when messaging escalation is disabled", () => {
     const binding = buildBinding();
     const navigation = buildNavigationSnapshot();

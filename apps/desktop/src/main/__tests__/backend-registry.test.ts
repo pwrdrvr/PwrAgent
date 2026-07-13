@@ -409,10 +409,21 @@ function createOverlayStoreMock(params?: {
       fastMode?: boolean;
     }) => {
       const key = `${settings.backend}:${settings.threadId}`;
+      const current = overlays.get(key);
+      const reasoningEffortsByModel = {
+        ...(current?.reasoningEffortsByModel ?? {}),
+      };
+      if (settings.model && settings.reasoningEffort) {
+        reasoningEffortsByModel[settings.model] = settings.reasoningEffort;
+      }
       const next = {
-        ...overlays.get(key),
+        ...current,
         ...settings,
-        extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
+        reasoningEffortsByModel:
+          Object.keys(reasoningEffortsByModel).length > 0
+            ? reasoningEffortsByModel
+            : undefined,
+        extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -1104,13 +1115,7 @@ class MockBackendClient {
         cwd?: string;
         skills: AppServerSkillSummary[];
       }>;
-      models?: Array<{
-        id: string;
-        label?: string;
-        current?: boolean;
-        supportsReasoning?: boolean;
-        supportsFast?: boolean;
-      }>;
+      models?: BackendModelOption[];
       modelListErrors?: Error[];
       account?: BackendAccountSummary;
       rateLimits?: BackendRateLimitSummary[];
@@ -2146,6 +2151,24 @@ describe("DesktopBackendRegistry", () => {
         launchpadOptions: {
           models: [
             {
+              id: "gpt-5.6-sol",
+              label: "GPT-5.6-Sol",
+              supportsReasoning: true,
+              supportsFast: true,
+            },
+            {
+              id: "gpt-5.6-terra",
+              label: "GPT-5.6-Terra",
+              supportsReasoning: true,
+              supportsFast: true,
+            },
+            {
+              id: "gpt-5.6-luna",
+              label: "GPT-5.6-Luna",
+              supportsReasoning: true,
+              supportsFast: true,
+            },
+            {
               id: "gpt-5.5",
               label: "GPT-5.5",
               current: true,
@@ -2169,7 +2192,7 @@ describe("DesktopBackendRegistry", () => {
               supportsReasoning: true,
             },
           ],
-          reasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+          reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
           supportsFastMode: true,
         },
       },
@@ -5659,6 +5682,112 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("prefers Terra as the default when Codex discovers the 5.6 family", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          label: "GPT-5.6-Sol",
+          current: true,
+          defaultReasoningEffort: "medium",
+          reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+          supportsReasoning: true,
+          supportsFast: true,
+        },
+        {
+          id: "gpt-5.6-terra",
+          label: "GPT-5.6-Terra",
+          defaultReasoningEffort: "medium",
+          reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+          supportsReasoning: true,
+          supportsFast: true,
+        },
+        {
+          id: "gpt-5.6-luna",
+          label: "GPT-5.6-Luna",
+          defaultReasoningEffort: "medium",
+          reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+          supportsReasoning: true,
+          supportsFast: true,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+    await registry.startThread({ backend: "codex" });
+
+    expect(response.backends[0]?.launchpadOptions?.models).toMatchObject([
+      {
+        id: "gpt-5.6-sol",
+        current: false,
+      },
+      {
+        id: "gpt-5.6-terra",
+        current: true,
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      },
+      {
+        id: "gpt-5.6-luna",
+        current: false,
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    ]);
+    expect(response.backends[0]?.launchpadOptions?.reasoningEfforts).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(codexClient.lastStartThreadParams?.model).toBe("gpt-5.6-terra");
+    expect(codexClient.lastStartThreadParams?.reasoningEffort).toBe("medium");
+
+    await registry.close();
+  });
+
+  it("keeps fallback backend summary and thread-start defaults aligned", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+      models: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+    await registry.startThread({ backend: "codex" });
+
+    const models = response.backends[0]?.launchpadOptions?.models ?? [];
+    expect(models.find((model) => model.id === "gpt-5.6-sol")?.current).toBe(false);
+    expect(models.find((model) => model.id === "gpt-5.6-terra")?.current).toBe(false);
+    expect(models.find((model) => model.id === "gpt-5.6-luna")?.current).toBe(false);
+    expect(models.find((model) => model.id === "gpt-5.5")?.current).toBe(true);
+    expect(codexClient.lastStartThreadParams?.model).toBe("gpt-5.5");
+
+    await registry.close();
+  });
+
   it("advertises PwrAgent dynamic tools when starting ordinary Codex threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
@@ -7350,8 +7479,8 @@ script = "echo setup"
 
     expect(codexClient.listModelsCallCount).toBe(2);
     expect(response.backends[0]?.launchpadOptions?.models?.[0]).toMatchObject({
-      id: "gpt-5.5",
-      label: "GPT-5.5",
+      id: "gpt-5.6-sol",
+      label: "GPT-5.6-Sol",
     });
     expect(codexClient.lastStartThreadParams?.model).toBe("gpt-5.4");
 
@@ -7502,6 +7631,129 @@ script = "echo setup"
       fastMode: true,
       model: "gpt-5.4",
       reasoningEffort: "high",
+    });
+
+    await registry.close();
+  });
+
+  it("restores sticky launchpad reasoning when switching back to a model", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+        models: [
+          {
+            id: "gpt-5.6-terra",
+            label: "GPT-5.6-Terra",
+            defaultReasoningEffort: "medium",
+            reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+            supportsReasoning: true,
+          },
+          {
+            id: "gpt-5.6-luna",
+            label: "GPT-5.6-Luna",
+            defaultReasoningEffort: "medium",
+            reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+            supportsReasoning: true,
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+    const terraUltra = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { model: "gpt-5.6-terra", reasoningEffort: "ultra" },
+      stickySettingsChanged: true,
+    });
+    const luna = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { model: "gpt-5.6-luna" },
+      stickySettingsChanged: true,
+    });
+    const terraRestored = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { model: "gpt-5.6-terra" },
+      stickySettingsChanged: true,
+    });
+
+    expect(terraUltra.launchpad.reasoningEffort).toBe("ultra");
+    expect(luna.launchpad.reasoningEffort).toBe("medium");
+    expect(terraRestored.launchpad.reasoningEffort).toBe("ultra");
+    expect(terraRestored.defaults.reasoningEffort).toBe("ultra");
+    expect(
+      terraRestored.defaults.providerSettings?.codex?.reasoningEffortsByModel,
+    ).toMatchObject({
+      "gpt-5.6-luna": "medium",
+      "gpt-5.6-terra": "ultra",
+    });
+
+    await registry.close();
+  });
+
+  it("restores thread reasoning when switching back to a model", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+        models: [
+          {
+            id: "gpt-5.6-sol",
+            label: "GPT-5.6-Sol",
+            defaultReasoningEffort: "medium",
+            reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+            supportsReasoning: true,
+          },
+          {
+            id: "gpt-5.6-luna",
+            label: "GPT-5.6-Luna",
+            defaultReasoningEffort: "medium",
+            reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+            supportsReasoning: true,
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    const solUltra = await registry.setThreadModelSettings({
+      backend: "codex",
+      threadId: "thread-1",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "ultra",
+    });
+    const luna = await registry.setThreadModelSettings({
+      backend: "codex",
+      threadId: "thread-1",
+      model: "gpt-5.6-luna",
+    });
+    const solRestored = await registry.setThreadModelSettings({
+      backend: "codex",
+      threadId: "thread-1",
+      model: "gpt-5.6-sol",
+    });
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(solUltra.reasoningEffort).toBe("ultra");
+    expect(luna.reasoningEffort).toBe("medium");
+    expect(solRestored.reasoningEffort).toBe("ultra");
+    expect(overlay?.reasoningEffortsByModel).toMatchObject({
+      "gpt-5.6-luna": "medium",
+      "gpt-5.6-sol": "ultra",
     });
 
     await registry.close();

@@ -127,6 +127,9 @@ const LEGACY_CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["conf
 const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY =
   "features.default_mode_request_user_input";
 const SUPPORTED_CODEX_MODEL_ORDER = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini",
@@ -4133,6 +4136,28 @@ function pickStringArray(value: unknown): string[] | undefined {
   return strings.length > 0 ? strings : undefined;
 }
 
+function pickReasoningEfforts(record: Record<string, unknown>): string[] | undefined {
+  const value =
+    record.supportedReasoningEfforts ?? record.supported_reasoning_efforts;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const efforts = [
+    ...new Set(
+      value
+        .map((item) =>
+          typeof item === "string"
+            ? item
+            : pickString(asRecord(item) ?? {}, ["reasoningEffort", "reasoning_effort"]),
+        )
+        .map((effort) => effort?.trim())
+        .filter((effort): effort is string => Boolean(effort)),
+    ),
+  ];
+  return efforts.length > 0 ? efforts : undefined;
+}
+
 function extractModelOptions(value: unknown): BackendModelOption[] {
   const record = asRecord(value);
   const data = Array.isArray(record?.data)
@@ -4155,7 +4180,17 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
       {
         id,
         label: formatCodexModelLabel(id),
-        current: pickBoolean(modelRecord, ["current", "default"]),
+        current: pickBoolean(modelRecord, [
+          "current",
+          "default",
+          "isDefault",
+          "is_default",
+        ]),
+        defaultReasoningEffort: pickString(modelRecord, [
+          "defaultReasoningEffort",
+          "default_reasoning_effort",
+        ]),
+        reasoningEfforts: pickReasoningEfforts(modelRecord),
         supportsReasoning: pickBoolean(modelRecord, [
           "supportsReasoning",
           "supports_reasoning",
@@ -4202,10 +4237,18 @@ function summarizeRawModelList(value: unknown): Array<Record<string, unknown>> {
         id: pickString(modelRecord, ["id", "name", "model"]) ?? null,
         displayName:
           pickString(modelRecord, ["displayName", "display_name", "label"]) ?? null,
-        current: pickBoolean(modelRecord, ["current", "default"]) ?? null,
+        current:
+          pickBoolean(modelRecord, ["current", "default", "isDefault", "is_default"]) ??
+          null,
         hidden: pickBoolean(modelRecord, ["hidden"]) ?? null,
         supportsReasoning:
           pickBoolean(modelRecord, ["supportsReasoning", "supports_reasoning"]) ?? null,
+        supportedReasoningEfforts: pickReasoningEfforts(modelRecord) ?? null,
+        defaultReasoningEffort:
+          pickString(modelRecord, [
+            "defaultReasoningEffort",
+            "default_reasoning_effort",
+          ]) ?? null,
         supportsFast: pickBoolean(modelRecord, ["supportsFast", "supports_fast"]) ?? null,
       },
     ];
@@ -4722,9 +4765,11 @@ function normalizeCodexReasoningEffort(
     normalized === "low" ||
     normalized === "medium" ||
     normalized === "high" ||
-    normalized === "xhigh"
+    normalized === "xhigh" ||
+    normalized === "max" ||
+    normalized === "ultra"
   ) {
-    return normalized;
+    return normalized as CodexReasoningEffort;
   }
   return undefined;
 }

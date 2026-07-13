@@ -52,6 +52,75 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     ]);
   });
 
+  it("does not rewrite a finalized usage line model when thread settings change later", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        cachedInputTokens: 0,
+        createdAt: Date.UTC(2026, 6, 13, 0, 31),
+        inputTokens: 29_818,
+        model: "gpt-5.6-sol",
+        outputTokens: 84,
+        pricingCatalogVersion: "2026-07-09",
+        pricingRateId: "openai:2026-07-09:gpt-5.6-sol:standard",
+        reasoningOutputTokens: 69,
+        totalTokens: 29_902,
+        turnId: "turn-1231",
+        uncachedInputTokens: 29_818,
+        usageLineId: "turn-1231-usage",
+      }),
+    });
+
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        cachedInputTokens: 0,
+        createdAt: Date.UTC(2026, 6, 13, 0, 33),
+        inputTokens: 29_818,
+        model: "gpt-5.6-terra",
+        outputTokens: 84,
+        reasoningOutputTokens: 69,
+        totalTokens: 29_902,
+        turnId: "turn-1231",
+        uncachedInputTokens: 29_818,
+        usageLineId: "turn-1231-usage",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      model: "gpt-5.6-sol",
+      pricingRateId: "openai:2026-07-09:gpt-5.6-sol:standard",
+      totalCostMicros: 153_680,
+      uncachedInputCostMicros: 149_090,
+    });
+    expect(pricing.summaries[0]).toMatchObject({
+      totalCostMicros: 153_680,
+      unpricedUsageLineCount: 0,
+      usageLineCount: 1,
+    });
+
+    const turn = stateDb.raw
+      .prepare(
+        "SELECT model, pricing_rate_id FROM thread_usage_lines WHERE usage_line_id = ?",
+      )
+      .get("turn-1231-usage") as {
+      model: string | null;
+      pricing_rate_id: string | null;
+    };
+    const usageTurn = stateDb.raw
+      .prepare("SELECT model FROM thread_usage_turns WHERE turn_id = ?")
+      .get("turn-1231") as { model: string | null };
+    expect(turn).toEqual({
+      model: "gpt-5.6-sol",
+      pricing_rate_id: "openai:2026-07-09:gpt-5.6-sol:standard",
+    });
+    expect(usageTurn).toEqual({ model: "gpt-5.6-sol" });
+  });
+
   it("stores running totals on usage lines without adding them to summaries", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({

@@ -1474,10 +1474,12 @@ function applyThreadModelSettingsUpdate(
     changed = true;
     return {
       ...thread,
-      model: params.model,
-      reasoningEffort: params.reasoningEffort,
-      serviceTier: params.serviceTier,
-      fastMode: params.fastMode,
+      ...("model" in params ? { model: params.model } : {}),
+      ...("reasoningEffort" in params
+        ? { reasoningEffort: params.reasoningEffort }
+        : {}),
+      ...("serviceTier" in params ? { serviceTier: params.serviceTier } : {}),
+      ...("fastMode" in params ? { fastMode: params.fastMode } : {}),
     };
   });
 
@@ -5322,18 +5324,18 @@ export function useThreadNavigation(
       }
 
       const nextSettings = {
-        model: "model" in patch ? patch.model : thread.model,
-        reasoningEffort:
-          "reasoningEffort" in patch
-            ? patch.reasoningEffort
-            : thread.reasoningEffort,
-        serviceTier: "serviceTier" in patch ? patch.serviceTier : thread.serviceTier,
-        fastMode:
-          thread.source === "codex"
-            ? "fastMode" in patch
-              ? patch.fastMode
-              : thread.fastMode
-            : undefined,
+        ...("model" in patch
+          ? { model: patch.model }
+          : thread.model
+            ? { model: thread.model }
+            : {}),
+        ...("reasoningEffort" in patch
+          ? { reasoningEffort: patch.reasoningEffort }
+          : {}),
+        ...("serviceTier" in patch ? { serviceTier: patch.serviceTier } : {}),
+        ...(thread.source === "codex" && "fastMode" in patch
+          ? { fastMode: patch.fastMode }
+          : {}),
       };
 
       setSetThreadModelSettingsError(undefined);

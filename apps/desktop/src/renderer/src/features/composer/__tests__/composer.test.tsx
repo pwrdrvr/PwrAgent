@@ -4464,7 +4464,6 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(onSetThreadModelSettings).toHaveBeenCalledWith({
         model: "gpt-5.2",
-        reasoningEffort: "medium",
         fastMode: undefined,
       });
     });
