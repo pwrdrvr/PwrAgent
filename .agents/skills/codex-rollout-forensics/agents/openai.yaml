@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Rollout Forensics"
+  short_description: "Analyze Codex rollout tool-output costs"
+  default_prompt: "Use $codex-rollout-forensics to analyze this Codex rollout for noisy tool outputs and context replay cost."
