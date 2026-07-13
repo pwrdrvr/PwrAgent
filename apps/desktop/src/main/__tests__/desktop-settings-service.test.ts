@@ -1784,12 +1784,17 @@ describe("DesktopSettingsService", () => {
       value: false,
       source: "default",
     });
+    expect(initial.experimental.threadToolAccounting).toEqual({
+      value: false,
+      source: "default",
+    });
 
     await service.writeConfigPatch({
       experimental: {
         threadPricingSummary: false,
         threadPricingDisplayUsd: false,
         threadPricingDisplayCodexCredits: true,
+        threadToolAccounting: true,
       },
     });
 
@@ -1806,6 +1811,10 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "config",
     });
+    expect(updated.experimental.threadToolAccounting).toEqual({
+      value: true,
+      source: "config",
+    });
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "thread_pricing_summary = false",
     );
@@ -1814,6 +1823,9 @@ describe("DesktopSettingsService", () => {
     );
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "thread_pricing_display_codex_credits = true",
+    );
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "thread_tool_accounting = true",
     );
   });
 
