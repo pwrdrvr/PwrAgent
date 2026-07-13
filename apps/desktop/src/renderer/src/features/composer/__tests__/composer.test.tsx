@@ -1878,6 +1878,36 @@ describe("Composer", () => {
     );
   });
 
+  it("hides the schedule caret on a launchpad where scheduling does not apply", () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        launchpad={{
+          directoryKey: "directory:/repo/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/PwrAgent",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Kick off a new thread",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        skills={[]}
+      />
+    );
+
+    // The split collapses to a plain Send/Start pill: no caret, no divider.
+    expect(
+      screen.queryByRole("button", { name: "Schedule message" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Start thread" })
+    ).toBeInTheDocument();
+  });
+
   it("queues slash review submits while a turn start is pending", async () => {
     let agentEventHandler:
       | ((event: {
@@ -4253,6 +4283,69 @@ describe("Composer", () => {
       expect(screen.queryByText("Queued elsewhere")).not.toBeInTheDocument();
     });
     expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("releases a due scheduled queued turn ahead of an earlier future scheduled turn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const draftStore = createComposerDraftStore();
+    const scopeKey = "thread:codex:thread-1";
+    draftStore.setQueuedTurns(scopeKey, [
+      {
+        id: "queued-later",
+        text: "Later scheduled turn",
+        imageAttachments: [],
+        input: [{ type: "text", text: "Later scheduled turn" }],
+        scheduledSendAt: Date.now() + 2 * 60 * 60_000,
+      },
+      {
+        id: "queued-sooner",
+        text: "Sooner scheduled turn",
+        imageAttachments: [],
+        input: [{ type: "text", text: "Sooner scheduled turn" }],
+        scheduledSendAt: Date.now() + 15 * 60_000,
+      },
+    ]);
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-sooner",
+    }));
+    const thread = {
+      id: "thread-1",
+      title: "Out of order schedule",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    vi.setSystemTime(new Date("2026-07-10T12:15:00Z"));
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [{ type: "text", text: "Sooner scheduled turn" }],
+      })
+    );
+    expect(draftStore.getQueuedTurns(scopeKey).map((entry) => entry.text)).toEqual([
+      "Later scheduled turn",
+    ]);
   });
 
   it("dispatches a queued turn even when selected-thread preflight would block a new send", async () => {

@@ -129,7 +129,7 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     const composer = app.window.locator(".composer");
     const activeLens = app.window.locator(".lens-switch__button.is-active");
     const selectedRow = app.window.locator(".thread-row.is-selected").first();
-    const primaryButton = app.window.locator(".button--primary").first();
+    const primaryButton = app.window.locator(".composer__send-split-pill").first();
     const composerInput = app.window.getByLabel("Reply");
     const sendButton = app.window.getByRole("button", { name: "Send" });
 
@@ -148,7 +148,7 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     await expect(activeLens).toHaveCSS("background-color", "rgb(18, 8, 0)");
     await expect(activeLens).toHaveCSS("color", "rgb(255, 179, 92)");
     await expect(primaryButton).toHaveCSS("background-color", "rgb(18, 8, 0)");
-    await expect(primaryButton).toHaveCSS("color", "rgb(255, 179, 92)");
+    await expect(sendButton).toHaveCSS("color", "rgb(255, 179, 92)");
     // --accent-border now derives via color-mix(in srgb, var(--accent) 42%,
     // transparent). Chromium serializes the computed value as either
     // `rgba(...)` (older versions) or `color(srgb r g b / a)` (newer
@@ -192,7 +192,7 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     await assertTangerineFocusRing(composerInput);
     await composerInput.fill("Focus ring check");
     await expect(sendButton).toBeEnabled();
-    await assertTangerineFocusRing(sendButton);
+    await assertTangerineFocusRing(primaryButton, sendButton);
   } finally {
     await app.close();
   }

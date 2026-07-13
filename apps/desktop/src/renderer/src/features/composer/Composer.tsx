@@ -38,8 +38,8 @@ import type {
 } from "@pwragent/shared";
 import { readCodexEnvironmentActionRuns } from "@pwragent/shared";
 import {
-  ArrowUpIcon,
   BranchIcon,
+  ChevronUpIcon,
   CloseIcon,
   FileCodeIcon,
   FolderIcon,
@@ -84,6 +84,7 @@ import {
   formatRunningDurationMs,
 } from "../thread-detail/EnvActionRunsView";
 import {
+  getNextReleasableQueuedTurn,
   useComposerDraftStore,
   type ComposerDraftSnapshot,
   type ComposerDraftStore,
@@ -2617,6 +2618,7 @@ export function Composer(props: ComposerProps) {
   const hasComposerContent =
     draft.trim().length > 0 || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
+  const nextReleasableQueuedTurn = getNextReleasableQueuedTurn(queuedTurns);
   const futureScheduledDraftSendAt = getFutureScheduledSendAt(
     scheduledDraftSendAt,
     scheduleTick,
@@ -4447,31 +4449,30 @@ export function Composer(props: ComposerProps) {
       return;
     }
     if (
-      !queuedTurn ||
+      !nextReleasableQueuedTurn ||
       globalQueuedTurnReleaseScopeKeys.has(composerScopeKey) ||
       props.threadBusy ||
       activeTurnId ||
       serverQueuedTurnEntryId ||
       sending ||
       props.launchpad ||
-      props.disabled ||
-      getFutureScheduledSendAt(queuedTurn.scheduledSendAt, scheduleTick)
+      props.disabled
     ) {
       return;
     }
-    if (queuedAutoReleaseAttemptIdRef.current === queuedTurn.id) {
+    if (queuedAutoReleaseAttemptIdRef.current === nextReleasableQueuedTurn.id) {
       return;
     }
 
-    queuedAutoReleaseAttemptIdRef.current = queuedTurn.id;
+    queuedAutoReleaseAttemptIdRef.current = nextReleasableQueuedTurn.id;
     globalQueuedTurnReleaseScopeKeys.add(composerScopeKey);
     updateSending(true);
-    void sendQueuedTurn(queuedTurn).finally(() => {
+    void sendQueuedTurn(nextReleasableQueuedTurn).finally(() => {
       updateSending(false);
     });
   }, [
     activeTurnId,
-    queuedTurn,
+    nextReleasableQueuedTurn,
     serverQueuedTurnEntryId,
     scheduleTick,
     sending,
@@ -5526,6 +5527,12 @@ export function Composer(props: ComposerProps) {
     Boolean(props.launchpad) ||
     !props.thread ||
     isCompactCommand;
+  // Only surface the schedule caret where scheduling actually applies. In the
+  // launchpad, compact command, or a thread-less composer there is nothing to
+  // schedule, so the split collapses to a plain Send pill instead of parking a
+  // permanently-dimmed half-button next to it.
+  const scheduleAffordanceVisible =
+    Boolean(props.thread) && !props.launchpad && !isCompactCommand;
   const submitButtonLabel = futureScheduledDraftSendAt
     ? `Send in ${formatScheduledSendCountdown(
         futureScheduledDraftSendAt,
@@ -7508,28 +7515,39 @@ export function Composer(props: ComposerProps) {
               .join(" ")}
             ref={scheduleMenuRef}
           >
-            <button
-              aria-expanded={scheduleMenuOpen}
-              aria-haspopup="menu"
-              aria-label="Schedule message"
-              className="button button--primary composer__send-schedule-button"
-              disabled={scheduleButtonDisabled}
-              type="button"
-              onClick={() => {
-                setScheduleTick(Date.now());
-                setScheduleMenuOpen((current) => !current);
-              }}
+            <div
+              className={[
+                "composer__send-split-pill",
+                sendButtonDisabled ? "is-disabled" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
             >
-              <ArrowUpIcon size={13} />
-            </button>
-            <button
-              className="button button--primary composer__send-submit-button"
-              disabled={sendButtonDisabled}
-              type="submit"
-            >
-              {submitButtonLabel}
-            </button>
-            {scheduleMenuOpen ? (
+              {scheduleAffordanceVisible ? (
+                <button
+                  aria-expanded={scheduleMenuOpen}
+                  aria-haspopup="menu"
+                  aria-label="Schedule message"
+                  className="button composer__send-schedule-button"
+                  disabled={scheduleButtonDisabled}
+                  type="button"
+                  onClick={() => {
+                    setScheduleTick(Date.now());
+                    setScheduleMenuOpen((current) => !current);
+                  }}
+                >
+                  <ChevronUpIcon size={14} />
+                </button>
+              ) : null}
+              <button
+                className="button composer__send-submit-button"
+                disabled={sendButtonDisabled}
+                type="submit"
+              >
+                {submitButtonLabel}
+              </button>
+            </div>
+            {scheduleAffordanceVisible && scheduleMenuOpen ? (
               <div className="composer__schedule-menu" role="menu">
                 {scheduledSendOptions.map((option) => (
                   <button

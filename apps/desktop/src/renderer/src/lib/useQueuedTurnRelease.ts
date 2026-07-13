@@ -5,9 +5,10 @@ import type {
   BackendSummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import type {
-  ComposerDraftStore,
-  ComposerQueuedTurnSnapshot,
+import {
+  getNextReleasableQueuedTurn,
+  type ComposerDraftStore,
+  type ComposerQueuedTurnSnapshot,
 } from "../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "./desktop-api";
 
@@ -22,17 +23,6 @@ const TERMINAL_TURN_METHODS = new Set([
 ]);
 const BACKGROUND_QUEUE_RELEASE_INTERVAL_MS = 30_000;
 const globalInFlightScopeKeys = new Set<string>();
-
-function getQueuedTurnReleaseDelayMs(
-  queuedTurn: Pick<ComposerQueuedTurnSnapshot, "scheduledSendAt">,
-  now = Date.now(),
-): number {
-  const scheduledSendAt = queuedTurn.scheduledSendAt;
-  if (typeof scheduledSendAt !== "number" || !Number.isFinite(scheduledSendAt)) {
-    return 0;
-  }
-  return Math.max(0, scheduledSendAt - now);
-}
 
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
@@ -170,11 +160,10 @@ export function useQueuedTurnRelease(params: {
       return;
     }
 
-    const queuedTurn = current.composerDraftStore.getQueuedTurn(scopeKey);
+    const queuedTurn = getNextReleasableQueuedTurn(
+      current.composerDraftStore.getQueuedTurns(scopeKey),
+    );
     if (!queuedTurn || isThreadSelected(current, thread)) {
-      return;
-    }
-    if (getQueuedTurnReleaseDelayMs(queuedTurn) > 0) {
       return;
     }
     const queuedTurnId = queuedTurn.id;
@@ -185,12 +174,10 @@ export function useQueuedTurnRelease(params: {
         return undefined;
       }
 
-      const releaseQueuedSnapshot =
-        releaseState.composerDraftStore.getQueuedTurn(scopeKey);
+      const releaseQueuedSnapshot = getNextReleasableQueuedTurn(
+        releaseState.composerDraftStore.getQueuedTurns(scopeKey),
+      );
       if (!releaseQueuedSnapshot || releaseQueuedSnapshot.id !== queuedTurnId) {
-        return undefined;
-      }
-      if (getQueuedTurnReleaseDelayMs(releaseQueuedSnapshot) > 0) {
         return undefined;
       }
 
@@ -478,22 +465,23 @@ export function useQueuedTurnRelease(params: {
         continue;
       }
 
-      const queuedTurn = current.composerDraftStore.getQueuedTurn(
+      for (const queuedTurn of current.composerDraftStore.getQueuedTurns(
         getThreadScopeKey(thread),
-      );
-      const scheduledSendAt = queuedTurn?.scheduledSendAt;
-      if (
-        typeof scheduledSendAt !== "number" ||
-        !Number.isFinite(scheduledSendAt) ||
-        scheduledSendAt <= Date.now()
-      ) {
-        continue;
-      }
+      )) {
+        const scheduledSendAt = queuedTurn.scheduledSendAt;
+        if (
+          typeof scheduledSendAt !== "number" ||
+          !Number.isFinite(scheduledSendAt) ||
+          scheduledSendAt <= Date.now()
+        ) {
+          continue;
+        }
 
-      nextReleaseAt =
-        nextReleaseAt === undefined
-          ? scheduledSendAt
-          : Math.min(nextReleaseAt, scheduledSendAt);
+        nextReleaseAt =
+          nextReleaseAt === undefined
+            ? scheduledSendAt
+            : Math.min(nextReleaseAt, scheduledSendAt);
+      }
     }
 
     if (nextReleaseAt === undefined) {

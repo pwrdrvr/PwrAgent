@@ -62,6 +62,25 @@ export type ComposerDraftStore = {
   set(scopeKey: string, snapshot: ComposerDraftSnapshot): void;
 };
 
+export function getQueuedTurnReleaseDelayMs(
+  queuedTurn: Pick<ComposerQueuedTurnSnapshot, "scheduledSendAt">,
+  now = Date.now(),
+): number {
+  const scheduledSendAt = queuedTurn.scheduledSendAt;
+  if (typeof scheduledSendAt !== "number" || !Number.isFinite(scheduledSendAt)) {
+    return 0;
+  }
+  return Math.max(0, scheduledSendAt - now);
+}
+
+export function getNextReleasableQueuedTurn<
+  T extends Pick<ComposerQueuedTurnSnapshot, "scheduledSendAt">,
+>(queuedTurns: readonly T[], now = Date.now()): T | undefined {
+  return queuedTurns.find((queuedTurn) =>
+    getQueuedTurnReleaseDelayMs(queuedTurn, now) === 0
+  );
+}
+
 export function useComposerDraftStore(): ComposerDraftStore {
   const storeRef = useRef(new Map<string, ComposerDraftSnapshot>());
   const pendingSteerStoreRef = useRef(new Map<string, ComposerPendingSteerSnapshot>());
