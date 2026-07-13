@@ -603,6 +603,10 @@ export class DesktopSettingsService {
           config.experimental?.threadPricingDisplayCodexCredits,
           false,
         ),
+        threadToolAccounting: this.resolveConfigBoolean(
+          config.experimental?.threadToolAccounting,
+          false,
+        ),
         codexDefaultModeRequestUserInput: this.resolveConfigBoolean(
           config.experimental?.codexDefaultModeRequestUserInput,
           false,

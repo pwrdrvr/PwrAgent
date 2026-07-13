@@ -498,6 +498,12 @@ export type DesktopSettingsSnapshot = {
      */
     threadPricingDisplayCodexCredits?: DesktopSettingsValue<boolean>;
     /**
+     * Shows experimental tool-output accounting inside the thread Pricing tab.
+     * The desktop app may still collect tool metrics while this is disabled;
+     * this only gates the operator-facing panel and noisy-polling alerts.
+     */
+    threadToolAccounting?: DesktopSettingsValue<boolean>;
+    /**
      * Enables Codex's upstream default-mode request_user_input feature for
      * ordinary turns, allowing skills to pause and ask structured questions
      * outside Plan mode when the installed Codex build supports it.
@@ -739,6 +745,7 @@ export type DesktopSettingsConfigPatch = {
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
+    threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     diffCondensation?: {
       enabled?: boolean;

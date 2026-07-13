@@ -62,6 +62,11 @@ const DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS = {
   source: "default" as const,
 };
 
+const DEFAULT_THREAD_TOOL_ACCOUNTING = {
+  value: false,
+  source: "default" as const,
+};
+
 export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
@@ -72,6 +77,7 @@ export function ExperimentalSettings(props: {
   onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
+  onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
   onCodexDefaultModeRequestUserInputChange: (
     enabled: boolean,
   ) => Promise<void>;
@@ -93,6 +99,9 @@ export function ExperimentalSettings(props: {
   const threadPricingDisplayCodexCredits =
     props.snapshot.experimental.threadPricingDisplayCodexCredits ??
     DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
+  const threadToolAccounting =
+    props.snapshot.experimental.threadToolAccounting ??
+    DEFAULT_THREAD_TOOL_ACCOUNTING;
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
@@ -166,6 +175,22 @@ export function ExperimentalSettings(props: {
                 label="Display Codex Credits"
                 onChange={(enabled) => {
                   void props.onThreadPricingDisplayCodexCreditsChange(enabled);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Display tool output accounting"
+            sub="Show experimental tool-output volume and noisy-polling alerts."
+            help="Collection stays on either way; this only controls the operator-facing Pricing panel section."
+            source={sourceBadge(threadToolAccounting)}
+            control={
+              <SettingsSwitch
+                checked={threadToolAccounting.value}
+                disabled={props.saving || !threadPricingSummary.value}
+                label="Display tool output accounting"
+                onChange={(enabled) => {
+                  void props.onThreadToolAccountingChange(enabled);
                 }}
               />
             }

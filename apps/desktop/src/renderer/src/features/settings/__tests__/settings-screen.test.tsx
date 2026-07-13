@@ -157,6 +157,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      threadToolAccounting: {
+        value: false,
+        source: "default",
+      },
       codexDefaultModeRequestUserInput: {
         value: false,
         source: "default",
@@ -668,6 +672,9 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("switch", { name: "Display Codex Credits" }),
     ).not.toBeDisabled();
+    expect(
+      screen.getByRole("switch", { name: "Display tool output accounting" }),
+    ).not.toBeDisabled();
 
     fireEvent.click(
       screen.getByRole("switch", {
@@ -871,6 +878,7 @@ describe("SettingsScreen", () => {
           threadPricingSummary: { value: true, source: "config" },
           threadPricingDisplayUsd: { value: true, source: "default" },
           threadPricingDisplayCodexCredits: { value: false, source: "default" },
+          threadToolAccounting: { value: false, source: "default" },
         },
       }),
     );
@@ -883,8 +891,12 @@ describe("SettingsScreen", () => {
     const creditsSwitch = screen.getByRole("switch", {
       name: "Display Codex Credits",
     });
+    const toolAccountingSwitch = screen.getByRole("switch", {
+      name: "Display tool output accounting",
+    });
     expect(usdSwitch).not.toBeDisabled();
     expect(creditsSwitch).not.toBeDisabled();
+    expect(toolAccountingSwitch).not.toBeDisabled();
 
     fireEvent.click(usdSwitch);
     await waitFor(() => {
@@ -899,6 +911,13 @@ describe("SettingsScreen", () => {
         experimental: { threadPricingDisplayCodexCredits: true },
       });
     });
+
+    fireEvent.click(toolAccountingSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { threadToolAccounting: true },
+      });
+    });
   });
 
   it("disables thread pricing display unit toggles when summary is off", () => {
@@ -910,6 +929,7 @@ describe("SettingsScreen", () => {
           threadPricingSummary: { value: false, source: "config" },
           threadPricingDisplayUsd: { value: true, source: "default" },
           threadPricingDisplayCodexCredits: { value: false, source: "default" },
+          threadToolAccounting: { value: false, source: "default" },
         },
       }),
     );
@@ -921,6 +941,9 @@ describe("SettingsScreen", () => {
     expect(screen.getByRole("switch", { name: "Display USD" })).toBeDisabled();
     expect(
       screen.getByRole("switch", { name: "Display Codex Credits" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("switch", { name: "Display tool output accounting" }),
     ).toBeDisabled();
   });
 

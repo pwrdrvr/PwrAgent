@@ -13000,6 +13000,32 @@ textarea,
   user-select: text;
 }
 
+.pricing-tool-output {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.pricing-tool-output h4 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.pricing-tool-alert,
+.pricing-tool-invocation-row--noisy {
+  border-color: color-mix(in srgb, var(--status-warning) 45%, var(--border-subtle));
+  box-shadow: inset 2px 0 0 0 var(--status-warning);
+}
+
+.pricing-tool-alert .rail-card__title {
+  color: var(--text-primary);
+}
+
 /* The in-progress turn: a calm accent left-stripe + slightly firmer border,
    reading as "live" without the background wash that would look like a
    hover/selection state. Pairs with the Live chip in the card header. */

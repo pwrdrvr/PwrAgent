@@ -17,6 +17,11 @@ import type {
   ThreadGitWorkingState,
   ThreadMessagingBindingTransition,
   ThreadOverlayState,
+  ThreadToolAccounting,
+  ThreadToolInvocationAlert,
+  ThreadToolInvocationRecord,
+  ThreadToolInvocationStatus,
+  ThreadToolInvocationSummary,
   ThreadPermissionTransition,
   ThreadPricingSummary,
   ThreadSubAgentSummary,
@@ -966,6 +971,277 @@ export class SqliteOverlayStore {
       lines,
       summaries: summaryRows.map(threadPricingSummaryFromRow),
     };
+  }
+
+  async upsertThreadToolInvocation(params: {
+    invocation: ThreadToolInvocationRecord;
+  }): Promise<ThreadToolInvocationRecord> {
+    const invocation = normalizeThreadToolInvocation(params.invocation);
+    const existing = this.readThreadToolInvocationSync(invocation.invocationId);
+    const merged = existing
+      ? mergeThreadToolInvocationForUpsert(invocation, existing)
+      : invocation;
+
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO thread_tool_invocations (
+          invocation_id,
+          backend,
+          thread_id,
+          turn_id,
+          item_id,
+          tool_name,
+          normalized_command,
+          category,
+          status,
+          started_at,
+          completed_at,
+          observed_at,
+          updated_at,
+          session_id,
+          process_id,
+          exit_code,
+          output_chars,
+          output_lines,
+          estimated_output_tokens,
+          warning_lines,
+          error_lines,
+          info_lines,
+          debug_lines,
+          output_truncated,
+          noisy,
+          noisy_reason
+        ) VALUES (
+          @invocationId,
+          @backend,
+          @threadId,
+          @turnId,
+          @itemId,
+          @toolName,
+          @normalizedCommand,
+          @category,
+          @status,
+          @startedAt,
+          @completedAt,
+          @observedAt,
+          @updatedAt,
+          @sessionId,
+          @processId,
+          @exitCode,
+          @outputChars,
+          @outputLines,
+          @estimatedOutputTokens,
+          @warningLines,
+          @errorLines,
+          @infoLines,
+          @debugLines,
+          @outputTruncated,
+          @noisy,
+          @noisyReason
+        )
+        ON CONFLICT(invocation_id) DO UPDATE SET
+          backend = excluded.backend,
+          thread_id = excluded.thread_id,
+          turn_id = excluded.turn_id,
+          item_id = excluded.item_id,
+          tool_name = excluded.tool_name,
+          normalized_command = excluded.normalized_command,
+          category = excluded.category,
+          status = excluded.status,
+          started_at = CASE
+            WHEN thread_tool_invocations.started_at IS NULL THEN excluded.started_at
+            WHEN excluded.started_at IS NULL THEN thread_tool_invocations.started_at
+            ELSE MIN(thread_tool_invocations.started_at, excluded.started_at)
+          END,
+          completed_at = excluded.completed_at,
+          observed_at = MAX(thread_tool_invocations.observed_at, excluded.observed_at),
+          updated_at = excluded.updated_at,
+          session_id = COALESCE(excluded.session_id, thread_tool_invocations.session_id),
+          process_id = COALESCE(excluded.process_id, thread_tool_invocations.process_id),
+          exit_code = COALESCE(excluded.exit_code, thread_tool_invocations.exit_code),
+          output_chars = excluded.output_chars,
+          output_lines = excluded.output_lines,
+          estimated_output_tokens = excluded.estimated_output_tokens,
+          warning_lines = excluded.warning_lines,
+          error_lines = excluded.error_lines,
+          info_lines = excluded.info_lines,
+          debug_lines = excluded.debug_lines,
+          output_truncated = excluded.output_truncated,
+          noisy = excluded.noisy,
+          noisy_reason = excluded.noisy_reason`,
+      )
+      .run(toThreadToolInvocationRowParams(merged));
+
+    return merged;
+  }
+
+  async markThreadToolInvocationNoisy(params: {
+    invocationId: string;
+    reason: string;
+  }): Promise<void> {
+    this.stateDb.raw
+      .prepare(
+        `UPDATE thread_tool_invocations
+         SET noisy = 1, noisy_reason = ?, updated_at = ?
+         WHERE invocation_id = ?`,
+      )
+      .run(params.reason, Date.now(), params.invocationId);
+  }
+
+  async upsertThreadToolInvocationAlert(params: {
+    alert: ThreadToolInvocationAlert;
+  }): Promise<ThreadToolInvocationAlert> {
+    const alert = normalizeThreadToolInvocationAlert(params.alert);
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO thread_tool_invocation_alerts (
+          alert_id,
+          backend,
+          thread_id,
+          kind,
+          severity,
+          tool_name,
+          session_id,
+          process_id,
+          first_observed_at,
+          last_observed_at,
+          invocation_count,
+          total_output_chars,
+          estimated_output_tokens,
+          average_interval_ms,
+          message,
+          suggested_prompt,
+          created_at,
+          updated_at
+        ) VALUES (
+          @alertId,
+          @backend,
+          @threadId,
+          @kind,
+          @severity,
+          @toolName,
+          @sessionId,
+          @processId,
+          @firstObservedAt,
+          @lastObservedAt,
+          @invocationCount,
+          @totalOutputChars,
+          @estimatedOutputTokens,
+          @averageIntervalMs,
+          @message,
+          @suggestedPrompt,
+          @createdAt,
+          @updatedAt
+        )
+        ON CONFLICT(alert_id) DO UPDATE SET
+          backend = excluded.backend,
+          thread_id = excluded.thread_id,
+          kind = excluded.kind,
+          severity = excluded.severity,
+          tool_name = excluded.tool_name,
+          session_id = COALESCE(excluded.session_id, thread_tool_invocation_alerts.session_id),
+          process_id = COALESCE(excluded.process_id, thread_tool_invocation_alerts.process_id),
+          first_observed_at = MIN(thread_tool_invocation_alerts.first_observed_at, excluded.first_observed_at),
+          last_observed_at = MAX(thread_tool_invocation_alerts.last_observed_at, excluded.last_observed_at),
+          invocation_count = excluded.invocation_count,
+          total_output_chars = excluded.total_output_chars,
+          estimated_output_tokens = excluded.estimated_output_tokens,
+          average_interval_ms = excluded.average_interval_ms,
+          message = excluded.message,
+          suggested_prompt = excluded.suggested_prompt,
+          updated_at = excluded.updated_at`,
+      )
+      .run(toThreadToolInvocationAlertRowParams(alert));
+    return alert;
+  }
+
+  async readThreadToolAccounting(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<ThreadToolAccounting> {
+    const invocationRows = this.stateDb.raw
+      .prepare(
+        `SELECT *
+         FROM thread_tool_invocations
+         WHERE backend = ?
+           AND thread_id = ?
+         ORDER BY observed_at DESC, invocation_id DESC
+         LIMIT 200`,
+      )
+      .all(params.backend, params.threadId) as ThreadToolInvocationRow[];
+    const summaryRows = this.stateDb.raw
+      .prepare(
+        `SELECT
+           category,
+           tool_name,
+           COUNT(*) AS invocation_count,
+           COALESCE(SUM(output_chars), 0) AS output_chars,
+           COALESCE(SUM(output_lines), 0) AS output_lines,
+           COALESCE(SUM(estimated_output_tokens), 0) AS estimated_output_tokens,
+           COALESCE(SUM(warning_lines), 0) AS warning_lines,
+           COALESCE(SUM(error_lines), 0) AS error_lines,
+           COALESCE(SUM(info_lines), 0) AS info_lines,
+           COALESCE(SUM(debug_lines), 0) AS debug_lines,
+           COALESCE(SUM(CASE WHEN noisy = 1 THEN 1 ELSE 0 END), 0) AS noisy_invocation_count,
+           MAX(observed_at) AS last_observed_at
+         FROM thread_tool_invocations
+         WHERE backend = ?
+           AND thread_id = ?
+         GROUP BY category, tool_name
+         ORDER BY estimated_output_tokens DESC, output_chars DESC
+         LIMIT 50`,
+      )
+      .all(params.backend, params.threadId) as ThreadToolInvocationSummaryRow[];
+    const alertRows = this.stateDb.raw
+      .prepare(
+        `SELECT *
+         FROM thread_tool_invocation_alerts
+         WHERE backend = ?
+           AND thread_id = ?
+         ORDER BY updated_at DESC, alert_id DESC
+         LIMIT 20`,
+      )
+      .all(params.backend, params.threadId) as ThreadToolInvocationAlertRow[];
+
+    return {
+      alerts: alertRows.map(threadToolInvocationAlertFromRow),
+      invocations: invocationRows.map(threadToolInvocationFromRow),
+      summaries: summaryRows.map(threadToolInvocationSummaryFromRow),
+    };
+  }
+
+  readRecentThreadToolInvocations(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    toolName: string;
+    since: number;
+    sessionId?: string;
+    processId?: string;
+    limit?: number;
+  }): ThreadToolInvocationRecord[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT *
+         FROM thread_tool_invocations
+         WHERE backend = @backend
+           AND thread_id = @threadId
+           AND tool_name = @toolName
+           AND observed_at >= @since
+           AND (@sessionId IS NULL OR session_id = @sessionId)
+           AND (@processId IS NULL OR process_id = @processId)
+         ORDER BY observed_at DESC, invocation_id DESC
+         LIMIT @limit`,
+      )
+      .all({
+        backend: params.backend,
+        limit: params.limit ?? 12,
+        processId: params.processId ?? null,
+        sessionId: params.sessionId ?? null,
+        since: params.since,
+        threadId: params.threadId,
+        toolName: params.toolName,
+      }) as ThreadToolInvocationRow[];
+    return rows.map(threadToolInvocationFromRow);
   }
 
   // Per-turn metadata lives on thread_usage_turns. The turn record is refreshed
@@ -2246,6 +2522,15 @@ export class SqliteOverlayStore {
     return row ? threadUsageLineFromRow(row) : undefined;
   }
 
+  private readThreadToolInvocationSync(
+    invocationId: string,
+  ): ThreadToolInvocationRecord | undefined {
+    const row = this.stateDb.raw
+      .prepare("SELECT * FROM thread_tool_invocations WHERE invocation_id = ?")
+      .get(invocationId) as ThreadToolInvocationRow | undefined;
+    return row ? threadToolInvocationFromRow(row) : undefined;
+  }
+
   private recomputeThreadPricingSummarySync(params: {
     backend: string;
     currency: string;
@@ -2519,6 +2804,190 @@ type ThreadPricingAggregateRow = Omit<
   "backend" | "thread_id" | "currency" | "updated_at"
 >;
 
+type ThreadToolInvocationRow = {
+  invocation_id: string;
+  backend: ThreadToolInvocationRecord["backend"];
+  thread_id: string;
+  turn_id: string | null;
+  item_id: string;
+  tool_name: string;
+  normalized_command: string | null;
+  category: ThreadToolInvocationRecord["category"];
+  status: ThreadToolInvocationStatus;
+  started_at: number | null;
+  completed_at: number | null;
+  observed_at: number;
+  updated_at: number;
+  session_id: string | null;
+  process_id: string | null;
+  exit_code: number | null;
+  output_chars: number;
+  output_lines: number;
+  estimated_output_tokens: number;
+  warning_lines: number;
+  error_lines: number;
+  info_lines: number;
+  debug_lines: number;
+  output_truncated: number;
+  noisy: number;
+  noisy_reason: string | null;
+};
+
+type ThreadToolInvocationSummaryRow = {
+  category: ThreadToolInvocationSummary["category"];
+  tool_name: string;
+  invocation_count: number;
+  output_chars: number;
+  output_lines: number;
+  estimated_output_tokens: number;
+  warning_lines: number;
+  error_lines: number;
+  info_lines: number;
+  debug_lines: number;
+  noisy_invocation_count: number;
+  last_observed_at: number;
+};
+
+type ThreadToolInvocationAlertRow = {
+  alert_id: string;
+  backend: ThreadToolInvocationAlert["backend"];
+  thread_id: string;
+  kind: ThreadToolInvocationAlert["kind"];
+  severity: ThreadToolInvocationAlert["severity"];
+  tool_name: string;
+  session_id: string | null;
+  process_id: string | null;
+  first_observed_at: number;
+  last_observed_at: number;
+  invocation_count: number;
+  total_output_chars: number;
+  estimated_output_tokens: number;
+  average_interval_ms: number | null;
+  message: string;
+  suggested_prompt: string;
+  created_at: number;
+  updated_at: number;
+};
+
+function normalizeThreadToolInvocation(
+  invocation: ThreadToolInvocationRecord,
+): ThreadToolInvocationRecord {
+  const outputChars = clampTokenCount(invocation.outputChars);
+  const estimatedOutputTokens =
+    invocation.estimatedOutputTokens > 0
+      ? clampTokenCount(invocation.estimatedOutputTokens)
+      : Math.ceil(outputChars / 4);
+  return {
+    ...invocation,
+    estimatedOutputTokens,
+    itemId: invocation.itemId.trim() || invocation.invocationId,
+    outputChars,
+    outputLines: clampTokenCount(invocation.outputLines),
+    warningLines: clampTokenCount(invocation.warningLines),
+    errorLines: clampTokenCount(invocation.errorLines),
+    infoLines: clampTokenCount(invocation.infoLines),
+    debugLines: clampTokenCount(invocation.debugLines),
+    toolName: invocation.toolName.trim() || "unknown",
+  };
+}
+
+function mergeThreadToolInvocationForUpsert(
+  incoming: ThreadToolInvocationRecord,
+  existing: ThreadToolInvocationRecord,
+): ThreadToolInvocationRecord {
+  const shouldAccumulateOutput =
+    existing.status === "in_progress" &&
+    incoming.status === "in_progress" &&
+    incoming.outputChars > 0;
+  const outputChars = shouldAccumulateOutput
+    ? existing.outputChars + incoming.outputChars
+    : Math.max(existing.outputChars, incoming.outputChars);
+  return {
+    ...incoming,
+    ...(incoming.completedAt !== undefined
+      ? { completedAt: incoming.completedAt }
+      : existing.completedAt !== undefined
+        ? { completedAt: existing.completedAt }
+        : {}),
+    ...(incoming.exitCode !== undefined
+      ? { exitCode: incoming.exitCode }
+      : existing.exitCode !== undefined
+        ? { exitCode: existing.exitCode }
+        : {}),
+    ...(incoming.normalizedCommand
+      ? { normalizedCommand: incoming.normalizedCommand }
+      : existing.normalizedCommand
+        ? { normalizedCommand: existing.normalizedCommand }
+        : {}),
+    ...(incoming.processId
+      ? { processId: incoming.processId }
+      : existing.processId
+        ? { processId: existing.processId }
+        : {}),
+    ...(incoming.sessionId
+      ? { sessionId: incoming.sessionId }
+      : existing.sessionId
+        ? { sessionId: existing.sessionId }
+        : {}),
+    ...(incoming.startedAt !== undefined || existing.startedAt !== undefined
+      ? {
+          startedAt: Math.min(
+            incoming.startedAt ?? incoming.observedAt,
+            existing.startedAt ?? existing.observedAt,
+          ),
+        }
+      : {}),
+    debugLines: shouldAccumulateOutput
+      ? existing.debugLines + incoming.debugLines
+      : Math.max(existing.debugLines, incoming.debugLines),
+    estimatedOutputTokens: Math.ceil(outputChars / 4),
+    errorLines: shouldAccumulateOutput
+      ? existing.errorLines + incoming.errorLines
+      : Math.max(existing.errorLines, incoming.errorLines),
+    infoLines: shouldAccumulateOutput
+      ? existing.infoLines + incoming.infoLines
+      : Math.max(existing.infoLines, incoming.infoLines),
+    noisy: existing.noisy || incoming.noisy,
+    ...(incoming.noisyReason
+      ? { noisyReason: incoming.noisyReason }
+      : existing.noisyReason
+        ? { noisyReason: existing.noisyReason }
+        : {}),
+    observedAt: Math.max(existing.observedAt, incoming.observedAt),
+    outputChars,
+    outputLines: shouldAccumulateOutput
+      ? existing.outputLines + incoming.outputLines
+      : Math.max(existing.outputLines, incoming.outputLines),
+    outputTruncated: existing.outputTruncated || incoming.outputTruncated,
+    status: terminalToolInvocationStatus(existing.status)
+      ? existing.status
+      : incoming.status,
+    updatedAt: Math.max(existing.updatedAt, incoming.updatedAt),
+    warningLines: shouldAccumulateOutput
+      ? existing.warningLines + incoming.warningLines
+      : Math.max(existing.warningLines, incoming.warningLines),
+  };
+}
+
+function terminalToolInvocationStatus(status: ThreadToolInvocationStatus): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function normalizeThreadToolInvocationAlert(
+  alert: ThreadToolInvocationAlert,
+): ThreadToolInvocationAlert {
+  const totalOutputChars = clampTokenCount(alert.totalOutputChars);
+  return {
+    ...alert,
+    estimatedOutputTokens:
+      alert.estimatedOutputTokens > 0
+        ? clampTokenCount(alert.estimatedOutputTokens)
+        : Math.ceil(totalOutputChars / 4),
+    invocationCount: clampTokenCount(alert.invocationCount),
+    totalOutputChars,
+  };
+}
+
 function normalizeThreadUsageLine(
   line: ThreadUsageLineRecord,
   updatedAt: number,
@@ -2784,6 +3253,64 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
   };
 }
 
+function toThreadToolInvocationRowParams(
+  invocation: ThreadToolInvocationRecord,
+): Record<string, unknown> {
+  return {
+    backend: invocation.backend,
+    category: invocation.category,
+    completedAt: invocation.completedAt ?? null,
+    debugLines: invocation.debugLines,
+    errorLines: invocation.errorLines,
+    estimatedOutputTokens: invocation.estimatedOutputTokens,
+    exitCode: invocation.exitCode ?? null,
+    infoLines: invocation.infoLines,
+    invocationId: invocation.invocationId,
+    itemId: invocation.itemId,
+    noisy: invocation.noisy ? 1 : 0,
+    noisyReason: invocation.noisyReason ?? null,
+    normalizedCommand: invocation.normalizedCommand ?? null,
+    observedAt: invocation.observedAt,
+    outputChars: invocation.outputChars,
+    outputLines: invocation.outputLines,
+    outputTruncated: invocation.outputTruncated ? 1 : 0,
+    processId: invocation.processId ?? null,
+    sessionId: invocation.sessionId ?? null,
+    startedAt: invocation.startedAt ?? null,
+    status: invocation.status,
+    threadId: invocation.threadId,
+    toolName: invocation.toolName,
+    turnId: invocation.turnId ?? null,
+    updatedAt: invocation.updatedAt,
+    warningLines: invocation.warningLines,
+  };
+}
+
+function toThreadToolInvocationAlertRowParams(
+  alert: ThreadToolInvocationAlert,
+): Record<string, unknown> {
+  return {
+    alertId: alert.alertId,
+    averageIntervalMs: alert.averageIntervalMs ?? null,
+    backend: alert.backend,
+    createdAt: alert.createdAt,
+    estimatedOutputTokens: alert.estimatedOutputTokens,
+    firstObservedAt: alert.firstObservedAt,
+    invocationCount: alert.invocationCount,
+    kind: alert.kind,
+    lastObservedAt: alert.lastObservedAt,
+    message: alert.message,
+    processId: alert.processId ?? null,
+    sessionId: alert.sessionId ?? null,
+    severity: alert.severity,
+    suggestedPrompt: alert.suggestedPrompt,
+    threadId: alert.threadId,
+    toolName: alert.toolName,
+    totalOutputChars: alert.totalOutputChars,
+    updatedAt: alert.updatedAt,
+  };
+}
+
 function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord {
   return {
     backend: row.backend,
@@ -2857,6 +3384,85 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
   };
 }
 
+function threadToolInvocationFromRow(
+  row: ThreadToolInvocationRow,
+): ThreadToolInvocationRecord {
+  return {
+    backend: row.backend,
+    category: row.category,
+    ...(row.completed_at !== null ? { completedAt: row.completed_at } : {}),
+    debugLines: row.debug_lines,
+    errorLines: row.error_lines,
+    estimatedOutputTokens: row.estimated_output_tokens,
+    ...(row.exit_code !== null ? { exitCode: row.exit_code } : {}),
+    infoLines: row.info_lines,
+    invocationId: row.invocation_id,
+    itemId: row.item_id,
+    noisy: Boolean(row.noisy),
+    ...(row.noisy_reason ? { noisyReason: row.noisy_reason } : {}),
+    ...(row.normalized_command ? { normalizedCommand: row.normalized_command } : {}),
+    observedAt: row.observed_at,
+    outputChars: row.output_chars,
+    outputLines: row.output_lines,
+    outputTruncated: Boolean(row.output_truncated),
+    ...(row.process_id ? { processId: row.process_id } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
+    status: row.status,
+    threadId: row.thread_id,
+    toolName: row.tool_name,
+    ...(row.turn_id ? { turnId: row.turn_id } : {}),
+    updatedAt: row.updated_at,
+    warningLines: row.warning_lines,
+  };
+}
+
+function threadToolInvocationSummaryFromRow(
+  row: ThreadToolInvocationSummaryRow,
+): ThreadToolInvocationSummary {
+  return {
+    category: row.category,
+    debugLines: row.debug_lines,
+    errorLines: row.error_lines,
+    estimatedOutputTokens: row.estimated_output_tokens,
+    infoLines: row.info_lines,
+    invocationCount: row.invocation_count,
+    lastObservedAt: row.last_observed_at,
+    noisyInvocationCount: row.noisy_invocation_count,
+    outputChars: row.output_chars,
+    outputLines: row.output_lines,
+    toolName: row.tool_name,
+    warningLines: row.warning_lines,
+  };
+}
+
+function threadToolInvocationAlertFromRow(
+  row: ThreadToolInvocationAlertRow,
+): ThreadToolInvocationAlert {
+  return {
+    alertId: row.alert_id,
+    ...(row.average_interval_ms !== null
+      ? { averageIntervalMs: row.average_interval_ms }
+      : {}),
+    backend: row.backend,
+    createdAt: row.created_at,
+    estimatedOutputTokens: row.estimated_output_tokens,
+    firstObservedAt: row.first_observed_at,
+    invocationCount: row.invocation_count,
+    kind: row.kind,
+    lastObservedAt: row.last_observed_at,
+    message: row.message,
+    ...(row.process_id ? { processId: row.process_id } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    severity: row.severity,
+    suggestedPrompt: row.suggested_prompt,
+    threadId: row.thread_id,
+    toolName: row.tool_name,
+    totalOutputChars: row.total_output_chars,
+    updatedAt: row.updated_at,
+  };
+}
+
 function threadPricingSummaryFromRow(row: ThreadPricingSummaryRow): ThreadPricingSummary {
   return {
     backend: row.backend,
@@ -2891,6 +3497,11 @@ export type OverlayStoreLike = Pick<
   | "persistThreadUsageActivity"
   | "upsertThreadUsageLine"
   | "readThreadPricing"
+  | "upsertThreadToolInvocation"
+  | "markThreadToolInvocationNoisy"
+  | "upsertThreadToolInvocationAlert"
+  | "readThreadToolAccounting"
+  | "readRecentThreadToolInvocations"
   | "upsertThreadSubAgent"
   | "setThreadReaction"
   | "setThreadPin"

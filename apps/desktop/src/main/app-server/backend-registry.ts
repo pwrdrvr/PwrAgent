@@ -300,6 +300,11 @@ import {
   createProtocolLogObserverFromEnv,
 } from "./protocol-log-observer";
 import {
+  detectNoisyPolling,
+  toolAccountingLookbackSince,
+  toolInvocationFromNotification,
+} from "./tool-invocation-accounting";
+import {
   ThreadTitleGenerationService,
   GrokThreadTitleGenerator,
   type ThreadTitleGenerator,
@@ -2769,6 +2774,7 @@ function buildTaskMonitorFinalHandoffInput(params: {
       : "",
     "",
     "Process this final monitor result. Do not resume polling unless the result explicitly says monitoring is still required.",
+    "Continue anything that was dependent upon this result that the user was expecting to continue when completed.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -2782,7 +2788,7 @@ function buildTaskMonitorRecoveryPrompt(params: {
   return [
     "PwrAgent monitor recovery instruction:",
     "",
-    `The previous monitor turn ended with status \"${params.terminalStatus}\" before it called pwragent.complete_monitoring.`,
+    `The previous monitor turn ended with status "${params.terminalStatus}" before it called pwragent.complete_monitoring.`,
     "You must now report the final monitor result. Use only the monitor task context you already have.",
     "",
     `Monitor id: ${params.monitorId}`,
@@ -7645,12 +7651,20 @@ export class DesktopBackendRegistry {
             threadId: request.threadId,
           })
         : { lines: [], summaries: [] };
+    const toolAccounting =
+      typeof this.overlayStore.readThreadToolAccounting === "function"
+        ? await this.overlayStore.readThreadToolAccounting({
+            backend,
+            threadId: request.threadId,
+          })
+        : undefined;
 
     return {
       backend,
       fetchedAt: Date.now(),
       threadId: request.threadId,
       pricing,
+      ...(toolAccounting ? { toolAccounting } : {}),
       ...(replayWithImmutableUsage.threadStatus
         ? { threadStatus: replayWithImmutableUsage.threadStatus }
         : {}),
@@ -7689,6 +7703,29 @@ export class DesktopBackendRegistry {
         params: {
           threadId: params.threadId,
           pricing,
+        },
+      },
+    });
+  }
+
+  private async emitThreadToolAccountingUpdated(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    if (typeof this.overlayStore.readThreadToolAccounting !== "function") {
+      return;
+    }
+    const toolAccounting = await this.overlayStore.readThreadToolAccounting({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/toolAccounting/updated",
+        params: {
+          threadId: params.threadId,
+          toolAccounting,
         },
       },
     });
@@ -14245,6 +14282,65 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async recordToolInvocationAccounting(event: AgentEvent): Promise<void> {
+    if (typeof this.overlayStore.upsertThreadToolInvocation !== "function") {
+      return;
+    }
+    const now = Date.now();
+    const invocation = toolInvocationFromNotification({
+      backend: event.backend,
+      notification: event.notification,
+      now,
+    });
+    if (!invocation) {
+      return;
+    }
+
+    const stored = await this.overlayStore.upsertThreadToolInvocation({
+      invocation,
+    });
+    let shouldNotify = event.notification.method === "item/completed";
+    if (
+      typeof this.overlayStore.readRecentThreadToolInvocations === "function" &&
+      typeof this.overlayStore.markThreadToolInvocationNoisy === "function" &&
+      typeof this.overlayStore.upsertThreadToolInvocationAlert === "function"
+    ) {
+      const recent = this.overlayStore.readRecentThreadToolInvocations({
+        backend: stored.backend,
+        limit: 12,
+        processId: stored.processId,
+        sessionId: stored.sessionId,
+        since: toolAccountingLookbackSince(now),
+        threadId: stored.threadId,
+        toolName: stored.toolName,
+      });
+      const detection = detectNoisyPolling({
+        current: stored,
+        now,
+        recent,
+      });
+      if (detection) {
+        for (const invocationId of detection.invocationIds) {
+          await this.overlayStore.markThreadToolInvocationNoisy({
+            invocationId,
+            reason: "repeat-polling-output",
+          });
+        }
+        await this.overlayStore.upsertThreadToolInvocationAlert({
+          alert: detection.alert,
+        });
+        shouldNotify = true;
+      }
+    }
+
+    if (shouldNotify) {
+      await this.emitThreadToolAccountingUpdated({
+        backend: stored.backend,
+        threadId: stored.threadId,
+      });
+    }
+  }
+
   private async describeSingleBackend(
     kind: AppServerBackendKind,
     client: BackendClient
@@ -20266,6 +20362,7 @@ export class DesktopBackendRegistry {
     }
 
     await this.recordLiveThreadUsage(event);
+    await this.recordToolInvocationAccounting(event);
     this.forgetCompletedTurnReplayObservations(event);
     await this.recordCodexNativeSubAgentActivity(event);
     await this.recordCodexNativeSubAgentNotifications(event);

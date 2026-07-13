@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 26;
+export const CURRENT_STATE_DB_USER_VERSION = 27;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -643,6 +643,66 @@ CREATE TABLE IF NOT EXISTS thread_pricing_summaries (
 );
 `;
 
+const THREAD_TOOL_ACCOUNTING_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_tool_invocations (
+  invocation_id             TEXT PRIMARY KEY,
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  turn_id                   TEXT,
+  item_id                   TEXT NOT NULL,
+  tool_name                 TEXT NOT NULL,
+  normalized_command        TEXT,
+  category                  TEXT NOT NULL,
+  status                    TEXT NOT NULL,
+  started_at                INTEGER,
+  completed_at              INTEGER,
+  observed_at               INTEGER NOT NULL,
+  updated_at                INTEGER NOT NULL,
+  session_id                TEXT,
+  process_id                TEXT,
+  exit_code                 INTEGER,
+  output_chars              INTEGER NOT NULL,
+  output_lines              INTEGER NOT NULL,
+  estimated_output_tokens   INTEGER NOT NULL,
+  warning_lines             INTEGER NOT NULL,
+  error_lines               INTEGER NOT NULL,
+  info_lines                INTEGER NOT NULL,
+  debug_lines               INTEGER NOT NULL,
+  output_truncated          INTEGER NOT NULL,
+  noisy                     INTEGER NOT NULL,
+  noisy_reason              TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_thread_tool_invocations_read_thread
+  ON thread_tool_invocations(backend, thread_id, observed_at DESC, invocation_id DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_tool_invocations_polling
+  ON thread_tool_invocations(backend, thread_id, tool_name, session_id, process_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_tool_invocations_turn
+  ON thread_tool_invocations(backend, thread_id, turn_id, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS thread_tool_invocation_alerts (
+  alert_id                  TEXT PRIMARY KEY,
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  kind                      TEXT NOT NULL,
+  severity                  TEXT NOT NULL,
+  tool_name                 TEXT NOT NULL,
+  session_id                TEXT,
+  process_id                TEXT,
+  first_observed_at         INTEGER NOT NULL,
+  last_observed_at          INTEGER NOT NULL,
+  invocation_count          INTEGER NOT NULL,
+  total_output_chars        INTEGER NOT NULL,
+  estimated_output_tokens   INTEGER NOT NULL,
+  average_interval_ms       INTEGER,
+  message                   TEXT NOT NULL,
+  suggested_prompt          TEXT NOT NULL,
+  created_at                INTEGER NOT NULL,
+  updated_at                INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_tool_invocation_alerts_read_thread
+  ON thread_tool_invocation_alerts(backend, thread_id, updated_at DESC, alert_id DESC);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -861,6 +921,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 26) {
       db.transaction(() => {
         ensureThreadUsageAttributedColumn(db);
+        db.pragma("user_version = 26");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 27) {
+      db.transaction(() => {
+        db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1016,6 +1082,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);
     ensureThreadUsagePricingCumulativeColumns(db);
+    db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

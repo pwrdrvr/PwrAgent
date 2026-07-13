@@ -671,7 +671,97 @@ export type AppServerReadThreadResponse = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
+  toolAccounting?: ThreadToolAccounting;
   threadStatus?: AppServerThreadStatus;
+};
+
+export type ThreadToolInvocationCategory =
+  | "build-test"
+  | "file-io"
+  | "git"
+  | "package-manager"
+  | "polling"
+  | "search"
+  | "shell"
+  | "sub-agent"
+  | "unknown";
+
+export type ThreadToolInvocationStatus =
+  | "pending"
+  | "in_progress"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type ThreadToolInvocationRecord = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+  itemId: string;
+  invocationId: string;
+  toolName: string;
+  normalizedCommand?: string;
+  category: ThreadToolInvocationCategory;
+  status: ThreadToolInvocationStatus;
+  startedAt?: number;
+  completedAt?: number;
+  observedAt: number;
+  updatedAt: number;
+  sessionId?: string;
+  processId?: string;
+  exitCode?: number;
+  outputChars: number;
+  outputLines: number;
+  estimatedOutputTokens: number;
+  warningLines: number;
+  errorLines: number;
+  infoLines: number;
+  debugLines: number;
+  outputTruncated: boolean;
+  noisy: boolean;
+  noisyReason?: string;
+};
+
+export type ThreadToolInvocationSummary = {
+  category: ThreadToolInvocationCategory;
+  toolName: string;
+  invocationCount: number;
+  outputChars: number;
+  outputLines: number;
+  estimatedOutputTokens: number;
+  warningLines: number;
+  errorLines: number;
+  infoLines: number;
+  debugLines: number;
+  noisyInvocationCount: number;
+  lastObservedAt: number;
+};
+
+export type ThreadToolInvocationAlert = {
+  alertId: string;
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  kind: "noisy-polling";
+  severity: "warning";
+  toolName: string;
+  sessionId?: string;
+  processId?: string;
+  firstObservedAt: number;
+  lastObservedAt: number;
+  invocationCount: number;
+  totalOutputChars: number;
+  estimatedOutputTokens: number;
+  averageIntervalMs?: number;
+  message: string;
+  suggestedPrompt: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type ThreadToolAccounting = {
+  alerts: ThreadToolInvocationAlert[];
+  invocations: ThreadToolInvocationRecord[];
+  summaries: ThreadToolInvocationSummary[];
 };
 
 export type PersistThreadUsageActivityRequest = {
@@ -958,6 +1048,13 @@ export type AppServerNotification =
           lines: ThreadUsageLineRecord[];
           summaries: ThreadPricingSummary[];
         };
+      };
+    }
+  | {
+      method: "thread/toolAccounting/updated";
+      params: {
+        threadId: string;
+        toolAccounting: ThreadToolAccounting;
       };
     }
   | {

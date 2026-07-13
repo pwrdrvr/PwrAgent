@@ -14,6 +14,7 @@ import type {
   BackendSummary,
   NavigationThreadSummary,
   ThreadPricingSummary,
+  ThreadToolAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
@@ -151,6 +152,7 @@ type PanelOverrides = Partial<
     | "editedFilesDock"
     | "onEditedFilesDockChange"
     | "pricing"
+    | "toolAccounting"
     | "pricingDisplayOptions"
     | "threadPricingSummaryEnabled"
   >
@@ -613,6 +615,88 @@ describe("ThreadContextPanel", () => {
       screen.queryByRole("heading", { level: 3, name: "Pricing" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
+  });
+
+  it("renders tool output accounting and noisy polling alerts in Pricing", () => {
+    const toolAccounting: ThreadToolAccounting = {
+      alerts: [
+        {
+          alertId: "alert-1",
+          averageIntervalMs: 30_000,
+          backend: "codex",
+          createdAt: 1_800_000_060_000,
+          estimatedOutputTokens: 6_000,
+          firstObservedAt: 1_800_000_000_000,
+          invocationCount: 3,
+          kind: "noisy-polling",
+          lastObservedAt: 1_800_000_060_000,
+          message:
+            "Repeated write_stdin polling on session 40500 produced 24,000 chars (~6,000 output tokens) across 3 checks.",
+          sessionId: "40500",
+          severity: "warning",
+          suggestedPrompt: "Use create_monitor_delegation.",
+          threadId: "thread-1",
+          toolName: "write_stdin",
+          totalOutputChars: 24_000,
+          updatedAt: 1_800_000_060_000,
+        },
+      ],
+      invocations: [
+        {
+          backend: "codex",
+          category: "polling",
+          debugLines: 0,
+          errorLines: 1,
+          estimatedOutputTokens: 3_000,
+          infoLines: 120,
+          invocationId: "tool-1",
+          itemId: "tool-1",
+          noisy: true,
+          normalizedCommand: "poll session 40500",
+          observedAt: 1_800_000_060_000,
+          outputChars: 12_000,
+          outputLines: 120,
+          outputTruncated: false,
+          sessionId: "40500",
+          status: "completed",
+          threadId: "thread-1",
+          toolName: "write_stdin",
+          turnId: "turn-1",
+          updatedAt: 1_800_000_060_000,
+          warningLines: 2,
+        },
+      ],
+      summaries: [
+        {
+          category: "polling",
+          debugLines: 0,
+          errorLines: 1,
+          estimatedOutputTokens: 6_000,
+          infoLines: 240,
+          invocationCount: 3,
+          lastObservedAt: 1_800_000_060_000,
+          noisyInvocationCount: 3,
+          outputChars: 24_000,
+          outputLines: 240,
+          toolName: "write_stdin",
+          warningLines: 4,
+        },
+      ],
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      threadPricingSummaryEnabled: true,
+      toolAccounting,
+    });
+
+    expect(screen.getByRole("heading", { level: 4, name: "Tool output" })).toBeInTheDocument();
+    expect(screen.getByText("Noisy polling detected")).toBeInTheDocument();
+    expect(screen.getByText(/Repeated write_stdin polling/)).toBeInTheDocument();
+    expect(screen.getByText("write_stdin · polling")).toBeInTheDocument();
+    expect(screen.getByText("poll session 40500")).toBeInTheDocument();
+    expect(screen.getAllByText(/6,000/).length).toBeGreaterThan(0);
   });
 
   it("renders cached pricing totals and per-turn model settings", () => {

@@ -106,6 +106,7 @@ export type DesktopSettingsConfig = {
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
+    threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     diffCondensation?: {
       enabled?: boolean;
@@ -671,6 +672,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "thread_pricing_display_codex_credits"],
       patch.experimental.threadPricingDisplayCodexCredits,
+    );
+  }
+  if (patch.experimental?.threadToolAccounting !== undefined) {
+    set(
+      ["experimental", "thread_tool_accounting"],
+      patch.experimental.threadToolAccounting,
     );
   }
   if (patch.experimental?.codexDefaultModeRequestUserInput !== undefined) {
@@ -1323,6 +1330,7 @@ function normalizeDesktopConfig(
       threadPricingDisplayCodexCredits: readBoolean(
         experimental?.thread_pricing_display_codex_credits,
       ),
+      threadToolAccounting: readBoolean(experimental?.thread_tool_accounting),
       codexDefaultModeRequestUserInput: readBoolean(
         experimental?.codex_default_mode_request_user_input,
       ),
