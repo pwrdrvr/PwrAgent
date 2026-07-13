@@ -5184,9 +5184,13 @@ export function Composer(props: ComposerProps) {
 
     const before = draft.slice(0, trigger.start);
     const after = draft.slice(Math.max(trigger.end, selectionEnd));
-    const nextAfter = after.length > 0 && !/^\s/.test(after) ? ` ${after}` : after;
+    // Always leave one space after the chip — including at the end of the
+    // draft — and park the caret after it, so typing straight on never
+    // glues onto the chip's serialized form.
+    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
+    const nextSelection = tokenIndex + 1;
     const nextSkillTokens = [
       ...adjustSkillTokenIndexesForTextChange({
         currentDraft: draft,
@@ -5208,7 +5212,10 @@ export function Composer(props: ComposerProps) {
       setDraft(nextDraft);
       setActiveSkillIndex(0);
     });
-    requestAnimationFrame(() => inputRef.current?.focus());
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+    });
   };
 
   const applySlashCommand = (command: SlashCommandSuggestion): void => {
@@ -5312,13 +5319,16 @@ export function Composer(props: ComposerProps) {
 
     // Mint a durable mention token (the `@label` chip) instead of
     // splicing path text — mirrors applySkill. The chip is zero-width in
-    // the plain draft; serializeDraftWithSkillTokens splices the tilde
-    // path back in for the outgoing text and launchpad prompt.
+    // the plain draft; serializeDraftWithSkillTokens splices the markdown
+    // link back in for the outgoing text and launchpad prompt. Like
+    // applySkill, always leave one space after the chip and park the
+    // caret after it.
     const before = draft.slice(0, refTrigger.start);
     const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = after.length > 0 && !/^\s/.test(after) ? ` ${after}` : after;
+    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
+    const nextSelection = tokenIndex + 1;
     const nextSkillTokens = [
       ...adjustSkillTokenIndexesForTextChange({
         currentDraft: draft,
@@ -5345,7 +5355,10 @@ export function Composer(props: ComposerProps) {
       setDraft(nextDraft);
       setActiveDirectoryRefIndex(0);
     });
-    requestAnimationFrame(() => inputRef.current?.focus());
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+    });
   };
 
   const removeImageAttachment = (id: string): void => {

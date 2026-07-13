@@ -9420,13 +9420,21 @@ describe("Composer", () => {
       );
 
       // The commit mints a zero-width chip: the plain draft keeps only
-      // the surrounding text, the editor shows an @label mention chip,
-      // and the serialized draft (asserted on materialize below) carries
-      // the tilde path.
+      // the surrounding text plus the guaranteed post-chip space, the
+      // editor shows an @label mention chip, and the serialized draft
+      // (asserted on materialize below) carries the markdown link.
       await waitFor(() => {
         expect(screen.getByLabelText("New thread")).toHaveValue(
-          "Read SEARCH-4803 in "
+          "Read SEARCH-4803 in  "
         );
+      });
+      // Caret parks after the guaranteed post-chip space (set in a
+      // requestAnimationFrame after the commit).
+      await waitFor(() => {
+        expect(
+          (screen.getByLabelText("New thread") as HTMLInputElement)
+            .selectionStart
+        ).toBe("Read SEARCH-4803 in  ".length);
       });
       const richInput = screen.getByTestId("composer-tiptap-input");
       const chip = within(richInput).getByText("@search-product");
@@ -10058,7 +10066,9 @@ describe("Composer", () => {
     expect(screen.getByRole("listbox", { name: "Skills" })).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(textarea).toHaveValue("Use ");
+    // The commit always leaves one space after the chip (the second
+    // space here; the first is the one typed before the trigger).
+    expect(textarea).toHaveValue("Use  ");
     expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
 
     await clickButton("Send");
@@ -10187,7 +10197,7 @@ describe("Composer", () => {
 
     const richInput = screen.getByTestId("composer-tiptap-input");
     expect(within(richInput).getByText("$ce:plan")).toBeInTheDocument();
-    expect((input as HTMLInputElement).value).toMatch(/Let's use $/);
+    expect((input as HTMLInputElement).value).toMatch(/Let's use {2}$/);
     expect(richInput).toHaveTextContent("Let's use");
     expect(richInput).not.toHaveTextContent("Let's use $ce:plan plan");
 
@@ -10804,7 +10814,7 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan")).toBeInTheDocument();
-    expect(textarea).toHaveValue("Use ");
+    expect(textarea).toHaveValue("Use  ");
 
     await clickButton("Send");
 
@@ -11627,7 +11637,7 @@ describe("Composer", () => {
     fireEvent.keyDown(option, { key: "Enter" });
 
     expect(within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan")).toBeInTheDocument();
-    expect(screen.getByLabelText("Reply")).toHaveValue("");
+    expect(screen.getByLabelText("Reply")).toHaveValue(" ");
     expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
   });
 

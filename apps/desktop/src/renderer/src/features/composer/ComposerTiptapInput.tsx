@@ -1773,7 +1773,10 @@ function applyExternalSkillInsertion(params: {
 
   const before = params.current.value.slice(0, trigger.start);
   const after = params.current.value.slice(trigger.end);
-  const insertedSpace = after.length > 0 && !/^\s/.test(after);
+  // Mirrors the applier rule in Composer: a committed chip always gets
+  // one following space (even at the end of the draft) so the caret can
+  // land after it and typing never runs flush against the chip.
+  const insertedSpace = !/^\s/.test(after);
   const expectedValue = `${before}${insertedSpace ? " " : ""}${after}`;
   if (params.nextValue !== expectedValue) {
     return false;
