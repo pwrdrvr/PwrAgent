@@ -209,6 +209,8 @@ export function buildBindingStatusIntent(params: {
       .filter((line): line is string => Boolean(line))
       .join("\n"),
     actions: buildStatusActions({
+      activeTurn,
+      binding: params.binding,
       capabilityProfile: params.capabilityProfile,
       allowFullAccessEscalation: params.allowFullAccessEscalation,
       fastMode,
@@ -444,7 +446,9 @@ function mentionRequiredLine(
 }
 
 function buildStatusActions(params: {
+  activeTurn?: MessagingResolvedThreadState["activeTurn"];
   allowFullAccessEscalation?: boolean;
+  binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
   fastMode: boolean | undefined;
   handoff?: MessagingWorkspaceHandoffContext;
@@ -578,6 +582,15 @@ function buildStatusActions(params: {
       fallbackText: "stop",
       priority: 1,
       layout: { rowBreakBefore: true },
+      ...(isInterruptibleActiveTurn(params.activeTurn)
+        ? {
+            value: {
+              backend: params.binding.backend,
+              threadId: params.binding.threadId,
+              turnId: params.activeTurn.turnId,
+            },
+          }
+        : {}),
     },
     {
       id: "status:refresh",
@@ -1499,6 +1512,12 @@ function handoffOverviewText(context: MessagingWorkspaceHandoffContext): string 
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isInterruptibleActiveTurn(
+  activeTurn: MessagingResolvedThreadState["activeTurn"],
+): activeTurn is NonNullable<MessagingResolvedThreadState["activeTurn"]> {
+  return activeTurn?.status === "working" || activeTurn?.status === "waiting";
 }
 
 function unavailable(): string {

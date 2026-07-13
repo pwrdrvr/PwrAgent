@@ -14372,6 +14372,48 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not overwrite a terminal turn from a stale status Stop callback", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    const stopAction = findAction(harness.delivered.at(-1), "status:stop");
+    expect(stopAction.value).toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    harness.interruptTurn.mockClear();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:stop",
+        value: stopAction.value,
+      }),
+    );
+
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: completed"),
+    });
+  });
+
   it("starts compaction through the backend bridge", async () => {
     const harness = await createHarness();
     await bindThread(harness);
