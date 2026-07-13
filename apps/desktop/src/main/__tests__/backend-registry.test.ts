@@ -11564,7 +11564,6 @@ command = "pnpm dev"
         helperTurnId: "title-helper-turn",
         model: "gpt-5.4-mini",
         reasoningEffort: "low",
-        serviceTier: "priority",
         tokenUsage: {
           inputTokens: 100,
           cachedInputTokens: 20,
@@ -11640,7 +11639,6 @@ command = "pnpm dev"
         outcome: "success",
         monitorUsage: expect.objectContaining({
           model: "gpt-5.4-mini",
-          serviceTier: "priority",
           tokenUsage: {
             inputTokens: 100,
             cachedInputTokens: 20,
@@ -11662,7 +11660,7 @@ command = "pnpm dev"
         threadId: "title-helper-thread",
         turnId: "title-helper-turn",
         model: "gpt-5.4-mini",
-        serviceTier: "priority",
+        pricingRateId: "openai:2026-06-16:gpt-5.4-mini:standard",
         inputTokens: 100,
         cachedInputTokens: 20,
         uncachedInputTokens: 80,
@@ -11684,7 +11682,6 @@ command = "pnpm dev"
         helperTurnId: "title-helper-turn",
         model: "gpt-5.4-mini",
         reasoningEffort: "low",
-        serviceTier: "priority",
         tokenUsage: {
           inputTokens: 100,
           cachedInputTokens: 20,

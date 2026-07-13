@@ -6144,7 +6144,6 @@ describe("CodexAppServerClient", () => {
       helperTurnId: "turn-title-helper",
       model: "gpt-5.4-mini",
       reasoningEffort: "low",
-      serviceTier: "priority",
       tokenUsage: {
         inputTokens: 100,
         cachedInputTokens: 20,
@@ -6157,6 +6156,13 @@ describe("CodexAppServerClient", () => {
     const requests = transport!.sentMessages.map(
       (message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> }
     );
+    for (const request of requests.filter((request) =>
+      request.method === "thread/start" || request.method === "turn/start"
+    )) {
+      expect(request.params).toEqual(
+        expect.objectContaining({ serviceTier: null })
+      );
+    }
     const titleHelperWorkspace = path.join(os.tmpdir(), "pwragent", "codex-title-helper");
     expect(requests).toContainEqual(
       expect.objectContaining({
@@ -6166,7 +6172,7 @@ describe("CodexAppServerClient", () => {
           runtimeWorkspaceRoots: [titleHelperWorkspace],
           ephemeral: true,
           model: "gpt-5.4-mini",
-          serviceTier: "priority",
+          serviceTier: null,
           config: {
             web_search: "disabled",
             include_permissions_instructions: false,
@@ -6199,7 +6205,7 @@ describe("CodexAppServerClient", () => {
         params: expect.objectContaining({
           threadId: "thread-title-helper",
           model: "gpt-5.4-mini",
-          serviceTier: "priority",
+          serviceTier: null,
           effort: "low",
           outputSchema: expect.objectContaining({
             type: "object",
@@ -6294,7 +6300,6 @@ describe("CodexAppServerClient", () => {
       helperTurnId: "turn-title-helper",
       model: "gpt-5.4-mini",
       reasoningEffort: "low",
-      serviceTier: "priority",
     });
 
     await client.close();
@@ -6360,7 +6365,6 @@ describe("CodexAppServerClient", () => {
       helperTurnId: "turn-title-helper",
       model: "gpt-5.4-mini",
       reasoningEffort: "low",
-      serviceTier: "priority",
     });
 
     await client.close();

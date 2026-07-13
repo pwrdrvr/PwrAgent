@@ -6303,7 +6303,7 @@ export class CodexAppServerClient {
             cwd: helperWorkspaceDir,
             runtimeWorkspaceRoots: [helperWorkspaceDir],
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
-            serviceTier: "priority",
+            serviceTier: null,
             ephemeral: true,
             config: CODEX_THREAD_TITLE_CONFIG,
           }),
@@ -6311,21 +6311,7 @@ export class CodexAppServerClient {
             cwd: helperWorkspaceDir,
             runtimeWorkspaceRoots: [helperWorkspaceDir],
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
-            serviceTier: "priority",
-            ephemeral: true,
-            config: LEGACY_CODEX_THREAD_TITLE_CONFIG,
-          }),
-          buildThreadStartPayload({
-            cwd: helperWorkspaceDir,
-            runtimeWorkspaceRoots: [helperWorkspaceDir],
-            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
-            ephemeral: true,
-            config: CODEX_THREAD_TITLE_CONFIG,
-          }),
-          buildThreadStartPayload({
-            cwd: helperWorkspaceDir,
-            runtimeWorkspaceRoots: [helperWorkspaceDir],
-            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            serviceTier: null,
             ephemeral: true,
             config: LEGACY_CODEX_THREAD_TITLE_CONFIG,
           }),
@@ -6350,14 +6336,7 @@ export class CodexAppServerClient {
             threadId: helperThreadId,
             input: [{ type: "text", text: params.prompt }],
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
-            serviceTier: "priority",
-            reasoningEffort: "low",
-            outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
-          }),
-          buildTurnStartPayload({
-            threadId: helperThreadId,
-            input: [{ type: "text", text: params.prompt }],
-            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            serviceTier: null,
             reasoningEffort: "low",
             outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
           }),
@@ -6375,7 +6354,6 @@ export class CodexAppServerClient {
           ...(immediateTurnId ? { helperTurnId: immediateTurnId } : {}),
           model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
           reasoningEffort: "low",
-          serviceTier: "priority",
           ...(tokenUsage !== undefined ? { tokenUsage } : {}),
         };
       }
@@ -6400,7 +6378,6 @@ export class CodexAppServerClient {
         helperTurnId: turnId,
         model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
         reasoningEffort: "low",
-        serviceTier: "priority",
         ...(helperResult.tokenUsage !== undefined
           ? { tokenUsage: helperResult.tokenUsage }
           : {}),
