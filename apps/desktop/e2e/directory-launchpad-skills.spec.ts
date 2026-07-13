@@ -532,7 +532,9 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
     await app.window.keyboard.press("Delete");
     await app.window.keyboard.type("Before ");
     await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
-    await app.window.keyboard.type(" after");
+    // The commit guarantees one space after the chip with the caret
+    // parked after it, so continue typing without a leading space.
+    await app.window.keyboard.type("after");
 
     await expect(
       tiptapInput.locator(".composer-tiptap-input__mention", { hasText: "$ce:plan" }),
@@ -669,7 +671,8 @@ test("directory launchpad skill autocomplete honors markdown offsets after forma
         hasText: "$ce:brainstorm",
       }),
     ).toBeVisible();
-    await expect(tiptapInput).toHaveAttribute("data-value", "## heading\n\n");
+    // The trailing space is the guaranteed post-chip space.
+    await expect(tiptapInput).toHaveAttribute("data-value", "## heading\n\n ");
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -703,9 +706,12 @@ test("directory launchpad Tiptap composer selects focused skills as undoable inl
       "data-tooltip",
       /\/Users\/huntharo\/\.codex\/skills\/frontend-design\/SKILL\.md$/,
     );
-    await expect(tiptapInput).toHaveAttribute("data-value", "");
+    // The commit leaves one guaranteed space after the chip.
+    await expect(tiptapInput).toHaveAttribute("data-value", " ");
 
     await textbox.focus();
+    // A whitespace-only draft holding a single chip gets the one-shot
+    // Backspace clear (chip + its guaranteed space together, undoable).
     await app.window.keyboard.press("Backspace");
     await expect(chip).toBeHidden();
     await expect(tiptapInput).toHaveAttribute("data-value", "");
@@ -715,7 +721,8 @@ test("directory launchpad Tiptap composer selects focused skills as undoable inl
       process.platform === "darwin" ? "Meta+Z" : "Control+Z",
     );
     await expect(chip).toBeVisible();
-    await expect(tiptapInput).toHaveAttribute("data-value", "");
+    // Undo restores the pre-delete draft, including the guaranteed space.
+    await expect(tiptapInput).toHaveAttribute("data-value", " ");
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -734,9 +741,11 @@ test("directory launchpad Tiptap composer preserves multiple skill chips across 
     const textbox = app.window.getByRole("textbox", { name: "New thread" });
     await textbox.focus();
     await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
-    await app.window.keyboard.type(" i like cats n dogs - ");
+    // Each commit guarantees a post-chip space, so continue typing
+    // without a leading space — the final plain draft is unchanged.
+    await app.window.keyboard.type("i like cats n dogs - ");
     await typeSkillChip(app, "$ce:brainstorm", /\$ce:brainstorm/i);
-    await app.window.keyboard.type(" and more");
+    await app.window.keyboard.type("and more");
 
     const planChip = tiptapInput.locator(".composer-tiptap-input__mention", {
       hasText: "$ce:plan",
@@ -971,9 +980,12 @@ test("directory launchpad types at the clicked text caret between skill chips", 
     const { root: richInput, textbox } = getLaunchpadComposer(app);
     await textbox.focus();
     await typeSkillChip(app, "$ce:brainstorm", /\$ce:brainstorm/i);
-    await app.window.keyboard.type(" Cats like hats. ");
+    // The leading space is the first chip's guaranteed post-chip space;
+    // the trailing double space is the typed trigger separator plus the
+    // second chip's guaranteed space.
+    await app.window.keyboard.type("Cats like hats. ");
     await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
-    await expect(richInput).toHaveAttribute("data-value", " Cats like hats. ");
+    await expect(richInput).toHaveAttribute("data-value", " Cats like hats.  ");
 
     const clickPoint = await richInput.evaluate((element) => {
       const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -1009,7 +1021,7 @@ test("directory launchpad types at the clicked text caret between skill chips", 
 
     await app.window.mouse.click(clickPoint.x, clickPoint.y);
     await app.window.keyboard.type("I");
-    await expect(richInput).toHaveAttribute("data-value", " Cats like Ihats. ");
+    await expect(richInput).toHaveAttribute("data-value", " Cats like Ihats.  ");
   } finally {
     await app.close();
     await fixture.cleanup();
