@@ -6,6 +6,11 @@ import type { DesktopApi } from "../../lib/desktop-api";
 
 const SELECTED_REFRESH_INTERVAL_MS = 60_000;
 
+type PullRequestLookupTarget = {
+  branch: string;
+  directoryPaths: string[];
+};
+
 /**
  * Drives focused-trigger PR refreshes:
  *
@@ -40,17 +45,15 @@ export function usePullRequestRefresh(params: {
       trigger: "scheduled" | "user" = "scheduled",
     ): void => {
       if (!desktopApi?.refreshThreadPullRequests) return;
-      const branch = resolvePullRequestLookupBranch(thread);
-      if (!branch) return;
-      const directoryPaths = resolveFetchableDirectoryPaths(thread.linkedDirectories);
-      if (directoryPaths.length === 0) return;
+      const target = resolvePullRequestLookupTarget(thread);
+      if (!target) return;
       void desktopApi
         .refreshThreadPullRequests({
           backend: thread.source,
           threadId: thread.id,
           trigger,
-          branch,
-          directoryPaths,
+          branch: target.branch,
+          directoryPaths: target.directoryPaths,
         })
         .then((response) => {
           if (prSummariesEqual(thread.prs, response.prs)) {
@@ -127,23 +130,52 @@ export function usePullRequestRefresh(params: {
 }
 
 function buildRefreshRequestKey(thread: NavigationThreadSummary): string | undefined {
-  const branch = resolvePullRequestLookupBranch(thread);
-  if (!branch) return undefined;
-
-  const directoryPaths = resolveFetchableDirectoryPaths(thread.linkedDirectories);
-  if (directoryPaths.length === 0) return undefined;
+  const target = resolvePullRequestLookupTarget(thread);
+  if (!target) return undefined;
 
   return JSON.stringify({
     threadKey: buildThreadIdentityKey(thread.source, thread.id),
-    branch,
-    directoryPaths,
+    target,
   });
 }
 
-function resolvePullRequestLookupBranch(
+function resolvePullRequestLookupTarget(
   thread: NavigationThreadSummary,
-): string | undefined {
-  return thread.observedGitBranch?.trim() || thread.gitBranch?.trim() || undefined;
+): PullRequestLookupTarget | undefined {
+  const threadBranch = thread.observedGitBranch?.trim()
+    || thread.gitBranch?.trim()
+    || undefined;
+  if (threadBranch) {
+    const directoryPaths = resolveFetchableDirectoryPaths(thread.linkedDirectories);
+    return directoryPaths.length > 0
+      ? { branch: threadBranch, directoryPaths }
+      : undefined;
+  }
+
+  const headDirectoryPaths = resolveFetchableDirectoryPaths(
+    thread.linkedDirectories.filter(
+      (directory) => directory.gitBranch?.trim() === "HEAD",
+    ),
+  );
+  if ((thread.prs?.length ?? 0) > 0 && headDirectoryPaths.length > 0) {
+    return { branch: "HEAD", directoryPaths: headDirectoryPaths };
+  }
+
+  for (const directory of thread.linkedDirectories) {
+    const branch = directory.gitBranch?.trim();
+    if (!branch || branch === "HEAD") {
+      continue;
+    }
+    const directoryPaths = resolveFetchableDirectoryPaths(
+      thread.linkedDirectories.filter(
+        (candidate) => candidate.gitBranch?.trim() === branch,
+      ),
+    );
+    if (directoryPaths.length > 0) {
+      return { branch, directoryPaths };
+    }
+  }
+  return undefined;
 }
 
 function prSummariesEqual(

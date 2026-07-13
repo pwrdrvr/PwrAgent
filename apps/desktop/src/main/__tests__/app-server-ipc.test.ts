@@ -4090,6 +4090,125 @@ describe("app server ipc", () => {
     });
   });
 
+  it("routes post-turn retained PR refreshes back to HEAD worktree threads", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const stalePr = githubPr({
+      number: 981,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Restore queued steer",
+      state: "pending",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/981",
+    });
+    const passingPr = githubPr({
+      number: stalePr.number,
+      org: stalePr.org,
+      repo: stalePr.repo,
+      title: stalePr.title,
+      state: "passing",
+      url: stalePr.url,
+    });
+    const requestKey = buildThreadPrRequestKey({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "HEAD",
+      directoryPaths: ["/worktrees/PwrAgnt"],
+    });
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/scratch/project",
+        linkedDirectories: [
+          {
+            id: "/repo/PwrAgnt",
+            label: "PwrAgnt",
+            path: "/repo/PwrAgnt",
+            kind: "worktree",
+            worktreePath: "/worktrees/PwrAgnt",
+            gitBranch: "HEAD",
+          },
+          {
+            id: "/scratch/project",
+            label: "project",
+            path: "/scratch/project",
+            kind: "local",
+          },
+        ],
+        prs: [stalePr],
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [stalePr],
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: requestKey,
+    });
+    fetchPullRequestByUrl.mockResolvedValueOnce(passingPr);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
+    });
+    detectPullRequestsForThread.mockClear();
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "t1",
+          turn: { id: "t1", status: "completed" },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+        fetcher: expect.any(Object),
+        branch: "HEAD",
+        directoryPaths: ["/worktrees/PwrAgnt"],
+      });
+    });
+    await vi.waitFor(() => {
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
+        cwd: "/worktrees/PwrAgnt",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/981",
+      });
+    });
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        prs: [passingPr],
+        fetchedAt: expect.any(Number),
+        refreshKey: requestKey,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(publishLocalEvent).toHaveBeenCalledWith({
+        backend: "codex",
+        notification: {
+          method: "thread/pullRequests/updated",
+          params: {
+            threadId: "thread-1",
+            prs: [passingPr],
+          },
+        },
+      });
+    });
+  });
+
   it("ignores a completed non-git command for working-state refresh", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
