@@ -5599,9 +5599,14 @@ export function Composer(props: ComposerProps) {
   // A pending draft schedule (e.g. after editing a scheduled item) surfaces as
   // a checkable toggle between the caret and Send rather than hijacking the
   // Send label into a countdown. Armed → Send keeps the schedule; unarmed →
-  // Send fires now. The toggle only shows where scheduling applies.
+  // Send fires now. The toggle only shows where scheduling applies — and never
+  // while the review-config panel is open, since that panel owns its own
+  // scheduled-send button and doesn't read `scheduleArmed`; showing the toggle
+  // there would let an operator "uncheck" a schedule the review submit ignores.
   const scheduleToggleVisible =
-    scheduleAffordanceVisible && Boolean(futureScheduledDraftSendAt);
+    scheduleAffordanceVisible
+    && Boolean(futureScheduledDraftSendAt)
+    && !isReviewComposerOpen;
   const effectiveScheduledSendAt = scheduleArmed
     ? futureScheduledDraftSendAt
     : undefined;
@@ -7652,7 +7657,7 @@ export function Composer(props: ComposerProps) {
                   ]
                     .filter(Boolean)
                     .join(" ")}
-                  disabled={props.disabled}
+                  disabled={sendButtonDisabled}
                   role="switch"
                   type="button"
                   onClick={() => {

@@ -1926,6 +1926,48 @@ describe("Composer", () => {
     );
   });
 
+  it("hides the schedule toggle while the review-config panel owns the schedule", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(async (request: StartReviewRequest) => ({
+            backend: request.backend,
+            threadId: request.threadId,
+            reviewThreadId: request.threadId,
+            turnId: "turn-review-1",
+          })),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Scheduled review",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 30m" }));
+
+    // The review panel owns the scheduled-send button; the main-composer
+    // schedule toggle must NOT appear (it doesn't gate the review submit, so
+    // it would be a dead control that pretends to unarm the schedule).
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
   it("shows a 5h context reset schedule option when the backend exposes a reset", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
