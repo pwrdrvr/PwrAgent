@@ -29,6 +29,7 @@ import {
   buildThreadIdentityKey,
   compareThreadsByCreatedAtDesc,
   insertSubthreadIdAfter,
+  isSubthreadLaunchpadKey,
   shortenDerivedThreadTitle,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
@@ -2137,6 +2138,7 @@ export function useThreadNavigation(
   pickingDirectory: boolean;
   clearPickDirectoryError: () => void;
   resetDirectoryLaunchpad: (directoryKey: string) => Promise<void>;
+  removeDirectory: (directoryKey: string) => Promise<void>;
   selectedDirectory?: NavigationDirectorySummary;
   selectedItemKey?: string;
   selectedLaunchpad?: NavigationLaunchpadDraft;
@@ -4449,6 +4451,83 @@ export function useThreadNavigation(
     [desktopApi, directories, optimisticThread, state.response, threads]
   );
 
+  /**
+   * Remove an empty directory (one with no linked threads) from the Directories
+   * list. Such a row is kept alive solely by its registered
+   * `directory_launchpads` overlay row, so deleting that row via
+   * `resetDirectoryLaunchpad` clears `registeredAt` and the directory drops out
+   * of the next snapshot. We optimistically prune the row (and any local
+   * launchpad draft) so the list updates instantly; a directory that still has
+   * threads is left in place, and a failed delete is reconciled by `refresh`.
+   */
+  const removeDirectory = useCallback(
+    async (directoryKey: string): Promise<void> => {
+      if (!desktopApi?.resetDirectoryLaunchpad) {
+        setLaunchpadError("Desktop bridge is missing resetDirectoryLaunchpad().");
+        return;
+      }
+
+      // Only an empty directory may be removed. One that still holds threads
+      // keeps its row from the thread side, so deleting its overlay row would
+      // silently drop its registration and sticky settings while the row stayed
+      // on screen. Sub-thread launchpads are transient composers, not
+      // directories, and must never be torn down through this path.
+      const directory = directories.find(
+        (candidate) => candidate.key === directoryKey,
+      );
+      if (
+        !directory
+        || directory.threadKeys.length > 0
+        || isSubthreadLaunchpadKey(directoryKey)
+      ) {
+        return;
+      }
+
+      setLaunchpadError(undefined);
+      setLocalLaunchpads((current) => {
+        if (!current[directoryKey]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[directoryKey];
+        return next;
+      });
+      setState((current) => {
+        if (!current.response) {
+          return current;
+        }
+        return {
+          ...current,
+          response: {
+            ...current.response,
+            directories: current.response.directories.filter(
+              (directory) =>
+                directory.key !== directoryKey
+                || directory.threadKeys.length > 0,
+            ),
+          },
+        };
+      });
+      setSelectedItemKey((current) =>
+        current === buildLaunchpadSelectionKey(directoryKey) ? undefined : current,
+      );
+
+      try {
+        await desktopApi.resetDirectoryLaunchpad({ directoryKey });
+        // Drop the pin overlay too. It lives in a separate `directory_overlay`
+        // row that resetDirectoryLaunchpad does not touch, and a stale
+        // pinnedRank would silently re-pin the directory if it is ever re-added.
+        if (directory.pinnedRank) {
+          await desktopApi.setDirectoryPin?.({ directoryKey, pinnedRank: null });
+        }
+      } catch (error) {
+        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        await refresh();
+      }
+    },
+    [desktopApi, directories, refresh],
+  );
+
   const materializeDirectoryLaunchpad = useCallback(
     async (
       directoryKey: string,
@@ -4588,11 +4667,23 @@ export function useThreadNavigation(
    * selection to the source card the user invoked it from.
    */
   const discardLaunchpad = useCallback((directoryKey: string): void => {
-    const launchpad = stateRef.current.response?.directories.find(
+    // Read from the merged `directories` memo, not the raw snapshot: the
+    // main-process snapshot deliberately omits sub-thread launchpads, so after
+    // an authoritative refresh they exist only in `localLaunchpads`. Sourcing
+    // from the raw snapshot would lose `sourceThreadId` (which is never
+    // persisted anyway) and drop the user to no selection instead of returning
+    // them to the card they composed from. Mirrors materializeDirectoryLaunchpad.
+    const launchpad = directories.find(
       (candidate) => candidate.key === directoryKey,
     )?.launchpad;
     const sourceThreadId = launchpad?.sourceThreadId;
     const sourceBackend = launchpad?.backend;
+    // An explicitly-registered directory (user added it, or it already holds
+    // threads) must stay in the Directories list — Cancel only discards its
+    // un-submitted message. Everything else (sub-thread launchpads, transient
+    // launchpad-only rows) exists solely because of the draft, so drop the row
+    // entirely instead of leaving it behind as a phantom directory entry.
+    const isRegisteredDirectory = launchpad?.registeredAt !== undefined;
 
     setLocalLaunchpads((current) => {
       if (!current[directoryKey]) {
@@ -4618,7 +4709,28 @@ export function useThreadNavigation(
         ? buildThreadIdentityKey(sourceBackend, sourceThreadId)
         : undefined,
     );
-  }, []);
+
+    // Persist the discard so the overlay row can't rehydrate the cancelled
+    // draft on the next open (or after a refresh / restart / in another window).
+    // The in-memory reset above only affects this render.
+    const handleDiscardError = (error: unknown): void => {
+      setLaunchpadError(error instanceof Error ? error.message : String(error));
+    };
+    if (isRegisteredDirectory) {
+      // Keep the registered directory (and its remembered sticky settings);
+      // clear just the composed message.
+      void desktopApi
+        ?.updateDirectoryLaunchpad?.({
+          directoryKey,
+          patch: { prompt: "", imageAttachments: [], editorDocument: undefined },
+        })
+        .catch(handleDiscardError);
+    } else {
+      void desktopApi
+        ?.resetDirectoryLaunchpad?.({ directoryKey })
+        .catch(handleDiscardError);
+    }
+  }, [desktopApi, directories]);
 
   const archiveThread = useCallback(
     async (
@@ -5468,6 +5580,7 @@ export function useThreadNavigation(
     pickingDirectory,
     clearPickDirectoryError,
     resetDirectoryLaunchpad,
+    removeDirectory,
     selectedDirectory,
     selectedItemKey,
     selectedLaunchpad,

@@ -1,4 +1,5 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
+import { SUBTHREAD_LAUNCHPAD_KEY_PREFIX } from "@pwragent/shared";
 
 export type ThreadWorkspaceMode = "local" | "same-worktree" | "new-worktree";
 
@@ -6,7 +7,7 @@ export function buildSubthreadLaunchpadKey(
   parent: Pick<NavigationThreadSummary, "id" | "source">,
   mode: ThreadWorkspaceMode,
 ): string {
-  return `subthread:${encodeURIComponent(parent.source)}:${encodeURIComponent(parent.id)}:${mode}`;
+  return `${SUBTHREAD_LAUNCHPAD_KEY_PREFIX}${encodeURIComponent(parent.source)}:${encodeURIComponent(parent.id)}:${mode}`;
 }
 
 export function getSubthreadLaunchpadMode(

@@ -2675,7 +2675,7 @@ export function Composer(props: ComposerProps) {
     imageAttachments: [],
     skillTokens: [],
   });
-  const clearSubmittedComposerDraftForStart = (
+  const resetComposerDraftAndState = (
     scopeKey: string,
   ): void => {
     clearComposerDraftSnapshot(scopeKey);
@@ -2760,6 +2760,31 @@ export function Composer(props: ComposerProps) {
       return;
     }
     draftStore.recordHistory?.(scopeKey, state, status);
+  };
+  /**
+   * Discard the draft for `scopeKey` without destroying it: park whatever the
+   * user composed in the recovery journal as "abandoned" (so ArrowUp can bring
+   * it straight back), then reset the store AND the live component state.
+   * Cancelling a launchpad should empty the composer, not lose the message.
+   *
+   * The record check mirrors the abandon path in `saveComposerDraftSnapshot` —
+   * the live snapshot is re-stamped on every render, so it is current at click
+   * time. It reuses the same `resetComposerDraftAndState` the submit path calls,
+   * so a cancelled draft can't linger in local React state and get re-persisted
+   * into the next scope if this Composer instance is ever reused rather than
+   * remounted.
+   */
+  const abandonComposerDraftSnapshot = (scopeKey: string): void => {
+    const latest = latestDraftSnapshotRef.current;
+    if (
+      latest.scopeKey === scopeKey
+      && (latest.snapshot.draft.trim()
+        || latest.snapshot.skillTokens.length > 0
+        || latest.snapshot.imageAttachments.length > 0)
+    ) {
+      recordComposerDraftHistory(scopeKey, latest.snapshot, "abandoned");
+    }
+    resetComposerDraftAndState(scopeKey);
   };
   const getComposerDraftSnapshotSignature = (
     snapshot: ComposerDraftSnapshot,
@@ -4037,7 +4062,7 @@ export function Composer(props: ComposerProps) {
     setActiveOptimisticMessageId(optimisticReviewId);
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
     if (!options?.queued) {
-      clearSubmittedComposerDraftForStart(composerScopeKey);
+      resetComposerDraftAndState(composerScopeKey);
       setReviewConfig(undefined);
     }
     try {
@@ -4388,7 +4413,7 @@ export function Composer(props: ComposerProps) {
     setActiveOptimisticMessageId(optimisticMessageId);
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
     if (!queued) {
-      clearSubmittedComposerDraftForStart(composerScopeKey);
+      resetComposerDraftAndState(composerScopeKey);
       if (collaborationMode) {
         setPlanModeEnabled(false);
       }
@@ -7598,6 +7623,12 @@ export function Composer(props: ComposerProps) {
               disabled={sending}
               type="button"
               onClick={() => {
+                // Cancel empties the launchpad without losing what was typed:
+                // the message is parked in the ArrowUp recovery buffer and the
+                // active draft is cleared. Leaving the draft in place instead
+                // would rehydrate it into the next launchpad opened for this key
+                // and keep the row's orange "has-draft" marker lit.
+                abandonComposerDraftSnapshot(composerScopeKey);
                 props.onCancelLaunchpad?.(props.launchpad!.directoryKey);
               }}
             >

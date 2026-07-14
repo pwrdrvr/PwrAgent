@@ -3111,6 +3111,7 @@ describe("Sidebar directory pinning", () => {
         pinned: boolean,
       ) => Promise<void>;
       onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
+      onRemoveDirectory?: (directory: NavigationDirectorySummary) => void;
     } = {},
   ): void {
     render(
@@ -3131,9 +3132,165 @@ describe("Sidebar directory pinning", () => {
         onSelectThread={() => undefined}
         onSetDirectoryPin={overrides.onSetDirectoryPin}
         onReorderDirectoryPins={overrides.onReorderDirectoryPins}
+        onRemoveDirectory={overrides.onRemoveDirectory}
       />,
     );
   }
+
+  /**
+   * A sub-thread launchpad as the renderer's launchpad merge synthesizes it:
+   * a `kind: "directory"` summary keyed `subthread:...` with no threads. It must
+   * never surface in the Directories lens.
+   */
+  const subthreadLaunchpadDirectory: NavigationDirectorySummary = {
+    key: "subthread:codex:thread-parent:same-worktree",
+    kind: "directory",
+    label: "media-service",
+    path: "/Users/huntharo/pwrdrvr/media-service",
+    threadKeys: [],
+    needsAttentionCount: 0,
+    latestUpdatedAt: 4000,
+  };
+
+  /** Base launchpad draft for the orange "has-draft" marker tests. */
+  const projectBLaunchpad = {
+    directoryKey: projectBDirectory.key,
+    directoryKind: "directory" as const,
+    directoryLabel: "ProjectB",
+    directoryPath: projectBDirectory.path,
+    workMode: "local" as const,
+    backend: "codex" as const,
+    executionMode: "default" as const,
+    prompt: "",
+    createdAt: 1,
+    updatedAt: 2,
+  };
+
+  function getLaunchpadButton(label: string): HTMLElement {
+    return screen.getByRole("button", {
+      name: `Open new thread launchpad for ${label}`,
+    });
+  }
+
+  it("marks a directory as having a draft when a message is composed", () => {
+    renderSidebar(
+      [
+        {
+          ...projectBDirectory,
+          launchpad: { ...projectBLaunchpad, prompt: "Half-written message" },
+        },
+      ],
+      { onSetDirectoryPin: async () => undefined },
+    );
+
+    expect(getLaunchpadButton("ProjectB")).toHaveClass("has-draft");
+  });
+
+  it("does not mark a directory as having a draft when only its settings were touched", () => {
+    renderSidebar(
+      [
+        {
+          ...projectBDirectory,
+          launchpad: {
+            ...projectBLaunchpad,
+            executionMode: "full-access" as const,
+            prompt: "",
+            settingsTouchedAt: 2_000,
+          },
+        },
+      ],
+      { onSetDirectoryPin: async () => undefined },
+    );
+
+    // Picking a model / reasoning level / access mode for a project is a sticky
+    // preference we keep, not an unsent draft. The orange marker means "you
+    // composed something here" — it must stay off.
+    expect(getLaunchpadButton("ProjectB")).not.toHaveClass("has-draft");
+  });
+
+  it("does not render a sub-thread launchpad as a directory row", () => {
+    renderSidebar([projectADirectory, subthreadLaunchpadDirectory], {
+      onSetDirectoryPin: async () => undefined,
+      onRemoveDirectory: () => undefined,
+    });
+
+    expect(getDirectorySummary(/ProjectA/i)).toBeInTheDocument();
+    // The open sub-thread composer's transient row must not appear as a project
+    // directory — it would duplicate its parent's real directory and, having no
+    // threads, would be offered "Remove Directory".
+    expect(
+      screen.queryByRole("button", { name: /media-service/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("falls back to the empty state when only sub-thread launchpads exist", () => {
+    renderSidebar([subthreadLaunchpadDirectory], {
+      onSetDirectoryPin: async () => undefined,
+      onRemoveDirectory: () => undefined,
+    });
+
+    expect(screen.getByText("No directory-linked threads.")).toBeInTheDocument();
+  });
+
+  it("offers Remove Directory on an empty directory row", async () => {
+    const onRemoveDirectory = vi.fn();
+
+    renderSidebar([projectBDirectory], {
+      onSetDirectoryPin: async () => undefined,
+      onRemoveDirectory,
+    });
+
+    fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+
+    const removeItem = await screen.findByRole("menuitem", {
+      name: "Remove Directory",
+    });
+    await clickElement(removeItem);
+
+    expect(onRemoveDirectory).toHaveBeenCalledWith(projectBDirectory);
+    expect(
+      screen.queryByRole("menuitem", { name: "Remove Directory" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not offer Remove Directory on a directory that still has threads", async () => {
+    const populated: NavigationDirectorySummary = {
+      ...projectBDirectory,
+      threadKeys: ["codex:thread-1"],
+    };
+
+    renderSidebar([populated], {
+      onSetDirectoryPin: async () => undefined,
+      onRemoveDirectory: vi.fn(),
+    });
+
+    fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+
+    // The pin item proves the menu opened; Remove must be absent because
+    // removing the row would strand the threads that live in it.
+    expect(
+      await screen.findByRole("menuitem", { name: "Pin Directory" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: "Remove Directory" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not offer Remove Directory on a workspace row", async () => {
+    renderSidebar([workspaceDirectory], {
+      onSetDirectoryPin: async () => undefined,
+      onRemoveDirectory: vi.fn(),
+    });
+
+    fireEvent.contextMenu(getDirectorySummary(/Workspace/i));
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Pin Directory" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: "Remove Directory" }),
+    ).not.toBeInTheDocument();
+  });
 
   it("renders pinned directories above the divider and unpinned below", () => {
     const pinned: NavigationDirectorySummary = {

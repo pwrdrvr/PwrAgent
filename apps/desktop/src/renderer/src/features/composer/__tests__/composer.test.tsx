@@ -382,6 +382,73 @@ describe("Composer", () => {
     });
   });
 
+  it("parks the launchpad's message in the recovery buffer when cancelled", async () => {
+    // Cancel empties the composer without losing the message: it is recorded as
+    // "abandoned" (an ArrowUp-recoverable status) and the active draft is
+    // cleared. Leaving the draft in place would rehydrate it into the next
+    // launchpad opened for this key and keep the row's orange marker lit.
+    const deleteDraft = vi.fn();
+    const recordHistory = vi.fn();
+    const draftStore: ComposerDraftStore = {
+      delete: deleteDraft,
+      recordHistory,
+      get: () => undefined,
+      deletePendingSteer: vi.fn(),
+      deleteQueuedTurn: vi.fn(),
+      getPendingSteer: () => undefined,
+      getQueuedTurn: () => undefined,
+      getQueuedTurns: () => [],
+      getQueuedTurnVersion: () => 0,
+      subscribeQueuedTurns: () => () => undefined,
+      removeQueuedTurnAt: () => undefined,
+      removeQueuedTurnById: () => undefined,
+      shiftQueuedTurn: () => undefined,
+      setPendingSteer: vi.fn(),
+      setQueuedTurn: vi.fn(),
+      setQueuedTurns: vi.fn(),
+      set: vi.fn(),
+    };
+    const onCancelLaunchpad = vi.fn();
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        draftStore={draftStore}
+        launchpad={{
+          directoryKey: "subthread:codex:thread-parent:local",
+          directoryKind: "directory",
+          directoryLabel: "media-service",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Make a PR to swap all the icons",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onCancelLaunchpad={onCancelLaunchpad}
+        skills={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    // Recoverable via ArrowUp ("abandoned" is a recovery status), then cleared.
+    expect(recordHistory).toHaveBeenCalledWith(
+      "launchpad:subthread:codex:thread-parent:local",
+      expect.objectContaining({ draft: "Make a PR to swap all the icons" }),
+      "abandoned",
+    );
+    expect(deleteDraft).toHaveBeenCalledWith(
+      "launchpad:subthread:codex:thread-parent:local",
+    );
+    expect(onCancelLaunchpad).toHaveBeenCalledWith(
+      "subthread:codex:thread-parent:local",
+    );
+  });
+
   it("renders unavailable reason when provided", async () => {
     const unavailableReason = "Codex profile not logged in. Please check your settings.";
     render(
