@@ -58,17 +58,26 @@ export function useIntegratedTerminals(
     [],
   );
   const [localPanes, setLocalPanes] = useState<Record<string, LocalPane>>({});
+  // Read by the hand-off effect so it can compute its IPC calls without doing
+  // work inside a setState updater.
+  const localPanesRef = useRef(localPanes);
+  localPanesRef.current = localPanes;
   const [heightByThread, setHeightByThread] = useState<Record<string, number>>(
     {},
   );
 
   useEffect(() => {
     let cancelled = false;
-    void desktopApi?.listIntegratedTerminals?.().then((next) => {
-      if (!cancelled) setSessions(next);
-    });
+    // Subscribe BEFORE hydrating, and let any broadcast win over the in-flight
+    // list: a create/exit landing while `listIntegratedTerminals()` is in the
+    // air would otherwise be clobbered by the older snapshot when it resolves.
+    let broadcastApplied = false;
     const unsubscribe = desktopApi?.onIntegratedTerminalSessions?.((event) => {
+      broadcastApplied = true;
       setSessions(event.sessions);
+    });
+    void desktopApi?.listIntegratedTerminals?.().then((next) => {
+      if (!cancelled && !broadcastApplied) setSessions(next);
     });
     return () => {
       cancelled = true;
@@ -87,23 +96,36 @@ export function useIntegratedTerminals(
   // Hand a thread off to main as soon as it has a session. If the user
   // collapsed the pane while `create` was still in flight, carry that choice
   // over rather than letting the arriving session pop it back open.
+  //
+  // The IPC happens in the effect body, NOT inside the updater: updaters must
+  // be pure. StrictMode double-invokes them, so a side effect in there fires
+  // the IPC twice.
   useEffect(() => {
-    setLocalPanes((current) => {
-      const settled = Object.values(current).filter((pane) =>
-        sessionByThread.has(pane.threadKey),
-      );
-      if (settled.length === 0) return current;
-      const next = { ...current };
-      for (const pane of settled) {
-        if (pane.hidden && !sessionByThread.get(pane.threadKey)?.panelHidden) {
-          void desktopApi?.setIntegratedTerminalPanelHidden?.({
-            threadKey: pane.threadKey,
-            hidden: true,
-          });
-        }
-        delete next[pane.threadKey];
+    const settled = Object.values(localPanesRef.current).filter((pane) =>
+      sessionByThread.has(pane.threadKey),
+    );
+    if (settled.length === 0) return;
+
+    for (const pane of settled) {
+      if (pane.hidden && !sessionByThread.get(pane.threadKey)?.panelHidden) {
+        void desktopApi?.setIntegratedTerminalPanelHidden?.({
+          threadKey: pane.threadKey,
+          hidden: true,
+        });
       }
-      return next;
+    }
+
+    const settledKeys = new Set(settled.map((pane) => pane.threadKey));
+    setLocalPanes((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const threadKey of settledKeys) {
+        if (threadKey in next) {
+          delete next[threadKey];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
     });
   }, [desktopApi, sessionByThread]);
 
@@ -213,10 +235,17 @@ export function useIntegratedTerminals(
     setHeightByThread((current) => ({ ...current, [threadKey]: height }));
   }, []);
 
-  // The quit dialog's terminal links land here: show me the shell, whatever
-  // the remembered panel state was.
+  // The quit dialog's terminal links land here: show me the shell, whatever the
+  // remembered panel state was. Only ever for a session main still has — main
+  // already refuses to broadcast otherwise, and `openPanel` on an unknown
+  // thread would create a local pane, which spawns a whole new shell.
+  const liveThreadKeysRef = useRef(liveThreadKeys);
+  liveThreadKeysRef.current = liveThreadKeys;
   useEffect(() => {
     const unsubscribe = desktopApi?.onIntegratedTerminalReveal?.((event) => {
+      if (!liveThreadKeysRef.current.has(event.threadKey)) {
+        return;
+      }
       if (!isPanelOpenRef.current(event.threadKey)) {
         openPanel(event.threadKey);
       }

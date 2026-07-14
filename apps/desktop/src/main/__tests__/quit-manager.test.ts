@@ -21,6 +21,13 @@ vi.mock("../ipc/integrated-terminal", () => ({
     sessionIds: [],
     threadKeys: [],
   })),
+  revealIntegratedTerminal: vi.fn(() => false),
+}));
+
+vi.mock("../window-show-thread", () => ({ requestShowThread: vi.fn() }));
+
+vi.mock("../settings/appearance-bootstrap", () => ({
+  readBootstrapAppearance: () => ({ theme: "dark" }),
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
@@ -349,8 +356,33 @@ describe("buildQuitBlockerSnapshot", () => {
         backend: "codex",
         threadId: "thread-action",
         threadKey: "codex:thread-action",
+        // Named up front: an auto-started action can briefly outrun its own
+        // thread's creation, and a row labelled with an empty thread id is
+        // worse than useless.
+        title: "Dev server",
         detail: "pnpm dev · pid 4242",
       },
     ]);
+  });
+});
+
+describe("resolveQuitCountdownSeconds", () => {
+  it("leaves the countdown alone when there is nothing to read", async () => {
+    const { resolveQuitCountdownSeconds } = await import(
+      "../quit-confirmation-dialog"
+    );
+
+    expect(resolveQuitCountdownSeconds(10, 0)).toBe(10);
+  });
+
+  it("buys time to read the list instead of quitting out from under you", async () => {
+    const { resolveQuitCountdownSeconds } = await import(
+      "../quit-confirmation-dialog"
+    );
+
+    // Ten terminals is not a ten-second read.
+    expect(resolveQuitCountdownSeconds(10, 10)).toBe(40);
+    // ...but an unattended machine still finishes shutting down.
+    expect(resolveQuitCountdownSeconds(10, 100)).toBe(60);
   });
 });

@@ -108,6 +108,10 @@ export async function showQuitConfirmationDialog(
   const colorScheme = resolveQuitDialogTheme();
   const palette = QUIT_DIALOG_PALETTES[colorScheme];
   const items = options.items ?? [];
+  const countdownSeconds = resolveQuitCountdownSeconds(
+    options.countdownSeconds,
+    items.length,
+  );
   const window = new BrowserWindow({
     width: 460,
     // The list is scrollable, but a dialog that always reserves room for ten
@@ -155,16 +159,23 @@ export async function showQuitConfirmationDialog(
       resolve(result);
     };
 
+    // This page interpolates model-generated thread titles and user-configured
+    // command strings, so it must not be able to reach the network at all: deny
+    // every navigation that is not our own fake-scheme signal, and deny window
+    // opens outright. Escaping is the first line of defence; this is the second.
+    window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
     window.webContents.on("will-navigate", (event, url) => {
       if (!url.startsWith(navigationPrefix)) {
+        event.preventDefault();
         return;
       }
       event.preventDefault();
       const action = url.slice(navigationPrefix.length);
 
-      // Reading a ten-row list takes longer than the countdown. Any interaction
-      // with the list cancels the auto-quit — including the main-process hard
-      // ceiling, which would otherwise quit out from under the user mid-scroll.
+      // Any interaction with the dialog cancels the auto-quit — including the
+      // main-process hard ceiling, which would otherwise quit out from under a
+      // user who is mid-scroll.
       if (action === "countdown-cancel") {
         if (hardCeiling) {
           clearTimeout(hardCeiling);
@@ -198,13 +209,13 @@ export async function showQuitConfirmationDialog(
     window.once("closed", () => finish("manual-cancel"));
     hardCeiling = setTimeout(
       () => finish("countdown-expired"),
-      options.countdownSeconds * 1000,
+      countdownSeconds * 1000 + HARD_CEILING_GRACE_MS,
     );
 
     void window.loadURL(
       `data:text/html;charset=utf-8,${encodeURIComponent(
         buildQuitConfirmationHtml({
-          countdownSeconds: options.countdownSeconds,
+          countdownSeconds,
           inProgressThreadCount: options.inProgressThreadCount,
           terminalSessionCount: options.terminalSessionCount,
           actionRunCount: options.actionRunCount ?? 0,
@@ -225,6 +236,31 @@ export async function showQuitConfirmationDialog(
 const DIALOG_BASE_HEIGHT = 340;
 const DIALOG_ROW_HEIGHT = 46;
 const DIALOG_MAX_HEIGHT = 620;
+
+/** Per listed item, on top of the base countdown. Ten terminals is not a
+ *  ten-second read. */
+const COUNTDOWN_SECONDS_PER_ITEM = 3;
+const COUNTDOWN_MAX_SECONDS = 60;
+
+/**
+ * The countdown exists so an unattended machine can finish shutting down, not
+ * to rush a human. Scale it with how much there is to read; any interaction
+ * cancels it outright.
+ */
+export function resolveQuitCountdownSeconds(
+  baseSeconds: number,
+  itemCount: number,
+): number {
+  if (itemCount <= 0) return baseSeconds;
+  return Math.min(
+    COUNTDOWN_MAX_SECONDS,
+    baseSeconds + itemCount * COUNTDOWN_SECONDS_PER_ITEM,
+  );
+}
+
+/** The main-process ceiling must never beat the in-dialog cancel to the punch:
+ *  a `countdown-cancel` fired in the final tick has to survive the round trip. */
+const HARD_CEILING_GRACE_MS = 1_500;
 
 function quitDialogHeight(itemCount: number): number {
   if (itemCount === 0) return DIALOG_BASE_HEIGHT;
@@ -333,6 +369,13 @@ export function buildQuitConfirmationHtml(options: {
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <!-- The page carries model-generated thread titles and user command strings.
+         It needs nothing from the network, so forbid the network: no origin can
+         be reached even if an escaping bug ever lets markup through. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'none'; base-uri 'none'"
+    />
     <style>
       :root {
         color-scheme: ${options.colorScheme};
@@ -568,7 +611,6 @@ export function buildQuitConfirmationHtml(options: {
       const navigationPrefix = ${JSON.stringify(options.navigationPrefix)};
       let remaining = ${JSON.stringify(options.countdownSeconds)};
       const countdown = document.getElementById("countdown");
-      const list = document.getElementById("list");
       let timer;
 
       function send(result) {
@@ -577,15 +619,17 @@ export function buildQuitConfirmationHtml(options: {
       function render() {
         countdown.textContent = "Auto-quitting in " + remaining + " second" + (remaining === 1 ? "" : "s") + "...";
       }
-      // Reading the list takes longer than the countdown allows, and quitting
-      // out from under someone who is mid-scroll is the worst possible outcome
-      // here. The first sign of engagement stops the clock for good; the
-      // main-process hard ceiling is cleared too, via "countdown-cancel".
+      // Quitting out from under someone who is reading the list is the worst
+      // possible outcome here, so ANY sign of a human — moving the mouse over
+      // the dialog, scrolling, a keystroke, focusing anything — stops the clock
+      // for good. The main-process hard ceiling is cleared too, via
+      // "countdown-cancel". The countdown still exists so an unattended machine
+      // (OS shutdown, update install) can finish quitting.
       function cancelCountdown() {
         if (!timer) return;
         clearInterval(timer);
         timer = undefined;
-        countdown.textContent = "Auto-quit cancelled. Choose an option above.";
+        countdown.textContent = "Auto-quit cancelled. Choose an option below.";
         send("countdown-cancel");
       }
       render();
@@ -601,10 +645,15 @@ export function buildQuitConfirmationHtml(options: {
         render();
       }, 1000);
 
-      if (list) {
-        list.addEventListener("pointerenter", cancelCountdown);
-        list.addEventListener("wheel", cancelCountdown, { passive: true });
-        list.addEventListener("focusin", cancelCountdown);
+      // Deliberate interaction only. Two things that look like engagement are
+      // not: "focusin" fires immediately because the Quit button is autofocused,
+      // and "pointermove" fires when the window simply appears underneath a
+      // stationary cursor. Either would cancel the countdown before anyone had
+      // read a word, leaving an unattended shutdown (OS restart, update install)
+      // waiting forever for a human who isn't there. A click, a scroll, or a
+      // keystroke is a person; a cursor sitting still is not.
+      for (const eventName of ["pointerdown", "wheel", "keydown"]) {
+        document.addEventListener(eventName, cancelCountdown, { passive: true });
       }
 
       document.getElementById("stay").addEventListener("click", () => send("manual-cancel"));

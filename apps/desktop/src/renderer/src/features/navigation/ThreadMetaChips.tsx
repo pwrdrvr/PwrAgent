@@ -39,6 +39,9 @@ export function ThreadMetaChips({
   // scroll region, matching the copyable branch/path chips.
   const pinTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const gitStateTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // Sidebar rows are a clipped scroll region, so a native `title` gets
+  // edge-clipped — the viewport tooltip is what the neighbouring chips use.
+  const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
@@ -185,10 +188,16 @@ export function ThreadMetaChips({
       {hasIntegratedTerminal ? (
         <span
           aria-label="Integrated terminal running"
+          role="img"
           className="thread-row__chip thread-row__chip--terminal"
-          title="Integrated terminal running"
+          onMouseEnter={(event) =>
+            terminalTooltip.show(event.currentTarget, "Integrated terminal running")
+          }
+          onMouseLeave={terminalTooltip.hide}
         >
-          <TerminalIcon size={12} />
+          <span aria-hidden="true" className="thread-row__chip-icon">
+            <TerminalIcon size={12} />
+          </span>
         </span>
       ) : null}
 

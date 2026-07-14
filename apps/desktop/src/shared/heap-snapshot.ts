@@ -44,14 +44,29 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * The text the result toast copies. Written to be pasted straight into a bug
- * report or an agent session — absolute paths, no "see above".
+ * A heap snapshot is a byte-for-byte dump of everything the process is holding,
+ * and the main process holds decrypted secrets: the xAI API key and every
+ * messaging bot token are live strings there the moment `safeStorage` unseals
+ * them. `strings main.heapsnapshot | grep -i xai` recovers the key.
+ *
+ * That makes a snapshot path something you must never hand to anyone casually —
+ * not a bug report, not an issue, not a coding-agent session. Every surface that
+ * mentions these files says so, because the natural instinct with a diagnostic
+ * artifact is to paste the path at whoever is helping you.
+ */
+export const HEAP_SNAPSHOT_SECRET_WARNING =
+  "Contains decrypted secrets (API keys, bot tokens) held in memory. Do not attach it to a bug report or share it with an agent.";
+
+/**
+ * The text the result toast copies. Deliberately leads with the warning: this
+ * string exists to be pasted somewhere, so the caution has to travel with it.
  */
 export function buildHeapSnapshotHandoffMessage(
   result: CaptureHeapSnapshotResult,
 ): string {
   const lines = [
     "PwrAgent captured a heap snapshot.",
+    `WARNING: ${HEAP_SNAPSHOT_SECRET_WARNING}`,
     `Session basename: ${result.sessionDirectoryName}`,
     `Session directory path: ${result.sessionDirectory}`,
   ];

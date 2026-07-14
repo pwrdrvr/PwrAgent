@@ -266,14 +266,85 @@ describe("resolveTerminalShell", () => {
     expect(service.listSessions()[0]?.panelHidden).toBe(true);
     expect(pty.kill).not.toHaveBeenCalled();
 
-    // Re-attaching is how a detached terminal comes back into view.
+    // Re-attaching must NOT un-hide. The renderer mounts a pane — and so
+    // attaches — for every live session, collapsed ones included, so an attach
+    // is not evidence the user wants to see it. Un-hiding here re-opened every
+    // collapsed terminal on any remount.
     await service.createOrAttach(
       { threadKey: "codex:thread-a", cwd: os.tmpdir(), cols: 80, rows: 24 },
       fakeWebContents(),
     );
 
+    expect(service.listSessions()[0]?.panelHidden).toBe(true);
+    expect(onSessionsChanged).toHaveBeenCalledTimes(2);
+
+    // Showing a panel is an explicit act.
+    expect(service.revealSession("codex:thread-a")).toBe(true);
     expect(service.listSessions()[0]?.panelHidden).toBe(false);
-    expect(onSessionsChanged).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses to reveal a thread with no live session", async () => {
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => fakePty()) as unknown as typeof import("node-pty").spawn,
+      }),
+    });
+
+    // The quit dialog can sit open long after its snapshot was taken, so a
+    // listed shell may already have exited. Revealing anyway made the renderer
+    // open a panel for a session-less thread, which spawned a brand-new shell.
+    expect(service.revealSession("codex:thread-gone")).toBe(false);
+    expect(service.listSessions()).toEqual([]);
+  });
+
+  it("honors a close that arrives while the shell is still spawning", async () => {
+    const pty = fakePty();
+    let releaseSpawn: () => void = () => undefined;
+    const spawnGate = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => {
+        // Stand in for the real cost of spawning: login-shell env capture plus
+        // the native node-pty load. A close landing in this window used to find
+        // nothing to kill and was silently dropped.
+        await spawnGate;
+        return {
+          spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+        };
+      },
+    });
+
+    const creating = service.createOrAttach(
+      { threadKey: "codex:thread-a", cwd: os.tmpdir(), cols: 80, rows: 24 },
+      fakeWebContents(),
+    );
+
+    service.close({ threadKey: "codex:thread-a" });
+    releaseSpawn();
+    await creating;
+
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a dropped close shoot down a later terminal", async () => {
+    const pty = fakePty();
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
+    });
+
+    // Nothing is spawning, so this close has nothing to queue against.
+    service.close({ threadKey: "codex:thread-a" });
+
+    await service.createOrAttach(
+      { threadKey: "codex:thread-a", cwd: os.tmpdir(), cols: 80, rows: 24 },
+      fakeWebContents(),
+    );
+
+    expect(pty.kill).not.toHaveBeenCalled();
+    expect(service.listSessions()).toHaveLength(1);
   });
 
   it("removes pty listeners before killing sessions during shutdown", async () => {

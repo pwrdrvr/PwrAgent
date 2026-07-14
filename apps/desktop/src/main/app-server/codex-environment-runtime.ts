@@ -207,6 +207,25 @@ type DetachedCommandProcess = {
 
 const detachedCommandProcesses = new Map<string, DetachedCommandProcess>();
 
+/**
+ * Late-bind the thread a detached command belongs to.
+ *
+ * The auto-started action for a launchpad spawns BEFORE its thread exists —
+ * `materializeDirectoryLaunchpad` starts the environment action, then creates
+ * the thread — so its descriptor is registered without a thread id and gets one
+ * here. Without this the run would have no owner at all and would drop out of
+ * the quit blockers entirely.
+ */
+export function attachDetachedCommandThreadId(
+  runId: string,
+  threadId: string,
+): void {
+  const entry = detachedCommandProcesses.get(runId);
+  if (entry?.descriptor) {
+    entry.descriptor.threadId = threadId;
+  }
+}
+
 /** Every detached action still running, for the quit blockers. Synchronous by
  *  design — `getQuitBlockers` cannot await. */
 export function listRunningDetachedCommands(): DetachedCommandSummary[] {
@@ -299,6 +318,13 @@ export async function applyLocalCodexEnvironmentSelection(params: {
   onActionDetachedOutput?: (event: CodexEnvironmentDetachedOutput) => void;
   /** Optional caller-generated runId for the auto-action; falls back to a fresh UUID. */
   actionRunId?: string;
+  /**
+   * Thread identity, so the quit dialog can name and link an auto-started
+   * action. `threadId` is optional because the launchpad path spawns the action
+   * before the thread exists — the caller back-fills it with
+   * `attachDetachedCommandThreadId` once the thread id is known.
+   */
+  owner?: { backend: string; threadId?: string };
   hydrationStore?: CodexEnvironmentHydrationStoreLike;
   selection?: CodexEnvironmentSelection;
   setupTimeoutMs?: number;
@@ -466,6 +492,19 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         env: actionEnv,
         mode: "detach",
         detachedTerminationKey: runId,
+        // Auto-started actions are the ones most likely to be a long-running
+        // dev server, so they need an owner just as much as the Run-button
+        // path. Without one they are invisible to the quit blockers and get
+        // hard-killed on quit with no prompt at all.
+        detachedDescriptor: params.owner
+          ? {
+              backend: params.owner.backend,
+              threadId: params.owner.threadId ?? "",
+              actionName: selection.action.name,
+              command: selection.action.command,
+              startedAt,
+            }
+          : undefined,
         onDetachedExit: params.onActionDetachedExit,
         onDetachedOutput: params.onActionDetachedOutput,
       });

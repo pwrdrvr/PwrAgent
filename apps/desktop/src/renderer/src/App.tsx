@@ -71,6 +71,7 @@ import { resolveBackendErrorNotice } from "./features/notifications/backend-erro
 import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
+  HEAP_SNAPSHOT_SECRET_WARNING,
 } from "../../shared/heap-snapshot";
 import {
   buildHotCpuProfileHandoffMessage,
@@ -316,15 +317,29 @@ function DesktopAppShell(props: {
   useEffect(() => {
     return desktopApi?.onHeapSnapshotCaptured?.((result) => {
       const failed = result.artifacts.length === 0;
+      // A capture can half-succeed (main written, renderer window gone). Saying
+      // "captured" and hiding the errors would send someone off to analyze a
+      // snapshot that is missing the half they cared about.
+      const partial = !failed && result.errors.length > 0;
+      const title = failed
+        ? "Heap snapshot failed"
+        : partial
+          ? "Heap snapshot partially captured"
+          : "Heap snapshot captured";
+      const message = failed
+        ? result.errors.join("; ")
+        : [
+            describeHeapSnapshotResult(result),
+            partial ? ` Not captured: ${result.errors.join("; ")}.` : "",
+            ` ${HEAP_SNAPSHOT_SECRET_WARNING}`,
+          ].join("");
       setHeapSnapshotNotice({
         autoDismiss: false,
         copyText: buildHeapSnapshotHandoffMessage(result),
         detail: failed ? undefined : `Session: ${result.sessionDirectoryName}`,
         id: `heap-snapshot:${result.capturedAt}`,
-        title: failed ? "Heap snapshot failed" : "Heap snapshot captured",
-        message: failed
-          ? result.errors.join("; ")
-          : `${describeHeapSnapshotResult(result)} Copy this notice to hand off the snapshot paths.`,
+        title,
+        message,
       });
     });
   }, [desktopApi]);

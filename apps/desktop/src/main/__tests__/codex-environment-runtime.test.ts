@@ -4,8 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyLocalCodexEnvironmentSelection,
+  attachDetachedCommandThreadId,
   buildExitErrorSuffix,
   CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV,
+  listRunningDetachedCommands,
   startLocalCodexEnvironmentAction,
   stopCodexEnvironmentDetachedCommand,
 } from "../app-server/codex-environment-runtime";
@@ -220,6 +222,75 @@ describe("codex environment runtime", () => {
         });
       }
     } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 15_000);
+
+  /**
+   * Regression: only the Run-button path passed an owner, so an action started
+   * automatically when an environment is applied had no descriptor. It was
+   * therefore skipped by `listRunningDetachedCommands` and invisible to the
+   * quit blockers — while `stopAllCodexEnvironmentDetachedCommands` killed it
+   * anyway. If it was the only work running, the quit took the "no active work"
+   * fast path and hard-killed the user's dev server with no prompt at all.
+   */
+  it("counts an auto-started environment action as a quit blocker", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-auto-"));
+    const runId = "test-run-auto";
+    try {
+      await applyLocalCodexEnvironmentSelection({
+        cwd: root,
+        actionRunId: runId,
+        // The launchpad spawns the action before its thread exists, so the
+        // owner arrives without a thread id.
+        owner: { backend: "codex" },
+        env: { ...process.env, SHELL: spawnableShell("/bin/sh") },
+        selection: {
+          executionTarget: "local",
+          runSetup: false,
+          environment: {
+            id: "env",
+            name: "Env",
+            sourcePath: path.join(root, "AGENTS.md"),
+            actions: [
+              {
+                id: "start-dev",
+                name: "Start dev",
+                command: "while true; do sleep 1; done",
+              },
+            ],
+          },
+          action: {
+            id: "start-dev",
+            name: "Start dev",
+            command: "while true; do sleep 1; done",
+          },
+        },
+      });
+
+      const running = await expectEventually(async () => {
+        const commands = listRunningDetachedCommands();
+        if (commands.length === 0) {
+          throw new Error("Detached process is not registered yet");
+        }
+        return commands;
+      });
+
+      expect(running).toEqual([
+        expect.objectContaining({
+          runId,
+          backend: "codex",
+          actionName: "Start dev",
+          command: "while true; do sleep 1; done",
+          threadId: "",
+        }),
+      ]);
+
+      // The thread now exists; the run gets its owner and becomes linkable.
+      attachDetachedCommandThreadId(runId, "thread-1");
+      expect(listRunningDetachedCommands()[0]?.threadId).toBe("thread-1");
+    } finally {
+      stopCodexEnvironmentDetachedCommand(runId, "terminate");
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 15_000);

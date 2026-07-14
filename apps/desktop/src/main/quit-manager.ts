@@ -221,6 +221,10 @@ export function buildQuitBlockerSnapshot(params: {
         run.backend as AppServerBackendKind,
         run.threadId,
       ),
+      // Name the action up front. A thread title (resolved later) is nicer, but
+      // an auto-started action can briefly outrun its own thread's creation, and
+      // a row labelled with an empty thread id is worse than useless.
+      title: run.actionName,
       detail: run.pid ? `${run.command} · pid ${run.pid}` : run.command,
     })),
   ];

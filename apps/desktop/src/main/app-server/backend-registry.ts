@@ -329,6 +329,7 @@ import {
 } from "./codex-environment-config";
 import {
   applyLocalCodexEnvironmentSelection,
+  attachDetachedCommandThreadId,
   CodexEnvironmentStartupError,
   startLocalCodexEnvironmentAction,
   stopCodexEnvironmentDetachedCommand,
@@ -11475,6 +11476,10 @@ export class DesktopBackendRegistry {
         onActionDetachedExit,
         onActionDetachedOutput,
         actionRunId: autoActionRunId,
+        // The thread doesn't exist yet — `attachDetachedCommandThreadId` below
+        // back-fills it once `startThread` returns. Registering the owner now
+        // is what keeps an auto-started dev server visible to the quit dialog.
+        owner: { backend: codexActionBackend },
         hydrationStore: this.codexEnvironmentHydrationStore,
         selection: codexEnvironmentSelection,
       });
@@ -11503,6 +11508,10 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime,
     });
     pendingActionThreadId = startThreadResponse.threadId;
+    // The auto-started environment action spawned before this thread existed;
+    // give its detached-process record an owner now so the quit dialog can name
+    // it and link back here.
+    attachDetachedCommandThreadId(autoActionRunId, startThreadResponse.threadId);
     if (request.parentThreadId?.trim()) {
       await this.overlayStore.setThreadParent?.({
         backend: startThreadResponse.backend,

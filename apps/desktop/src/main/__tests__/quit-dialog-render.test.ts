@@ -73,6 +73,47 @@ describe("quit dialog HTML", () => {
     expect(html).toContain("overflow-y: auto");
   });
 
+  it("escapes the action detail, which carries a user-configured command", () => {
+    const html = buildQuitConfirmationHtml({
+      countdownSeconds: 10,
+      inProgressThreadCount: 0,
+      terminalSessionCount: 0,
+      actionRunCount: 1,
+      items: [
+        {
+          kind: "action",
+          backend: "codex",
+          threadId: "t1",
+          threadKey: "codex:t1",
+          title: "Dev server",
+          detail: '</span><script>alert(1)</script> · pid 1',
+        },
+      ],
+      navigationPrefix: "pwragent-quit-confirmation://tok/",
+      colorScheme: "dark",
+      palette: QUIT_DIALOG_PALETTES.dark,
+    });
+
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;/span&gt;&lt;script&gt;alert(1)&lt;/script&gt;");
+  });
+
+  it("forbids the network so an escaping slip cannot exfiltrate", () => {
+    const html = buildQuitConfirmationHtml({
+      countdownSeconds: 10,
+      inProgressThreadCount: 0,
+      terminalSessionCount: 1,
+      actionRunCount: 0,
+      items,
+      navigationPrefix: "pwragent-quit-confirmation://tok/",
+      colorScheme: "dark",
+      palette: QUIT_DIALOG_PALETTES.dark,
+    });
+
+    expect(html).toContain("Content-Security-Policy");
+    expect(html).toContain("default-src 'none'");
+  });
+
   it("escapes thread titles rather than injecting them as markup", () => {
     const html = buildQuitConfirmationHtml({
       countdownSeconds: 10,

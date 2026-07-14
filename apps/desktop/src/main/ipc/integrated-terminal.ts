@@ -114,12 +114,23 @@ export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnaps
  * quit dialog's "running work" links: clicking a terminal row should land you
  * on the thread with the shell already on screen, whatever the panel's
  * remembered hidden state was.
+ *
+ * No session, no reveal. The quit dialog renders a snapshot taken when the
+ * prompt opened and can sit there indefinitely once the countdown is cancelled,
+ * so a listed shell may well have exited by the time the row is clicked.
+ * Broadcasting anyway made the renderer open a panel for a thread with no
+ * session, which spawned a brand-new login shell in the home directory — a
+ * fresh quit blocker, conjured by trying to look at one.
  */
-export function revealIntegratedTerminal(threadKey: string): void {
-  service?.setPanelHidden({ threadKey, hidden: false });
+export function revealIntegratedTerminal(threadKey: string): boolean {
+  const revealed = service?.revealSession(threadKey) ?? false;
+  if (!revealed) {
+    return false;
+  }
   for (const webContents of subscribersForChannel(
     INTEGRATED_TERMINAL_REVEAL_CHANNEL,
   )) {
     webContents.send(INTEGRATED_TERMINAL_REVEAL_CHANNEL, { threadKey });
   }
+  return true;
 }

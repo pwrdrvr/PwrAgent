@@ -87,10 +87,19 @@ export function registerDiagnosticsIpcHandlers(): void {
         void runCapture(request, sender);
         return { delayMs: 0 };
       }
-      pendingCapture = setTimeout(() => {
+      const timer = setTimeout(() => {
         pendingCapture = undefined;
         void runCapture(request, sender);
       }, delayMs);
+      pendingCapture = timer;
+      // Don't hold a destroyed WebContents (and a doomed capture) for the whole
+      // delay if the window that asked goes away first.
+      sender.once("destroyed", () => {
+        if (pendingCapture === timer) {
+          clearTimeout(timer);
+          pendingCapture = undefined;
+        }
+      });
       return { delayMs };
     },
   );

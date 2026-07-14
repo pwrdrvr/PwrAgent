@@ -66,6 +66,14 @@ export class IntegratedTerminalService {
   private readonly onSessionsChanged?: (
     sessions: IntegratedTerminalSessionSummary[],
   ) => void;
+  /** Threads whose PTY is mid-spawn — the window in which a close has nothing
+   *  to act on yet. */
+  private readonly spawningThreadKeys = new Set<string>();
+  /** Closes that arrived during that window, to be honored on spawn. */
+  private readonly pendingCloseThreadKeys = new Set<string>();
+  /** One `destroyed` listener per WebContents, not per session — 10 terminals
+   *  in one window used to install 10 and trip Node's max-listeners warning. */
+  private readonly subscribedWebContents = new Set<WebContents>();
   private disposing = false;
 
   constructor(options: IntegratedTerminalServiceOptions = {}) {
@@ -85,27 +93,28 @@ export class IntegratedTerminalService {
 
     const existing = this.sessionsByThread.get(threadKey);
     if (existing) {
+      // Deliberately does NOT touch `panelHidden`. The renderer mounts a pane
+      // — and therefore attaches — for every live session, including collapsed
+      // ones, so an attach is not evidence that the user wants to see it.
+      // Un-hiding here made a collapsed terminal pop back open on every
+      // remount. Showing a panel is an explicit act: `setPanelHidden(false)`.
       this.subscribe(existing, webContents);
-      // Re-attaching is how a detached terminal comes back into view, so it
-      // also un-hides the panel — the renderer only calls this when it is
-      // actually mounting the pane.
-      if (existing.panelHidden) {
-        existing.panelHidden = false;
-        this.emitSessionsChanged();
-      }
       return this.toCreateResponse(existing);
     }
 
-    const settings = getDesktopSettingsService();
-    const env = await settings.resolveTerminalSpawnEnvAsync();
-    const cwd = resolveTerminalCwd(request.cwd);
-    const shell = resolveTerminalShell({
-      env,
-      platform: process.platform,
-      windowsShell: settings.resolveIntegratedTerminalWindowsShell(),
-    });
+    this.spawningThreadKeys.add(threadKey);
     let ptyProcess: IPty;
+    let cwd: string;
+    let shell: { file: string; args: string[] };
     try {
+      const settings = getDesktopSettingsService();
+      const env = await settings.resolveTerminalSpawnEnvAsync();
+      cwd = resolveTerminalCwd(request.cwd);
+      shell = resolveTerminalShell({
+        env,
+        platform: process.platform,
+        windowsShell: settings.resolveIntegratedTerminalWindowsShell(),
+      });
       const nodePty = await this.loadNodePty();
       ptyProcess = nodePty.spawn(shell.file, shell.args, {
         name: "xterm-256color",
@@ -121,12 +130,16 @@ export class IntegratedTerminalService {
     } catch (error) {
       const message = terminalStartErrorMessage(error);
       this.logger.warn("start-failed", {
-        cwd,
         error: error instanceof Error ? error.message : String(error),
-        shell: shell.file,
         threadKey,
       });
+      // The spawn died, so there is nothing left for a queued close to kill.
+      // Leaving the key behind would shoot down the next terminal on this
+      // thread.
+      this.pendingCloseThreadKeys.delete(threadKey);
       throw new Error(message, { cause: error });
+    } finally {
+      this.spawningThreadKeys.delete(threadKey);
     }
     const session: TerminalSession = {
       sessionId: randomUUID(),
@@ -153,6 +166,18 @@ export class IntegratedTerminalService {
       shell: shell.file,
       threadKey,
     });
+
+    // Spawning is slow (login-shell env capture, then the node-pty load), and a
+    // close issued in that window used to find nothing in `sessionsByThread`
+    // and silently no-op — leaving a live shell the user had already dismissed,
+    // which the renderer then re-adopted from the sessions broadcast. Honor the
+    // close now that we finally have something to kill.
+    if (this.pendingCloseThreadKeys.delete(threadKey)) {
+      this.logger.info("closing-on-spawn", { threadKey });
+      this.killSession(session);
+      return this.toCreateResponse(session);
+    }
+
     this.emitSessionsChanged();
     return this.toCreateResponse(session);
   }
@@ -173,6 +198,16 @@ export class IntegratedTerminalService {
     this.emitSessionsChanged();
   }
 
+  /** Un-hide a live session's panel. Returns false when there is no session to
+   *  reveal, so callers don't ask the renderer to show a shell that has exited. */
+  revealSession(threadKey: string): boolean {
+    if (!this.sessionsByThread.has(threadKey)) {
+      return false;
+    }
+    this.setPanelHidden({ threadKey, hidden: false });
+    return true;
+  }
+
   write(request: IntegratedTerminalWriteRequest): void {
     this.sessionsById.get(request.sessionId)?.pty.write(request.data);
   }
@@ -190,8 +225,19 @@ export class IntegratedTerminalService {
     const session =
       (request.sessionId ? this.sessionsById.get(request.sessionId) : undefined) ??
       (request.threadKey ? this.sessionsByThread.get(request.threadKey) : undefined);
-    if (!session) return;
-    this.killSession(session);
+    if (session) {
+      this.pendingCloseThreadKeys.delete(session.threadKey);
+      this.killSession(session);
+      return;
+    }
+    // Nothing to kill yet. If a spawn for this thread is still in flight, mark
+    // it so `createOrAttach` kills the session the moment it exists — otherwise
+    // the close is lost and the shell survives the user dismissing it. Gated on
+    // an in-flight spawn so a close for an idle thread can't linger and shoot
+    // down some unrelated terminal the user opens later.
+    if (request.threadKey && this.spawningThreadKeys.has(request.threadKey)) {
+      this.pendingCloseThreadKeys.add(request.threadKey);
+    }
   }
 
   dispose(): void {
@@ -248,9 +294,20 @@ export class IntegratedTerminalService {
       return;
     }
     session.subscribers.add(webContents);
-    webContents.once("destroyed", () => {
-      session.subscribers.delete(webContents);
-    });
+
+    // One listener per WebContents, cleaning up across ALL sessions. Attaching
+    // one per session put 10+ `destroyed` listeners on a single window (that is
+    // exactly the load this feature is built for) and tripped Node's
+    // max-listeners warning.
+    if (!this.subscribedWebContents.has(webContents)) {
+      this.subscribedWebContents.add(webContents);
+      webContents.once("destroyed", () => {
+        this.subscribedWebContents.delete(webContents);
+        for (const candidate of this.sessionsById.values()) {
+          candidate.subscribers.delete(webContents);
+        }
+      });
+    }
   }
 
   private handleOutput(session: TerminalSession, data: string): void {

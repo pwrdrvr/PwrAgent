@@ -12,6 +12,7 @@ import type {
   AppUpdateReleaseVersions,
   AppUpdateStatus,
 } from "../../../../shared/app-metadata";
+import { HEAP_SNAPSHOT_SECRET_WARNING } from "../../../../shared/heap-snapshot";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type {
   AppearanceController,
@@ -951,7 +952,7 @@ export function GeneralSettings(props: {
                 <button
                   type="button"
                   className="button button--primary"
-                  disabled={heapSnapshotCountdownActive}
+                  disabled={!developerMode.value || heapSnapshotCountdownActive}
                   onClick={() => {
                     void startHeapSnapshotCapture();
                   }}
@@ -962,13 +963,15 @@ export function GeneralSettings(props: {
                   className="settings-hot-cpu-capture__status"
                   aria-live="polite"
                 >
-                  {heapSnapshotCountdownActive
-                    ? `Capturing in ${heapSnapshotCountdownSeconds}s`
-                    : "Idle"}
+                  {!developerMode.value
+                    ? "Requires Developer Mode"
+                    : heapSnapshotCountdownActive
+                      ? `Capturing in ${heapSnapshotCountdownSeconds}s`
+                      : "Idle"}
                 </span>
               </div>
             }
-            help="Capture runs in the main process, so you can close Settings while the countdown finishes. The result arrives as a copyable notice."
+            help={`Capture runs in the main process, so you can close Settings while the countdown finishes. ${HEAP_SNAPSHOT_SECRET_WARNING}`}
           />
           <SettingsField
             label="Heap snapshot delay"
@@ -986,7 +989,9 @@ export function GeneralSettings(props: {
                     className={`settings-segmented__button settings-segmented__button--stacked${
                       heapSnapshotDelayMs === option.value ? " is-active" : ""
                     }`}
-                    disabled={heapSnapshotCountdownActive}
+                    disabled={
+                      !developerMode.value || heapSnapshotCountdownActive
+                    }
                     role="radio"
                     type="button"
                     onClick={() => {
