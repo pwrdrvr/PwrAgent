@@ -6,6 +6,7 @@ import type {
   ComposerDraftLifecycle,
   ComposerDraftRecoveryCandidate,
   ListComposerDraftRecoveryCandidatesRequest,
+  NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
 } from "@pwragent/shared";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
@@ -14,6 +15,8 @@ export type ComposerDraftSnapshot = {
   draft: string;
   editorDocument?: JSONContent;
   imageAttachments: NavigationLaunchpadImageAttachment[];
+  /** Path-only file references from drag-and-drop / the file picker. */
+  fileAttachments?: NavigationLaunchpadFileAttachment[];
   skillTokens: ComposerSkillToken[];
 };
 
@@ -22,6 +25,7 @@ export type ComposerQueuedTurnSnapshot = {
   input?: AppServerTurnInputItem[];
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
+  fileAttachments: NavigationLaunchpadFileAttachment[];
   scheduledSendAt?: number;
   reviewCommand?: {
     cwd?: string;
@@ -34,6 +38,7 @@ export type ComposerPendingSteerSnapshot = {
   id: string;
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
+  fileAttachments: NavigationLaunchpadFileAttachment[];
 };
 
 export type ComposerDraftStore = {

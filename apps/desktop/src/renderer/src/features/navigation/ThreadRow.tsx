@@ -33,6 +33,8 @@ const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
 
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
+  /** Thread keys with a live integrated terminal in the main process. */
+  terminalThreadKeys?: Record<string, boolean>;
   inputRequestThreadKeys?: Record<string, boolean>;
   /**
    * Identity key → pending outbound-message state, surfaced as the
@@ -267,6 +269,7 @@ export function ThreadRow(props: ThreadRowProps) {
         >
           <ThreadMetaChips
             hasApprovalRequest={props.approvalRequestThreadKeys?.[threadKey] === true}
+            hasIntegratedTerminal={props.terminalThreadKeys?.[threadKey] === true}
             hasInputRequest={props.inputRequestThreadKeys?.[threadKey] === true}
             queuedMessageState={props.queuedMessageThreadKeys?.[threadKey]}
             includeLinkedDirectories={props.includeLinkedDirectories}

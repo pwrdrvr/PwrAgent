@@ -1,4 +1,4 @@
-import { clipboard, contextBridge, ipcRenderer } from "electron";
+import { clipboard, contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   AgentEvent,
   AutomationIdRequest,
@@ -121,7 +121,11 @@ import type {
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
   PickDirectoryFromDiskResponse,
+  PickFileFromDiskResponse,
   PickGhCommandResponse,
+  PickReferenceFromDiskResponse,
+  ListRecentFileReferencesResponse,
+  RecordRecentFileReferencesRequest,
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
   RegisterDirectoryFromDiskRequest,
@@ -243,6 +247,10 @@ import type {
 } from "../shared/image-normalization";
 import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
 import type {
+  CaptureHeapSnapshotRequest,
+  CaptureHeapSnapshotResult,
+} from "../shared/heap-snapshot";
+import type {
   IntegratedTerminalCloseRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
@@ -250,6 +258,10 @@ import type {
   IntegratedTerminalExitEvent,
   IntegratedTerminalOutputEvent,
   IntegratedTerminalResizeRequest,
+  IntegratedTerminalRevealEvent,
+  IntegratedTerminalSessionSummary,
+  IntegratedTerminalSessionsEvent,
+  IntegratedTerminalSetPanelHiddenRequest,
   IntegratedTerminalWriteRequest,
 } from "../shared/integrated-terminal";
 import {
@@ -321,12 +333,18 @@ import {
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
+  DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
+  DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
   INTEGRATED_TERMINAL_EXIT_CHANNEL,
+  INTEGRATED_TERMINAL_LIST_CHANNEL,
   INTEGRATED_TERMINAL_OUTPUT_CHANNEL,
   INTEGRATED_TERMINAL_RESIZE_CHANNEL,
+  INTEGRATED_TERMINAL_REVEAL_CHANNEL,
+  INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
+  INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL,
   INTEGRATED_TERMINAL_WRITE_CHANNEL,
   PATH_OPEN_CHANNEL,
   PATH_REVEAL_CHANNEL,
@@ -364,7 +382,11 @@ import {
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
+  NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
+  NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
+  NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
+  NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
@@ -872,6 +894,63 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(INTEGRATED_TERMINAL_ERROR_CHANNEL, listener);
     };
   },
+  captureHeapSnapshot: async (
+    request: CaptureHeapSnapshotRequest,
+  ): Promise<{ delayMs: number }> =>
+    await ipcRenderer.invoke(
+      DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
+      request,
+    ),
+  onHeapSnapshotCaptured: (
+    callback: (result: CaptureHeapSnapshotResult) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: CaptureHeapSnapshotResult,
+    ) => callback(payload);
+    ipcRenderer.on(DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(
+        DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
+        listener,
+      );
+    };
+  },
+  listIntegratedTerminals: async (): Promise<
+    IntegratedTerminalSessionSummary[]
+  > => await ipcRenderer.invoke(INTEGRATED_TERMINAL_LIST_CHANNEL),
+  setIntegratedTerminalPanelHidden: async (
+    request: IntegratedTerminalSetPanelHiddenRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(
+      INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL,
+      request,
+    );
+  },
+  onIntegratedTerminalSessions: (
+    callback: (event: IntegratedTerminalSessionsEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: IntegratedTerminalSessionsEvent,
+    ) => callback(payload);
+    ipcRenderer.on(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, listener);
+    };
+  },
+  onIntegratedTerminalReveal: (
+    callback: (event: IntegratedTerminalRevealEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: IntegratedTerminalRevealEvent,
+    ) => callback(payload);
+    ipcRenderer.on(INTEGRATED_TERMINAL_REVEAL_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(INTEGRATED_TERMINAL_REVEAL_CHANNEL, listener);
+    };
+  },
   readThread: async (
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> =>
@@ -1171,6 +1250,32 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(COMPOSER_DRAFT_LIST_LATEST_CHANNEL),
   pickDirectoryFromDisk: async (): Promise<PickDirectoryFromDiskResponse> =>
     await ipcRenderer.invoke(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL),
+  pickFileFromDisk: async (): Promise<PickFileFromDiskResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL),
+  pickReferenceFromDisk: async (): Promise<PickReferenceFromDiskResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL),
+  listRecentFileReferences: async (): Promise<ListRecentFileReferencesResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL),
+  recordRecentFileReferences: async (
+    request: RecordRecentFileReferencesRequest,
+  ): Promise<void> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
+      request,
+    ),
+  /**
+   * Resolve the on-disk path of a dropped/pasted File object. Electron
+   * removed the legacy `File.path` augmentation; `webUtils.getPathForFile`
+   * is its sandbox-safe replacement. Returns "" for synthetic Files that
+   * have no backing path.
+   */
+  getPathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return "";
+    }
+  },
   registerDirectoryFromDisk: async (
     request: RegisterDirectoryFromDiskRequest,
   ): Promise<RegisterDirectoryFromDiskResponse> =>

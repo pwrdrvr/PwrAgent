@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { getHomeDir, tildifyPath } from "../tildify-path";
+import { expandTildePath, getHomeDir, tildifyPath } from "../tildify-path";
 
 describe("tildifyPath", () => {
   it("collapses a home-prefixed path to ~", () => {
@@ -33,6 +33,38 @@ describe("tildifyPath", () => {
   it("returns the path unchanged when the home directory is unknown", () => {
     expect(tildifyPath("/Users/huntharo/app", undefined)).toBe("/Users/huntharo/app");
     expect(tildifyPath("/Users/huntharo/app", "")).toBe("/Users/huntharo/app");
+  });
+});
+
+describe("expandTildePath", () => {
+  it("expands a leading ~/ to the home directory", () => {
+    expect(expandTildePath("~/pwrdrvr/PwrAgnt", "/Users/huntharo")).toBe(
+      "/Users/huntharo/pwrdrvr/PwrAgnt",
+    );
+  });
+
+  it("expands a bare ~ to the home directory", () => {
+    expect(expandTildePath("~", "/Users/huntharo")).toBe("/Users/huntharo");
+  });
+
+  it("leaves non-tilde paths unchanged", () => {
+    expect(expandTildePath("/opt/work/app", "/Users/huntharo")).toBe(
+      "/opt/work/app",
+    );
+  });
+
+  it("leaves a tilde-user path (~foo) unchanged", () => {
+    expect(expandTildePath("~foo/app", "/Users/huntharo")).toBe("~foo/app");
+  });
+
+  it("returns the path unchanged when home is unknown", () => {
+    expect(expandTildePath("~/app", undefined)).toBe("~/app");
+  });
+
+  it("round-trips with tildifyPath", () => {
+    const home = "/Users/huntharo";
+    const absolute = "/Users/huntharo/GIPHY/search-product";
+    expect(expandTildePath(tildifyPath(absolute, home), home)).toBe(absolute);
   });
 });
 

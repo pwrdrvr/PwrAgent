@@ -21,6 +21,8 @@ type ThreadHeaderLayoutControls = {
   sidebarOpen: boolean;
   railOpen: boolean;
   terminalOpen: boolean;
+  /** A PTY is alive for this thread even if the panel is collapsed. */
+  terminalRunning?: boolean;
   onToggleSidebar: () => void;
   onToggleRail: () => void;
   onToggleTerminal: () => void;
@@ -83,9 +85,15 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // sidebar/rail toggles sitting right beside it instead of falling back to the
   // slow, edge-clipping native `title`.
   const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // A collapsed-but-running terminal gets its own affordance: the toggle wears
+  // a live dot and says so, otherwise the shell is invisible from here.
+  const terminalCollapsedRunning =
+    Boolean(props.layout?.terminalRunning) && !props.layout?.terminalOpen;
   const terminalLabel = props.layout?.terminalOpen
     ? "Hide integrated terminal"
-    : "Open integrated terminal";
+    : terminalCollapsedRunning
+      ? "Show running integrated terminal"
+      : "Open integrated terminal";
 
   return (
     <header className="thread-header">
@@ -164,7 +172,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               type="button"
               className={`thread-header__terminal-toggle${
                 props.layout.terminalOpen ? " is-open" : ""
-              }`}
+              }${terminalCollapsedRunning ? " is-running" : ""}`}
               aria-label={terminalLabel}
               aria-pressed={props.layout.terminalOpen}
               onClick={() => {

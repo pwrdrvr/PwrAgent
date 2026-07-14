@@ -83,6 +83,8 @@ type SidebarProps = {
   threadSearchActive?: boolean;
   settingsActive?: boolean;
   approvalRequestThreadKeys?: Record<string, boolean>;
+  /** Thread keys with a live integrated terminal in the main process. */
+  terminalThreadKeys?: Record<string, boolean>;
   inputRequestThreadKeys?: Record<string, boolean>;
   /**
    * Identity key → pending outbound-message state, for the
@@ -921,6 +923,7 @@ export function Sidebar(props: SidebarProps) {
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              terminalThreadKeys={props.terminalThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
@@ -951,6 +954,7 @@ export function Sidebar(props: SidebarProps) {
             ) : (
               <RecentsList
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                terminalThreadKeys={props.terminalThreadKeys}
                 inputRequestThreadKeys={props.inputRequestThreadKeys}
                 queuedMessageThreadKeys={props.queuedMessageThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}

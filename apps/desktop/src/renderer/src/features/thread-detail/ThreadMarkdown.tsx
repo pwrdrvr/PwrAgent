@@ -22,7 +22,7 @@ import ReactMarkdown, { type Components, type UrlTransform } from "react-markdow
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AppIcon } from "../../components/AppIcon";
-import { CloseIcon, PopoutIcon } from "../../icons";
+import { CloseIcon, FolderIcon, PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { repairNestedLanguageFences } from "../../lib/markdown-fences";
 import {
@@ -31,6 +31,7 @@ import {
   useThreadLinks,
   type ThreadLinkContextValue,
 } from "../../lib/thread-links";
+import { expandTildePath, tildifyPath } from "../../lib/tildify-path";
 import { SkillChip } from "../composer/SkillChip";
 import { ThreadChip } from "./ThreadChip";
 import { remarkTableProfile } from "./remark-table-profile";
@@ -206,6 +207,22 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           // the author's text rather than an anchor that goes nowhere — and
           // never let `pwragent:` reach the external-open path below.
           return <>{anchorProps.children}</>;
+        }
+
+        if (label.startsWith("@") && localTarget) {
+          // Composer directory-reference chip (`[@label](~/path)`) —
+          // render it back as a chip in the transcript, mirroring how
+          // `[$name](path)` skill links become SkillChips.
+          return (
+            <span
+              className="chip directory-chip tooltip-target"
+              data-tooltip={tildifyPath(localTarget.path)}
+              tabIndex={0}
+            >
+              <FolderIcon size={13} aria-hidden="true" />
+              <span className="skill-chip__label">{label}</span>
+            </span>
+          );
         }
 
         if (
@@ -721,6 +738,13 @@ const normalizeMarkdownUrl: UrlTransform = (url) => {
   const trimmed = url.trim();
   if (trimmed.startsWith("/")) {
     return `file://${trimmed}`;
+  }
+  if (trimmed.startsWith("~/")) {
+    // Composer directory-reference links (`[@label](~/path)`) and other
+    // tilde-form local paths — expand to the same file:// form as
+    // absolute paths so the local-file machinery (and the directory
+    // chip) can resolve them.
+    return `file://${expandTildePath(trimmed)}`;
   }
 
   return isSafeMarkdownUrl(trimmed) ? trimmed : "";

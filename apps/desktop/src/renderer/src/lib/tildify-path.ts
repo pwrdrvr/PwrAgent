@@ -45,3 +45,28 @@ export function tildifyPath(
   }
   return absolutePath;
 }
+
+/**
+ * Inverse of tildifyPath: expands a leading `~` to the home directory.
+ * Returns the path unchanged when it doesn't start with `~` or when the
+ * home directory is unknown.
+ */
+export function expandTildePath(
+  path: string,
+  homeDir: string | undefined = getHomeDir(),
+): string {
+  if (!path || !homeDir || !path.startsWith("~")) {
+    return path;
+  }
+  const home = homeDir.replace(/[/\\]+$/, "");
+  if (!home) {
+    return path;
+  }
+  if (path === "~") {
+    return home;
+  }
+  if (path.startsWith("~/") || path.startsWith("~\\")) {
+    return `${home}${path.slice(1)}`;
+  }
+  return path;
+}

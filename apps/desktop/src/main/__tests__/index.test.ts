@@ -29,6 +29,9 @@ const registerImageNormalizationIpcHandlersMock = vi.fn();
 const disposeImageNormalizationIpcHandlersMock = vi.fn();
 const registerIntegratedTerminalIpcHandlersMock = vi.fn();
 const disposeIntegratedTerminalIpcHandlersMock = vi.fn();
+const registerDiagnosticsIpcHandlersMock = vi.fn();
+const disposeDiagnosticsIpcHandlersMock = vi.fn();
+const stopAllCodexEnvironmentDetachedCommandsMock = vi.fn(() => 0);
 const registerComposerDraftIpcHandlersMock = vi.fn();
 const disposeComposerDraftIpcHandlersMock = vi.fn();
 const registerPreloadLogIpcHandlersMock = vi.fn();
@@ -258,6 +261,16 @@ vi.mock("../ipc/image-normalization", () => ({
 vi.mock("../ipc/integrated-terminal", () => ({
   registerIntegratedTerminalIpcHandlers: registerIntegratedTerminalIpcHandlersMock,
   disposeIntegratedTerminalIpcHandlers: disposeIntegratedTerminalIpcHandlersMock,
+}));
+
+vi.mock("../ipc/diagnostics", () => ({
+  registerDiagnosticsIpcHandlers: registerDiagnosticsIpcHandlersMock,
+  disposeDiagnosticsIpcHandlers: disposeDiagnosticsIpcHandlersMock,
+}));
+
+vi.mock("../app-server/codex-environment-runtime", () => ({
+  stopAllCodexEnvironmentDetachedCommands:
+    stopAllCodexEnvironmentDetachedCommandsMock,
 }));
 
 vi.mock("../ipc/composer-drafts", () => ({

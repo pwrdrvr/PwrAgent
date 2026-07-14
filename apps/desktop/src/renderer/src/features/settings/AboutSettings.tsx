@@ -6,6 +6,8 @@ import type {
   AppUpdateCheckResult,
 } from "../../../../shared/app-metadata";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { SettingsCopyValue } from "./SettingsCopyValue";
+import { formatProcessIds } from "./settings-fields";
 import {
   SettingsPanelHead,
   SettingsSection,
@@ -183,6 +185,16 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
           <div>
             <dt>Node</dt>
             <dd>{metadata.nodeVersion}</dd>
+          </div>
+          <div>
+            <dt>Process IDs</dt>
+            <dd>
+              <SettingsCopyValue
+                desktopApi={props.desktopApi}
+                label="process IDs"
+                value={formatProcessIds(metadata)}
+              />
+            </dd>
           </div>
         </dl>
       </SettingsSection>

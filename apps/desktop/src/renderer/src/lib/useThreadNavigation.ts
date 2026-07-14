@@ -2116,6 +2116,7 @@ export function useThreadNavigation(
     collaborationMode?: AppServerCollaborationModeRequest,
     reviewTarget?: AppServerReviewTarget,
     parentThreadId?: string,
+    extraDirectoryPaths?: string[],
   ) => Promise<void>;
   /** Directory the New Thread button resolves to by default, or undefined for the directory-less workspace. */
   newThreadDirectoryLabel?: string;
@@ -2133,6 +2134,31 @@ export function useThreadNavigation(
   ) => Promise<void>;
   /** Existing-thread picker: OS dialog -> validate -> attach as an extra linked directory. */
   pickAndAttachDirectoryToSelectedThread: () => Promise<void>;
+  /**
+   * No-navigation variant of `pickAndRegisterDirectory` for the composer's
+   * reference pickers ("@ → Add directory…", the "+" menu): OS dialog →
+   * validate/register → fold the new launchpad into the snapshot so the
+   * tracked set knows it, then resolve with the picked directory's
+   * label/path for the caller to mint a chip. Never changes the selected
+   * item. Resolves undefined on cancel or failure (failures also surface
+   * via `pickDirectoryError`).
+   */
+  pickDirectoryForReference: () => Promise<
+    { label: string; path: string } | undefined
+  >;
+  /**
+   * Attach known directory paths (composer `@`-references) to a specific
+   * thread. The target is explicit — the composer resolves it from the
+   * turn it just sent — so a selection change while the turn request was
+   * in flight (or a queued turn firing later) cannot link the directories
+   * to the wrong thread. Per-path failures are non-fatal — the turn
+   * already carries the path as text, so a failed link only loses the
+   * sidebar association.
+   */
+  attachDirectoryPathsToThread: (
+    target: { backend: AppServerBackendKind; threadId: string },
+    paths: string[],
+  ) => Promise<void>;
   pickDirectoryError?: string;
   pickingDirectory: boolean;
   clearPickDirectoryError: () => void;
@@ -4230,6 +4256,63 @@ export function useThreadNavigation(
     [desktopApi, refresh],
   );
 
+  const pickDirectoryForReference = useCallback(async (): Promise<
+    { label: string; path: string } | undefined
+  > => {
+    // No-navigation sibling of pickAndRegisterDirectory: the composer's
+    // reference pickers register the picked directory (so the tracked set
+    // and the `@` autocomplete know it) but keep the current selection —
+    // the caller mints a chip in place instead of moving to the new
+    // launchpad. Same cancel-vs-failure split as the sibling: cancel is
+    // silent, validation failure surfaces via `pickDirectoryError`.
+    if (
+      !desktopApi?.pickDirectoryFromDisk ||
+      !desktopApi?.registerDirectoryFromDisk
+    ) {
+      setPickDirectoryError("Desktop bridge is missing the directory picker.");
+      return undefined;
+    }
+
+    setPickDirectoryError(undefined);
+    setPickingDirectory(true);
+    try {
+      const pick = await desktopApi.pickDirectoryFromDisk();
+      if (pick.canceled) {
+        return undefined;
+      }
+      const result = await desktopApi.registerDirectoryFromDisk({
+        path: pick.path,
+      });
+      if (!result.ok) {
+        setPickDirectoryError(result.message);
+        return undefined;
+      }
+      setLocalLaunchpads((current) => ({
+        ...current,
+        [result.directoryKey]: result.launchpad,
+      }));
+      setState((current) => ({
+        ...current,
+        response: applyLaunchpadUpdate(
+          current.response,
+          result.launchpad,
+          result.defaults,
+        ),
+      }));
+      return {
+        label: result.launchpad.directoryLabel,
+        path: result.launchpad.directoryPath ?? pick.path,
+      };
+    } catch (error) {
+      setPickDirectoryError(
+        error instanceof Error ? error.message : String(error),
+      );
+      return undefined;
+    } finally {
+      setPickingDirectory(false);
+    }
+  }, [desktopApi]);
+
   const pickAndAttachDirectoryToSelectedThread = useCallback(async (): Promise<void> => {
     if (
       !desktopApi?.pickDirectoryFromDisk ||
@@ -4269,6 +4352,59 @@ export function useThreadNavigation(
       setPickingDirectory(false);
     }
   }, [desktopApi, refresh, selectedThread]);
+
+  const attachDirectoryPathsToThread = useCallback(
+    async (
+      target: { backend: AppServerBackendKind; threadId: string },
+      paths: string[],
+    ): Promise<void> => {
+      // Composer `@`-reference links (no OS dialog — the paths are already
+      // known). The caller names the thread explicitly so a selection
+      // change during the send cannot misdirect the attach. Failures stay
+      // non-fatal: the sent turn carries the path as text either way, so a
+      // failed link only loses the association.
+      if (!desktopApi?.attachDirectoryToThread || paths.length === 0) {
+        return;
+      }
+
+      let attachedAny = false;
+      for (const path of paths) {
+        try {
+          const result = await desktopApi.attachDirectoryToThread({
+            backend: target.backend,
+            threadId: target.threadId,
+            path,
+            preferredBackend: target.backend,
+          });
+          if (result.ok) {
+            attachedAny = true;
+          } else {
+            console.warn(
+              `Could not link referenced directory ${path}: ${result.message}`,
+            );
+          }
+        } catch (error) {
+          console.warn(
+            `Could not link referenced directory ${path}:`,
+            error,
+          );
+        }
+      }
+      if (attachedAny) {
+        try {
+          await refresh(
+            buildThreadIdentityKey(target.backend, target.threadId),
+          );
+        } catch (error) {
+          // The attach itself landed and the threadDirectories/updated
+          // event will still reach the snapshot; a failed refresh here is
+          // not worth surfacing (and the caller fire-and-forgets us).
+          console.warn("Could not refresh after linking directories:", error);
+        }
+      }
+    },
+    [desktopApi, refresh],
+  );
 
   const clearPickDirectoryError = useCallback((): void => {
     setPickDirectoryError(undefined);
@@ -4456,6 +4592,7 @@ export function useThreadNavigation(
       collaborationMode?: AppServerCollaborationModeRequest,
       reviewTarget?: AppServerReviewTarget,
       parentThreadId?: string,
+      extraDirectoryPaths?: string[],
     ): Promise<void> => {
       if (!desktopApi?.materializeDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing materializeDirectoryLaunchpad().");
@@ -4559,6 +4696,29 @@ export function useThreadNavigation(
       }
       if (response.turnStartFailure) {
         setLaunchpadError(response.turnStartFailure.message);
+      }
+      // Link composer `@`-referenced directories to the just-created
+      // thread before the refresh below so the snapshot comes back with
+      // them. Non-fatal per path — the turn already carries the path as
+      // text, so a failed link only loses the sidebar association.
+      if (extraDirectoryPaths && extraDirectoryPaths.length > 0) {
+        for (const path of extraDirectoryPaths) {
+          try {
+            const attachResult = await desktopApi.attachDirectoryToThread?.({
+              backend: response.backend,
+              threadId: response.threadId,
+              path,
+              preferredBackend: response.backend,
+            });
+            if (attachResult && !attachResult.ok) {
+              console.warn(
+                `Could not link referenced directory ${path}: ${attachResult.message}`,
+              );
+            }
+          } catch (error) {
+            console.warn(`Could not link referenced directory ${path}:`, error);
+          }
+        }
       }
       setState((current) => ({
         ...current,
@@ -5464,6 +5624,8 @@ export function useThreadNavigation(
     openWorkspaceLaunchpad,
     pickAndRegisterDirectory,
     pickAndAttachDirectoryToSelectedThread,
+    pickDirectoryForReference,
+    attachDirectoryPathsToThread,
     pickDirectoryError,
     pickingDirectory,
     clearPickDirectoryError,

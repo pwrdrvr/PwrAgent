@@ -43,10 +43,12 @@ import type {
 } from "@pwragent/shared";
 import {
   buildPendingRequestResponse,
+  buildThreadIdentityKey,
   isBranchDrifted,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { IntegratedTerminalsController } from "../../lib/useIntegratedTerminals";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import type { PendingForkEnvironmentSetup } from "../../lib/useThreadNavigation";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -100,11 +102,6 @@ type LaunchpadEnvironmentSetupProgress = {
   exitCode?: number;
   output: string;
   status: "starting" | "running" | "completed" | "failed";
-};
-
-type RetainedIntegratedTerminal = {
-  threadKey: string;
-  cwd?: string;
 };
 
 const LazyIntegratedTerminal = lazy(async () => {
@@ -705,6 +702,11 @@ function activityHasFileDiff(entry: AppServerThreadActivityEntry | undefined): b
 export type ThreadViewProps = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
+  /**
+   * Live integrated-terminal state, owned by App so it survives this
+   * component's unmounts. See `useIntegratedTerminals`.
+   */
+  terminals: IntegratedTerminalsController;
   addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage: (
     text: string,
@@ -762,6 +764,21 @@ export type ThreadViewProps = {
   onSelectNoDirectoryFromPicker?: () => void;
   onPickAndRegisterDirectory?: () => void;
   onPickAndAttachDirectoryToThread?: () => void;
+  /**
+   * Composer reference picker ("@ → Add directory…", the "+" menu): OS
+   * dialog → register (no navigation) → resolve with label/path so the
+   * composer can mint a reference chip. Undefined on cancel/failure.
+   */
+  onPickDirectoryForReference?: () => Promise<
+    { label: string; path: string } | undefined
+  >;
+  onAttachDirectoryReferences?: (
+    paths: string[],
+    target: {
+      backend: NavigationThreadSummary["source"];
+      threadId: string;
+    },
+  ) => void;
   onClearPickDirectoryError?: () => void;
   setExecutionModeError?: string;
   setThreadModelSettingsError?: string;
@@ -822,6 +839,8 @@ export type ThreadViewProps = {
   findInitialQuery?: string;
   /** Turn id to load+scroll to when deep-linking a search match. */
   findTurnId?: string;
+  /** Bumped on each ⌘F so an already-open bar pulls focus back to its field. */
+  findFocusNonce?: number;
   onLoadOlder: () => Promise<void>;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
@@ -830,7 +849,8 @@ export type ThreadViewProps = {
     directoryKey: string,
     input?: AppServerTurnInputItem[],
     collaborationMode?: AppServerCollaborationModeRequest,
-    reviewTarget?: AppServerReviewTarget
+    reviewTarget?: AppServerReviewTarget,
+    extraDirectoryPaths?: string[]
   ) => Promise<void>;
   onCancelLaunchpad?: (directoryKey: string) => void;
   onPendingStatusChange?: (status?: string) => void;
@@ -951,15 +971,11 @@ export function ThreadView(props: ThreadViewProps) {
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [contextRailWidth, setContextRailWidth] = useState(380);
   const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
-  const [terminalOpenByThread, setTerminalOpenByThread] = useState<
-    Record<string, boolean>
-  >({});
-  const [terminalHeightByThread, setTerminalHeightByThread] = useState<
-    Record<string, number>
-  >({});
-  const [retainedTerminalByThread, setRetainedTerminalByThread] = useState<
-    Record<string, RetainedIntegratedTerminal>
-  >({});
+  // Terminal state is owned by `useIntegratedTerminals` up in App, mirroring
+  // the main process's registry. It cannot live here: ThreadView unmounts on
+  // search and on any refresh that flips `threadDetailPending`, which used to
+  // orphan every running PTY.
+  const terminals = props.terminals;
   const [launchpadMaterializeError, setLaunchpadMaterializeError] =
     useState<string>();
   const [setupFailureDismissedThreadKeys, setSetupFailureDismissedThreadKeys] =
@@ -1087,8 +1103,11 @@ export function ThreadView(props: ThreadViewProps) {
   const [branchDriftError, setBranchDriftError] = useState<string>();
   const [branchDriftBusy, setBranchDriftBusy] = useState(false);
 
+  // Canonical thread identity — the same key the sidebar rows and the quit
+  // blockers use. A hand-rolled `${source}:${id}` is ambiguous for ACP
+  // backends, whose kind ("acp:grok") already contains a colon.
   const selectedThreadKey = selectedThread
-    ? `${selectedThread.source}:${selectedThread.id}`
+    ? buildThreadIdentityKey(selectedThread.source, selectedThread.id)
     : undefined;
   const fileViewerContext = useMemo<MarkdownFileViewerContext | undefined>(() => {
     if (!selectedThread || !selectedThreadKey) {
@@ -1108,61 +1127,18 @@ export function ThreadView(props: ThreadViewProps) {
     };
   }, [selectedThread, selectedThreadKey]);
   const selectedThreadTerminalOpen = selectedThreadKey
-    ? terminalOpenByThread[selectedThreadKey] === true
+    ? terminals.isPanelOpen(selectedThreadKey)
+    : false;
+  const selectedThreadTerminalRunning = selectedThreadKey
+    ? terminals.liveThreadKeys.has(selectedThreadKey)
     : false;
   const selectedThreadTerminalCwd = selectedThread
     ? resolveThreadTerminalCwd(selectedThread)
     : undefined;
   const toggleSelectedThreadTerminal = useCallback(() => {
     if (!selectedThreadKey) return;
-    const isOpening = terminalOpenByThread[selectedThreadKey] !== true;
-    if (isOpening) {
-      setRetainedTerminalByThread((current) => ({
-        ...current,
-        [selectedThreadKey]: {
-          threadKey: selectedThreadKey,
-          cwd: selectedThreadTerminalCwd,
-        },
-      }));
-    }
-    setTerminalOpenByThread((current) => ({
-      ...current,
-      [selectedThreadKey]: current[selectedThreadKey] !== true,
-    }));
-  }, [selectedThreadKey, selectedThreadTerminalCwd, terminalOpenByThread]);
-  const hideTerminalByThread = useCallback((threadKey: string) => {
-    setTerminalOpenByThread((current) => ({
-      ...current,
-      [threadKey]: false,
-    }));
-  }, []);
-  const removeRetainedTerminalByThread = useCallback((threadKey: string) => {
-    setRetainedTerminalByThread((current) => {
-      if (!(threadKey in current)) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[threadKey];
-      return next;
-    });
-  }, []);
-  const closeTerminalByThread = useCallback((threadKey: string) => {
-    hideTerminalByThread(threadKey);
-    removeRetainedTerminalByThread(threadKey);
-    void props.desktopApi?.closeIntegratedTerminal?.({
-      threadKey,
-    });
-  }, [hideTerminalByThread, props.desktopApi, removeRetainedTerminalByThread]);
-  const handleTerminalExitByThread = useCallback((threadKey: string) => {
-    hideTerminalByThread(threadKey);
-    removeRetainedTerminalByThread(threadKey);
-  }, [hideTerminalByThread, removeRetainedTerminalByThread]);
-  const setTerminalHeightForThread = useCallback((threadKey: string, height: number) => {
-    setTerminalHeightByThread((current) => ({
-      ...current,
-      [threadKey]: height,
-    }));
-  }, []);
+    terminals.togglePanel(selectedThreadKey, selectedThreadTerminalCwd);
+  }, [selectedThreadKey, selectedThreadTerminalCwd, terminals]);
   const suppressBranchDriftDialogRef = useRef(
     props.suppressBranchDriftDialog ?? false
   );
@@ -2266,7 +2242,13 @@ export function ThreadView(props: ThreadViewProps) {
     );
     const handleMaterializeLaunchpad: NonNullable<
       ThreadViewProps["onMaterializeLaunchpad"]
-    > = async (directoryKey, input, collaborationMode, reviewTarget) => {
+    > = async (
+      directoryKey,
+      input,
+      collaborationMode,
+      reviewTarget,
+      extraDirectoryPaths
+    ) => {
       if (!props.onMaterializeLaunchpad) {
         return;
       }
@@ -2278,7 +2260,8 @@ export function ThreadView(props: ThreadViewProps) {
           directoryKey,
           input,
           collaborationMode,
-          reviewTarget
+          reviewTarget,
+          extraDirectoryPaths
         );
       } catch (error) {
         setLaunchpadMaterializeError(
@@ -2436,6 +2419,7 @@ export function ThreadView(props: ThreadViewProps) {
               onPickAndAttachDirectoryToThread={
                 props.onPickAndAttachDirectoryToThread
               }
+              onPickDirectoryForReference={props.onPickDirectoryForReference}
               onClearPickDirectoryError={props.onClearPickDirectoryError}
               pickDirectoryError={props.pickDirectoryError}
               pickingDirectory={props.pickingDirectory}
@@ -2470,6 +2454,7 @@ export function ThreadView(props: ThreadViewProps) {
           sidebarOpen: !sidebarHidden,
           railOpen: contextRailPinned,
           terminalOpen: selectedThreadTerminalOpen,
+          terminalRunning: selectedThreadTerminalRunning,
           onToggleSidebar,
           onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
           onToggleTerminal: toggleSelectedThreadTerminal,
@@ -2536,6 +2521,7 @@ export function ThreadView(props: ThreadViewProps) {
               refreshKey={`${selectedThread!.source}:${selectedThread!.id}:${props.transcriptEntries.length}`}
               initialQuery={props.findInitialQuery}
               turnId={props.findTurnId}
+              focusNonce={props.findFocusNonce}
               hasMoreHistory={Boolean(
                 props.transcriptPagination?.supportsPagination &&
                   props.transcriptPagination.hasPreviousPage,
@@ -2675,6 +2661,8 @@ export function ThreadView(props: ThreadViewProps) {
             onSetAcpRuntimeOption={props.onSetAcpRuntimeOption}
             onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
+            onAttachDirectoryReferences={props.onAttachDirectoryReferences}
+            onPickDirectoryForReference={props.onPickDirectoryForReference}
             pendingRequestActive={Boolean(props.pendingRequest)}
             pendingUserInputActive={Boolean(
               props.pendingUserInput || props.pendingMcpInteraction
@@ -2692,26 +2680,26 @@ export function ThreadView(props: ThreadViewProps) {
             updatingExecutionMode={props.updatingExecutionMode}
           />
 
-          {Object.values(retainedTerminalByThread).map((terminal) => {
+          {terminals.panes.map((terminal) => {
             const terminalVisible =
               terminal.threadKey === selectedThreadKey &&
-              terminalOpenByThread[terminal.threadKey] === true;
+              terminals.isPanelOpen(terminal.threadKey);
             return (
               <Suspense key={terminal.threadKey} fallback={null}>
                 <LazyIntegratedTerminal
                   desktopApi={props.desktopApi}
                   threadKey={terminal.threadKey}
                   cwd={terminal.cwd}
-                  height={terminalHeightByThread[terminal.threadKey] ?? 260}
+                  height={terminals.heightByThread[terminal.threadKey] ?? 260}
                   visible={terminalVisible}
                   onHeightChange={(height) => {
-                    setTerminalHeightForThread(terminal.threadKey, height);
+                    terminals.setHeight(terminal.threadKey, height);
                   }}
                   onClose={() => {
-                    closeTerminalByThread(terminal.threadKey);
+                    terminals.closeTerminal(terminal.threadKey);
                   }}
                   onExit={() => {
-                    handleTerminalExitByThread(terminal.threadKey);
+                    terminals.handleExit(terminal.threadKey);
                   }}
                 />
               </Suspense>

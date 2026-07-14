@@ -507,6 +507,7 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
    */
   editorDocument?: Record<string, unknown>;
   imageAttachments?: NavigationLaunchpadImageAttachment[];
+  fileAttachments?: NavigationLaunchpadFileAttachment[];
   prompt: string;
   registeredAt?: number;
   settingsTouchedAt?: number;
@@ -544,6 +545,20 @@ export type NavigationLaunchpadImageAttachment = {
   type: string;
   url: string;
   width?: number;
+};
+
+/**
+ * A file referenced by path from the composer's attachment tray
+ * (drag-and-drop or the "+ Add file…" picker). Path-only by design —
+ * contents are never captured; the outgoing text carries a
+ * `[@label](~/path)` reference the agent reads itself.
+ */
+export type NavigationLaunchpadFileAttachment = {
+  id: string;
+  /** Display label, normally the file's basename. */
+  label: string;
+  /** Absolute on-disk path. */
+  path: string;
 };
 
 /**

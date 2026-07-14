@@ -140,6 +140,11 @@ export type CodexEnvironmentCommandParams = {
    * Intended to be the action runId.
    */
   detachedTerminationKey?: string;
+  /**
+   * Detach mode only: who this command belongs to, so the quit path can name
+   * it and link back to its thread.
+   */
+  detachedDescriptor?: DetachedCommandDescriptor;
 };
 
 export type CodexEnvironmentDetachedExit = {
@@ -174,13 +179,94 @@ export type CodexEnvironmentCommandRunner = (
   params: CodexEnvironmentCommandParams,
 ) => Promise<CodexEnvironmentCommandResult>;
 
+/**
+ * Who owns a detached command, so a caller holding only the termination key can
+ * still say "this is `pnpm dev` on thread X". Populated by the backend registry
+ * at start time; the quit path and the shutdown kill both read it.
+ */
+export type DetachedCommandDescriptor = {
+  backend: string;
+  threadId: string;
+  actionName: string;
+  command: string;
+  startedAt: number;
+};
+
+export type DetachedCommandSummary = DetachedCommandDescriptor & {
+  runId: string;
+  pid?: number;
+};
+
 type DetachedCommandProcess = {
   killTree: (signal: NodeJS.Signals) => void;
   closed: () => boolean;
   killHandle?: NodeJS.Timeout;
+  descriptor?: DetachedCommandDescriptor;
+  pid?: number;
 };
 
 const detachedCommandProcesses = new Map<string, DetachedCommandProcess>();
+
+/**
+ * Late-bind the thread a detached command belongs to.
+ *
+ * The auto-started action for a launchpad spawns BEFORE its thread exists —
+ * `materializeDirectoryLaunchpad` starts the environment action, then creates
+ * the thread — so its descriptor is registered without a thread id and gets one
+ * here. Without this the run would have no owner at all and would drop out of
+ * the quit blockers entirely.
+ */
+export function attachDetachedCommandThreadId(
+  runId: string,
+  threadId: string,
+): void {
+  const entry = detachedCommandProcesses.get(runId);
+  if (entry?.descriptor) {
+    entry.descriptor.threadId = threadId;
+  }
+}
+
+/** Every detached action still running, for the quit blockers. Synchronous by
+ *  design — `getQuitBlockers` cannot await. */
+export function listRunningDetachedCommands(): DetachedCommandSummary[] {
+  const running: DetachedCommandSummary[] = [];
+  for (const [runId, entry] of detachedCommandProcesses) {
+    if (entry.closed() || !entry.descriptor) continue;
+    running.push({ ...entry.descriptor, runId, pid: entry.pid });
+  }
+  return running.sort((left, right) => left.startedAt - right.startedAt);
+}
+
+/**
+ * Kill every detached action tree on shutdown.
+ *
+ * Without this the children were simply abandoned: they are spawned detached
+ * but keep their stdio pipes, so they *usually* died of SIGPIPE on their next
+ * write once the app went away — a quiet `pnpm dev` that happened not to be
+ * printing could outlive PwrAgent and keep its port bound. The quit dialog now
+ * promises these get stopped, so actually stop them.
+ */
+export function stopAllCodexEnvironmentDetachedCommands(): number {
+  let stopped = 0;
+  for (const [runId, entry] of detachedCommandProcesses) {
+    if (entry.closed()) continue;
+    if (entry.killHandle) {
+      clearTimeout(entry.killHandle);
+      entry.killHandle = undefined;
+    }
+    try {
+      entry.killTree("SIGKILL");
+      stopped += 1;
+    } catch (error) {
+      environmentRuntimeLog.warn("detached-shutdown-kill-failed", {
+        runId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  detachedCommandProcesses.clear();
+  return stopped;
+}
 
 export type CodexEnvironmentDetachedCommandStopMode = "stop" | "terminate";
 
@@ -232,6 +318,13 @@ export async function applyLocalCodexEnvironmentSelection(params: {
   onActionDetachedOutput?: (event: CodexEnvironmentDetachedOutput) => void;
   /** Optional caller-generated runId for the auto-action; falls back to a fresh UUID. */
   actionRunId?: string;
+  /**
+   * Thread identity, so the quit dialog can name and link an auto-started
+   * action. `threadId` is optional because the launchpad path spawns the action
+   * before the thread exists — the caller back-fills it with
+   * `attachDetachedCommandThreadId` once the thread id is known.
+   */
+  owner?: { backend: string; threadId?: string };
   hydrationStore?: CodexEnvironmentHydrationStoreLike;
   selection?: CodexEnvironmentSelection;
   setupTimeoutMs?: number;
@@ -399,6 +492,19 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         env: actionEnv,
         mode: "detach",
         detachedTerminationKey: runId,
+        // Auto-started actions are the ones most likely to be a long-running
+        // dev server, so they need an owner just as much as the Run-button
+        // path. Without one they are invisible to the quit blockers and get
+        // hard-killed on quit with no prompt at all.
+        detachedDescriptor: params.owner
+          ? {
+              backend: params.owner.backend,
+              threadId: params.owner.threadId ?? "",
+              actionName: selection.action.name,
+              command: selection.action.command,
+              startedAt,
+            }
+          : undefined,
         onDetachedExit: params.onActionDetachedExit,
         onDetachedOutput: params.onActionDetachedOutput,
       });
@@ -440,6 +546,8 @@ export async function startLocalCodexEnvironmentAction(params: {
   actionId: string;
   /** Caller-generated runId so output/exit callbacks can be pre-bound to the right run. */
   runId: string;
+  /** Thread identity, so the quit dialog can name and link this run. */
+  owner?: { backend: string; threadId: string };
   commandRunner?: CodexEnvironmentCommandRunner;
   env?: NodeJS.ProcessEnv;
   onDetachedExit?: (event: CodexEnvironmentDetachedExit) => void;
@@ -478,6 +586,15 @@ export async function startLocalCodexEnvironmentAction(params: {
       env: actionEnv,
       mode: "detach",
       detachedTerminationKey: params.runId,
+      detachedDescriptor: params.owner
+        ? {
+            backend: params.owner.backend,
+            threadId: params.owner.threadId,
+            actionName: action.name,
+            command: action.command,
+            startedAt,
+          }
+        : undefined,
       onDetachedExit: params.onDetachedExit,
       onDetachedOutput: params.onDetachedOutput,
     });
@@ -604,6 +721,8 @@ function runShellCommand(
       detachedCommandProcesses.set(params.detachedTerminationKey, {
         killTree: terminateChild,
         closed: () => closed,
+        descriptor: params.detachedDescriptor,
+        pid: child.pid,
       });
     };
 
