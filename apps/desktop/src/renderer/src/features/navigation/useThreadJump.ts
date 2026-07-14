@@ -19,6 +19,13 @@ export function useThreadJump(options: {
   open: boolean;
   openJump: () => void;
   closeJump: () => void;
+  /**
+   * Whether the sidebar on screen right now is a peek — i.e. it's about to be
+   * hidden again when the search closes. Callers that scroll the thread list on
+   * the way out need this: the scroll has to be instant, not animated, to land
+   * before the sidebar goes away. Read it at event time, not during render.
+   */
+  isPeeking: () => boolean;
   /** ⌘K again backs out of a jump you didn't mean to start. */
   toggleJump: () => void;
   /**
@@ -45,10 +52,19 @@ export function useThreadJump(options: {
 
   const closeJump = useCallback(() => {
     setOpen(false);
-    if (peekedRef.current) {
-      peekedRef.current = false;
-      setSidebarHidden(true);
+    if (!peekedRef.current) {
+      return;
     }
+    peekedRef.current = false;
+    // Restore on the NEXT frame, not in this commit. Picking a thread closes the
+    // popup and schedules a scroll-the-selected-row-into-view for that same
+    // frame (App's onJumpToThread), and `scrollIntoView` inside a
+    // `display: none` subtree is a no-op — so re-hiding here would silently eat
+    // the scroll and the row would be off-screen when the sidebar came back.
+    // Chromium restores a scroll offset across `display: none`, so all we owe
+    // the reveal is a laid-out sidebar for the frame it runs in. Its rAF was
+    // queued first, so it runs before ours.
+    requestAnimationFrame(() => setSidebarHidden(true));
   }, [setSidebarHidden]);
 
   const toggleJump = useCallback(() => {
@@ -63,5 +79,7 @@ export function useThreadJump(options: {
     peekedRef.current = false;
   }, []);
 
-  return { open, openJump, closeJump, toggleJump, endPeek };
+  const isPeeking = useCallback(() => peekedRef.current, []);
+
+  return { open, openJump, closeJump, isPeeking, toggleJump, endPeek };
 }

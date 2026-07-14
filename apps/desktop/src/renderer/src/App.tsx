@@ -418,16 +418,28 @@ function DesktopAppShell(props: {
       }
     });
   }, [desktopApi]);
-  const revealSelectedThreadInList = useCallback(() => {
-    const selectedRow = document.querySelector<HTMLElement>(
-      ".sidebar .thread-row.is-selected",
-    );
-    selectedRow?.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
-      inline: "nearest",
-    });
-  }, []);
+  // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
+  // a smooth scroll is animated over several frames, and hiding the sidebar
+  // mid-animation abandons it wherever it got to. An instant scroll lands in one
+  // frame, and Chromium keeps the offset across `display: none` — so the row is
+  // already centered when the sidebar comes back.
+  //
+  // Takes an options object rather than a bare `behavior` string so a caller
+  // that wires this straight to an event handler (which would pass the event as
+  // the first argument) still gets the default.
+  const revealSelectedThreadInList = useCallback(
+    (options?: { instant?: boolean }) => {
+      const selectedRow = document.querySelector<HTMLElement>(
+        ".sidebar .thread-row.is-selected",
+      );
+      selectedRow?.scrollIntoView({
+        behavior: options?.instant === true ? "auto" : "smooth",
+        block: "center",
+        inline: "nearest",
+      });
+    },
+    [],
+  );
   const settings = props.settings;
 
   // Persisted layout setters — update local state immediately and write the
@@ -1209,7 +1221,15 @@ function DesktopAppShell(props: {
           onJumpToThread={(thread) => {
             setMainView("thread");
             navigation.selectThread(thread);
-            requestAnimationFrame(() => revealSelectedThreadInList());
+            // Reveal on the next frame, once the new selection has rendered.
+            // Do it even when the sidebar is only peeked open (⌘K over a hidden
+            // sidebar) — the popup is closing and taking the sidebar with it,
+            // but the scroll offset survives, so bringing the sidebar back later
+            // shows the thread we jumped to instead of stranding it off-screen.
+            // That reveal must be instant: an animated scroll wouldn't finish
+            // before the sidebar hides.
+            const instant = threadJump.isPeeking();
+            requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
           }}
           onArchiveThread={navigation.archiveThread}
           onRenameThread={navigation.renameThread}
