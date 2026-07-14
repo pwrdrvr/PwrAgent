@@ -3,16 +3,25 @@ import { promisify } from "node:util";
 import type {
   DesktopGhDiscoverySnapshot,
   GhStatus,
-  PrChipState,
-  PrLifecycleState,
-  PrMergeState,
-  PrReviewState,
   PrSummary,
 } from "@pwragent/shared";
-import { DEFAULT_PULL_REQUEST_PROVIDER } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { parseGhPrPayload } from "./pr-derivations";
+import type { GhPrPayload } from "./pr-derivations";
+
+// The PrSummary derivations are shared with the batched GraphQL poller and
+// live in `pr-derivations.ts`. Re-exported here because this module was
+// their original home and callers/tests import them from this path.
+export {
+  deriveChipState,
+  deriveLifecycleState,
+  deriveMergeState,
+  deriveReviewState,
+  parseGhPrPayload,
+} from "./pr-derivations";
+export type { GhCheckRunPayload, GhPrPayload } from "./pr-derivations";
 
 const execFileAsync = promisify(execFile);
 const fetcherLog = getMainLogger("pwragent:pr-fetcher");
@@ -54,30 +63,6 @@ const DEFAULT_GH_AVAILABLE_CACHE_TTL_MS = 60_000;
  * the cache via `invalidateGhCaches()`.
  */
 const DEFAULT_GH_AUTH_STATUS_CACHE_TTL_MS = 5 * 60_000;
-
-/** Subset of fields returned by `gh pr list --json …` that we actually read. */
-type GhPrPayload = {
-  number: number;
-  title?: string;
-  url: string;
-  state: string;
-  isDraft: boolean;
-  mergeable?: string | null;
-  mergeStateStatus?: string | null;
-  mergedAt: string | null;
-  commits?: { oid?: string | null }[] | null;
-  headRefName: string;
-  headRepository: { name?: string } | null;
-  headRepositoryOwner: { login?: string } | null;
-  statusCheckRollup: GhCheckRunPayload[] | null;
-};
-
-type GhCheckRunPayload = {
-  __typename?: string;
-  conclusion?: string | null;
-  status?: string;
-  name?: string;
-};
 
 /**
  * Parsed result of `gh auth status --hostname github.com`. Re-exports the
@@ -411,111 +396,6 @@ export class GithubPrFetcher {
     }
     return command;
   }
-}
-
-/**
- * Map a `gh pr list` row to our PrSummary. Exported for direct testing
- * without invoking the subprocess.
- */
-export function parseGhPrPayload(row: GhPrPayload): PrSummary {
-  const checkState = deriveChipState(row);
-  return {
-    provider: parsePullRequestProvider(row.url),
-    number: row.number,
-    org: row.headRepositoryOwner?.login ?? "",
-    repo: row.headRepository?.name ?? "",
-    ...(row.title?.trim() ? { title: row.title.trim() } : {}),
-    state: checkState,
-    checkState,
-    lifecycleState: deriveLifecycleState(row),
-    reviewState: deriveReviewState(row),
-    mergeState: deriveMergeState(row),
-    ...parseCommitShas(row),
-    url: row.url,
-  };
-}
-
-function parseCommitShas(
-  row: Pick<GhPrPayload, "commits">,
-): Pick<PrSummary, "commitShas"> {
-  const commitShas = [
-    ...new Set(
-      (row.commits ?? [])
-        .map((commit) => commit.oid?.trim().toLowerCase())
-        .filter((oid): oid is string => Boolean(oid && /^[0-9a-f]{40}$/.test(oid))),
-    ),
-  ].sort();
-  return commitShas.length > 0 ? { commitShas } : {};
-}
-
-function parsePullRequestProvider(url: string): string {
-  try {
-    return new URL(url).hostname.toLowerCase() || DEFAULT_PULL_REQUEST_PROVIDER;
-  } catch {
-    return DEFAULT_PULL_REQUEST_PROVIDER;
-  }
-}
-
-export function deriveChipState(row: GhPrPayload): PrChipState {
-  const checks = row.statusCheckRollup ?? [];
-  if (checks.length === 0) return "unknown";
-
-  const failingConclusions = new Set([
-    "FAILURE",
-    "CANCELLED",
-    "TIMED_OUT",
-    "STARTUP_FAILURE",
-    "ACTION_REQUIRED",
-  ]);
-  const passingConclusions = new Set([
-    "SUCCESS",
-    "SKIPPED",
-    "NEUTRAL",
-    "STALE",
-  ]);
-
-  let pendingCount = 0;
-  for (const check of checks) {
-    if (check.conclusion && failingConclusions.has(check.conclusion)) {
-      return "failing";
-    }
-    if (check.conclusion && passingConclusions.has(check.conclusion)) {
-      continue;
-    }
-    if (!check.conclusion) {
-      pendingCount += 1;
-      continue;
-    }
-    // Conclusion we don't recognize as either pass or fail — be conservative.
-    return "unknown";
-  }
-  if (pendingCount > 0) return "pending";
-  return "passing";
-}
-
-export function deriveLifecycleState(row: Pick<GhPrPayload, "state">): PrLifecycleState {
-  if (row.state === "MERGED") return "merged";
-  if (row.state === "CLOSED") return "closed";
-  return "open";
-}
-
-export function deriveReviewState(row: Pick<GhPrPayload, "isDraft">): PrReviewState {
-  return row.isDraft ? "draft" : "ready_for_review";
-}
-
-export function deriveMergeState(
-  row: Pick<GhPrPayload, "mergeable" | "mergeStateStatus" | "state">,
-): PrMergeState {
-  if (deriveLifecycleState(row) !== "open") {
-    return "unknown";
-  }
-  if (row.mergeStateStatus === "DIRTY" || row.mergeable === "CONFLICTING") {
-    return "conflicting";
-  }
-  if (row.mergeStateStatus === "CLEAN" || row.mergeable === "MERGEABLE") {
-    return "mergeable";
-  }
-  return "unknown";
 }
 
 /**

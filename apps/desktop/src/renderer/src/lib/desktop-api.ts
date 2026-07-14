@@ -139,6 +139,7 @@ import type {
   UnbindMessagingThreadRequest,
   UnbindMessagingThreadResponse,
   RefreshThreadPullRequestsRequest,
+  SetPullRequestPollingFocusRequest,
   RefreshThreadPullRequestsResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
@@ -644,6 +645,13 @@ export type DesktopApi = {
   refreshThreadPullRequests?: (
     request: RefreshThreadPullRequestsRequest
   ) => Promise<RefreshThreadPullRequestsResponse>;
+  /**
+   * Tell the main-process PR poller which threads are selected / on screen so
+   * their PRs refresh on the fast tier.
+   */
+  setPullRequestPollingFocus?: (
+    request: SetPullRequestPollingFocusRequest
+  ) => Promise<void>;
   detachThreadPullRequest?: (
     request: DetachThreadPullRequestRequest
   ) => Promise<DetachThreadPullRequestResponse>;

@@ -47,6 +47,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@octokit/graphql": "^9.0.3",
     "@pwragent/agent-core": "workspace:*",
     "@pwragent/messaging-interface": "workspace:*",
     "@pwragent/messaging-provider-discord": "workspace:*",
