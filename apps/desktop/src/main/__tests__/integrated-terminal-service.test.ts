@@ -245,12 +245,20 @@ describe("resolveTerminalShell", () => {
       fakeWebContents(),
     );
 
+    // Windows ignores SHELL entirely and resolves PowerShell/cmd, so derive the
+    // expectation rather than hardcoding the POSIX shell.
+    const expectedShell = resolveTerminalShell({
+      env: { SHELL: "/bin/sh" },
+      platform: process.platform,
+      windowsShell: "auto",
+    }).file;
+
     expect(service.listSessions()).toEqual([
       {
         sessionId: response.sessionId,
         threadKey: "codex:thread-a",
         cwd: os.tmpdir(),
-        shell: "/bin/sh",
+        shell: expectedShell,
         pid: pty.pid,
         panelHidden: false,
         createdAt: 1_000,
