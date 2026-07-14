@@ -19,6 +19,7 @@ import {
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
+import { useThreadJump } from "./features/navigation/useThreadJump";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
 import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
@@ -219,9 +220,6 @@ function DesktopAppShell(props: {
   }>();
   // Bumped on every ⌘F so an already-open find bar takes focus back.
   const [findFocusNonce, setFindFocusNonce] = useState(0);
-  // Thread-list quick-jump popup (⌘K anywhere, or ⌘F while the sidebar is
-  // focused).
-  const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
   // Initial section for SettingsScreen — non-undefined when navigation
   // came from a deep-link to a specific section. Resets when the user
   // switches mainView. The Messaging Activity surface is its own
@@ -437,12 +435,19 @@ function DesktopAppShell(props: {
   // writeConfig call is fire-and-forget; a failed write just means the
   // preference isn't remembered next launch.
   const writeConfig = settings.writeConfig;
+  // Thread-list quick search (⌘K anywhere, ⌘F while the sidebar is focused).
+  // Owns its own open state and the sidebar peek it needs to render.
+  const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
+  const endSidebarPeek = threadJump.endPeek;
   const setSidebarHiddenPersisted = useCallback(
     (next: boolean) => {
+      // An explicit toggle (⌘B, the chips) is the operator stating a preference,
+      // so it ends any quick-search peek in flight.
+      endSidebarPeek();
       setSidebarHidden(next);
       void writeConfig({ ui: { sidebarHidden: next } });
     },
-    [writeConfig],
+    [endSidebarPeek, writeConfig],
   );
   const setContextRailPinnedPersisted = useCallback(
     (next: boolean) => {
@@ -581,15 +586,6 @@ function DesktopAppShell(props: {
     restore: restoreHistoryLocation,
   });
   useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
-  // Opening the thread-list quick search has to reveal the sidebar first — it
-  // lives inside it, and a hidden sidebar (⌘B) is `display: none`, so the popup
-  // would open into nothing.
-  const openThreadJump = useCallback(() => {
-    if (sidebarHidden) {
-      setSidebarHiddenPersisted(false);
-    }
-    setSidebarSearchOpen(true);
-  }, [sidebarHidden, setSidebarHiddenPersisted]);
   // ⌘⇧F / ⌃⇧F opens the global thread search screen; ⌘F is the focus-sensitive
   // context find; ⌘K always lands on the thread-list quick search.
   useFindHotkeys({
@@ -601,7 +597,7 @@ function DesktopAppShell(props: {
       // thread would otherwise open the in-thread find.
       const active = document.activeElement as HTMLElement | null;
       if (active?.closest(".sidebar")) {
-        openThreadJump();
+        threadJump.openJump();
         return;
       }
       if (mainView === "thread") {
@@ -612,7 +608,9 @@ function DesktopAppShell(props: {
         setFindFocusNonce((nonce) => nonce + 1);
       }
     },
-    onThreadJump: openThreadJump,
+    // ⌘K toggles, like ⌘⇧F toggles the search screen: pressing it again backs
+    // out of a jump you didn't mean to start, without reaching for Escape.
+    onThreadJump: threadJump.toggleJump,
   });
   // Manual find is per-thread chrome: drop it when the operator leaves the
   // thread view or switches threads. The deep-link find (findRequest) closes
@@ -1198,8 +1196,16 @@ function DesktopAppShell(props: {
             setMainView("thread");
             navigation.selectThread(thread);
           }}
-          threadJumpOpen={sidebarSearchOpen}
-          onThreadJumpOpenChange={setSidebarSearchOpen}
+          threadJumpOpen={threadJump.open}
+          onThreadJumpOpenChange={(open) => {
+            // Every close (Escape, outside click, picking a thread) goes through
+            // closeJump so a peeked-open sidebar goes back to hidden.
+            if (open) {
+              threadJump.openJump();
+              return;
+            }
+            threadJump.closeJump();
+          }}
           onJumpToThread={(thread) => {
             setMainView("thread");
             navigation.selectThread(thread);
