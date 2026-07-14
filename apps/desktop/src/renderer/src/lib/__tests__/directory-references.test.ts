@@ -3,7 +3,9 @@ import type { NavigationDirectorySummary } from "@pwragent/shared";
 import {
   buildDirectoryReferenceInsertText,
   buildDirectoryReferenceMarkdown,
+  buildFileReferenceTooltip,
   decodeMarkdownDestination,
+  fileLabelFromPath,
   filterDirectoryReferenceCandidates,
   findDirectoryReferenceTrigger,
   listReferencedDirectories,
@@ -120,6 +122,41 @@ describe("filterDirectoryReferenceCandidates", () => {
       }),
     );
     expect(filterDirectoryReferenceCandidates(many, "")).toHaveLength(10);
+  });
+});
+
+describe("fileLabelFromPath", () => {
+  it("returns the basename of a posix path", () => {
+    expect(fileLabelFromPath("/Users/huntharo/notes/notes.txt")).toBe(
+      "notes.txt",
+    );
+  });
+
+  it("returns the basename of a windows path", () => {
+    expect(fileLabelFromPath("C:\\Users\\huntharo\\notes\\report.pdf")).toBe(
+      "report.pdf",
+    );
+  });
+
+  it("ignores a trailing separator", () => {
+    expect(fileLabelFromPath("/Users/huntharo/notes/")).toBe("notes");
+  });
+
+  it("returns a bare name unchanged", () => {
+    expect(fileLabelFromPath("notes.txt")).toBe("notes.txt");
+  });
+
+  it("falls back to the input when no segment survives", () => {
+    expect(fileLabelFromPath("")).toBe("");
+    expect(fileLabelFromPath("///")).toBe("///");
+  });
+});
+
+describe("buildFileReferenceTooltip", () => {
+  it("returns just the tilde path with no linked suffix", () => {
+    expect(
+      buildFileReferenceTooltip(`${HOME}/notes/notes.txt`, HOME),
+    ).toBe("~/notes/notes.txt");
   });
 });
 

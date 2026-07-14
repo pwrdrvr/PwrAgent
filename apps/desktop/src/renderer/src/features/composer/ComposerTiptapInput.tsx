@@ -23,6 +23,7 @@ import {
 import { buildSkillTooltip, findSkillTrigger } from "../../lib/skill-mentions";
 import {
   buildDirectoryReferenceTooltip,
+  buildFileReferenceTooltip,
   findDirectoryReferenceTrigger,
 } from "../../lib/directory-references";
 import { tildifyPath } from "../../lib/tildify-path";
@@ -124,19 +125,28 @@ const SkillMention = Mention.extend({
     class: "chip skill-chip composer-tiptap-input__mention",
   },
   renderHTML: ({ node }) => {
-    if (node.attrs.kind === "directory") {
+    if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
       // Directory-reference chip: `name` is the tracked directory's
-      // label, `path` its absolute path. Reuses the data-skill-* attr
-      // names so the shared parseHTML fallbacks round-trip both kinds.
-      const label = String(node.attrs.name ?? "directory");
+      // label, `path` its absolute path. File-reference chips are the
+      // same shape with `name` = basename and a path-only tooltip.
+      // Reuses the data-skill-* attr names so the shared parseHTML
+      // fallbacks round-trip every kind.
+      const isFile = node.attrs.kind === "file";
+      const label = String(node.attrs.name ?? (isFile ? "file" : "directory"));
       const path = typeof node.attrs.path === "string" ? node.attrs.path : "";
-      const tooltip = path ? buildDirectoryReferenceTooltip(path) : "";
+      const tooltip = path
+        ? isFile
+          ? buildFileReferenceTooltip(path)
+          : buildDirectoryReferenceTooltip(path)
+        : "";
       return [
         "span",
         {
-          class: "chip directory-chip composer-tiptap-input__mention",
+          class: isFile
+            ? "chip file-chip composer-tiptap-input__mention"
+            : "chip directory-chip composer-tiptap-input__mention",
           "data-type": "mention",
-          "data-mention-kind": "directory",
+          "data-mention-kind": isFile ? "file" : "directory",
           "data-composer-skill-token-id": String(node.attrs.id ?? ""),
           "data-id": String(node.attrs.id ?? ""),
           "data-label": label,
@@ -171,7 +181,7 @@ const SkillMention = Mention.extend({
     ];
   },
   renderText: ({ node }) =>
-    node.attrs.kind === "directory"
+    node.attrs.kind === "directory" || node.attrs.kind === "file"
       ? tildifyPath(String(node.attrs.path ?? node.attrs.name ?? ""))
       : `$${String(node.attrs.name ?? node.attrs.id ?? "")}`,
   suggestion: {
@@ -836,7 +846,11 @@ function mentionAttrsToSkill(
       typeof attrs.shortDescription === "string"
         ? attrs.shortDescription
         : undefined,
-    ...(attrs.kind === "directory" ? { kind: "directory" as const } : {}),
+    ...(attrs.kind === "directory"
+      ? { kind: "directory" as const }
+      : attrs.kind === "file"
+        ? { kind: "file" as const }
+        : {}),
   };
 }
 
@@ -2442,12 +2456,17 @@ export const ComposerTiptapInput = forwardRef<
             attribute.value,
           ]),
         );
-        if (attrs["data-mention-kind"] === "directory") {
+        if (
+          attrs["data-mention-kind"] === "directory" ||
+          attrs["data-mention-kind"] === "file"
+        ) {
           const path = attrs["data-skill-path"];
           if (path) {
             node.setAttribute(
               "data-tooltip",
-              buildDirectoryReferenceTooltip(path),
+              attrs["data-mention-kind"] === "file"
+                ? buildFileReferenceTooltip(path)
+                : buildDirectoryReferenceTooltip(path),
             );
           }
           return;

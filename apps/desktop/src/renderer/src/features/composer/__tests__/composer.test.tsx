@@ -2484,18 +2484,21 @@ describe("Composer", () => {
         id: "queued-1",
         text: "First duplicate-owned turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "First duplicate-owned turn" }],
       },
       {
         id: "queued-2",
         text: "Second duplicate-owned turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Second duplicate-owned turn" }],
       },
       {
         id: "queued-3",
         text: "Third duplicate-owned turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Third duplicate-owned turn" }],
       },
     ]);
@@ -2543,6 +2546,7 @@ describe("Composer", () => {
         id: "queued-review",
         text: "/review main",
         imageAttachments: [],
+        fileAttachments: [],
         reviewCommand: {
           displayText: "Review changes against main",
           target: { type: "baseBranch", branch: "main" },
@@ -2552,6 +2556,7 @@ describe("Composer", () => {
         id: "queued-turn",
         text: "Run after failed review",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Run after failed review" }],
       },
     ]);
@@ -4444,6 +4449,7 @@ describe("Composer", () => {
         id: "queued-later",
         text: "Later scheduled turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Later scheduled turn" }],
         scheduledSendAt: Date.now() + 2 * 60 * 60_000,
       },
@@ -4451,6 +4457,7 @@ describe("Composer", () => {
         id: "queued-sooner",
         text: "Sooner scheduled turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Sooner scheduled turn" }],
         scheduledSendAt: Date.now() + 15 * 60_000,
       },
@@ -9603,6 +9610,235 @@ describe("Composer", () => {
     }
   });
 
+  it("mints file chips from the @ popover's Add file… action", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "Repo",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const repoDirectory: NavigationDirectorySummary = {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 20,
+      };
+      const pickFileFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        paths: ["/Users/huntharo/notes/spec.md"],
+      }));
+      const onMaterializeLaunchpad = vi.fn(
+        async (..._args: unknown[]) => undefined,
+      );
+
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            pickFileFromDisk,
+          }}
+          directory={repoDirectory}
+          directories={[repoDirectory]}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={onMaterializeLaunchpad}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("New thread"), {
+        target: { value: "Check @" },
+      });
+
+      const listbox = screen.getByRole("listbox", { name: "Directories" });
+      // Only the file action renders — this composer has no
+      // onPickDirectoryForReference, so the directory action is hidden.
+      expect(
+        within(listbox).queryByRole("button", { name: "+ Add directory…" })
+      ).not.toBeInTheDocument();
+      expect(
+        within(listbox).getByRole("button", { name: "+ Add file…" })
+      ).toBeInTheDocument();
+      await clickButton("+ Add file…");
+
+      expect(pickFileFromDisk).toHaveBeenCalledOnce();
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      await waitFor(() => {
+        expect(within(richInput).getByText("@spec.md")).toBeInTheDocument();
+      });
+      const chip = within(richInput).getByText("@spec.md");
+      expect(chip).toHaveAttribute("data-mention-kind", "file");
+      expect(chip).toHaveAttribute(
+        "data-skill-path",
+        "/Users/huntharo/notes/spec.md"
+      );
+      expect(
+        screen.queryByRole("listbox", { name: "Directories" })
+      ).not.toBeInTheDocument();
+
+      await clickButton("Start thread");
+
+      await waitFor(() => {
+        expect(onMaterializeLaunchpad).toHaveBeenCalled();
+      });
+      const materializedInput = onMaterializeLaunchpad.mock
+        .calls[0][1] as unknown as { type: string; text: string }[];
+      expect(materializedInput).toEqual([
+        {
+          type: "text",
+          text: "Check [@spec.md](~/notes/spec.md)",
+        },
+      ]);
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("mints a directory chip from the @ popover's Add directory… action", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "Repo",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const repoDirectory: NavigationDirectorySummary = {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 20,
+      };
+      const onPickDirectoryForReference = vi.fn(async () => ({
+        label: "agent-kit",
+        path: "/Users/huntharo/pwrdrvr/agent-kit",
+      }));
+
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          directory={repoDirectory}
+          directories={[repoDirectory]}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={async () => undefined}
+          onPickDirectoryForReference={onPickDirectoryForReference}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("New thread"), {
+        target: { value: "Look in @" },
+      });
+
+      screen.getByRole("listbox", { name: "Directories" });
+      await clickButton("+ Add directory…");
+
+      expect(onPickDirectoryForReference).toHaveBeenCalledOnce();
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      await waitFor(() => {
+        expect(within(richInput).getByText("@agent-kit")).toBeInTheDocument();
+      });
+      const chip = within(richInput).getByText("@agent-kit");
+      expect(chip).toHaveAttribute("data-mention-kind", "directory");
+      expect(chip).toHaveAttribute(
+        "data-skill-path",
+        "/Users/huntharo/pwrdrvr/agent-kit"
+      );
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("attaches picked files to the tray from the + Add reference menu", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const pickFileFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        paths: ["/Users/huntharo/notes/spec.md"],
+      }));
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            pickFileFromDisk,
+          }}
+          disabled={false}
+          skills={[]}
+          onPickDirectoryForReference={async () => undefined}
+          thread={{
+            id: "thread-1",
+            title: "Build Codex client",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      await clickButton("Add reference");
+
+      const menu = screen.getByRole("menu");
+      expect(
+        within(menu).getByRole("menuitem", { name: "Add directory…" })
+      ).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(
+          within(menu).getByRole("menuitem", { name: "Add file…" })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(pickFileFromDisk).toHaveBeenCalledOnce();
+      // The pick lands in the attachment tray as a pill, not as an
+      // editor chip, and the menu closes.
+      expect(await screen.findByText("spec.md")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Remove spec.md" })
+      ).toBeInTheDocument();
+      expect(screen.queryByText("@spec.md")).not.toBeInTheDocument();
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
   it("commits a provider slash command insert without looping the draft", async () => {
     render(
       <Composer
@@ -11556,6 +11792,183 @@ describe("Composer", () => {
     });
   });
 
+  it("attaches a dropped non-image file as a path-only reference and appends it to the sent text", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const notesFile = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            getPathForFile: (file: File) => `/Users/huntharo/notes/${file.name}`,
+            startTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Build Codex client",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "Look at this" } });
+      fireEvent.drop(textarea, {
+        dataTransfer: {
+          files: [],
+          items: [
+            { kind: "file", type: "text/plain", getAsFile: () => notesFile },
+          ],
+        },
+      });
+
+      expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+      expect(normalizeImageFile).not.toHaveBeenCalled();
+
+      await clickButton("Send");
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            input: [
+              {
+                type: "text",
+                text: "Look at this\n\n[@notes.txt](~/notes/notes.txt)",
+              },
+            ],
+          })
+        );
+      });
+      // The submitted draft clears, and the file pill clears with it.
+      await waitFor(() =>
+        expect(screen.queryByText("notes.txt")).not.toBeInTheDocument()
+      );
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("sends a files-only draft as just the reference block", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const notesFile = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            getPathForFile: (file: File) => `/Users/huntharo/notes/${file.name}`,
+            startTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Build Codex client",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      fireEvent.drop(screen.getByLabelText("Reply"), {
+        dataTransfer: {
+          files: [],
+          items: [
+            { kind: "file", type: "text/plain", getAsFile: () => notesFile },
+          ],
+        },
+      });
+
+      expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+
+      await clickButton("Send");
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            input: [
+              { type: "text", text: "[@notes.txt](~/notes/notes.txt)" },
+            ],
+          })
+        );
+      });
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("removes a file attachment via its pill remove button", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const notesFile = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            getPathForFile: (file: File) => `/Users/huntharo/notes/${file.name}`,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Build Codex client",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      fireEvent.drop(screen.getByLabelText("Reply"), {
+        dataTransfer: {
+          files: [],
+          items: [
+            { kind: "file", type: "text/plain", getAsFile: () => notesFile },
+          ],
+        },
+      });
+
+      expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Remove notes.txt" })
+      );
+
+      await waitFor(() =>
+        expect(screen.queryByText("notes.txt")).not.toBeInTheDocument()
+      );
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
   it("keeps Shift+Enter available for a newline", () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
@@ -12073,12 +12486,14 @@ describe("Composer", () => {
         id: "queued-1",
         text: "First queued stale turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "First queued stale turn" }],
       },
       {
         id: "queued-2",
         text: "Second queued follow-up",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Second queued follow-up" }],
       },
     ]);

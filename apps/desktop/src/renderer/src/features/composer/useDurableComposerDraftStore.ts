@@ -228,6 +228,7 @@ export function snapshotFromDraftRecord(
     draft: record.text,
     editorDocument: record.editorDocument as JSONContent | undefined,
     imageAttachments: record.imageAttachments,
+    fileAttachments: record.fileAttachments,
     skillTokens: record.skillTokens,
   };
 }
@@ -254,6 +255,7 @@ function buildDraftRecord(
     editorDocument: snapshot.editorDocument as ComposerDraftJsonValue | undefined,
     skillTokens: snapshot.skillTokens,
     imageAttachments: snapshot.imageAttachments,
+    fileAttachments: snapshot.fileAttachments,
     status,
     createdAt,
     updatedAt: now,
@@ -299,11 +301,16 @@ function shouldRecordHistory(
   const hasRecoverableContent =
     snapshot.draft.trim().length > 0 ||
     snapshot.imageAttachments.length > 0 ||
+    (snapshot.fileAttachments?.length ?? 0) > 0 ||
     snapshot.skillTokens.length > 0;
   if (status === "sent") {
     return hasRecoverableContent;
   }
-  if (snapshot.imageAttachments.length > 0 || snapshot.skillTokens.length > 0) {
+  if (
+    snapshot.imageAttachments.length > 0 ||
+    (snapshot.fileAttachments?.length ?? 0) > 0 ||
+    snapshot.skillTokens.length > 0
+  ) {
     return true;
   }
   return snapshot.draft.trim().length >= HISTORY_TEXT_THRESHOLD;
@@ -428,6 +435,9 @@ function hashDraftContent(snapshot: ComposerDraftSnapshot): string {
     })),
     imageAttachments: snapshot.imageAttachments.map((attachment) => ({
       url: attachment.url,
+    })),
+    fileAttachments: (snapshot.fileAttachments ?? []).map((attachment) => ({
+      path: attachment.path,
     })),
   });
   let hash = 5381;

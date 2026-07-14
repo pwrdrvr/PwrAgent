@@ -1,4 +1,4 @@
-import { clipboard, contextBridge, ipcRenderer } from "electron";
+import { clipboard, contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   AgentEvent,
   AutomationIdRequest,
@@ -121,6 +121,7 @@ import type {
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
   PickDirectoryFromDiskResponse,
+  PickFileFromDiskResponse,
   PickGhCommandResponse,
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
@@ -379,6 +380,7 @@ import {
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
+  NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
@@ -1242,6 +1244,21 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(COMPOSER_DRAFT_LIST_LATEST_CHANNEL),
   pickDirectoryFromDisk: async (): Promise<PickDirectoryFromDiskResponse> =>
     await ipcRenderer.invoke(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL),
+  pickFileFromDisk: async (): Promise<PickFileFromDiskResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL),
+  /**
+   * Resolve the on-disk path of a dropped/pasted File object. Electron
+   * removed the legacy `File.path` augmentation; `webUtils.getPathForFile`
+   * is its sandbox-safe replacement. Returns "" for synthetic Files that
+   * have no backing path.
+   */
+  getPathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return "";
+    }
+  },
   registerDirectoryFromDisk: async (
     request: RegisterDirectoryFromDiskRequest,
   ): Promise<RegisterDirectoryFromDiskResponse> =>

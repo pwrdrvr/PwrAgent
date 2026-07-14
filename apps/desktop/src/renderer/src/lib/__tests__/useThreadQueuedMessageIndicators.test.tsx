@@ -28,6 +28,7 @@ function makeQueuedTurn(
     id: "queued-1",
     text: "hello",
     imageAttachments: [],
+    fileAttachments: [],
     ...overrides,
   };
 }

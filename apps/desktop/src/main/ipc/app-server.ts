@@ -47,6 +47,7 @@ import {
   type GhStatus,
   type LinkedDirectorySummary,
   type PickDirectoryFromDiskResponse,
+  type PickFileFromDiskResponse,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
   type RefreshDirectoryGitStatusesRequest,
@@ -162,6 +163,7 @@ import {
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
+  NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
@@ -3246,6 +3248,40 @@ class DesktopAppServerService {
     return { canceled: false, path: result.filePaths[0] };
   }
 
+  async pickFileFromDisk(
+    parentWindow?: BrowserWindow,
+  ): Promise<PickFileFromDiskResponse> {
+    const e2ePickPaths = process.env.PWRAGENT_REPLAY_FIXTURE_PATH
+      ? process.env.PWRAGENT_E2E_PICK_FILE_PATHS?.trim()
+      : undefined;
+    if (e2ePickPaths) {
+      return {
+        canceled: false,
+        paths: e2ePickPaths.split(":").filter(Boolean),
+      };
+    }
+
+    const window =
+      parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    const defaultPath = this.lastPickedDirectoryParent ?? os.homedir();
+    const options = {
+      title: "Add file",
+      buttonLabel: "Add file",
+      defaultPath,
+      properties: ["openFile", "multiSelections"] as Array<
+        "openFile" | "multiSelections"
+      >,
+    };
+    const result = window
+      ? await dialog.showOpenDialog(window, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    this.lastPickedDirectoryParent = path.dirname(result.filePaths[0]);
+    return { canceled: false, paths: result.filePaths };
+  }
+
   async registerDirectoryFromDisk(
     request: RegisterDirectoryFromDiskRequest,
   ): Promise<RegisterDirectoryFromDiskResponse> {
@@ -4082,6 +4118,16 @@ export function registerAppServerIpcHandlers(): void {
       // the focused window inside `pickDirectoryFromDisk`.
       const senderWindow = BrowserWindow.fromWebContents(event.sender);
       return await appServerService.pickDirectoryFromDisk(
+        senderWindow ?? undefined,
+      );
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
+    async (event): Promise<PickFileFromDiskResponse> => {
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      return await appServerService.pickFileFromDisk(
         senderWindow ?? undefined,
       );
     },

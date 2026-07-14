@@ -217,6 +217,13 @@ export const NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL =
   "navigation:pick-directory-from-disk";
 export const NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL =
   "navigation:register-directory-from-disk";
+/**
+ * File variant of the picker above, used by the composer's file
+ * reference flows ("Add file…" in the @ popover / + menu). No register
+ * step — files are referenced by path, not tracked like directories.
+ */
+export const NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL =
+  "navigation:pick-file-from-disk";
 export const COMPOSER_DRAFT_SAVE_CHANNEL = "composer-draft:save";
 export const COMPOSER_DRAFT_RECORD_HISTORY_CHANNEL =
   "composer-draft:record-history";

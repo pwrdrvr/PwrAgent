@@ -128,6 +128,7 @@ import type {
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
   PickDirectoryFromDiskResponse,
+  PickFileFromDiskResponse,
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
   RegisterDirectoryFromDiskRequest,
@@ -687,6 +688,13 @@ export type DesktopApi = {
    * seed a launchpad in one round-trip.
    */
   pickDirectoryFromDisk?: () => Promise<PickDirectoryFromDiskResponse>;
+  /** Composer file-reference picker (multi-select; paths only, no register step). */
+  pickFileFromDisk?: () => Promise<PickFileFromDiskResponse>;
+  /**
+   * Resolve the on-disk path of a dropped/pasted File (Electron
+   * webUtils.getPathForFile). Returns "" when the File has no backing path.
+   */
+  getPathForFile?: (file: File) => string;
   registerDirectoryFromDisk?: (
     request: RegisterDirectoryFromDiskRequest,
   ) => Promise<RegisterDirectoryFromDiskResponse>;

@@ -764,6 +764,14 @@ export type ThreadViewProps = {
   onSelectNoDirectoryFromPicker?: () => void;
   onPickAndRegisterDirectory?: () => void;
   onPickAndAttachDirectoryToThread?: () => void;
+  /**
+   * Composer reference picker ("@ → Add directory…", the "+" menu): OS
+   * dialog → register (no navigation) → resolve with label/path so the
+   * composer can mint a reference chip. Undefined on cancel/failure.
+   */
+  onPickDirectoryForReference?: () => Promise<
+    { label: string; path: string } | undefined
+  >;
   onAttachDirectoryReferences?: (
     paths: string[],
     target: {
@@ -2411,6 +2419,7 @@ export function ThreadView(props: ThreadViewProps) {
               onPickAndAttachDirectoryToThread={
                 props.onPickAndAttachDirectoryToThread
               }
+              onPickDirectoryForReference={props.onPickDirectoryForReference}
               onClearPickDirectoryError={props.onClearPickDirectoryError}
               pickDirectoryError={props.pickDirectoryError}
               pickingDirectory={props.pickingDirectory}
@@ -2653,6 +2662,7 @@ export function ThreadView(props: ThreadViewProps) {
             onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
             onAttachDirectoryReferences={props.onAttachDirectoryReferences}
+            onPickDirectoryForReference={props.onPickDirectoryForReference}
             pendingRequestActive={Boolean(props.pendingRequest)}
             pendingUserInputActive={Boolean(
               props.pendingUserInput || props.pendingMcpInteraction

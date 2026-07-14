@@ -1,5 +1,8 @@
 import type { AppServerBackendKind, ThreadIdentifier } from "./normalized-app-server";
-import type { NavigationLaunchpadImageAttachment } from "./navigation";
+import type {
+  NavigationLaunchpadFileAttachment,
+  NavigationLaunchpadImageAttachment,
+} from "./navigation";
 
 export type ComposerDraftScopeKind = "thread" | "launchpad" | "empty";
 
@@ -24,9 +27,11 @@ export type ComposerDraftSkillToken = {
   /**
    * Absent for skill mentions (the original kind). "directory" marks a
    * composer directory-reference chip: `name` is the tracked directory's
-   * label and `path` its absolute path.
+   * label and `path` its absolute path. "file" marks a file-reference
+   * chip: `name` is the file's basename and `path` its absolute file
+   * path. Both serialize to the same `[@label](~/path)` markdown.
    */
-  kind?: "directory";
+  kind?: "directory" | "file";
 };
 
 export type ComposerDraftSnapshotRecord = {
@@ -40,6 +45,7 @@ export type ComposerDraftSnapshotRecord = {
   editorDocument?: ComposerDraftJsonValue;
   skillTokens: ComposerDraftSkillToken[];
   imageAttachments: NavigationLaunchpadImageAttachment[];
+  fileAttachments?: NavigationLaunchpadFileAttachment[];
   status: ComposerDraftLifecycle;
   createdAt: number;
   updatedAt: number;

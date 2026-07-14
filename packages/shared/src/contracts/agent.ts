@@ -453,6 +453,7 @@ export type UpdateDirectoryLaunchpadRequest = {
     Pick<
       NavigationLaunchpadDraft,
       | "imageAttachments"
+      | "fileAttachments"
       | "prompt"
       | "editorDocument"
       | "backend"
@@ -601,6 +602,16 @@ export type SetCodexThreadEnvironmentResponse = {
 export type PickDirectoryFromDiskResponse =
   | { canceled: true }
   | { canceled: false; path: string };
+
+/**
+ * Result of the composer's "Add file…" reference picker. Multi-select is
+ * allowed — each picked path becomes one file-reference chip or tray
+ * attachment. Files are referenced by path only; contents are never read
+ * by the picker.
+ */
+export type PickFileFromDiskResponse =
+  | { canceled: true }
+  | { canceled: false; paths: string[] };
 
 export type RegisterDirectoryFromDiskRequest = {
   /** Absolute path the user picked from the system dialog. */

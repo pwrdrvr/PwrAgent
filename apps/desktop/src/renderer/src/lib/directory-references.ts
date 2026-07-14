@@ -91,6 +91,29 @@ export function buildDirectoryReferenceInsertText(
   return tildifyPath(directory.path ?? "", homeDir);
 }
 
+/**
+ * Display label for a composer file reference: the path's basename.
+ * Handles both separators (a Windows path pasted on macOS still labels
+ * sensibly) and trailing separators; falls back to the input when no
+ * segment survives.
+ */
+export function fileLabelFromPath(path: string): string {
+  const segments = path.split(/[/\\]/).filter((segment) => segment.length > 0);
+  return segments[segments.length - 1] ?? path;
+}
+
+/**
+ * Hover copy for a file-reference chip/pill: just the tilde path. Unlike
+ * directory references there is no "linked to the thread" suffix — the
+ * file rides along as a path in the outgoing text, nothing gets linked.
+ */
+export function buildFileReferenceTooltip(
+  path: string,
+  homeDir: string | undefined = getHomeDir(),
+): string {
+  return tildifyPath(path, homeDir);
+}
+
 /** Hover copy shared by the editor chip and the setup-row pill. */
 export function buildDirectoryReferenceTooltip(
   path: string,

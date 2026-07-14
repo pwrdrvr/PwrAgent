@@ -11463,6 +11463,17 @@ textarea,
   color: var(--text-secondary);
 }
 
+/* Composer file-reference mention chip (`@basename`). Same neutral
+   silhouette as the directory chip — files are path references, not
+   skills, so the accent stays reserved. */
+.file-chip {
+  max-width: 100%;
+  vertical-align: middle;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+}
+
 .skill-chip--removable {
   gap: 6px;
   padding-right: 4px;
@@ -14800,6 +14811,49 @@ textarea,
   white-space: nowrap;
 }
 
+/* Dropped/picked file reference pill in the attachments tray. Same
+   28px silhouette as the directory-reference pill, but a solid border:
+   the file is an explicit attachment with its own remove control, not
+   an informational echo of the draft text. */
+.composer__file-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.composer__file-attachment-label {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__file-attachment-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.composer__file-attachment-remove:hover {
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+}
+
 .composer__inline-error {
   max-width: min(320px, 100%);
   color: var(--danger-text);
@@ -15519,6 +15573,14 @@ textarea,
   cursor: default;
 }
 
+/* Setup-row "+" reference button: the wrapper anchors the reused
+   composer-dropdown__menu popover above the toggle. */
+.composer__add-reference {
+  display: inline-flex;
+  position: relative;
+  flex: 0 0 auto;
+}
+
 .composer__autocomplete {
   position: absolute;
   right: 0;
@@ -15646,6 +15708,23 @@ textarea,
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+/* Divider between the matched options and the "Add directory… / Add
+   file…" action rows at the bottom of the `@` popover. */
+.composer__autocomplete-separator {
+  flex: 0 0 auto;
+  margin: 4px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.composer__autocomplete-option--action .composer__autocomplete-title {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.composer__autocomplete-option--action:hover .composer__autocomplete-title {
+  color: var(--text-primary);
 }
 
 .composer__review-config {

@@ -290,6 +290,9 @@ function normalizeDraftRecord(
     imageAttachments: Array.isArray(draft.imageAttachments)
       ? draft.imageAttachments
       : [],
+    fileAttachments: Array.isArray(draft.fileAttachments)
+      ? draft.fileAttachments
+      : undefined,
     skillTokens: Array.isArray(draft.skillTokens) ? draft.skillTokens : [],
   };
 }

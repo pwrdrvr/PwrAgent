@@ -1007,6 +1007,7 @@ function DesktopAppShell(props: {
     onPickAndAttachDirectoryToThread: () => {
       void navigation.pickAndAttachDirectoryToSelectedThread();
     },
+    onPickDirectoryForReference: () => navigation.pickDirectoryForReference(),
     onAttachDirectoryReferences: (
       paths: string[],
       target: { backend: AppServerBackendKind; threadId: string }
