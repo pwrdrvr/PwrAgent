@@ -353,13 +353,16 @@
 /* Suppress directory / PR / agent / binding chips in the list. Reaction
    and pin markers stay visible — reactions because they're user-curated
    signals, pin because the pin marker on its own is information-dense.
+   The "Scheduled"/"Queued" pending-send chips also stay visible: a pending
+   outbound message is a time-sensitive commitment the operator needs to
+   spot at a glance, so it survives the density strip like the pin marker.
 
    Scope the rule to `.thread-row__chips` so non-list surfaces that
    carry a `.thread-row__chip--*` variant (e.g. the questionnaire's mode
    chip in the transcript) don't get collapsed when compact density is
    on. The skill chip in the composer and the standalone SkillChip use
    `.chip` directly and aren't affected by this rule. */
-:root[data-density="compact"] .thread-row__chips .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--pin) {
+:root[data-density="compact"] .thread-row__chips .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--pin):not(.thread-row__chip--scheduled):not(.thread-row__chip--queued) {
   display: none;
 }
 
@@ -3625,6 +3628,26 @@ textarea,
 .thread-row__chip--approval:hover,
 .thread-row__chip--input:hover {
   background: var(--accent-strong);
+}
+
+/* Pending outbound-message chips. "Scheduled" is the solid-accent CTA —
+   a future send time is the highest-priority signal, so it mirrors the
+   approval/input pill weight. "Queued" (waiting on the active turn) is
+   the softer accent-tinted variant so it reads as subordinate when the
+   two labels sit in the same list. Only one renders per row (priority is
+   resolved upstream), but they share the base pill sizing. */
+.thread-row__chip--scheduled {
+  border: 1px solid var(--accent-strong);
+  background: var(--accent);
+  color: var(--button-text);
+  font-weight: 700;
+}
+
+.thread-row__chip--queued {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-weight: 600;
 }
 
 .path-copy-target {
@@ -15878,6 +15901,65 @@ textarea,
 
 .composer__send-split--open .composer__send-schedule-button svg {
   transform: rotate(180deg);
+}
+
+/* Middle zone of the split pill shown only while a draft schedule is pending
+   (e.g. editing a scheduled item). A checkbox + countdown that arms/disarms
+   the schedule: armed → Send keeps the schedule, unarmed → Send fires now.
+   Reuses the pill's seam convention (right-hairline between zones). */
+.composer__actions .composer__send-split-pill .composer__send-schedule-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid var(--accent-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.composer__send-split-pill:hover .composer__send-schedule-toggle,
+.composer__send-split--open .composer__send-split-pill .composer__send-schedule-toggle {
+  border-right-color: transparent;
+}
+
+.composer__send-schedule-toggle-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  color: var(--button-text);
+}
+
+.composer__send-schedule-toggle.is-armed .composer__send-schedule-toggle-box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.composer__send-schedule-toggle:not(.is-armed) .composer__send-schedule-toggle-label {
+  opacity: 0.6;
+}
+
+/* Hover fills this zone like the caret/Send zones so it's clear a click lands
+   here — but keep the armed check box readable by giving it a solid outline. */
+.composer__send-split-pill .composer__send-schedule-toggle:not(:disabled):hover {
+  background: var(--accent);
+  color: var(--button-text);
+}
+
+.composer__send-split-pill
+  .composer__send-schedule-toggle:not(:disabled):hover
+  .composer__send-schedule-toggle-box {
+  border-color: var(--button-text);
 }
 
 /* Per-zone hover so it's always obvious which half a click will fire — the fix

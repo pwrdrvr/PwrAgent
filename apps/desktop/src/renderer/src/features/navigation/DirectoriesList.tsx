@@ -35,11 +35,13 @@ import {
   getDropIndicatorPosition,
   type DropIndicatorState,
 } from "./drag-drop";
+import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { ThreadRow } from "./ThreadRow";
 
 type DirectoriesListProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
   inputRequestThreadKeys?: Record<string, boolean>;
+  queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   composerSourceThreadKey?: string;
   directories: NavigationDirectorySummary[];
   selectedItemKey?: string;
@@ -487,6 +489,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               key={`${directory.key}:${childKey}`}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
+              queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               compact
               draggable={reorderable}
@@ -615,6 +618,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             key={`${directory.key}:${threadKey}`}
             approvalRequestThreadKeys={props.approvalRequestThreadKeys}
             inputRequestThreadKeys={props.inputRequestThreadKeys}
+            queuedMessageThreadKeys={props.queuedMessageThreadKeys}
             composerSourceThreadKey={props.composerSourceThreadKey}
             compact
             draggable={Boolean(props.onReorderThreadPins)}
@@ -920,6 +924,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                           inputRequestThreadKeys={props.inputRequestThreadKeys}
+                          queuedMessageThreadKeys={props.queuedMessageThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           compact
                           dropIndicator={

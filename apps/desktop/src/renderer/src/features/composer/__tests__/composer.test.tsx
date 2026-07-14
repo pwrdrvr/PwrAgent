@@ -131,6 +131,8 @@ function createComposerDraftStore(): ComposerDraftStore {
     getPendingSteer: (scopeKey) => pendingSteers.get(scopeKey),
     getQueuedTurn: (scopeKey) => queuedTurns.get(scopeKey)?.[0],
     getQueuedTurns: (scopeKey) => queuedTurns.get(scopeKey) ?? [],
+    getQueuedTurnVersion: () => 0,
+    subscribeQueuedTurns: () => () => {},
     removeQueuedTurnAt: (scopeKey, index) => {
       const current = queuedTurns.get(scopeKey) ?? [];
       const next = [...current];
@@ -1748,10 +1750,16 @@ describe("Composer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(textarea).toHaveValue("Original scheduled text");
-    expect(screen.getByRole("button", { name: "Send in 1h" })).toBeEnabled();
+    // The Send button is plain "Send"; the schedule surfaces as an armed
+    // toggle beside it rather than a countdown label on Send itself.
+    const scheduleToggle = screen.getByRole("switch");
+    expect(scheduleToggle).toBeChecked();
+    expect(scheduleToggle).toHaveTextContent("in 1h");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 
     fireEvent.change(textarea, { target: { value: "Edited scheduled text" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send in 1h" }));
+    // Toggle stays armed → Send keeps the schedule (re-queues at the same time).
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(textarea).toHaveValue("");
@@ -1761,6 +1769,105 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
       "Edited scheduled text"
     );
+  });
+
+  it("sends now when the schedule toggle is unchecked while editing a scheduled draft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-scheduled",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Edit scheduled send",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Scheduled text" } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    // Uncheck the schedule so Send fires immediately instead of re-queuing.
+    fireEvent.click(screen.getByRole("switch"));
+    expect(screen.getByRole("switch")).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(startTurn.mock.calls[0]![0].input).toEqual([
+      { type: "text", text: "Scheduled text" },
+    ]);
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    // The toggle is gone once the schedule is consumed.
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("sends a scheduled queued message now via Send now when no turn is active", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-scheduled",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Send scheduled now",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Scheduled for later" } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+
+    // No active turn → the queued entry offers "Send now", not a dead "Steer".
+    expect(screen.queryByRole("button", { name: "Steer" })).not.toBeInTheDocument();
+    const sendNow = screen.getByRole("button", { name: "Send now" });
+
+    await act(async () => {
+      fireEvent.click(sendNow);
+    });
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(startTurn.mock.calls[0]![0].input).toEqual([
+      { type: "text", text: "Scheduled for later" },
+    ]);
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
   });
 
   it("preserves schedule selection through bare review configuration", async () => {
@@ -1817,6 +1924,48 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
       "Review changes against main"
     );
+  });
+
+  it("hides the schedule toggle while the review-config panel owns the schedule", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(async (request: StartReviewRequest) => ({
+            backend: request.backend,
+            threadId: request.threadId,
+            reviewThreadId: request.threadId,
+            turnId: "turn-review-1",
+          })),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Scheduled review",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 30m" }));
+
+    // The review panel owns the scheduled-send button; the main-composer
+    // schedule toggle must NOT appear (it doesn't gate the review submit, so
+    // it would be a dead control that pretends to unarm the schedule).
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
   it("shows a 5h context reset schedule option when the backend exposes a reset", async () => {

@@ -1,6 +1,7 @@
 export { ArrowUpIcon } from "./ArrowUpIcon";
 export { AutomationsIcon } from "./AutomationsIcon";
 export { BranchIcon } from "./BranchIcon";
+export { CheckIcon } from "./CheckIcon";
 export { ChevronLeftIcon } from "./ChevronLeftIcon";
 export { ChevronRightIcon } from "./ChevronRightIcon";
 export { ChevronUpIcon } from "./ChevronUpIcon";

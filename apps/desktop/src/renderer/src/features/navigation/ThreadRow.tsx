@@ -18,6 +18,7 @@ import {
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { PrChip } from "../pr-status/PrChip";
 import type { DropIndicatorPosition } from "./drag-drop";
 import { ReactionPicker } from "./ReactionPicker";
@@ -33,6 +34,11 @@ const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
   inputRequestThreadKeys?: Record<string, boolean>;
+  /**
+   * Identity key → pending outbound-message state, surfaced as the
+   * "Scheduled"/"Queued" chip. Absent key = no pending send.
+   */
+  queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   /**
    * Identity key of the card the open composer was spawned from. When it
    * matches this row, the row renders as the orange "composing" source.
@@ -262,6 +268,7 @@ export function ThreadRow(props: ThreadRowProps) {
           <ThreadMetaChips
             hasApprovalRequest={props.approvalRequestThreadKeys?.[threadKey] === true}
             hasInputRequest={props.inputRequestThreadKeys?.[threadKey] === true}
+            queuedMessageState={props.queuedMessageThreadKeys?.[threadKey]}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
             thread={props.thread}
