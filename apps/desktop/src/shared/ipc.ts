@@ -303,6 +303,16 @@ export const INTEGRATED_TERMINAL_CLOSE_CHANNEL = "integrated-terminal:close";
 export const INTEGRATED_TERMINAL_OUTPUT_CHANNEL = "integrated-terminal:output";
 export const INTEGRATED_TERMINAL_EXIT_CHANNEL = "integrated-terminal:exit";
 export const INTEGRATED_TERMINAL_ERROR_CHANNEL = "integrated-terminal:error";
+export const DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL =
+  "diagnostics:capture-heap-snapshot";
+export const DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL =
+  "diagnostics:heap-snapshot-captured";
+export const INTEGRATED_TERMINAL_LIST_CHANNEL = "integrated-terminal:list";
+export const INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL =
+  "integrated-terminal:set-panel-hidden";
+export const INTEGRATED_TERMINAL_SESSIONS_CHANNEL =
+  "integrated-terminal:sessions";
+export const INTEGRATED_TERMINAL_REVEAL_CHANNEL = "integrated-terminal:reveal";
 export const APP_METADATA_READ_CHANNEL = "app:read-metadata";
 export const APP_LICENSE_DOCUMENT_READ_CHANNEL = "app:read-license-document";
 export const APP_CHANGELOG_DOCUMENT_READ_CHANNEL = "app:read-changelog-document";

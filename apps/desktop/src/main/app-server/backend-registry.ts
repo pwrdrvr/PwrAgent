@@ -329,6 +329,7 @@ import {
 } from "./codex-environment-config";
 import {
   applyLocalCodexEnvironmentSelection,
+  attachDetachedCommandThreadId,
   CodexEnvironmentStartupError,
   startLocalCodexEnvironmentAction,
   stopCodexEnvironmentDetachedCommand,
@@ -2125,11 +2126,17 @@ function parseReservedAcpStartThreadKey(
   return { backend, threadId };
 }
 
+/**
+ * Quit blockers are keyed the same way as every other thread identity, so the
+ * quit dialog can parse them back into `{backend, threadId}` and link to the
+ * thread. The hand-rolled `${backend}:${threadId}` this used to build was
+ * ambiguous for ACP backends, whose kind ("acp:grok") already contains a colon.
+ */
 function formatQuitThreadKey(
   backend: AppServerBackendKind,
   threadId: string,
 ): string {
-  return `${backend}:${threadId}`;
+  return buildThreadIdentityKey(backend, threadId);
 }
 
 function prependAutomationRuntimeContext(params: {
@@ -10907,6 +10914,10 @@ export class DesktopBackendRegistry {
           nextRuntime = await startLocalCodexEnvironmentAction({
             actionId: request.actionId,
             runId,
+            owner: {
+              backend: request.backend,
+              threadId: request.threadId,
+            },
             commandRunner: this.codexEnvironmentCommandRunner,
             env: this.codexEnvironmentCommandEnv,
             runtime: runtimeForAction,
@@ -11465,6 +11476,10 @@ export class DesktopBackendRegistry {
         onActionDetachedExit,
         onActionDetachedOutput,
         actionRunId: autoActionRunId,
+        // The thread doesn't exist yet — `attachDetachedCommandThreadId` below
+        // back-fills it once `startThread` returns. Registering the owner now
+        // is what keeps an auto-started dev server visible to the quit dialog.
+        owner: { backend: codexActionBackend },
         hydrationStore: this.codexEnvironmentHydrationStore,
         selection: codexEnvironmentSelection,
       });
@@ -11493,6 +11508,10 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime,
     });
     pendingActionThreadId = startThreadResponse.threadId;
+    // The auto-started environment action spawned before this thread existed;
+    // give its detached-process record an owner now so the quit dialog can name
+    // it and link back here.
+    attachDetachedCommandThreadId(autoActionRunId, startThreadResponse.threadId);
     if (request.parentThreadId?.trim()) {
       await this.overlayStore.setThreadParent?.({
         backend: startThreadResponse.backend,

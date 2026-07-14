@@ -11588,9 +11588,12 @@ command = "pnpm dev"
       },
     });
 
+    // Canonical thread-identity keys: the ACP backend kind ("acp:grok") is
+    // URI-encoded so the quit dialog can split backend from thread id and link
+    // to the thread.
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 2,
-      threadIds: ["acp:grok:acp-thread-1", "codex:thread-1"],
+      threadIds: ["acp%3Agrok:acp-thread-1", "codex:thread-1"],
     });
 
     await registry.close();

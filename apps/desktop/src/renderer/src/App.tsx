@@ -61,6 +61,7 @@ import {
   useThreadSessionState,
 } from "./lib/useThreadSessionState";
 import { setSidebarResizing } from "./lib/sidebar-resize-signal";
+import { useIntegratedTerminals } from "./lib/useIntegratedTerminals";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
@@ -68,6 +69,11 @@ import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWar
 import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { resolveBackendErrorNotice } from "./features/notifications/backend-error-notice";
+import {
+  buildHeapSnapshotHandoffMessage,
+  describeHeapSnapshotResult,
+  HEAP_SNAPSHOT_SECRET_WARNING,
+} from "../../shared/heap-snapshot";
 import {
   buildHotCpuProfileHandoffMessage,
   formatHotCpuProfileTriggerSummary,
@@ -254,6 +260,8 @@ function DesktopAppShell(props: {
   const [composerNotice, setComposerNotice] = useState<AppNoticeToastNotice>();
   const [hotCpuProfileNotice, setHotCpuProfileNotice] =
     useState<AppNoticeToastNotice>();
+  const [heapSnapshotNotice, setHeapSnapshotNotice] =
+    useState<AppNoticeToastNotice>();
   // Sticky (manual-dismiss) notice for backend turn failures and system
   // errors. These used to vanish silently — the turn just stopped thinking
   // with nothing to show for it. The toast stays until dismissed so a
@@ -301,6 +309,38 @@ function DesktopAppShell(props: {
           heapSnapshotSummary,
           " Copy this notice to hand off the profile path.",
         ].join(""),
+      });
+    });
+  }, [desktopApi]);
+
+  // On-demand heap snapshots. The capture (and its countdown) run in main, so
+  // the result can land here even if Settings was closed to stage the scenario.
+  useEffect(() => {
+    return desktopApi?.onHeapSnapshotCaptured?.((result) => {
+      const failed = result.artifacts.length === 0;
+      // A capture can half-succeed (main written, renderer window gone). Saying
+      // "captured" and hiding the errors would send someone off to analyze a
+      // snapshot that is missing the half they cared about.
+      const partial = !failed && result.errors.length > 0;
+      const title = failed
+        ? "Heap snapshot failed"
+        : partial
+          ? "Heap snapshot partially captured"
+          : "Heap snapshot captured";
+      const message = failed
+        ? result.errors.join("; ")
+        : [
+            describeHeapSnapshotResult(result),
+            partial ? ` Not captured: ${result.errors.join("; ")}.` : "",
+            ` ${HEAP_SNAPSHOT_SECRET_WARNING}`,
+          ].join("");
+      setHeapSnapshotNotice({
+        autoDismiss: false,
+        copyText: buildHeapSnapshotHandoffMessage(result),
+        detail: failed ? undefined : `Session: ${result.sessionDirectoryName}`,
+        id: `heap-snapshot:${result.capturedAt}`,
+        title,
+        message,
       });
     });
   }, [desktopApi]);
@@ -847,6 +887,20 @@ function DesktopAppShell(props: {
     launchpad: navigation.selectedLaunchpad,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
+  // Lives here, not in ThreadView: ThreadView unmounts on the search view and
+  // on any refresh that flips `threadDetailPending`, and terminal state kept
+  // inside it left the main process's PTYs running with nothing in the UI
+  // pointing at them.
+  const terminals = useIntegratedTerminals(desktopApi);
+  // Sidebar rows wear a terminal chip when a shell is alive for that thread —
+  // without it, a collapsed terminal is unfindable from the thread list.
+  const terminalThreadKeys = useMemo(
+    () =>
+      Object.fromEntries(
+        [...terminals.liveThreadKeys].map((threadKey) => [threadKey, true]),
+      ),
+    [terminals.liveThreadKeys],
+  );
   // Window-level masthead actions (Automations / Settings / New Thread).
   // Shared by the sidebar masthead's home (AppTitleBar on Windows) and the
   // thread-header relocation when the sidebar is hidden on macOS/Linux.
@@ -878,6 +932,7 @@ function DesktopAppShell(props: {
   const threadViewProps = {
     activeTurnId: session.activeTurnId,
     activeTurnStartedAt: session.activeTurnStartedAt,
+    terminals,
     addOptimisticReviewEntry: session.addOptimisticReviewEntry,
     addOptimisticUserMessage: session.addOptimisticUserMessage,
     backendError: backendSummaries.error,
@@ -1161,6 +1216,7 @@ function DesktopAppShell(props: {
           loading={navigation.loading}
           approvalRequestThreadKeys={session.approvalRequestThreadKeys}
           inputRequestThreadKeys={session.inputRequestThreadKeys}
+          terminalThreadKeys={terminalThreadKeys}
           queuedMessageThreadKeys={queuedMessageThreadKeys}
           composerSourceThreadKey={navigation.composerSourceThreadKey}
           selectedItemKey={navigation.selectedItemKey}
@@ -1467,6 +1523,11 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             notice={hotCpuProfileNotice}
             onDismiss={() => setHotCpuProfileNotice(undefined)}
+          />
+          <AppNoticeToast
+            desktopApi={desktopApi}
+            notice={heapSnapshotNotice}
+            onDismiss={() => setHeapSnapshotNotice(undefined)}
           />
           <AppNoticeToast
             desktopApi={desktopApi}

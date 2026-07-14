@@ -6,6 +6,10 @@ import type {
   ImageUploadFallbackResponse,
   ImageUploadNormalizationLogRequest,
 } from "../../../shared/image-normalization";
+import type {
+  CaptureHeapSnapshotRequest,
+  CaptureHeapSnapshotResult,
+} from "../../../shared/heap-snapshot";
 import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
 import type {
   IntegratedTerminalCloseRequest,
@@ -15,6 +19,10 @@ import type {
   IntegratedTerminalExitEvent,
   IntegratedTerminalOutputEvent,
   IntegratedTerminalResizeRequest,
+  IntegratedTerminalRevealEvent,
+  IntegratedTerminalSessionSummary,
+  IntegratedTerminalSessionsEvent,
+  IntegratedTerminalSetPanelHiddenRequest,
   IntegratedTerminalWriteRequest,
 } from "../../../shared/integrated-terminal";
 import type {
@@ -572,6 +580,22 @@ export type DesktopApi = {
   ) => () => void;
   onIntegratedTerminalError?: (
     callback: (event: IntegratedTerminalErrorEvent) => void,
+  ) => () => void;
+  captureHeapSnapshot?: (
+    request: CaptureHeapSnapshotRequest,
+  ) => Promise<{ delayMs: number }>;
+  onHeapSnapshotCaptured?: (
+    callback: (result: CaptureHeapSnapshotResult) => void,
+  ) => () => void;
+  listIntegratedTerminals?: () => Promise<IntegratedTerminalSessionSummary[]>;
+  setIntegratedTerminalPanelHidden?: (
+    request: IntegratedTerminalSetPanelHiddenRequest,
+  ) => Promise<void>;
+  onIntegratedTerminalSessions?: (
+    callback: (event: IntegratedTerminalSessionsEvent) => void,
+  ) => () => void;
+  onIntegratedTerminalReveal?: (
+    callback: (event: IntegratedTerminalRevealEvent) => void,
   ) => () => void;
   listThreads?: (
     request?: AppServerListThreadsRequest

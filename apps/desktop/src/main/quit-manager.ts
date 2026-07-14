@@ -1,12 +1,24 @@
 import { app, BrowserWindow } from "electron";
+import {
+  buildThreadIdentityKey,
+  parseThreadIdentityKey,
+  type AppServerBackendKind,
+} from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
+import {
+  listRunningDetachedCommands,
+  type DetachedCommandSummary,
+} from "./app-server/codex-environment-runtime";
 import { getIntegratedTerminalQuitSnapshot } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import {
   showQuitConfirmationDialog,
+  type QuitBlockerItem,
   type QuitConfirmationDialogResult,
 } from "./quit-confirmation-dialog";
+
+export type { QuitBlockerItem };
 
 export const QUIT_CONFIRMATION_COUNTDOWN_SECONDS = 10;
 
@@ -30,6 +42,8 @@ export type QuitBlockerSnapshot = {
   terminalSessionCount: number;
   terminalThreadKeys: string[];
   threadIds: string[];
+  actionRunCount: number;
+  items: QuitBlockerItem[];
 };
 
 export type QuitManagerDependencies = {
@@ -37,17 +51,26 @@ export type QuitManagerDependencies = {
     countdownSeconds: number;
     inProgressThreadCount: number;
     terminalSessionCount: number;
+    actionRunCount?: number;
+    items?: QuitBlockerItem[];
     parent?: BrowserWindow | null;
   }) => Promise<QuitConfirmationDialogResult>;
   getConfirmationEnabled: () => boolean;
   getFocusedWindow?: () => BrowserWindow | null;
   getQuitBlockers: () => QuitBlockerSnapshot;
+  /** Best-effort thread-title lookup for the dialog's links. */
+  resolveThreadTitles?: (
+    threadKeys: string[],
+  ) => Promise<Map<string, string>>;
   log: {
     info?: (message: string, meta?: Record<string, unknown>) => void;
     warn?: (message: string, meta?: Record<string, unknown>) => void;
   };
   performQuit: () => void;
 };
+
+/** Titles are a nicety; quitting must not hang on a slow app-server. */
+const QUIT_TITLE_RESOLVE_TIMEOUT_MS = 1_500;
 
 export type QuitManager = {
   allowImmediateQuit: () => void;
@@ -83,6 +106,7 @@ export function createQuitManager(
         "quit requested with active work; confirmation disabled",
         {
           count: snapshot.count,
+          actionRunCount: snapshot.actionRunCount,
           source: options.source,
           terminalSessionCount: snapshot.terminalSessionCount,
           terminalThreadKeys: snapshot.terminalThreadKeys,
@@ -103,6 +127,7 @@ export function createQuitManager(
 
     dependencies.log.warn?.("quit requested with active work", {
       count: snapshot.count,
+      actionRunCount: snapshot.actionRunCount,
       source: options.source,
       terminalSessionCount: snapshot.terminalSessionCount,
       terminalThreadKeys: snapshot.terminalThreadKeys,
@@ -111,14 +136,27 @@ export function createQuitManager(
 
     pendingPerformQuit = options.performQuit ?? dependencies.performQuit;
     promptPromise = (async () => {
+      // Skip the round trip entirely when there is nothing to title, so the
+      // no-resolver path reaches `confirm` without an extra microtask hop.
+      const items =
+        dependencies.resolveThreadTitles && snapshot.items.length > 0
+          ? await withResolvedTitles(
+              snapshot.items,
+              dependencies.resolveThreadTitles,
+              dependencies.log,
+            )
+          : snapshot.items;
       const resolution = await (dependencies.confirm ?? showQuitConfirmationDialog)({
         countdownSeconds: QUIT_CONFIRMATION_COUNTDOWN_SECONDS,
         inProgressThreadCount: snapshot.threadIds.length,
         terminalSessionCount: snapshot.terminalSessionCount,
+        actionRunCount: snapshot.actionRunCount,
+        items,
         parent: dependencies.getFocusedWindow?.(),
       });
       dependencies.log.warn?.("quit confirmation resolved", {
         count: snapshot.count,
+        actionRunCount: snapshot.actionRunCount,
         resolution,
         source: options.source,
         terminalSessionCount: snapshot.terminalSessionCount,
@@ -158,14 +196,94 @@ export function buildQuitBlockerSnapshot(params: {
     count: number;
     threadKeys: string[];
   };
+  actionRuns?: DetachedCommandSummary[];
 }): QuitBlockerSnapshot {
   const threadIds = [...params.inProgressThreads.threadIds].sort();
+  const terminalThreadKeys = [...params.terminalSessions.threadKeys].sort();
+  const actionRuns = params.actionRuns ?? [];
+
+  const items: QuitBlockerItem[] = [
+    ...threadIds.map((threadKey) => ({
+      kind: "turn" as const,
+      ...splitQuitThreadKey(threadKey),
+      threadKey,
+    })),
+    ...terminalThreadKeys.map((threadKey) => ({
+      kind: "terminal" as const,
+      ...splitQuitThreadKey(threadKey),
+      threadKey,
+    })),
+    ...actionRuns.map((run) => ({
+      kind: "action" as const,
+      backend: run.backend,
+      threadId: run.threadId,
+      threadKey: buildThreadIdentityKey(
+        run.backend as AppServerBackendKind,
+        run.threadId,
+      ),
+      // Name the action up front. A thread title (resolved later) is nicer, but
+      // an auto-started action can briefly outrun its own thread's creation, and
+      // a row labelled with an empty thread id is worse than useless.
+      title: run.actionName,
+      detail: run.pid ? `${run.command} · pid ${run.pid}` : run.command,
+    })),
+  ];
+
   return {
-    count: threadIds.length + params.terminalSessions.count,
+    count: threadIds.length + params.terminalSessions.count + actionRuns.length,
     terminalSessionCount: params.terminalSessions.count,
-    terminalThreadKeys: [...params.terminalSessions.threadKeys].sort(),
+    terminalThreadKeys,
     threadIds,
+    actionRunCount: actionRuns.length,
+    items,
   };
+}
+
+/**
+ * Attach thread titles to the blocker rows, bounded by a timeout: a hung
+ * app-server must not be able to wedge shutdown. On timeout or failure the rows
+ * keep their thread ids, which still link correctly — they just read worse.
+ */
+async function withResolvedTitles(
+  items: QuitBlockerItem[],
+  resolve: QuitManagerDependencies["resolveThreadTitles"],
+  log: QuitManagerDependencies["log"],
+): Promise<QuitBlockerItem[]> {
+  if (!resolve || items.length === 0) {
+    return items;
+  }
+  const threadKeys = [...new Set(items.map((item) => item.threadKey))];
+  let titles: Map<string, string>;
+  try {
+    titles = await Promise.race([
+      resolve(threadKeys),
+      new Promise<Map<string, string>>((_resolve, reject) => {
+        setTimeout(
+          () => reject(new Error("thread-title resolution timed out")),
+          QUIT_TITLE_RESOLVE_TIMEOUT_MS,
+        ).unref?.();
+      }),
+    ]);
+  } catch (error) {
+    log.warn?.("quit blocker title resolution failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return items;
+  }
+  return items.map((item) => {
+    const title = titles.get(item.threadKey);
+    return title ? { ...item, title } : item;
+  });
+}
+
+/** Split a canonical `buildThreadIdentityKey` back into its parts. Unparseable
+ *  keys still render — they just link nowhere useful. */
+function splitQuitThreadKey(threadKey: string): {
+  backend: string;
+  threadId: string;
+} {
+  const parsed = parseThreadIdentityKey(threadKey);
+  return parsed ?? { backend: "", threadId: threadKey };
 }
 
 const quitLog = getMainLogger("pwragent:quit");
@@ -179,7 +297,22 @@ export const appQuitManager = createQuitManager({
       inProgressThreads:
         getDesktopBackendRegistry().getInProgressThreadSnapshotForQuit(),
       terminalSessions: getIntegratedTerminalQuitSnapshot(),
+      actionRuns: listRunningDetachedCommands(),
     }),
+  resolveThreadTitles: async (threadKeys) => {
+    const wanted = new Set(threadKeys);
+    const threads = await getDesktopBackendRegistry().listThreads({
+      callerReason: "quit-confirmation",
+    });
+    const titles = new Map<string, string>();
+    for (const thread of threads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      if (wanted.has(threadKey) && thread.title) {
+        titles.set(threadKey, thread.title);
+      }
+    }
+    return titles;
+  },
   log: quitLog,
   performQuit: () => {
     app.quit();

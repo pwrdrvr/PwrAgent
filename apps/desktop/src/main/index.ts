@@ -41,6 +41,11 @@ import {
   disposeIntegratedTerminalIpcHandlers,
   registerIntegratedTerminalIpcHandlers,
 } from "./ipc/integrated-terminal";
+import { stopAllCodexEnvironmentDetachedCommands } from "./app-server/codex-environment-runtime";
+import {
+  disposeDiagnosticsIpcHandlers,
+  registerDiagnosticsIpcHandlers,
+} from "./ipc/diagnostics";
 import {
   disposeComposerDraftIpcHandlers,
   registerComposerDraftIpcHandlers,
@@ -378,8 +383,19 @@ function disposeMainProcessResourcesSync(): void {
   disposeAppMetadataIpcHandlers();
   disposeAppUpdateIpcHandlers();
   disposeComposerDraftIpcHandlers();
+  disposeDiagnosticsIpcHandlers();
   disposeImageNormalizationIpcHandlers();
   disposeIntegratedTerminalIpcHandlers();
+  // Detached env-action trees (`pnpm dev` and friends) were previously just
+  // abandoned here. They keep their stdio pipes, so they *usually* died of
+  // SIGPIPE once we went away — but a quiet one could outlive the app and hold
+  // its port. The quit dialog promises they get stopped, so stop them.
+  const stoppedDetachedCommands = stopAllCodexEnvironmentDetachedCommands();
+  if (stoppedDetachedCommands > 0) {
+    mainLog.info("stopped detached environment actions on shutdown", {
+      count: stoppedDetachedCommands,
+    });
+  }
   disposePreloadLogIpcHandlers();
   disposeBootInfoIpcHandlers();
   disposeProfilesIpcHandlers();
@@ -763,6 +779,7 @@ export function bootstrapApp(): void {
         await requestQuit({ performQuit, source: "update-install" }),
     });
     registerComposerDraftIpcHandlers();
+    registerDiagnosticsIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerIntegratedTerminalIpcHandlers();
     installTranscriptImageProtocol();
