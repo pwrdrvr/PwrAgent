@@ -3,6 +3,7 @@ import type { NavigationDirectorySummary } from "@pwragent/shared";
 import {
   buildDirectoryReferenceInsertText,
   buildDirectoryReferenceMarkdown,
+  decodeMarkdownDestination,
   filterDirectoryReferenceCandidates,
   findDirectoryReferenceTrigger,
   listReferencedDirectories,
@@ -156,6 +157,33 @@ describe("buildDirectoryReferenceMarkdown", () => {
         homeDir: HOME,
       }).map((d) => d.key),
     ).toEqual([SEARCH.key]);
+  });
+
+  it("percent-encodes parens, spaces, and percents in the destination", () => {
+    const markdown = buildDirectoryReferenceMarkdown(
+      { label: "repo", path: `${HOME}/Backup (50% old)/repo` },
+      HOME,
+    );
+    expect(markdown).toBe("[@repo](~/Backup%20%2850%25%20old%29/repo)");
+    expect(decodeMarkdownDestination("~/Backup%20%2850%25%20old%29/repo")).toBe(
+      "~/Backup (50% old)/repo",
+    );
+  });
+
+  it("leaves never-encoded destinations unchanged when decoding", () => {
+    expect(decodeMarkdownDestination("~/GIPHY/search-product")).toBe(
+      "~/GIPHY/search-product",
+    );
+    expect(decodeMarkdownDestination("~/100%-legit")).toBe("~/100%-legit");
+  });
+
+  it("falls back to the bare tilde path for a link-breaking label", () => {
+    expect(
+      buildDirectoryReferenceMarkdown(
+        { label: "weird]name", path: `${HOME}/weird]name` },
+        HOME,
+      ),
+    ).toBe("~/weird]name");
   });
 });
 

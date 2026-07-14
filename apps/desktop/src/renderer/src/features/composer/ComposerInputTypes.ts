@@ -8,8 +8,8 @@ import type { AppServerSkillSummary } from "@pwragent/shared";
  *   - skills (default, `kind` absent): `name`/`path` describe a skill;
  *     serializes to `[$name](path)` markdown.
  *   - directory references (`kind: "directory"`): `name` is the tracked
- *     directory's label and `path` its absolute path; serializes to the
- *     tilde-shortened path in the outgoing text.
+ *     directory's label and `path` its absolute path; serializes to
+ *     `[@label](~/path)` markdown in the outgoing text.
  */
 export type ComposerSkillToken = AppServerSkillSummary & {
   id: string;

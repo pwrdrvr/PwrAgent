@@ -64,6 +64,7 @@ import {
   buildDirectoryReferenceInsertText,
   buildDirectoryReferenceMarkdown,
   buildDirectoryReferenceTooltip,
+  decodeMarkdownDestination,
   filterDirectoryReferenceCandidates,
   findDirectoryReferenceTrigger,
   listReferencedDirectories,
@@ -1330,6 +1331,7 @@ function getComposerSkillTokensSignature(skillTokens: ComposerSkillToken[]): str
     skillTokens.map((token) => ({
       id: token.id,
       index: token.index,
+      kind: token.kind,
       name: token.name,
       path: token.path,
     })),
@@ -1395,13 +1397,14 @@ function hydrateComposerDraft(
     }
 
     if (part.type === "directory") {
-      // Serialized paths are tilde form; the token carries the absolute
-      // path so send-time attach can use it directly.
+      // Serialized paths are percent-encoded tilde form; the token
+      // carries the decoded absolute path so send-time attach can use
+      // it directly.
       skillTokens.push(
         createComposerDirectoryToken(
           {
             label: part.name,
-            path: expandTildePath(part.path),
+            path: expandTildePath(decodeMarkdownDestination(part.path)),
           },
           draft.length,
         ),

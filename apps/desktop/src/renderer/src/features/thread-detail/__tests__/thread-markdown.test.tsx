@@ -706,4 +706,21 @@ describe("ThreadMarkdown", () => {
         .__pwragentHomeDir;
     }
   });
+
+  it("decodes percent-encoded directory reference paths in the chip tooltip", () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const { container } = render(
+        <ThreadMarkdown text={"[@repo](~/Backup%20%2850%25%20old%29/repo) has it."} />
+      );
+
+      const chip = container.querySelector(".directory-chip");
+      expect(chip).toHaveTextContent("@repo");
+      expect(chip).toHaveAttribute("data-tooltip", "~/Backup (50% old)/repo");
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
 });

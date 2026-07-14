@@ -100,17 +100,55 @@ export function buildDirectoryReferenceTooltip(
 }
 
 /**
+ * Characters that would break the `[@label](path)` form: `%` so decoding
+ * stays lossless, parens because they delimit the destination (both for
+ * `parseSkillMentionParts` and CommonMark), and whitespace because a
+ * CommonMark destination cannot contain an unescaped space.
+ */
+const MARKDOWN_DESTINATION_UNSAFE = /[%()\s]/g;
+
+function encodeMarkdownDestination(path: string): string {
+  return path.replace(MARKDOWN_DESTINATION_UNSAFE, (char) =>
+    encodeURIComponent(char) === char
+      ? `%${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`
+      : encodeURIComponent(char),
+  );
+}
+
+/**
+ * Inverse of encodeMarkdownDestination for hydration. Tolerates paths
+ * that were never encoded (hand-authored links, older drafts): a decode
+ * failure returns the input unchanged.
+ */
+export function decodeMarkdownDestination(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
  * Serialized form of a directory-reference chip in the canonical draft
  * and outgoing text: `[@label](~/path)`. A markdown link keeps the path
  * bounded — text typed flush against the chip cannot glue onto it the
  * way a bare tilde path could — and gives the transcript renderer and
  * `parseSkillMentionParts` a self-describing form to chip/hydrate from.
+ * Unsafe destination characters (parens, spaces, `%`) are percent-encoded
+ * so paths like `~/Backup (old)/repo` survive the round trip. A label
+ * that would break the link syntax (brackets, newlines) falls back to
+ * the bare tilde path — still glue-resistant at send time because the
+ * token state drives the attach, just without a transcript chip.
  */
 export function buildDirectoryReferenceMarkdown(
   reference: { label: string; path: string },
   homeDir: string | undefined = getHomeDir(),
 ): string {
-  return `[@${reference.label}](${tildifyPath(reference.path, homeDir)})`;
+  const tilde = tildifyPath(reference.path, homeDir);
+  if (/[[\]\r\n]/.test(reference.label)) {
+    return tilde;
+  }
+  return `[@${reference.label}](${encodeMarkdownDestination(tilde)})`;
 }
 
 /**
