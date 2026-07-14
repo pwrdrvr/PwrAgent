@@ -17323,6 +17323,15 @@ export class DesktopBackendRegistry {
         approvalPolicy: request.args.approvalPolicy,
         sandbox: request.args.sandbox,
       });
+      // Best-effort: give the link its human title so it reads well on
+      // surfaces that can't resolve the id against the live snapshot (the
+      // desktop chip shows the live title regardless). `listThreads` is
+      // cached, so this usually costs nothing.
+      const targetThread = await this.findThreadForWorkspaceHandoff({
+        backend,
+        callerReason: "send-message-link",
+        threadId: turn.threadId,
+      });
       return {
         ok: true,
         data: {
@@ -17334,6 +17343,7 @@ export class DesktopBackendRegistry {
           threadLink: buildThreadMarkdownLink({
             backend,
             threadId: turn.threadId,
+            title: targetThread?.title,
           }),
           settings,
         },

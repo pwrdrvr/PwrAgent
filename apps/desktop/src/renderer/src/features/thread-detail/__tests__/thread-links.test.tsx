@@ -131,4 +131,29 @@ describe("thread links in transcript markdown", () => {
       threadId: CHILD_THREAD_ID,
     });
   });
+
+  it("upgrades a link to a chip once its thread appears in the snapshot", () => {
+    // The provider keys its context on thread *membership*, not on the churny
+    // array reference, so this proves a newly-hydrated thread (the handoff
+    // case) still flips a plain-text link into a chip.
+    const text = `See [handoff](pwragent://thread/${CHILD_THREAD_ID})`;
+    const onShowThread = vi.fn();
+    const { rerender } = render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+        <ThreadMarkdown text={text} />
+      </ThreadLinkProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: /Open thread/ })).not.toBeInTheDocument();
+
+    rerender(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[threadSummary()]}>
+        <ThreadMarkdown text={text} />
+      </ThreadLinkProvider>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Open thread RELATED query deranking issue" }),
+    ).toBeInTheDocument();
+  });
 });

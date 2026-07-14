@@ -68,7 +68,10 @@ function TranscriptCode(props: {
   const insideCodeBlock = useContext(CodeBlockContext);
   const isBlockCode = insideCodeBlock || (props.className?.includes("language-") ?? false);
 
-  if (!isBlockCode) {
+  // Only inline code on a navigation-capable surface can become a chip; skip
+  // the text extraction entirely on block code and on the Activity/Changelog/
+  // file-viewer surfaces (no `threadLinks` context there).
+  if (!isBlockCode && props.threadLinks) {
     // Transcripts written before the link protocol existed — and any model
     // that ignores the `threadLink` convention — put the bare thread id in a
     // code span. Recognizing it makes those threads reachable without asking
@@ -78,7 +81,7 @@ function TranscriptCode(props: {
       extractTextContent(props.children),
       props.threadLinks
     );
-    if (threadLink && props.threadLinks) {
+    if (threadLink) {
       return <ThreadChip link={threadLink} onOpen={props.threadLinks.show} />;
     }
   }

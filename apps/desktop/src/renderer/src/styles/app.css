@@ -11527,6 +11527,11 @@ textarea,
   background: var(--bg-row-active);
 }
 
+.thread-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .thread-chip__icon {
   flex: 0 0 auto;
   color: var(--accent);

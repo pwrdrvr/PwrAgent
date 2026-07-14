@@ -86,6 +86,15 @@ navigation exists; a context with a null default gives those surfaces inert
 chips for free, where prop-threading would mean five layers of `onShowThread`
 (App → ThreadView → TranscriptList → TranscriptMessage → ThreadMarkdown).
 
+The provider wraps the whole app and reads `navigation.threads`, which is a
+fresh array on every snapshot patch (unread flips, `updatedAt` bumps, title
+generation). To avoid re-rendering every transcript message on that churn, the
+context value is keyed on a **membership signature** (the sorted set of
+`backend:threadId` keys), not the array reference: identity changes only when a
+link should flip between chip and plain text. Title/branch churn within stable
+membership is not reflected until the next membership change — fine for a
+reference chip, which points at a thread rather than mirroring its label live.
+
 ### 5. Retroactive linkification
 
 Everything above only helps *future* handoffs. Existing transcripts carry the
