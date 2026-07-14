@@ -42,6 +42,12 @@ type ThreadFindBarProps = {
    * miss if markdown reflowed the snippet across nodes).
    */
   turnId?: string;
+  /**
+   * Bumped by the ⌘F owner on every press. A second ⌘F with the bar already
+   * open pulls focus back into the field — the operator clicked into the
+   * transcript, then reached for find again and expects to type.
+   */
+  focusNonce?: number;
   /** Whether older transcript pages remain (drives the deep-link auto-load). */
   hasMoreHistory?: boolean;
   /** Whether an older-page load is in flight. */
@@ -125,11 +131,43 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
   const seededRef = useRef<string | undefined>(undefined);
   const autoLoadsRef = useRef(0);
   const landedSeedRef = useRef<string | undefined>(undefined);
+  // Armed only when the operator asks to be taken somewhere — typing a query,
+  // or stepping between matches. Consumed by the paint effect below, which is
+  // the sole owner of the manual scroll. Nothing else may move the transcript:
+  // matches are re-collected on every transcript change (new messages, older
+  // pages), and scrolling on that alone yanked the viewport back to a stale
+  // match while the operator was reading elsewhere.
+  const scrollIntentRef = useRef(false);
+  // The query the current `matches` were collected for, so the recompute below
+  // can tell "the operator retyped" from "the transcript moved under us".
+  const collectedQueryRef = useRef(query);
+  const onCloseRef = useRef(props.onClose);
+  useEffect(() => {
+    onCloseRef.current = props.onClose;
+  });
 
-  // Focus + select on mount and whenever the bar is (re)opened.
+  // Focus + select on mount, and again on each ⌘F while already open.
   useEffect(() => {
     inputRef.current?.focus();
     inputRef.current?.select();
+  }, [props.focusNonce]);
+
+  // Escape dismisses the bar from anywhere in the window, not just from the
+  // field: the operator ⌘Fs, clicks into the transcript to read, then hits
+  // Escape expecting find to go away. Anything that already claimed the key
+  // (a dialog, the thread-jump popup, the field's own handler below) calls
+  // preventDefault, so we never dismiss two surfaces with one press.
+  useEffect(() => {
+    // `KeyboardEvent` is React's synthetic type in this file (see the import);
+    // a window listener gets the DOM one.
+    const closeOnEscape = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== "Escape" || event.defaultPrevented) {
+        return;
+      }
+      onCloseRef.current();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
   }, []);
 
   // Adopt a search-seeded query (deep-link from a search result) once per
@@ -154,7 +192,19 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
     }
     const ranges = collectMatchRanges(container, query);
     setMatches(ranges);
-    setActiveIndex((current) => (current < ranges.length ? current : 0));
+    if (collectedQueryRef.current !== query) {
+      // A different query is a different search: start at its first hit. This
+      // reset lives here rather than in the input handler so it lands in the
+      // same commit as the matches it applies to — moving the index on its own
+      // would run the scroll effect against the PREVIOUS query's ranges and
+      // strand the operator at the old first match.
+      collectedQueryRef.current = query;
+      setActiveIndex(0);
+    } else {
+      // Same query, transcript churned (new messages, older pages): hold the
+      // operator's place, only clamping if their match went away.
+      setActiveIndex((current) => (current < ranges.length ? current : 0));
+    }
     const anchorPresent = props.turnId
       ? container.querySelector(`[data-turn-id="${CSS.escape(props.turnId)}"]`) !==
         null
@@ -162,23 +212,34 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
     setTargetFound(anchorPresent || ranges.length > 0);
   }, [query, props.refreshKey, props.containerRef, props.turnId]);
 
-  // Paint the highlights and scroll the active match into view.
+  // Paint the highlights, and scroll the active match into view only when the
+  // operator asked for it. This effect re-runs on every transcript change —
+  // `collectMatchRanges` hands back a fresh array each time — so an
+  // unconditional scroll here is what made a live thread keep dragging the
+  // viewport back to a match nobody was looking at any more. The intent flag is
+  // consumed on every run (armed or not), so it can never leak into a later
+  // transcript update.
   useEffect(() => {
     if (!highlightsSupported()) {
       return;
     }
+    const scrollRequested = scrollIntentRef.current;
+    scrollIntentRef.current = false;
     CSS.highlights.set(HIGHLIGHT_ALL, new Highlight(...matches));
     const active = matches[activeIndex];
-    if (active) {
-      CSS.highlights.set(HIGHLIGHT_ACTIVE, new Highlight(active));
-      const anchor =
-        active.startContainer instanceof Element
-          ? active.startContainer
-          : active.startContainer.parentElement;
-      anchor?.scrollIntoView({ block: "center", behavior: "smooth" });
-    } else {
+    if (!active) {
       CSS.highlights.delete(HIGHLIGHT_ACTIVE);
+      return;
     }
+    CSS.highlights.set(HIGHLIGHT_ACTIVE, new Highlight(active));
+    if (!scrollRequested) {
+      return;
+    }
+    const anchor =
+      active.startContainer instanceof Element
+        ? active.startContainer
+        : active.startContainer.parentElement;
+    anchor?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [matches, activeIndex]);
 
   // Drop highlights when the bar unmounts (closed).
@@ -283,8 +344,12 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
     // restoration tugs back — so a one-shot scroll lands then drifts off as
     // later content prepends above. Re-center every frame for the window
     // instead; once content truly stops moving, re-centering an already-
-    // centered anchor is a no-op. Bail the instant the operator scrolls — a
-    // deep-link landing shouldn't fight someone who's taken over.
+    // centered anchor is a no-op. Bail the instant the operator takes over — a
+    // deep-link landing shouldn't fight someone who's already driving. Wheel
+    // alone missed the ways people actually take over mid-landing (dragging the
+    // scrollbar, clicking into the transcript), which left the loop re-centering
+    // under them for the rest of the window.
+    const TAKEOVER_EVENTS = ["wheel", "pointerdown", "touchstart"] as const;
     const deadline = HOLD_CENTERED_FRAMES;
     let frame = 0;
     let rafId = 0;
@@ -294,9 +359,13 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
     };
     const stop = (): void => {
       cancelAnimationFrame(rafId);
-      container?.removeEventListener("wheel", onUserScroll);
+      for (const name of TAKEOVER_EVENTS) {
+        container?.removeEventListener(name, onUserScroll);
+      }
     };
-    container?.addEventListener("wheel", onUserScroll, { passive: true });
+    for (const name of TAKEOVER_EVENTS) {
+      container?.addEventListener(name, onUserScroll, { passive: true });
+    }
     const tick = (): void => {
       if (takenOver || frame >= deadline) {
         stop();
@@ -318,15 +387,23 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
 
   const step = useCallback(
     (delta: number) => {
-      setActiveIndex((current) => {
-        if (matches.length === 0) {
-          return 0;
-        }
-        return (current + delta + matches.length) % matches.length;
-      });
+      if (matches.length === 0) {
+        return;
+      }
+      scrollIntentRef.current = true;
+      setActiveIndex(
+        (current) => (current + delta + matches.length) % matches.length,
+      );
     },
     [matches.length],
   );
+
+  // Typing is the operator asking to be taken to a match, so it arms the scroll.
+  // The active index is reset where the new matches land (see above).
+  const changeQuery = useCallback((next: string) => {
+    scrollIntentRef.current = true;
+    setQuery(next);
+  }, []);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key === "Escape") {
@@ -363,7 +440,7 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
         aria-label="Find in thread"
         placeholder="Find in thread"
         value={query}
-        onChange={(event) => setQuery(event.target.value)}
+        onChange={(event) => changeQuery(event.target.value)}
         onKeyDown={handleKeyDown}
       />
       <span className="thread-find__count" aria-live="polite">

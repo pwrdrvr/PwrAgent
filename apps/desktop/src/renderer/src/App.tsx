@@ -217,7 +217,10 @@ function DesktopAppShell(props: {
     threadKey: string;
     turnId?: string;
   }>();
-  // Thread-list quick-jump popup (⌘F while the sidebar is focused).
+  // Bumped on every ⌘F so an already-open find bar takes focus back.
+  const [findFocusNonce, setFindFocusNonce] = useState(0);
+  // Thread-list quick-jump popup (⌘K anywhere, or ⌘F while the sidebar is
+  // focused).
   const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
   // Initial section for SettingsScreen — non-undefined when navigation
   // came from a deep-link to a specific section. Resets when the user
@@ -578,22 +581,38 @@ function DesktopAppShell(props: {
     restore: restoreHistoryLocation,
   });
   useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
-  // ⌘⇧F / ⌃⇧F opens the global thread search screen. ⌘F (in-thread find /
-  // thread-list quick search) is wired onto this same owner further below.
+  // Opening the thread-list quick search has to reveal the sidebar first — it
+  // lives inside it, and a hidden sidebar (⌘B) is `display: none`, so the popup
+  // would open into nothing.
+  const openThreadJump = useCallback(() => {
+    if (sidebarHidden) {
+      setSidebarHiddenPersisted(false);
+    }
+    setSidebarSearchOpen(true);
+  }, [sidebarHidden, setSidebarHiddenPersisted]);
+  // ⌘⇧F / ⌃⇧F opens the global thread search screen; ⌘F is the focus-sensitive
+  // context find; ⌘K always lands on the thread-list quick search.
   useFindHotkeys({
     onOpenSearch: () => setMainView(mainView === "search" ? "thread" : "search"),
     onFind: () => {
-      // The thread-list quick search (below) claims ⌘F while the sidebar is
-      // focused; anywhere else ⌘F finds within the open thread.
+      // The thread-list quick search claims ⌘F while the sidebar is focused;
+      // anywhere else ⌘F finds within the open thread. Focus decides — which is
+      // precisely why ⌘K exists: reaching for the thread list from inside a
+      // thread would otherwise open the in-thread find.
       const active = document.activeElement as HTMLElement | null;
       if (active?.closest(".sidebar")) {
-        setSidebarSearchOpen(true);
+        openThreadJump();
         return;
       }
       if (mainView === "thread") {
         setManualFindOpen(true);
+        // Re-arm focus: a second ⌘F with the bar already open (operator clicked
+        // into the transcript, then reached back for find) must put the caret
+        // back in the field, the way a browser's find does.
+        setFindFocusNonce((nonce) => nonce + 1);
       }
     },
+    onThreadJump: openThreadJump,
   });
   // Manual find is per-thread chrome: drop it when the operator leaves the
   // thread view or switches threads. The deep-link find (findRequest) closes
@@ -965,6 +984,7 @@ function DesktopAppShell(props: {
     findOpen: threadFindOpen,
     findInitialQuery: threadFindInitialQuery,
     findTurnId: threadFindTurnId,
+    findFocusNonce,
     onFindOpenChange: (open: boolean) => {
       // The bar only ever calls this to close itself (Escape / ✕). Clear both
       // the manual toggle and any deep-link request so it stays closed.

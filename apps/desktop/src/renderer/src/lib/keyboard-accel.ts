@@ -124,6 +124,9 @@ export function matchHistoryNavChord(
  *                          focused; the caller resolves which from focus)
  *   ⌘⇧F / ⌃⇧F → "search" (open the global thread search screen)
  *
+ * ⌘F is deliberately focus-sensitive; {@link matchThreadJumpChord} (⌘K) is the
+ * unambiguous way to reach the thread list from anywhere.
+ *
  * Unlike {@link matchLayoutChord}, find stays live inside editable fields —
  * ⌘F is a universal "find" gesture that should fire even while the caret is in
  * the composer or another input. ⌥ is excluded so it never collides with an
@@ -140,6 +143,29 @@ export function matchFindChord(event: KeyboardEvent): "find" | "search" | null {
     return null;
   }
   return event.shiftKey ? "search" : "find";
+}
+
+/**
+ * Whether `event` is the thread-jump chord: ⌘K / ⌃K.
+ *
+ * ⌘K is the focus-independent way into the thread-list quick search — the
+ * near-universal "jump to a thing in the list" binding (Slack's quick switcher,
+ * Linear, GitHub, VS Code's ⌘P sibling). It exists because ⌘F follows focus:
+ * the operator reaching for the thread list from inside a thread would land in
+ * the in-thread find instead, since the composer and transcript belong to the
+ * thread. ⌘K always means the list.
+ *
+ * Like {@link matchFindChord} it stays live in editable fields — the composer is
+ * exactly where an operator is standing when they want to jump elsewhere. Shift
+ * and Option are excluded so it can't collide with a future chord.
+ */
+export function matchThreadJumpChord(event: KeyboardEvent): boolean {
+  return (
+    isPrimaryAccel(event) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    isAccelLetter(event, "k")
+  );
 }
 
 /**

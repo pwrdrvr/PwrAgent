@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   formatPrimaryAccel,
   isAccelLetter,
+  matchFindChord,
   matchHistoryNavChord,
   matchLayoutChord,
+  matchThreadJumpChord,
 } from "../keyboard-accel";
 
 type PwrWindow = Window & { pwragent?: { platform?: string } };
@@ -122,6 +124,93 @@ describe("matchLayoutChord", () => {
       value: document.createElement("input"),
     });
     expect(matchLayoutChord(event)).toBe(null);
+  });
+});
+
+describe("matchFindChord", () => {
+  const keydown = (init: KeyboardEventInit): KeyboardEvent =>
+    new KeyboardEvent("keydown", init);
+  const inEditable = (event: KeyboardEvent): KeyboardEvent => {
+    Object.defineProperty(event, "target", {
+      value: document.createElement("input"),
+    });
+    return event;
+  };
+
+  it("classifies ⌘F / ⌃F as the context find chord", () => {
+    expect(matchFindChord(keydown({ metaKey: true, code: "KeyF", key: "f" }))).toBe(
+      "find",
+    );
+    expect(matchFindChord(keydown({ ctrlKey: true, code: "KeyF", key: "f" }))).toBe(
+      "find",
+    );
+  });
+
+  it("classifies ⌘⇧F as the global search chord", () => {
+    expect(
+      matchFindChord(
+        keydown({ metaKey: true, shiftKey: true, code: "KeyF", key: "F" }),
+      ),
+    ).toBe("search");
+  });
+
+  it("stays live inside editable fields (⌘F never types anything)", () => {
+    expect(
+      matchFindChord(inEditable(keydown({ metaKey: true, code: "KeyF", key: "f" }))),
+    ).toBe("find");
+  });
+
+  it("returns null without the primary modifier, with Option, or for other keys", () => {
+    expect(matchFindChord(keydown({ code: "KeyF", key: "f" }))).toBe(null);
+    expect(
+      matchFindChord(
+        keydown({ metaKey: true, altKey: true, code: "KeyF", key: "ƒ" }),
+      ),
+    ).toBe(null);
+    expect(
+      matchFindChord(keydown({ metaKey: true, code: "KeyK", key: "k" })),
+    ).toBe(null);
+  });
+});
+
+describe("matchThreadJumpChord", () => {
+  const keydown = (init: KeyboardEventInit): KeyboardEvent =>
+    new KeyboardEvent("keydown", init);
+
+  it("classifies ⌘K / ⌃K as the thread-jump chord", () => {
+    expect(
+      matchThreadJumpChord(keydown({ metaKey: true, code: "KeyK", key: "k" })),
+    ).toBe(true);
+    expect(
+      matchThreadJumpChord(keydown({ ctrlKey: true, code: "KeyK", key: "k" })),
+    ).toBe(true);
+  });
+
+  it("stays live inside editable fields, so it works from the composer", () => {
+    // The whole point of ⌘K: it opens the thread-list search no matter where
+    // focus sits, unlike ⌘F which follows focus into the open thread.
+    const event = keydown({ metaKey: true, code: "KeyK", key: "k" });
+    Object.defineProperty(event, "target", {
+      value: document.createElement("textarea"),
+    });
+    expect(matchThreadJumpChord(event)).toBe(true);
+  });
+
+  it("returns null without the primary modifier or with extra modifiers", () => {
+    expect(matchThreadJumpChord(keydown({ code: "KeyK", key: "k" }))).toBe(false);
+    expect(
+      matchThreadJumpChord(
+        keydown({ metaKey: true, altKey: true, code: "KeyK", key: "˚" }),
+      ),
+    ).toBe(false);
+    expect(
+      matchThreadJumpChord(
+        keydown({ metaKey: true, shiftKey: true, code: "KeyK", key: "K" }),
+      ),
+    ).toBe(false);
+    expect(
+      matchThreadJumpChord(keydown({ metaKey: true, code: "KeyF", key: "f" })),
+    ).toBe(false);
   });
 });
 

@@ -822,6 +822,8 @@ export type ThreadViewProps = {
   findInitialQuery?: string;
   /** Turn id to load+scroll to when deep-linking a search match. */
   findTurnId?: string;
+  /** Bumped on each ⌘F so an already-open bar pulls focus back to its field. */
+  findFocusNonce?: number;
   onLoadOlder: () => Promise<void>;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
@@ -2536,6 +2538,7 @@ export function ThreadView(props: ThreadViewProps) {
               refreshKey={`${selectedThread!.source}:${selectedThread!.id}:${props.transcriptEntries.length}`}
               initialQuery={props.findInitialQuery}
               turnId={props.findTurnId}
+              focusNonce={props.findFocusNonce}
               hasMoreHistory={Boolean(
                 props.transcriptPagination?.supportsPagination &&
                   props.transcriptPagination.hasPreviousPage,
