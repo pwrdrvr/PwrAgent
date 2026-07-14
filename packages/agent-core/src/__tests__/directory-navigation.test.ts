@@ -367,6 +367,37 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("does not surface a sub-thread launchpad as a project-directory row", () => {
+    // Repro for the launchpad leak: opening "create sub-thread", typing a
+    // prompt, then cancelling used to leave the subthread:<source>:<parent>:<mode>
+    // overlay row behind. Because it carried a prompt, buildDirectorySummaries
+    // rendered it as a phantom top-level project directory (labelled with the
+    // parent workspace name), duplicating the real directory row. Sub-thread
+    // launchpads are thread-scoped and reached inline from the parent thread —
+    // they must never masquerade as a directory in the Directories lens.
+    const directories = buildDirectorySummaries({
+      threads: [],
+      launchpadsByKey: {
+        "subthread:codex:thread-parent:same-worktree": {
+          directoryKey: "subthread:codex:thread-parent:same-worktree",
+          directoryKind: "directory",
+          directoryLabel: "media-service",
+          directoryPath: "/Users/huntharo/pwrdrvr/media-service",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Make a PR to swap all the icons",
+          workMode: "worktree",
+          parentThreadId: "thread-parent",
+          parentThreadTitle: "media-service",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      },
+    });
+
+    expect(directories).toEqual([]);
+  });
+
   it("groups the scratch workspace root under Workspaces instead of a projects directory", () => {
     const directories = buildDirectorySummaries({
       threads: [

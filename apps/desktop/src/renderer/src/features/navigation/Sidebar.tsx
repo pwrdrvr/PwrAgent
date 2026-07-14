@@ -161,6 +161,13 @@ type SidebarProps = {
   ) => Promise<void>;
   onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
   /**
+   * Remove an empty directory (no linked threads) from the Directories list.
+   * Offered in the directory context menu only when the directory has no
+   * threads; deletes the registered launchpad overlay row that keeps the empty
+   * row visible.
+   */
+  onRemoveDirectory?: (directory: NavigationDirectorySummary) => void;
+  /**
    * Called by thread rows when the user hovers a non-merged PR chip
    * (or the row itself, depending on chip strategy). Used to prefetch
    * fresh PR status before they click in.
@@ -533,6 +540,13 @@ export function Sidebar(props: SidebarProps) {
   ): void => {
     setDirectoryContextMenu(undefined);
     void props.onSetDirectoryPin?.(directory, !directory.pinnedRank);
+  };
+
+  const removeDirectoryFromContextMenu = (
+    directory: NavigationDirectorySummary,
+  ): void => {
+    setDirectoryContextMenu(undefined);
+    props.onRemoveDirectory?.(directory);
   };
 
   /**
@@ -1374,6 +1388,24 @@ export function Sidebar(props: SidebarProps) {
               </>
             ) : null}
           </div>
+          {props.onRemoveDirectory
+            && directoryContextMenu.directory.kind === "directory"
+            && directoryContextMenu.directory.threadKeys.length === 0 ? (
+            <>
+              <div className="thread-context-menu__separator" role="separator" />
+              <div className="thread-context-menu__section">
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() =>
+                    removeDirectoryFromContextMenu(directoryContextMenu.directory)
+                  }
+                >
+                  Remove Directory
+                </button>
+              </div>
+            </>
+          ) : null}
         </div>
       ) : null}
 

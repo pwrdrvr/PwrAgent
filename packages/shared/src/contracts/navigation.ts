@@ -804,6 +804,19 @@ export function buildThreadIdentityKey(
   return `${encodeURIComponent(backend)}:${threadId}`;
 }
 
+/**
+ * Directory-key prefix for a sub-thread launchpad
+ * (`subthread:<source>:<parent>:<mode>`). Sub-thread launchpads are transient,
+ * thread-scoped composers — never a project directory — so several layers must
+ * recognize and exclude them. Centralized here so the key format has one source
+ * of truth and the exclusions can't drift apart.
+ */
+export const SUBTHREAD_LAUNCHPAD_KEY_PREFIX = "subthread:";
+
+export function isSubthreadLaunchpadKey(directoryKey: string): boolean {
+  return directoryKey.startsWith(SUBTHREAD_LAUNCHPAD_KEY_PREFIX);
+}
+
 export function parseThreadIdentityKey(
   threadKey: string,
 ): ThreadIdentityKeyParts | undefined {
