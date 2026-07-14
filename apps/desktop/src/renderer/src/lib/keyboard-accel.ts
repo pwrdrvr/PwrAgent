@@ -13,6 +13,29 @@ export function isPrimaryAccel(event: KeyboardEvent): boolean {
   return event.metaKey !== event.ctrlKey;
 }
 
+/**
+ * Stricter sibling of {@link isPrimaryAccel}, for chords that would otherwise
+ * shadow a platform text-editing binding: ⌘ on macOS, Ctrl on Windows/Linux —
+ * never "either one." {@link isPrimaryAccel}'s Cmd-or-Ctrl leniency is fine for
+ * a chord like ⌘F, but a chord that stays live inside text fields AND calls
+ * preventDefault will SWALLOW whatever the platform bound the Ctrl form to. On
+ * macOS, Chromium implements the emacs-style editing bindings in inputs and
+ * contenteditables, so ⌃K is delete-to-end-of-line — losing that in the composer
+ * is a real regression, unlike losing a caret-movement binding.
+ *
+ * Falls back to the lenient check when the platform is unknown (the desktop
+ * bridge is unavailable, e.g. in unit tests), so a chord never goes dead.
+ */
+export function isPlatformPrimaryAccel(event: KeyboardEvent): boolean {
+  const platform = getDesktopApi()?.platform;
+  if (platform === undefined) {
+    return isPrimaryAccel(event);
+  }
+  return platform === "darwin"
+    ? event.metaKey && !event.ctrlKey
+    : event.ctrlKey && !event.metaKey;
+}
+
 export function isEditableTarget(event: KeyboardEvent): boolean {
   const target = event.target as HTMLElement | null;
   if (target === null) {
@@ -158,10 +181,16 @@ export function matchFindChord(event: KeyboardEvent): "find" | "search" | null {
  * Like {@link matchFindChord} it stays live in editable fields — the composer is
  * exactly where an operator is standing when they want to jump elsewhere. Shift
  * and Option are excluded so it can't collide with a future chord.
+ *
+ * Unlike every other chord here it uses {@link isPlatformPrimaryAccel}, NOT the
+ * lenient Cmd-or-Ctrl check: staying live in text fields means the Ctrl form
+ * would swallow macOS's ⌃K (delete-to-end-of-line) in the composer. So ⌘K on
+ * macOS, Ctrl+K on Windows/Linux (where Ctrl+K binds nothing native), and the
+ * composer keeps its editing keys on both.
  */
 export function matchThreadJumpChord(event: KeyboardEvent): boolean {
   return (
-    isPrimaryAccel(event) &&
+    isPlatformPrimaryAccel(event) &&
     !event.altKey &&
     !event.shiftKey &&
     isAccelLetter(event, "k")

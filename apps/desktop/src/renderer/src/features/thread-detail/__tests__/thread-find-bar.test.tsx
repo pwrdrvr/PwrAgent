@@ -174,7 +174,10 @@ describe("ThreadFindBar scrolling", () => {
     typeQuery("gamma");
 
     expect(screen.getByText("1 of 1")).toBeInTheDocument();
-    const scrolled = scrollIntoView.mock.instances.at(-1) as Element | undefined;
+    // `contexts` is the `this` of each call — i.e. the element scrolled. (Not
+    // `instances`, which is documented as the `new`-constructed instances and
+    // only happens to carry `this` today.)
+    const scrolled = scrollIntoView.mock.contexts.at(-1) as Element | undefined;
     expect(scrolled?.textContent).toBe("gamma");
   });
 });

@@ -177,7 +177,34 @@ describe("matchThreadJumpChord", () => {
   const keydown = (init: KeyboardEventInit): KeyboardEvent =>
     new KeyboardEvent("keydown", init);
 
-  it("classifies ⌘K / ⌃K as the thread-jump chord", () => {
+  it("takes ⌘K on macOS and leaves ⌃K to the platform", () => {
+    // ⌃K is delete-to-end-of-line in a macOS text field. This chord stays live
+    // inside fields and calls preventDefault, so claiming the Ctrl form would
+    // swallow that editing key in the composer — hence the platform gate.
+    setPlatform("darwin");
+    expect(
+      matchThreadJumpChord(keydown({ metaKey: true, code: "KeyK", key: "k" })),
+    ).toBe(true);
+    expect(
+      matchThreadJumpChord(keydown({ ctrlKey: true, code: "KeyK", key: "k" })),
+    ).toBe(false);
+  });
+
+  it("takes Ctrl+K on Windows/Linux and ignores the Meta form", () => {
+    // Ctrl+K binds nothing native there; Meta is the Windows/Super key.
+    for (const platform of ["win32", "linux"]) {
+      setPlatform(platform);
+      expect(
+        matchThreadJumpChord(keydown({ ctrlKey: true, code: "KeyK", key: "k" })),
+      ).toBe(true);
+      expect(
+        matchThreadJumpChord(keydown({ metaKey: true, code: "KeyK", key: "k" })),
+      ).toBe(false);
+    }
+  });
+
+  it("accepts either modifier when the platform is unknown, so the chord never goes dead", () => {
+    setPlatform(undefined);
     expect(
       matchThreadJumpChord(keydown({ metaKey: true, code: "KeyK", key: "k" })),
     ).toBe(true);

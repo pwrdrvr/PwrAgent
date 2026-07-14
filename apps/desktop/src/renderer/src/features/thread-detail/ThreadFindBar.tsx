@@ -154,9 +154,15 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
 
   // Escape dismisses the bar from anywhere in the window, not just from the
   // field: the operator ⌘Fs, clicks into the transcript to read, then hits
-  // Escape expecting find to go away. Anything that already claimed the key
-  // (a dialog, the thread-jump popup, the field's own handler below) calls
-  // preventDefault, so we never dismiss two surfaces with one press.
+  // Escape expecting find to go away.
+  //
+  // The `defaultPrevented` guard yields to surfaces that claim the key — the
+  // field's own handler below, the thread-jump popup — but note that several
+  // others (the sidebar's context menus, ThreadView's branch-drift dialog)
+  // close on Escape WITHOUT calling preventDefault. One press will close both
+  // them and this bar. That's accepted: find is transient chrome, and dismissing
+  // it alongside a menu is not a surprise. Don't read this guard as a repo-wide
+  // convention — it isn't one.
   useEffect(() => {
     // `KeyboardEvent` is React's synthetic type in this file (see the import);
     // a window listener gets the DOM one.
