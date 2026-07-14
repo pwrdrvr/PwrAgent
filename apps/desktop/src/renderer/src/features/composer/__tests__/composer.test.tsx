@@ -9809,15 +9809,26 @@ describe("Composer", () => {
         />
       );
 
+      // While closed, the trigger carries the CSS tooltip.
+      expect(
+        screen.getByRole("button", { name: "Add reference" })
+      ).toHaveAttribute("data-tooltip", "Reference a directory or file");
+
       await clickButton("Add reference");
 
-      const menu = screen.getByRole("menu");
+      const dialog = screen.getByRole("dialog", { name: "Add reference" });
+      // The tooltip is omitted while the popover is open so the
+      // pseudo-element can't linger over the panel.
       expect(
-        within(menu).getByRole("menuitem", { name: "Add directory…" })
+        screen.getByRole("button", { name: "Add reference" })
+      ).not.toHaveAttribute("data-tooltip");
+      // No platform reported → separate add rows (non-macOS behavior).
+      expect(
+        within(dialog).getByRole("button", { name: "Add directory…" })
       ).toBeInTheDocument();
       await act(async () => {
         fireEvent.click(
-          within(menu).getByRole("menuitem", { name: "Add file…" })
+          within(dialog).getByRole("button", { name: "Add file…" })
         );
         await Promise.resolve();
         await Promise.resolve();
@@ -9826,13 +9837,246 @@ describe("Composer", () => {
 
       expect(pickFileFromDisk).toHaveBeenCalledOnce();
       // The pick lands in the attachment tray as a pill, not as an
-      // editor chip, and the menu closes.
+      // editor chip, and the picker closes.
       expect(await screen.findByText("spec.md")).toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Remove spec.md" })
       ).toBeInTheDocument();
       expect(screen.queryByText("@spec.md")).not.toBeInTheDocument();
-      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("dialog", { name: "Add reference" })
+      ).not.toBeInTheDocument();
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("attaches a recent file to the tray from the reference picker's Files tab", async () => {
+    const listRecentFileReferences = vi.fn(async () => ({
+      files: [
+        { label: "notes.md", path: "/Users/huntharo/notes/notes.md" },
+        { label: "todo.txt", path: "/Users/huntharo/notes/todo.txt" },
+      ],
+    }));
+    const recordRecentFileReferences = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          listRecentFileReferences,
+          recordRecentFileReferences,
+          pickFileFromDisk: vi.fn(async () => ({ canceled: true as const })),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    await clickButton("Add reference");
+
+    expect(listRecentFileReferences).toHaveBeenCalledOnce();
+    const dialog = screen.getByRole("dialog", { name: "Add reference" });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("tab", { name: "Files" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole("option", { name: /notes\.md/ })
+      );
+      await Promise.resolve();
+    });
+
+    // The recent file lands in the attachment tray as a pill and the
+    // picker closes; committing it re-records the reference.
+    expect(await screen.findByText("notes.md")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remove notes.md" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Add reference" })
+    ).not.toBeInTheDocument();
+    expect(recordRecentFileReferences).toHaveBeenCalledWith({
+      paths: ["/Users/huntharo/notes/notes.md"],
+    });
+  });
+
+  it("mints a directory chip from the reference picker's Projects tab", async () => {
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const repoDirectory: NavigationDirectorySummary = {
+      key: "directory:/repo",
+      kind: "directory",
+      label: "Repo",
+      path: "/repo",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 20,
+    };
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          pickFileFromDisk: vi.fn(async () => ({ canceled: true as const })),
+        }}
+        directory={repoDirectory}
+        directories={[repoDirectory]}
+        draftStore={createComposerDraftStore()}
+        launchpad={launchpad}
+        onMaterializeLaunchpad={async () => undefined}
+        onPickDirectoryForReference={async () => undefined}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    await clickButton("Add reference");
+
+    const dialog = screen.getByRole("dialog", { name: "Add reference" });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("option", { name: /Repo/ }));
+      await Promise.resolve();
+    });
+
+    const richInput = screen.getByTestId("composer-tiptap-input");
+    await waitFor(() => {
+      expect(within(richInput).getByText("@Repo")).toBeInTheDocument();
+    });
+    const chip = within(richInput).getByText("@Repo");
+    expect(chip).toHaveAttribute("data-mention-kind", "directory");
+    expect(chip).toHaveAttribute("data-skill-path", "/repo");
+    expect(
+      screen.queryByRole("dialog", { name: "Add reference" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("routes the combined macOS picker's entries to tray pills and directory chips", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "Repo",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const repoDirectory: NavigationDirectorySummary = {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 20,
+      };
+      const pickReferenceFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        entries: [
+          {
+            path: "/Users/huntharo/notes/spec.md",
+            kind: "file" as const,
+          },
+          {
+            path: "/Users/huntharo/pwrdrvr/agent-kit",
+            kind: "directory" as const,
+          },
+        ],
+      }));
+      // Registration failures are non-fatal — the chip mints anyway and
+      // the send-time attach re-registers.
+      const registerDirectoryFromDisk = vi.fn(async () => ({
+        ok: false as const,
+        reason: "not-a-git-repo" as const,
+        message: "That folder isn't a git repository.",
+      }));
+
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            platform: "darwin",
+            pickFileFromDisk: vi.fn(async () => ({ canceled: true as const })),
+            pickReferenceFromDisk,
+            registerDirectoryFromDisk,
+          }}
+          directory={repoDirectory}
+          directories={[repoDirectory]}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={async () => undefined}
+          onPickDirectoryForReference={async () => undefined}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      );
+
+      await clickButton("Add reference");
+
+      const dialog = screen.getByRole("dialog", { name: "Add reference" });
+      // macOS gets the single combined action row.
+      expect(
+        within(dialog).queryByRole("button", { name: "Add directory…" })
+      ).not.toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(
+          within(dialog).getByRole("button", {
+            name: "Add file or directory…",
+          })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(pickReferenceFromDisk).toHaveBeenCalledOnce();
+      expect(registerDirectoryFromDisk).toHaveBeenCalledWith({
+        path: "/Users/huntharo/pwrdrvr/agent-kit",
+      });
+      // File → tray pill; directory → editor chip.
+      expect(await screen.findByText("spec.md")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Remove spec.md" })
+      ).toBeInTheDocument();
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      await waitFor(() => {
+        expect(within(richInput).getByText("@agent-kit")).toBeInTheDocument();
+      });
+      expect(within(richInput).getByText("@agent-kit")).toHaveAttribute(
+        "data-mention-kind",
+        "directory"
+      );
     } finally {
       delete (window as unknown as { __pwragentHomeDir?: string })
         .__pwragentHomeDir;

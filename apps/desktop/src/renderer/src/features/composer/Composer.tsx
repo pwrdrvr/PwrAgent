@@ -91,6 +91,7 @@ import {
 } from "./ComposerInputTypes";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectPicker } from "./ProjectPicker";
+import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
 import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 import {
   EnvActionRunEntry,
@@ -2577,10 +2578,11 @@ export function Composer(props: ComposerProps) {
     () => setScheduleMenuOpen(false),
   );
   const [addReferenceMenuOpen, setAddReferenceMenuOpen] = useState(false);
-  const addReferenceMenuRef = useDismissableMenu<HTMLSpanElement>(
-    addReferenceMenuOpen,
-    () => setAddReferenceMenuOpen(false),
-  );
+  // Recently referenced files for the reference picker's Files tab —
+  // loaded lazily from the main process each time the picker opens.
+  const [recentFileReferences, setRecentFileReferences] = useState<
+    ReferencePickerFile[]
+  >([]);
   const [scheduleTick, setScheduleTick] = useState(() => Date.now());
   const [scheduledDraftSendAt, setScheduledDraftSendAt] = useState<
     number | undefined
@@ -5622,6 +5624,11 @@ export function Composer(props: ComposerProps) {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(nextSelection, nextSelection);
     });
+
+    // Feed the reference picker's Files tab — fire-and-forget.
+    void props.desktopApi
+      ?.recordRecentFileReferences?.({ paths })
+      ?.catch(() => undefined);
   };
 
   /** "@ → Add file…" action: OS file picker → file-reference chips. */
@@ -5631,6 +5638,133 @@ export function Composer(props: ComposerProps) {
       return;
     }
     applyFileReferences(result.paths);
+  };
+
+  /**
+   * Mint directory-reference chips for a batch of picked directories —
+   * the multi-token sibling of `applyDirectoryReference`, sharing
+   * `applyFileReferences`' token layout (n-1 separator spaces plus the
+   * guaranteed post-chip space). Needed because the single-directory
+   * helper can't be called twice in one tick: each call captures the
+   * pre-insert draft, so the second insert would clobber the first.
+   */
+  const applyDirectoryReferenceChips = (
+    directories: { label: string; path: string }[],
+  ): void => {
+    if (!inputRef.current || directories.length === 0) {
+      return;
+    }
+
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const selectionEnd = Math.min(
+      inputRef.current.selectionEnd ?? selectionStart,
+      draft.length,
+    );
+    const refTrigger =
+      findDirectoryReferenceTrigger(draft, selectionStart)
+      ?? findDirectoryReferenceTrigger(draft, draft.length)
+      ?? { start: selectionStart, end: selectionEnd };
+
+    const before = draft.slice(0, refTrigger.start);
+    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
+    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextDraft = `${before}${" ".repeat(directories.length - 1)}${nextAfter}`;
+    const nextSelection = before.length + directories.length;
+    const nextSkillTokens = [
+      ...adjustSkillTokenIndexesForTextChange({
+        currentDraft: draft,
+        nextDraft,
+        skillTokens,
+      }),
+      ...directories.map((directory, index) =>
+        createComposerDirectoryToken(directory, before.length + index),
+      ),
+    ];
+
+    // Same protected-update dance as applySkill / applyDirectoryReference:
+    // the editability sync in ComposerTiptapInput re-emits the editor's
+    // (still pre-insert) content through onChange before the
+    // external-value sync applies the new draft. The pending-programmatic
+    // guard in handleComposerChange swallows that stale replay so the two
+    // sides can't ping-pong.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveDirectoryRefIndex(0);
+    });
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+    });
+  };
+
+  /**
+   * Combined "+ Add file or directory…" picker (macOS only): one OS
+   * dialog returns a mix of files and directories. Files land in the
+   * attachment tray (the "+ flow attaches" rule); directories are
+   * registered as tracked directories (non-fatal — the send-time attach
+   * re-registers anyway) and minted as reference chips. The tray attach
+   * runs first because it snapshots the current draft, which the chip
+   * mint is about to rewrite.
+   */
+  const applyPickedReferencesFromDisk = async (): Promise<void> => {
+    const result = await props.desktopApi?.pickReferenceFromDisk?.();
+    if (!result || result.canceled || result.entries.length === 0) {
+      return;
+    }
+    const filePaths = result.entries
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => entry.path);
+    const directoryPaths = result.entries
+      .filter((entry) => entry.kind === "directory")
+      .map((entry) => entry.path);
+    if (filePaths.length > 0) {
+      attachFilePaths(filePaths);
+    }
+    for (const directoryPath of directoryPaths) {
+      void props.desktopApi
+        ?.registerDirectoryFromDisk?.({ path: directoryPath })
+        ?.then((response) => {
+          if (response && !response.ok) {
+            console.warn(
+              `Could not register picked directory ${directoryPath}: ${response.message}`,
+            );
+          }
+        })
+        .catch(() => undefined);
+    }
+    if (directoryPaths.length > 0) {
+      applyDirectoryReferenceChips(
+        directoryPaths.map((directoryPath) => ({
+          label: fileLabelFromPath(directoryPath),
+          path: directoryPath,
+        })),
+      );
+    }
+  };
+
+  /**
+   * Load the reference picker's Files tab from the main process. Called
+   * on every picker open; failures keep the previous list — recents are
+   * a convenience surface, not load-bearing.
+   */
+  const refreshRecentFileReferences = async (): Promise<void> => {
+    try {
+      const response = await props.desktopApi?.listRecentFileReferences?.();
+      setRecentFileReferences(response?.files ?? []);
+    } catch {
+      // Keep whatever list we had.
+    }
   };
 
   const removeImageAttachment = (id: string): void => {
@@ -5769,6 +5903,13 @@ export function Composer(props: ComposerProps) {
       skillTokens,
     });
     persistLaunchpadImageAttachments(imageAttachments, nextAttachments);
+
+    // Feed the reference picker's Files tab — fire-and-forget.
+    void props.desktopApi
+      ?.recordRecentFileReferences?.({
+        paths: accepted.map((attachment) => attachment.path),
+      })
+      ?.catch(() => undefined);
   };
 
   /**
@@ -8211,56 +8352,72 @@ export function Composer(props: ComposerProps) {
 
           {props.onPickDirectoryForReference ||
           props.desktopApi?.pickFileFromDisk ? (
-            <span className="composer__add-reference" ref={addReferenceMenuRef}>
+            <ReferencePicker
+              open={addReferenceMenuOpen}
+              onClose={() => setAddReferenceMenuOpen(false)}
+              directories={props.directories ?? []}
+              recentFiles={recentFileReferences}
+              platform={props.desktopApi?.platform}
+              onSelectDirectory={(directory) => {
+                setAddReferenceMenuOpen(false);
+                applyDirectoryReference(directory);
+              }}
+              onSelectFile={(path) => {
+                setAddReferenceMenuOpen(false);
+                attachFilePaths([path]);
+              }}
+              onPickFromDisk={
+                props.desktopApi?.pickReferenceFromDisk
+                  ? () => {
+                      // Close before the OS dialog opens so the sheet
+                      // doesn't float over a stale popover.
+                      setAddReferenceMenuOpen(false);
+                      void applyPickedReferencesFromDisk();
+                    }
+                  : undefined
+              }
+              onPickDirectoryFromDisk={
+                props.onPickDirectoryForReference
+                  ? () => {
+                      setAddReferenceMenuOpen(false);
+                      void applyPickedDirectoryReference();
+                    }
+                  : undefined
+              }
+              onPickFileFromDisk={
+                props.desktopApi?.pickFileFromDisk
+                  ? () => {
+                      setAddReferenceMenuOpen(false);
+                      void attachPickedFilesToTray();
+                    }
+                  : undefined
+              }
+            >
               <button
                 type="button"
                 className="composer__toggle tooltip-target"
                 aria-label="Add reference"
-                aria-haspopup="menu"
+                aria-haspopup="dialog"
                 aria-expanded={addReferenceMenuOpen}
-                data-tooltip="Reference a directory or file"
+                // Omit the CSS tooltip while the popover is open — the
+                // pseudo-element otherwise lingers over the panel.
+                data-tooltip={
+                  addReferenceMenuOpen
+                    ? undefined
+                    : "Reference a directory or file"
+                }
                 disabled={launchpadSubmitting}
-                onClick={() => setAddReferenceMenuOpen((current) => !current)}
+                onClick={() => {
+                  const next = !addReferenceMenuOpen;
+                  setAddReferenceMenuOpen(next);
+                  if (next) {
+                    void refreshRecentFileReferences();
+                  }
+                }}
               >
                 <PlusIcon size={15} aria-hidden="true" />
               </button>
-              {addReferenceMenuOpen ? (
-                <div className="composer-dropdown__menu" role="menu">
-                  {props.onPickDirectoryForReference ? (
-                    <button
-                      className="composer-dropdown__option"
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        setAddReferenceMenuOpen(false);
-                        void applyPickedDirectoryReference();
-                      }}
-                    >
-                      <FolderIcon size={14} aria-hidden="true" />
-                      <span className="composer-dropdown__option-label">
-                        Add directory…
-                      </span>
-                    </button>
-                  ) : null}
-                  {props.desktopApi?.pickFileFromDisk ? (
-                    <button
-                      className="composer-dropdown__option"
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        setAddReferenceMenuOpen(false);
-                        void attachPickedFilesToTray();
-                      }}
-                    >
-                      <FileCodeIcon size={14} aria-hidden="true" />
-                      <span className="composer-dropdown__option-label">
-                        Add file…
-                      </span>
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-            </span>
+            </ReferencePicker>
           ) : null}
         </div>
       ) : null}

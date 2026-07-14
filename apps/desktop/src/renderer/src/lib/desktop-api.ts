@@ -129,6 +129,9 @@ import type {
   SetMessagingEnabledResponse,
   PickDirectoryFromDiskResponse,
   PickFileFromDiskResponse,
+  PickReferenceFromDiskResponse,
+  ListRecentFileReferencesResponse,
+  RecordRecentFileReferencesRequest,
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
   RegisterDirectoryFromDiskRequest,
@@ -690,6 +693,19 @@ export type DesktopApi = {
   pickDirectoryFromDisk?: () => Promise<PickDirectoryFromDiskResponse>;
   /** Composer file-reference picker (multi-select; paths only, no register step). */
   pickFileFromDisk?: () => Promise<PickFileFromDiskResponse>;
+  /**
+   * Combined file-or-directory reference picker (macOS only — the other
+   * platforms cannot combine both kinds in one OS dialog). Entries come
+   * back classified by `fs.stat` so the composer can route files to the
+   * tray and directories to reference chips.
+   */
+  pickReferenceFromDisk?: () => Promise<PickReferenceFromDiskResponse>;
+  /** Recently referenced files for the reference picker's Files tab. */
+  listRecentFileReferences?: () => Promise<ListRecentFileReferencesResponse>;
+  /** Fire-and-forget record of freshly committed file references. */
+  recordRecentFileReferences?: (
+    request: RecordRecentFileReferencesRequest,
+  ) => Promise<void>;
   /**
    * Resolve the on-disk path of a dropped/pasted File (Electron
    * webUtils.getPathForFile). Returns "" when the File has no backing path.

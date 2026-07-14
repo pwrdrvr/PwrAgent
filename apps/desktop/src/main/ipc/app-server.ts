@@ -1,4 +1,5 @@
 import { BrowserWindow, dialog, ipcMain } from "electron";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -46,8 +47,11 @@ import {
   type GetGhStatusRequest,
   type GhStatus,
   type LinkedDirectorySummary,
+  type ListRecentFileReferencesResponse,
   type PickDirectoryFromDiskResponse,
   type PickFileFromDiskResponse,
+  type PickReferenceFromDiskResponse,
+  type RecordRecentFileReferencesRequest,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
   type RefreshDirectoryGitStatusesRequest,
@@ -126,6 +130,10 @@ import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-env
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { getAppStateDb } from "../state/app-state";
 import {
+  listRecentFileReferencePaths,
+  recordRecentFileReferencePaths,
+} from "../state/recent-file-references-store";
+import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
@@ -162,8 +170,11 @@ import {
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
+  NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
+  NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
@@ -253,6 +264,30 @@ function rejectNonDirectoryPinKey(directoryKey: string): void {
       `Cannot pin synthetic directory entry: ${directoryKey} (only directory:* and workspace:* keys are pinnable)`,
     );
   }
+}
+
+/**
+ * Classify combined reference-picker paths as files or directories via
+ * `fs.stat`. Unreadable paths (and exotic kinds like sockets) are
+ * skipped — the renderer only knows how to route these two kinds.
+ */
+function classifyReferencePaths(
+  paths: string[],
+): { path: string; kind: "file" | "directory" }[] {
+  const entries: { path: string; kind: "file" | "directory" }[] = [];
+  for (const candidate of paths) {
+    try {
+      const stats = fs.statSync(candidate);
+      if (stats.isDirectory()) {
+        entries.push({ path: candidate, kind: "directory" });
+      } else if (stats.isFile()) {
+        entries.push({ path: candidate, kind: "file" });
+      }
+    } catch {
+      // Skip unreadable paths.
+    }
+  }
+  return entries;
 }
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
@@ -3282,6 +3317,62 @@ class DesktopAppServerService {
     return { canceled: false, paths: result.filePaths };
   }
 
+  /**
+   * Combined file-or-directory reference picker. Only macOS can combine
+   * `openFile` + `openDirectory` in one dialog (Electron limitation on
+   * Windows/Linux — which is why the composer's reference picker keeps
+   * separate "Add directory…" / "Add file…" actions off-macOS). Each
+   * pick is classified via `fs.stat`; unreadable paths are skipped.
+   */
+  async pickReferenceFromDisk(
+    parentWindow?: BrowserWindow,
+  ): Promise<PickReferenceFromDiskResponse> {
+    const e2ePickPaths = process.env.PWRAGENT_REPLAY_FIXTURE_PATH
+      ? process.env.PWRAGENT_E2E_PICK_REFERENCE_PATHS?.trim()
+      : undefined;
+    if (e2ePickPaths) {
+      return {
+        canceled: false,
+        entries: classifyReferencePaths(e2ePickPaths.split(":").filter(Boolean)),
+      };
+    }
+
+    const window =
+      parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    const defaultPath = this.lastPickedDirectoryParent ?? os.homedir();
+    const options = {
+      title: "Add reference",
+      buttonLabel: "Add reference",
+      defaultPath,
+      properties: (process.platform === "darwin"
+        ? ["openFile", "openDirectory", "multiSelections"]
+        : ["openFile", "multiSelections"]) as Array<
+        "openFile" | "openDirectory" | "multiSelections"
+      >,
+    };
+    const result = window
+      ? await dialog.showOpenDialog(window, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    this.lastPickedDirectoryParent = path.dirname(result.filePaths[0]);
+    return { canceled: false, entries: classifyReferencePaths(result.filePaths) };
+  }
+
+  listRecentFileReferences(): ListRecentFileReferencesResponse {
+    return {
+      files: listRecentFileReferencePaths(getAppStateDb()).map((filePath) => ({
+        label: path.basename(filePath),
+        path: filePath,
+      })),
+    };
+  }
+
+  recordRecentFileReferences(request: RecordRecentFileReferencesRequest): void {
+    recordRecentFileReferencePaths(getAppStateDb(), request.paths ?? []);
+  }
+
   async registerDirectoryFromDisk(
     request: RegisterDirectoryFromDiskRequest,
   ): Promise<RegisterDirectoryFromDiskResponse> {
@@ -4130,6 +4221,33 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.pickFileFromDisk(
         senderWindow ?? undefined,
       );
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
+    async (event): Promise<PickReferenceFromDiskResponse> => {
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      return await appServerService.pickReferenceFromDisk(
+        senderWindow ?? undefined,
+      );
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
+    async (): Promise<ListRecentFileReferencesResponse> => {
+      return appServerService.listRecentFileReferences();
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
+    async (
+      _event,
+      request: RecordRecentFileReferencesRequest,
+    ): Promise<void> => {
+      appServerService.recordRecentFileReferences(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);

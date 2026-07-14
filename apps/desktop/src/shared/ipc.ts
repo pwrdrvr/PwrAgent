@@ -224,6 +224,23 @@ export const NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL =
  */
 export const NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL =
   "navigation:pick-file-from-disk";
+/**
+ * Combined file-or-directory variant used by the composer's reference
+ * picker on macOS, where one OS dialog can offer both kinds. The main
+ * process classifies each pick via `fs.stat` so the renderer can route
+ * files to the attachment tray and directories to reference chips.
+ */
+export const NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL =
+  "navigation:pick-reference-from-disk";
+/**
+ * Recently referenced files for the reference picker's Files tab —
+ * `list` reads the persisted most-recent-first list; `record` is a
+ * fire-and-forget append whenever the composer commits file references.
+ */
+export const NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL =
+  "navigation:list-recent-file-references";
+export const NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL =
+  "navigation:record-recent-file-references";
 export const COMPOSER_DRAFT_SAVE_CHANNEL = "composer-draft:save";
 export const COMPOSER_DRAFT_RECORD_HISTORY_CHANNEL =
   "composer-draft:record-history";
