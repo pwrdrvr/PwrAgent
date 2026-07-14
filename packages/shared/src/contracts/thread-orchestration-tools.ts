@@ -324,6 +324,14 @@ export type HandoffTaskResult = {
   threadId: ThreadIdentifier;
   turnId?: string;
   title?: string;
+  /** Canonical `pwragent://thread/…` URL for the created thread. */
+  threadUrl: string;
+  /**
+   * Ready-made markdown link the model is told to reproduce verbatim when it
+   * reports the new thread. Models paraphrase a bare `threadId` into an
+   * unclickable uuid; handing them a finished link removes the assembly step.
+   */
+  threadLink: string;
   seedMode: HandoffTaskSeedMode;
   groupingMode: HandoffTaskGroupingMode;
   groupedUnderThreadId?: ThreadIdentifier;
@@ -343,6 +351,10 @@ export type SendMessageToThreadResult = {
   threadId: ThreadIdentifier;
   turnId: string;
   promptPreview: string;
+  /** Canonical `pwragent://thread/…` URL for the messaged thread. */
+  threadUrl: string;
+  /** Ready-made markdown link; see `HandoffTaskResult.threadLink`. */
+  threadLink: string;
   settings: {
     executionMode?: ThreadExecutionMode;
     model?: string;

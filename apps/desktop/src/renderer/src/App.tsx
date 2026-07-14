@@ -13,6 +13,7 @@ import {
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
+  type AppServerBackendKind,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
@@ -52,6 +53,7 @@ import {
   useNavigationHistory,
   type NavigationHistoryLocation,
 } from "./lib/useNavigationHistory";
+import { ThreadLinkProvider } from "./lib/thread-links";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
@@ -544,6 +546,16 @@ function DesktopAppShell(props: {
     return undefined;
   }, [mainView, navigation.selectedThreadKey]);
   const showThread = navigation.showThread;
+  // Target of `pwragent://thread/…` chips in the transcript. Navigation-only:
+  // the scheme never carries an action, so this is the entire surface it can
+  // reach. Mirrors the tray/notification `onShowThreadRequested` path below.
+  const showThreadFromLink = useCallback(
+    (request: { backend: AppServerBackendKind; threadId: string }): void => {
+      setMainView("thread");
+      void showThread(request);
+    },
+    [showThread],
+  );
   const restoreHistoryLocation = useCallback(
     (location: NavigationHistoryLocation): void => {
       if (location.view === "search") {
@@ -1095,7 +1107,7 @@ function DesktopAppShell(props: {
   };
 
   return (
-    <>
+    <ThreadLinkProvider onShowThread={showThreadFromLink} threads={navigation.threads}>
       <AppTitleBar
         desktopApi={desktopApi}
         onOpenMessagingActivity={openMessagingActivityWindow}
@@ -1435,7 +1447,7 @@ function DesktopAppShell(props: {
           <AppUpdateBanner desktopApi={desktopApi} />
         </div>
       </div>
-    </>
+    </ThreadLinkProvider>
   );
 }
 

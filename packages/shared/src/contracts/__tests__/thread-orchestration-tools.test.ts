@@ -128,6 +128,8 @@ describe("thread orchestration tool contracts", () => {
       backend: "codex",
       threadId: "thread-child",
       turnId: "turn-child",
+      threadUrl: "pwragent://thread/thread-child?backend=codex",
+      threadLink: "[thread-child](pwragent://thread/thread-child?backend=codex)",
       seedMode: "clean",
       groupingMode: "none",
       inheritedSettings: {

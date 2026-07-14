@@ -34,6 +34,7 @@ export { SmileyIcon } from "./SmileyIcon";
 export { SubAgentsIcon } from "./SubAgentsIcon";
 export { TelegramIcon } from "./TelegramIcon";
 export { TerminalIcon } from "./TerminalIcon";
+export { ThreadIcon } from "./ThreadIcon";
 export { UnlinkedDotIcon } from "./UnlinkedDotIcon";
 export { WorkspaceIcon } from "./WorkspaceIcon";
 export { WorktreeIcon } from "./WorktreeIcon";

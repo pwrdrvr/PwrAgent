@@ -19,6 +19,8 @@ import { requestShowThread } from "../window-show-thread";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   type AcpBackendId,
+  buildThreadMarkdownLink,
+  buildThreadUrl,
   estimateOpenAiTokenUsageCost,
   formatTokenUsageUsd,
   isToolManagedWorktreePath,
@@ -17309,6 +17311,11 @@ export class DesktopBackendRegistry {
           threadId: turn.threadId,
           turnId: turn.turnId,
           promptPreview: truncateThreadInspectionText(prompt, 240),
+          threadUrl: buildThreadUrl({ backend, threadId: turn.threadId }),
+          threadLink: buildThreadMarkdownLink({
+            backend,
+            threadId: turn.threadId,
+          }),
           settings,
         },
       };
@@ -17842,6 +17849,8 @@ export class DesktopBackendRegistry {
         turnId,
         handoffId,
         title,
+        threadUrl: buildThreadUrl({ backend, threadId }),
+        threadLink: buildThreadMarkdownLink({ backend, threadId, title }),
         seedMode,
         groupingMode,
         ...(groupedParentThreadId

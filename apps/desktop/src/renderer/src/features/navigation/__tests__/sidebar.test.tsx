@@ -2209,6 +2209,7 @@ describe("Sidebar", () => {
     expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
       "Rename Thread",
       "Archive Thread",
+      "Copy Thread Link",
       "Copy Thread ID",
       "Copy Worktree Path",
       "Copy Branch Name",

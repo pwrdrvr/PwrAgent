@@ -11439,6 +11439,34 @@ textarea,
   color: var(--accent-bright);
 }
 
+/* Reference to another thread, rendered inline in transcript prose from a
+   `pwragent://thread/…` link (or a bare thread id an agent wrote as code).
+   Sits on the `.chip` primitive so it carries the same pill geometry as the
+   skill chip; the interactive states are what set it apart. */
+.thread-chip {
+  max-width: 100%;
+  height: 22px;
+  vertical-align: middle;
+  border: 1px solid var(--accent-border);
+  cursor: pointer;
+}
+
+.thread-chip:hover,
+.thread-chip:focus-visible {
+  background: var(--bg-row-active);
+}
+
+.thread-chip__icon {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.thread-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .context-rail {
   display: flex;
   /* Anchored to `.thread-view__layout` (position: relative), NOT the window,

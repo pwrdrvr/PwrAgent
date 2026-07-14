@@ -1,11 +1,15 @@
-import type {
-  AppServerSkillSummary,
-  DesktopApplicationsSnapshot,
-  MarkdownFileViewerContext,
+import {
+  isThreadUrl,
+  PWRAGENT_URL_SCHEME,
+  type AppServerSkillSummary,
+  type DesktopApplicationsSnapshot,
+  type MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import {
+  createContext,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -21,7 +25,14 @@ import { AppIcon } from "../../components/AppIcon";
 import { CloseIcon, PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { repairNestedLanguageFences } from "../../lib/markdown-fences";
+import {
+  resolveThreadHref,
+  resolveThreadIdText,
+  useThreadLinks,
+  type ThreadLinkContextValue,
+} from "../../lib/thread-links";
 import { SkillChip } from "../composer/SkillChip";
+import { ThreadChip } from "./ThreadChip";
 import { remarkTableProfile } from "./remark-table-profile";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
@@ -40,6 +51,44 @@ type ThreadMarkdownProps = {
 
 type EditorApplication = DesktopApplicationsSnapshot["editors"][number];
 
+/**
+ * True while rendering inside a `<pre>`. react-markdown v10 dropped the
+ * `inline` prop on `code`, and a fence with no language carries no
+ * `language-` class, so the class name alone cannot distinguish block code
+ * from an inline span.
+ */
+const CodeBlockContext = createContext(false);
+
+function TranscriptCode(props: {
+  children: ReactNode;
+  className?: string;
+  threadLinks: ThreadLinkContextValue | undefined;
+}) {
+  const insideCodeBlock = useContext(CodeBlockContext);
+  const isBlockCode = insideCodeBlock || (props.className?.includes("language-") ?? false);
+
+  if (!isBlockCode) {
+    // Transcripts written before the link protocol existed — and any model
+    // that ignores the `threadLink` convention — put the bare thread id in a
+    // code span. Recognizing it makes those threads reachable without asking
+    // anyone to re-run anything. Gated on the id resolving to a real thread,
+    // so an unrelated uuid stays plain code.
+    const threadLink = resolveThreadIdText(
+      extractTextContent(props.children),
+      props.threadLinks
+    );
+    if (threadLink && props.threadLinks) {
+      return <ThreadChip link={threadLink} onOpen={props.threadLinks.show} />;
+    }
+  }
+
+  return (
+    <code className={isBlockCode ? props.className : "transcript-message__code"}>
+      {props.children}
+    </code>
+  );
+}
+
 type LocalFileTarget = {
   path: string;
   line?: number;
@@ -57,6 +106,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
   );
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
+  const threadLinks = useThreadLinks();
   const editorApplication = useMemo(
     () =>
       props.applications?.editors.find(
@@ -136,6 +186,25 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         const source = sourceForNode(markdownText, anchorProps.node);
 
         if (isImplicitBareAutolink({ href, label, source })) {
+          return <>{anchorProps.children}</>;
+        }
+
+        if (isThreadUrl(href)) {
+          const threadLink = resolveThreadHref(href, threadLinks);
+          if (threadLink && threadLinks) {
+            return (
+              <ThreadChip
+                fallbackLabel={label}
+                link={threadLink}
+                onOpen={threadLinks.show}
+              />
+            );
+          }
+
+          // The link names a thread this profile does not have, or renders on a
+          // surface with no navigation (Activity, Changelog, file viewer). Show
+          // the author's text rather than an anchor that goes nowhere — and
+          // never let `pwragent:` reach the external-open path below.
           return <>{anchorProps.children}</>;
         }
 
@@ -227,15 +296,10 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         );
       },
       code(codeProps) {
-        const className = typeof codeProps.className === "string" ? codeProps.className : "";
-        const isBlockCode = className.includes("language-");
-
         return (
-          <code
-            className={isBlockCode ? codeProps.className : "transcript-message__code"}
-          >
+          <TranscriptCode className={codeProps.className} threadLinks={threadLinks}>
             {codeProps.children}
-          </code>
+          </TranscriptCode>
         );
       },
       h1(headingProps) {
@@ -299,7 +363,13 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
               aria-label="Code block"
               tabIndex={0}
             >
-              {preProps.children}
+              {/* Tells the nested `code` renderer it is block, not inline. A
+                  fence with no language produces a `<code>` with no
+                  `language-` class, so the class alone cannot tell them
+                  apart — and block code must never become a thread chip. */}
+              <CodeBlockContext.Provider value={true}>
+                {preProps.children}
+              </CodeBlockContext.Provider>
             </pre>
           </div>
         );
@@ -351,6 +421,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       openLocalFileLink,
       props.desktopApi,
       skillsByPath,
+      threadLinks,
     ]
   );
 
@@ -668,6 +739,13 @@ function isSafeMarkdownUrl(url: string): boolean {
     parsed.protocol === "mailto:" ||
     parsed.protocol === "file:"
   ) {
+    return true;
+  }
+
+  // PwrAgent's own scheme is resolved in-app and never handed to the OS — it
+  // is deliberately absent from the main process' `shell.openExternal`
+  // allowlist. Navigation-only by contract; see `contracts/thread-link.ts`.
+  if (parsed.protocol === PWRAGENT_URL_SCHEME) {
     return true;
   }
 
