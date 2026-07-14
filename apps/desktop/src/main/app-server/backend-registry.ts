@@ -2125,11 +2125,17 @@ function parseReservedAcpStartThreadKey(
   return { backend, threadId };
 }
 
+/**
+ * Quit blockers are keyed the same way as every other thread identity, so the
+ * quit dialog can parse them back into `{backend, threadId}` and link to the
+ * thread. The hand-rolled `${backend}:${threadId}` this used to build was
+ * ambiguous for ACP backends, whose kind ("acp:grok") already contains a colon.
+ */
 function formatQuitThreadKey(
   backend: AppServerBackendKind,
   threadId: string,
 ): string {
-  return `${backend}:${threadId}`;
+  return buildThreadIdentityKey(backend, threadId);
 }
 
 function prependAutomationRuntimeContext(params: {
@@ -10907,6 +10913,10 @@ export class DesktopBackendRegistry {
           nextRuntime = await startLocalCodexEnvironmentAction({
             actionId: request.actionId,
             runId,
+            owner: {
+              backend: request.backend,
+              threadId: request.threadId,
+            },
             commandRunner: this.codexEnvironmentCommandRunner,
             env: this.codexEnvironmentCommandEnv,
             runtime: runtimeForAction,

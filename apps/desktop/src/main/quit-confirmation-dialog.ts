@@ -1,15 +1,36 @@
 import { BrowserWindow, nativeTheme } from "electron";
+import { parseThreadIdentityKey } from "@pwragent/shared";
+import { revealIntegratedTerminal } from "./ipc/integrated-terminal";
 import { readBootstrapAppearance } from "./settings/appearance-bootstrap";
+import { requestShowThread } from "./window-show-thread";
 
 export type QuitConfirmationDialogResult =
   | "manual-confirm"
   | "manual-cancel"
   | "countdown-expired";
 
+/**
+ * One row in the dialog's "still running" list. Declared here rather than in
+ * `quit-manager` because quit-manager imports this module — the reverse would
+ * be a dependency cycle.
+ */
+export type QuitBlockerItem = {
+  kind: "turn" | "terminal" | "action";
+  backend: string;
+  threadId: string;
+  threadKey: string;
+  /** Resolved just before the dialog opens; falls back to the thread id. */
+  title?: string;
+  /** Secondary line — the command and pid for an action, for example. */
+  detail?: string;
+};
+
 export type QuitConfirmationDialogOptions = {
   countdownSeconds: number;
   inProgressThreadCount: number;
   terminalSessionCount: number;
+  actionRunCount?: number;
+  items?: QuitBlockerItem[];
   parent?: BrowserWindow | null;
 };
 
@@ -35,7 +56,7 @@ type QuitDialogPalette = {
   buttonText: string;
 };
 
-const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> = {
+export const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> = {
   dark: {
     bg: "#000000",
     sidebar: "#050505",
@@ -86,9 +107,13 @@ export async function showQuitConfirmationDialog(
     options.parent && !options.parent.isDestroyed() ? options.parent : undefined;
   const colorScheme = resolveQuitDialogTheme();
   const palette = QUIT_DIALOG_PALETTES[colorScheme];
+  const items = options.items ?? [];
   const window = new BrowserWindow({
     width: 460,
-    height: 340,
+    // The list is scrollable, but a dialog that always reserves room for ten
+    // rows would look absurd when nothing is running. Grow with the content up
+    // to a ceiling, then let the list scroll inside it.
+    height: quitDialogHeight(items.length),
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -135,13 +160,39 @@ export async function showQuitConfirmationDialog(
         return;
       }
       event.preventDefault();
-      const result = url.slice(navigationPrefix.length);
+      const action = url.slice(navigationPrefix.length);
+
+      // Reading a ten-row list takes longer than the countdown. Any interaction
+      // with the list cancels the auto-quit — including the main-process hard
+      // ceiling, which would otherwise quit out from under the user mid-scroll.
+      if (action === "countdown-cancel") {
+        if (hardCeiling) {
+          clearTimeout(hardCeiling);
+          hardCeiling = undefined;
+        }
+        return;
+      }
+
+      // Clicking a row means "don't quit, take me there".
+      const target = parseQuitItemAction(action);
+      if (target) {
+        const parsed = parseThreadIdentityKey(target.threadKey);
+        if (parsed) {
+          if (target.kind === "terminal") {
+            revealIntegratedTerminal(target.threadKey);
+          }
+          requestShowThread(parsed);
+        }
+        finish("manual-cancel");
+        return;
+      }
+
       if (
-        result === "manual-confirm" ||
-        result === "manual-cancel" ||
-        result === "countdown-expired"
+        action === "manual-confirm" ||
+        action === "manual-cancel" ||
+        action === "countdown-expired"
       ) {
-        finish(result);
+        finish(action);
       }
     });
     window.once("closed", () => finish("manual-cancel"));
@@ -156,6 +207,8 @@ export async function showQuitConfirmationDialog(
           countdownSeconds: options.countdownSeconds,
           inProgressThreadCount: options.inProgressThreadCount,
           terminalSessionCount: options.terminalSessionCount,
+          actionRunCount: options.actionRunCount ?? 0,
+          items,
           navigationPrefix,
           colorScheme,
           palette,
@@ -169,10 +222,93 @@ export async function showQuitConfirmationDialog(
   });
 }
 
-function buildQuitConfirmationHtml(options: {
+const DIALOG_BASE_HEIGHT = 340;
+const DIALOG_ROW_HEIGHT = 46;
+const DIALOG_MAX_HEIGHT = 620;
+
+function quitDialogHeight(itemCount: number): number {
+  if (itemCount === 0) return DIALOG_BASE_HEIGHT;
+  // + section headers (at most three) and the list's own padding.
+  const listHeight = itemCount * DIALOG_ROW_HEIGHT + 56;
+  return Math.min(DIALOG_MAX_HEIGHT, DIALOG_BASE_HEIGHT + listHeight);
+}
+
+const QUIT_ITEM_GROUPS: ReadonlyArray<{
+  kind: QuitBlockerItem["kind"];
+  heading: string;
+}> = [
+  { kind: "turn", heading: "Agent turns in progress" },
+  { kind: "terminal", heading: "Integrated terminals" },
+  { kind: "action", heading: "Environment actions" },
+];
+
+/**
+ * Encode a row's target as a single URL segment.
+ *
+ * The thread key travels whole rather than as `backend/threadId`: an ACP
+ * backend kind ("acp:grok") contains a colon, and thread ids are opaque, so
+ * splitting on delimiters here corrupts the key that the terminal registry and
+ * the renderer both index by.
+ */
+export function formatQuitItemAction(item: QuitBlockerItem): string {
+  return `show-thread/${encodeURIComponent(item.threadKey)}/${encodeURIComponent(
+    item.kind,
+  )}`;
+}
+
+export function parseQuitItemAction(
+  action: string,
+): { threadKey: string; kind: string } | undefined {
+  if (!action.startsWith("show-thread/")) {
+    return undefined;
+  }
+  const [, encodedThreadKey, encodedKind] = action.split("/");
+  if (!encodedThreadKey) {
+    return undefined;
+  }
+  try {
+    return {
+      threadKey: decodeURIComponent(encodedThreadKey),
+      kind: decodeURIComponent(encodedKind ?? ""),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function buildQuitItemListHtml(options: {
+  items: QuitBlockerItem[];
+  navigationPrefix: string;
+}): string {
+  if (options.items.length === 0) {
+    return "";
+  }
+  const sections = QUIT_ITEM_GROUPS.map((group) => {
+    const groupItems = options.items.filter((item) => item.kind === group.kind);
+    if (groupItems.length === 0) return "";
+    const rows = groupItems
+      .map((item) => {
+        const href = `${options.navigationPrefix}${formatQuitItemAction(item)}`;
+        const label = item.title?.trim() || item.threadId;
+        const detail = item.detail?.trim();
+        return `<a class="row" href="${escapeHtml(href)}">
+          <span class="row__label">${escapeHtml(label)}</span>
+          ${detail ? `<span class="row__detail">${escapeHtml(detail)}</span>` : ""}
+        </a>`;
+      })
+      .join("");
+    return `<p class="group">${escapeHtml(group.heading)}</p>${rows}`;
+  }).join("");
+
+  return `<div class="list" id="list">${sections}</div>`;
+}
+
+export function buildQuitConfirmationHtml(options: {
   countdownSeconds: number;
   inProgressThreadCount: number;
   terminalSessionCount: number;
+  actionRunCount: number;
+  items: QuitBlockerItem[];
   navigationPrefix: string;
   colorScheme: "dark" | "light";
   palette: QuitDialogPalette;
@@ -180,10 +316,17 @@ function buildQuitConfirmationHtml(options: {
   const countText = describeQuitBlockers({
     inProgressThreadCount: options.inProgressThreadCount,
     terminalSessionCount: options.terminalSessionCount,
+    actionRunCount: options.actionRunCount,
   });
   const interruptionText = describeQuitImpact({
     inProgressThreadCount: options.inProgressThreadCount,
     terminalSessionCount: options.terminalSessionCount,
+    actionRunCount: options.actionRunCount,
+    hasItems: options.items.length > 0,
+  });
+  const listHtml = buildQuitItemListHtml({
+    items: options.items,
+    navigationPrefix: options.navigationPrefix,
   });
   const p = options.palette;
   return `<!doctype html>
@@ -253,8 +396,67 @@ function buildQuitConfirmationHtml(options: {
         flex: 1 1 auto;
       }
       .content {
+        display: flex;
+        flex-direction: column;
+        /* min-height:0 is what actually lets .list scroll instead of blowing
+           the flex column past the window. */
+        min-height: 0;
         flex: 1 1 auto;
         padding: 18px 24px 22px;
+      }
+      /* The list of still-running work. Scrolls inside the dialog; the row
+         links cancel the quit and navigate. */
+      .list {
+        min-height: 0;
+        flex: 1 1 auto;
+        overflow-y: auto;
+        margin: 4px -6px 0;
+        padding: 0 6px;
+      }
+      .group {
+        margin: 10px 0 6px;
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .group:first-child {
+        margin-top: 0;
+      }
+      .row {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 6px 8px;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        color: var(--text-primary);
+        text-decoration: none;
+        cursor: pointer;
+        -webkit-app-region: no-drag;
+      }
+      .row:hover {
+        border-color: var(--accent-border);
+        background: var(--panel-hover);
+      }
+      .row:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      .row__label {
+        font-size: 13px;
+        font-weight: 500;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .row__detail {
+        color: var(--text-muted);
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       h1 {
         margin: 0 0 14px;
@@ -269,15 +471,17 @@ function buildQuitConfirmationHtml(options: {
         line-height: 1.45;
       }
       .countdown {
-        margin: 18px 0 0;
+        margin: 14px 0 0;
+        flex: 0 0 auto;
         color: var(--text-muted);
         font-weight: 600;
       }
       .actions {
         display: flex;
+        flex: 0 0 auto;
         justify-content: flex-end;
         gap: 8px;
-        margin-top: 24px;
+        margin-top: 16px;
       }
       /* Mirrors the .button / .button--primary / .button--secondary primitives
          in app.css. */
@@ -353,6 +557,7 @@ function buildQuitConfirmationHtml(options: {
       <h1>Quit PwrAgent?</h1>
       <p>${escapeHtml(countText)}</p>
       <p>${escapeHtml(interruptionText)}</p>
+      ${listHtml}
       <p class="countdown" id="countdown"></p>
       <div class="actions">
         <button id="stay" class="secondary" type="button">Stay Open</button>
@@ -363,29 +568,55 @@ function buildQuitConfirmationHtml(options: {
       const navigationPrefix = ${JSON.stringify(options.navigationPrefix)};
       let remaining = ${JSON.stringify(options.countdownSeconds)};
       const countdown = document.getElementById("countdown");
+      const list = document.getElementById("list");
+      let timer;
+
       function send(result) {
         window.location.href = navigationPrefix + result;
       }
       function render() {
         countdown.textContent = "Auto-quitting in " + remaining + " second" + (remaining === 1 ? "" : "s") + "...";
       }
+      // Reading the list takes longer than the countdown allows, and quitting
+      // out from under someone who is mid-scroll is the worst possible outcome
+      // here. The first sign of engagement stops the clock for good; the
+      // main-process hard ceiling is cleared too, via "countdown-cancel".
+      function cancelCountdown() {
+        if (!timer) return;
+        clearInterval(timer);
+        timer = undefined;
+        countdown.textContent = "Auto-quit cancelled. Choose an option above.";
+        send("countdown-cancel");
+      }
       render();
-      const timer = setInterval(() => {
+      timer = setInterval(() => {
         remaining -= 1;
         if (remaining <= 0) {
           clearInterval(timer);
+          timer = undefined;
           countdown.textContent = "Auto-quitting now...";
           send("countdown-expired");
           return;
         }
         render();
       }, 1000);
+
+      if (list) {
+        list.addEventListener("pointerenter", cancelCountdown);
+        list.addEventListener("wheel", cancelCountdown, { passive: true });
+        list.addEventListener("focusin", cancelCountdown);
+      }
+
       document.getElementById("stay").addEventListener("click", () => send("manual-cancel"));
       document.getElementById("close").addEventListener("click", () => send("manual-cancel"));
       document.getElementById("quit").addEventListener("click", () => send("manual-confirm"));
       window.addEventListener("keydown", (event) => {
         if (event.key === "Escape") send("manual-cancel");
-        if (event.key === "Enter") send("manual-confirm");
+        // Enter still confirms, but not while a row link has focus — there it
+        // means "follow this link".
+        if (event.key === "Enter" && !document.activeElement?.classList.contains("row")) {
+          send("manual-confirm");
+        }
       });
     </script>
   </body>
@@ -395,6 +626,7 @@ function buildQuitConfirmationHtml(options: {
 function describeQuitBlockers(options: {
   inProgressThreadCount: number;
   terminalSessionCount: number;
+  actionRunCount: number;
 }): string {
   const parts: string[] = [];
   if (options.inProgressThreadCount === 1) {
@@ -407,26 +639,50 @@ function describeQuitBlockers(options: {
   } else if (options.terminalSessionCount > 1) {
     parts.push(`${options.terminalSessionCount} integrated terminals are running`);
   }
+  if (options.actionRunCount === 1) {
+    parts.push("1 environment action is running");
+  } else if (options.actionRunCount > 1) {
+    parts.push(`${options.actionRunCount} environment actions are running`);
+  }
   if (parts.length === 0) {
     return "PwrAgent is ready to quit.";
   }
   if (parts.length === 1) {
     return `${parts[0]}.`;
   }
-  return `${parts[0]}, and ${parts[1]}.`;
+  const last = parts[parts.length - 1];
+  return `${parts.slice(0, -1).join(", ")}, and ${last}.`;
 }
 
 function describeQuitImpact(options: {
   inProgressThreadCount: number;
   terminalSessionCount: number;
+  actionRunCount: number;
+  hasItems: boolean;
 }): string {
-  if (options.inProgressThreadCount > 0 && options.terminalSessionCount > 0) {
-    return "If you quit now, those turns will be interrupted and terminal processes will be killed. You'll need to reopen the threads and restart any terminal work.";
+  const consequences: string[] = [];
+  if (options.inProgressThreadCount > 0) {
+    consequences.push("those turns will be interrupted");
   }
   if (options.terminalSessionCount > 0) {
-    return "If you quit now, terminal processes will be killed. You'll need to restart any terminal work after reopening PwrAgent.";
+    consequences.push("terminal processes will be killed");
   }
-  return "If you quit now, those turns will be interrupted. You'll need to find each thread when you restart and tell them to continue.";
+  if (options.actionRunCount > 0) {
+    consequences.push("environment action processes will be stopped");
+  }
+  if (consequences.length === 0) {
+    return "Nothing is running.";
+  }
+  const joined =
+    consequences.length === 1
+      ? consequences[0]
+      : `${consequences.slice(0, -1).join(", ")} and ${
+          consequences[consequences.length - 1]
+        }`;
+  const followUp = options.hasItems
+    ? " Select an item below to go to it instead."
+    : "";
+  return `If you quit now, ${joined}.${followUp}`;
 }
 
 function escapeHtml(value: string): string {

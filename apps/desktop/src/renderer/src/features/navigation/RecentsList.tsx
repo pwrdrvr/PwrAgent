@@ -22,6 +22,8 @@ import { ThreadRow } from "./ThreadRow";
 
 type RecentsListProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
+  /** Thread keys with a live integrated terminal in the main process. */
+  terminalThreadKeys?: Record<string, boolean>;
   inputRequestThreadKeys?: Record<string, boolean>;
   queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   composerSourceThreadKey?: string;
@@ -143,6 +145,7 @@ export function RecentsList(props: RecentsListProps) {
             <ThreadRow
               key={childKey}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              terminalThreadKeys={props.terminalThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
@@ -235,6 +238,7 @@ export function RecentsList(props: RecentsListProps) {
       <div key={key} className="thread-group">
         <ThreadRow
           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+          terminalThreadKeys={props.terminalThreadKeys}
           inputRequestThreadKeys={props.inputRequestThreadKeys}
           queuedMessageThreadKeys={props.queuedMessageThreadKeys}
           composerSourceThreadKey={props.composerSourceThreadKey}

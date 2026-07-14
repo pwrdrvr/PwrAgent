@@ -6,6 +6,7 @@ import type {
   DesktopUpdateChannel,
 } from "@pwragent/shared";
 import type {
+  AppMetadata,
   AppUpdateCheckResult,
   AppUpdateReleaseInfo,
   AppUpdateReleaseVersions,
@@ -23,7 +24,8 @@ import {
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
-import { sourceBadge } from "./settings-fields";
+import { SettingsCopyValue } from "./SettingsCopyValue";
+import { formatProcessIds, sourceBadge } from "./settings-fields";
 import { SettingsSwitch } from "./SettingsSwitch";
 
 const THEME_OPTIONS: Array<{
@@ -116,6 +118,17 @@ const HOT_CPU_TRIGGER_MODE_OPTIONS: Array<{
   { label: "Slowburn", meta: "2x > 15%", value: "slowburn" },
 ];
 
+/** Session-local, not persisted: it is a one-shot capture, not a preference. */
+const HEAP_SNAPSHOT_DELAY_OPTIONS: Array<{
+  label: string;
+  meta: string;
+  value: number;
+}> = [
+  { label: "Immediate", meta: "Capture now", value: 0 },
+  { label: "5 seconds", meta: "Short setup", value: 5_000 },
+  { label: "10 seconds", meta: "Long setup", value: 10_000 },
+];
+
 function releaseVersionText(release: AppUpdateReleaseInfo | undefined): string {
   return release?.version ?? "Unavailable";
 }
@@ -192,6 +205,12 @@ export function GeneralSettings(props: {
   >(null);
   const [hotCpuCountdownRemainingMs, setHotCpuCountdownRemainingMs] =
     useState(0);
+  const [heapSnapshotDelayMs, setHeapSnapshotDelayMs] = useState(0);
+  const [heapSnapshotCountdownEndsAt, setHeapSnapshotCountdownEndsAt] =
+    useState<number | null>(null);
+  const [heapSnapshotCountdownRemainingMs, setHeapSnapshotCountdownRemainingMs] =
+    useState(0);
+  const [appMetadata, setAppMetadata] = useState<AppMetadata>();
   const pastedImageMaxPatches =
     props.snapshot.imageUploads.pastedImageMaxPatches;
   const confirmQuitWithInProgressThreads =
@@ -259,6 +278,63 @@ export function GeneralSettings(props: {
     setHotCpuCountdownRemainingMs(0);
     await props.onHotCpuProfilingEnabledChange(false);
   };
+
+  const heapSnapshotCountdownActive = heapSnapshotCountdownRemainingMs > 0;
+  const heapSnapshotCountdownSeconds = Math.ceil(
+    heapSnapshotCountdownRemainingMs / 1_000,
+  );
+  const heapSnapshotDelayText =
+    HEAP_SNAPSHOT_DELAY_OPTIONS.find(
+      (option) => option.value === heapSnapshotDelayMs,
+    )?.label ?? "Immediate";
+
+  // Mirrors the countdown the main process is already running, purely so the
+  // row can say how long is left. If Settings closes, main still captures.
+  useEffect(() => {
+    if (heapSnapshotCountdownEndsAt === null) {
+      return;
+    }
+
+    const updateCountdown = () => {
+      const remainingMs = Math.max(0, heapSnapshotCountdownEndsAt - Date.now());
+      setHeapSnapshotCountdownRemainingMs(remainingMs);
+      if (remainingMs === 0) {
+        setHeapSnapshotCountdownEndsAt(null);
+      }
+    };
+
+    updateCountdown();
+    const interval = window.setInterval(updateCountdown, 250);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [heapSnapshotCountdownEndsAt]);
+
+  const startHeapSnapshotCapture = async () => {
+    const scheduled = await props.desktopApi?.captureHeapSnapshot?.({
+      delayMs: heapSnapshotDelayMs,
+      target: "both",
+    });
+    const delayMs = scheduled?.delayMs ?? heapSnapshotDelayMs;
+    if (delayMs > 0) {
+      setHeapSnapshotCountdownEndsAt(Date.now() + delayMs);
+      setHeapSnapshotCountdownRemainingMs(delayMs);
+    }
+  };
+
+  const processIds = appMetadata ? formatProcessIds(appMetadata) : undefined;
+
+  useEffect(() => {
+    let canceled = false;
+    void props.desktopApi?.readAppMetadata?.().then((metadata) => {
+      if (!canceled) {
+        setAppMetadata(metadata);
+      }
+    });
+    return () => {
+      canceled = true;
+    };
+  }, [props.desktopApi]);
 
   useEffect(() => {
     let canceled = false;
@@ -865,6 +941,82 @@ export function GeneralSettings(props: {
                   </button>
                 ))}
               </div>
+            }
+          />
+          <SettingsField
+            label="Capture heap snapshot"
+            sub="Snapshot both processes right now, without waiting for a CPU spike. Use the delay to stage the scenario first."
+            control={
+              <div className="settings-hot-cpu-capture">
+                <button
+                  type="button"
+                  className="button button--primary"
+                  disabled={heapSnapshotCountdownActive}
+                  onClick={() => {
+                    void startHeapSnapshotCapture();
+                  }}
+                >
+                  Capture ({heapSnapshotDelayText})
+                </button>
+                <span
+                  className="settings-hot-cpu-capture__status"
+                  aria-live="polite"
+                >
+                  {heapSnapshotCountdownActive
+                    ? `Capturing in ${heapSnapshotCountdownSeconds}s`
+                    : "Idle"}
+                </span>
+              </div>
+            }
+            help="Capture runs in the main process, so you can close Settings while the countdown finishes. The result arrives as a copyable notice."
+          />
+          <SettingsField
+            label="Heap snapshot delay"
+            sub="Wait before capturing so you can reproduce the state you want to inspect."
+            control={
+              <div
+                className="settings-segmented"
+                role="radiogroup"
+                aria-label="Heap snapshot delay"
+              >
+                {HEAP_SNAPSHOT_DELAY_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    aria-checked={heapSnapshotDelayMs === option.value}
+                    className={`settings-segmented__button settings-segmented__button--stacked${
+                      heapSnapshotDelayMs === option.value ? " is-active" : ""
+                    }`}
+                    disabled={heapSnapshotCountdownActive}
+                    role="radio"
+                    type="button"
+                    onClick={() => {
+                      setHeapSnapshotDelayMs(option.value);
+                    }}
+                  >
+                    <span>{option.label}</span>
+                    <span className="settings-segmented__meta">
+                      {option.meta}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            }
+          />
+          <SettingsField
+            label="Process IDs"
+            sub="Attach a debugger or profiler to the right process when several Electron apps are running."
+            control={
+              processIds ? (
+                <SettingsCopyValue
+                  desktopApi={props.desktopApi}
+                  label="process IDs"
+                  value={processIds}
+                />
+              ) : (
+                <span className="settings-hot-cpu-capture__status">
+                  Unavailable
+                </span>
+              )
             }
           />
         </div>

@@ -15,6 +15,8 @@ import type {
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
   IntegratedTerminalResizeRequest,
+  IntegratedTerminalSessionSummary,
+  IntegratedTerminalSetPanelHiddenRequest,
   IntegratedTerminalWriteRequest,
 } from "../../shared/integrated-terminal";
 import { getMainLogger } from "../log";
@@ -33,6 +35,10 @@ type TerminalSession = {
   cwd: string;
   shell: string;
   buffer: string;
+  /** User collapsed the panel; the PTY keeps running. Owned here so the
+   *  preference outlives any renderer remount. */
+  panelHidden: boolean;
+  createdAt: number;
   subscribers: Set<WebContents>;
   disposables: IDisposable[];
 };
@@ -47,6 +53,8 @@ export type IntegratedTerminalQuitSnapshot = {
 
 type IntegratedTerminalServiceOptions = {
   loadNodePty?: () => Promise<Pick<NodePtyModule, "spawn">>;
+  now?: () => number;
+  onSessionsChanged?: (sessions: IntegratedTerminalSessionSummary[]) => void;
 };
 
 export class IntegratedTerminalService {
@@ -54,10 +62,16 @@ export class IntegratedTerminalService {
   private readonly sessionsByThread = new Map<string, TerminalSession>();
   private readonly sessionsById = new Map<string, TerminalSession>();
   private readonly loadNodePty: () => Promise<Pick<NodePtyModule, "spawn">>;
+  private readonly now: () => number;
+  private readonly onSessionsChanged?: (
+    sessions: IntegratedTerminalSessionSummary[],
+  ) => void;
   private disposing = false;
 
   constructor(options: IntegratedTerminalServiceOptions = {}) {
     this.loadNodePty = options.loadNodePty ?? loadNodePty;
+    this.now = options.now ?? Date.now;
+    this.onSessionsChanged = options.onSessionsChanged;
   }
 
   async createOrAttach(
@@ -72,6 +86,13 @@ export class IntegratedTerminalService {
     const existing = this.sessionsByThread.get(threadKey);
     if (existing) {
       this.subscribe(existing, webContents);
+      // Re-attaching is how a detached terminal comes back into view, so it
+      // also un-hides the panel — the renderer only calls this when it is
+      // actually mounting the pane.
+      if (existing.panelHidden) {
+        existing.panelHidden = false;
+        this.emitSessionsChanged();
+      }
       return this.toCreateResponse(existing);
     }
 
@@ -114,6 +135,8 @@ export class IntegratedTerminalService {
       cwd,
       shell: shell.file,
       buffer: "",
+      panelHidden: false,
+      createdAt: this.now(),
       subscribers: new Set(),
       disposables: [],
     };
@@ -130,7 +153,24 @@ export class IntegratedTerminalService {
       shell: shell.file,
       threadKey,
     });
+    this.emitSessionsChanged();
     return this.toCreateResponse(session);
+  }
+
+  /** Every live PTY, oldest first. The renderer's only source of terminal truth. */
+  listSessions(): IntegratedTerminalSessionSummary[] {
+    return [...this.sessionsById.values()]
+      .sort((left, right) => left.createdAt - right.createdAt)
+      .map((session) => this.toSummary(session));
+  }
+
+  setPanelHidden(request: IntegratedTerminalSetPanelHiddenRequest): void {
+    const session = this.sessionsByThread.get(request.threadKey);
+    if (!session || session.panelHidden === request.hidden) {
+      return;
+    }
+    session.panelHidden = request.hidden;
+    this.emitSessionsChanged();
   }
 
   write(request: IntegratedTerminalWriteRequest): void {
@@ -181,6 +221,23 @@ export class IntegratedTerminalService {
       pid: session.pty.pid,
       buffer: session.buffer || undefined,
     };
+  }
+
+  private toSummary(session: TerminalSession): IntegratedTerminalSessionSummary {
+    return {
+      sessionId: session.sessionId,
+      threadKey: session.threadKey,
+      cwd: session.cwd,
+      shell: session.shell,
+      pid: session.pty.pid,
+      panelHidden: session.panelHidden,
+      createdAt: session.createdAt,
+    };
+  }
+
+  private emitSessionsChanged(): void {
+    if (this.disposing) return;
+    this.onSessionsChanged?.(this.listSessions());
   }
 
   private subscribe(session: TerminalSession, webContents: WebContents): void {
@@ -244,6 +301,7 @@ export class IntegratedTerminalService {
     this.sessionsByThread.delete(session.threadKey);
     this.sessionsById.delete(session.sessionId);
     session.subscribers.clear();
+    this.emitSessionsChanged();
   }
 
   private disposeSessionForShutdown(session: TerminalSession): void {

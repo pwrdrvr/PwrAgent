@@ -224,6 +224,58 @@ describe("resolveTerminalShell", () => {
     });
   });
 
+  // The renderer has no terminal state of its own — it rebuilds from this list
+  // on every mount. If the list stops being published, terminals go invisible
+  // while their PTYs keep running.
+  it("publishes the session list whenever it changes", async () => {
+    const pty = fakePty();
+    const onSessionsChanged = vi.fn();
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
+      now: () => 1_000,
+      onSessionsChanged,
+    });
+
+    expect(service.listSessions()).toEqual([]);
+
+    const response = await service.createOrAttach(
+      { threadKey: "codex:thread-a", cwd: os.tmpdir(), cols: 80, rows: 24 },
+      fakeWebContents(),
+    );
+
+    expect(service.listSessions()).toEqual([
+      {
+        sessionId: response.sessionId,
+        threadKey: "codex:thread-a",
+        cwd: os.tmpdir(),
+        shell: "/bin/sh",
+        pid: pty.pid,
+        panelHidden: false,
+        createdAt: 1_000,
+      },
+    ]);
+    expect(onSessionsChanged).toHaveBeenCalledTimes(1);
+
+    // Collapsing the panel is a preference, not a teardown: the PTY lives on
+    // and the flag is what lets the UI flag it as "running but hidden".
+    service.setPanelHidden({ threadKey: "codex:thread-a", hidden: true });
+
+    expect(onSessionsChanged).toHaveBeenCalledTimes(2);
+    expect(service.listSessions()[0]?.panelHidden).toBe(true);
+    expect(pty.kill).not.toHaveBeenCalled();
+
+    // Re-attaching is how a detached terminal comes back into view.
+    await service.createOrAttach(
+      { threadKey: "codex:thread-a", cwd: os.tmpdir(), cols: 80, rows: 24 },
+      fakeWebContents(),
+    );
+
+    expect(service.listSessions()[0]?.panelHidden).toBe(false);
+    expect(onSessionsChanged).toHaveBeenCalledTimes(3);
+  });
+
   it("removes pty listeners before killing sessions during shutdown", async () => {
     const disposable = { dispose: vi.fn() };
     const pty = fakePty({

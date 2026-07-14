@@ -49,6 +49,8 @@ describe("createQuitManager", () => {
         terminalSessionCount: 0,
         terminalThreadKeys: [],
         threadIds: [],
+        actionRunCount: 0,
+        items: [],
       }),
       log: {},
       performQuit,
@@ -73,6 +75,8 @@ describe("createQuitManager", () => {
         terminalSessionCount: 0,
         terminalThreadKeys: [],
         threadIds: ["acp:grok:thread-2", "codex:thread-1"],
+        actionRunCount: 0,
+        items: [],
       }),
       log: { warn },
       performQuit,
@@ -109,6 +113,8 @@ describe("createQuitManager", () => {
         terminalSessionCount: 1,
         terminalThreadKeys: ["codex:thread-terminal"],
         threadIds: [],
+        actionRunCount: 0,
+        items: [],
       }),
       log: { warn },
       performQuit,
@@ -131,6 +137,7 @@ describe("createQuitManager", () => {
         terminalSessionCount: 1,
         terminalThreadKeys: ["codex:thread-terminal"],
         threadIds: [],
+        actionRunCount: 0,
       }),
     );
   });
@@ -147,6 +154,8 @@ describe("createQuitManager", () => {
         terminalSessionCount: 0,
         terminalThreadKeys: [],
         threadIds: ["codex:thread-1"],
+        actionRunCount: 0,
+        items: [],
       }),
       log: {},
       performQuit,
@@ -176,6 +185,8 @@ describe("createQuitManager", () => {
         terminalSessionCount: 0,
         terminalThreadKeys: [],
         threadIds: ["codex:thread-1"],
+        actionRunCount: 0,
+        items: [],
       }),
       log: {},
       performQuit,
@@ -207,6 +218,8 @@ describe("createQuitManager", () => {
         terminalSessionCount: 0,
         terminalThreadKeys: [],
         threadIds: ["codex:thread-1"],
+        actionRunCount: 0,
+        items: [],
       }),
       log: {},
       performQuit,
@@ -216,5 +229,128 @@ describe("createQuitManager", () => {
 
     expect(confirm).not.toHaveBeenCalled();
     expect(performQuit).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves thread titles for the dialog's links", async () => {
+    const { buildQuitBlockerSnapshot, createQuitManager } = await import(
+      "../quit-manager"
+    );
+    const confirm = vi.fn(async () => "manual-cancel" as const);
+    const manager = createQuitManager({
+      confirm,
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () =>
+        buildQuitBlockerSnapshot({
+          inProgressThreads: { count: 0, threadIds: [] },
+          terminalSessions: { count: 1, threadKeys: ["codex:thread-1"] },
+        }),
+      resolveThreadTitles: async () =>
+        new Map([["codex:thread-1", "Migrate Next Chunk"]]),
+      log: {},
+      performQuit: vi.fn(),
+    });
+
+    await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(false);
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            kind: "terminal",
+            title: "Migrate Next Chunk",
+            threadKey: "codex:thread-1",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("still shows the dialog when thread-title resolution fails", async () => {
+    const { buildQuitBlockerSnapshot, createQuitManager } = await import(
+      "../quit-manager"
+    );
+    const confirm = vi.fn(async () => "manual-cancel" as const);
+    const warn = vi.fn();
+    const manager = createQuitManager({
+      confirm,
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () =>
+        buildQuitBlockerSnapshot({
+          inProgressThreads: { count: 0, threadIds: [] },
+          terminalSessions: { count: 1, threadKeys: ["codex:thread-1"] },
+        }),
+      resolveThreadTitles: async () => {
+        throw new Error("app-server unavailable");
+      },
+      log: { warn },
+      performQuit: vi.fn(),
+    });
+
+    await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(false);
+
+    // Untitled rows still link correctly — they just read as thread ids.
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          {
+            kind: "terminal",
+            backend: "codex",
+            threadId: "thread-1",
+            threadKey: "codex:thread-1",
+          },
+        ],
+      }),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "quit blocker title resolution failed",
+      expect.objectContaining({ error: "app-server unavailable" }),
+    );
+  });
+});
+
+describe("buildQuitBlockerSnapshot", () => {
+  it("turns every kind of running work into a linkable item", async () => {
+    const { buildQuitBlockerSnapshot } = await import("../quit-manager");
+
+    const snapshot = buildQuitBlockerSnapshot({
+      inProgressThreads: { count: 1, threadIds: ["codex:thread-turn"] },
+      terminalSessions: { count: 1, threadKeys: ["acp%3Agrok:thread-term"] },
+      actionRuns: [
+        {
+          runId: "run-1",
+          backend: "codex",
+          threadId: "thread-action",
+          actionName: "Dev server",
+          command: "pnpm dev",
+          startedAt: 10,
+          pid: 4242,
+        },
+      ],
+    });
+
+    expect(snapshot.count).toBe(3);
+    expect(snapshot.actionRunCount).toBe(1);
+    expect(snapshot.items).toEqual([
+      {
+        kind: "turn",
+        backend: "codex",
+        threadId: "thread-turn",
+        threadKey: "codex:thread-turn",
+      },
+      {
+        // The ACP backend kind survives the round trip through the key.
+        kind: "terminal",
+        backend: "acp:grok",
+        threadId: "thread-term",
+        threadKey: "acp%3Agrok:thread-term",
+      },
+      {
+        kind: "action",
+        backend: "codex",
+        threadId: "thread-action",
+        threadKey: "codex:thread-action",
+        detail: "pnpm dev · pid 4242",
+      },
+    ]);
   });
 });

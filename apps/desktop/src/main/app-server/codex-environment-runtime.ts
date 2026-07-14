@@ -140,6 +140,11 @@ export type CodexEnvironmentCommandParams = {
    * Intended to be the action runId.
    */
   detachedTerminationKey?: string;
+  /**
+   * Detach mode only: who this command belongs to, so the quit path can name
+   * it and link back to its thread.
+   */
+  detachedDescriptor?: DetachedCommandDescriptor;
 };
 
 export type CodexEnvironmentDetachedExit = {
@@ -174,13 +179,75 @@ export type CodexEnvironmentCommandRunner = (
   params: CodexEnvironmentCommandParams,
 ) => Promise<CodexEnvironmentCommandResult>;
 
+/**
+ * Who owns a detached command, so a caller holding only the termination key can
+ * still say "this is `pnpm dev` on thread X". Populated by the backend registry
+ * at start time; the quit path and the shutdown kill both read it.
+ */
+export type DetachedCommandDescriptor = {
+  backend: string;
+  threadId: string;
+  actionName: string;
+  command: string;
+  startedAt: number;
+};
+
+export type DetachedCommandSummary = DetachedCommandDescriptor & {
+  runId: string;
+  pid?: number;
+};
+
 type DetachedCommandProcess = {
   killTree: (signal: NodeJS.Signals) => void;
   closed: () => boolean;
   killHandle?: NodeJS.Timeout;
+  descriptor?: DetachedCommandDescriptor;
+  pid?: number;
 };
 
 const detachedCommandProcesses = new Map<string, DetachedCommandProcess>();
+
+/** Every detached action still running, for the quit blockers. Synchronous by
+ *  design — `getQuitBlockers` cannot await. */
+export function listRunningDetachedCommands(): DetachedCommandSummary[] {
+  const running: DetachedCommandSummary[] = [];
+  for (const [runId, entry] of detachedCommandProcesses) {
+    if (entry.closed() || !entry.descriptor) continue;
+    running.push({ ...entry.descriptor, runId, pid: entry.pid });
+  }
+  return running.sort((left, right) => left.startedAt - right.startedAt);
+}
+
+/**
+ * Kill every detached action tree on shutdown.
+ *
+ * Without this the children were simply abandoned: they are spawned detached
+ * but keep their stdio pipes, so they *usually* died of SIGPIPE on their next
+ * write once the app went away — a quiet `pnpm dev` that happened not to be
+ * printing could outlive PwrAgent and keep its port bound. The quit dialog now
+ * promises these get stopped, so actually stop them.
+ */
+export function stopAllCodexEnvironmentDetachedCommands(): number {
+  let stopped = 0;
+  for (const [runId, entry] of detachedCommandProcesses) {
+    if (entry.closed()) continue;
+    if (entry.killHandle) {
+      clearTimeout(entry.killHandle);
+      entry.killHandle = undefined;
+    }
+    try {
+      entry.killTree("SIGKILL");
+      stopped += 1;
+    } catch (error) {
+      environmentRuntimeLog.warn("detached-shutdown-kill-failed", {
+        runId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  detachedCommandProcesses.clear();
+  return stopped;
+}
 
 export type CodexEnvironmentDetachedCommandStopMode = "stop" | "terminate";
 
@@ -440,6 +507,8 @@ export async function startLocalCodexEnvironmentAction(params: {
   actionId: string;
   /** Caller-generated runId so output/exit callbacks can be pre-bound to the right run. */
   runId: string;
+  /** Thread identity, so the quit dialog can name and link this run. */
+  owner?: { backend: string; threadId: string };
   commandRunner?: CodexEnvironmentCommandRunner;
   env?: NodeJS.ProcessEnv;
   onDetachedExit?: (event: CodexEnvironmentDetachedExit) => void;
@@ -478,6 +547,15 @@ export async function startLocalCodexEnvironmentAction(params: {
       env: actionEnv,
       mode: "detach",
       detachedTerminationKey: params.runId,
+      detachedDescriptor: params.owner
+        ? {
+            backend: params.owner.backend,
+            threadId: params.owner.threadId,
+            actionName: action.name,
+            command: action.command,
+            startedAt,
+          }
+        : undefined,
       onDetachedExit: params.onDetachedExit,
       onDetachedOutput: params.onDetachedOutput,
     });
@@ -604,6 +682,8 @@ function runShellCommand(
       detachedCommandProcesses.set(params.detachedTerminationKey, {
         killTree: terminateChild,
         closed: () => closed,
+        descriptor: params.detachedDescriptor,
+        pid: child.pid,
       });
     };
 

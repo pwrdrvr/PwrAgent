@@ -1227,6 +1227,24 @@ textarea,
   color: var(--accent-bright);
 }
 
+/* A shell is running behind a collapsed panel. Without this the terminal is
+   invisible from the thread — the toggle looks identical to "no terminal". */
+.thread-header__terminal-toggle.is-running {
+  position: relative;
+  color: var(--accent);
+}
+
+.thread-header__terminal-toggle.is-running::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 /* Browser-style Back/Forward pair at the leading edge of the thread/search
    title bars. Mirrors the .panel-toggle chip treatment (size, muted resting
    color, hover row tint, inert disabled state) so the header chrome reads
@@ -3628,6 +3646,18 @@ textarea,
 .thread-row__chip--approval:hover,
 .thread-row__chip--input:hover {
   background: var(--accent-strong);
+}
+
+/* Icon-only marker: this thread has a live shell. Quieter than the approval /
+   input CTAs — it is a "you left something running here", not a call to act. */
+.thread-row__chip--terminal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
 }
 
 /* Pending outbound-message chips. "Scheduled" is the solid-accent CTA —
@@ -6399,6 +6429,25 @@ textarea,
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
+}
+
+/* A value an operator has to hand to someone else verbatim (process ids,
+   diagnostic paths): monospaced pill + Copy. */
+.settings-copyvalue {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-copyvalue__value {
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .settings-segmented__button:hover,

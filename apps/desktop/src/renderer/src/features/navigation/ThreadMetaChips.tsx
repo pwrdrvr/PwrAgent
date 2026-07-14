@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted } from "@pwragent/shared";
-import { BranchIcon, FolderIcon, PinIcon, WorktreeIcon } from "../../icons";
+import { BranchIcon, FolderIcon, PinIcon, TerminalIcon, WorktreeIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText } from "../../lib/copy-text";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -9,6 +9,8 @@ import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageI
 
 type ThreadMetaChipsProps = {
   hasApprovalRequest?: boolean;
+  /** A shell is alive for this thread — the row is how you find it again. */
+  hasIntegratedTerminal?: boolean;
   hasInputRequest?: boolean;
   /**
    * When set, renders the "Scheduled" (future send time) or "Queued"
@@ -23,6 +25,7 @@ type ThreadMetaChipsProps = {
 
 export function ThreadMetaChips({
   hasApprovalRequest = false,
+  hasIntegratedTerminal = false,
   hasInputRequest = false,
   queuedMessageState,
   includeLinkedDirectories = false,
@@ -176,6 +179,16 @@ export function ThreadMetaChips({
           title="Input needed"
         >
           Input needed
+        </span>
+      ) : null}
+
+      {hasIntegratedTerminal ? (
+        <span
+          aria-label="Integrated terminal running"
+          className="thread-row__chip thread-row__chip--terminal"
+          title="Integrated terminal running"
+        >
+          <TerminalIcon size={12} />
         </span>
       ) : null}
 

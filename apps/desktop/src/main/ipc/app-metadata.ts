@@ -45,7 +45,9 @@ function readDecoratedAppLogSnapshot(): AppLogSnapshot {
   return logFilePath ? { ...snapshot, logFilePath } : snapshot;
 }
 
-export function resolveAppMetadata(): AppMetadata {
+export function resolveAppMetadata(
+  rendererProcessId?: number,
+): AppMetadata {
   return {
     applicationName: app.getName(),
     applicationVersion: app.getVersion(),
@@ -55,6 +57,8 @@ export function resolveAppMetadata(): AppMetadata {
     electronVersion: process.versions.electron ?? "",
     chromeVersion: process.versions.chrome ?? "",
     nodeVersion: process.versions.node ?? "",
+    mainProcessId: process.pid,
+    ...(rendererProcessId === undefined ? {} : { rendererProcessId }),
   };
 }
 
@@ -119,8 +123,10 @@ export function registerAppMetadataIpcHandlers(): void {
   ipcMain.removeHandler(APP_LOG_SNAPSHOT_READ_CHANNEL);
   ipcMain.removeHandler(APP_LOG_DEBUG_COLLECTION_SET_CHANNEL);
   ipcMain.removeHandler(APP_LOG_WINDOW_OPEN_CHANNEL);
-  ipcMain.handle(APP_METADATA_READ_CHANNEL, async (): Promise<AppMetadata> =>
-    resolveAppMetadata(),
+  ipcMain.handle(
+    APP_METADATA_READ_CHANNEL,
+    async (event): Promise<AppMetadata> =>
+      resolveAppMetadata(event.sender.getOSProcessId()),
   );
   ipcMain.handle(
     APP_LICENSE_DOCUMENT_READ_CHANNEL,

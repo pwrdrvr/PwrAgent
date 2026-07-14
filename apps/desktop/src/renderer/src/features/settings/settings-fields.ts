@@ -2,6 +2,16 @@ import type {
   DesktopAuthorizedContact,
   DesktopSettingsValue,
 } from "@pwragent/shared";
+import type { AppMetadata } from "../../../../shared/app-metadata";
+
+/** Renderer pid is absent when metadata was resolved outside a window. */
+export function formatProcessIds(metadata: AppMetadata): string {
+  const parts = [`main ${metadata.mainProcessId}`];
+  if (metadata.rendererProcessId !== undefined) {
+    parts.push(`renderer ${metadata.rendererProcessId}`);
+  }
+  return parts.join(" · ");
+}
 
 export function formatSourceLabel(source: string, overriddenByEnv?: boolean): string {
   if (source === "env") {

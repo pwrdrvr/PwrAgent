@@ -243,6 +243,10 @@ import type {
 } from "../shared/image-normalization";
 import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
 import type {
+  CaptureHeapSnapshotRequest,
+  CaptureHeapSnapshotResult,
+} from "../shared/heap-snapshot";
+import type {
   IntegratedTerminalCloseRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
@@ -250,6 +254,10 @@ import type {
   IntegratedTerminalExitEvent,
   IntegratedTerminalOutputEvent,
   IntegratedTerminalResizeRequest,
+  IntegratedTerminalRevealEvent,
+  IntegratedTerminalSessionSummary,
+  IntegratedTerminalSessionsEvent,
+  IntegratedTerminalSetPanelHiddenRequest,
   IntegratedTerminalWriteRequest,
 } from "../shared/integrated-terminal";
 import {
@@ -321,12 +329,18 @@ import {
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
+  DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
+  DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
   INTEGRATED_TERMINAL_EXIT_CHANNEL,
+  INTEGRATED_TERMINAL_LIST_CHANNEL,
   INTEGRATED_TERMINAL_OUTPUT_CHANNEL,
   INTEGRATED_TERMINAL_RESIZE_CHANNEL,
+  INTEGRATED_TERMINAL_REVEAL_CHANNEL,
+  INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
+  INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL,
   INTEGRATED_TERMINAL_WRITE_CHANNEL,
   PATH_OPEN_CHANNEL,
   PATH_REVEAL_CHANNEL,
@@ -870,6 +884,63 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(INTEGRATED_TERMINAL_ERROR_CHANNEL, listener);
     return () => {
       ipcRenderer.off(INTEGRATED_TERMINAL_ERROR_CHANNEL, listener);
+    };
+  },
+  captureHeapSnapshot: async (
+    request: CaptureHeapSnapshotRequest,
+  ): Promise<{ delayMs: number }> =>
+    await ipcRenderer.invoke(
+      DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
+      request,
+    ),
+  onHeapSnapshotCaptured: (
+    callback: (result: CaptureHeapSnapshotResult) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: CaptureHeapSnapshotResult,
+    ) => callback(payload);
+    ipcRenderer.on(DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(
+        DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
+        listener,
+      );
+    };
+  },
+  listIntegratedTerminals: async (): Promise<
+    IntegratedTerminalSessionSummary[]
+  > => await ipcRenderer.invoke(INTEGRATED_TERMINAL_LIST_CHANNEL),
+  setIntegratedTerminalPanelHidden: async (
+    request: IntegratedTerminalSetPanelHiddenRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(
+      INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL,
+      request,
+    );
+  },
+  onIntegratedTerminalSessions: (
+    callback: (event: IntegratedTerminalSessionsEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: IntegratedTerminalSessionsEvent,
+    ) => callback(payload);
+    ipcRenderer.on(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, listener);
+    };
+  },
+  onIntegratedTerminalReveal: (
+    callback: (event: IntegratedTerminalRevealEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: IntegratedTerminalRevealEvent,
+    ) => callback(payload);
+    ipcRenderer.on(INTEGRATED_TERMINAL_REVEAL_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(INTEGRATED_TERMINAL_REVEAL_CHANNEL, listener);
     };
   },
   readThread: async (
