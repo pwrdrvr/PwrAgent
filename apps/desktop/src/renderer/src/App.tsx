@@ -13,6 +13,7 @@ import {
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
+  type AppServerBackendKind,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
@@ -1006,6 +1007,13 @@ function DesktopAppShell(props: {
     onPickAndAttachDirectoryToThread: () => {
       void navigation.pickAndAttachDirectoryToSelectedThread();
     },
+    onPickDirectoryForReference: () => navigation.pickDirectoryForReference(),
+    onAttachDirectoryReferences: (
+      paths: string[],
+      target: { backend: AppServerBackendKind; threadId: string }
+    ) => {
+      void navigation.attachDirectoryPathsToThread(target, paths);
+    },
     onClearPickDirectoryError: navigation.clearPickDirectoryError,
     setExecutionModeError: navigation.setThreadExecutionModeError,
     setThreadModelSettingsError: navigation.setThreadModelSettingsError,
@@ -1068,7 +1076,24 @@ function DesktopAppShell(props: {
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: navigation.discardLaunchpad,
-    onMaterializeLaunchpad: navigation.materializeDirectoryLaunchpad,
+    // The composer's 5th argument is `extraDirectoryPaths` (draft
+    // `@`-references); the hook's 5th is `parentThreadId` (resolved from
+    // the launchpad draft internally), so map positions explicitly.
+    onMaterializeLaunchpad: (
+      directoryKey,
+      input,
+      collaborationMode,
+      reviewTarget,
+      extraDirectoryPaths
+    ) =>
+      navigation.materializeDirectoryLaunchpad(
+        directoryKey,
+        input,
+        collaborationMode,
+        reviewTarget,
+        undefined,
+        extraDirectoryPaths
+      ),
     onPendingStatusChange: session.setPendingStatusText,
     onRefreshNavigation: navigation.refresh,
     onSetExecutionMode: navigation.selectedThread

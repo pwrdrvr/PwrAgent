@@ -93,7 +93,12 @@ test("thread reply Tiptap skill autocomplete filters and commits the reported mu
     await expect(
       tiptapInput.locator(".composer-tiptap-input__mention", { hasText: "$ce:plan" }),
     ).toBeVisible();
-    await expect(tiptapInput).toHaveAttribute("data-value", seededDraft ?? "");
+    // The commit appends the guaranteed post-chip space; the outgoing
+    // text below is trimmed, so the startTurn expectation is unchanged.
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      `${seededDraft ?? ""} `,
+    );
     await expect(tiptapInput).not.toContainText("$ce:plan plan");
 
     await app.window.getByRole("button", { name: "Send" }).click();
@@ -208,7 +213,11 @@ test("thread reply Tiptap skill insertion preserves rich Markdown blocks", async
     ).toBeVisible();
     await expect(codeBlock).toBeVisible();
     await expect(codeBlock).not.toContainText("```");
-    await expect(tiptapInput).toHaveAttribute("data-value", seededDraft ?? "");
+    // The commit appends the guaranteed post-chip space.
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      `${seededDraft ?? ""} `,
+    );
   } finally {
     await app.close();
   }

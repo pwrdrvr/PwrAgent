@@ -764,6 +764,21 @@ export type ThreadViewProps = {
   onSelectNoDirectoryFromPicker?: () => void;
   onPickAndRegisterDirectory?: () => void;
   onPickAndAttachDirectoryToThread?: () => void;
+  /**
+   * Composer reference picker ("@ → Add directory…", the "+" menu): OS
+   * dialog → register (no navigation) → resolve with label/path so the
+   * composer can mint a reference chip. Undefined on cancel/failure.
+   */
+  onPickDirectoryForReference?: () => Promise<
+    { label: string; path: string } | undefined
+  >;
+  onAttachDirectoryReferences?: (
+    paths: string[],
+    target: {
+      backend: NavigationThreadSummary["source"];
+      threadId: string;
+    },
+  ) => void;
   onClearPickDirectoryError?: () => void;
   setExecutionModeError?: string;
   setThreadModelSettingsError?: string;
@@ -834,7 +849,8 @@ export type ThreadViewProps = {
     directoryKey: string,
     input?: AppServerTurnInputItem[],
     collaborationMode?: AppServerCollaborationModeRequest,
-    reviewTarget?: AppServerReviewTarget
+    reviewTarget?: AppServerReviewTarget,
+    extraDirectoryPaths?: string[]
   ) => Promise<void>;
   onCancelLaunchpad?: (directoryKey: string) => void;
   onPendingStatusChange?: (status?: string) => void;
@@ -2226,7 +2242,13 @@ export function ThreadView(props: ThreadViewProps) {
     );
     const handleMaterializeLaunchpad: NonNullable<
       ThreadViewProps["onMaterializeLaunchpad"]
-    > = async (directoryKey, input, collaborationMode, reviewTarget) => {
+    > = async (
+      directoryKey,
+      input,
+      collaborationMode,
+      reviewTarget,
+      extraDirectoryPaths
+    ) => {
       if (!props.onMaterializeLaunchpad) {
         return;
       }
@@ -2238,7 +2260,8 @@ export function ThreadView(props: ThreadViewProps) {
           directoryKey,
           input,
           collaborationMode,
-          reviewTarget
+          reviewTarget,
+          extraDirectoryPaths
         );
       } catch (error) {
         setLaunchpadMaterializeError(
@@ -2396,6 +2419,7 @@ export function ThreadView(props: ThreadViewProps) {
               onPickAndAttachDirectoryToThread={
                 props.onPickAndAttachDirectoryToThread
               }
+              onPickDirectoryForReference={props.onPickDirectoryForReference}
               onClearPickDirectoryError={props.onClearPickDirectoryError}
               pickDirectoryError={props.pickDirectoryError}
               pickingDirectory={props.pickingDirectory}
@@ -2637,6 +2661,8 @@ export function ThreadView(props: ThreadViewProps) {
             onSetAcpRuntimeOption={props.onSetAcpRuntimeOption}
             onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
+            onAttachDirectoryReferences={props.onAttachDirectoryReferences}
+            onPickDirectoryForReference={props.onPickDirectoryForReference}
             pendingRequestActive={Boolean(props.pendingRequest)}
             pendingUserInputActive={Boolean(
               props.pendingUserInput || props.pendingMcpInteraction

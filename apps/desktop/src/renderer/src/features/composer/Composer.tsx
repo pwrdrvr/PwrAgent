@@ -31,6 +31,7 @@ import type {
   NavigationDirectorySummary,
   NavigationGitCommitSummary,
   NavigationLaunchpadDraft,
+  NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
   NavigationThreadSummary,
   ThreadWorkspaceHandoffStrategy,
@@ -47,6 +48,7 @@ import {
   LightningIcon,
   PlanIcon,
   PlayIcon,
+  PlusIcon,
   SearchIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
@@ -60,6 +62,18 @@ import {
   getAcpRuntimeModeControl,
 } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
+import {
+  buildDirectoryReferenceInsertText,
+  buildDirectoryReferenceMarkdown,
+  buildDirectoryReferenceTooltip,
+  buildFileReferenceTooltip,
+  decodeMarkdownDestination,
+  fileLabelFromPath,
+  filterDirectoryReferenceCandidates,
+  findDirectoryReferenceTrigger,
+  listReferencedDirectories,
+} from "../../lib/directory-references";
+import { expandTildePath } from "../../lib/tildify-path";
 import { normalizeImageFile } from "../../lib/image-normalization";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
@@ -77,6 +91,7 @@ import {
 } from "./ComposerInputTypes";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectPicker } from "./ProjectPicker";
+import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
 import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 import {
   EnvActionRunEntry,
@@ -134,7 +149,12 @@ type ComposerProps = {
     directoryKey: string,
     input?: AppServerTurnInputItem[],
     collaborationMode?: AppServerCollaborationModeRequest,
-    reviewTarget?: AppServerReviewTarget
+    reviewTarget?: AppServerReviewTarget,
+    /**
+     * Paths of tracked directories the draft references (`@`-inserted or
+     * typed by hand). Linked to the new thread right after it is created.
+     */
+    extraDirectoryPaths?: string[]
   ) => Promise<void>;
   /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
   onCancelLaunchpad?: (directoryKey: string) => void;
@@ -172,6 +192,7 @@ type ComposerProps = {
         | "directoryLabel"
         | "directoryPath"
         | "imageAttachments"
+        | "fileAttachments"
       >
     >,
     options?: { stickySettingsChanged?: boolean }
@@ -186,6 +207,31 @@ type ComposerProps = {
   onSelectNoDirectoryFromPicker?: () => void;
   onPickAndRegisterDirectory?: () => void;
   onPickAndAttachDirectoryToThread?: () => void;
+  /**
+   * Link draft-referenced directories to the thread the turn was sent to
+   * (the launchpad path rides on `onMaterializeLaunchpad`'s
+   * `extraDirectoryPaths` instead). The composer names the target thread
+   * explicitly so a selection change while the send was in flight — or a
+   * queued turn firing later — cannot attach to the wrong thread.
+   * Fire-and-forget; failures must not block the turn.
+   */
+  onAttachDirectoryReferences?: (
+    paths: string[],
+    target: {
+      backend: NavigationThreadSummary["source"];
+      threadId: string;
+    },
+  ) => void;
+  /**
+   * "@ → Add directory…" / "+"-menu picker: opens the OS directory dialog,
+   * registers the pick as a tracked directory WITHOUT navigating, and
+   * resolves with its label/path so the composer can mint a reference chip
+   * in place. Resolves undefined on cancel or failure (failures surface
+   * via `pickDirectoryError`).
+   */
+  onPickDirectoryForReference?: () => Promise<
+    { label: string; path: string } | undefined
+  >;
   onClearPickDirectoryError?: () => void;
   pickDirectoryError?: string;
   pickingDirectory?: boolean;
@@ -224,12 +270,21 @@ type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy;
 
 type ComposerImageAttachment = NavigationLaunchpadImageAttachment;
 
+type ComposerFileAttachment = NavigationLaunchpadFileAttachment;
+
 /**
  * Maximum number of image attachments allowed on a single message. No
  * provider currently advertises its own per-message image limit, so this is
  * the default cap; if a backend ever reports one, prefer the smaller value.
  */
 const MAX_COMPOSER_IMAGE_ATTACHMENTS = 5;
+
+/**
+ * Maximum number of path-only file references on a single message. Higher
+ * than the image cap because references are a few bytes of text each — the
+ * limit only guards against an accidental mass drop.
+ */
+const MAX_COMPOSER_FILE_ATTACHMENTS = 20;
 
 type ComposerDropdownOption = {
   disabled?: boolean;
@@ -262,6 +317,7 @@ type QueuedTurnDraft = {
   id: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
+  fileAttachments: ComposerFileAttachment[];
   scheduledSendAt?: number;
   reviewCommand?: {
     cwd?: string;
@@ -313,7 +369,7 @@ type SlashCommandSuggestion = {
   sourceLabel: string;
 };
 
-type AutocompleteKind = "skills" | "slash";
+type AutocompleteKind = "skills" | "slash" | "directories";
 type ReviewTargetChoice = AppServerReviewTarget["type"];
 
 const CONTEXT_MOON_PHASES = [
@@ -970,6 +1026,12 @@ function formatDraftPreview(draft: QueuedTurnDraft): string {
     return text;
   }
 
+  if (draft.imageAttachments.length === 0 && draft.fileAttachments.length > 0) {
+    return `${draft.fileAttachments.length} file${
+      draft.fileAttachments.length === 1 ? "" : "s"
+    }`;
+  }
+
   return `${draft.imageAttachments.length} image${
     draft.imageAttachments.length === 1 ? "" : "s"
   }`;
@@ -1283,11 +1345,63 @@ function createComposerSkillToken(
   };
 }
 
+function createComposerDirectoryToken(
+  directory: Pick<NavigationDirectorySummary, "label" | "path">,
+  index: number,
+): ComposerSkillToken {
+  return {
+    kind: "directory",
+    name: directory.label,
+    path: directory.path,
+    id: `${directory.path ?? directory.label}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    index,
+  };
+}
+
+// Exported for the `@`-popover / picker surfaces that mint file-reference
+// chips; the drop/paste tray uses the pill list instead of chips.
+export function createComposerFileToken(
+  file: { label: string; path: string },
+  index: number,
+): ComposerSkillToken {
+  return {
+    kind: "file",
+    name: file.label,
+    path: file.path,
+    id: `${file.path}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    index,
+  };
+}
+
+/**
+ * Append path-only file references to outgoing text as one
+ * `[@label](~/path)` line per file, separated from the typed draft by a
+ * blank line. A files-only message is just the reference block.
+ */
+function appendFileReferenceMarkdown(
+  text: string,
+  fileRefs: ComposerFileAttachment[],
+): string {
+  if (fileRefs.length === 0) {
+    return text;
+  }
+  const referenceBlock = fileRefs
+    .map((fileRef) =>
+      buildDirectoryReferenceMarkdown({
+        label: fileRef.label,
+        path: fileRef.path,
+      }),
+    )
+    .join("\n");
+  return text ? `${text}\n\n${referenceBlock}` : referenceBlock;
+}
+
 function getComposerSkillTokensSignature(skillTokens: ComposerSkillToken[]): string {
   return JSON.stringify(
     skillTokens.map((token) => ({
       id: token.id,
       index: token.index,
+      kind: token.kind,
       name: token.name,
       path: token.path,
     })),
@@ -1318,7 +1432,17 @@ function serializeDraftWithSkillTokens(
   for (const token of sortedTokens) {
     const index = clampSkillTokenIndex(token.index, draft);
     output += draft.slice(cursor, index);
-    output += buildSkillMentionMarkdown(token);
+    // Directory- and file-reference chips serialize to `[@label](~/path)`
+    // markdown — the parens bound the path so adjacent text can't glue
+    // onto it, the transcript renders it back as a chip, and
+    // hydrateComposerDraft rebuilds the token from a prompt-only restore.
+    // Skills keep their `[$name](path)` markdown.
+    output += token.kind === "directory" || token.kind === "file"
+      ? buildDirectoryReferenceMarkdown({
+          label: token.name,
+          path: token.path ?? "",
+        })
+      : buildSkillMentionMarkdown(token);
     cursor = index;
   }
 
@@ -1339,6 +1463,25 @@ function hydrateComposerDraft(
   for (const part of parseSkillMentionParts(canonicalDraft)) {
     if (part.type === "text") {
       draft += part.text;
+      continue;
+    }
+
+    if (part.type === "directory") {
+      // Serialized paths are percent-encoded tilde form; the token
+      // carries the decoded absolute path so send-time attach can use
+      // it directly. File-reference chips serialize to the same
+      // `[@label](~/path)` form, so a restored file chip degrades to a
+      // directory-kind chip here — acceptable: the outgoing text is
+      // identical either way.
+      skillTokens.push(
+        createComposerDirectoryToken(
+          {
+            label: part.name,
+            path: expandTildePath(decodeMarkdownDestination(part.path)),
+          },
+          draft.length,
+        ),
+      );
       continue;
     }
 
@@ -2359,6 +2502,7 @@ export function Composer(props: ComposerProps) {
   const reviewCustomTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const skillListboxId = useId();
   const slashListboxId = useId();
+  const directoryRefListboxId = useId();
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
   const pendingProgrammaticComposerChangeRef =
     useRef<PendingProgrammaticComposerChange | undefined>(undefined);
@@ -2408,6 +2552,10 @@ export function Composer(props: ComposerProps) {
         savedInitialDraft?.imageAttachments ??
         props.launchpad?.imageAttachments ??
         [],
+      fileAttachments:
+        savedInitialDraft?.fileAttachments ??
+        props.launchpad?.fileAttachments ??
+        [],
       skillTokens:
         savedInitialDraft?.skillTokens ?? hydratedInitialLaunchpad?.skillTokens ?? [],
     },
@@ -2429,6 +2577,12 @@ export function Composer(props: ComposerProps) {
     scheduleMenuOpen,
     () => setScheduleMenuOpen(false),
   );
+  const [addReferenceMenuOpen, setAddReferenceMenuOpen] = useState(false);
+  // Recently referenced files for the reference picker's Files tab —
+  // loaded lazily from the main process each time the picker opens.
+  const [recentFileReferences, setRecentFileReferences] = useState<
+    ReferencePickerFile[]
+  >([]);
   const [scheduleTick, setScheduleTick] = useState(() => Date.now());
   const [scheduledDraftSendAt, setScheduledDraftSendAt] = useState<
     number | undefined
@@ -2495,6 +2649,9 @@ export function Composer(props: ComposerProps) {
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.imageAttachments
   );
+  const [fileAttachments, setFileAttachments] = useState<ComposerFileAttachment[]>(
+    latestDraftSnapshotRef.current.snapshot.fileAttachments ?? []
+  );
   // Per-attachment content signature (`<size>:<hash>`) cache used to reject
   // exact-duplicate pastes. Computed lazily on first use and kept only in
   // memory — signatures are never part of the persisted draft snapshot.
@@ -2524,6 +2681,7 @@ export function Composer(props: ComposerProps) {
   }>();
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
+  const [activeDirectoryRefIndex, setActiveDirectoryRefIndex] = useState(0);
   const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
 
   const setThreadEnvActionStarting = (
@@ -2653,6 +2811,7 @@ export function Composer(props: ComposerProps) {
       draft,
       editorDocument,
       imageAttachments,
+      fileAttachments,
       skillTokens,
     },
   };
@@ -2673,6 +2832,7 @@ export function Composer(props: ComposerProps) {
     draft: "",
     editorDocument: undefined,
     imageAttachments: [],
+    fileAttachments: [],
     skillTokens: [],
   });
   const clearSubmittedComposerDraftForStart = (
@@ -2685,6 +2845,7 @@ export function Composer(props: ComposerProps) {
     };
     clearComposerDraft();
     setImageAttachments([]);
+    setFileAttachments([]);
   };
   const hasLiveComposerContent = (): boolean => {
     const latest = latestDraftSnapshotRef.current;
@@ -2692,7 +2853,8 @@ export function Composer(props: ComposerProps) {
       (inputRef.current?.value ?? latest.snapshot.draft).trim() ||
         (inputRef.current?.skillTokenCount ??
           latest.snapshot.skillTokens.length) > 0 ||
-        latest.snapshot.imageAttachments.length > 0,
+        latest.snapshot.imageAttachments.length > 0 ||
+        (latest.snapshot.fileAttachments?.length ?? 0) > 0,
     );
   };
   const updateVisibleDraft = (
@@ -2729,14 +2891,16 @@ export function Composer(props: ComposerProps) {
     if (
       !state.draft.trim() &&
       state.skillTokens.length === 0 &&
-      state.imageAttachments.length === 0
+      state.imageAttachments.length === 0 &&
+      (state.fileAttachments?.length ?? 0) === 0
     ) {
       const previous = latestDraftSnapshotRef.current;
       if (
         previous.scopeKey === scopeKey &&
         (previous.snapshot.draft.trim() ||
           previous.snapshot.skillTokens.length > 0 ||
-          previous.snapshot.imageAttachments.length > 0)
+          previous.snapshot.imageAttachments.length > 0 ||
+          (previous.snapshot.fileAttachments?.length ?? 0) > 0)
       ) {
         recordComposerDraftHistory(scopeKey, previous.snapshot, "abandoned");
       }
@@ -2774,6 +2938,10 @@ export function Composer(props: ComposerProps) {
         type: attachment.type,
         url: attachment.url,
       })),
+      fileAttachments: (snapshot.fileAttachments ?? []).map((attachment) => ({
+        label: attachment.label,
+        path: attachment.path,
+      })),
       skillTokens: snapshot.skillTokens.map((token) => ({
         index: token.index,
         name: token.name,
@@ -2802,6 +2970,7 @@ export function Composer(props: ComposerProps) {
       setDraft(snapshot.draft);
       setEditorDocument(snapshot.editorDocument);
       setImageAttachments(snapshot.imageAttachments);
+      setFileAttachments(snapshot.fileAttachments ?? []);
       setSkillTokens(snapshot.skillTokens);
       setComposerSelectionRequest({
         id: `recovery:${++composerSelectionRequestSequenceRef.current}`,
@@ -2833,7 +3002,8 @@ export function Composer(props: ComposerProps) {
     const latestSnapshotIsCleared =
       !latestSnapshot.draft.trim() &&
       latestSnapshot.skillTokens.length === 0 &&
-      latestSnapshot.imageAttachments.length === 0;
+      latestSnapshot.imageAttachments.length === 0 &&
+      (latestSnapshot.fileAttachments?.length ?? 0) === 0;
 
     if (
       latestSnapshotIsCleared &&
@@ -2846,7 +3016,8 @@ export function Composer(props: ComposerProps) {
     return Boolean(
       liveDraft.trim() ||
         liveSkillTokenCount > 0 ||
-        latestSnapshot.imageAttachments.length > 0,
+        latestSnapshot.imageAttachments.length > 0 ||
+        (latestSnapshot.fileAttachments?.length ?? 0) > 0,
     );
   };
   const recoverSubmittedComposerDraft = (
@@ -2869,6 +3040,7 @@ export function Composer(props: ComposerProps) {
       setDraft("");
       setEditorDocument(undefined);
       setImageAttachments([]);
+      setFileAttachments([]);
       setSkillTokens([]);
       setComposerSelectionRequest({
         id: `recovery:${++composerSelectionRequestSequenceRef.current}`,
@@ -2939,13 +3111,15 @@ export function Composer(props: ComposerProps) {
           draft: candidate.text,
           editorDocument: candidate.editorDocument as JSONContent | undefined,
           imageAttachments: candidate.imageAttachments,
+          fileAttachments: candidate.fileAttachments,
           skillTokens: candidate.skillTokens as ComposerSkillToken[],
         }))
         .filter(
           (candidate) =>
             candidate.draft.trim() ||
             candidate.skillTokens.length > 0 ||
-            candidate.imageAttachments.length > 0,
+            candidate.imageAttachments.length > 0 ||
+            (candidate.fileAttachments?.length ?? 0) > 0,
         );
       const uniqueCandidates = dedupeComposerDraftSnapshots(candidates);
       if (uniqueCandidates.length === 0) {
@@ -3016,7 +3190,12 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    if (!state || (!state.text.trim() && state.imageAttachments.length === 0)) {
+    if (
+      !state ||
+      (!state.text.trim() &&
+        state.imageAttachments.length === 0 &&
+        state.fileAttachments.length === 0)
+    ) {
       draftStore.deletePendingSteer(scopeKey);
       return;
     }
@@ -3036,6 +3215,7 @@ export function Composer(props: ComposerProps) {
         entry.reviewCommand ||
         entry.text.trim() ||
         entry.imageAttachments.length > 0 ||
+        entry.fileAttachments.length > 0 ||
         entry.input?.length,
     );
 
@@ -3188,6 +3368,7 @@ export function Composer(props: ComposerProps) {
       draft: "",
       editorDocument: undefined,
       imageAttachments: [],
+      fileAttachments: [],
       skillTokens: [],
     };
 
@@ -3202,6 +3383,7 @@ export function Composer(props: ComposerProps) {
     };
     clearComposerDraft();
     setImageAttachments([]);
+    setFileAttachments([]);
   };
   const persistLaunchpadDraftSnapshot = (
     scopeKey: string,
@@ -3216,6 +3398,8 @@ export function Composer(props: ComposerProps) {
     void updateLaunchpad(directoryKey, {
       imageAttachments:
         snapshot.imageAttachments.length > 0 ? snapshot.imageAttachments : undefined,
+      fileAttachments:
+        snapshot.fileAttachments?.length ? snapshot.fileAttachments : undefined,
       prompt: serializeDraftWithSkillTokens(snapshot.draft, snapshot.skillTokens),
     });
   };
@@ -3248,6 +3432,7 @@ export function Composer(props: ComposerProps) {
   };
   const trigger = findSkillTrigger(draft, selectionStart);
   const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
+  const directoryRefTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
   const filteredSkills = useMemo(() => {
     if (!trigger) {
       return [];
@@ -3297,17 +3482,31 @@ export function Composer(props: ComposerProps) {
       );
     });
   }, [slashCommandSuggestions, slashTrigger?.query]);
+  const filteredDirectoryRefs = useMemo(() => {
+    if (!directoryRefTrigger) {
+      return [];
+    }
+
+    return filterDirectoryReferenceCandidates(
+      props.directories ?? [],
+      directoryRefTrigger.query,
+    );
+  }, [props.directories, directoryRefTrigger]);
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
       ? "slash"
-      : undefined;
+      : directoryRefTrigger && filteredDirectoryRefs.length > 0
+        ? "directories"
+        : undefined;
   const autocompleteKey =
     availableAutocompleteKind === "skills" && trigger
       ? `skills:${trigger.start}:${trigger.end}:${trigger.query}`
       : availableAutocompleteKind === "slash" && slashTrigger
         ? `slash:${slashTrigger.start}:${slashTrigger.end}:/${slashTrigger.query}`
-        : undefined;
+        : availableAutocompleteKind === "directories" && directoryRefTrigger
+          ? `directories:${directoryRefTrigger.start}:${directoryRefTrigger.end}:@${directoryRefTrigger.query}`
+          : undefined;
   const displayedAutocompleteKind =
     autocompleteKey && autocompleteKey === dismissedAutocompleteKey
       ? undefined
@@ -3317,21 +3516,89 @@ export function Composer(props: ComposerProps) {
     : displayedAutocompleteKind;
   const hasAutocomplete = Boolean(autocompleteKind);
   const activeAutocompleteIndex =
-    autocompleteKind === "skills" ? activeSkillIndex : activeSlashIndex;
+    autocompleteKind === "skills"
+      ? activeSkillIndex
+      : autocompleteKind === "directories"
+        ? activeDirectoryRefIndex
+        : activeSlashIndex;
   const autocompleteLength =
     autocompleteKind === "skills"
       ? filteredSkills.length
-      : filteredSlashCommands.length;
+      : autocompleteKind === "directories"
+        ? filteredDirectoryRefs.length
+        : filteredSlashCommands.length;
   const autocompleteListboxId =
     autocompleteKind === "skills"
       ? skillListboxId
       : autocompleteKind === "slash"
         ? slashListboxId
-        : undefined;
+        : autocompleteKind === "directories"
+          ? directoryRefListboxId
+          : undefined;
   const activeAutocompleteOptionId =
     autocompleteListboxId && autocompleteKind
       ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
       : undefined;
+  // Directories the draft references: `@` chips (authoritative, from the
+  // token state) unioned with paths typed or pasted as plain text (from
+  // the serialized-draft scan). Deleting a chip or a typed path drops the
+  // reference. Directories that are already linked (the launchpad's own
+  // directory; a thread's linked directories, including worktree
+  // checkouts) are excluded so send-time attach only sees new references.
+  const listDraftReferencedDirectories = (
+    text: string,
+    tokens?: ComposerSkillToken[],
+  ): NavigationDirectorySummary[] => {
+    const excludePaths = [
+      props.directory?.path,
+      props.launchpad?.directoryPath,
+      ...(props.thread?.linkedDirectories ?? []).flatMap((linked) => [
+        linked.path,
+        linked.worktreePath,
+      ]),
+    ].filter((path): path is string => Boolean(path));
+    const excluded = new Set(excludePaths.map((path) => path.replace(/[/\\]+$/, "")));
+    const scanned = listReferencedDirectories(text, props.directories ?? [], {
+      excludePaths,
+    });
+    const seenPaths = new Set(
+      scanned
+        .map((directory) => directory.path?.replace(/[/\\]+$/, ""))
+        .filter((path): path is string => Boolean(path)),
+    );
+    const fromTokens: NavigationDirectorySummary[] = [];
+    for (const token of tokens ?? []) {
+      // Only directory-kind tokens are attachable directories. File-kind
+      // tokens are excluded here — a file's containing repo still links
+      // via the text scan's deeper-path matching above.
+      if (token.kind !== "directory" || !token.path) {
+        continue;
+      }
+      const path = token.path.replace(/[/\\]+$/, "");
+      if (!path || seenPaths.has(path) || excluded.has(path)) {
+        continue;
+      }
+      seenPaths.add(path);
+      const tracked = (props.directories ?? []).find(
+        (directory) => directory.path?.replace(/[/\\]+$/, "") === path,
+      );
+      fromTokens.push(
+        tracked ?? {
+          key: `directory-reference:${path}`,
+          kind: "directory",
+          label: token.name,
+          path: token.path,
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      );
+    }
+    return [...scanned, ...fromTokens];
+  };
+  const referencedDirectories = listDraftReferencedDirectories(
+    canonicalDraft,
+    skillTokens,
+  );
   const reviewDirectory = useMemo(
     () =>
       findReviewDirectoryForWorkspace({
@@ -3447,6 +3714,7 @@ export function Composer(props: ComposerProps) {
       draft,
       editorDocument,
       imageAttachments,
+      fileAttachments,
       skillTokens,
     };
     flushComposerDraftSnapshot(previousScopeKey, previousSnapshot);
@@ -3469,6 +3737,7 @@ export function Composer(props: ComposerProps) {
       setDraft(saved?.draft ?? "");
       setEditorDocument(saved?.editorDocument);
       setImageAttachments(saved?.imageAttachments ?? []);
+      setFileAttachments(saved?.fileAttachments ?? []);
       setSkillTokens(saved?.skillTokens ?? []);
       setPendingSteerState(
         savedPendingSteer ? { ...savedPendingSteer, status: "pending" } : undefined
@@ -3490,7 +3759,7 @@ export function Composer(props: ComposerProps) {
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
-  }, [composerScopeKey, draft, editorDocument, imageAttachments, skillTokens]);
+  }, [composerScopeKey, draft, editorDocument, imageAttachments, fileAttachments, skillTokens]);
 
   useEffect(() => {
     const saved = draftStore.get(composerScopeKey);
@@ -3504,7 +3773,8 @@ export function Composer(props: ComposerProps) {
     if (
       latest.snapshot.draft.trim() ||
       latest.snapshot.skillTokens.length > 0 ||
-      latest.snapshot.imageAttachments.length > 0
+      latest.snapshot.imageAttachments.length > 0 ||
+      (latest.snapshot.fileAttachments?.length ?? 0) > 0
     ) {
       return;
     }
@@ -3512,6 +3782,7 @@ export function Composer(props: ComposerProps) {
     setDraft(saved.draft);
     setEditorDocument(saved.editorDocument);
     setImageAttachments(saved.imageAttachments);
+    setFileAttachments(saved.fileAttachments ?? []);
     setSkillTokens(saved.skillTokens);
   }, [composerScopeKey, draftStore, draftStoreHydrationVersion]);
 
@@ -3522,6 +3793,10 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     setActiveSlashIndex(0);
   }, [slashTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
+
+  useEffect(() => {
+    setActiveDirectoryRefIndex(0);
+  }, [directoryRefTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
 
   useEffect(() => {
     if (!dismissedAutocompleteKey) {
@@ -3618,6 +3893,7 @@ export function Composer(props: ComposerProps) {
       setDraft(saved.draft);
       setEditorDocument(saved.editorDocument);
       setImageAttachments(saved.imageAttachments);
+      setFileAttachments(saved.fileAttachments ?? []);
       setSkillTokens(saved.skillTokens);
     } else {
       setComposerDraftFromCanonical(props.launchpad?.prompt ?? "");
@@ -3625,6 +3901,7 @@ export function Composer(props: ComposerProps) {
         props.launchpad?.editorDocument as JSONContent | undefined,
       );
       setImageAttachments(props.launchpad?.imageAttachments ?? []);
+      setFileAttachments(props.launchpad?.fileAttachments ?? []);
     }
     updateSending(false);
     setInterrupting(false);
@@ -3848,11 +4125,13 @@ export function Composer(props: ComposerProps) {
           if (queuedTurn) {
             setComposerDraftFromCanonical(pendingSteer.text);
             setImageAttachments(pendingSteer.imageAttachments);
+            setFileAttachments(pendingSteer.fileAttachments);
           } else {
             setQueuedTurn({
               id: createQueuedTurnId(),
               text: pendingSteer.text,
               imageAttachments: pendingSteer.imageAttachments,
+              fileAttachments: pendingSteer.fileAttachments,
             });
           }
         }
@@ -3918,6 +4197,7 @@ export function Composer(props: ComposerProps) {
 
       void props.onUpdateLaunchpad?.(launchpad.directoryKey, {
         imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
+        fileAttachments: fileAttachments.length > 0 ? fileAttachments : undefined,
         prompt: canonicalDraft,
         editorDocument: editorDocument as Record<string, unknown> | undefined,
       });
@@ -3931,6 +4211,7 @@ export function Composer(props: ComposerProps) {
     composerScopeKey,
     editorDocument,
     imageAttachments,
+    fileAttachments,
     launchpad,
     props.onUpdateLaunchpad,
   ]);
@@ -4006,7 +4287,16 @@ export function Composer(props: ComposerProps) {
           props.launchpad.directoryKey,
           undefined,
           undefined,
-          reviewCommand.target
+          reviewCommand.target,
+          // No turn payload is built for a review materialize, so append
+          // the file references by hand — a dropped file inside a tracked
+          // repo should still link that repo to the new thread.
+          listDraftReferencedDirectories(
+            appendFileReferenceMarkdown(canonicalDraft, fileAttachments),
+            skillTokens,
+          )
+            .map((directory) => directory.path)
+            .filter((path): path is string => Boolean(path))
         );
         clearSubmittedComposerDraft(submittedScopeKey);
         setReviewConfig(undefined);
@@ -4097,8 +4387,8 @@ export function Composer(props: ComposerProps) {
       setSendError("Selected backend does not support compaction.");
       return;
     }
-    if (imageAttachments.length > 0) {
-      setSendError("/compact does not accept image attachments.");
+    if (imageAttachments.length > 0 || fileAttachments.length > 0) {
+      setSendError("/compact does not accept attachments.");
       return;
     }
     if (shouldQueueThreadSubmit()) {
@@ -4119,6 +4409,7 @@ export function Composer(props: ComposerProps) {
       draft: "",
       editorDocument: undefined,
       imageAttachments: [],
+      fileAttachments: [],
       skillTokens: [],
     };
     clearComposerDraftSnapshot(submittedScopeKey);
@@ -4137,6 +4428,7 @@ export function Composer(props: ComposerProps) {
     flushSync(() => {
       clearComposerDraft();
       setImageAttachments([]);
+      setFileAttachments([]);
       setReviewConfig(undefined);
     });
 
@@ -4161,6 +4453,7 @@ export function Composer(props: ComposerProps) {
       setDraft(submittedSnapshot.draft);
       setEditorDocument(submittedSnapshot.editorDocument);
       setImageAttachments(submittedSnapshot.imageAttachments);
+      setFileAttachments(submittedSnapshot.fileAttachments ?? []);
       setSkillTokens(submittedSnapshot.skillTokens);
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
@@ -4313,13 +4606,21 @@ export function Composer(props: ComposerProps) {
   const buildTurnPayload = (
     textDraft: string,
     attachments: ComposerImageAttachment[],
+    fileRefs: ComposerFileAttachment[],
   ): {
     displayText: string;
     imageParts: AppServerThreadImagePart[];
     input: AppServerTurnInputItem[];
   } => {
     const turnSkills = listMentionedSkills(textDraft, props.skills);
-    const displayText = hydrateSkillLabelsWithMarkdown(textDraft.trim(), turnSkills);
+    // File-reference pills ride the outgoing text as `[@label](~/path)`
+    // markdown appended after the typed draft — part of BOTH the display
+    // text and the text input item, so the agent and the transcript see
+    // the same message.
+    const displayText = appendFileReferenceMarkdown(
+      hydrateSkillLabelsWithMarkdown(textDraft.trim(), turnSkills),
+      fileRefs,
+    );
     const imageParts = attachments.map((attachment, index) => ({
       type: "image" as const,
       url: attachment.url,
@@ -4350,8 +4651,12 @@ export function Composer(props: ComposerProps) {
     }
 
     const payload = queued
-      ? buildTurnPayload(queued.text, queued.imageAttachments)
-      : buildTurnPayload(canonicalDraft, imageAttachments);
+      ? buildTurnPayload(
+          queued.text,
+          queued.imageAttachments,
+          queued.fileAttachments ?? [],
+        )
+      : buildTurnPayload(canonicalDraft, imageAttachments, fileAttachments);
     if (payload.input.length === 0 || props.disabled) {
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       if (queued && options?.queueClaimed) {
@@ -4413,6 +4718,23 @@ export function Composer(props: ComposerProps) {
       } else {
         updateActiveTurnId(response.turnId);
         props.onActiveTurnIdChange?.(response.turnId);
+      }
+      // Queued turns only carry their serialized text, but that text is
+      // self-describing (`[@label](~/path)` markdown), so the scan alone
+      // recovers chip references there. Scan the outgoing display text —
+      // it also carries the appended file references, so a dropped file
+      // inside a tracked repo links that repo.
+      const sentReferencedDirectoryPaths = listDraftReferencedDirectories(
+        payload.displayText,
+        queued ? undefined : skillTokens,
+      )
+        .map((directory) => directory.path)
+        .filter((path): path is string => Boolean(path));
+      if (sentReferencedDirectoryPaths.length > 0) {
+        props.onAttachDirectoryReferences?.(sentReferencedDirectoryPaths, {
+          backend: props.thread.source,
+          threadId: props.thread.id,
+        });
       }
       if (queued) {
         if (!options?.queueClaimed) {
@@ -4541,22 +4863,28 @@ export function Composer(props: ComposerProps) {
     if (queuedTurn) {
       setComposerDraftFromCanonical(pendingSteer.text);
       setImageAttachments(pendingSteer.imageAttachments);
+      setFileAttachments(pendingSteer.fileAttachments);
     } else {
       setQueuedTurn({
         id: createQueuedTurnId(),
         text: pendingSteer.text,
         imageAttachments: pendingSteer.imageAttachments,
+        fileAttachments: pendingSteer.fileAttachments,
       });
     }
     setPendingSteer(undefined);
   }, [activeTurnId, pendingSteer, props.launchpad, queuedTurn]);
 
   const queueCurrentDraft = (options?: { scheduledSendAt?: number }): void => {
-    if (!hasComposerContent && imageAttachments.length === 0) {
+    if (
+      !hasComposerContent &&
+      imageAttachments.length === 0 &&
+      fileAttachments.length === 0
+    ) {
       return;
     }
 
-    const payload = buildTurnPayload(canonicalDraft, imageAttachments);
+    const payload = buildTurnPayload(canonicalDraft, imageAttachments, fileAttachments);
     if (payload.input.length === 0) {
       return;
     }
@@ -4566,6 +4894,7 @@ export function Composer(props: ComposerProps) {
       input: payload.input,
       text: canonicalDraft,
       imageAttachments,
+      fileAttachments,
       ...(options?.scheduledSendAt
         ? { scheduledSendAt: options.scheduledSendAt }
         : {}),
@@ -4578,6 +4907,7 @@ export function Composer(props: ComposerProps) {
     clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
+    setFileAttachments([]);
     setScheduledDraftSendAt(undefined);
     setScheduleArmed(true);
     setReviewConfig(undefined);
@@ -4596,6 +4926,7 @@ export function Composer(props: ComposerProps) {
       id: createQueuedTurnId(),
       text: reviewCommandToDraftText(reviewCommand),
       imageAttachments: [],
+      fileAttachments: [],
       ...(options?.scheduledSendAt
         ? { scheduledSendAt: options.scheduledSendAt }
         : {}),
@@ -4609,6 +4940,7 @@ export function Composer(props: ComposerProps) {
     clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
+    setFileAttachments([]);
     setScheduledDraftSendAt(undefined);
     setScheduleArmed(true);
     setReviewConfig(undefined);
@@ -4677,7 +5009,11 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const payload = buildTurnPayload(pending.text, pending.imageAttachments);
+    const payload = buildTurnPayload(
+      pending.text,
+      pending.imageAttachments,
+      pending.fileAttachments,
+    );
     if (payload.input.length === 0 || props.disabled || steering) {
       return;
     }
@@ -4704,11 +5040,13 @@ export function Composer(props: ComposerProps) {
         if (queuedTurn) {
           setDraft(pending.text);
           setImageAttachments(pending.imageAttachments);
+          setFileAttachments(pending.fileAttachments);
         } else {
           setQueuedTurn({
             id: createQueuedTurnId(),
             text: pending.text,
             imageAttachments: pending.imageAttachments,
+            fileAttachments: pending.fileAttachments,
           });
         }
         setPendingSteer(undefined);
@@ -4739,7 +5077,11 @@ export function Composer(props: ComposerProps) {
       return false;
     }
 
-    const payload = buildTurnPayload(pending.text, pending.imageAttachments);
+    const payload = buildTurnPayload(
+      pending.text,
+      pending.imageAttachments,
+      pending.fileAttachments,
+    );
     if (payload.input.length === 0 || props.disabled || pendingSteer) {
       return false;
     }
@@ -4749,6 +5091,7 @@ export function Composer(props: ComposerProps) {
       id: pending.id,
       text: pending.text,
       imageAttachments: pending.imageAttachments,
+      fileAttachments: pending.fileAttachments,
       status: "pending",
     });
     recordComposerDraftHistory(
@@ -4759,6 +5102,7 @@ export function Composer(props: ComposerProps) {
     clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
+    setFileAttachments([]);
     setReviewConfig(undefined);
     return true;
   };
@@ -4779,6 +5123,7 @@ export function Composer(props: ComposerProps) {
       id: createQueuedTurnId(),
       text: canonicalDraft,
       imageAttachments,
+      fileAttachments,
     });
   };
 
@@ -4887,7 +5232,7 @@ export function Composer(props: ComposerProps) {
     // pending time so the toggle doesn't reappear after the immediate send.
     setScheduledDraftSendAt(undefined);
     setScheduleArmed(true);
-    const payload = buildTurnPayload(canonicalDraft, imageAttachments);
+    const payload = buildTurnPayload(canonicalDraft, imageAttachments, fileAttachments);
     const collaborationMode = planModeEnabled && supportsPlanMode
       ? ({
           mode: "plan",
@@ -4919,7 +5264,13 @@ export function Composer(props: ComposerProps) {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
           payload.input,
-          collaborationMode
+          collaborationMode,
+          undefined,
+          // Scan the outgoing display text so the appended file
+          // references also link their containing tracked repos.
+          listDraftReferencedDirectories(payload.displayText, skillTokens)
+            .map((directory) => directory.path)
+            .filter((path): path is string => Boolean(path))
         );
         clearSubmittedComposerDraft(submittedScopeKey);
         if (collaborationMode) {
@@ -5009,9 +5360,13 @@ export function Composer(props: ComposerProps) {
 
     const before = draft.slice(0, trigger.start);
     const after = draft.slice(Math.max(trigger.end, selectionEnd));
-    const nextAfter = after.length > 0 && !/^\s/.test(after) ? ` ${after}` : after;
+    // Always leave one space after the chip — including at the end of the
+    // draft — and park the caret after it, so typing straight on never
+    // glues onto the chip's serialized form.
+    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
+    const nextSelection = tokenIndex + 1;
     const nextSkillTokens = [
       ...adjustSkillTokenIndexesForTextChange({
         currentDraft: draft,
@@ -5033,7 +5388,10 @@ export function Composer(props: ComposerProps) {
       setDraft(nextDraft);
       setActiveSkillIndex(0);
     });
-    requestAnimationFrame(() => inputRef.current?.focus());
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+    });
   };
 
   const applySlashCommand = (command: SlashCommandSuggestion): void => {
@@ -5069,13 +5427,344 @@ export function Composer(props: ComposerProps) {
     const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
     const nextDraft = `${before}${command.insertText}${needsTrailingSpace ? " " : ""}${after}`;
     const nextSelection = before.length + command.insertText.length + (needsTrailingSpace ? 1 : 0);
+    const nextSkillTokens = adjustSkillTokenIndexesForTextChange({
+      currentDraft: draft,
+      nextDraft,
+      skillTokens,
+    });
 
-    updateVisibleDraft(nextDraft);
-    setActiveSlashIndex(0);
+    // Same protected-update dance as applySkill / applyDirectoryReference:
+    // the editability sync in ComposerTiptapInput re-emits the editor's
+    // (still pre-insert) content through onChange before the external-value
+    // sync applies the new draft. The pending-programmatic guard in
+    // handleComposerChange swallows that stale replay so the two sides
+    // can't ping-pong.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    // The caret lives in a ref, so the commit below re-renders with the
+    // PRE-insert caret still inside the inserted "/command" text — that
+    // prefix is itself a valid slash trigger, which would keep the popover
+    // open until the next interaction. Dismiss that phantom trigger's key;
+    // the dismissal self-clears as soon as the trigger key changes.
+    const lingeringTrigger = findSlashCommandTrigger(
+      nextDraft,
+      Math.min(selectionStart, nextDraft.length),
+    );
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveSlashIndex(0);
+      setDismissedAutocompleteKey(
+        lingeringTrigger
+          ? `slash:${lingeringTrigger.start}:${lingeringTrigger.end}:/${lingeringTrigger.query}`
+          : undefined,
+      );
+    });
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(nextSelection, nextSelection);
     });
+  };
+
+  const applyDirectoryReference = (
+    directory: Pick<NavigationDirectorySummary, "label" | "path">,
+  ): void => {
+    if (!inputRef.current) {
+      return;
+    }
+
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const selectionEnd = Math.min(
+      inputRef.current.selectionEnd ?? selectionStart,
+      draft.length,
+    );
+    // Prefer replacing the `@` trigger the popover opened from; when the
+    // reference arrives without one (the "+"-menu picker, or the trigger
+    // vanished while an OS dialog was open) fall back to a zero-width
+    // "trigger" at the current caret so the chip still lands in place.
+    const refTrigger =
+      findDirectoryReferenceTrigger(draft, selectionStart)
+      ?? findDirectoryReferenceTrigger(draft, draft.length)
+      ?? { start: selectionStart, end: selectionEnd };
+    if (!directory.path) {
+      return;
+    }
+
+    // Mint a durable mention token (the `@label` chip) instead of
+    // splicing path text — mirrors applySkill. The chip is zero-width in
+    // the plain draft; serializeDraftWithSkillTokens splices the markdown
+    // link back in for the outgoing text and launchpad prompt. Like
+    // applySkill, always leave one space after the chip and park the
+    // caret after it.
+    const before = draft.slice(0, refTrigger.start);
+    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
+    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextDraft = `${before}${nextAfter}`;
+    const tokenIndex = before.length;
+    const nextSelection = tokenIndex + 1;
+    const nextSkillTokens = [
+      ...adjustSkillTokenIndexesForTextChange({
+        currentDraft: draft,
+        nextDraft,
+        skillTokens,
+      }),
+      createComposerDirectoryToken(directory, tokenIndex),
+    ];
+
+    // Same protected-update dance as applySkill: the editability sync in
+    // ComposerTiptapInput re-emits the editor's (still pre-insert) content
+    // through onChange before the external-value sync applies the new
+    // draft. The pending-programmatic guard in handleComposerChange
+    // swallows that stale replay so the two sides can't ping-pong.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveDirectoryRefIndex(0);
+    });
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+    });
+  };
+
+  /**
+   * "@ → Add directory…" / "+"-menu action: run the OS picker (which also
+   * registers the pick as a tracked directory, without navigating) and
+   * mint the returned directory as a chip. The trigger is recomputed
+   * inside `applyDirectoryReference` AFTER the dialog resolves, with a
+   * caret fallback for the no-trigger paths.
+   */
+  const applyPickedDirectoryReference = async (): Promise<void> => {
+    const picked = await props.onPickDirectoryForReference?.();
+    if (!picked?.path) {
+      return;
+    }
+    applyDirectoryReference(picked);
+  };
+
+  /**
+   * Mint file-reference chips at the `@` trigger (or the caret when no
+   * trigger survives) — the multi-token sibling of
+   * `applyDirectoryReference`. The plain draft gets n-1 separator spaces
+   * plus the guaranteed post-chip space, placing the n zero-width tokens
+   * at consecutive indexes so the serialized draft reads
+   * `chip␠chip␠…chip␠after` with exactly one space after every chip.
+   */
+  const applyFileReferences = (paths: string[]): void => {
+    if (!inputRef.current || paths.length === 0) {
+      return;
+    }
+
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const selectionEnd = Math.min(
+      inputRef.current.selectionEnd ?? selectionStart,
+      draft.length,
+    );
+    const refTrigger =
+      findDirectoryReferenceTrigger(draft, selectionStart)
+      ?? findDirectoryReferenceTrigger(draft, draft.length)
+      ?? { start: selectionStart, end: selectionEnd };
+
+    const before = draft.slice(0, refTrigger.start);
+    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
+    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextDraft = `${before}${" ".repeat(paths.length - 1)}${nextAfter}`;
+    const nextSelection = before.length + paths.length;
+    const nextSkillTokens = [
+      ...adjustSkillTokenIndexesForTextChange({
+        currentDraft: draft,
+        nextDraft,
+        skillTokens,
+      }),
+      ...paths.map((path, index) =>
+        createComposerFileToken(
+          { label: fileLabelFromPath(path), path },
+          before.length + index,
+        ),
+      ),
+    ];
+
+    // Same protected-update dance as applySkill / applyDirectoryReference:
+    // the editability sync in ComposerTiptapInput re-emits the editor's
+    // (still pre-insert) content through onChange before the
+    // external-value sync applies the new draft. The pending-programmatic
+    // guard in handleComposerChange swallows that stale replay so the two
+    // sides can't ping-pong.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveDirectoryRefIndex(0);
+    });
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+    });
+
+    // Feed the reference picker's Files tab — fire-and-forget.
+    void props.desktopApi
+      ?.recordRecentFileReferences?.({ paths })
+      ?.catch(() => undefined);
+  };
+
+  /** "@ → Add file…" action: OS file picker → file-reference chips. */
+  const applyPickedFileReferences = async (): Promise<void> => {
+    const result = await props.desktopApi?.pickFileFromDisk?.();
+    if (!result || result.canceled || result.paths.length === 0) {
+      return;
+    }
+    applyFileReferences(result.paths);
+  };
+
+  /**
+   * Mint directory-reference chips for a batch of picked directories —
+   * the multi-token sibling of `applyDirectoryReference`, sharing
+   * `applyFileReferences`' token layout (n-1 separator spaces plus the
+   * guaranteed post-chip space). Needed because the single-directory
+   * helper can't be called twice in one tick: each call captures the
+   * pre-insert draft, so the second insert would clobber the first.
+   */
+  const applyDirectoryReferenceChips = (
+    directories: { label: string; path: string }[],
+  ): void => {
+    if (!inputRef.current || directories.length === 0) {
+      return;
+    }
+
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const selectionEnd = Math.min(
+      inputRef.current.selectionEnd ?? selectionStart,
+      draft.length,
+    );
+    const refTrigger =
+      findDirectoryReferenceTrigger(draft, selectionStart)
+      ?? findDirectoryReferenceTrigger(draft, draft.length)
+      ?? { start: selectionStart, end: selectionEnd };
+
+    const before = draft.slice(0, refTrigger.start);
+    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
+    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextDraft = `${before}${" ".repeat(directories.length - 1)}${nextAfter}`;
+    const nextSelection = before.length + directories.length;
+    const nextSkillTokens = [
+      ...adjustSkillTokenIndexesForTextChange({
+        currentDraft: draft,
+        nextDraft,
+        skillTokens,
+      }),
+      ...directories.map((directory, index) =>
+        createComposerDirectoryToken(directory, before.length + index),
+      ),
+    ];
+
+    // Same protected-update dance as applySkill / applyDirectoryReference:
+    // the editability sync in ComposerTiptapInput re-emits the editor's
+    // (still pre-insert) content through onChange before the
+    // external-value sync applies the new draft. The pending-programmatic
+    // guard in handleComposerChange swallows that stale replay so the two
+    // sides can't ping-pong.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveDirectoryRefIndex(0);
+    });
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+    });
+  };
+
+  /**
+   * Combined "+ Add file or directory…" picker (macOS only): one OS
+   * dialog returns a mix of files and directories. Files land in the
+   * attachment tray (the "+ flow attaches" rule); directories are
+   * registered as tracked directories (non-fatal — the send-time attach
+   * re-registers anyway) and minted as reference chips. The tray attach
+   * runs first because it snapshots the current draft, which the chip
+   * mint is about to rewrite.
+   */
+  const applyPickedReferencesFromDisk = async (): Promise<void> => {
+    const result = await props.desktopApi?.pickReferenceFromDisk?.();
+    if (!result || result.canceled || result.entries.length === 0) {
+      return;
+    }
+    const filePaths = result.entries
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => entry.path);
+    const directoryPaths = result.entries
+      .filter((entry) => entry.kind === "directory")
+      .map((entry) => entry.path);
+    if (filePaths.length > 0) {
+      attachFilePaths(filePaths);
+    }
+    for (const directoryPath of directoryPaths) {
+      void props.desktopApi
+        ?.registerDirectoryFromDisk?.({ path: directoryPath })
+        ?.then((response) => {
+          if (response && !response.ok) {
+            console.warn(
+              `Could not register picked directory ${directoryPath}: ${response.message}`,
+            );
+          }
+        })
+        .catch(() => undefined);
+    }
+    if (directoryPaths.length > 0) {
+      applyDirectoryReferenceChips(
+        directoryPaths.map((directoryPath) => ({
+          label: fileLabelFromPath(directoryPath),
+          path: directoryPath,
+        })),
+      );
+    }
+  };
+
+  /**
+   * Load the reference picker's Files tab from the main process. Called
+   * on every picker open; failures keep the previous list — recents are
+   * a convenience surface, not load-bearing.
+   */
+  const refreshRecentFileReferences = async (): Promise<void> => {
+    try {
+      const response = await props.desktopApi?.listRecentFileReferences?.();
+      setRecentFileReferences(response?.files ?? []);
+    } catch {
+      // Keep whatever list we had.
+    }
   };
 
   const removeImageAttachment = (id: string): void => {
@@ -5085,6 +5774,7 @@ export function Composer(props: ComposerProps) {
         draft,
         editorDocument,
         imageAttachments: nextAttachments,
+        fileAttachments,
         skillTokens,
       });
       persistLaunchpadImageAttachments(nextAttachments);
@@ -5092,8 +5782,24 @@ export function Composer(props: ComposerProps) {
     });
   };
 
+  const removeFileAttachment = (id: string): void => {
+    setFileAttachments((current) => {
+      const nextAttachments = current.filter((attachment) => attachment.id !== id);
+      saveComposerDraftSnapshot(composerScopeKey, {
+        draft,
+        editorDocument,
+        imageAttachments,
+        fileAttachments: nextAttachments,
+        skillTokens,
+      });
+      persistLaunchpadImageAttachments(imageAttachments, nextAttachments);
+      return nextAttachments;
+    });
+  };
+
   const persistLaunchpadImageAttachments = (
     attachments: ComposerImageAttachment[],
+    files: ComposerFileAttachment[] = fileAttachments,
   ): void => {
     if (!props.launchpad || !props.onUpdateLaunchpad) {
       return;
@@ -5101,6 +5807,7 @@ export function Composer(props: ComposerProps) {
 
     void props.onUpdateLaunchpad(props.launchpad.directoryKey, {
       imageAttachments: attachments.length > 0 ? attachments : undefined,
+      fileAttachments: files.length > 0 ? files : undefined,
       prompt: canonicalDraft,
     });
   };
@@ -5149,14 +5856,117 @@ export function Composer(props: ComposerProps) {
     return files;
   };
 
+  /**
+   * Add path-only file attachments to the tray. Shared by drop/paste
+   * (after `attachFiles` resolves each File's path) and the "+"-menu
+   * "Add file…" picker (which already has paths). Dedupes against the
+   * pills already in the tray, caps the total, and persists the snapshot.
+   * Toasts once per batch when the cap clamps it.
+   */
+  const attachFilePaths = (paths: string[]): void => {
+    const resolved: ComposerFileAttachment[] = [];
+    const seenPaths = new Set(fileAttachments.map((attachment) => attachment.path));
+    for (const path of paths) {
+      if (!path || seenPaths.has(path)) {
+        continue;
+      }
+      seenPaths.add(path);
+      resolved.push({
+        id: `${path}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+        label: fileLabelFromPath(path),
+        path,
+      });
+    }
+    if (resolved.length === 0) {
+      return;
+    }
+
+    const remaining = MAX_COMPOSER_FILE_ATTACHMENTS - fileAttachments.length;
+    if (resolved.length > remaining) {
+      showComposerNotice({
+        title: "Attachment limit reached",
+        message: `You can attach up to ${MAX_COMPOSER_FILE_ATTACHMENTS} files per message.`,
+      });
+    }
+    const accepted = resolved.slice(0, Math.max(0, remaining));
+    if (accepted.length === 0) {
+      return;
+    }
+
+    const nextAttachments = [...fileAttachments, ...accepted];
+    setFileAttachments(nextAttachments);
+    saveComposerDraftSnapshot(composerScopeKey, {
+      draft,
+      editorDocument,
+      imageAttachments,
+      fileAttachments: nextAttachments,
+      skillTokens,
+    });
+    persistLaunchpadImageAttachments(imageAttachments, nextAttachments);
+
+    // Feed the reference picker's Files tab — fire-and-forget.
+    void props.desktopApi
+      ?.recordRecentFileReferences?.({
+        paths: accepted.map((attachment) => attachment.path),
+      })
+      ?.catch(() => undefined);
+  };
+
+  /**
+   * Turn dropped/pasted non-image Files into path-only file attachments.
+   * Resolves each path via Electron's webUtils bridge (contents are never
+   * read) and hands off to `attachFilePaths` for dedupe/cap/persist.
+   * Toasts once per batch for unresolvable paths.
+   */
+  const attachFiles = (files: File[]): void => {
+    let unresolvedCount = 0;
+    const paths: string[] = [];
+    for (const file of files) {
+      const path = props.desktopApi?.getPathForFile?.(file) ?? "";
+      if (!path) {
+        unresolvedCount += 1;
+        continue;
+      }
+      paths.push(path);
+    }
+
+    if (unresolvedCount > 0) {
+      showComposerNotice({
+        title: "File path unavailable",
+        message: "Could not resolve a path for the dropped file.",
+      });
+    }
+    attachFilePaths(paths);
+  };
+
+  /** "+"-menu "Add file…" action: OS file picker → tray pills. */
+  const attachPickedFilesToTray = async (): Promise<void> => {
+    const result = await props.desktopApi?.pickFileFromDisk?.();
+    if (!result || result.canceled || result.paths.length === 0) {
+      return;
+    }
+    attachFilePaths(result.paths);
+  };
+
   const handlePaste = (event: ClipboardEvent<HTMLElement>): void => {
     const pastedFiles = getImageFilesFromDataTransfer(event.clipboardData);
-    if (pastedFiles.length === 0) {
+    // Non-image FILES only (kind === "file" items) — plain text paste
+    // must fall through to the editor untouched.
+    const pastedNonImageFiles = getNonImageFilesFromDataTransfer(
+      event.clipboardData,
+    );
+    if (pastedFiles.length === 0 && pastedNonImageFiles.length === 0) {
       return;
     }
 
     event.preventDefault();
     setSendError(undefined);
+    if (pastedNonImageFiles.length > 0) {
+      attachFiles(pastedNonImageFiles);
+    }
+    if (pastedFiles.length === 0) {
+      return;
+    }
     const accepted = gateImageFilesForAttachment(pastedFiles);
     if (!accepted || accepted.length === 0) {
       return;
@@ -5165,7 +5975,7 @@ export function Composer(props: ComposerProps) {
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>): void => {
-    if (!hasImageFiles(event.dataTransfer)) {
+    if (!hasAnyFiles(event.dataTransfer)) {
       return;
     }
 
@@ -5175,12 +5985,21 @@ export function Composer(props: ComposerProps) {
 
   const handleDrop = (event: DragEvent<HTMLElement>): void => {
     const droppedFiles = getImageFilesFromDataTransfer(event.dataTransfer);
-    if (droppedFiles.length === 0) {
+    const droppedNonImageFiles = getNonImageFilesFromDataTransfer(
+      event.dataTransfer,
+    );
+    if (droppedFiles.length === 0 && droppedNonImageFiles.length === 0) {
       return;
     }
 
     event.preventDefault();
     setSendError(undefined);
+    if (droppedNonImageFiles.length > 0) {
+      attachFiles(droppedNonImageFiles);
+    }
+    if (droppedFiles.length === 0) {
+      return;
+    }
     const accepted = gateImageFilesForAttachment(droppedFiles);
     if (!accepted || accepted.length === 0) {
       return;
@@ -5193,6 +6012,7 @@ export function Composer(props: ComposerProps) {
     const pasteDraft = draft;
     const pasteEditorDocument = editorDocument;
     const pasteImageAttachments = imageAttachments;
+    const pasteFileAttachments = fileAttachments;
 
     try {
       const nextAttachments = await Promise.all(
@@ -5251,6 +6071,7 @@ export function Composer(props: ComposerProps) {
           draft: pasteDraft,
           editorDocument: pasteEditorDocument,
           imageAttachments: pasteImageAttachments,
+          fileAttachments: pasteFileAttachments,
           skillTokens,
         };
         // Drop exact duplicates against the background scope's own attachments
@@ -5267,6 +6088,7 @@ export function Composer(props: ComposerProps) {
             0,
             MAX_COMPOSER_IMAGE_ATTACHMENTS,
           ),
+          fileAttachments: saved.fileAttachments,
           skillTokens: saved.skillTokens,
         };
         saveComposerDraftSnapshot(pasteScope.key, nextSnapshot);
@@ -5310,14 +6132,21 @@ export function Composer(props: ComposerProps) {
           0,
           MAX_COMPOSER_IMAGE_ATTACHMENTS,
         );
+        // Read file pills from the latest snapshot ref, not the paste-time
+        // closure — a mixed drop attaches files synchronously before this
+        // async image path lands, and the stale list would wipe them.
+        const latestFileAttachments =
+          latestDraftSnapshotRef.current.snapshot.fileAttachments ??
+          pasteFileAttachments;
         const nextSnapshot = {
           draft,
           editorDocument,
           imageAttachments: mergedAttachments,
+          fileAttachments: latestFileAttachments,
           skillTokens,
         };
         saveComposerDraftSnapshot(pasteScope.key, nextSnapshot);
-        persistLaunchpadImageAttachments(mergedAttachments);
+        persistLaunchpadImageAttachments(mergedAttachments, latestFileAttachments);
         return mergedAttachments;
       });
     } catch (error) {
@@ -5360,6 +6189,8 @@ export function Composer(props: ComposerProps) {
       {
         imageAttachments:
           imageAttachments.length > 0 ? imageAttachments : undefined,
+        fileAttachments:
+          fileAttachments.length > 0 ? fileAttachments : undefined,
         prompt: canonicalDraft,
         ...patch,
       },
@@ -5584,7 +6415,9 @@ export function Composer(props: ComposerProps) {
     props.disabled ||
     steering ||
     (!activeTurnId && sending) ||
-    (!hasComposerContent && imageAttachments.length === 0);
+    (!hasComposerContent &&
+      imageAttachments.length === 0 &&
+      fileAttachments.length === 0);
   const scheduleButtonDisabled =
     sendButtonDisabled ||
     Boolean(props.launchpad) ||
@@ -5825,6 +6658,13 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
+    if (autocompleteKind === "directories") {
+      applyDirectoryReference(
+        filteredDirectoryRefs[activeDirectoryRefIndex] ?? filteredDirectoryRefs[0]!,
+      );
+      return;
+    }
+
     const currentSlashText = slashTrigger
       ? `/${slashTrigger.query}`.toLowerCase()
       : undefined;
@@ -5912,6 +6752,8 @@ export function Composer(props: ComposerProps) {
     ): void => {
       if (autocompleteKind === "skills") {
         setActiveSkillIndex(updater);
+      } else if (autocompleteKind === "directories") {
+        setActiveDirectoryRefIndex(updater);
       } else {
         setActiveSlashIndex(updater);
       }
@@ -5964,6 +6806,7 @@ export function Composer(props: ComposerProps) {
       }
       setActiveSkillIndex(0);
       setActiveSlashIndex(0);
+      setActiveDirectoryRefIndex(0);
       requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
@@ -6051,6 +6894,7 @@ export function Composer(props: ComposerProps) {
             draft: nextDraft,
             editorDocument: metadata?.editorDocument,
             imageAttachments,
+            fileAttachments,
             skillTokens: storedSkillTokens,
           }),
       ) === true;
@@ -6061,6 +6905,7 @@ export function Composer(props: ComposerProps) {
       draft: nextDraft,
       editorDocument: metadata?.editorDocument,
       imageAttachments,
+      fileAttachments,
       skillTokens: storedSkillTokens,
     });
     if (deletedSkillTokenHistoryEntry) {
@@ -6074,6 +6919,7 @@ export function Composer(props: ComposerProps) {
   const handleComposerClick = (): void => {
     setActiveSkillIndex(0);
     setActiveSlashIndex(0);
+    setActiveDirectoryRefIndex(0);
   };
   const handlePlainComposerKeyDown = (
     event: ReactKeyboardEvent<HTMLElement>,
@@ -6088,7 +6934,9 @@ export function Composer(props: ComposerProps) {
           (inputRef.current?.skillTokenCount ?? skillTokens.length) > 0,
       );
       const liveHasAnyComposerContent =
-        liveHasComposerContent || imageAttachments.length > 0;
+        liveHasComposerContent ||
+        imageAttachments.length > 0 ||
+        fileAttachments.length > 0;
       const recoveryCycle = recoveryCycleRef.current;
       const liveSelectionAtStart =
         (inputRef.current?.selectionStart ?? 0) === 0 &&
@@ -6112,7 +6960,8 @@ export function Composer(props: ComposerProps) {
       if (
         event.key === "ArrowUp" &&
         (!liveHasComposerContent || canCycleActiveRecovery) &&
-        (imageAttachments.length === 0 || canCycleActiveRecovery)
+        (imageAttachments.length === 0 || canCycleActiveRecovery) &&
+        (fileAttachments.length === 0 || canCycleActiveRecovery)
       ) {
         event.preventDefault();
         void recoverPreviousComposerDraft();
@@ -6122,7 +6971,8 @@ export function Composer(props: ComposerProps) {
         event.key === "ArrowDown" &&
         liveHasAnyComposerContent &&
         canCycleActiveRecovery &&
-        (imageAttachments.length === 0 || canCycleActiveRecovery)
+        (imageAttachments.length === 0 || canCycleActiveRecovery) &&
+        (fileAttachments.length === 0 || canCycleActiveRecovery)
       ) {
         event.preventDefault();
         recoverNextComposerDraft();
@@ -6480,6 +7330,7 @@ export function Composer(props: ComposerProps) {
                   onClick={() => {
                     setComposerDraftFromCanonical(pendingSteer.text);
                     setImageAttachments(pendingSteer.imageAttachments);
+                    setFileAttachments(pendingSteer.fileAttachments);
                     setPendingSteer(undefined);
                     requestAnimationFrame(() => inputRef.current?.focus());
                   }}
@@ -6550,7 +7401,7 @@ export function Composer(props: ComposerProps) {
               .filter(Boolean)
               .join(" ")}
             aria-label={index === 0 ? "Queued message" : `Queued message ${index + 1}`}
-            key={`${index}:${queued.text}:${queued.imageAttachments.length}:${queued.scheduledSendAt ?? ""}`}
+            key={`${index}:${queued.text}:${queued.imageAttachments.length}:${queued.fileAttachments.length}:${queued.scheduledSendAt ?? ""}`}
           >
             <div className="composer__queued-copy">
               <span className="composer__queued-label">
@@ -6593,6 +7444,7 @@ export function Composer(props: ComposerProps) {
                 onClick={() => {
                   setComposerDraftFromCanonical(queued.text);
                   setImageAttachments(queued.imageAttachments);
+                  setFileAttachments(queued.fileAttachments);
                   setScheduledDraftSendAt(scheduledSendAt);
                   setScheduleArmed(true);
                   removeQueuedTurnAt(index);
@@ -6615,8 +7467,11 @@ export function Composer(props: ComposerProps) {
         );
       })}
 
-      {imageAttachments.length > 0 ? (
-        <div className="composer__attachments" aria-label="Pasted images">
+      {imageAttachments.length > 0 || fileAttachments.length > 0 ? (
+        <div
+          className="composer__attachments"
+          aria-label={fileAttachments.length > 0 ? "Attachments" : "Pasted images"}
+        >
           {imageAttachments.map((attachment, index) => {
             const dimensions = formatImageDimensions(
               attachment.width,
@@ -6661,6 +7516,28 @@ export function Composer(props: ComposerProps) {
               </div>
             );
           })}
+          {fileAttachments.map((attachment) => (
+            <span
+              className="composer__file-attachment tooltip-target"
+              data-tooltip={buildFileReferenceTooltip(attachment.path)}
+              key={attachment.id}
+            >
+              <FileCodeIcon size={13} aria-hidden="true" />
+              <span className="composer__file-attachment-label">
+                {attachment.label}
+              </span>
+              <button
+                aria-label={`Remove ${attachment.label}`}
+                className="composer__file-attachment-remove"
+                type="button"
+                onClick={() => {
+                  removeFileAttachment(attachment.id);
+                }}
+              >
+                <CloseIcon size={12} aria-hidden="true" />
+              </button>
+            </span>
+          ))}
         </div>
       ) : null}
 
@@ -6964,6 +7841,90 @@ export function Composer(props: ComposerProps) {
               </button>
             ))}
           </div>
+        ) : autocompleteKind === "directories" ? (
+          <div
+            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+            ref={autocompleteListRef}
+            role="listbox"
+            aria-label="Directories"
+            id={directoryRefListboxId}
+            style={{ maxHeight: autocompleteLayout.maxHeight }}
+          >
+            {filteredDirectoryRefs.map((directory, index) => (
+              <button
+                key={directory.key}
+                id={`${directoryRefListboxId}-option-${index}`}
+                ref={(node) => {
+                  autocompleteOptionRefs.current[index] = node;
+                }}
+                aria-selected={index === activeDirectoryRefIndex}
+                className={`composer__autocomplete-option${index === activeDirectoryRefIndex ? " is-active" : ""}`}
+                tabIndex={index === activeDirectoryRefIndex ? 0 : -1}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  applyDirectoryReference(directory);
+                }}
+                onClick={() => {
+                  applyDirectoryReference(directory);
+                }}
+                onFocus={() => {
+                  setActiveDirectoryRefIndex(index);
+                }}
+                onKeyDown={handleAutocompleteKeyDown}
+              >
+                <span className="composer__autocomplete-title">
+                  <FolderIcon size={13} aria-hidden="true" />
+                  <HighlightedAutocompleteLabel
+                    label={directory.label}
+                    query={directoryRefTrigger?.query ?? ""}
+                  />
+                </span>
+                <span className="composer__autocomplete-meta">
+                  {buildDirectoryReferenceInsertText(directory)}
+                </span>
+              </button>
+            ))}
+            {props.onPickDirectoryForReference ||
+            props.desktopApi?.pickFileFromDisk ? (
+              <div
+                className="composer__autocomplete-separator"
+                role="separator"
+              />
+            ) : null}
+            {props.onPickDirectoryForReference ? (
+              <button
+                className="composer__autocomplete-option composer__autocomplete-option--action"
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                }}
+                onClick={() => {
+                  void applyPickedDirectoryReference();
+                }}
+              >
+                <span className="composer__autocomplete-title">
+                  + Add directory…
+                </span>
+              </button>
+            ) : null}
+            {props.desktopApi?.pickFileFromDisk ? (
+              <button
+                className="composer__autocomplete-option composer__autocomplete-option--action"
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                }}
+                onClick={() => {
+                  void applyPickedFileReferences();
+                }}
+              >
+                <span className="composer__autocomplete-title">
+                  + Add file…
+                </span>
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
 
@@ -7148,6 +8109,19 @@ export function Composer(props: ComposerProps) {
               ) : null}
             </>
           ) : null}
+
+          {referencedDirectories.map((directory) => (
+            <span
+              key={directory.key}
+              className="composer__directory-reference tooltip-target"
+              data-tooltip={buildDirectoryReferenceTooltip(directory.path ?? "")}
+            >
+              <FolderIcon size={13} aria-hidden="true" />
+              <span className="composer__directory-reference-label">
+                {directory.label}
+              </span>
+            </span>
+          ))}
 
           {props.launchpad ? (
             <ComposerDropdown
@@ -7374,6 +8348,76 @@ export function Composer(props: ComposerProps) {
             >
               <PlanIcon size={15} aria-hidden="true" />
             </button>
+          ) : null}
+
+          {props.onPickDirectoryForReference ||
+          props.desktopApi?.pickFileFromDisk ? (
+            <ReferencePicker
+              open={addReferenceMenuOpen}
+              onClose={() => setAddReferenceMenuOpen(false)}
+              directories={props.directories ?? []}
+              recentFiles={recentFileReferences}
+              platform={props.desktopApi?.platform}
+              onSelectDirectory={(directory) => {
+                setAddReferenceMenuOpen(false);
+                applyDirectoryReference(directory);
+              }}
+              onSelectFile={(path) => {
+                setAddReferenceMenuOpen(false);
+                attachFilePaths([path]);
+              }}
+              onPickFromDisk={
+                props.desktopApi?.pickReferenceFromDisk
+                  ? () => {
+                      // Close before the OS dialog opens so the sheet
+                      // doesn't float over a stale popover.
+                      setAddReferenceMenuOpen(false);
+                      void applyPickedReferencesFromDisk();
+                    }
+                  : undefined
+              }
+              onPickDirectoryFromDisk={
+                props.onPickDirectoryForReference
+                  ? () => {
+                      setAddReferenceMenuOpen(false);
+                      void applyPickedDirectoryReference();
+                    }
+                  : undefined
+              }
+              onPickFileFromDisk={
+                props.desktopApi?.pickFileFromDisk
+                  ? () => {
+                      setAddReferenceMenuOpen(false);
+                      void attachPickedFilesToTray();
+                    }
+                  : undefined
+              }
+            >
+              <button
+                type="button"
+                className="composer__toggle tooltip-target"
+                aria-label="Add reference"
+                aria-haspopup="dialog"
+                aria-expanded={addReferenceMenuOpen}
+                // Omit the CSS tooltip while the popover is open — the
+                // pseudo-element otherwise lingers over the panel.
+                data-tooltip={
+                  addReferenceMenuOpen
+                    ? undefined
+                    : "Reference a directory or file"
+                }
+                disabled={launchpadSubmitting}
+                onClick={() => {
+                  const next = !addReferenceMenuOpen;
+                  setAddReferenceMenuOpen(next);
+                  if (next) {
+                    void refreshRecentFileReferences();
+                  }
+                }}
+              >
+                <PlusIcon size={15} aria-hidden="true" />
+              </button>
+            </ReferencePicker>
           ) : null}
         </div>
       ) : null}
@@ -7929,14 +8973,65 @@ function getImageFilesFromDataTransfer(dataTransfer: DataTransfer): ComposerImag
   return files;
 }
 
-function hasImageFiles(dataTransfer: DataTransfer): boolean {
+/**
+ * Sibling of getImageFilesFromDataTransfer for the path-only file tray:
+ * every dropped/pasted File that is NOT an image (those keep the existing
+ * attach-image path), deduped by content key.
+ */
+function getNonImageFilesFromDataTransfer(dataTransfer: DataTransfer): File[] {
+  const files: File[] = [];
+  const seenFiles = new Set<string>();
+  let foundFileItem = false;
+
   for (const item of Array.from(dataTransfer.items)) {
-    if (item.kind === "file" && (!item.type || isImageMimeType(item.type))) {
+    if (item.kind !== "file") {
+      continue;
+    }
+
+    const file = item.getAsFile();
+    if (!file) {
+      continue;
+    }
+
+    foundFileItem = true;
+    if (isImageMimeType(item.type) || inferTransferImageType(file)) {
+      continue;
+    }
+
+    const key = buildFileKey(file);
+    if (!seenFiles.has(key)) {
+      files.push(file);
+      seenFiles.add(key);
+    }
+  }
+
+  if (foundFileItem) {
+    return files;
+  }
+
+  for (const file of Array.from(dataTransfer.files)) {
+    if (inferTransferImageType(file)) {
+      continue;
+    }
+
+    const key = buildFileKey(file);
+    if (!seenFiles.has(key)) {
+      files.push(file);
+      seenFiles.add(key);
+    }
+  }
+
+  return files;
+}
+
+function hasAnyFiles(dataTransfer: DataTransfer): boolean {
+  for (const item of Array.from(dataTransfer.items)) {
+    if (item.kind === "file") {
       return true;
     }
   }
 
-  return Array.from(dataTransfer.files).some((file) => Boolean(inferTransferImageType(file)));
+  return dataTransfer.files.length > 0;
 }
 
 function buildFileKey(file: File): string {

@@ -11452,6 +11452,28 @@ textarea,
   border: 1px solid var(--border-subtle);
 }
 
+/* Composer directory-reference mention chip (`@label`). Same silhouette
+   as the skill chip; neutral surface so the accent stays reserved for
+   skills, per the one-accent rule. */
+.directory-chip {
+  max-width: 100%;
+  vertical-align: middle;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+}
+
+/* Composer file-reference mention chip (`@basename`). Same neutral
+   silhouette as the directory chip — files are path references, not
+   skills, so the accent stays reserved. */
+.file-chip {
+  max-width: 100%;
+  vertical-align: middle;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+}
+
 .skill-chip--removable {
   gap: 6px;
   padding-right: 4px;
@@ -14475,21 +14497,23 @@ textarea,
 /* ============================================================
    Composer pickers — shared popover language
 
-   The project picker and the branch picker share ONE popover
-   look: an elevated panel, a search header (search icon +
-   borderless input + bottom divider), an uppercase section
-   eyebrow, and rows (leading check column + icon + label) that
-   tint to the accent on hover / keyboard focus. Picker-specific
-   content — a directory's path, a branch's badges + timestamp —
+   The project picker, the branch picker, and the "+" reference
+   picker share ONE popover look: an elevated panel, a search
+   header (search icon + borderless input + bottom divider), an
+   uppercase section eyebrow, and rows (leading check column +
+   icon + label) that tint to the accent on hover / keyboard
+   focus. Picker-specific content — a directory's path, a
+   branch's badges + timestamp, the reference picker's tabs —
    layers on top of these primitives.
 
    Edit the shared look HERE. Keep only genuinely per-picker
    overrides (panel anchor/size, project path/error, branch
-   badges/timestamp) in the `.project-picker__*` /
-   `.branch-picker__*` blocks.
+   badges/timestamp, reference tabs) in the `.project-picker__*`
+   / `.branch-picker__*` / `.reference-picker__*` blocks.
    ============================================================ */
 .project-picker__pop,
-.branch-picker__menu {
+.branch-picker__menu,
+.reference-picker__pop {
   position: absolute;
   z-index: 30;
   bottom: calc(100% + 8px);
@@ -14503,7 +14527,8 @@ textarea,
 }
 
 .project-picker__search,
-.branch-picker__search {
+.branch-picker__search,
+.reference-picker__search {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -14514,7 +14539,8 @@ textarea,
 }
 
 .project-picker__search-icon,
-.branch-picker__search-icon {
+.branch-picker__search-icon,
+.reference-picker__search-icon {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -14522,7 +14548,8 @@ textarea,
 }
 
 .project-picker__search-input,
-.branch-picker__search-input {
+.branch-picker__search-input,
+.reference-picker__search-input {
   flex: 1 1 auto;
   min-width: 0;
   border: 0;
@@ -14534,7 +14561,8 @@ textarea,
 }
 
 .project-picker__search-input::placeholder,
-.branch-picker__search-input::placeholder {
+.branch-picker__search-input::placeholder,
+.reference-picker__search-input::placeholder {
   color: var(--text-muted);
 }
 
@@ -14550,14 +14578,16 @@ textarea,
 }
 
 .project-picker__list,
-.branch-picker__list {
+.branch-picker__list,
+.reference-picker__list {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
 .project-picker__row,
-.branch-picker__option {
+.branch-picker__option,
+.reference-picker__row {
   display: flex;
   width: 100%;
   align-items: center;
@@ -14579,7 +14609,9 @@ textarea,
 .project-picker__row:focus-visible:not(:disabled),
 .branch-picker__option:hover,
 .branch-picker__option:focus-visible,
-.branch-picker__option.is-active {
+.branch-picker__option.is-active,
+.reference-picker__row:hover:not(:disabled),
+.reference-picker__row:focus-visible:not(:disabled) {
   background: var(--accent-soft);
   color: var(--accent-bright);
   outline: none;
@@ -14597,7 +14629,8 @@ textarea,
 
 /* Leading row glyph (folder / branch icon). */
 .project-picker__row-icon,
-.branch-picker__option-icon {
+.branch-picker__option-icon,
+.reference-picker__row-icon {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -14765,6 +14798,71 @@ textarea,
 
 .composer__attach-directory-button {
   gap: 6px;
+}
+
+/* Draft `@`-referenced directory (linked to the thread when the turn is
+   sent). Informational — the reference is removed by deleting the path
+   from the draft text, so the chip has no close affordance. */
+.composer__directory-reference {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.composer__directory-reference-label {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dropped/picked file reference pill in the attachments tray. Same
+   28px silhouette as the directory-reference pill, but a solid border:
+   the file is an explicit attachment with its own remove control, not
+   an informational echo of the draft text. */
+.composer__file-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.composer__file-attachment-label {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__file-attachment-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.composer__file-attachment-remove:hover {
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
 }
 
 .composer__inline-error {
@@ -14967,7 +15065,8 @@ textarea,
   cursor: default;
 }
 
-.project-picker__row-name {
+.project-picker__row-name,
+.reference-picker__row-name {
   flex: 0 0 auto;
   max-width: 160px;
   overflow: hidden;
@@ -14976,7 +15075,8 @@ textarea,
   font-weight: 500;
 }
 
-.project-picker__row-path {
+.project-picker__row-path,
+.reference-picker__row-path {
   flex: 1;
   font-family: var(--font-mono);
   font-size: 11px;
@@ -14987,14 +15087,16 @@ textarea,
   text-align: right;
 }
 
-.project-picker__row--action {
+.project-picker__row--action,
+.reference-picker__row--action {
   flex: 0 0 auto;
   color: var(--accent-bright);
 }
 
 /* The "+" sits in the leading icon column; it follows the action row's
    accent color (not the muted glyph color) so it reads as an affordance. */
-.project-picker__plus {
+.project-picker__plus,
+.reference-picker__plus {
   display: inline-flex;
   flex: 0 0 14px;
   width: 14px;
@@ -15002,14 +15104,16 @@ textarea,
   font-weight: 700;
 }
 
-.project-picker__separator {
+.project-picker__separator,
+.reference-picker__separator {
   flex: 0 0 auto;
   height: 1px;
   margin: 4px 2px;
   background: var(--border-subtle);
 }
 
-.project-picker__empty {
+.project-picker__empty,
+.reference-picker__empty {
   padding: 8px 12px;
   color: var(--text-muted);
   font-size: 12px;
@@ -15069,6 +15173,68 @@ textarea,
   transform: translateX(-50%) rotate(45deg);
   background: currentColor;
   border-radius: 1px;
+}
+
+/* ---- Reference picker specifics (the composer's setup-row "+") ----
+   Shares the popover language above; adds a Projects / Files tab
+   switch under the panel top. Like the project picker, the panel is a
+   FIXED-size flex column: tabs + search pin to the top, the add-…
+   action row(s) pin to the bottom, and only the list scrolls. */
+.reference-picker {
+  display: inline-flex;
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.reference-picker__pop {
+  left: 0;
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  height: 420px;
+  max-height: calc(100dvh - 128px);
+  gap: 4px;
+  overflow: hidden;
+}
+
+.reference-picker__tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding: 0 4px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.reference-picker__tab {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reference-picker__tab:hover,
+.reference-picker__tab:focus-visible {
+  color: var(--text-primary);
+  outline: none;
+}
+
+.reference-picker__tab.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.reference-picker__list {
+  /* Only the list scrolls; it's the sole flex-grow child of the
+     fixed-height panel, so the action row(s) stay pinned. */
+  flex: 1 1 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .workspace-handoff-modal {
@@ -15613,6 +15779,23 @@ textarea,
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+/* Divider between the matched options and the "Add directory… / Add
+   file…" action rows at the bottom of the `@` popover. */
+.composer__autocomplete-separator {
+  flex: 0 0 auto;
+  margin: 4px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.composer__autocomplete-option--action .composer__autocomplete-title {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.composer__autocomplete-option--action:hover .composer__autocomplete-title {
+  color: var(--text-primary);
 }
 
 .composer__review-config {

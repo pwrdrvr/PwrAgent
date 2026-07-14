@@ -6960,5 +6960,77 @@ describe("useThreadNavigation", () => {
       });
       expect(result.current.pickDirectoryError).toBeUndefined();
     });
+
+    it("pickDirectoryForReference registers the pick without navigating and returns it", async () => {
+      const launchpad = buildPickedLaunchpad();
+      const pickDirectoryFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        path: "/Users/me/repos/PwrAgent",
+      }));
+      const registerDirectoryFromDisk = vi.fn(async () => ({
+        ok: true as const,
+        directoryPath: "/Users/me/repos/PwrAgent",
+        directoryKey: launchpad.directoryKey,
+        directoryLabel: "PwrAgent",
+        currentBranch: "main",
+        launchpad,
+        defaults: launchpadDefaults,
+      }));
+      const desktopApi = buildBaseDesktopApi({
+        pickDirectoryFromDisk,
+        registerDirectoryFromDisk,
+      });
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      let picked: { label: string; path: string } | undefined;
+      await act(async () => {
+        picked = await result.current.pickDirectoryForReference();
+      });
+
+      expect(picked).toEqual({
+        label: "PwrAgent",
+        path: "/Users/me/repos/PwrAgent",
+      });
+      expect(registerDirectoryFromDisk).toHaveBeenCalledExactlyOnceWith({
+        path: "/Users/me/repos/PwrAgent",
+      });
+      // The tracked set learns the directory, but nothing navigates.
+      expect(
+        result.current.directories.map((directory) => directory.label),
+      ).toContain("PwrAgent");
+      expect(result.current.selectedItemKey).toBeUndefined();
+      expect(result.current.pickDirectoryError).toBeUndefined();
+      expect(result.current.pickingDirectory).toBe(false);
+    });
+
+    it("pickDirectoryForReference surfaces validation failures and resolves undefined", async () => {
+      const pickDirectoryFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        path: "/tmp/not-a-repo",
+      }));
+      const registerDirectoryFromDisk = vi.fn(async () => ({
+        ok: false as const,
+        reason: "not-a-git-repo" as const,
+        message: "/tmp/not-a-repo is not inside a git repository.",
+      }));
+      const desktopApi = buildBaseDesktopApi({
+        pickDirectoryFromDisk,
+        registerDirectoryFromDisk,
+      });
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      let picked: { label: string; path: string } | undefined;
+      await act(async () => {
+        picked = await result.current.pickDirectoryForReference();
+      });
+
+      expect(picked).toBeUndefined();
+      expect(result.current.pickDirectoryError).toContain("not inside a git");
+      expect(result.current.selectedItemKey).toBeUndefined();
+    });
   });
 });

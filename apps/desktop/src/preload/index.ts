@@ -1,4 +1,4 @@
-import { clipboard, contextBridge, ipcRenderer } from "electron";
+import { clipboard, contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   AgentEvent,
   AutomationIdRequest,
@@ -121,7 +121,11 @@ import type {
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
   PickDirectoryFromDiskResponse,
+  PickFileFromDiskResponse,
   PickGhCommandResponse,
+  PickReferenceFromDiskResponse,
+  ListRecentFileReferencesResponse,
+  RecordRecentFileReferencesRequest,
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
   RegisterDirectoryFromDiskRequest,
@@ -378,7 +382,11 @@ import {
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
+  NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
+  NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
+  NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
+  NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
@@ -1242,6 +1250,32 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(COMPOSER_DRAFT_LIST_LATEST_CHANNEL),
   pickDirectoryFromDisk: async (): Promise<PickDirectoryFromDiskResponse> =>
     await ipcRenderer.invoke(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL),
+  pickFileFromDisk: async (): Promise<PickFileFromDiskResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL),
+  pickReferenceFromDisk: async (): Promise<PickReferenceFromDiskResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL),
+  listRecentFileReferences: async (): Promise<ListRecentFileReferencesResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL),
+  recordRecentFileReferences: async (
+    request: RecordRecentFileReferencesRequest,
+  ): Promise<void> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
+      request,
+    ),
+  /**
+   * Resolve the on-disk path of a dropped/pasted File object. Electron
+   * removed the legacy `File.path` augmentation; `webUtils.getPathForFile`
+   * is its sandbox-safe replacement. Returns "" for synthetic Files that
+   * have no backing path.
+   */
+  getPathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return "";
+    }
+  },
   registerDirectoryFromDisk: async (
     request: RegisterDirectoryFromDiskRequest,
   ): Promise<RegisterDirectoryFromDiskResponse> =>
