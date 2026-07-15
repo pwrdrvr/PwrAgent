@@ -15975,12 +15975,16 @@ textarea,
   gap: 8px;
 }
 
+/* Same chip language as the footer's Stop/Send/Queue pills
+   (.composer__actions .button) so queued-row and review actions read as
+   one family instead of taller squared-off strays. */
 .composer__secondary-action,
 .composer__primary-action {
-  min-height: 34px;
+  min-height: 26px;
   padding: 0 12px;
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: 999px;
+  font-size: 13px;
   cursor: pointer;
 }
 
