@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.0-beta.49 - 2026-07-15
+
+- Composer References - Added `@` directory and file references, with durable chips, reference pickers, and drag-and-drop or paste support for non-image files. Referenced projects are linked to the thread automatically when sent.
+- Scheduled Messages - Added Scheduled and Queued indicators to sidebar threads, plus reliable Send now controls and an explicit schedule toggle while editing.
+- Integrated Terminals - Running terminals now survive navigation and view refreshes instead of becoming detached from the UI; active terminals are visible from thread rows and the quit dialog.
+- Diagnostics - Added Developer Mode heap snapshots and copyable process IDs for investigating idle resource usage.
+- Thread Navigation - Added Cmd/Ctrl+K quick thread search, improved find-bar focus behavior, and stopped streamed transcript updates from unexpectedly scrolling the current view.
+- Launchpads and Directories - Cancelling a new-thread or sub-thread launchpad now clears stale persisted drafts and phantom directory rows while preserving recoverable text with ArrowUp; empty directories can now be removed directly.
+
 ## v1.0.0-beta.48 - 2026-07-13
 
 - GPT-5.6 Models - Added Codex GPT-5.6 Sol, Terra, and Luna to model discovery and pickers, including model-specific reasoning choices such as `max` and `ultra`, per-model reasoning memory, and GPT-5.6 pricing/Codex Credits estimates.
