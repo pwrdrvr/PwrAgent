@@ -76,6 +76,7 @@ import {
 import { expandTildePath } from "../../lib/tildify-path";
 import { normalizeImageFile } from "../../lib/image-normalization";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   findSkillTrigger,
   hydrateSkillLabelsWithMarkdown,
@@ -8798,6 +8799,10 @@ function ContextWindowMoon({
 }: {
   contextWindow?: ThreadContextWindowState;
 }) {
+  const { show, hide, tooltipNode } = useViewportTooltip({
+    className: "context-usage-card",
+  });
+
   if (!contextWindow) {
     return null;
   }
@@ -8809,15 +8814,20 @@ function ContextWindowMoon({
     contextWindow.totalTokens
   )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
   const label = `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
-  const tooltip = buildContextWindowTooltip(contextWindow, phaseLabel);
+  const card = (
+    <ContextWindowUsageCard contextWindow={contextWindow} phaseLabel={phaseLabel} />
+  );
 
   return (
     <div
       aria-label={label}
-      className="context-window-moon tooltip-target"
-      data-tooltip={tooltip}
+      className="context-window-moon"
       role="img"
       tabIndex={0}
+      onBlur={hide}
+      onFocus={(event) => show(event.currentTarget, card)}
+      onMouseEnter={(event) => show(event.currentTarget, card)}
+      onMouseLeave={hide}
     >
       <span
         aria-hidden="true"
@@ -8826,117 +8836,151 @@ function ContextWindowMoon({
         <span className="context-window-moon__disc" />
       </span>
       <span className="context-window-moon__label">{percentLabel}</span>
+      {tooltipNode}
     </div>
   );
 }
 
-function buildContextWindowTooltip(
-  contextWindow: ThreadContextWindowState,
-  phaseLabel: string
-): string {
-  const lines = [
-    `Context window: ${Math.round(contextWindow.usedPercent)}% full (${phaseLabel})`,
-    `Current snapshot: ${formatCompactNumber(contextWindow.totalTokens)} / ${formatCompactNumber(
-      contextWindow.modelContextWindow
-    )} tokens`,
-  ];
+function ContextWindowUsageCard({
+  contextWindow,
+  phaseLabel,
+}: {
+  contextWindow: ThreadContextWindowState;
+  phaseLabel: string;
+}) {
+  const usedPercent = Math.max(0, Math.min(100, contextWindow.usedPercent));
+  const critical = contextWindow.phase >= CONTEXT_MOON_PHASES.length - 1;
+  const hasBreakdown =
+    typeof contextWindow.inputTokens === "number"
+    || typeof contextWindow.cachedInputTokens === "number"
+    || typeof contextWindow.outputTokens === "number"
+    || typeof contextWindow.reasoningOutputTokens === "number";
 
-  if (typeof contextWindow.remainingTokens === "number") {
-    const remainingPercent =
-      typeof contextWindow.remainingPercent === "number"
-        ? `, ${Math.round(contextWindow.remainingPercent)}% remaining`
-        : "";
-    lines.push(
-      `Remaining: ${formatCompactNumber(contextWindow.remainingTokens)} tokens${remainingPercent}`
-    );
-  }
-
-  const breakdown = [
-    formatOptionalTokenDetail("input", contextWindow.inputTokens),
-    formatCachedTokenDetail(contextWindow.cachedInputTokens, contextWindow.inputTokens),
-    formatOptionalTokenDetail("output", contextWindow.outputTokens),
-    formatOptionalTokenDetail("reasoning", contextWindow.reasoningOutputTokens),
-  ].filter((detail): detail is string => Boolean(detail));
-
-  if (breakdown.length > 0) {
-    lines.push(`Current breakdown: ${breakdown.join(", ")}`);
-  }
-
-  if (typeof contextWindow.cumulativeTotalTokens === "number") {
-    lines.push(
-      `Cumulative usage reported: ${formatCompactNumber(
-        contextWindow.cumulativeTotalTokens
-      )} tokens`
-    );
-    const cumulativeCachedInput = formatCachedInputSummary(
-      contextWindow.cumulativeCachedInputTokens,
-      contextWindow.cumulativeInputTokens
-    );
-    if (cumulativeCachedInput) {
-      lines.push(`Cumulative cached input: ${cumulativeCachedInput}`);
-    }
-    const cumulativeOutput = formatCumulativeOutputSummary(
-      contextWindow.cumulativeOutputTokens,
-      contextWindow.cumulativeReasoningOutputTokens
-    );
-    if (cumulativeOutput) {
-      lines.push(`Cumulative output: ${cumulativeOutput}`);
-    }
-  }
-
-  return lines.join("\n");
+  return (
+    <>
+      <div className="context-usage-card__header">
+        <span className="context-usage-card__eyebrow">Context window</span>
+        <span className="context-usage-card__phase">{phaseLabel}</span>
+      </div>
+      <div className="context-usage-card__headline">
+        <span className="context-usage-card__percent">
+          {Math.round(usedPercent)}% full
+        </span>
+        {typeof contextWindow.remainingTokens === "number" ? (
+          <span className="context-usage-card__remaining">
+            {formatCompactNumber(contextWindow.remainingTokens)} left
+          </span>
+        ) : null}
+      </div>
+      <div aria-hidden="true" className="context-usage-card__meter">
+        <span
+          className={
+            critical
+              ? "context-usage-card__meter-fill context-usage-card__meter-fill--critical"
+              : "context-usage-card__meter-fill"
+          }
+          style={{ width: `${usedPercent}%` }}
+        />
+      </div>
+      <div className="context-usage-card__caption">
+        {`${formatCompactNumber(contextWindow.totalTokens)} of ${formatCompactNumber(
+          contextWindow.modelContextWindow
+        )} tokens`}
+      </div>
+      {hasBreakdown ? (
+        <div className="context-usage-card__section">
+          <span className="context-usage-card__section-title">Current request</span>
+          {typeof contextWindow.inputTokens === "number" ? (
+            <ContextUsageRow
+              label="Input"
+              value={formatCompactNumber(contextWindow.inputTokens)}
+            />
+          ) : null}
+          {typeof contextWindow.cachedInputTokens === "number" ? (
+            <ContextUsageCacheMeter
+              cachedTokens={contextWindow.cachedInputTokens}
+              inputTokens={contextWindow.inputTokens}
+            />
+          ) : null}
+          {typeof contextWindow.outputTokens === "number" ? (
+            <ContextUsageRow
+              label="Output"
+              value={formatCompactNumber(contextWindow.outputTokens)}
+            />
+          ) : null}
+          {typeof contextWindow.reasoningOutputTokens === "number" ? (
+            <ContextUsageRow
+              label="Reasoning"
+              value={formatCompactNumber(contextWindow.reasoningOutputTokens)}
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {typeof contextWindow.cumulativeTotalTokens === "number" ? (
+        <div className="context-usage-card__section">
+          <span className="context-usage-card__section-title">Session total</span>
+          <ContextUsageRow
+            label="Tokens"
+            value={formatCompactNumber(contextWindow.cumulativeTotalTokens)}
+          />
+          {typeof contextWindow.cumulativeCachedInputTokens === "number" ? (
+            <ContextUsageCacheMeter
+              cachedTokens={contextWindow.cumulativeCachedInputTokens}
+              inputTokens={contextWindow.cumulativeInputTokens}
+            />
+          ) : null}
+          {typeof contextWindow.cumulativeOutputTokens === "number" ? (
+            <ContextUsageRow
+              label="Output"
+              value={formatCompactNumber(contextWindow.cumulativeOutputTokens)}
+            />
+          ) : null}
+          {typeof contextWindow.cumulativeReasoningOutputTokens === "number" ? (
+            <ContextUsageRow
+              label="Reasoning"
+              value={formatCompactNumber(contextWindow.cumulativeReasoningOutputTokens)}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
 }
 
-function formatOptionalTokenDetail(label: string, value: number | undefined): string | undefined {
-  return typeof value === "number" ? `${formatCompactNumber(value)} ${label}` : undefined;
+function ContextUsageRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="context-usage-card__row">
+      <span className="context-usage-card__row-label">{label}</span>
+      <span className="context-usage-card__row-value">{value}</span>
+    </div>
+  );
 }
 
-function formatCachedTokenDetail(
-  cachedInputTokens: number | undefined,
-  inputTokens: number | undefined
-): string | undefined {
-  if (typeof cachedInputTokens !== "number") {
-    return undefined;
-  }
-
-  const percent = formatCachedInputPercent(cachedInputTokens, inputTokens);
-  return `${formatCompactNumber(cachedInputTokens)} cached${percent ? ` (${percent})` : ""}`;
-}
-
-function formatCumulativeOutputSummary(
-  outputTokens: number | undefined,
-  reasoningOutputTokens: number | undefined
-): string | undefined {
-  const details = [
-    formatOptionalTokenDetail("output", outputTokens),
-    formatOptionalTokenDetail("reasoning", reasoningOutputTokens),
-  ].filter((detail): detail is string => Boolean(detail));
-
-  return details.length > 0 ? details.join(", ") : undefined;
-}
-
-function formatCachedInputSummary(
-  cachedInputTokens: number | undefined,
-  inputTokens: number | undefined
-): string | undefined {
-  if (typeof cachedInputTokens !== "number") {
-    return undefined;
-  }
-
-  const percent = formatCachedInputPercent(cachedInputTokens, inputTokens);
-  return `${formatCompactNumber(cachedInputTokens)}${percent ? ` (${percent})` : ""}`;
-}
-
-function formatCachedInputPercent(
-  cachedInputTokens: number,
-  inputTokens: number | undefined
-): string | undefined {
+function ContextUsageCacheMeter({
+  cachedTokens,
+  inputTokens,
+}: {
+  cachedTokens: number;
+  inputTokens: number | undefined;
+}) {
   if (typeof inputTokens !== "number" || inputTokens <= 0) {
-    return undefined;
+    return <ContextUsageRow label="Cached" value={formatCompactNumber(cachedTokens)} />;
   }
 
-  const percent = Math.max(0, Math.min(100, (cachedInputTokens / inputTokens) * 100));
-  return formatPercent(percent);
+  const percent = Math.max(0, Math.min(100, (cachedTokens / inputTokens) * 100));
+  return (
+    <div className="context-usage-card__cache">
+      <span aria-hidden="true" className="context-usage-card__cache-meter">
+        <span
+          className="context-usage-card__cache-fill"
+          style={{ width: `${percent}%` }}
+        />
+      </span>
+      <span className="context-usage-card__cache-label">
+        {formatCompactNumber(cachedTokens)} cached ({formatPercent(percent)})
+      </span>
+    </div>
+  );
 }
 
 function formatPercent(value: number): string {

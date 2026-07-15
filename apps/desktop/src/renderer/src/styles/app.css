@@ -16402,6 +16402,158 @@ textarea,
   white-space: nowrap;
 }
 
+/* Portal-rendered hover card for the context-window moon (rendered by
+   useViewportTooltip). A structured usage card — meter + stat rows —
+   instead of a text-blob tooltip. */
+.context-usage-card {
+  position: fixed;
+  z-index: 90;
+  width: 264px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--popover-bg);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  pointer-events: none;
+  text-align: left;
+}
+
+.context-usage-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-usage-card__eyebrow,
+.context-usage-card__section-title {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.context-usage-card__phase {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.context-usage-card__headline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.context-usage-card__percent {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.context-usage-card__remaining {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.context-usage-card__meter {
+  display: block;
+  height: 6px;
+  margin-top: 7px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  overflow: hidden;
+}
+
+.context-usage-card__meter-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.context-usage-card__meter-fill--critical {
+  background: var(--status-error);
+}
+
+.context-usage-card__caption {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.context-usage-card__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.context-usage-card__section-title {
+  margin-bottom: 2px;
+}
+
+.context-usage-card__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-usage-card__row-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.context-usage-card__row-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.context-usage-card__cache {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-usage-card__cache-meter {
+  display: block;
+  flex: 1 1 auto;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  overflow: hidden;
+}
+
+.context-usage-card__cache-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--text-secondary) 62%, transparent);
+}
+
+.context-usage-card__cache-label {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .composer__error {
   margin: 0 16px;
   color: var(--danger-text);

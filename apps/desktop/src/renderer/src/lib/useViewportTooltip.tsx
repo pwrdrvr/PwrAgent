@@ -13,7 +13,7 @@ const VIEWPORT_PADDING = 12;
 const TOOLTIP_GAP = 10;
 
 type TooltipState = {
-  text: string;
+  content: ReactNode;
   targetTop: number;
   targetBottom: number;
   targetCenter: number;
@@ -52,7 +52,7 @@ export function useViewportTooltip(options: {
   /** CSS class applied to the rendered tooltip element. */
   className: string;
 }): {
-  show: (target: HTMLElement, text: string) => void;
+  show: (target: HTMLElement, content: ReactNode) => void;
   hide: () => void;
   tooltipNode: ReactNode;
 } {
@@ -83,10 +83,10 @@ export function useViewportTooltip(options: {
     setState({ ...state, left, top });
   }, [state]);
 
-  const show = useCallback((target: HTMLElement, text: string): void => {
+  const show = useCallback((target: HTMLElement, content: ReactNode): void => {
     const rect = target.getBoundingClientRect();
     setState({
-      text,
+      content,
       targetTop: rect.top,
       targetBottom: rect.bottom,
       targetCenter: rect.left + rect.width / 2,
@@ -131,7 +131,7 @@ export function useViewportTooltip(options: {
               visibility: state.left === undefined ? "hidden" : undefined,
             }}
           >
-            {state.text}
+            {state.content}
           </div>,
           document.body,
         )
