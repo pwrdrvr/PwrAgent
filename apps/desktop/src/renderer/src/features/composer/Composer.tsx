@@ -8799,9 +8799,33 @@ function ContextWindowMoon({
 }: {
   contextWindow?: ThreadContextWindowState;
 }) {
-  const { show, hide, tooltipNode } = useViewportTooltip({
+  const { show, update, hide, visible, tooltipNode } = useViewportTooltip({
     className: "context-usage-card",
   });
+
+  // Token-usage notifications keep streaming while a turn runs; push the
+  // fresh numbers into an already-open card instead of freezing it at
+  // hover-time values. If the context state disappears (thread switch),
+  // drop the card so it can't reappear at stale coordinates.
+  useEffect(() => {
+    if (!contextWindow) {
+      hide();
+      return;
+    }
+    if (!visible) {
+      return;
+    }
+    const phase = Math.min(
+      CONTEXT_MOON_PHASES.length - 1,
+      Math.max(0, contextWindow.phase),
+    );
+    update(
+      <ContextWindowUsageCard
+        contextWindow={contextWindow}
+        phaseLabel={CONTEXT_MOON_PHASES[phase]}
+      />,
+    );
+  }, [contextWindow, hide, update, visible]);
 
   if (!contextWindow) {
     return null;
