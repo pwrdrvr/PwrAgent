@@ -147,6 +147,8 @@ jobs:
             --clobber
 
       - name: Upload release artifacts (debug retention)
+        # Diagnostic retention must not block Linux assets or release notes.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ !cancelled() }}
         with:
@@ -288,6 +290,8 @@ jobs:
             --clobber
 
       - name: Upload Linux artifacts (debug retention)
+        # Diagnostic retention must not block release-note publication.
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ !cancelled() }}
         with:

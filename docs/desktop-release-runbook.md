@@ -141,6 +141,10 @@ release jobs:
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
 
+The macOS and Linux workflow-artifact uploads labeled `debug retention` are
+diagnostic only. They are intentionally non-blocking, so a transient artifact
+service failure cannot prevent publishing release assets or release notes.
+
 The no-secret prepare job:
 
 1. Verifies `THIRD_PARTY_LICENSES` matches a fresh deterministic generation.
