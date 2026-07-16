@@ -13,7 +13,7 @@ const VIEWPORT_PADDING = 12;
 const TOOLTIP_GAP = 10;
 
 type TooltipState = {
-  text: string;
+  content: ReactNode;
   targetTop: number;
   targetBottom: number;
   targetCenter: number;
@@ -52,18 +52,29 @@ export function useViewportTooltip(options: {
   /** CSS class applied to the rendered tooltip element. */
   className: string;
 }): {
-  show: (target: HTMLElement, text: string) => void;
+  show: (target: HTMLElement, content: ReactNode) => void;
+  /**
+   * Replace the content of an already-visible tooltip in place (no-op
+   * while hidden). Keeps the current position until the re-measure pass
+   * settles, so live data updates don't blink the tooltip.
+   */
+  update: (content: ReactNode) => void;
   hide: () => void;
+  /** Whether the tooltip is currently shown. */
+  visible: boolean;
   tooltipNode: ReactNode;
 } {
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<TooltipState | undefined>(undefined);
 
-  // After the tooltip first paints (with left/top undefined → visibility
-  // hidden), measure it and clamp position so it stays in the viewport
-  // and on the side of the target where it fits.
+  // Measure the rendered tooltip and clamp position so it stays in the
+  // viewport and on the side of the target where it fits. The first
+  // paint renders with left/top undefined (visibility hidden); content
+  // updates re-measure from the already-visible position and only
+  // reposition when the size actually changed, so the pass settles
+  // without flicker.
   useLayoutEffect(() => {
-    if (!state || state.left !== undefined) {
+    if (!state) {
       return;
     }
     const tooltipElement = tooltipRef.current;
@@ -80,17 +91,23 @@ export function useViewportTooltip(options: {
     const top = fitsAbove
       ? state.targetTop - rect.height - TOOLTIP_GAP
       : state.targetBottom + TOOLTIP_GAP;
-    setState({ ...state, left, top });
+    if (state.left !== left || state.top !== top) {
+      setState({ ...state, left, top });
+    }
   }, [state]);
 
-  const show = useCallback((target: HTMLElement, text: string): void => {
+  const show = useCallback((target: HTMLElement, content: ReactNode): void => {
     const rect = target.getBoundingClientRect();
     setState({
-      text,
+      content,
       targetTop: rect.top,
       targetBottom: rect.bottom,
       targetCenter: rect.left + rect.width / 2,
     });
+  }, []);
+
+  const update = useCallback((content: ReactNode): void => {
+    setState((current) => (current ? { ...current, content } : current));
   }, []);
 
   const hide = useCallback((): void => {
@@ -131,11 +148,11 @@ export function useViewportTooltip(options: {
               visibility: state.left === undefined ? "hidden" : undefined,
             }}
           >
-            {state.text}
+            {state.content}
           </div>,
           document.body,
         )
       : null;
 
-  return { show, hide, tooltipNode };
+  return { show, update, hide, visible, tooltipNode };
 }

@@ -1397,25 +1397,101 @@ describe("Composer", () => {
       />
     );
 
-    expect(
-      screen.getByRole("img", {
-        name: "Context window 50% full, 64k/128k tokens, full moon",
-      })
-    ).toBeInTheDocument();
-    expect(screen.getByRole("img")).toHaveAttribute(
-      "data-tooltip",
-      [
-        "Context window: 50% full (full moon)",
-        "Current snapshot: 64k / 128k tokens",
-        "Remaining: 64k tokens, 50% remaining",
-        "Current breakdown: 63k input, 32k cached (50.8%), 1k output",
-        "Cumulative usage reported: 80k tokens",
-        "Cumulative cached input: 48k (66.7%)",
-        "Cumulative output: 8k output, 4k reasoning",
-      ].join("\n")
-    );
-    expect(screen.getByRole("img")).not.toHaveAttribute("title");
+    const moon = screen.getByRole("img", {
+      name: "Context window 50% full, 64k/128k tokens, full moon",
+    });
+    expect(moon).toBeInTheDocument();
+    expect(moon).not.toHaveAttribute("title");
+    expect(moon).not.toHaveAttribute("data-tooltip");
     expect(screen.getByText("50%")).toBeInTheDocument();
+
+    // Hovering the moon opens the structured usage card.
+    fireEvent.mouseEnter(moon);
+    const card = screen.getByRole("tooltip");
+    expect(within(card).getByText("Context window")).toBeInTheDocument();
+    expect(within(card).getByText("full moon")).toBeInTheDocument();
+    expect(within(card).getByText("50% full")).toBeInTheDocument();
+    expect(within(card).getByText("64k left")).toBeInTheDocument();
+    expect(within(card).getByText("64k of 128k tokens")).toBeInTheDocument();
+
+    expect(within(card).getByText("Current request")).toBeInTheDocument();
+    expect(within(card).getByText("Input")).toBeInTheDocument();
+    expect(within(card).getByText("63k")).toBeInTheDocument();
+    expect(within(card).getByText("32k cached (50.8%)")).toBeInTheDocument();
+    expect(within(card).getAllByText("Output")).toHaveLength(2);
+    expect(within(card).getByText("1k")).toBeInTheDocument();
+
+    expect(within(card).getByText("Session total")).toBeInTheDocument();
+    expect(within(card).getByText("80k")).toBeInTheDocument();
+    expect(within(card).getByText("48k cached (66.7%)")).toBeInTheDocument();
+    expect(within(card).getByText("8k")).toBeInTheDocument();
+    expect(within(card).getByText("Reasoning")).toBeInTheDocument();
+    expect(within(card).getByText("4k")).toBeInTheDocument();
+
+    fireEvent.mouseLeave(moon);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("live-updates the open context usage card as token usage changes", () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Context usage",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const composerFor = (
+      contextWindow:
+        | Parameters<typeof Composer>[0]["contextWindow"]
+        | undefined
+    ) => (
+      <Composer
+        backends={[backendSummary("codex")]}
+        contextWindow={contextWindow}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    const { rerender } = render(
+      composerFor({
+        modelContextWindow: 128_000,
+        phase: 4,
+        remainingPercent: 50,
+        remainingTokens: 64_000,
+        totalTokens: 64_000,
+        usedPercent: 50,
+      })
+    );
+
+    fireEvent.mouseEnter(screen.getByRole("img", { name: /Context window/ }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("50% full");
+
+    // A fresh token-usage notification while the card is open updates it
+    // in place — no re-hover required.
+    rerender(
+      composerFor({
+        modelContextWindow: 128_000,
+        phase: 6,
+        remainingPercent: 25,
+        remainingTokens: 32_000,
+        totalTokens: 96_000,
+        usedPercent: 75,
+      })
+    );
+
+    const card = screen.getByRole("tooltip");
+    expect(card).toHaveTextContent("75% full");
+    expect(card).toHaveTextContent("32k left");
+    expect(card).toHaveTextContent("96k of 128k tokens");
+    expect(card).not.toHaveTextContent("50% full");
+
+    // Losing the context state entirely (thread switch) drops the card.
+    rerender(composerFor(undefined));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
   it("shows OpenAI model and reasoning defaults without a Default option", () => {
