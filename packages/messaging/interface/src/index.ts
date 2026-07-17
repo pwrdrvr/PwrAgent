@@ -943,7 +943,7 @@ export function messagingQuestionnaireAnswerDisplay(
   if (!value) {
     return "";
   }
-  if (options.secret) {
+  if (options.secret && answer.kind === "custom") {
     return "Secret answer provided";
   }
   return answer.kind === "custom" ? `Custom: ${value}` : value;
