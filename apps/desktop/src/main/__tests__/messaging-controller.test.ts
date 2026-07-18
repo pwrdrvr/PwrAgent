@@ -1237,6 +1237,11 @@ describe("MessagingController", () => {
       ]),
       body: expect.stringContaining("Working Updates: More"),
     });
+    expect(harness.updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "directory:pwragent",
+      patch: { messagingToolUpdateMode: "show_more" },
+      stickySettingsChanged: false,
+    });
 
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
 
@@ -1245,6 +1250,119 @@ describe("MessagingController", () => {
     ).resolves.toMatchObject({
       preferences: expect.objectContaining({ toolUpdateMode: "show_more" }),
     });
+  });
+
+  it("reuses the project Working Updates override in a later /new wizard", async () => {
+    let projectToolUpdateMode: MessagingToolUpdateMode | undefined;
+    const harness = await createHarness({
+      ensureDirectoryLaunchpad: async (request) => {
+        const defaults = buildNavigationSnapshot().launchpadDefaults;
+        return {
+          defaults,
+          launchpad: {
+            directoryKey: request.directoryKey,
+            directoryKind: request.directoryKind,
+            directoryLabel: request.directoryLabel,
+            directoryPath: request.directoryPath,
+            backend: request.preferredBackend ?? defaults.backend,
+            executionMode: defaults.executionMode,
+            messagingToolUpdateMode: projectToolUpdateMode,
+            prompt: "",
+            workMode: defaults.workMode ?? "local",
+            createdAt: 1000,
+            updatedAt: 1000,
+          },
+        };
+      },
+      updateDirectoryLaunchpad: async (request) => {
+        projectToolUpdateMode = request.patch.messagingToolUpdateMode;
+        const defaults = buildNavigationSnapshot().launchpadDefaults;
+        return {
+          defaults,
+          launchpad: {
+            directoryKey: request.directoryKey,
+            directoryKind: "directory",
+            directoryLabel: "PwrAgent",
+            directoryPath: "/repo/pwragent",
+            backend: defaults.backend,
+            executionMode: defaults.executionMode,
+            messagingToolUpdateMode: projectToolUpdateMode,
+            prompt: "",
+            workMode: defaults.workMode ?? "local",
+            createdAt: 1000,
+            updatedAt: 1000,
+          },
+        };
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-working-updates",
+        value: { toolUpdateMode: "show_more" },
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Working Updates: More"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:working-updates",
+          label: "Working Updates: More",
+        }),
+      ]),
+    });
+  });
+
+  it("copies the global Working Updates default into an untouched project's new binding", async () => {
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_more",
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({
+      preferences: expect.objectContaining({ toolUpdateMode: "show_more" }),
+    });
+    expect(harness.updateDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
   it("keeps a pending new-thread first prompt usable after the picker TTL", async () => {

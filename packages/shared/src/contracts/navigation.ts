@@ -19,6 +19,7 @@ import type {
 import type {
   MessagingChannelKind,
   MessagingConversationKind,
+  MessagingToolUpdateMode,
 } from "./messaging";
 import type { DesktopGhDiscoverySnapshot } from "./settings";
 import type { BackendAcpSessionRuntimeState } from "./backend";
@@ -511,6 +512,8 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   prompt: string;
   registeredAt?: number;
   settingsTouchedAt?: number;
+  /** Explicit messaging `/new` override for this project. */
+  messagingToolUpdateMode?: MessagingToolUpdateMode;
   workMode: LaunchpadWorkMode;
   branchName?: string;
   parentThreadId?: string;
