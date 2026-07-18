@@ -4268,7 +4268,7 @@ async function resetLaunchpadAfterMaterialize(params: {
     directoryKey: launchpad.directoryKey,
   });
 
-  if (!launchpad.codexEnvironmentId) {
+  if (!launchpad.codexEnvironmentId && !launchpad.messagingToolUpdateMode) {
     return;
   }
 
@@ -4287,9 +4287,11 @@ async function resetLaunchpadAfterMaterialize(params: {
     prompt: "",
     workMode: defaultLaunchpadWorkMode(launchpad, defaults),
     branchName: launchpad.branchName,
+    messagingToolUpdateMode: launchpad.messagingToolUpdateMode,
     codexEnvironmentId: launchpad.codexEnvironmentId,
-    codexEnvironmentExecutionTarget:
-      launchpad.codexEnvironmentExecutionTarget ?? "local",
+    codexEnvironmentExecutionTarget: launchpad.codexEnvironmentId
+      ? launchpad.codexEnvironmentExecutionTarget ?? "local"
+      : undefined,
     createdAt: now,
     updatedAt: now,
   });

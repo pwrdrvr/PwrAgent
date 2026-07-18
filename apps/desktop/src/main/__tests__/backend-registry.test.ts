@@ -4008,6 +4008,49 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("preserves the project Working Updates override after materialization", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/project",
+          workMode: "local" as const,
+        })),
+      } as never,
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/project",
+      launchpad: {
+        directoryKey: "directory:/repo/project",
+        directoryKind: "directory",
+        directoryLabel: "project",
+        directoryPath: "/repo/project",
+        backend: "codex",
+        executionMode: "default",
+        messagingToolUpdateMode: "show_more",
+        prompt: "Fix bug",
+        workMode: "local",
+        createdAt: 1000,
+        updatedAt: 2000,
+      },
+    });
+
+    const resetLaunchpad = await overlayStore.getDirectoryLaunchpad({
+      directoryKey: "directory:/repo/project",
+    });
+    expect(resetLaunchpad).toMatchObject({
+      messagingToolUpdateMode: "show_more",
+      prompt: "",
+    });
+    expect(resetLaunchpad?.settingsTouchedAt).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("notifies when a launchpad thread is materialized before starting input", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = new DesktopBackendRegistry({

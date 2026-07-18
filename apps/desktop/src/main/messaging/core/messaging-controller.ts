@@ -4383,9 +4383,13 @@ export class MessagingController {
       return;
     }
     if (actionId === "browse:new:working-updates") {
+      const ensured = await this.ensureNewThreadProjectLaunchpad(
+        nextSession,
+        navigation,
+        nextSession.backend,
+      );
       const currentMode =
-        nextSession.preferences?.toolUpdateMode ??
-        (await this.resolveToolUpdateDefaultMode());
+        await this.resolveNewThreadToolUpdateMode(nextSession, ensured.directory);
       await this.presentNewThreadWorkingUpdatesPicker(
         nextSession,
         event,
@@ -4399,15 +4403,23 @@ export class MessagingController {
         await this.deliverInvalidBrowseSelection(event);
         return;
       }
-      await this.presentNewThreadPromptGate(
-        {
-          ...nextSession,
-          preferences: {
-            ...nextSession.preferences,
-            toolUpdateMode,
-            updatedAt: this.now(),
-          },
+      const updatedSession = {
+        ...nextSession,
+        preferences: {
+          ...nextSession.preferences,
+          toolUpdateMode,
+          updatedAt: this.now(),
         },
+      };
+      // This is sticky only for the selected project. The backend's broad
+      // sticky flag would also freeze unrelated launchpad defaults.
+      await this.updateNewThreadStickySettings(
+        updatedSession,
+        { messagingToolUpdateMode: toolUpdateMode },
+        false,
+      );
+      await this.presentNewThreadPromptGate(
+        updatedSession,
         event,
         navigation,
       );
@@ -4679,6 +4691,7 @@ export class MessagingController {
   private async updateNewThreadStickySettings(
     session: MessagingBrowseSessionRecord,
     patch: UpdateDirectoryLaunchpadRequest["patch"],
+    stickySettingsChanged = true,
   ): Promise<void> {
     const directoryKey = session.selectedProject?.directoryKey;
     if (!directoryKey || !this.options.backend.updateDirectoryLaunchpad) {
@@ -4689,13 +4702,22 @@ export class MessagingController {
       await this.options.backend.updateDirectoryLaunchpad({
         directoryKey,
         patch,
-        stickySettingsChanged: true,
+        stickySettingsChanged,
       });
     } catch (error) {
       this.logger.debug?.("messaging new-thread sticky launchpad update failed", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async resolveNewThreadToolUpdateMode(
+    session: MessagingBrowseSessionRecord,
+    directory?: NavigationDirectorySummary,
+  ): Promise<MessagingToolUpdateMode> {
+    return session.preferences?.toolUpdateMode
+      ?? directory?.launchpad?.messagingToolUpdateMode
+      ?? await this.resolveToolUpdateDefaultMode();
   }
 
   private async loadNewThreadBackendChoices(
@@ -5049,9 +5071,10 @@ export class MessagingController {
     const supportsEnvironment =
       options.codexEnvironmentOptions.length > 0 ||
       Boolean(options.codexEnvironmentId);
-    const toolUpdateMode =
-      effectiveSession.preferences?.toolUpdateMode ??
-      (await this.resolveToolUpdateDefaultMode());
+    const toolUpdateMode = await this.resolveNewThreadToolUpdateMode(
+      effectiveSession,
+      directory,
+    );
     const showStreaming = shouldShowStreamingControl(
       effectiveSession.preferences?.streamingResponses ?? "inherit",
       await this.resolveShowStreamingOption(),
@@ -6049,7 +6072,11 @@ export class MessagingController {
     );
     navigation = ensured.navigation;
     const directory = ensured.directory ?? directoryForProjectSelection(navigation, project);
-    const preferences = session.preferences;
+    const preferences = {
+      ...session.preferences,
+      toolUpdateMode: await this.resolveNewThreadToolUpdateMode(session, directory),
+      updatedAt: session.preferences?.updatedAt ?? this.now(),
+    };
     const options = newThreadOptionsForSession(
       session,
       navigation,

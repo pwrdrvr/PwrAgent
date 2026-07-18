@@ -463,6 +463,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "serviceTier"
       | "fastMode"
       | "acpRuntime"
+      | "messagingToolUpdateMode"
       | "workMode"
       | "branchName"
       | "parentThreadId"
