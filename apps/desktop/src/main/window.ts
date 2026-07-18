@@ -256,6 +256,15 @@ function isSafeRendererNavigation(targetUrl: string): boolean {
   }
 }
 
+/**
+ * Gate for handing a URL to the OS via `shell.openExternal`.
+ *
+ * PwrAgent's own `pwragent:` scheme is deliberately NOT allowed here. Thread
+ * links are resolved in-app by the transcript renderer, which intercepts the
+ * click and navigates; they must never round-trip out through the OS. Keeping
+ * the scheme out of this allowlist is what makes that a property of the code
+ * rather than a convention — see `contracts/thread-link.ts`.
+ */
 export function isSafeExternalOpenUrl(url: string): boolean {
   let parsed: URL;
 

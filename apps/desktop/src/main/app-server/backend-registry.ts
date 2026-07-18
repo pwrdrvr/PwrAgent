@@ -19,6 +19,8 @@ import { requestShowThread } from "../window-show-thread";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   type AcpBackendId,
+  buildThreadMarkdownLink,
+  buildThreadUrl,
   estimateOpenAiTokenUsageCost,
   formatTokenUsageUsd,
   isToolManagedWorktreePath,
@@ -17321,6 +17323,15 @@ export class DesktopBackendRegistry {
         approvalPolicy: request.args.approvalPolicy,
         sandbox: request.args.sandbox,
       });
+      // Best-effort: give the link its human title so it reads well on
+      // surfaces that can't resolve the id against the live snapshot (the
+      // desktop chip shows the live title regardless). `listThreads` is
+      // cached, so this usually costs nothing.
+      const targetThread = await this.findThreadForWorkspaceHandoff({
+        backend,
+        callerReason: "send-message-link",
+        threadId: turn.threadId,
+      });
       return {
         ok: true,
         data: {
@@ -17328,6 +17339,12 @@ export class DesktopBackendRegistry {
           threadId: turn.threadId,
           turnId: turn.turnId,
           promptPreview: truncateThreadInspectionText(prompt, 240),
+          threadUrl: buildThreadUrl({ backend, threadId: turn.threadId }),
+          threadLink: buildThreadMarkdownLink({
+            backend,
+            threadId: turn.threadId,
+            title: targetThread?.title,
+          }),
           settings,
         },
       };
@@ -17861,6 +17878,8 @@ export class DesktopBackendRegistry {
         turnId,
         handoffId,
         title,
+        threadUrl: buildThreadUrl({ backend, threadId }),
+        threadLink: buildThreadMarkdownLink({ backend, threadId, title }),
         seedMode,
         groupingMode,
         ...(groupedParentThreadId

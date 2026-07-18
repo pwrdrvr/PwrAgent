@@ -16642,7 +16642,14 @@ script = "printf setup"
       handoffId: "handoff:codex:ordinary-thread:turn-1:handoff-call-1",
       threadId: "thread-1",
       groupedUnderThreadId: "ordinary-thread",
+      // The handoff result hands the model a finished link. Without this the
+      // model paraphrases `threadId` into a bare, unclickable uuid — which is
+      // exactly what this protocol exists to stop.
+      threadUrl: "pwragent://thread/thread-1?backend=codex",
     });
+    expect(handoffPayload.threadLink).toBe(
+      `[${handoffPayload.title}](pwragent://thread/thread-1?backend=codex)`,
+    );
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
@@ -19698,6 +19705,10 @@ script = "printf setup"
       threadId: "target-thread",
       turnId: "turn-1",
       promptPreview: "Please pick up the CI failure.",
+      // The model gets a finished link, not just an id to paraphrase into a
+      // bare uuid. It is told to reproduce `threadLink` verbatim.
+      threadUrl: "pwragent://thread/target-thread?backend=codex",
+      threadLink: "[target-thread](pwragent://thread/target-thread?backend=codex)",
       settings: {
         executionMode: "full-access",
         model: "gpt-5.5",

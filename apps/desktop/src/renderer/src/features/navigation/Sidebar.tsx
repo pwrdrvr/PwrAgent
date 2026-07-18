@@ -17,6 +17,7 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  buildThreadUrl,
   comparePinnedDirectories,
   comparePinnedThreads,
   isPinnedDirectory,
@@ -1265,6 +1266,20 @@ export function Sidebar(props: SidebarProps) {
                 ) : null}
               </>
             ) : null}
+            <button
+              role="menuitem"
+              type="button"
+              onClick={() =>
+                copyFromContextMenu(
+                  buildThreadUrl({
+                    backend: contextMenu.thread.source,
+                    threadId: contextMenu.thread.id,
+                  }),
+                )
+              }
+            >
+              Copy Thread Link
+            </button>
             <button
               role="menuitem"
               type="button"

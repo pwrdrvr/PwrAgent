@@ -299,6 +299,8 @@ describe("pwragent thread orchestration agent tools", () => {
         backend: "codex" as const,
         threadId: "thread-child",
         turnId: "turn-child",
+        threadUrl: "pwragent://thread/thread-child?backend=codex",
+        threadLink: "[thread-child](pwragent://thread/thread-child?backend=codex)",
         seedMode: "fork" as const,
         groupingMode: "subthread" as const,
         inheritedSettings: { backend: "codex" as const },
@@ -380,6 +382,8 @@ describe("pwragent thread orchestration agent tools", () => {
         threadId: "target-thread",
         turnId: "target-turn",
         promptPreview: "Check CI",
+        threadUrl: "pwragent://thread/target-thread?backend=codex",
+        threadLink: "[target-thread](pwragent://thread/target-thread?backend=codex)",
         settings: {
           model: "gpt-5.5",
           fastMode: true,
