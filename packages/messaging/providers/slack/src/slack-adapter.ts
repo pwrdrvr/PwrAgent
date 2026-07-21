@@ -25,6 +25,10 @@ import type {
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
   MessagingJsonValue,
+  MessagingManagedConversationCreateRequest,
+  MessagingManagedConversationCreateResult,
+  MessagingManagedConversationRightsRequest,
+  MessagingManagedConversationRightsResult,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingResponseMode,
@@ -188,6 +192,12 @@ export type SlackProviderAdapter = {
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
+  getManagedConversationRights(
+    request: MessagingManagedConversationRightsRequest,
+  ): Promise<MessagingManagedConversationRightsResult>;
+  createManagedConversation(
+    request: MessagingManagedConversationCreateRequest,
+  ): Promise<MessagingManagedConversationCreateResult>;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
@@ -658,6 +668,73 @@ export class SlackAdapter implements SlackProviderAdapter {
       conversation: request.channel.conversation,
       outcome: "unsupported",
       title: request.title,
+      updatedAt: this.now(),
+    };
+  }
+
+  async getManagedConversationRights(
+    request: MessagingManagedConversationRightsRequest,
+  ): Promise<MessagingManagedConversationRightsResult> {
+    const conversation = request.channel.conversation;
+    const target = slackManagedThreadTarget(request.channel, request.routingState);
+    const supported = target !== undefined;
+    return {
+      channel: this.channel,
+      conversation,
+      operations: [
+        {
+          operation: "create_child",
+          supported,
+          ...(!supported
+            ? {
+                reason: conversation.kind === "thread"
+                  ? "Slack does not support nested threads"
+                  : "the source message timestamp is unavailable",
+              }
+            : {}),
+        },
+      ],
+      outcome: supported ? "ok" : "unsupported",
+      updatedAt: this.now(),
+    };
+  }
+
+  async createManagedConversation(
+    request: MessagingManagedConversationCreateRequest,
+  ): Promise<MessagingManagedConversationCreateResult> {
+    const target = slackManagedThreadTarget(request.parent, request.routingState);
+    if (!target) {
+      return {
+        channel: this.channel,
+        errorMessage: request.parent.conversation.kind === "thread"
+          ? "Slack does not support nested threads."
+          : "Slack thread creation needs the source message timestamp.",
+        outcome: "unsupported",
+        updatedAt: this.now(),
+      };
+    }
+    // Slack has no separate create-thread API. A thread exists when the first
+    // reply is posted, so return routing for the source message and let the
+    // controller's initial status delivery materialize it through thread_ts.
+    return {
+      channel: this.channel,
+      conversation: {
+        id: target.channelId,
+        kind: "thread",
+        parentId: target.threadTs,
+        ...(request.parent.conversation.title
+          ? { parentTitle: request.parent.conversation.title }
+          : {}),
+        title: request.title,
+      },
+      outcome: "created",
+      routingState: {
+        opaque: {
+          channelId: target.channelId,
+          ...(target.teamId ? { teamId: target.teamId } : {}),
+          threadTs: target.threadTs,
+        },
+      },
       updatedAt: this.now(),
     };
   }
@@ -2168,15 +2245,53 @@ function normalizeSlackSlashCommand(
 function readSlackSurfaceState(
   surface: MessagingSurfaceRef | undefined,
 ): SlackSurfaceOpaqueState | undefined {
-  const opaque = surface?.state?.opaque;
+  return readSlackOpaqueState(surface?.state?.opaque);
+}
+
+function readSlackAdapterState(
+  state: MessagingAdapterState | undefined,
+): SlackSurfaceOpaqueState & { teamId?: string } | undefined {
+  return readSlackOpaqueState(state?.opaque);
+}
+
+function readSlackOpaqueState(
+  opaque: MessagingJsonValue | undefined,
+): SlackSurfaceOpaqueState & { teamId?: string } | undefined {
   if (!opaque || typeof opaque !== "object" || Array.isArray(opaque)) {
     return undefined;
   }
   const record = opaque as Record<string, MessagingJsonValue>;
   return {
     ...(typeof record.channelId === "string" ? { channelId: record.channelId } : {}),
+    ...(typeof record.teamId === "string" ? { teamId: record.teamId } : {}),
     ...(typeof record.threadTs === "string" ? { threadTs: record.threadTs } : {}),
     ...(typeof record.ts === "string" ? { ts: record.ts } : {}),
+  };
+}
+
+function slackManagedThreadTarget(
+  channel: MessagingChannelRef,
+  routingState: MessagingAdapterState | undefined,
+): { channelId: string; teamId?: string; threadTs: string } | undefined {
+  if (channel.conversation.kind === "thread") {
+    return undefined;
+  }
+  const state = readSlackAdapterState(routingState);
+  const channelId = channel.conversation.id;
+  const threadTs = state?.ts;
+  if (
+    !validateSlackChannelId(channelId).ok
+    || (state?.channelId !== undefined && state.channelId !== channelId)
+    || !validateSlackMessageTs(threadTs).ok
+  ) {
+    return undefined;
+  }
+  return {
+    channelId,
+    ...(state?.teamId && validateSlackTeamId(state.teamId).ok
+      ? { teamId: state.teamId }
+      : {}),
+    threadTs: threadTs!,
   };
 }
 

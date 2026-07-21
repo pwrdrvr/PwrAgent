@@ -152,6 +152,100 @@ describe("SlackAdapter", () => {
     expect(adapter.capabilityProfile.text.markdownDialect).toBe("slack-mrkdwn");
   });
 
+  it("creates a bindable Slack thread from the invoking root message", async () => {
+    const posted: unknown[] = [];
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({
+        conversations: { C012ABCDEF0: "signals-chat" },
+        posted,
+      }),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "app_mention",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023030.000000",
+        user: "U012ABCDEF0",
+        text: "<@U0BOTUSERID> inspect my open PRs",
+      },
+    });
+
+    const source = events[0]!;
+    await expect(adapter.getManagedConversationRights({
+      actor: source.actor,
+      channel: source.channel,
+      routingState: source.routingState,
+    })).resolves.toMatchObject({
+      channel: "slack",
+      operations: [
+        {
+          operation: "create_child",
+          supported: true,
+        },
+      ],
+      outcome: "ok",
+    });
+
+    const created = await adapter.createManagedConversation({
+      actor: source.actor,
+      parent: source.channel,
+      routingState: source.routingState,
+      title: "GIPHY-services PR status",
+    });
+    expect(created).toMatchObject({
+      channel: "slack",
+      conversation: {
+        id: "C012ABCDEF0",
+        kind: "thread",
+        parentId: "1712023030.000000",
+        parentTitle: "signals-chat",
+        title: "GIPHY-services PR status",
+      },
+      outcome: "created",
+      routingState: {
+        opaque: {
+          channelId: "C012ABCDEF0",
+          teamId: "T012ABCDEF0",
+          threadTs: "1712023030.000000",
+        },
+      },
+    });
+
+    await adapter.deliver({
+      id: "thread-status",
+      kind: "status",
+      createdAt: 1,
+      status: "working",
+      text: "Working on recent PRs",
+      targetSurface: {
+        channel: "slack",
+        id: "slack-thread",
+        state: created.routingState!,
+      },
+    });
+
+    expect(posted).toEqual([
+      expect.objectContaining({
+        channel: "C012ABCDEF0",
+        text: "Working on recent PRs",
+        thread_ts: "1712023030.000000",
+      }),
+    ]);
+  });
+
   it("signals Slack Assistant thread status for active typing activity", async () => {
     const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
     const adapter = new SlackAdapter({
