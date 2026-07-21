@@ -16,6 +16,7 @@ import {
   writeRbacPolicy,
 } from "../settings/rbac-policy-store";
 import { RbacPolicyService } from "../messaging/rbac-policy-service";
+import type { RecordMessagingActivityInput } from "../messaging/messaging-activity-log";
 
 let tmpHome: string;
 let storeOptions: { env: NodeJS.ProcessEnv };
@@ -171,6 +172,100 @@ describe("RbacPolicyService", () => {
     expect(
       service.providerFor("telegram").resolve({ actorId: "U1" }).rejected,
     ).toBe(true);
+  });
+
+  it("audits every policy edit through the injected sink", () => {
+    const entries: RecordMessagingActivityInput[] = [];
+    const service = new RbacPolicyService(storeOptions, (entry) =>
+      entries.push(entry),
+    );
+
+    service.upsertRole({
+      id: "role_x",
+      name: "X",
+      builtIn: false,
+      permissions: ["message.reply", "thread.execution.full_access"],
+    });
+    expect(entries.at(-1)).toMatchObject({
+      kind: "policy",
+      platform: "desktop",
+      payload: { action: "role-created", roleId: "role_x", danger: true },
+    });
+    expect(entries.at(-1)?.summary).toContain("Codex Full Access");
+
+    service.upsertRole({
+      id: "role_x",
+      name: "X",
+      builtIn: false,
+      permissions: ["message.reply"],
+    });
+    expect(entries.at(-1)?.payload).toMatchObject({
+      action: "role-updated",
+      previousPermissions: ["message.reply", "thread.execution.full_access"],
+    });
+
+    service.upsertAttachment({
+      subject: { kind: "actor", platform: "slack", actorId: "U1" },
+      roleIds: ["role_x"],
+      displayName: "Alice",
+    });
+    expect(entries.at(-1)).toMatchObject({
+      kind: "policy",
+      platform: "slack",
+      actorId: "U1",
+      actorDisplayName: "Alice",
+    });
+    expect(entries.at(-1)?.summary).toBe("Roles for Alice set to X");
+
+    service.deleteRole("role_x");
+    expect(entries.at(-1)?.payload).toMatchObject({
+      action: "role-deleted",
+      detachedSubjects: 1,
+    });
+
+    service.setEnforced(true, [
+      {
+        subject: { kind: "actor", platform: "slack", actorId: "U1" },
+        roleIds: [RBAC_BUILT_IN_ROLE_IDS.admin],
+      },
+    ]);
+    expect(entries.at(-1)).toMatchObject({
+      platform: "desktop",
+      payload: { action: "enforcement-enabled", seededAttachments: 1 },
+    });
+
+    service.deleteAttachment({
+      kind: "actor",
+      platform: "slack",
+      actorId: "U1",
+    });
+    expect(entries.at(-1)?.payload).toMatchObject({
+      action: "attachment-deleted",
+      previousRoleIds: [RBAC_BUILT_IN_ROLE_IDS.admin],
+    });
+
+    service.setEnforced(false);
+    expect(entries.at(-1)?.payload).toMatchObject({
+      action: "enforcement-disabled",
+    });
+    // Re-asserting the same value is not an audited change.
+    const count = entries.length;
+    service.setEnforced(false);
+    expect(entries).toHaveLength(count);
+  });
+
+  it("does not audit no-op deletes of unknown roles or attachments", () => {
+    const entries: RecordMessagingActivityInput[] = [];
+    const service = new RbacPolicyService(storeOptions, (entry) =>
+      entries.push(entry),
+    );
+    service.deleteRole("nope");
+    service.deleteAttachment({
+      kind: "actor",
+      platform: "slack",
+      actorId: "ghost",
+    });
+    expect(entries).toHaveLength(0);
   });
 
   it("seeds synthesized attachments only when enabling on an empty policy", () => {

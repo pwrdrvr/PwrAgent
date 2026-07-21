@@ -13,7 +13,7 @@ import {
 } from "@pwragent/shared";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { ChevronRightIcon } from "../../icons";
+import { ChevronRightIcon, SettingsIcon } from "../../icons";
 import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
@@ -28,6 +28,7 @@ const KIND_LABEL: Record<MessagingActivityKind, string> = {
   outbound: "Sent",
   binding: "Binding",
   diagnostic: "Diagnostic",
+  policy: "Policy",
 };
 const KIND_TONE: Record<MessagingActivityKind, "ok" | "warning" | "error" | "muted"> = {
   "inbound-routed": "ok",
@@ -37,6 +38,7 @@ const KIND_TONE: Record<MessagingActivityKind, "ok" | "warning" | "error" | "mut
   outbound: "muted",
   binding: "ok",
   diagnostic: "warning",
+  policy: "warning",
 };
 /** Which pane, if any, is collapsed to header-only. */
 type CollapsedPane = "top" | "bottom" | null;
@@ -177,8 +179,8 @@ export function MessagingActivityScreen(props: { desktopApi?: DesktopApi }) {
         className="messaging-activity__pane messaging-activity__pane--bottom"
         style={paneStyleFor("bottom", collapsed, splitFraction)}
         title="Attention"
-        emptyLabel="No rejected messages, pairing attempts, or delivery diagnostics."
-        kinds={["diagnostic", "inbound-rejected", "inbound-ignored", "pairing"]}
+        emptyLabel="No rejected messages, pairing attempts, policy edits, or delivery diagnostics."
+        kinds={["policy", "diagnostic", "inbound-rejected", "inbound-ignored", "pairing"]}
         groups={groups}
         collapsed={collapsed === "bottom"}
         onToggleCollapse={() => toggleCollapse("bottom")}
@@ -253,7 +255,12 @@ function ActivityRow(props: { entry: MessagingActivityEntry }) {
   const actorUsername = activityActorUsername(entry);
   const [copiedKey, setCopiedKey] = useState<string | undefined>(undefined);
   const copyFields = copyFieldsForEntry(entry);
-  const Icon = MESSAGING_PLATFORM_ICONS[entry.platform];
+  // "desktop" rows are local-operator actions (Access Control policy edits),
+  // not platform traffic — they get the settings gear, not a brand mark.
+  const Icon =
+    entry.platform === "desktop"
+      ? SettingsIcon
+      : MESSAGING_PLATFORM_ICONS[entry.platform];
   return (
     <li className="messaging-activity-row">
       <span className={`messaging-activity-row__icon messaging-activity-row__icon--${tone}`}>
@@ -472,6 +479,7 @@ function groupByKind(
     outbound: [],
     binding: [],
     diagnostic: [],
+    policy: [],
   };
   for (const entry of entries) {
     groups[entry.kind]?.push(entry);

@@ -1,5 +1,8 @@
 import type { ReactElement } from "react";
-import type { MessagingChannelKind } from "@pwragent/shared";
+import type {
+  MessagingActivityOrigin,
+  MessagingChannelKind,
+} from "@pwragent/shared";
 import {
   DiscordIcon,
   FeishuIcon,
@@ -30,7 +33,10 @@ const MESSAGING_PLATFORM_LABELS: Partial<Record<MessagingChannelKind, string>> =
   telegram: "Telegram",
 };
 
-export function formatMessagingPlatformName(platform: MessagingChannelKind): string {
+export function formatMessagingPlatformName(
+  platform: MessagingActivityOrigin,
+): string {
+  if (platform === "desktop") return "Desktop";
   return MESSAGING_PLATFORM_LABELS[platform] ?? fallbackPlatformName(platform);
 }
 

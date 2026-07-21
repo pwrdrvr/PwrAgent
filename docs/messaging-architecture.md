@@ -495,6 +495,7 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 
 ## Cross-references
 
+- [`docs/messaging-rbac.md`](messaging-rbac.md) — the RBAC capability layer: permission catalog, built-in roles, resolution semantics, enforcement surfaces, audit
 - [`docs/messaging-adding-a-provider.md`](messaging-adding-a-provider.md) — hands-on walkthrough for adding a new platform adapter
 - [`docs/messaging-platform-integration.md`](messaging-platform-integration.md) — operator setup, command surface, button layout policy, Cloudflare-Tunnel / Tailscale-Funnel deployment for HTTP-callback providers
 - [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) — the formal contract for new platform adapters

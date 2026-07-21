@@ -31,8 +31,9 @@ import type { MutateThreadToolArgs } from "./thread-tools";
 /**
  * Stable atomic capability IDs. These are contractually load-bearing: once
  * shipped, a permission ID must not change meaning, because it is persisted in
- * custom role definitions in `config.toml`. Add new IDs; never repurpose old
- * ones.
+ * custom role definitions in the per-profile `rbac-policy.json`. Add new IDs;
+ * never repurpose old ones. The catalog is documented for operators in
+ * `docs/messaging-rbac.md` — update it when adding a permission.
  */
 export type MessagingPermissionId =
   // Baseline conversational — the floor a Limited Chat User keeps.
