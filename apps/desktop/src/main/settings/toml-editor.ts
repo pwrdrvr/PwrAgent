@@ -42,7 +42,7 @@ export type TomlEditScalar = string | number | boolean;
 export type TomlEditValue =
   | TomlEditScalar
   | readonly string[]
-  | readonly Record<string, TomlEditScalar | readonly string[]>[];
+  | readonly Record<string, TomlEditScalar>[];
 
 export type TomlEdit =
   | { op: "set"; path: readonly string[]; value: TomlEditValue }
@@ -77,10 +77,7 @@ type ParsedValue =
   | { kind: "float"; value: number }
   | { kind: "boolean"; value: boolean }
   | { kind: "string-array"; value: string[] }
-  | {
-      kind: "inline-table-array";
-      value: Record<string, TomlEditScalar | string[]>[];
-    };
+  | { kind: "inline-table-array"; value: Record<string, TomlEditScalar>[] };
 
 type KeyLocation = {
   name: string;
