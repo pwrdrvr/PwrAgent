@@ -199,12 +199,13 @@ describe("resolveTerminalShell", () => {
     expect(webContents.once).toHaveBeenCalledTimes(1);
   });
 
-  it("reports running terminal sessions for quit confirmation", async () => {
-    const pty = fakePty();
+  it("reports terminal sessions with a foreground command for quit confirmation", async () => {
+    const pty = fakePty({ process: "sleep" });
     const service = new IntegratedTerminalService({
       loadNodePty: async () => ({
         spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
       }),
+      platform: "darwin",
     });
 
     const response = await service.createOrAttach(
@@ -221,6 +222,89 @@ describe("resolveTerminalShell", () => {
       count: 1,
       sessionIds: [response.sessionId],
       threadKeys: ["codex:thread-a"],
+    });
+  });
+
+  it("does not report a terminal sitting idle at its shell prompt", async () => {
+    const pty = fakePty({ process: "-sh" });
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "darwin",
+    });
+
+    await service.createOrAttach(
+      {
+        threadKey: "codex:thread-idle",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(service.getQuitSnapshot()).toEqual({
+      count: 0,
+      sessionIds: [],
+      threadKeys: [],
+    });
+  });
+
+  it("conservatively reports terminals when foreground detection is unsupported", async () => {
+    const pty = fakePty({ process: "powershell.exe" });
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "win32",
+    });
+
+    const response = await service.createOrAttach(
+      {
+        threadKey: "codex:thread-windows",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(service.getQuitSnapshot()).toEqual({
+      count: 1,
+      sessionIds: [response.sessionId],
+      threadKeys: ["codex:thread-windows"],
+    });
+  });
+
+  it("conservatively reports terminals when foreground detection fails", async () => {
+    const pty = fakePty();
+    Object.defineProperty(pty, "process", {
+      get: () => {
+        throw new Error("foreground lookup failed");
+      },
+    });
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "darwin",
+    });
+
+    const response = await service.createOrAttach(
+      {
+        threadKey: "codex:thread-lookup-failed",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(service.getQuitSnapshot()).toEqual({
+      count: 1,
+      sessionIds: [response.sessionId],
+      threadKeys: ["codex:thread-lookup-failed"],
     });
   });
 

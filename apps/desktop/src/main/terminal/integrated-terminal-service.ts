@@ -55,6 +55,7 @@ type IntegratedTerminalServiceOptions = {
   loadNodePty?: () => Promise<Pick<NodePtyModule, "spawn">>;
   now?: () => number;
   onSessionsChanged?: (sessions: IntegratedTerminalSessionSummary[]) => void;
+  platform?: NodeJS.Platform;
 };
 
 export class IntegratedTerminalService {
@@ -66,6 +67,7 @@ export class IntegratedTerminalService {
   private readonly onSessionsChanged?: (
     sessions: IntegratedTerminalSessionSummary[],
   ) => void;
+  private readonly platform: NodeJS.Platform;
   /** Threads whose PTY is mid-spawn — the window in which a close has nothing
    *  to act on yet. */
   private readonly spawningThreadKeys = new Set<string>();
@@ -80,6 +82,7 @@ export class IntegratedTerminalService {
     this.loadNodePty = options.loadNodePty ?? loadNodePty;
     this.now = options.now ?? Date.now;
     this.onSessionsChanged = options.onSessionsChanged;
+    this.platform = options.platform ?? process.platform;
   }
 
   async createOrAttach(
@@ -248,12 +251,36 @@ export class IntegratedTerminalService {
   }
 
   getQuitSnapshot(): IntegratedTerminalQuitSnapshot {
-    const sessions = [...this.sessionsById.values()];
+    const sessions = [...this.sessionsById.values()].filter((session) =>
+      this.hasForegroundCommand(session),
+    );
     return {
       count: sessions.length,
       sessionIds: sessions.map((session) => session.sessionId).sort(),
       threadKeys: sessions.map((session) => session.threadKey).sort(),
     };
+  }
+
+  private hasForegroundCommand(session: TerminalSession): boolean {
+    // node-pty exposes the terminal's foreground process on macOS and Linux.
+    // Other platforms return only the originally spawned process name, which
+    // cannot distinguish an idle prompt from a running command. Keep the
+    // existing conservative warning where the signal is unavailable.
+    if (this.platform !== "darwin" && this.platform !== "linux") {
+      return true;
+    }
+
+    try {
+      const activeProcess = normalizeTerminalProcessName(session.pty.process);
+      const shellProcess = normalizeTerminalProcessName(session.shell);
+      return !activeProcess || !shellProcess || activeProcess !== shellProcess;
+    } catch (error) {
+      this.logger.warn("foreground-process-check-failed", {
+        error: error instanceof Error ? error.message : String(error),
+        sessionId: session.sessionId,
+      });
+      return true;
+    }
   }
 
   private toCreateResponse(
@@ -395,6 +422,10 @@ export class IntegratedTerminalService {
       webContents.send(channel, payload);
     }
   }
+}
+
+function normalizeTerminalProcessName(value: string): string {
+  return path.basename(value.trim().replace(/^-+/, ""));
 }
 
 async function loadNodePty(): Promise<Pick<NodePtyModule, "spawn">> {

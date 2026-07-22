@@ -15,6 +15,32 @@ async function openSmokeThread(page: Page) {
   ).toBeVisible();
 }
 
+async function setQuitConfirmation(page: Page, enabled: boolean) {
+  await page.evaluate(async (nextEnabled) => {
+    await (
+      window as unknown as {
+        pwragent: {
+          writeSettingsConfig: (request: unknown) => Promise<unknown>;
+        };
+      }
+    ).pwragent.writeSettingsConfig({
+      patch: { general: { confirmQuitWithInProgressThreads: nextEnabled } },
+    });
+  }, enabled);
+}
+
+async function openIntegratedTerminal(page: Page) {
+  await page
+    .getByRole("button", { name: "Open integrated terminal" })
+    .click();
+  await expect(
+    page.getByLabel("Integrated terminal", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".integrated-terminal__status")).not.toHaveText(
+    "Starting shell...",
+  );
+}
+
 /**
  * The quit dialog is a standalone `data:` HTML window with no preload: it talks
  * to main by navigating to a fake scheme that `will-navigate` intercepts. That
@@ -41,33 +67,19 @@ test("lists running terminals, cancels auto-quit, and stays open", async () => {
     // The shared harness seeds quit confirmation OFF so specs can close cleanly
     // (and it does so after `preLaunchHook`). This spec is about the
     // confirmation, so turn it back on through the app's own settings IPC.
-    await app.window.evaluate(async () => {
-      await (
-        window as unknown as {
-          pwragent: {
-            writeSettingsConfig: (request: unknown) => Promise<unknown>;
-          };
-        }
-      ).pwragent.writeSettingsConfig({
-        patch: { general: { confirmQuitWithInProgressThreads: true } },
-      });
-    });
+    await setQuitConfirmation(app.window, true);
 
     await openSmokeThread(app.window);
 
-    // A running shell is a quit blocker, which is what summons the dialog.
-    await app.window
-      .getByRole("button", { name: "Open integrated terminal" })
-      .click();
+    // An idle shell is not a quit blocker. Start a foreground command so this
+    // spec still exercises the dialog and its terminal-row navigation.
+    await openIntegratedTerminal(app.window);
+    await app.window.locator(".integrated-terminal__viewport").click();
+    await app.window.keyboard.type("echo PWRAGENT_QUIT_BLOCKER_READY; sleep 60");
+    await app.window.keyboard.press("Enter");
     await expect(
-      app.window.getByLabel("Integrated terminal", { exact: true }),
-    ).toBeVisible();
-    // The pane renders before `createOrAttach` resolves. Wait for the status to
-    // flip off "Starting shell..." — that is the renderer's proof that main has
-    // actually registered the session, and therefore has a quit blocker.
-    await expect(
-      app.window.locator(".integrated-terminal__status"),
-    ).not.toHaveText("Starting shell...");
+      app.window.locator(".integrated-terminal .xterm-rows"),
+    ).toContainText("PWRAGENT_QUIT_BLOCKER_READY");
 
     const dialogPromise = app.electronApp.waitForEvent("window");
     // Not awaited: the modal holds the main process, so this round trip does
@@ -136,19 +148,46 @@ test("lists running terminals, cancels auto-quit, and stays open", async () => {
     // Disarm the confirmation before teardown. The terminal is still running,
     // so `app.close()` would trip the quit path again and hang on a second
     // dialog that nobody is there to answer.
-    await app.window
-      .evaluate(async () => {
-        await (
-          window as unknown as {
-            pwragent: {
-              writeSettingsConfig: (request: unknown) => Promise<unknown>;
-            };
-          }
-        ).pwragent.writeSettingsConfig({
-          patch: { general: { confirmQuitWithInProgressThreads: false } },
-        });
+    await setQuitConfirmation(app.window, false).catch(() => undefined);
+    await app.close();
+  }
+});
+
+test("does not confirm quit for a terminal sitting at its prompt", async () => {
+  test.setTimeout(90_000);
+
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+  });
+
+  try {
+    await setQuitConfirmation(app.window, true);
+    await openSmokeThread(app.window);
+    await openIntegratedTerminal(app.window);
+
+    const closedPromise = app.electronApp.waitForEvent("close").then(() => ({
+      kind: "closed" as const,
+    }));
+    const dialogPromise = app.electronApp
+      .waitForEvent("window")
+      .then((dialog) => ({
+        kind: "dialog" as const,
+        dialog,
+      }));
+    void app.electronApp
+      .evaluate(({ app: electronApp }) => {
+        electronApp.quit();
       })
       .catch(() => undefined);
-    await app.close();
+
+    const outcome = await Promise.race([closedPromise, dialogPromise]);
+    if (outcome.kind === "dialog") {
+      // Clean up a regressed run before surfacing the assertion failure.
+      await outcome.dialog.locator("#quit").dispatchEvent("click");
+      await closedPromise;
+    }
+    expect(outcome.kind).toBe("closed");
+  } finally {
+    await app.close().catch(() => undefined);
   }
 });

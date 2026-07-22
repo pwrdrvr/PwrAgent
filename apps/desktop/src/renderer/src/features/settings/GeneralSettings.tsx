@@ -499,7 +499,7 @@ export function GeneralSettings(props: {
         <div className="settings-fields">
           <SettingsField
             label="Confirm quit when threads or terminals are active"
-            sub="Warn before quitting while agent turns or integrated terminal sessions are running. The prompt auto-quits after a short countdown so shutdown can continue."
+            sub="Warn before quitting while agent turns, integrated terminal commands, or environment actions are running. On macOS and Linux, idle terminal prompts do not block quit. The prompt auto-quits after a short countdown so shutdown can continue."
             source={sourceBadge(confirmQuitWithInProgressThreads)}
             control={
               <SettingsSwitch
