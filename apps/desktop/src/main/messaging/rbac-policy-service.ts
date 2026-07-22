@@ -50,8 +50,9 @@ export type RbacPolicyAuditSink = (
 ) => void;
 
 /**
- * Process-wide RBAC policy service. One JSON file backs every platform's
- * controller, so the loaded policy is cached here and invalidated on write.
+ * Process-wide RBAC policy service. One `[messaging.rbac]` config section
+ * backs every platform's controller, so the loaded policy is cached here and
+ * invalidated on write.
  */
 export class RbacPolicyService {
   private cache: RbacPolicy | null = null;

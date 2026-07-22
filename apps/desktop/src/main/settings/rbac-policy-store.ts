@@ -12,25 +12,48 @@ import {
 } from "@pwragent/shared";
 
 import { resolveActiveProfilePath } from "../profile";
+import {
+  applyTomlEdits,
+  parseTomlTables,
+  type TomlEdit,
+  type TomlEditScalar,
+  type TomlValue,
+} from "./toml-editor";
 
 /**
  * Persistence for the per-profile RBAC policy (custom roles + subject→role
  * attachments + the `enforced` flag).
  *
- * Stored as a dedicated JSON document at the profile root
- * (`~/.pwragent/profiles/<name>/rbac-policy.json`), sibling to `state/`, rather
- * than inside `config.toml`. Two reasons:
- *   1. The policy shape has arrays nested inside table rows (a role's
- *      `permissions`, an attachment's `roleIds`), which the repo's scalar-only
- *      TOML table-array writer (`toml-editor.ts`) cannot express without a
- *      disproportionate extension.
- *   2. A standalone JSON file is still operator-editable and export/importable
- *      (issue #292), and survives independently of both config.toml and the
- *      state.db.
+ * Stored in the profile's `config.toml` under `[messaging.rbac]`, with the
+ * nested arrays as array-of-tables rows carrying string-array cells:
+ *
+ *   [messaging.rbac]
+ *   enforced = true
+ *   policy_version = 1
+ *
+ *   [[messaging.rbac.roles]]
+ *   id = "role_oncall"
+ *   name = "On-call"
+ *   permissions = ["message.reply", "thread.status.view"]
+ *
+ *   [[messaging.rbac.attachments]]
+ *   platform = "slack"
+ *   subject_kind = "actor"
+ *   actor_id = "U123"
+ *   role_ids = ["admin", "role_oncall"]
+ *
+ * Earlier revisions of this branch persisted a standalone
+ * `rbac-policy.json` because the TOML editor's table-array rows were
+ * scalar-only; PR #938 added string-array cells, so the policy now lives with
+ * the rest of the messaging config. The JSON file never shipped in a release,
+ * but dev profiles may have one — reads fall back to it when `config.toml`
+ * has no `[messaging.rbac]` section, and the first TOML write retires it
+ * (renamed to `rbac-policy.json.migrated`), per the lazy-conversion rules in
+ * `docs/config-file-evolution.md`.
  *
  * Built-in roles are NEVER persisted here — they are code constants
  * (`BUILT_IN_ROLES` in `@pwragent/shared`) so upgrades can extend them. Only
- * custom roles and attachments live in this file.
+ * custom roles and attachments live in the config.
  */
 
 export type RbacPolicyStoreOptions = {
@@ -40,23 +63,223 @@ export type RbacPolicyStoreOptions = {
   argv?: readonly string[];
 };
 
-const RBAC_POLICY_SEGMENT = "rbac-policy.json";
+const RBAC_SECTION = "messaging.rbac";
+const RBAC_SECTION_PATH = ["messaging", "rbac"] as const;
+const LEGACY_JSON_SEGMENT = "rbac-policy.json";
 
-export function resolveRbacPolicyPath(options?: RbacPolicyStoreOptions): string {
-  return resolveActiveProfilePath(RBAC_POLICY_SEGMENT, options);
+export function resolveRbacConfigPath(options?: RbacPolicyStoreOptions): string {
+  return resolveActiveProfilePath("config.toml", options);
+}
+
+export function resolveLegacyRbacPolicyJsonPath(
+  options?: RbacPolicyStoreOptions,
+): string {
+  return resolveActiveProfilePath(LEGACY_JSON_SEGMENT, options);
 }
 
 /**
  * Read the persisted policy. Tolerant by design: a missing file, unreadable
- * file, malformed JSON, or an unrecognized shape all resolve to an empty,
+ * file, malformed TOML, or an unrecognized shape all resolve to an empty,
  * unenforced policy so a corrupt file can never brick messaging authorization
- * (it fails safe to legacy-compatible mode).
+ * (it fails safe to legacy-compatible mode). When `config.toml` has no
+ * `[messaging.rbac]` section, falls back to the pre-#938 standalone JSON file
+ * so dev profiles keep their policy until the next write migrates it.
  */
 export function readRbacPolicy(options?: RbacPolicyStoreOptions): RbacPolicy {
-  const policyPath = resolveRbacPolicyPath(options);
+  const configPath = resolveRbacConfigPath(options);
+  let source: string | null;
+  try {
+    source = fs.readFileSync(configPath, "utf8");
+  } catch {
+    source = null;
+  }
+  if (source !== null) {
+    let tables: ReturnType<typeof parseTomlTables>;
+    try {
+      tables = parseTomlTables(source, configPath);
+    } catch {
+      // Malformed config: fail safe to legacy-compatible mode rather than
+      // resurrecting a stale JSON policy behind the operator's back.
+      return emptyRbacPolicy();
+    }
+    const section = tables[RBAC_SECTION];
+    if (section !== undefined) {
+      return policyFromSection(section);
+    }
+  }
+  return readLegacyJsonPolicy(options);
+}
+
+/**
+ * Persist the policy into `config.toml` via targeted TOML edits (comments and
+ * unrelated sections preserved), atomically (tmp file + rename). Retires the
+ * legacy JSON file on success.
+ */
+export function writeRbacPolicy(
+  policy: RbacPolicy,
+  options?: RbacPolicyStoreOptions,
+): void {
+  const configPath = resolveRbacConfigPath(options);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const source = fs.existsSync(configPath)
+    ? fs.readFileSync(configPath, "utf8")
+    : "";
+
+  const roles = policy.roles.map(normalizeRole);
+  const attachments = policy.attachments.map(normalizeAttachment);
+  const edits: TomlEdit[] = [
+    { op: "set", path: [...RBAC_SECTION_PATH, "enforced"], value: Boolean(policy.enforced) },
+    { op: "set", path: [...RBAC_SECTION_PATH, "policy_version"], value: RBAC_POLICY_VERSION },
+    { op: "delete", path: [...RBAC_SECTION_PATH, "roles"] },
+    { op: "deleteTableArray", path: [...RBAC_SECTION_PATH, "roles"] },
+    { op: "delete", path: [...RBAC_SECTION_PATH, "attachments"] },
+    { op: "deleteTableArray", path: [...RBAC_SECTION_PATH, "attachments"] },
+  ];
+  if (roles.length > 0) {
+    edits.push({
+      op: "setTableArray",
+      path: [...RBAC_SECTION_PATH, "roles"],
+      value: roles.map(roleToRow),
+    });
+  }
+  if (attachments.length > 0) {
+    edits.push({
+      op: "setTableArray",
+      path: [...RBAC_SECTION_PATH, "attachments"],
+      value: attachments.map(attachmentToRow),
+    });
+  }
+
+  const next = applyTomlEdits(source, edits);
+  if (next !== source) {
+    const tmpPath = `${configPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, next, "utf8");
+    fs.renameSync(tmpPath, configPath);
+  }
+  retireLegacyJsonPolicy(options);
+}
+
+// ---------------------------------------------------------------------------
+// TOML row mapping
+// ---------------------------------------------------------------------------
+
+type TomlRow = Record<string, TomlEditScalar | readonly string[]>;
+type ParsedTomlRow = Record<string, TomlEditScalar | string[]>;
+
+function roleToRow(role: RbacRoleDefinition): TomlRow {
+  return {
+    id: role.id,
+    name: role.name,
+    ...(role.description ? { description: role.description } : {}),
+    ...(role.danger ? { danger: true } : {}),
+    permissions: [...role.permissions],
+  };
+}
+
+function attachmentToRow(attachment: RbacAttachment): TomlRow {
+  const subject = attachment.subject;
+  return {
+    platform: subject.platform,
+    subject_kind: subject.kind,
+    ...(subject.kind === "actor"
+      ? { actor_id: subject.actorId }
+      : {
+          bucket: subject.bucket,
+          ...(subject.scopeId ? { scope_id: subject.scopeId } : {}),
+        }),
+    role_ids: [...attachment.roleIds],
+    ...(attachment.displayName ? { display_name: attachment.displayName } : {}),
+  };
+}
+
+function policyFromSection(section: Record<string, TomlValue>): RbacPolicy {
+  return {
+    policyVersion:
+      typeof section.policy_version === "number"
+        ? section.policy_version
+        : RBAC_POLICY_VERSION,
+    enforced: section.enforced === true,
+    roles: rowsOf(section.roles)
+      .map(roleFromRow)
+      .filter((role): role is RbacRoleDefinition => role !== null),
+    attachments: rowsOf(section.attachments)
+      .map(attachmentFromRow)
+      .filter((attachment): attachment is RbacAttachment => attachment !== null),
+  };
+}
+
+function rowsOf(value: TomlValue | undefined): ParsedTomlRow[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is ParsedTomlRow =>
+      typeof item === "object" && item !== null && !Array.isArray(item),
+  );
+}
+
+function roleFromRow(row: ParsedTomlRow): RbacRoleDefinition | null {
+  if (typeof row.id !== "string" || row.id.length === 0) return null;
+  if (typeof row.name !== "string") return null;
+  return {
+    id: row.id,
+    name: row.name,
+    ...(typeof row.description === "string" && row.description.length > 0
+      ? { description: row.description }
+      : {}),
+    // Persisted roles are always custom; built-ins are code constants.
+    builtIn: false,
+    ...(row.danger === true ? { danger: true } : {}),
+    permissions: readStringArrayCell(row.permissions) as RbacRoleDefinition["permissions"],
+  };
+}
+
+function attachmentFromRow(row: ParsedTomlRow): RbacAttachment | null {
+  const subject = subjectFromRow(row);
+  if (!subject) return null;
+  return {
+    subject,
+    roleIds: readStringArrayCell(row.role_ids),
+    ...(typeof row.display_name === "string" && row.display_name.length > 0
+      ? { displayName: row.display_name }
+      : {}),
+  };
+}
+
+function subjectFromRow(row: ParsedTomlRow): RbacSubject | null {
+  if (typeof row.platform !== "string" || row.platform.length === 0) return null;
+  const platform = row.platform as RbacSubject["platform"];
+  if (row.subject_kind === "actor") {
+    if (typeof row.actor_id !== "string" || row.actor_id.length === 0) {
+      return null;
+    }
+    return { kind: "actor", platform, actorId: row.actor_id };
+  }
+  if (row.subject_kind === "bucket") {
+    if (!BUCKET_KINDS.includes(row.bucket as RbacBucketKind)) return null;
+    return {
+      kind: "bucket",
+      platform,
+      bucket: row.bucket as RbacBucketKind,
+      ...(typeof row.scope_id === "string" && row.scope_id.length > 0
+        ? { scopeId: row.scope_id }
+        : {}),
+    };
+  }
+  return null;
+}
+
+function readStringArrayCell(value: TomlEditScalar | string[] | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+// ---------------------------------------------------------------------------
+// Legacy standalone-JSON fallback (pre-#938 dev profiles; never shipped)
+// ---------------------------------------------------------------------------
+
+function readLegacyJsonPolicy(options?: RbacPolicyStoreOptions): RbacPolicy {
   let raw: string;
   try {
-    raw = fs.readFileSync(policyPath, "utf8");
+    raw = fs.readFileSync(resolveLegacyRbacPolicyJsonPath(options), "utf8");
   } catch {
     return emptyRbacPolicy();
   }
@@ -69,26 +292,24 @@ export function readRbacPolicy(options?: RbacPolicyStoreOptions): RbacPolicy {
   return sanitizeRbacPolicy(parsed);
 }
 
-/** Atomically persist the policy (tmp file + rename), creating dirs as needed. */
-export function writeRbacPolicy(
-  policy: RbacPolicy,
-  options?: RbacPolicyStoreOptions,
-): void {
-  const policyPath = resolveRbacPolicyPath(options);
-  fs.mkdirSync(path.dirname(policyPath), { recursive: true });
-  const normalized: RbacPolicy = {
-    policyVersion: RBAC_POLICY_VERSION,
-    enforced: Boolean(policy.enforced),
-    roles: policy.roles.map(normalizeRole),
-    attachments: policy.attachments.map(normalizeAttachment),
-  };
-  const tmpPath = `${policyPath}.${process.pid}.tmp`;
-  fs.writeFileSync(tmpPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
-  fs.renameSync(tmpPath, policyPath);
+/**
+ * Once the policy lives in `config.toml`, a lingering JSON file would only
+ * confuse (and could silently resurrect stale policy if the operator ever
+ * removed the TOML section). Rename rather than delete so nothing is lost.
+ */
+function retireLegacyJsonPolicy(options?: RbacPolicyStoreOptions): void {
+  const legacyPath = resolveLegacyRbacPolicyJsonPath(options);
+  try {
+    if (fs.existsSync(legacyPath)) {
+      fs.renameSync(legacyPath, `${legacyPath}.migrated`);
+    }
+  } catch {
+    // Best-effort: a failed rename leaves the ignored file in place.
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Sanitizers — keep the reader defensive against hand-edited / corrupt files.
+// Sanitizers — keep the readers defensive against hand-edited / corrupt files.
 // ---------------------------------------------------------------------------
 
 function sanitizeRbacPolicy(value: unknown): RbacPolicy {

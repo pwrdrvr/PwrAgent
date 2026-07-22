@@ -31,9 +31,10 @@ import type { MutateThreadToolArgs } from "./thread-tools";
 /**
  * Stable atomic capability IDs. These are contractually load-bearing: once
  * shipped, a permission ID must not change meaning, because it is persisted in
- * custom role definitions in the per-profile `rbac-policy.json`. Add new IDs;
- * never repurpose old ones. The catalog is documented for operators in
- * `docs/messaging-rbac.md` — update it when adding a permission.
+ * custom role definitions under `[messaging.rbac]` in the per-profile
+ * `config.toml`. Add new IDs; never repurpose old ones. The catalog is
+ * documented for operators in `docs/messaging-rbac.md` — update it when
+ * adding a permission.
  */
 export type MessagingPermissionId =
   // Baseline conversational — the floor a Limited Chat User keeps.
@@ -754,10 +755,11 @@ export function permissionsForThreadMutation(
 // ---------------------------------------------------------------------------
 
 /**
- * The RBAC policy as persisted per-profile (custom roles + attachments only;
- * built-in roles are code constants). `enforced` gates the whole system: when
- * false (or when the policy is absent entirely), the controller runs in
- * legacy-compatible mode where every admitted actor is implicitly Admin.
+ * The RBAC policy as persisted per-profile under `[messaging.rbac]` in
+ * `config.toml` (custom roles + attachments only; built-in roles are code
+ * constants). `enforced` gates the whole system: when false (or when the
+ * policy is absent entirely), the controller runs in legacy-compatible mode
+ * where every admitted actor is implicitly Admin.
  */
 export type RbacPolicy = {
   policyVersion: number;

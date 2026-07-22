@@ -12,7 +12,8 @@ import {
 
 import {
   readRbacPolicy,
-  resolveRbacPolicyPath,
+  resolveLegacyRbacPolicyJsonPath,
+  resolveRbacConfigPath,
   writeRbacPolicy,
 } from "../settings/rbac-policy-store";
 import { RbacPolicyService } from "../messaging/rbac-policy-service";
@@ -31,12 +32,12 @@ afterEach(() => {
 });
 
 describe("rbac policy store", () => {
-  it("returns an empty unenforced policy when the file is absent", () => {
+  it("returns an empty unenforced policy when no config exists", () => {
     const policy = readRbacPolicy(storeOptions);
     expect(policy).toEqual(emptyRbacPolicy());
   });
 
-  it("round-trips a policy through disk", () => {
+  it("round-trips a policy through config.toml", () => {
     const policy: RbacPolicy = {
       policyVersion: 1,
       enforced: true,
@@ -66,40 +67,134 @@ describe("rbac policy store", () => {
       ],
     };
     writeRbacPolicy(policy, storeOptions);
-    expect(fs.existsSync(resolveRbacPolicyPath(storeOptions))).toBe(true);
+    const configPath = resolveRbacConfigPath(storeOptions);
+    expect(fs.existsSync(configPath)).toBe(true);
+    const source = fs.readFileSync(configPath, "utf8");
+    expect(source).toContain("[messaging.rbac]");
+    expect(source).toContain("[[messaging.rbac.roles]]");
+    expect(source).toContain('permissions = ["message.reply", "thread.status.view"]');
     expect(readRbacPolicy(storeOptions)).toEqual(policy);
   });
 
-  it("forces persisted roles to builtIn:false and drops malformed entries", () => {
-    const file = resolveRbacPolicyPath(storeOptions);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+  it("preserves unrelated config content and comments across writes", () => {
+    const configPath = resolveRbacConfigPath(storeOptions);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(
-      file,
-      JSON.stringify({
-        policyVersion: 1,
+      configPath,
+      [
+        "# operator note: keep me",
+        "[general]",
+        'theme = "dark"',
+        "",
+        "[messaging.slack]",
+        "enabled = true",
+        "",
+      ].join("\n"),
+    );
+    writeRbacPolicy(
+      {
+        ...emptyRbacPolicy(),
         enforced: true,
-        roles: [
-          { id: "ok", name: "OK", builtIn: true, permissions: ["message.reply"] },
-          { name: "no id", permissions: [] },
-          "garbage",
-        ],
         attachments: [
-          { subject: { kind: "actor", platform: "slack", actorId: "U1" }, roleIds: ["ok"] },
-          { subject: { kind: "bogus" }, roleIds: ["ok"] },
+          {
+            subject: { kind: "actor", platform: "slack", actorId: "U1" },
+            roleIds: [RBAC_BUILT_IN_ROLE_IDS.admin],
+          },
         ],
-      }),
+      },
+      storeOptions,
+    );
+    const source = fs.readFileSync(configPath, "utf8");
+    expect(source).toContain("# operator note: keep me");
+    expect(source).toContain('theme = "dark"');
+    expect(source).toContain("[messaging.slack]");
+    expect(readRbacPolicy(storeOptions).enforced).toBe(true);
+  });
+
+  it("forces persisted roles to builtIn:false and drops malformed rows", () => {
+    const configPath = resolveRbacConfigPath(storeOptions);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.rbac]",
+        "enforced = true",
+        "",
+        "[[messaging.rbac.roles]]",
+        'id = "ok"',
+        'name = "OK"',
+        'permissions = ["message.reply"]',
+        "",
+        "[[messaging.rbac.roles]]",
+        'name = "no id"',
+        "permissions = []",
+        "",
+        "[[messaging.rbac.attachments]]",
+        'platform = "slack"',
+        'subject_kind = "actor"',
+        'actor_id = "U1"',
+        'role_ids = ["ok"]',
+        "",
+        "[[messaging.rbac.attachments]]",
+        'platform = "slack"',
+        'subject_kind = "bogus"',
+        'role_ids = ["ok"]',
+        "",
+      ].join("\n"),
     );
     const policy = readRbacPolicy(storeOptions);
+    expect(policy.enforced).toBe(true);
     expect(policy.roles).toHaveLength(1);
     expect(policy.roles[0]).toMatchObject({ id: "ok", builtIn: false });
     expect(policy.attachments).toHaveLength(1);
   });
 
-  it("fails safe to empty policy on malformed JSON", () => {
-    const file = resolveRbacPolicyPath(storeOptions);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, "{ not json");
+  it("fails safe to empty policy on malformed TOML", () => {
+    const configPath = resolveRbacConfigPath(storeOptions);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "[messaging.rbac\nenforced = ");
     expect(readRbacPolicy(storeOptions)).toEqual(emptyRbacPolicy());
+  });
+
+  it("falls back to the legacy JSON file and retires it on the next write", () => {
+    const legacyPath = resolveLegacyRbacPolicyJsonPath(storeOptions);
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        policyVersion: 1,
+        enforced: true,
+        roles: [
+          { id: "ok", name: "OK", builtIn: true, permissions: ["message.reply"] },
+        ],
+        attachments: [
+          {
+            subject: { kind: "actor", platform: "slack", actorId: "U1" },
+            roleIds: ["ok"],
+          },
+        ],
+      }),
+    );
+    const fromLegacy = readRbacPolicy(storeOptions);
+    expect(fromLegacy.enforced).toBe(true);
+    expect(fromLegacy.roles[0]).toMatchObject({ id: "ok", builtIn: false });
+
+    writeRbacPolicy(fromLegacy, storeOptions);
+    expect(fs.existsSync(legacyPath)).toBe(false);
+    expect(fs.existsSync(`${legacyPath}.migrated`)).toBe(true);
+    // The TOML section now wins outright.
+    expect(readRbacPolicy(storeOptions)).toEqual(fromLegacy);
+  });
+
+  it("prefers an existing TOML section over a lingering legacy JSON file", () => {
+    const legacyPath = resolveLegacyRbacPolicyJsonPath(storeOptions);
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({ policyVersion: 1, enforced: true, roles: [], attachments: [] }),
+    );
+    writeRbacPolicy(emptyRbacPolicy(), storeOptions);
+    expect(readRbacPolicy(storeOptions).enforced).toBe(false);
   });
 });
 

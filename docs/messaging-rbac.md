@@ -141,17 +141,45 @@ controller *enforces* cannot drift.
 
 ## Storage
 
-Policy persists per profile at
-`~/.pwragent/profiles/<name>/rbac-policy.json`
+Policy persists per profile under `[messaging.rbac]` in
+`~/.pwragent/profiles/<name>/config.toml`
 ([`apps/desktop/src/main/settings/rbac-policy-store.ts`](../apps/desktop/src/main/settings/rbac-policy-store.ts)),
-holding `enforced`, custom roles, and attachments. Built-in roles are never
-persisted.
+alongside the rest of the messaging config. Built-in roles are never
+persisted — only `enforced`, custom roles, and attachments:
 
-This is a **deliberate deviation from `config.toml`**: the repo's TOML editor
-writes scalar-only table arrays and cannot express the nested arrays RBAC
-needs (`role.permissions`, `attachment.roleIds`). Reads fail safe — a missing
-or malformed file resolves to the empty, unenforced policy, and malformed
-roles/attachments are dropped individually.
+```toml
+[messaging.rbac]
+enforced = true
+policy_version = 1
+
+[[messaging.rbac.roles]]
+id = "role_oncall"
+name = "On-call"
+permissions = ["message.reply", "thread.status.view"]
+
+[[messaging.rbac.attachments]]
+platform = "slack"
+subject_kind = "actor"
+actor_id = "U123"
+role_ids = ["admin", "role_oncall"]
+display_name = "Alice"
+
+[[messaging.rbac.attachments]]
+platform = "slack"
+subject_kind = "bucket"
+bucket = "channel_any_user"
+scope_id = "C123"
+role_ids = ["chat_user"]
+```
+
+Writes are targeted TOML edits (comments and unrelated sections preserved
+byte-for-byte), which became possible when the TOML editor gained string-array
+cells in table-array rows (PR #938) — earlier revisions of this feature used
+an interim standalone `rbac-policy.json`, which never shipped; the store still
+reads it as a fallback when no `[messaging.rbac]` section exists and retires
+it (renamed `.migrated`) on the first TOML write. Reads fail safe — a missing
+or malformed config resolves to the empty, unenforced policy, and malformed
+roles/attachments are dropped row by row.
 
 ## Full-access guardrails
 
