@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -55,6 +55,8 @@ type IntegratedTerminalServiceOptions = {
   loadNodePty?: () => Promise<Pick<NodePtyModule, "spawn">>;
   now?: () => number;
   onSessionsChanged?: (sessions: IntegratedTerminalSessionSummary[]) => void;
+  platform?: NodeJS.Platform;
+  readLinuxProcessStat?: (pid: number) => string;
 };
 
 export class IntegratedTerminalService {
@@ -66,6 +68,8 @@ export class IntegratedTerminalService {
   private readonly onSessionsChanged?: (
     sessions: IntegratedTerminalSessionSummary[],
   ) => void;
+  private readonly platform: NodeJS.Platform;
+  private readonly readLinuxProcessStat: (pid: number) => string;
   /** Threads whose PTY is mid-spawn — the window in which a close has nothing
    *  to act on yet. */
   private readonly spawningThreadKeys = new Set<string>();
@@ -80,6 +84,10 @@ export class IntegratedTerminalService {
     this.loadNodePty = options.loadNodePty ?? loadNodePty;
     this.now = options.now ?? Date.now;
     this.onSessionsChanged = options.onSessionsChanged;
+    this.platform = options.platform ?? process.platform;
+    this.readLinuxProcessStat =
+      options.readLinuxProcessStat
+      ?? ((pid) => readFileSync(`/proc/${pid}/stat`, "utf8"));
   }
 
   async createOrAttach(
@@ -112,7 +120,7 @@ export class IntegratedTerminalService {
       cwd = resolveTerminalCwd(request.cwd);
       shell = resolveTerminalShell({
         env,
-        platform: process.platform,
+        platform: this.platform,
         windowsShell: settings.resolveIntegratedTerminalWindowsShell(),
       });
       const nodePty = await this.loadNodePty();
@@ -248,12 +256,68 @@ export class IntegratedTerminalService {
   }
 
   getQuitSnapshot(): IntegratedTerminalQuitSnapshot {
-    const sessions = [...this.sessionsById.values()];
+    const sessions = [...this.sessionsById.values()].filter((session) =>
+      this.hasForegroundCommand(session),
+    );
     return {
       count: sessions.length,
       sessionIds: sessions.map((session) => session.sessionId).sort(),
       threadKeys: sessions.map((session) => session.threadKey).sort(),
     };
+  }
+
+  private hasForegroundCommand(session: TerminalSession): boolean {
+    if (this.platform === "linux") {
+      return this.hasLinuxForegroundCommand(session);
+    }
+
+    // node-pty exposes the terminal's foreground process on macOS. Other
+    // platforms return only the originally spawned process name, which cannot
+    // distinguish an idle prompt from a running command. Keep the existing
+    // conservative warning where the signal is unavailable.
+    if (this.platform !== "darwin") {
+      return true;
+    }
+
+    try {
+      const activeProcess = normalizeTerminalProcessName(session.pty.process);
+      const shellProcess = normalizeTerminalProcessName(session.shell);
+      return !activeProcess || !shellProcess || activeProcess !== shellProcess;
+    } catch (error) {
+      this.logger.warn("foreground-process-check-failed", {
+        error: error instanceof Error ? error.message : String(error),
+        sessionId: session.sessionId,
+      });
+      return true;
+    }
+  }
+
+  private hasLinuxForegroundCommand(session: TerminalSession): boolean {
+    try {
+      const stat = this.readLinuxProcessStat(session.pty.pid);
+      const closingParen = stat.lastIndexOf(")");
+      const fields = stat.slice(closingParen + 1).trim().split(/\s+/);
+      // After pid and the parenthesized command name, Linux stat fields begin
+      // at state (field 3); pgrp and tpgid are offsets 2 and 5 from there.
+      const processGroupId = Number(fields[2]);
+      const foregroundProcessGroupId = Number(fields[5]);
+      if (
+        closingParen < 0
+        || !Number.isInteger(processGroupId)
+        || processGroupId <= 0
+        || !Number.isInteger(foregroundProcessGroupId)
+        || foregroundProcessGroupId <= 0
+      ) {
+        throw new Error("Malformed Linux process stat");
+      }
+      return processGroupId !== foregroundProcessGroupId;
+    } catch (error) {
+      this.logger.warn("foreground-process-check-failed", {
+        error: error instanceof Error ? error.message : String(error),
+        sessionId: session.sessionId,
+      });
+      return true;
+    }
   }
 
   private toCreateResponse(
@@ -395,6 +459,10 @@ export class IntegratedTerminalService {
       webContents.send(channel, payload);
     }
   }
+}
+
+function normalizeTerminalProcessName(value: string): string {
+  return path.basename(value.trim().replace(/^-+/, ""));
 }
 
 async function loadNodePty(): Promise<Pick<NodePtyModule, "spawn">> {
