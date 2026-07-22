@@ -251,6 +251,92 @@ describe("resolveTerminalShell", () => {
     });
   });
 
+  it("reports a Linux foreground pipeline when node-pty falls back to the shell name", async () => {
+    const pty = fakePty({ pid: 321, process: "sh" });
+    const serviceOptions = {
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "linux" as const,
+      readLinuxProcessStat: () => "321 (sh) S 1 321 321 34816 654",
+    };
+    const service = new IntegratedTerminalService(serviceOptions);
+
+    const response = await service.createOrAttach(
+      {
+        threadKey: "codex:thread-linux-pipeline",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(service.getQuitSnapshot()).toEqual({
+      count: 1,
+      sessionIds: [response.sessionId],
+      threadKeys: ["codex:thread-linux-pipeline"],
+    });
+  });
+
+  it("does not report a Linux terminal whose shell owns the foreground process group", async () => {
+    const pty = fakePty({ pid: 321, process: "sh" });
+    const serviceOptions = {
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "linux" as const,
+      readLinuxProcessStat: () => "321 (sh) S 1 321 321 34816 321",
+    };
+    const service = new IntegratedTerminalService(serviceOptions);
+
+    await service.createOrAttach(
+      {
+        threadKey: "codex:thread-linux-idle",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(service.getQuitSnapshot()).toEqual({
+      count: 0,
+      sessionIds: [],
+      threadKeys: [],
+    });
+  });
+
+  it("conservatively reports a Linux terminal when process-group lookup fails", async () => {
+    const pty = fakePty({ pid: 321, process: "sh" });
+    const serviceOptions = {
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "linux" as const,
+      readLinuxProcessStat: () => {
+        throw new Error("proc unavailable");
+      },
+    };
+    const service = new IntegratedTerminalService(serviceOptions);
+
+    const response = await service.createOrAttach(
+      {
+        threadKey: "codex:thread-linux-lookup-failed",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(service.getQuitSnapshot()).toEqual({
+      count: 1,
+      sessionIds: [response.sessionId],
+      threadKeys: ["codex:thread-linux-lookup-failed"],
+    });
+  });
+
   it("conservatively reports terminals when foreground detection is unsupported", async () => {
     const pty = fakePty({ process: "powershell.exe" });
     const service = new IntegratedTerminalService({
