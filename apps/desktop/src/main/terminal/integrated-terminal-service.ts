@@ -115,7 +115,7 @@ export class IntegratedTerminalService {
       cwd = resolveTerminalCwd(request.cwd);
       shell = resolveTerminalShell({
         env,
-        platform: process.platform,
+        platform: this.platform,
         windowsShell: settings.resolveIntegratedTerminalWindowsShell(),
       });
       const nodePty = await this.loadNodePty();
