@@ -75,10 +75,40 @@ async function resolvePrLookupBranches(params: {
   const defaultBranchInfo = await readDefaultBranchInfo(params.cwd);
 
   if (params.branch !== "HEAD") {
-    return defaultBranchInfo.names.has(params.branch) ? [] : [params.branch];
+    const trackedRemoteBranch = await readTrackedRemoteBranchName(
+      params.cwd,
+      params.branch,
+    );
+    if (defaultBranchInfo.names.has(params.branch)) {
+      return [];
+    }
+    // A local feature branch may track the remote default branch for pulls.
+    // Never query that default name; keep the local feature name instead.
+    return [
+      trackedRemoteBranch
+      && !defaultBranchInfo.names.has(trackedRemoteBranch)
+        ? trackedRemoteBranch
+        : params.branch,
+    ];
   }
 
   return [];
+}
+
+async function readTrackedRemoteBranchName(
+  cwd: string,
+  localBranch: string,
+): Promise<string | undefined> {
+  const remoteRef = await readGitLine(cwd, [
+    "for-each-ref",
+    "--format=%(upstream:remoteref)",
+    `refs/heads/${localBranch}`,
+  ]);
+  const prefix = "refs/heads/";
+  if (!remoteRef?.startsWith(prefix)) {
+    return undefined;
+  }
+  return remoteRef.slice(prefix.length).trim() || undefined;
 }
 
 async function readDefaultBranchInfo(cwd: string): Promise<DefaultBranchInfo> {
