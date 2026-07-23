@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   GithubGraphqlPrClient,
+  branchRefKey,
   buildBatchedPrQuery,
+  buildBranchPrQuery,
   mapGraphqlPrNode,
   parsePrRefFromUrl,
   retryDelayMs,
@@ -84,6 +86,47 @@ describe("buildBatchedPrQuery", () => {
       n1: "infra",
       p1: 7,
     });
+  });
+});
+
+describe("buildBranchPrQuery", () => {
+  it("aliases branches from different repos into one document", () => {
+    const { query, variables } = buildBranchPrQuery([
+      { owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/a" },
+      { owner: "other", repo: "infra", branch: "fix/b" },
+    ]);
+
+    expect(query).toContain("r0: repository(owner: $o0, name: $n0)");
+    expect(query).toContain("r1: repository(owner: $o1, name: $n1)");
+    expect(query).toContain("pullRequests(headRefName: $b0");
+    expect(query).toContain("pullRequests(headRefName: $b1");
+    // Merged/closed included, so a branch whose PR already landed still resolves.
+    expect(query).toContain("states: [OPEN, MERGED, CLOSED]");
+    expect(variables).toEqual({
+      o0: "pwrdrvr",
+      n0: "PwrAgent",
+      b0: "feat/a",
+      o1: "other",
+      n1: "infra",
+      b1: "fix/b",
+    });
+  });
+
+  it("passes branch names as variables, never interpolated", () => {
+    const { query, variables } = buildBranchPrQuery([
+      { owner: "o", repo: "r", branch: 'evil") { x } #' },
+    ]);
+    expect(variables.b0).toBe('evil") { x } #');
+    expect(query).not.toContain("evil");
+  });
+});
+
+describe("branchRefKey", () => {
+  it("is case-insensitive on repo but not on the branch", () => {
+    // Git branches are case-sensitive; GitHub owner/repo are not.
+    expect(branchRefKey({ owner: "PwrDrvr", repo: "PwrAgent", branch: "Feat/A" })).toBe(
+      "pwrdrvr/pwragent#Feat/A",
+    );
   });
 });
 
@@ -282,6 +325,65 @@ describe("GithubGraphqlPrClient", () => {
     await expect(client(request).fetchPullRequests(refs)).resolves.toEqual([]);
     // 401 is not retryable — exactly one attempt.
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("looks up branches across repos in one request", async () => {
+    const request = vi.fn(async () => ({
+      r0: { pullRequests: { nodes: [node({ number: 12 })] } },
+      r1: {
+        pullRequests: {
+          nodes: [
+            node({ number: 7, url: "https://github.com/other/infra/pull/7" }),
+          ],
+        },
+      },
+    }));
+    const result = await client(request).fetchPullRequestsForBranches([
+      { owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/a" },
+      { owner: "other", repo: "infra", branch: "fix/b" },
+    ]);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(result.get("pwrdrvr/pwragent#feat/a")?.map((pr) => pr.number)).toEqual([12]);
+    expect(result.get("other/infra#fix/b")?.map((pr) => pr.number)).toEqual([7]);
+  });
+
+  it("records an authoritative empty answer for a branch with no PRs", async () => {
+    const request = vi.fn(async () => ({ r0: { pullRequests: { nodes: [] } } }));
+    const result = await client(request).fetchPullRequestsForBranches([
+      { owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/a" },
+    ]);
+
+    // Key PRESENT with an empty array — "GitHub says this branch has no PRs".
+    expect(result.has("pwrdrvr/pwragent#feat/a")).toBe(true);
+    expect(result.get("pwrdrvr/pwragent#feat/a")).toEqual([]);
+  });
+
+  it("omits the key entirely when a batch fails, so callers cannot record a false negative", async () => {
+    const request = vi.fn(async () => {
+      throw Object.assign(new Error("unauthorized"), { status: 401 });
+    });
+    const result = await client(request).fetchPullRequestsForBranches([
+      { owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/a" },
+    ]);
+
+    // Absent, NOT an empty array — the difference between "no PRs" and
+    // "we don't know" is what keeps a failed request from blanking chips.
+    expect(result.has("pwrdrvr/pwragent#feat/a")).toBe(false);
+  });
+
+  it("omits only the unresolved repo when part of a batch fails", async () => {
+    const request = vi.fn(async () => ({
+      r0: { pullRequests: { nodes: [node({ number: 12 })] } },
+      r1: null,
+    }));
+    const result = await client(request).fetchPullRequestsForBranches([
+      { owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/a" },
+      { owner: "gone", repo: "missing", branch: "fix/b" },
+    ]);
+
+    expect(result.has("pwrdrvr/pwragent#feat/a")).toBe(true);
+    expect(result.has("gone/missing#fix/b")).toBe(false);
   });
 
   it("does not call GitHub at all when gh has no token", async () => {

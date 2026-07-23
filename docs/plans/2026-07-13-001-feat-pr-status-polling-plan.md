@@ -335,6 +335,44 @@ A `since`-based crawl remains the right tool if we later want to discover PRs
 *independent of any thread's branch* (e.g. a dashboard of all org PR activity).
 That is a different feature; `deriveIncrementalSince` from ghcrawl is noted for it.
 
+### Phase 4 follow-up: discovery brought in-process too
+
+The first cut of the branch-lookup rotation reused `refreshThreadPullRequests`,
+which bottoms out in `gh pr list --head <branch>` — **one subprocess per
+branch**. That left the transport story inconsistent: status polling was
+in-process GraphQL, discovery was not. Fixed:
+
+- **`pr-status/git-remote.ts`** — `parseGitHubRemote` + cached
+  `resolveGitHubRepoForDirectory`. This is the one capability the subprocess
+  path got for free: `gh` infers the repo from the cwd's remote, but
+  `repository(owner:, name:)` has to be told. Negative results are cached too,
+  so a non-GitHub checkout does not re-shell every sweep.
+- **`buildBranchPrQuery` / `fetchPullRequestsForBranches`** — PwrGit's
+  `pullRequests(headRefName:)` pattern, with the `repository()` level aliased
+  as well so branches from *different repos* share one request (PwrGit batches
+  within a single repo). `first: 5` matches `gh pr list --limit 5`, so a branch
+  with both a merged and a newer open PR still surfaces both.
+- **`GithubPrFetcher.primeBranchLookup`** — discovery answers every due branch
+  in one batched request and primes the fetcher; the existing refresh path then
+  consumes those answers instead of spawning `gh`. Nothing about PR→thread
+  attachment changed, which is what made this safe to slot in.
+
+**The load-bearing invariant:** `fetchPullRequestsForBranches` returns a key
+*only* when GitHub actually answered. A present-but-empty array is an
+authoritative "this branch has no PRs"; an **absent** key means "we don't know"
+and the caller falls back to `gh`. Conflating the two would let a single failed
+request blank out every chip. Primed entries are also **single-use** and
+short-TTL, so a later user-triggered refresh always gets its own fresh read.
+
+Verified live: one HTTP request covering four branches across two orgs, with
+correct authoritative-empty answers for branches that have no PR.
+
+**Still subprocess-based** (not addressed here): `readDefaultBranchInfo`'s
+`git remote` / `git symbolic-ref` calls per cwd (local and cheap), and
+`fetchRetainedNonTerminalPullRequests`'s `gh pr view` for retained PRs — those
+PRs are already kept fresh by the by-number poller, so the redundancy is small.
+The pre-existing on-selection / hover / post-turn path also still uses `gh`.
+
 ## Future (explicitly not in this plan)
 
 CI/merge transitions starting turns in threads (the webhook-mimic ingestor) —

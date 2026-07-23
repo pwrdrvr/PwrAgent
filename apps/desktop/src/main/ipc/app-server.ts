@@ -192,7 +192,12 @@ import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindin
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { detectPullRequestsForThread } from "../pr-status/pr-detection";
-import { GithubGraphqlPrClient } from "../pr-status/github-graphql-client";
+import {
+  GithubGraphqlPrClient,
+  branchRefKey,
+} from "../pr-status/github-graphql-client";
+import type { BranchRef } from "../pr-status/github-graphql-client";
+import { resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
 import type { PrPollTarget } from "../pr-status/pr-polling-scheduler";
 import { isTerminalPullRequest, mergeCommitShas } from "../pr-status/pr-derivations";
@@ -3143,32 +3148,113 @@ class DesktopAppServerService {
       skipThreadKeys: this.prPollingFocusThreadKeys,
     });
 
+    const dueContexts: ThreadPrRefreshContext[] = [];
     for (const threadKey of due) {
       // Mark before firing so a slow refresh cannot keep re-selecting the same
       // thread on the next tick.
       this.prDiscoveryLastRefreshedAt.set(threadKey, now);
-      const contexts = this.prRefreshContextByThreadKey.get(threadKey);
-      if (!contexts) {
+      dueContexts.push(...(this.prRefreshContextByThreadKey.get(threadKey) ?? []));
+    }
+    if (dueContexts.length === 0) {
+      return;
+    }
+
+    // Answer every due branch lookup in one batched in-process request, then
+    // let the normal refresh path consume those answers. Best-effort: anything
+    // not primed simply falls back to the `gh` subprocess.
+    void this.primeDiscoveryBranchLookups(dueContexts)
+      .catch((error) => {
+        appServerLog.debug("pr discovery prefetch failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.startDiscoveryRefreshes(dueContexts);
+      });
+  }
+
+  /**
+   * Resolve each due (directory, branch) to a GitHub repo and look them all up
+   * in one batched GraphQL request, priming the fetcher with the results.
+   *
+   * This is what keeps discovery from spawning one `gh pr list` per branch.
+   * Only branches GitHub actually answered for are primed — a missing answer
+   * falls through to `gh` rather than being recorded as "no PRs".
+   */
+  private async primeDiscoveryBranchLookups(
+    contexts: ThreadPrRefreshContext[],
+  ): Promise<void> {
+    const wanted = new Map<string, { cwd: string; branch: string; ref: BranchRef }>();
+    for (const context of contexts) {
+      const branch = context.branch.trim();
+      // "HEAD" contexts are not branch lookups, and the detection path skips
+      // default branches entirely — priming either would be wasted work.
+      if (!branch || branch === "HEAD") {
         continue;
       }
-      for (const context of contexts) {
-        // `trigger: "scheduled"` routes through the existing per-lookup cooldown
-        // and the shared token bucket, so discovery self-limits against the
-        // fast poller and the terminal short-circuit still applies.
-        void this.refreshThreadPullRequests({
-          backend: context.backend,
-          threadId: context.threadId,
-          provider: DEFAULT_PULL_REQUEST_PROVIDER,
-          trigger: "scheduled",
-          branch: context.branch,
-          directoryPaths: context.directoryPaths,
-        }).catch((error) => {
-          appServerLog.debug("pr discovery refresh failed", {
-            threadId: context.threadId,
-            error: error instanceof Error ? error.message : String(error),
-          });
+      for (const cwd of context.directoryPaths) {
+        const dedupeKey = `${cwd} ${branch}`;
+        if (wanted.has(dedupeKey)) {
+          continue;
+        }
+        const repo = await resolveGitHubRepoForDirectory(cwd);
+        if (!repo || repo.host !== DEFAULT_PULL_REQUEST_PROVIDER) {
+          continue;
+        }
+        wanted.set(dedupeKey, {
+          cwd,
+          branch,
+          ref: { owner: repo.owner, repo: repo.repo, branch },
         });
       }
+    }
+
+    if (wanted.size === 0) {
+      return;
+    }
+
+    const entries = [...wanted.values()];
+    const byRefKey = await this.getPrGraphqlClient().fetchPullRequestsForBranches(
+      entries.map((entry) => entry.ref),
+    );
+    const primed = entries
+      .map((entry) => ({
+        cwd: entry.cwd,
+        branch: entry.branch,
+        prs: byRefKey.get(branchRefKey(entry.ref)),
+      }))
+      .filter(
+        (entry): entry is { cwd: string; branch: string; prs: PrSummary[] } =>
+          entry.prs !== undefined,
+      );
+    if (primed.length === 0) {
+      return;
+    }
+    this.getPrFetcher().primeBranchLookup(primed);
+    appServerLog.debug("pr discovery primed branch lookups", {
+      requested: entries.length,
+      primed: primed.length,
+    });
+  }
+
+  private startDiscoveryRefreshes(contexts: ThreadPrRefreshContext[]): void {
+    for (const context of contexts) {
+      // `trigger: "scheduled"` routes through the existing per-lookup cooldown
+      // and the shared token bucket, so discovery self-limits against the
+      // fast poller and the terminal short-circuit still applies.
+      void this.refreshThreadPullRequests({
+        backend: context.backend,
+        threadId: context.threadId,
+        provider: DEFAULT_PULL_REQUEST_PROVIDER,
+        trigger: "scheduled",
+        branch: context.branch,
+        directoryPaths: context.directoryPaths,
+      }).catch((error) => {
+        appServerLog.debug("pr discovery refresh failed", {
+          threadId: context.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     }
   }
 

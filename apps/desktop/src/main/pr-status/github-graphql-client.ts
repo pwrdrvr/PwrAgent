@@ -166,6 +166,74 @@ ${PR_STATUS_FRAGMENT}`;
   return { query, variables };
 }
 
+/**
+ * A branch to look up PRs for. Used by discovery: "does this branch have a PR?"
+ * — the question the `gh pr list --head <branch>` subprocess answers one branch
+ * at a time.
+ */
+export type BranchRef = {
+  owner: string;
+  repo: string;
+  branch: string;
+};
+
+/** Stable key for correlating a branch lookup back to its result. */
+export function branchRefKey(ref: BranchRef): string {
+  return `${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}#${ref.branch}`;
+}
+
+/**
+ * How many PRs to return per branch. `gh pr list --head <branch>` uses
+ * `--limit 5`; matching it means a branch that has both a merged PR and a newer
+ * open one still surfaces both, exactly as the subprocess path did.
+ */
+const PRS_PER_BRANCH = 5;
+
+/**
+ * Build one aliased document that looks up PRs by head branch across
+ * arbitrary repos.
+ *
+ * PwrGit batches ~50 branches inside a single `repository(...)`; aliasing the
+ * repository level too (as the by-number query does) lets branches from
+ * different repos share one request as well. Same injection-safe variable
+ * discipline: nothing is interpolated.
+ */
+export function buildBranchPrQuery(refs: BranchRef[]): {
+  query: string;
+  variables: Record<string, string | number>;
+} {
+  const variableDecls: string[] = [];
+  const selections: string[] = [];
+  const variables: Record<string, string | number> = {};
+
+  refs.forEach((ref, index) => {
+    const owner = `o${index}`;
+    const name = `n${index}`;
+    const branch = `b${index}`;
+    variableDecls.push(
+      `$${owner}: String!`,
+      `$${name}: String!`,
+      `$${branch}: String!`,
+    );
+    selections.push(
+      `  r${index}: repository(owner: $${owner}, name: $${name}) {`
+      + ` pullRequests(headRefName: $${branch}, first: ${PRS_PER_BRANCH},`
+      + ` orderBy: { field: CREATED_AT, direction: DESC },`
+      + ` states: [OPEN, MERGED, CLOSED]) { nodes { ...PrStatus } } }`,
+    );
+    variables[owner] = ref.owner;
+    variables[name] = ref.repo;
+    variables[branch] = ref.branch;
+  });
+
+  const query = `query DiscoverPullRequestsByBranch(${variableDecls.join(", ")}) {
+${selections.join("\n")}
+}
+${PR_STATUS_FRAGMENT}`;
+
+  return { query, variables };
+}
+
 /** Map one GraphQL PullRequest node onto our shared PrSummary. */
 export function mapGraphqlPrNode(node: GraphqlPrNode): PrSummary {
   const headCommit = node.commits?.nodes?.[0]?.commit ?? undefined;
@@ -323,6 +391,100 @@ export class GithubGraphqlPrClient {
       results.push(...prs);
     }
     return results;
+  }
+
+  /**
+   * Look up PRs by head branch, batched across repos.
+   *
+   * Returns a map keyed by `branchRefKey`. A key is present ONLY when GitHub
+   * actually answered for that branch — an empty array then means an
+   * authoritative "this branch has no PRs". A missing key means we don't know
+   * (batch failed, repo inaccessible), and the caller must fall back rather
+   * than record a false negative. That distinction is the whole contract here:
+   * conflating the two would let one failed request blank out every chip.
+   */
+  async fetchPullRequestsForBranches(
+    refs: BranchRef[],
+  ): Promise<Map<string, PrSummary[]>> {
+    const results = new Map<string, PrSummary[]>();
+    if (refs.length === 0) {
+      return results;
+    }
+    const token = await this.resolveToken();
+    if (!token) {
+      graphqlLog.debug("skipping branch PR lookup: no GitHub token from gh");
+      return results;
+    }
+
+    for (const batch of chunk(refs, this.batchSize)) {
+      const data = await this.runBatchQuery(
+        buildBranchPrQuery(batch),
+        token,
+        batch.length,
+      );
+      if (!data) {
+        continue;
+      }
+      batch.forEach((ref, index) => {
+        const repository = data[`r${index}`] as
+          | { pullRequests?: { nodes?: (GraphqlPrNode | null)[] | null } | null }
+          | null
+          | undefined;
+        if (!repository) {
+          // Alias did not resolve — leave the key absent so the caller falls back.
+          return;
+        }
+        const nodes = repository.pullRequests?.nodes ?? [];
+        results.set(
+          branchRefKey(ref),
+          nodes
+            .filter((node): node is GraphqlPrNode => Boolean(node))
+            .map(mapGraphqlPrNode),
+        );
+      });
+    }
+    return results;
+  }
+
+  /**
+   * Run one aliased document with retry/backoff, salvaging partial data.
+   * Returns `undefined` when the batch produced nothing usable.
+   */
+  private async runBatchQuery(
+    built: { query: string; variables: Record<string, string | number> },
+    token: string,
+    refCount: number,
+  ): Promise<Record<string, unknown> | undefined> {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
+      try {
+        return (await this.runRequest(built.query, built.variables, token)) as Record<
+          string,
+          unknown
+        >;
+      } catch (error) {
+        const partial = (error as { data?: Record<string, unknown> } | null)?.data;
+        if (partial) {
+          graphqlLog.debug("PR batch returned partial data", {
+            refCount,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return partial;
+        }
+
+        const delay = retryDelayMs(error, attempt);
+        if (delay === null || attempt === MAX_RETRIES) {
+          graphqlLog.warn("PR batch failed", {
+            refCount,
+            attempt,
+            retryable: delay !== null,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return undefined;
+        }
+        await this.sleep(delay);
+      }
+    }
+    return undefined;
   }
 
   private async fetchBatch(refs: PrRef[], token: string): Promise<PrSummary[]> {
