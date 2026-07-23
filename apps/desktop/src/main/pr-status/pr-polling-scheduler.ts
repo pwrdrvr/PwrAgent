@@ -24,7 +24,14 @@ const schedulerLog = getMainLogger("pwragent:pr-poller");
  * of points.
  */
 
-export type PrPollTier = "focused" | "warm" | "cold";
+/**
+ * `icebox` is not a cadence — it means "stop watching this PR entirely."
+ * Everything else polls on the cadence below.
+ */
+export type PrPollTier = "focused" | "warm" | "cold" | "icebox";
+
+/** The tiers that actually poll. `icebox` is excluded by construction. */
+export type PollablePrTier = Exclude<PrPollTier, "icebox">;
 
 export type PrPollTarget = {
   prKey: string;
@@ -33,8 +40,8 @@ export type PrPollTarget = {
   threadKeys: string[];
 };
 
-/** Target cadence per tier, when the window is visible. */
-export const TIER_CADENCE_MS: Record<PrPollTier, number> = {
+/** Target cadence per pollable tier, when the window is visible. */
+export const TIER_CADENCE_MS: Record<PollablePrTier, number> = {
   focused: 60_000,
   warm: 150_000,
   cold: 300_000,
@@ -46,6 +53,20 @@ export const TIER_CADENCE_MS: Record<PrPollTier, number> = {
  * sat untouched for six hours is unlikely to need minute-level freshness.
  */
 export const QUIET_DEMOTION_MS = 6 * 60 * 60_000;
+
+/**
+ * The icebox threshold. A PR whose status has not changed AND whose threads
+ * have not been touched in this long falls off the monitor list completely —
+ * we stop spending any budget on it.
+ *
+ * This is intentionally self-latching: an iceboxed PR is never polled, so its
+ * `lastChangedAt` can never advance on its own, so it stays iceboxed until the
+ * operator interacts with one of its threads. That is the point — a branch
+ * abandoned two weeks ago should cost nothing, forever, until you look at it.
+ * Touching the thread (selecting it, or a turn completing in it) puts it back
+ * on the list immediately at the focused/warm tier.
+ */
+export const ICEBOX_AFTER_MS = 24 * 60 * 60_000;
 
 /** When the window is hidden, stretch every cadence rather than stopping dead. */
 const HIDDEN_WINDOW_CADENCE_MULTIPLIER = 4;
@@ -59,7 +80,7 @@ const BATCH_SIZE = 40;
  */
 const MAX_BATCHES_PER_TICK = 3;
 
-const TIER_RANK: Record<PrPollTier, number> = {
+const TIER_RANK: Record<PollablePrTier, number> = {
   focused: 0,
   warm: 1,
   cold: 2,
@@ -83,33 +104,58 @@ type PollState = {
   lastPolledAt: number;
   /** Last time this PR's status actually changed — drives quiet-demotion. */
   lastChangedAt: number;
+  /**
+   * Last time the operator touched one of this PR's threads (focused it, or a
+   * turn completed in it). Together with `lastChangedAt` this decides whether
+   * the PR is still worth watching at all.
+   */
+  lastInteractionAt: number;
 };
+
+/** Is the operator looking at a thread that shows this PR right now? */
+export function isTargetFocused(
+  target: PrPollTarget,
+  focusedThreadKeys: ReadonlySet<string>,
+): boolean {
+  return target.threadKeys.some((threadKey) => focusedThreadKeys.has(threadKey));
+}
 
 /**
  * Pick the tier for one target. Exported for tests.
  *
  * Focus wins outright: if the operator is looking at a thread showing this PR,
- * it polls fast regardless of how quiet it has been.
+ * it polls fast no matter how long it had been quiet — which is what makes the
+ * icebox safe to be aggressive about.
  */
 export function assignTier(params: {
   target: PrPollTarget;
   focusedThreadKeys: ReadonlySet<string>;
   lastChangedAt: number;
+  lastInteractionAt: number;
   now: number;
 }): PrPollTier {
-  const focused = params.target.threadKeys.some((threadKey) =>
-    params.focusedThreadKeys.has(threadKey),
-  );
-  if (focused) {
+  if (isTargetFocused(params.target, params.focusedThreadKeys)) {
     return "focused";
   }
-  return params.now - params.lastChangedAt <= QUIET_DEMOTION_MS ? "warm" : "cold";
+  // Either real movement on the PR or the operator touching its thread counts
+  // as "still live" — neither alone should be able to freeze an active PR out.
+  const lastActivityAt = Math.max(params.lastChangedAt, params.lastInteractionAt);
+  const quietForMs = params.now - lastActivityAt;
+  if (quietForMs > ICEBOX_AFTER_MS) {
+    return "icebox";
+  }
+  return quietForMs <= QUIET_DEMOTION_MS ? "warm" : "cold";
 }
 
 export class PrPollingScheduler {
   private readonly deps: PrPollingSchedulerDeps;
   private readonly now: () => number;
   private readonly pollState = new Map<string, PollState>();
+  /**
+   * Threads touched since the last pass, from signals the scheduler cannot see
+   * itself (a turn completing in a background thread). Drained each tick.
+   */
+  private readonly pendingInteractionThreadKeys = new Set<string>();
   private timer: NodeJS.Timeout | undefined;
   private ticking = false;
 
@@ -138,6 +184,21 @@ export class PrPollingScheduler {
       this.timer = undefined;
     }
     this.pollState.clear();
+    this.pendingInteractionThreadKeys.clear();
+  }
+
+  /**
+   * Record that the operator (or an agent turn) touched these threads. Thaws
+   * any iceboxed PRs on them at the next tick.
+   *
+   * Focus is already sampled every tick, so this is for interactions the
+   * scheduler cannot observe — chiefly a turn completing in a thread that is
+   * not on screen.
+   */
+  noteThreadInteraction(threadKeys: string[]): void {
+    for (const threadKey of threadKeys) {
+      this.pendingInteractionThreadKeys.add(threadKey);
+    }
   }
 
   /** One scheduling pass. Exposed so tests can drive it without timers. */
@@ -192,7 +253,7 @@ export class PrPollingScheduler {
       ? 1
       : HIDDEN_WINDOW_CADENCE_MULTIPLIER;
 
-    const due: { target: PrPollTarget; tier: PrPollTier; lastPolledAt: number }[] = [];
+    const due: { target: PrPollTarget; tier: PollablePrTier; lastPolledAt: number }[] = [];
     for (const target of targets) {
       // Merged/closed PRs cannot change again. The registry keeps them for
       // display; polling them is pure waste.
@@ -200,18 +261,39 @@ export class PrPollingScheduler {
         continue;
       }
       const state = this.ensurePollState(target.prKey, now);
+
+      // Refresh the interaction clock BEFORE assigning a tier, so touching a
+      // thread thaws its iceboxed PRs on this very tick. Focus is sampled
+      // continuously (not just on change) so a thread sat on for a day does
+      // not age into the icebox while the operator is staring at it.
+      if (
+        isTargetFocused(target, focusedThreadKeys)
+        || target.threadKeys.some((threadKey) =>
+          this.pendingInteractionThreadKeys.has(threadKey),
+        )
+      ) {
+        state.lastInteractionAt = now;
+      }
+
       const tier = assignTier({
         target,
         focusedThreadKeys,
         lastChangedAt: state.lastChangedAt,
+        lastInteractionAt: state.lastInteractionAt,
         now,
       });
+      if (tier === "icebox") {
+        // Off the monitor list entirely — no cadence, no budget, no request.
+        continue;
+      }
       const cadence = TIER_CADENCE_MS[tier] * cadenceMultiplier;
       if (now - state.lastPolledAt < cadence) {
         continue;
       }
       due.push({ target, tier, lastPolledAt: state.lastPolledAt });
     }
+    // Drained once per pass: every target has now had a chance to see them.
+    this.pendingInteractionThreadKeys.clear();
 
     // Focused first, then least-recently-polled. The second key is what makes
     // the sweep round-robin instead of starving the tail of a long list.
@@ -273,9 +355,14 @@ export class PrPollingScheduler {
     if (existing) {
       return existing;
     }
-    // A newly tracked PR is "due immediately" but counts as recently changed,
-    // so it starts warm rather than being demoted to cold on first sight.
-    const created: PollState = { lastPolledAt: 0, lastChangedAt: now };
+    // A newly tracked PR is "due immediately" but counts as recently active,
+    // so it starts warm rather than being demoted to cold — or iceboxed — on
+    // first sight.
+    const created: PollState = {
+      lastPolledAt: 0,
+      lastChangedAt: now,
+      lastInteractionAt: now,
+    };
     this.pollState.set(prKey, created);
     return created;
   }

@@ -116,6 +116,7 @@ import {
   type PwrAgentThreadInspectionResponse,
 } from "@pwragent/shared";
 import {
+  DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PULL_REQUEST_PROVIDER,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
@@ -1259,7 +1260,7 @@ class DesktopAppServerService {
     await this.loadThreadGitWorkingStateCache();
     this.rememberThreadWorktreePaths(canonicalSnapshot.threads);
     this.rememberThreadPrRefreshContexts(canonicalSnapshot.threads);
-    this.ensurePrPollingSchedulerStarted();
+    this.syncPrPollingSchedulerState();
     const detachedPrsByThreadKey = await this.readDetachedPrsByThreadKey(
       canonicalSnapshot.threads,
     );
@@ -1988,6 +1989,9 @@ class DesktopAppServerService {
     }
 
     if (method === "turn/completed") {
+      // A finished turn is real activity on this thread even when it is off
+      // screen — thaw its PRs if the poller had iceboxed them.
+      this.prPollingScheduler?.noteThreadInteraction([threadKey]);
       const prContexts = this.prRefreshContextByThreadKey.get(threadKey);
       if (prContexts?.length) {
         for (const prContext of prContexts) {
@@ -3015,6 +3019,47 @@ class DesktopAppServerService {
       this.prGraphqlClient = new GithubGraphqlPrClient();
     }
     return this.prGraphqlClient;
+  }
+
+  /**
+   * Start or stop the background poller to match the experimental setting.
+   *
+   * Called on every navigation snapshot, so toggling the setting takes effect
+   * without an app restart. With the flag off nothing is scheduled and PR chips
+   * behave exactly as they did before the poller existed.
+   */
+  private syncPrPollingSchedulerState(): void {
+    void (async () => {
+      let enabled = DEFAULT_BACKGROUND_PR_POLLING;
+      try {
+        const settings = await getDesktopSettingsService().readSettings();
+        enabled =
+          settings.experimental.backgroundPrPolling?.value
+          ?? DEFAULT_BACKGROUND_PR_POLLING;
+      } catch (error) {
+        appServerLog.warn("failed to read background PR polling setting", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      if (!enabled) {
+        this.stopPrPollingScheduler();
+        return;
+      }
+      this.ensurePrPollingSchedulerStarted();
+    })();
+  }
+
+  private stopPrPollingScheduler(): void {
+    if (this.prPollingScheduler) {
+      this.prPollingScheduler.stop();
+      this.prPollingScheduler = undefined;
+    }
+    if (this.prDiscoveryTimer) {
+      clearInterval(this.prDiscoveryTimer);
+      this.prDiscoveryTimer = undefined;
+    }
+    this.prDiscoveryLastRefreshedAt.clear();
   }
 
   /**

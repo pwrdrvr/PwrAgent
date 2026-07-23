@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
 import {
+  ICEBOX_AFTER_MS,
   PrPollingScheduler,
   QUIET_DEMOTION_MS,
   TIER_CADENCE_MS,
@@ -78,15 +79,17 @@ function polledNumbers(fetched: PrRef[][]): number[] {
 }
 
 describe("assignTier", () => {
-  const now = 1_000_000;
+  const now = 10 * ICEBOX_AFTER_MS;
 
   it("puts a PR on the fast tier when the operator is looking at its thread", () => {
     expect(
       assignTier({
         target: target(1, ["codex:t1"]),
         focusedThreadKeys: new Set(["codex:t1"]),
-        // Even though it has been quiet for a week.
-        lastChangedAt: now - QUIET_DEMOTION_MS * 10,
+        // Even though it has been quiet long enough to be iceboxed — focus
+        // always wins, which is what makes the icebox safe to be aggressive.
+        lastChangedAt: now - ICEBOX_AFTER_MS * 2,
+        lastInteractionAt: now - ICEBOX_AFTER_MS * 2,
         now,
       }),
     ).toBe("focused");
@@ -98,6 +101,7 @@ describe("assignTier", () => {
         target: target(1),
         focusedThreadKeys: new Set(),
         lastChangedAt: now - 60_000,
+        lastInteractionAt: 0,
         now,
       }),
     ).toBe("warm");
@@ -109,9 +113,49 @@ describe("assignTier", () => {
         target: target(1),
         focusedThreadKeys: new Set(),
         lastChangedAt: now - QUIET_DEMOTION_MS - 1,
+        lastInteractionAt: 0,
         now,
       }),
     ).toBe("cold");
+  });
+
+  it("iceboxes a PR with no change and no interaction for a day", () => {
+    expect(
+      assignTier({
+        target: target(1),
+        focusedThreadKeys: new Set(),
+        lastChangedAt: now - ICEBOX_AFTER_MS - 1,
+        lastInteractionAt: now - ICEBOX_AFTER_MS - 1,
+        now,
+      }),
+    ).toBe("icebox");
+  });
+
+  it("keeps a stale PR out of the icebox when its thread was touched recently", () => {
+    // Interaction alone is enough — the PR itself has been quiet for a week.
+    expect(
+      assignTier({
+        target: target(1),
+        focusedThreadKeys: new Set(),
+        lastChangedAt: now - ICEBOX_AFTER_MS * 7,
+        lastInteractionAt: now - 60_000,
+        now,
+      }),
+    ).toBe("warm");
+  });
+
+  it("keeps a quiet-threaded PR out of the icebox when the PR itself moved", () => {
+    // ...and change alone is enough too, so neither signal can freeze out an
+    // actively-moving PR on its own.
+    expect(
+      assignTier({
+        target: target(1),
+        focusedThreadKeys: new Set(),
+        lastChangedAt: now - 60_000,
+        lastInteractionAt: now - ICEBOX_AFTER_MS * 7,
+        now,
+      }),
+    ).toBe("warm");
   });
 });
 
@@ -271,6 +315,79 @@ describe("PrPollingScheduler", () => {
 
     // Both are past their cadence, so both poll — the tier only decides *when*.
     expect(polledNumbers(h.fetched).sort()).toEqual([1, 2]);
+  });
+
+  it("drops a long-quiet PR off the monitor list entirely", async () => {
+    const targets = [target(1)];
+    const h = harness({ listTargets: () => targets });
+
+    await h.scheduler.tick();
+    expect(polledNumbers(h.fetched)).toEqual([1]);
+
+    // Nothing changed and nobody touched the thread for over a day.
+    h.advance(ICEBOX_AFTER_MS + 1);
+    h.fetched.length = 0;
+    await h.scheduler.tick();
+    expect(h.fetched).toHaveLength(0);
+
+    // And it stays off — an iceboxed PR is never polled, so it can never
+    // un-ice itself. That self-latching is the point.
+    h.advance(ICEBOX_AFTER_MS * 5);
+    await h.scheduler.tick();
+    expect(h.fetched).toHaveLength(0);
+  });
+
+  it("thaws an iceboxed PR the moment its thread is focused", async () => {
+    const targets = [target(1, ["codex:t1"])];
+    let focused = new Set<string>();
+    const h = harness({
+      listTargets: () => targets,
+      getFocusedThreadKeys: () => focused,
+    });
+
+    await h.scheduler.tick();
+    h.advance(ICEBOX_AFTER_MS + 1);
+    h.fetched.length = 0;
+    await h.scheduler.tick();
+    expect(h.fetched).toHaveLength(0);
+
+    // Operator opens the thread.
+    focused = new Set(["codex:t1"]);
+    await h.scheduler.tick();
+    expect(polledNumbers(h.fetched)).toEqual([1]);
+  });
+
+  it("thaws an iceboxed PR when a turn completes in an off-screen thread", async () => {
+    const targets = [target(1, ["codex:t1"])];
+    const h = harness({ listTargets: () => targets });
+
+    await h.scheduler.tick();
+    h.advance(ICEBOX_AFTER_MS + 1);
+    h.fetched.length = 0;
+    await h.scheduler.tick();
+    expect(h.fetched).toHaveLength(0);
+
+    // Never focused — the signal arrives from the turn/completed path instead.
+    h.scheduler.noteThreadInteraction(["codex:t1"]);
+    await h.scheduler.tick();
+    expect(polledNumbers(h.fetched)).toEqual([1]);
+  });
+
+  it("keeps polling a PR that stays quiet but whose thread stays in view", async () => {
+    // Focus is sampled every tick, so sitting on a thread for days must not
+    // let it age into the icebox underneath the operator.
+    const targets = [target(1, ["codex:t1"])];
+    const h = harness({
+      listTargets: () => targets,
+      getFocusedThreadKeys: () => new Set(["codex:t1"]),
+    });
+
+    await h.scheduler.tick();
+    h.advance(ICEBOX_AFTER_MS * 3);
+    h.fetched.length = 0;
+    await h.scheduler.tick();
+
+    expect(polledNumbers(h.fetched)).toEqual([1]);
   });
 
   it("skips a PR whose url cannot be parsed rather than crashing the sweep", async () => {

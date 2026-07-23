@@ -358,13 +358,43 @@ are separate future work.
 - **Boundary/lint gates:** `pnpm lint:boundaries` (octokit must not leak into
   renderer/leaf), `pnpm lint:eslint`, `pnpm typecheck` before push.
 
-## Rollout & Safety
+## Rollout & Safety — ✅ DONE (shipped opt-in, not default-on)
 
-- Gate background polling behind a setting/dev flag (default on, killable) so it can
-  be disabled if it misbehaves in the field; the selected-thread refresh path keeps
-  working with the flag off.
-- Ship Phase 0+1 as the first PR (scoped, independently valuable). Phases 2–4 as
-  follow-ups.
+- [x] Gated behind **Settings → Experimental → "Background Pull Request Status"**
+  (`[experimental] background_pr_polling` in `config.toml`), following the
+  `lightweightNavigationRefresh` pattern end to end: shared contract + patch
+  type, `desktop-config.ts` (stored type, patch→TOML edit, TOML reader),
+  `desktop-settings-service.ts` resolver, and the Experimental settings panel.
+- [x] **Default OFF**, not on. The plan said "default on, killable"; shipping it
+  as a true experiment is the safer posture and matches the repo's convention —
+  with the flag off, PR chips behave *exactly* as they did before this work, so
+  the flag is a real kill switch rather than a tuning knob. Shared constant
+  `DEFAULT_BACKGROUND_PR_POLLING` keeps main and renderer in lockstep.
+- [x] **Live toggling, no restart**: `syncPrPollingSchedulerState()` runs on every
+  navigation snapshot and starts/stops both the poller and the discovery
+  rotation to match the setting.
+
+## Icebox tier — ✅ DONE (added after review)
+
+Beyond the planned three tiers, a PR whose status has not changed **and** whose
+threads have not been touched for `ICEBOX_AFTER_MS` (24 h) falls **off the
+monitor list entirely** — no cadence, no budget, no request.
+
+- Deliberately **self-latching**: an iceboxed PR is never polled, so its
+  `lastChangedAt` can never advance on its own. It stays frozen until the
+  operator interacts with one of its threads. A branch abandoned two weeks ago
+  costs nothing, forever, until you look at it again.
+- **Two independent thaw signals**, so neither alone can freeze out an active PR:
+  `lastChangedAt` (the PR itself moved) and `lastInteractionAt` (a thread was
+  touched). Interaction comes from focus — sampled *every tick*, not just on
+  change, so sitting on a thread for days cannot let it age into the icebox
+  underneath you — plus an explicit `noteThreadInteraction()` called from the
+  `turn/completed` path so a turn finishing in an **off-screen** thread thaws it.
+- Focus always wins outright over the icebox, which is what makes a 24 h
+  threshold safe to be aggressive about.
+- Discovery (Layer B) is **not** icebox-aware yet — it keeps its own slow
+  rotation (3 threads/tick, ≥5 min apart, focused threads skipped). Extending
+  the icebox to skip long-quiet threads there is a reasonable follow-up.
 
 ## Risks & Mitigations
 

@@ -1,4 +1,5 @@
 import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import { DEFAULT_BACKGROUND_PR_POLLING } from "@pwragent/shared";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -34,6 +35,11 @@ const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
 
 const DEFAULT_LIGHTWEIGHT_NAVIGATION_REFRESH = {
   value: false,
+  source: "default" as const,
+};
+
+const DEFAULT_BACKGROUND_PR_POLLING_VALUE = {
+  value: DEFAULT_BACKGROUND_PR_POLLING,
   source: "default" as const,
 };
 
@@ -74,6 +80,7 @@ export function ExperimentalSettings(props: {
   onDiffCondensationModelChange: (model: string) => Promise<void>;
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
   onLightweightNavigationRefreshChange: (enabled: boolean) => Promise<void>;
+  onBackgroundPrPollingChange: (enabled: boolean) => Promise<void>;
   onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
@@ -90,6 +97,9 @@ export function ExperimentalSettings(props: {
   const lightweightNavigationRefresh =
     props.snapshot.experimental.lightweightNavigationRefresh ??
     DEFAULT_LIGHTWEIGHT_NAVIGATION_REFRESH;
+  const backgroundPrPolling =
+    props.snapshot.experimental.backgroundPrPolling ??
+    DEFAULT_BACKGROUND_PR_POLLING_VALUE;
   const threadPricingSummary =
     props.snapshot.experimental.threadPricingSummary ??
     DEFAULT_THREAD_PRICING_SUMMARY;
@@ -217,6 +227,32 @@ export function ExperimentalSettings(props: {
                 label="Enable lightweight navigation refresh"
                 onChange={(enabled) => {
                   void props.onLightweightNavigationRefreshChange(enabled);
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Background Pull Request Status"
+        description="Keep pull request status fresh across every open project instead of only the thread you have selected. Checks run in the background on a priority cadence and skip merged and closed pull requests."
+        chip={backgroundPrPolling.value ? "On" : "Off"}
+        chipKind={backgroundPrPolling.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Enable background pull request status"
+            sub="When on, the project you are viewing refreshes about every minute and other open projects refresh less often. Pull requests with no activity for a day stop being checked until you open their thread again. Requires the GitHub CLI to be signed in."
+            source={sourceBadge(backgroundPrPolling)}
+            control={
+              <SettingsSwitch
+                checked={backgroundPrPolling.value}
+                disabled={props.saving}
+                label="Enable background pull request status"
+                onChange={(enabled) => {
+                  void props.onBackgroundPrPollingChange(enabled);
                 }}
               />
             }

@@ -1762,6 +1762,38 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("defaults background PR polling to off and persists it", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    // Opt-in: with the flag absent, background polling stays off entirely.
+    const initial = await service.readSettings();
+    expect(initial.experimental.backgroundPrPolling).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      experimental: {
+        backgroundPrPolling: true,
+      },
+    });
+
+    const updated = await service.readSettings();
+    expect(updated.experimental.backgroundPrPolling).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "background_pr_polling = true",
+    );
+  });
+
   it("defaults thread pricing summary to true and persists it", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

@@ -30,6 +30,7 @@ import type {
 } from "@pwragent/shared";
 import { execFile } from "node:child_process";
 import {
+  DEFAULT_BACKGROUND_PR_POLLING,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
@@ -590,6 +591,10 @@ export class DesktopSettingsService {
         lightweightNavigationRefresh: this.resolveConfigBoolean(
           config.experimental?.lightweightNavigationRefresh,
           false,
+        ),
+        backgroundPrPolling: this.resolveConfigBoolean(
+          config.experimental?.backgroundPrPolling,
+          DEFAULT_BACKGROUND_PR_POLLING,
         ),
         threadPricingSummary: this.resolveConfigBoolean(
           config.experimental?.threadPricingSummary,
