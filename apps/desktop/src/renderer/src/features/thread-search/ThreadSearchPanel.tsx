@@ -48,6 +48,7 @@ type ThreadSearchPanelProps = {
   desktopApi?: DesktopApi;
   onOpenResult: (result: {
     backend: AppServerBackendKind;
+    federation?: ThreadSearchResult["federation"];
     threadId: string;
     /** Turn of the matched message, for deep-linking to it in the thread. */
     turnId?: string;
@@ -184,6 +185,9 @@ function ThreadSearchResultRow(props: {
         <span className="thread-search-result__meta">
           <span className="chip chip--backend">{result.backend}</span>
           {props.isAgent ? <AgentThreadChip /> : null}
+          {result.federation ? (
+            <span className="chip">{result.federation.instanceLabel}</span>
+          ) : null}
           {workspaceLabel ? (
             <span className="thread-search-result__meta-item">
               <WorkspaceIcon size={13} aria-hidden />
@@ -377,6 +381,9 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
                     onOpen={() => {
                       void props.onOpenResult({
                         backend: result.backend,
+                        ...(result.federation
+                          ? { federation: result.federation }
+                          : {}),
                         threadId: result.threadId,
                         turnId: result.snippets.find((s) => s.turnId)?.turnId,
                       });

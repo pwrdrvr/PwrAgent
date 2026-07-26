@@ -28,6 +28,7 @@ import type { FederationTarget } from "./federation";
 
 export type StartThreadRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   /**
    * When present, start the thread with Agent/persona metadata.
    */
@@ -70,6 +71,7 @@ export type ThreadAutoPinFailure = {
 
 export type ForkThreadRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   sourceThreadId: ThreadIdentifier;
   parentThreadId?: ThreadIdentifier;
   executionMode?: ThreadExecutionMode;
@@ -262,6 +264,7 @@ export type CancelQueuedTurnResponse = {
 
 export type StartReviewRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   target: AppServerReviewTarget;
   delivery?: AppServerReviewDelivery;
@@ -624,6 +627,7 @@ export type ResetDirectoryLaunchpadResponse = {
 
 export type MaterializeDirectoryLaunchpadRequest = {
   directoryKey: string;
+  federationTarget?: FederationTarget;
   launchpad?: NavigationLaunchpadDraft;
   /**
    * When present, materialize the launchpad with Agent/persona metadata.
@@ -667,6 +671,7 @@ export type MaterializeDirectoryLaunchpadResponse = MaterializedDirectoryLaunchp
 
 export type CodexEnvironmentSetupProgressEvent = {
   directoryKey: string;
+  federationTarget?: FederationTarget;
   environmentId: string;
   environmentName: string;
   command: string;
@@ -701,6 +706,7 @@ export type RunCodexEnvironmentActionResponse = {
 
 export type StopCodexEnvironmentActionRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   runId: string;
   mode: "stop" | "terminate";

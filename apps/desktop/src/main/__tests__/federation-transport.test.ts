@@ -111,6 +111,18 @@ describe("federation transport", () => {
       status: "connected",
       pinnedPublicKeyPem: clientKeyPair.publicKeyPem,
     });
+    expect(store.listAudit({ peerId: "client_one" })).toMatchObject([
+      {
+        kind: "connected",
+        detail: "enroll",
+      },
+      {
+        kind: "connect_attempt",
+        detail: "enroll",
+      },
+    ]);
+    expect(server?.closePeer("client_one")).toBe(true);
+    expect(server?.closePeer("client_one")).toBe(false);
   });
 
   it("rejects websocket clients that cannot prove an enrolled identity", async () => {
@@ -134,6 +146,16 @@ describe("federation transport", () => {
         capabilities: ["remote_window"],
       }),
     ).rejects.toThrow("unknown_peer");
+    expect(store.listAudit({ peerId: "client_one" })).toMatchObject([
+      {
+        kind: "rejected",
+        detail: "unknown_peer",
+      },
+      {
+        kind: "connect_attempt",
+        detail: "reconnect",
+      },
+    ]);
   });
 
   it("rejects auth proofs signed with a client-selected nonce", async () => {

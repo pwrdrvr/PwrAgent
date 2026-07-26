@@ -1397,6 +1397,39 @@ export class DesktopSettingsService {
     return keyPair;
   }
 
+  async resolveFederationCloudflareCredentials(): Promise<{
+    clientCertificate?: string;
+    clientPrivateKey?: string;
+    accessClientId?: string;
+    accessClientSecret?: string;
+  }> {
+    const [
+      clientCertificate,
+      clientPrivateKey,
+      accessClientId,
+      accessClientSecret,
+    ] = await Promise.all([
+      this.options.secretStore.getSecret(
+        "federationCloudflareClientCertificate",
+      ),
+      this.options.secretStore.getSecret(
+        "federationCloudflareClientPrivateKey",
+      ),
+      this.options.secretStore.getSecret(
+        "federationCloudflareAccessClientId",
+      ),
+      this.options.secretStore.getSecret(
+        "federationCloudflareAccessClientSecret",
+      ),
+    ]);
+    return {
+      clientCertificate,
+      clientPrivateKey,
+      accessClientId,
+      accessClientSecret,
+    };
+  }
+
   resolveTelegramBotTokenSync(): string | undefined {
     return this.resolveSecretSync("telegramBotToken", TELEGRAM_BOT_TOKEN_ENV);
   }

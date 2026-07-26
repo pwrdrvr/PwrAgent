@@ -11,6 +11,7 @@ import type {
 import {
   FEDERATION_PROTOCOL_VERSION,
   isFederationCapability,
+  isFederationInstanceId,
 } from "@pwragent/shared";
 import {
   authenticateFederationReconnect,
@@ -99,6 +100,11 @@ export class FederationGatewayWebSocketServer {
   private httpServer?: http.Server;
   private wsServer?: WebSocketServer;
   private readonly sessions: FederationSessionRegistry;
+  private stopping = false;
+  private readonly connections = new Map<
+    FederationInstanceId,
+    FederationGatewayConnection
+  >();
 
   constructor(private readonly options: FederationGatewayWebSocketServerOptions) {
     this.sessions = options.sessions ?? new FederationSessionRegistry();
@@ -110,6 +116,7 @@ export class FederationGatewayWebSocketServer {
       const port = typeof address === "object" && address ? address.port : this.options.port;
       return { url: `ws://${this.options.host}:${port}`, port };
     }
+    this.stopping = false;
     this.httpServer = http.createServer();
     this.wsServer = new WebSocketServer({ server: this.httpServer });
     this.wsServer.on("connection", (socket) => this.handleSocket(socket));
@@ -135,15 +142,30 @@ export class FederationGatewayWebSocketServer {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     const wsServer = this.wsServer;
     const httpServer = this.httpServer;
     this.wsServer = undefined;
     this.httpServer = undefined;
+    this.connections.clear();
     for (const client of wsServer?.clients ?? []) {
       client.close();
     }
     await new Promise<void>((resolve) => wsServer?.close(() => resolve()) ?? resolve());
     await new Promise<void>((resolve) => httpServer?.close(() => resolve()) ?? resolve());
+  }
+
+  closePeer(peerId: FederationInstanceId): boolean {
+    const connection = this.connections.get(peerId);
+    if (!connection) return false;
+    this.connections.delete(peerId);
+    this.sessions.closePeerSessions({
+      peerId,
+      closedAt: Date.now(),
+      reason: "revoked",
+    });
+    connection.close();
+    return true;
   }
 
   private handleSocket(socket: WebSocket): void {
@@ -158,6 +180,11 @@ export class FederationGatewayWebSocketServer {
     socket.once("message", (raw) => {
       const message = parseSocketMessage(raw);
       if (!message || message.kind !== "auth") {
+        this.options.store.appendAudit({
+          kind: "rejected",
+          createdAt: Date.now(),
+          detail: "policy_denied",
+        });
         sendSocketMessage(socket, {
           kind: "auth.rejected",
           failure: federationFailure("policy_denied"),
@@ -165,7 +192,23 @@ export class FederationGatewayWebSocketServer {
         socket.close();
         return;
       }
+      this.options.store.appendAudit({
+        peerId: isFederationInstanceId(message.peerInstanceId)
+          ? message.peerInstanceId
+          : undefined,
+        kind: "connect_attempt",
+        createdAt: Date.now(),
+        detail: message.mode,
+      });
       if (message.nonce !== challengeNonce) {
+        this.options.store.appendAudit({
+          peerId: isFederationInstanceId(message.peerInstanceId)
+            ? message.peerInstanceId
+            : undefined,
+          kind: "rejected",
+          createdAt: Date.now(),
+          detail: "policy_denied",
+        });
         sendSocketMessage(socket, {
           kind: "auth.rejected",
           failure: federationFailure("policy_denied"),
@@ -175,6 +218,14 @@ export class FederationGatewayWebSocketServer {
       }
       const decision = this.authenticate(message);
       if (!decision.accepted) {
+        this.options.store.appendAudit({
+          peerId: isFederationInstanceId(message.peerInstanceId)
+            ? message.peerInstanceId
+            : undefined,
+          kind: "rejected",
+          createdAt: Date.now(),
+          detail: decision.failure.code,
+        });
         sendSocketMessage(socket, {
           kind: "auth.rejected",
           failure: decision.failure,
@@ -199,6 +250,18 @@ export class FederationGatewayWebSocketServer {
         },
         close: () => socket.close(),
       };
+      const previous = this.connections.get(connection.peerId);
+      if (previous && previous.sessionId !== connection.sessionId) {
+        previous.close();
+      }
+      this.connections.set(connection.peerId, connection);
+      this.options.store.appendAudit({
+        peerId: connection.peerId,
+        sessionId,
+        kind: "connected",
+        createdAt: Date.now(),
+        detail: message.mode,
+      });
       sendSocketMessage(socket, {
         kind: "auth.accepted",
         sessionId,
@@ -220,6 +283,18 @@ export class FederationGatewayWebSocketServer {
           reason: "transport_closed",
         });
         if (connection) {
+          if (this.connections.get(connection.peerId)?.sessionId === sessionId) {
+            this.connections.delete(connection.peerId);
+          }
+          if (!this.stopping) {
+            this.options.store.appendAudit({
+              peerId: connection.peerId,
+              sessionId,
+              kind: "disconnected",
+              createdAt: Date.now(),
+              detail: "transport_closed",
+            });
+          }
           this.options.onDisconnect?.(connection);
         }
       });
@@ -293,10 +368,15 @@ export async function connectFederationClient(params: {
   endpoint?: string;
   profileName?: string;
   headers?: Record<string, string>;
+  clientCertificate?: string;
+  clientPrivateKey?: string;
   onEnvelope?: (envelope: FederationProtocolEnvelope) => void;
+  onClose?: () => void;
 }): Promise<FederationClientWebSocketClient> {
   const socket = new WebSocket(params.url, {
     headers: params.headers,
+    cert: params.clientCertificate,
+    key: params.clientPrivateKey,
   });
   const [challenge] = await Promise.all([
     waitForAuthChallenge(socket),
@@ -340,6 +420,7 @@ export async function connectFederationClient(params: {
 
   sendSocketMessage(socket, authMessage);
   const accepted = await waitForAuthResult(socket);
+  socket.once("close", () => params.onClose?.());
   socket.on("message", (raw) => {
     const message = parseSocketMessage(raw);
     if (message?.kind === "envelope") {

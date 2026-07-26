@@ -20,6 +20,7 @@ describe("federation backend bridge", () => {
       })),
       readThread: vi.fn(),
       listSkills: vi.fn(),
+      listBackends: vi.fn(),
       startTurn: vi.fn(),
     } as unknown as FederationBackendOperations;
     const replies: FederationProtocolEnvelope[] = [];
@@ -121,6 +122,7 @@ describe("federation backend bridge", () => {
         listThreads: vi.fn(),
         readThread: vi.fn(),
         listSkills: vi.fn(),
+        listBackends: vi.fn(),
         startTurn: vi.fn(),
       } as unknown as FederationBackendOperations,
     });
@@ -207,10 +209,15 @@ describe("federation backend bridge", () => {
 
   it("maps expanded remote control operations to capability-guarded handlers", async () => {
     const backend: FederationBackendOperations = {
+      getNavigationSnapshot: vi.fn(),
       listThreads: vi.fn(),
       readThread: vi.fn(),
       listSkills: vi.fn(),
+      listBackends: vi.fn(),
+      startThread: vi.fn(),
+      forkThread: vi.fn(),
       startTurn: vi.fn(),
+      startReview: vi.fn(),
       compactThread: vi.fn(async () => ({
         backend: "codex" as const,
         threadId: "thread-1",
@@ -237,7 +244,9 @@ describe("federation backend bridge", () => {
           executionTarget: "local" as const,
         },
       })),
+      stopCodexEnvironmentAction: vi.fn(),
       setCodexThreadEnvironment: vi.fn(),
+      materializeDirectoryLaunchpad: vi.fn(),
       handoffThreadWorkspace: vi.fn(),
     };
     const replies: FederationProtocolEnvelope[] = [];
@@ -358,10 +367,15 @@ describe("federation backend bridge", () => {
     registerFederationBackendHandlers({
       router,
       backend: {
+        getNavigationSnapshot: vi.fn(),
         listThreads: vi.fn(),
         readThread: vi.fn(),
         listSkills: vi.fn(),
+        listBackends: vi.fn(),
+        startThread: vi.fn(),
+        forkThread: vi.fn(),
         startTurn: vi.fn(),
+        startReview: vi.fn(),
         compactThread: vi.fn(),
         interruptTurn: vi.fn(),
         steerTurn: vi.fn(),
@@ -372,7 +386,9 @@ describe("federation backend bridge", () => {
         setThreadModelSettings: vi.fn(),
         submitServerRequest: vi.fn(),
         runCodexEnvironmentAction: vi.fn(),
+        stopCodexEnvironmentAction: vi.fn(),
         setCodexThreadEnvironment: vi.fn(),
+        materializeDirectoryLaunchpad: vi.fn(),
         handoffThreadWorkspace: vi.fn(),
       } as FederationBackendOperations,
     });

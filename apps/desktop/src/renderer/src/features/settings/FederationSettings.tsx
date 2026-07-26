@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import type {
   DesktopFederationMode,
+  DesktopSettingsSecretName,
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   FederationConnectionState,
+  FederationDiagnosticEvent,
   FederationHealthStatus,
   FederationInstanceRole,
 } from "@pwragent/shared";
@@ -19,6 +21,11 @@ import {
 type FederationSettingsProps = {
   desktopApi?: DesktopApi;
   onSettingsChanged: () => Promise<void>;
+  onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
+  onReplaceSecret: (
+    secret: DesktopSettingsSecretName,
+    value: string,
+  ) => Promise<boolean>;
   onWriteConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
@@ -26,11 +33,15 @@ type FederationSettingsProps = {
 
 export function FederationSettings(props: FederationSettingsProps) {
   const [health, setHealth] = useState<FederationHealthStatus>();
+  const [diagnosticEvents, setDiagnosticEvents] = useState<
+    FederationDiagnosticEvent[]
+  >([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [generatedInvite, setGeneratedInvite] = useState("");
   const [inviteToImport, setInviteToImport] = useState("");
+  const [revokingPeerId, setRevokingPeerId] = useState<string>();
   const [mode, setMode] = useState<DesktopFederationMode>(
     props.snapshot.federation.mode.value,
   );
@@ -46,6 +57,22 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [gatewayUrl, setGatewayUrl] = useState(
     props.snapshot.federation.gatewayUrl.value,
   );
+  const [cloudflareMtlsEnabled, setCloudflareMtlsEnabled] = useState(
+    props.snapshot.federation.cloudflareMtlsEnabled.value,
+  );
+  const [
+    cloudflareAccessServiceAuthEnabled,
+    setCloudflareAccessServiceAuthEnabled,
+  ] = useState(
+    props.snapshot.federation.cloudflareAccessServiceAuthEnabled.value,
+  );
+  const [cloudflareClientCertificate, setCloudflareClientCertificate] =
+    useState("");
+  const [cloudflareClientPrivateKey, setCloudflareClientPrivateKey] =
+    useState("");
+  const [cloudflareAccessClientId, setCloudflareAccessClientId] = useState("");
+  const [cloudflareAccessClientSecret, setCloudflareAccessClientSecret] =
+    useState("");
 
   useEffect(() => {
     setMode(props.snapshot.federation.mode.value);
@@ -53,19 +80,33 @@ export function FederationSettings(props: FederationSettingsProps) {
     setListenPort(String(props.snapshot.federation.listenPort.value));
     setPublicUrl(props.snapshot.federation.publicUrl.value);
     setGatewayUrl(props.snapshot.federation.gatewayUrl.value);
+    setCloudflareMtlsEnabled(
+      props.snapshot.federation.cloudflareMtlsEnabled.value,
+    );
+    setCloudflareAccessServiceAuthEnabled(
+      props.snapshot.federation.cloudflareAccessServiceAuthEnabled.value,
+    );
   }, [props.snapshot]);
 
   const loadHealth = async () => {
-    const reader = props.desktopApi?.readFederationHealth;
-    if (!reader) {
+    const diagnosticsReader = props.desktopApi?.readFederationDiagnostics;
+    const healthReader = props.desktopApi?.readFederationHealth;
+    if (!diagnosticsReader && !healthReader) {
       setError("Federation diagnostics are unavailable.");
       return;
     }
     setLoading(true);
     setError(undefined);
     try {
-      const response = await reader({});
-      setHealth(response.health);
+      if (diagnosticsReader) {
+        const response = await diagnosticsReader({ limit: 50 });
+        setHealth(response.health);
+        setDiagnosticEvents(response.events);
+      } else if (healthReader) {
+        const response = await healthReader({});
+        setHealth(response.health);
+        setDiagnosticEvents([]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -105,7 +146,11 @@ export function FederationSettings(props: FederationSettingsProps) {
           <button
             className="button button--secondary"
             type="button"
-            disabled={loading || !props.desktopApi?.readFederationHealth}
+            disabled={
+              loading ||
+              (!props.desktopApi?.readFederationDiagnostics &&
+                !props.desktopApi?.readFederationHealth)
+            }
             onClick={() => {
               void loadHealth();
             }}
@@ -199,6 +244,8 @@ export function FederationSettings(props: FederationSettingsProps) {
                     listenPort: Number.parseInt(listenPort, 10) || 0,
                     publicUrl,
                     gatewayUrl,
+                    cloudflareMtlsEnabled,
+                    cloudflareAccessServiceAuthEnabled,
                   },
                 }).then(() => loadHealth());
               }}
@@ -326,6 +373,11 @@ export function FederationSettings(props: FederationSettingsProps) {
               </code>
             }
           />
+          {effectiveHealth.unavailableReason ? (
+            <p className="settings-row__error">
+              {effectiveHealth.unavailableReason}
+            </p>
+          ) : null}
         </div>
       </SettingsSection>
 
@@ -341,13 +393,25 @@ export function FederationSettings(props: FederationSettingsProps) {
             {effectiveHealth.peers.map((peer) => (
               <div key={peer.id}>
                 <dt>{peer.label}</dt>
-                <dd>
-                  {peer.id} · {roleLabel(peer.role)} · {statusLabel(peer.status)}
+                <dd className="federation-peer-summary">
+                  <span>
+                    {peer.id} · {roleLabel(peer.role)} · {statusLabel(peer.status)}
+                  </span>
+                  <span>
+                    Protocol {peer.protocolVersion ?? "unknown"} ·{" "}
+                    {peer.capabilities.length} capabilities
+                    {peer.lastActivityAt
+                      ? ` · Active ${formatTimestamp(peer.lastActivityAt)}`
+                      : ""}
+                  </span>
+                  {peer.unavailableReason ? (
+                    <span>{peer.unavailableReason}</span>
+                  ) : null}
                   <button
                     className="button button--ghost"
                     type="button"
                     disabled={
-                      peer.status === "revoked" ||
+                      peer.status !== "connected" ||
                       !props.desktopApi?.openFederationWindow
                     }
                     onClick={() => {
@@ -359,6 +423,56 @@ export function FederationSettings(props: FederationSettingsProps) {
                   >
                     Open
                   </button>
+                  <button
+                    className="button button--ghost"
+                    type="button"
+                    disabled={
+                      peer.status === "revoked" ||
+                      revokingPeerId === peer.id ||
+                      !props.desktopApi?.revokeFederationPeer
+                    }
+                    onClick={() => {
+                      setActionError(undefined);
+                      setRevokingPeerId(peer.id);
+                      props.desktopApi?.revokeFederationPeer?.({
+                        peerId: peer.id,
+                      })
+                        .then(() => loadHealth())
+                        .catch((err: unknown) =>
+                          setActionError(
+                            err instanceof Error ? err.message : String(err),
+                          ),
+                        )
+                        .finally(() => setRevokingPeerId(undefined));
+                    }}
+                  >
+                    {revokingPeerId === peer.id ? "Revoking..." : "Revoke"}
+                  </button>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Diagnostics"
+        title="Recent Federation Activity"
+        chip={`${diagnosticEvents.length}`}
+      >
+        {diagnosticEvents.length === 0 ? (
+          <p className="settings-empty">No federation activity recorded.</p>
+        ) : (
+          <dl className="settings-aboutkv">
+            {diagnosticEvents.map((event) => (
+              <div key={event.eventId}>
+                <dt>{diagnosticEventLabel(event.kind)}</dt>
+                <dd className="federation-peer-summary">
+                  <span>
+                    {formatTimestamp(event.createdAt)}
+                    {event.peerId ? ` · ${event.peerId}` : ""}
+                  </span>
+                  {event.detail ? <span>{event.detail}</span> : null}
                 </dd>
               </div>
             ))}
@@ -370,14 +484,14 @@ export function FederationSettings(props: FederationSettingsProps) {
         eyebrow="Edge Policy"
         title="Cloudflare"
         chip={
-          props.snapshot.federation.cloudflareMtlsEnabled.value ||
-          props.snapshot.federation.cloudflareAccessServiceAuthEnabled.value
+          cloudflareMtlsEnabled ||
+          cloudflareAccessServiceAuthEnabled
             ? "Configured"
             : "Optional"
         }
         chipKind={
-          props.snapshot.federation.cloudflareMtlsEnabled.value ||
-          props.snapshot.federation.cloudflareAccessServiceAuthEnabled.value
+          cloudflareMtlsEnabled ||
+          cloudflareAccessServiceAuthEnabled
             ? "ok"
             : "muted"
         }
@@ -387,28 +501,247 @@ export function FederationSettings(props: FederationSettingsProps) {
             label="mTLS"
             sub="Cloudflare edge certificate gate."
             control={
-              <span>
-                {props.snapshot.federation.cloudflareMtlsEnabled.value
-                  ? "Enabled"
-                  : "Disabled"}
-              </span>
+              <input
+                aria-label="mTLS"
+                type="checkbox"
+                checked={cloudflareMtlsEnabled}
+                onChange={(event) =>
+                  setCloudflareMtlsEnabled(event.target.checked)
+                }
+              />
+            }
+          />
+          <SettingsField
+            label="Client certificate"
+            sub={secretStatus(
+              props.snapshot.federation.cloudflareClientCertificate.configured,
+            )}
+            control={
+              <textarea
+                aria-label="Client certificate"
+                rows={3}
+                value={cloudflareClientCertificate}
+                placeholder="PEM certificate"
+                onChange={(event) =>
+                  setCloudflareClientCertificate(event.target.value)
+                }
+              />
+            }
+          />
+          <SettingsField
+            label="Client private key"
+            sub={secretStatus(
+              props.snapshot.federation.cloudflareClientPrivateKey.configured,
+            )}
+            control={
+              <textarea
+                aria-label="Client private key"
+                rows={3}
+                value={cloudflareClientPrivateKey}
+                placeholder="PEM private key"
+                onChange={(event) =>
+                  setCloudflareClientPrivateKey(event.target.value)
+                }
+              />
             }
           />
           <SettingsField
             label="Access service auth"
             sub="Cloudflare Access service-token gate."
             control={
-              <span>
-                {props.snapshot.federation.cloudflareAccessServiceAuthEnabled.value
-                  ? "Enabled"
-                  : "Disabled"}
-              </span>
+              <input
+                aria-label="Access service auth"
+                type="checkbox"
+                checked={cloudflareAccessServiceAuthEnabled}
+                onChange={(event) =>
+                  setCloudflareAccessServiceAuthEnabled(event.target.checked)
+                }
+              />
             }
           />
+          <SettingsField
+            label="Access client ID"
+            sub={secretStatus(
+              props.snapshot.federation.cloudflareAccessClientId.configured,
+            )}
+            control={
+              <input
+                aria-label="Access client ID"
+                type="password"
+                value={cloudflareAccessClientId}
+                placeholder="Cloudflare Access client ID"
+                onChange={(event) =>
+                  setCloudflareAccessClientId(event.target.value)
+                }
+              />
+            }
+          />
+          <SettingsField
+            label="Access client secret"
+            sub={secretStatus(
+              props.snapshot.federation.cloudflareAccessClientSecret.configured,
+            )}
+            control={
+              <input
+                aria-label="Access client secret"
+                type="password"
+                value={cloudflareAccessClientSecret}
+                placeholder="Cloudflare Access client secret"
+                onChange={(event) =>
+                  setCloudflareAccessClientSecret(event.target.value)
+                }
+              />
+            }
+          />
+          <div className="settings-button-row">
+            <button
+              className="button button--secondary"
+              type="button"
+              disabled={props.saving}
+              onClick={() => {
+                setActionError(undefined);
+                void saveCloudflareSettings({
+                  config: {
+                    cloudflareMtlsEnabled,
+                    cloudflareAccessServiceAuthEnabled,
+                  },
+                  secrets: [
+                    [
+                      "federationCloudflareClientCertificate",
+                      cloudflareClientCertificate,
+                    ],
+                    [
+                      "federationCloudflareClientPrivateKey",
+                      cloudflareClientPrivateKey,
+                    ],
+                    [
+                      "federationCloudflareAccessClientId",
+                      cloudflareAccessClientId,
+                    ],
+                    [
+                      "federationCloudflareAccessClientSecret",
+                      cloudflareAccessClientSecret,
+                    ],
+                  ],
+                  onReplaceSecret: props.onReplaceSecret,
+                  onWriteConfig: props.onWriteConfig,
+                })
+                  .then(async () => {
+                    setCloudflareClientCertificate("");
+                    setCloudflareClientPrivateKey("");
+                    setCloudflareAccessClientId("");
+                    setCloudflareAccessClientSecret("");
+                    await props.onSettingsChanged();
+                    await loadHealth();
+                  })
+                  .catch((err: unknown) =>
+                    setActionError(
+                      err instanceof Error ? err.message : String(err),
+                    ),
+                  );
+              }}
+            >
+              Save edge policy
+            </button>
+            <button
+              className="button button--ghost"
+              type="button"
+              disabled={props.saving}
+              onClick={() => {
+                setActionError(undefined);
+                void Promise.all([
+                  props.onClearSecret(
+                    "federationCloudflareClientCertificate",
+                  ),
+                  props.onClearSecret(
+                    "federationCloudflareClientPrivateKey",
+                  ),
+                  props.onClearSecret("federationCloudflareAccessClientId"),
+                  props.onClearSecret(
+                    "federationCloudflareAccessClientSecret",
+                  ),
+                ])
+                  .then(async (cleared) => {
+                    if (cleared.some((result) => !result)) {
+                      throw new Error(
+                        "One or more Cloudflare credentials could not be cleared.",
+                      );
+                    }
+                    const written = await props.onWriteConfig({
+                      federation: {
+                        cloudflareMtlsEnabled: false,
+                        cloudflareAccessServiceAuthEnabled: false,
+                      },
+                    });
+                    if (!written) {
+                      throw new Error(
+                        "Cloudflare edge policy could not be updated.",
+                      );
+                    }
+                    setCloudflareMtlsEnabled(false);
+                    setCloudflareAccessServiceAuthEnabled(false);
+                    await props.onSettingsChanged();
+                    await loadHealth();
+                  })
+                  .catch((err: unknown) =>
+                    setActionError(
+                      err instanceof Error ? err.message : String(err),
+                    ),
+                  );
+              }}
+            >
+              Clear credentials
+            </button>
+          </div>
         </div>
       </SettingsSection>
     </SettingsSectionStack>
   );
+}
+
+async function saveCloudflareSettings(params: {
+  config: {
+    cloudflareMtlsEnabled: boolean;
+    cloudflareAccessServiceAuthEnabled: boolean;
+  };
+  secrets: Array<[DesktopSettingsSecretName, string]>;
+  onReplaceSecret: (
+    secret: DesktopSettingsSecretName,
+    value: string,
+  ) => Promise<boolean>;
+  onWriteConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
+}): Promise<void> {
+  for (const [secret, value] of params.secrets) {
+    if (value.trim()) {
+      const saved = await params.onReplaceSecret(secret, value);
+      if (!saved) {
+        throw new Error(`Cloudflare credential ${secret} could not be saved.`);
+      }
+    }
+  }
+  const written = await params.onWriteConfig({
+    federation: params.config,
+  });
+  if (!written) {
+    throw new Error("Cloudflare edge policy could not be updated.");
+  }
+}
+
+function secretStatus(configured: boolean): string {
+  return configured
+    ? "Stored securely. Leave blank to keep it."
+    : "Not configured.";
+}
+
+function diagnosticEventLabel(kind: FederationDiagnosticEvent["kind"]): string {
+  return kind
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatTimestamp(value: number): string {
+  return new Date(value).toLocaleString();
 }
 
 function trimmedOrUndefined(value: string): string | undefined {

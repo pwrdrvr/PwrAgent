@@ -11,6 +11,7 @@ import {
   type CancelThreadExecutionModeQueueResponse,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
+  type CodexEnvironmentSetupProgressEvent,
   type CompactThreadRequest,
   type CompactThreadResponse,
   type ForkThreadRequest,
@@ -318,11 +319,26 @@ export function broadcastAgentEvent(event: AgentEvent): void {
   }
 }
 
+function broadcastCodexEnvironmentSetupProgress(
+  event: CodexEnvironmentSetupProgressEvent,
+): void {
+  const rendererEvent = sanitizeRendererPayload(event);
+  for (const webContents of subscribersForChannel(
+    CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
+  )) {
+    if (typeof webContents.send !== "function") continue;
+    webContents.send(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, rendererEvent);
+  }
+}
+
 export function registerAgentIpcHandlers(): void {
   const registry = getDesktopBackendRegistry();
 
   unsubscribeRegistryEvents?.();
   getDesktopFederationRuntime().setAgentEventPublisher(broadcastAgentEvent);
+  getDesktopFederationRuntime().setEnvironmentSetupProgressPublisher(
+    broadcastCodexEnvironmentSetupProgress,
+  );
   unsubscribeRegistryEvents = registry.onEvent((event) => {
     broadcastAgentEvent(event);
   });
@@ -373,6 +389,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: StartThreadRequest
     ): Promise<StartThreadResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .startThread(stripFederationTarget(request));
+      }
       return await registry.startThread(request);
     },
   );
@@ -384,6 +408,14 @@ export function registerAgentIpcHandlers(): void {
       event: IpcMainInvokeEvent,
       request: ForkThreadRequest,
     ): Promise<ForkThreadResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .forkThread(stripFederationTarget(request));
+      }
       return await registry.forkThread({
         ...request,
         onCodexEnvironmentSetupProgress: (progress) => {
@@ -487,6 +519,14 @@ export function registerAgentIpcHandlers(): void {
       });
 
       try {
+        if (
+          request.federationTarget &&
+          isRemoteFederationTarget(request.federationTarget)
+        ) {
+          return await getDesktopFederationRuntime()
+            .remoteBackend(request.federationTarget)
+            .startReview(stripFederationTarget(request));
+        }
         const response = await registry.startReview(request);
         logDebug("startReviewResult", {
           backend: response.backend,
@@ -818,6 +858,14 @@ export function registerAgentIpcHandlers(): void {
       event,
       request: MaterializeDirectoryLaunchpadRequest
     ): Promise<MaterializeDirectoryLaunchpadResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .materializeDirectoryLaunchpad(stripFederationTarget(request));
+      }
       return await registry.materializeDirectoryLaunchpad(request, {
         onCodexEnvironmentSetupProgress: (progress) => {
           event.sender?.send?.(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, progress);
@@ -852,6 +900,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: StopCodexEnvironmentActionRequest,
     ): Promise<StopCodexEnvironmentActionResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .stopCodexEnvironmentAction(stripFederationTarget(request));
+      }
       return await registry.stopCodexEnvironmentAction(request);
     },
   );

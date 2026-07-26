@@ -90,6 +90,7 @@ export type FederationHealthStatus = {
   instanceId?: FederationInstanceId;
   listenUrl?: string;
   publicUrl?: string;
+  unavailableReason?: string;
   peers: FederationPeerSummary[];
 };
 
@@ -97,6 +98,41 @@ export type ReadFederationHealthRequest = Record<string, never>;
 
 export type ReadFederationHealthResponse = {
   health: FederationHealthStatus;
+};
+
+export type FederationDiagnosticEventKind =
+  | "connect_attempt"
+  | "connected"
+  | "rejected"
+  | "disconnected"
+  | "relay"
+  | "error";
+
+export type FederationDiagnosticEvent = {
+  eventId: number;
+  peerId?: FederationPeerId;
+  sessionId?: FederationSessionId;
+  kind: FederationDiagnosticEventKind;
+  createdAt: number;
+  detail?: string;
+};
+
+export type ReadFederationDiagnosticsRequest = {
+  limit?: number;
+  peerId?: FederationPeerId;
+};
+
+export type ReadFederationDiagnosticsResponse = {
+  health: FederationHealthStatus;
+  events: FederationDiagnosticEvent[];
+};
+
+export type RevokeFederationPeerRequest = {
+  peerId: FederationPeerId;
+};
+
+export type RevokeFederationPeerResponse = {
+  peer: FederationPeerSummary;
 };
 
 export type GenerateFederationInviteRequest = {
@@ -134,6 +170,7 @@ export type OpenFederationWindowResponse = {
 export type FederatedSearchRequest = {
   query: string;
   limit?: number;
+  backend?: AppServerBackendScope;
 };
 
 export type FederatedSearchResult = {

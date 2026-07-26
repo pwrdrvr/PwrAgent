@@ -2235,6 +2235,8 @@ export function ThreadView(props: ThreadViewProps) {
       void props.desktopApi
         .stopCodexEnvironmentAction({
           backend: selectedThread.source,
+          federationTarget: selectedThread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: selectedThread.id,
           runId: run.runId,
           mode,

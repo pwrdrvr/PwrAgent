@@ -9,7 +9,11 @@ import type {
   MessagingInboundTextEvent,
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  federatedThreadIdentityKey,
+  isRemoteFederationTarget,
+} from "@pwragent/shared";
 import type { PendingPdfAttachment } from "../../pdf/pdf-attachment-store";
 
 export type MessagingTurnInputEvent =
@@ -241,5 +245,8 @@ function pendingKeyForActor(threadKey: string, platformUserId: string): string {
 }
 
 export function threadKeyForBinding(binding: MessagingBindingRecord): string {
-  return buildThreadIdentityKey(binding.backend, binding.threadId);
+  return binding.federatedThread &&
+    isRemoteFederationTarget(binding.federatedThread.target)
+    ? federatedThreadIdentityKey(binding.federatedThread)
+    : buildThreadIdentityKey(binding.backend, binding.threadId);
 }

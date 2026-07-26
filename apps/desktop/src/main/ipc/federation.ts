@@ -8,13 +8,19 @@ import type {
   OpenFederationWindowResponse,
   ReadFederationHealthRequest,
   ReadFederationHealthResponse,
+  ReadFederationDiagnosticsRequest,
+  ReadFederationDiagnosticsResponse,
+  RevokeFederationPeerRequest,
+  RevokeFederationPeerResponse,
 } from "@pwragent/shared";
 import { isFederationInstanceId } from "@pwragent/shared";
 import {
   FEDERATION_GET_HEALTH_CHANNEL,
+  FEDERATION_GET_DIAGNOSTICS_CHANNEL,
   FEDERATION_GENERATE_INVITE_CHANNEL,
   FEDERATION_IMPORT_INVITE_CHANNEL,
   FEDERATION_OPEN_WINDOW_CHANNEL,
+  FEDERATION_REVOKE_PEER_CHANNEL,
 } from "../../shared/ipc";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { createMainWindow } from "../window";
@@ -22,8 +28,18 @@ import { createMainWindow } from "../window";
 export function registerFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_OPEN_WINDOW_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GET_HEALTH_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_GET_DIAGNOSTICS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GENERATE_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_IMPORT_INVITE_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_REVOKE_PEER_CHANNEL);
+  ipcMain.handle(
+    FEDERATION_GET_DIAGNOSTICS_CHANNEL,
+    async (
+      _event,
+      request: ReadFederationDiagnosticsRequest = {},
+    ): Promise<ReadFederationDiagnosticsResponse> =>
+      await getDesktopFederationRuntime().diagnostics(request),
+  );
   ipcMain.handle(
     FEDERATION_OPEN_WINDOW_CHANNEL,
     async (
@@ -36,8 +52,32 @@ export function registerFederationIpcHandlers(): void {
       ) {
         throw new Error("Invalid federation window target");
       }
+      const runtime = getDesktopFederationRuntime();
+      const peer = runtime.connectedPeerTargets().find(
+        (candidate) =>
+          candidate.target.instanceId === request.target.instanceId,
+      );
+      if (!peer) {
+        throw new Error("Federation peer is not connected.");
+      }
+      if (
+        request.initialThread &&
+        (
+          request.initialThread.target.scope !== "remote" ||
+          request.initialThread.target.instanceId !== request.target.instanceId
+        )
+      ) {
+        throw new Error("Federation initial thread target does not match its window.");
+      }
       const window = createMainWindow({
+        federationLabel: peer.label,
         federationTarget: request.target,
+        initialThread: request.initialThread
+          ? {
+              backend: request.initialThread.backend,
+              threadId: request.initialThread.threadId,
+            }
+          : undefined,
       });
       return {
         opened: true,
@@ -73,11 +113,27 @@ export function registerFederationIpcHandlers(): void {
     ): Promise<ImportFederationInviteResponse> =>
       await getDesktopFederationRuntime().importInvite(request.invite),
   );
+  ipcMain.handle(
+    FEDERATION_REVOKE_PEER_CHANNEL,
+    async (
+      _event,
+      request: RevokeFederationPeerRequest,
+    ): Promise<RevokeFederationPeerResponse> => {
+      if (!isFederationInstanceId(request.peerId)) {
+        throw new Error("Invalid federation peer id");
+      }
+      return {
+        peer: await getDesktopFederationRuntime().revokePeer(request.peerId),
+      };
+    },
+  );
 }
 
 export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_OPEN_WINDOW_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GET_HEALTH_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_GET_DIAGNOSTICS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GENERATE_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_IMPORT_INVITE_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_REVOKE_PEER_CHANNEL);
 }

@@ -4478,6 +4478,8 @@ export function useThreadNavigation(
       try {
         const response = await forkThreadRequest({
           backend: parent.source,
+          federationTarget: parent.federation?.ref.target ??
+            readRendererFederationTarget(),
           sourceThreadId: parent.id,
           parentThreadId: groupRoot.id,
           executionMode,
@@ -5154,6 +5156,7 @@ export function useThreadNavigation(
       try {
         response = await desktopApi.materializeDirectoryLaunchpad({
           directoryKey,
+          federationTarget: readRendererFederationTarget(),
           launchpad,
           input,
           collaborationMode,

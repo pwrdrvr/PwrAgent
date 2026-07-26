@@ -10,11 +10,21 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  CodexEnvironmentSetupProgressEvent,
   FederationCapability,
+  ForkThreadRequest,
+  ForkThreadResponse,
+  GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  ListBackendsRequest,
+  ListBackendsResponse,
+  MaterializeDirectoryLaunchpadOptions,
+  MaterializeDirectoryLaunchpadRequest,
+  MaterializeDirectoryLaunchpadResponse,
+  NavigationSnapshot,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
   RunCodexEnvironmentActionRequest,
@@ -31,6 +41,12 @@ import type {
   SteerTurnResponse,
   StartTurnRequest,
   StartTurnResponse,
+  StartReviewRequest,
+  StartReviewResponse,
+  StartThreadRequest,
+  StartThreadResponse,
+  StopCodexEnvironmentActionRequest,
+  StopCodexEnvironmentActionResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
 } from "@pwragent/shared";
@@ -38,10 +54,15 @@ import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
 
 export const FEDERATION_BACKEND_METHODS = {
+  getNavigationSnapshot: "backend.getNavigationSnapshot",
   listThreads: "backend.listThreads",
   readThread: "backend.readThread",
   listSkills: "backend.listSkills",
+  listBackends: "backend.listBackends",
+  startThread: "backend.startThread",
+  forkThread: "backend.forkThread",
   startTurn: "backend.startTurn",
+  startReview: "backend.startReview",
   compactThread: "backend.compactThread",
   interruptTurn: "backend.interruptTurn",
   steerTurn: "backend.steerTurn",
@@ -52,15 +73,24 @@ export const FEDERATION_BACKEND_METHODS = {
   setThreadModelSettings: "backend.setThreadModelSettings",
   submitServerRequest: "backend.submitServerRequest",
   runCodexEnvironmentAction: "backend.runCodexEnvironmentAction",
+  stopCodexEnvironmentAction: "backend.stopCodexEnvironmentAction",
   setCodexThreadEnvironment: "backend.setCodexThreadEnvironment",
+  materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
   handoffThreadWorkspace: "backend.handoffThreadWorkspace",
 } as const;
 
 export const FEDERATION_BACKEND_EVENT_METHOD = "backend.event";
+export const FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD =
+  "backend.environmentSetupProgress";
 
 export type FederationBackendEventNotification = {
   method: typeof FEDERATION_BACKEND_EVENT_METHOD;
   params: AgentEvent;
+};
+
+export type FederationEnvironmentSetupProgressNotification = {
+  method: typeof FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD;
+  params: CodexEnvironmentSetupProgressEvent;
 };
 
 export type FederationBackendMethod =
@@ -70,10 +100,15 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   FederationBackendMethod,
   FederationCapability
 > = {
+  [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.listThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listSkills]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.startReview]: "turn_control",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.interruptTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.steerTurn]: "turn_control",
@@ -84,11 +119,16 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.setThreadModelSettings]: "turn_control",
   [FEDERATION_BACKEND_METHODS.submitServerRequest]: "pending_request_control",
   [FEDERATION_BACKEND_METHODS.runCodexEnvironmentAction]: "environment_actions",
+  [FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment]: "environment_actions",
+  [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspace]: "turn_control",
 };
 
 export type FederationBackendOperations = {
+  getNavigationSnapshot(
+    request?: GetNavigationSnapshotRequest,
+  ): Promise<NavigationSnapshot>;
   listThreads(
     request?: AppServerListThreadsRequest,
   ): Promise<AppServerListThreadsResponse>;
@@ -98,7 +138,17 @@ export type FederationBackendOperations = {
   listSkills(
     request?: AppServerListSkillsRequest,
   ): Promise<AppServerListSkillsResponse>;
+  listBackends(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
+  startThread(request: StartThreadRequest): Promise<StartThreadResponse>;
+  forkThread(
+    request: ForkThreadRequest,
+    options?: Pick<
+      MaterializeDirectoryLaunchpadOptions,
+      "onCodexEnvironmentSetupProgress"
+    >,
+  ): Promise<ForkThreadResponse>;
   startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
+  startReview(request: StartReviewRequest): Promise<StartReviewResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
   interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
   steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse>;
@@ -123,9 +173,16 @@ export type FederationBackendOperations = {
   runCodexEnvironmentAction(
     request: RunCodexEnvironmentActionRequest,
   ): Promise<RunCodexEnvironmentActionResponse>;
+  stopCodexEnvironmentAction(
+    request: StopCodexEnvironmentActionRequest,
+  ): Promise<StopCodexEnvironmentActionResponse>;
   setCodexThreadEnvironment(
     request: SetCodexThreadEnvironmentRequest,
   ): Promise<SetCodexThreadEnvironmentResponse>;
+  materializeDirectoryLaunchpad(
+    request: MaterializeDirectoryLaunchpadRequest,
+    options?: MaterializeDirectoryLaunchpadOptions,
+  ): Promise<MaterializeDirectoryLaunchpadResponse>;
   handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;
@@ -134,7 +191,18 @@ export type FederationBackendOperations = {
 export function registerFederationBackendHandlers(params: {
   router: FederationRouter;
   backend: FederationBackendOperations;
+  onEnvironmentSetupProgress?: (
+    event: CodexEnvironmentSetupProgressEvent,
+    targetInstanceId: string,
+  ) => void;
 }): void {
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
+    async (envelope) =>
+      await params.backend.getNavigationSnapshot(
+        (envelope.params ?? {}) as GetNavigationSnapshotRequest,
+      ),
+  );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listThreads,
     async (envelope) =>
@@ -157,10 +225,46 @@ export function registerFederationBackendHandlers(params: {
       ),
   );
   params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.listBackends,
+    async (envelope) =>
+      await params.backend.listBackends(
+        (envelope.params ?? {}) as ListBackendsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.startThread,
+    async (envelope) =>
+      await params.backend.startThread(
+        envelope.params as StartThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.forkThread,
+    async (envelope) =>
+      await params.backend.forkThread(
+        envelope.params as ForkThreadRequest,
+        {
+          onCodexEnvironmentSetupProgress: (event) => {
+            params.onEnvironmentSetupProgress?.(
+              event,
+              envelope.sourceInstanceId,
+            );
+          },
+        },
+      ),
+  );
+  params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.startTurn,
     async (envelope) =>
       await params.backend.startTurn(
         envelope.params as StartTurnRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.startReview,
+    async (envelope) =>
+      await params.backend.startReview(
+        envelope.params as StartReviewRequest,
       ),
   );
   params.router.registerHandler(
@@ -234,10 +338,32 @@ export function registerFederationBackendHandlers(params: {
       ),
   );
   params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction,
+    async (envelope) =>
+      await params.backend.stopCodexEnvironmentAction(
+        envelope.params as StopCodexEnvironmentActionRequest,
+      ),
+  );
+  params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment,
     async (envelope) =>
       await params.backend.setCodexThreadEnvironment(
         envelope.params as SetCodexThreadEnvironmentRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
+    async (envelope) =>
+      await params.backend.materializeDirectoryLaunchpad(
+        envelope.params as MaterializeDirectoryLaunchpadRequest,
+        {
+          onCodexEnvironmentSetupProgress: (event) => {
+            params.onEnvironmentSetupProgress?.(
+              event,
+              envelope.sourceInstanceId,
+            );
+          },
+        },
       ),
   );
   params.router.registerHandler(
@@ -251,6 +377,15 @@ export function registerFederationBackendHandlers(params: {
 
 export class FederationRemoteBackendClient implements FederationBackendOperations {
   constructor(private readonly rpc: FederationRpcEndpoint) {}
+
+  async getNavigationSnapshot(
+    request: GetNavigationSnapshotRequest = {},
+  ): Promise<NavigationSnapshot> {
+    return await this.rpc.request<NavigationSnapshot>({
+      method: FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
+      params: request,
+    });
+  }
 
   async listThreads(
     request: AppServerListThreadsRequest = {},
@@ -279,9 +414,39 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async listBackends(
+    request: ListBackendsRequest = {},
+  ): Promise<ListBackendsResponse> {
+    return await this.rpc.request<ListBackendsResponse>({
+      method: FEDERATION_BACKEND_METHODS.listBackends,
+      params: request,
+    });
+  }
+
+  async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
+    return await this.rpc.request<StartThreadResponse>({
+      method: FEDERATION_BACKEND_METHODS.startThread,
+      params: request,
+    });
+  }
+
+  async forkThread(request: ForkThreadRequest): Promise<ForkThreadResponse> {
+    return await this.rpc.request<ForkThreadResponse>({
+      method: FEDERATION_BACKEND_METHODS.forkThread,
+      params: request,
+    });
+  }
+
   async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
     return await this.rpc.request<StartTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.startTurn,
+      params: request,
+    });
+  }
+
+  async startReview(request: StartReviewRequest): Promise<StartReviewResponse> {
+    return await this.rpc.request<StartReviewResponse>({
+      method: FEDERATION_BACKEND_METHODS.startReview,
       params: request,
     });
   }
@@ -374,11 +539,29 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async stopCodexEnvironmentAction(
+    request: StopCodexEnvironmentActionRequest,
+  ): Promise<StopCodexEnvironmentActionResponse> {
+    return await this.rpc.request<StopCodexEnvironmentActionResponse>({
+      method: FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction,
+      params: request,
+    });
+  }
+
   async setCodexThreadEnvironment(
     request: SetCodexThreadEnvironmentRequest,
   ): Promise<SetCodexThreadEnvironmentResponse> {
     return await this.rpc.request<SetCodexThreadEnvironmentResponse>({
       method: FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment,
+      params: request,
+    });
+  }
+
+  async materializeDirectoryLaunchpad(
+    request: MaterializeDirectoryLaunchpadRequest,
+  ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    return await this.rpc.request<MaterializeDirectoryLaunchpadResponse>({
+      method: FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
       params: request,
     });
   }

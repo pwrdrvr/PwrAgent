@@ -6,25 +6,35 @@ import type {
   AppServerReadThreadResponse,
   CancelThreadExecutionModeQueueResponse,
   CompactThreadResponse,
+  CodexEnvironmentSetupProgressEvent,
   FederationCapability,
+  FederationDiagnosticEvent,
+  FederatedSearchRequest,
+  FederatedSearchResponse,
   FederationHealthStatus,
   FederationInstanceId,
   FederationInstanceRole,
   FederationPeerSummary,
   FederationProtocolEnvelope,
+  ForkThreadResponse,
   HandoffThreadWorkspaceResponse,
   InterruptTurnResponse,
+  MaterializeDirectoryLaunchpadResponse,
   QueueThreadExecutionModeResponse,
   RunCodexEnvironmentActionResponse,
   SetAcpSessionRuntimeOptionResponse,
   SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsResponse,
+  StartReviewResponse,
+  StartThreadResponse,
   SteerTurnResponse,
+  StopCodexEnvironmentActionResponse,
   SubmitServerRequestResponse,
 } from "@pwragent/shared";
 import {
   FEDERATION_PROTOCOL_VERSION,
+  buildThreadIdentityKey,
   buildFederatedThreadRef,
   federatedThreadIdentityKey,
   isRemoteFederationTarget,
@@ -33,9 +43,12 @@ import {
   type AppServerReadThreadRequest,
   type CancelThreadExecutionModeQueueRequest,
   type CompactThreadRequest,
+  type ForkThreadRequest,
   type FederationRemoteTarget,
   type HandoffThreadWorkspaceRequest,
   type InterruptTurnRequest,
+  type MaterializeDirectoryLaunchpadRequest,
+  type MaterializeDirectoryLaunchpadOptions,
   type NavigationSnapshot,
   type QueueThreadExecutionModeRequest,
   type RunCodexEnvironmentActionRequest,
@@ -43,32 +56,42 @@ import {
   type SetCodexThreadEnvironmentRequest,
   type SetThreadExecutionModeRequest,
   type SetThreadModelSettingsRequest,
+  type StartReviewRequest,
+  type StartThreadRequest,
   type SteerTurnRequest,
   type StartTurnRequest,
   type StartTurnResponse,
   type SubmitServerRequestRequest,
+  type StopCodexEnvironmentActionRequest,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { rewriteTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
+import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import {
   createFederationEnrollmentInvite,
-  type FederationEnrollmentInvite,
 } from "./federation-enrollment";
+import { FederatedSearchService } from "./federated-search-service";
 import {
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
+  FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
   FederationRemoteBackendClient,
   registerFederationBackendHandlers,
   type FederationBackendEventNotification,
   type FederationBackendOperations,
+  type FederationEnvironmentSetupProgressNotification,
 } from "./federation-backend-bridge";
-import { buildFederationHealthStatus } from "./federation-health";
+import {
+  buildFederationHealthStatus,
+  publicPeerSummary,
+} from "./federation-health";
 import { FederationRouter } from "./federation-router";
 import { FederationRpcEndpoint } from "./federation-rpc";
 import { FederationStore } from "./federation-store";
+import { redactFederationDiagnostic } from "./federation-redaction";
 import {
   connectFederationClient,
   FederationGatewayWebSocketServer,
@@ -81,6 +104,7 @@ const INSTANCE_ID_META_KEY = "federation_instance_id";
 const GATEWAY_INSTANCE_ID_META_KEY = "federation_gateway_instance_id";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
+const FEDERATION_RECONNECT_MAX_DELAY_MS = 30_000;
 
 const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
@@ -122,11 +146,49 @@ export class DesktopFederationRuntime {
     FederationPeerSummary
   >();
   private publishAgentEvent?: (event: AgentEvent) => void;
+  private publishEnvironmentSetupProgress?: (
+    event: CodexEnvironmentSetupProgressEvent,
+  ) => void;
+  private readonly remoteBackendEventListeners = new Set<
+    (event: AgentEvent) => void | Promise<void>
+  >();
   private unsubscribeLocalBackendEvents?: () => void;
   private restartPromise: Promise<void> | undefined;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private reconnectAttempt = 0;
+  private connectionGeneration = 0;
+  private stopping = true;
+  private lastConnectionError?: string;
 
   setAgentEventPublisher(publisher: (event: AgentEvent) => void): void {
     this.publishAgentEvent = publisher;
+  }
+
+  setEnvironmentSetupProgressPublisher(
+    publisher: (event: CodexEnvironmentSetupProgressEvent) => void,
+  ): void {
+    this.publishEnvironmentSetupProgress = publisher;
+  }
+
+  onRemoteBackendEvent(
+    listener: (event: AgentEvent) => void | Promise<void>,
+  ): () => void {
+    this.remoteBackendEventListeners.add(listener);
+    return () => {
+      this.remoteBackendEventListeners.delete(listener);
+    };
+  }
+
+  connectedPeerTargets(): Array<{
+    target: FederationRemoteTarget;
+    label: string;
+  }> {
+    return this.visiblePeers()
+      .filter((peer) => peer.status === "connected")
+      .map((peer) => ({
+        target: { scope: "remote", instanceId: peer.id },
+        label: peer.label,
+      }));
   }
 
   async restart(): Promise<void> {
@@ -137,6 +199,12 @@ export class DesktopFederationRuntime {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
+    this.connectionGeneration += 1;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     this.unsubscribeLocalBackendEvents?.();
     this.unsubscribeLocalBackendEvents = undefined;
     this.client?.close();
@@ -149,14 +217,65 @@ export class DesktopFederationRuntime {
     this.gatewayInstanceId = undefined;
     this.rpcByPeer.clear();
     this.remotePeerDirectory.clear();
+    this.reconnectAttempt = 0;
+    this.lastConnectionError = undefined;
   }
 
   async health(): Promise<FederationHealthStatus> {
     const settings = await getDesktopSettingsService().readSettings();
-    return buildFederationHealthStatus({
+    const health = buildFederationHealthStatus({
       settings,
       peers: this.visiblePeers(),
       instanceId: this.ensureLocalInstanceId(),
+    });
+    if (
+      settings.federation.mode.value === "client" ||
+      settings.federation.mode.value === "dual"
+    ) {
+      health.status = this.client
+        ? "connected"
+        : this.reconnectTimer
+          ? "connecting"
+          : "disconnected";
+      health.unavailableReason = this.lastConnectionError;
+    }
+    return health;
+  }
+
+  async diagnostics(request: {
+    limit?: number;
+    peerId?: FederationInstanceId;
+  }): Promise<{
+    health: FederationHealthStatus;
+    events: FederationDiagnosticEvent[];
+  }> {
+    return {
+      health: await this.health(),
+      events: this.store().listAudit(request).map((entry) => ({
+        ...entry,
+        detail: entry.detail
+          ? redactFederationDiagnostic(entry.detail)
+          : undefined,
+      })),
+    };
+  }
+
+  async revokePeer(peerId: FederationInstanceId): Promise<FederationPeerSummary> {
+    const store = this.store();
+    const peer = store.getPeer(peerId);
+    if (!peer) {
+      throw new Error("Federation peer is not enrolled.");
+    }
+    const revokedAt = Date.now();
+    store.revokePeer(peerId, revokedAt);
+    this.server?.closePeer(peerId);
+    this.unregisterPeer(peerId);
+    this.remotePeerDirectory.delete(peerId);
+    this.broadcastPeerDirectory();
+    return publicPeerSummary({
+      ...peer,
+      status: "revoked",
+      revokedAt,
     });
   }
 
@@ -239,40 +358,73 @@ export class DesktopFederationRuntime {
     request: { backend?: AppServerListThreadsRequest["backend"]; filter?: string },
   ): Promise<NavigationSnapshot> {
     const backend = this.remoteBackend(target);
-    const response = await backend.listThreads({
+    const response = await backend.getNavigationSnapshot({
       backend: request.backend,
       filter: request.filter,
     });
     const peer = this.store().getPeer(target.instanceId);
     const instanceLabel = peer?.label ?? target.instanceId;
-    const threads = response.threads.map((thread) => ({
-      ...thread,
-      federation: {
-        ref: buildFederatedThreadRef({
-          backend: thread.source,
-          instanceId: target.instanceId,
-          threadId: thread.id,
-        }),
-        instanceLabel,
-        peerStatus: peer?.status,
-      },
-      inbox: { inInbox: true },
-    }));
+    const remoteThreadKeyByLocalKey = new Map<string, string>();
+    const threads = response.threads.map((thread) => {
+      const ref = buildFederatedThreadRef({
+        backend: thread.source,
+        instanceId: target.instanceId,
+        threadId: thread.id,
+      });
+      remoteThreadKeyByLocalKey.set(
+        buildThreadIdentityKey(thread.source, thread.id),
+        federatedThreadIdentityKey(ref),
+      );
+      return {
+        ...thread,
+        federation: {
+          ref,
+          instanceLabel,
+          peerStatus: peer?.status,
+        },
+      };
+    });
     return {
-      backend: response.backend,
-      fetchedAt: response.fetchedAt,
+      ...response,
       federationTarget: target,
       unchanged: false,
       threads,
-      inboxThreadKeys: threads.map((thread) =>
-        federatedThreadIdentityKey(thread.federation.ref),
+      inboxThreadKeys: response.inboxThreadKeys.map(
+        (threadKey) => remoteThreadKeyByLocalKey.get(threadKey) ?? threadKey,
       ),
-      directories: [],
-      launchpadDefaults: {
-        backend: request.backend ?? "codex",
-        executionMode: "default",
-      },
+      directories: response.directories.map((directory) => ({
+        ...directory,
+        threadKeys: directory.threadKeys.map(
+          (threadKey) => remoteThreadKeyByLocalKey.get(threadKey) ?? threadKey,
+        ),
+      })),
     };
+  }
+
+  async searchConnectedPeers(
+    request: FederatedSearchRequest,
+  ): Promise<FederatedSearchResponse> {
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      local: localBackendOperations(),
+      peers: () =>
+        this.visiblePeers()
+          .filter(
+            (peer) =>
+              peer.status === "connected" &&
+              peer.capabilities.includes("federated_search"),
+          )
+          .map((peer) => ({
+            instanceId: peer.id,
+            label: peer.label,
+            status: peer.status,
+            backend: this.remoteBackend({
+              scope: "remote",
+              instanceId: peer.id,
+            }),
+          })),
+    });
+    return await service.search(request);
   }
 
   private async restartNow(): Promise<void> {
@@ -282,6 +434,7 @@ export class DesktopFederationRuntime {
     if (mode === "disabled") {
       return;
     }
+    this.stopping = false;
 
     const localInstanceId = this.ensureLocalInstanceId();
     const router = new FederationRouter({
@@ -291,6 +444,9 @@ export class DesktopFederationRuntime {
     registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
+      onEnvironmentSetupProgress: (event, targetInstanceId) => {
+        this.sendEnvironmentSetupProgress(event, targetInstanceId);
+      },
     });
     this.router = router;
     this.subscribeLocalBackendEvents();
@@ -312,7 +468,14 @@ export class DesktopFederationRuntime {
     }
 
     if (mode === "client" || mode === "dual") {
-      await this.connectClient(settings.federation.gatewayUrl.value.trim());
+      const gatewayUrl = settings.federation.gatewayUrl.value.trim();
+      if (!gatewayUrl) {
+        this.lastConnectionError = "Federation gateway URL is not configured.";
+      } else {
+        await this.connectClient(gatewayUrl).catch((error) => {
+          this.handleClientConnectionFailure(gatewayUrl, error);
+        });
+      }
     }
   }
 
@@ -320,15 +483,41 @@ export class DesktopFederationRuntime {
     if (!gatewayUrl) return;
     const gatewayInstanceId = getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY);
     if (!gatewayInstanceId) {
-      log.warn("federation client mode missing gateway instance id");
-      return;
+      throw new Error("Federation client mode is missing its gateway identity.");
     }
     this.gatewayInstanceId = gatewayInstanceId;
     const pendingInviteToken = getAppStateDb().getMeta(PENDING_INVITE_TOKEN_META_KEY);
     const keyPair = await getDesktopSettingsService()
       .getOrCreateFederationIdentityKeyPair();
+    const settingsService = getDesktopSettingsService();
+    const settings = await settingsService.readSettings();
+    const cloudflareCredentials =
+      await settingsService.resolveFederationCloudflareCredentials();
+    const cloudflareMtlsEnabled =
+      settings.federation.cloudflareMtlsEnabled.value;
+    const cloudflareAccessEnabled =
+      settings.federation.cloudflareAccessServiceAuthEnabled.value;
+    if (
+      cloudflareMtlsEnabled &&
+      (!cloudflareCredentials.clientCertificate ||
+        !cloudflareCredentials.clientPrivateKey)
+    ) {
+      throw new Error(
+        "Cloudflare mTLS is enabled but the client certificate or private key is missing.",
+      );
+    }
+    if (
+      cloudflareAccessEnabled &&
+      (!cloudflareCredentials.accessClientId ||
+        !cloudflareCredentials.accessClientSecret)
+    ) {
+      throw new Error(
+        "Cloudflare Access service auth is enabled but its credentials are missing.",
+      );
+    }
     this.gatewayUrl = gatewayUrl;
-    this.client = await connectFederationClient({
+    const connectionGeneration = ++this.connectionGeneration;
+    const client = await connectFederationClient({
       url: gatewayUrl,
       mode: pendingInviteToken ? "enroll" : "reconnect",
       gatewayInstanceId,
@@ -339,9 +528,42 @@ export class DesktopFederationRuntime {
       inviteToken: pendingInviteToken || undefined,
       label: getAppStateDb().getMeta("profile_name") || this.ensureLocalInstanceId(),
       role: "client",
+      headers: cloudflareAccessEnabled
+        ? {
+            "CF-Access-Client-Id": cloudflareCredentials.accessClientId!,
+            "CF-Access-Client-Secret":
+              cloudflareCredentials.accessClientSecret!,
+          }
+        : undefined,
+      clientCertificate: cloudflareMtlsEnabled
+        ? cloudflareCredentials.clientCertificate
+        : undefined,
+      clientPrivateKey: cloudflareMtlsEnabled
+        ? cloudflareCredentials.clientPrivateKey
+        : undefined,
+      onClose: () => {
+        if (
+          this.stopping ||
+          connectionGeneration !== this.connectionGeneration
+        ) {
+          return;
+        }
+        this.client = undefined;
+        this.lastConnectionError = "Federation gateway connection closed.";
+        this.unregisterPeer(gatewayInstanceId);
+        this.scheduleReconnect(gatewayUrl);
+      },
       onEnvelope: (envelope) =>
         void this.receiveEnvelope(envelope, gatewayInstanceId),
     });
+    if (
+      this.stopping ||
+      connectionGeneration !== this.connectionGeneration
+    ) {
+      client.close();
+      return;
+    }
+    this.client = client;
     this.router?.registerConnection({
       peerId: gatewayInstanceId,
       capabilities: DEFAULT_CAPABILITIES,
@@ -350,7 +572,47 @@ export class DesktopFederationRuntime {
     if (pendingInviteToken) {
       getAppStateDb().setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     }
+    this.reconnectAttempt = 0;
+    this.lastConnectionError = undefined;
     log.info("federation client connected", { gatewayUrl });
+  }
+
+  private handleClientConnectionFailure(
+    gatewayUrl: string,
+    error: unknown,
+  ): void {
+    if (this.stopping) return;
+    this.client = undefined;
+    this.lastConnectionError = redactFederationDiagnostic(
+      error instanceof Error ? error.message : String(error),
+    );
+    this.store().appendAudit({
+      peerId: this.gatewayInstanceId,
+      kind: "error",
+      createdAt: Date.now(),
+      detail: this.lastConnectionError,
+    });
+    log.warn("federation client connection failed", {
+      gatewayUrl,
+      error: this.lastConnectionError,
+    });
+    this.scheduleReconnect(gatewayUrl);
+  }
+
+  private scheduleReconnect(gatewayUrl: string): void {
+    if (this.stopping || this.reconnectTimer) return;
+    const delayMs = Math.min(
+      1_000 * 2 ** this.reconnectAttempt,
+      FEDERATION_RECONNECT_MAX_DELAY_MS,
+    );
+    this.reconnectAttempt += 1;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      if (this.stopping) return;
+      void this.connectClient(gatewayUrl).catch((error) => {
+        this.handleClientConnectionFailure(gatewayUrl, error);
+      });
+    }, delayMs);
   }
 
   private registerGatewayConnection(connection: FederationGatewayConnection): void {
@@ -383,6 +645,9 @@ export class DesktopFederationRuntime {
     if (this.applyPeerDirectory(envelope)) {
       return;
     }
+    if (this.publishRemoteEnvironmentSetupProgress(envelope, sourcePeerId)) {
+      return;
+    }
     if (this.publishRemoteBackendEvent(envelope, sourcePeerId)) {
       return;
     }
@@ -391,6 +656,52 @@ export class DesktopFederationRuntime {
       if (handled) return;
     }
     await this.router?.routeEnvelope({ envelope, sourcePeerId });
+  }
+
+  private sendEnvironmentSetupProgress(
+    event: CodexEnvironmentSetupProgressEvent,
+    targetInstanceId: FederationInstanceId,
+  ): void {
+    this.sendEnvelopeToTarget(targetInstanceId, {
+      id: `federation-environment-setup:${randomUUID()}`,
+      kind: "notification",
+      method: FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
+      params: event,
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: this.ensureLocalInstanceId(),
+      targetInstanceId,
+      createdAt: Date.now(),
+    });
+  }
+
+  private publishRemoteEnvironmentSetupProgress(
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ): boolean {
+    if (
+      envelope.kind !== "notification" ||
+      envelope.method !== FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD
+    ) {
+      return false;
+    }
+    const notification =
+      envelope as FederationEnvironmentSetupProgressNotification & typeof envelope;
+    const targetInstanceId = envelope.targetInstanceId;
+    if (
+      targetInstanceId &&
+      targetInstanceId !== this.ensureLocalInstanceId()
+    ) {
+      void this.router?.routeEnvelope({ envelope, sourcePeerId });
+      return true;
+    }
+    this.publishEnvironmentSetupProgress?.({
+      ...notification.params,
+      federationTarget: {
+        scope: "remote",
+        instanceId: envelope.sourceInstanceId || sourcePeerId,
+      },
+    });
+    return true;
   }
 
   private ensureLocalInstanceId(): FederationInstanceId {
@@ -469,6 +780,8 @@ export class DesktopFederationRuntime {
     return [...visible.values()].map((peer) =>
       this.router?.getConnection(peer.id)
         ? { ...peer, status: "connected" }
+        : this.remotePeerDirectory.has(peer.id)
+          ? peer
         : {
             ...peer,
             status: peer.status === "connected" ? "disconnected" : peer.status,
@@ -600,14 +913,23 @@ export class DesktopFederationRuntime {
     }
 
     const notification = envelope as FederationBackendEventNotification & typeof envelope;
-    this.publishAgentEvent?.({
+    const event: AgentEvent = {
       backend: notification.params.backend,
       federationTarget: {
         scope: "remote",
         instanceId: envelope.sourceInstanceId || sourcePeerId,
       },
       notification: notification.params.notification,
-    });
+    };
+    this.publishAgentEvent?.(event);
+    for (const listener of this.remoteBackendEventListeners) {
+      void Promise.resolve(listener(event)).catch((error) => {
+        log.warn("federation remote backend event listener failed", {
+          error: error instanceof Error ? error.message : String(error),
+          method: event.notification.method,
+        });
+      });
+    }
     this.relayRemoteBackendEvent(envelope, sourcePeerId);
     return true;
   }
@@ -644,6 +966,10 @@ export class DesktopFederationRuntime {
 
 function localBackendOperations(): FederationBackendOperations {
   return {
+    async getNavigationSnapshot(request = {}): Promise<NavigationSnapshot> {
+      return await new DesktopMessagingBackendBridge()
+        .getNavigationSnapshot(request);
+    },
     async listThreads(
       request: AppServerListThreadsRequest = {},
     ): Promise<AppServerListThreadsResponse> {
@@ -671,7 +997,7 @@ function localBackendOperations(): FederationBackendOperations {
       });
       return rewriteTranscriptImageUrlsForRenderer(response);
     },
-    async listSkills(
+  async listSkills(
       request: AppServerListSkillsRequest = {},
     ): Promise<AppServerListSkillsResponse> {
       const backend = request.backend ?? "codex";
@@ -686,6 +1012,25 @@ function localBackendOperations(): FederationBackendOperations {
         fetchedAt: Date.now(),
         data: response.data,
       };
+    },
+    async listBackends(request = {}) {
+      return await getDesktopBackendRegistry().listBackends(request);
+    },
+    async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
+      return await getDesktopBackendRegistry().startThread(request);
+    },
+    async forkThread(
+      request: ForkThreadRequest,
+      options?: Pick<
+        MaterializeDirectoryLaunchpadOptions,
+        "onCodexEnvironmentSetupProgress"
+      >,
+    ): Promise<ForkThreadResponse> {
+      return await getDesktopBackendRegistry().forkThread({
+        ...request,
+        onCodexEnvironmentSetupProgress:
+          options?.onCodexEnvironmentSetupProgress,
+      });
     },
     async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
       const submitted = await getDesktopBackendRegistry().submitTurn({
@@ -707,6 +1052,11 @@ function localBackendOperations(): FederationBackendOperations {
             queueStatus: "queued",
             queueEntryId: submitted.entry.id,
           };
+    },
+    async startReview(
+      request: StartReviewRequest,
+    ): Promise<StartReviewResponse> {
+      return await getDesktopBackendRegistry().startReview(request);
     },
     async compactThread(
       request: CompactThreadRequest,
@@ -756,10 +1106,22 @@ function localBackendOperations(): FederationBackendOperations {
     ): Promise<RunCodexEnvironmentActionResponse> {
       return await getDesktopBackendRegistry().runCodexEnvironmentAction(request);
     },
+    async stopCodexEnvironmentAction(
+      request: StopCodexEnvironmentActionRequest,
+    ): Promise<StopCodexEnvironmentActionResponse> {
+      return await getDesktopBackendRegistry().stopCodexEnvironmentAction(request);
+    },
     async setCodexThreadEnvironment(
       request: SetCodexThreadEnvironmentRequest,
     ): Promise<SetCodexThreadEnvironmentResponse> {
       return await getDesktopBackendRegistry().setCodexThreadEnvironment(request);
+    },
+    async materializeDirectoryLaunchpad(
+      request: MaterializeDirectoryLaunchpadRequest,
+      options?: MaterializeDirectoryLaunchpadOptions,
+    ): Promise<MaterializeDirectoryLaunchpadResponse> {
+      return await getDesktopBackendRegistry()
+        .materializeDirectoryLaunchpad(request, options);
     },
     async handoffThreadWorkspace(
       request: HandoffThreadWorkspaceRequest,

@@ -14,6 +14,7 @@ import {
   buildThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  isRemoteFederationTarget,
   parseThreadIdentityKey,
   type AppServerBackendKind,
   type DesktopBootInfo,
@@ -1577,6 +1578,17 @@ function DesktopAppShell(props: {
                 }
               }}
               onOpenResult={async (result) => {
+                if (
+                  result.federation &&
+                  isRemoteFederationTarget(result.federation.ref.target)
+                ) {
+                  await desktopApi?.openFederationWindow?.({
+                    target: result.federation.ref.target,
+                    label: result.federation.instanceLabel,
+                    initialThread: result.federation.ref,
+                  });
+                  return;
+                }
                 // Deep-link to the match: open the thread with the find bar
                 // seeded with the search query so it highlights + scrolls the
                 // matched message into view (auto-loading older history if the

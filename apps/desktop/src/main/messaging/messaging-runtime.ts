@@ -72,6 +72,7 @@ import {
   type DesktopMessagingChannelConfigUpdate,
 } from "./messaging-config";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
 import {
   hasActiveInboundPreview,
@@ -1336,6 +1337,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
               await controller.handleBackendPendingRequest(
                 event.backend,
                 event.notification,
+                event.federationTarget,
               );
             } else {
               await controller.handleBackendEvent(event);
@@ -2193,7 +2195,10 @@ export function getDesktopMessagingRuntime(
   if (!runtime) {
     runtime = new DesktopMessagingRuntime({
       adapterFactory: createConfiguredAdapters,
-      backendBridge: new DesktopMessagingBackendBridge(),
+      backendBridge: new DesktopMessagingBackendBridge(
+        undefined,
+        getDesktopFederationRuntime(),
+      ),
       config: config ?? (() => loadDesktopMessagingConfig()),
       automationInboundHandler: (event) =>
         getDesktopAutomationService().handleMessagingInboundEvent(event),

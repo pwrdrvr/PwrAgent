@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type {
   AgentEvent,
+  CodexEnvironmentSetupProgressEvent,
   FederationCapability,
   FederationInstanceId,
   FederationProtocolEnvelope,
+  NavigationSnapshot,
 } from "@pwragent/shared";
 import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
-import { FEDERATION_BACKEND_EVENT_METHOD } from "../federation/federation-backend-bridge";
+import {
+  FEDERATION_BACKEND_EVENT_METHOD,
+  FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
+} from "../federation/federation-backend-bridge";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { FederationRouter } from "../federation/federation-router";
 import type { FederationGatewayConnection } from "../federation/federation-transport";
@@ -25,14 +30,39 @@ type RuntimeHarness = {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ) => boolean;
+  publishRemoteEnvironmentSetupProgress: (
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ) => boolean;
   remotePeerDirectory: Map<FederationInstanceId, unknown>;
   registerGatewayConnection: (connection: FederationGatewayConnection) => void;
+  remoteBackend: () => {
+    getNavigationSnapshot: () => Promise<NavigationSnapshot>;
+  };
+  remoteNavigationSnapshot: (
+    target: { scope: "remote"; instanceId: FederationInstanceId },
+    request: Record<string, never>,
+  ) => Promise<NavigationSnapshot>;
   sendEnvelopeToTarget: (
     targetInstanceId: FederationInstanceId,
     envelope: FederationProtocolEnvelope,
   ) => void;
   setAgentEventPublisher: (publisher: (event: AgentEvent) => void) => void;
+  setEnvironmentSetupProgressPublisher: (
+    publisher: (event: CodexEnvironmentSetupProgressEvent) => void,
+  ) => void;
+  store: () => {
+    getPeer: (peerId: FederationInstanceId) => {
+      label: string;
+      status: "connected";
+    } | undefined;
+    listPeers: () => [];
+  };
   unregisterGatewayConnection: (connection: FederationGatewayConnection) => void;
+  visiblePeers: () => Array<{
+    id: FederationInstanceId;
+    status: string;
+  }>;
 };
 
 function createConnection(params: {
@@ -50,9 +80,82 @@ function createConnection(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it("preserves remote navigation lenses while federating thread keys", async () => {
+    const response: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [
+        {
+          id: "thread-1",
+          title: "Remote work",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          source: "codex",
+          inbox: { inInbox: false },
+        },
+      ],
+      inboxThreadKeys: [],
+      directories: [
+        {
+          key: "directory:/repo",
+          kind: "directory",
+          label: "repo",
+          path: "/repo",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.remoteBackend = () => ({
+      getNavigationSnapshot: async () => response,
+    });
+    runtime.store = () => ({
+      getPeer: () => ({
+        label: "Studio Mac",
+        status: "connected",
+      }),
+      listPeers: () => [],
+    });
+
+    const snapshot = await runtime.remoteNavigationSnapshot(
+      { scope: "remote", instanceId: "client_one" },
+      {},
+    );
+
+    expect(snapshot.threads[0]).toMatchObject({
+      id: "thread-1",
+      inbox: { inInbox: false },
+      federation: {
+        instanceLabel: "Studio Mac",
+        ref: {
+          backend: "codex",
+          target: {
+            scope: "remote",
+            instanceId: "client_one",
+          },
+          threadId: "thread-1",
+        },
+      },
+    });
+    expect(snapshot.inboxThreadKeys).toEqual([]);
+    expect(snapshot.directories[0]?.threadKeys).toEqual([
+      "remote:client_one:codex:thread-1",
+    ]);
+  });
+
   it("records gateway-advertised peers for client instance health and opening", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.localInstanceId = "client_one";
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
 
     const handled = runtime.applyPeerDirectory({
       id: "peers-1",
@@ -103,6 +206,10 @@ describe("DesktopFederationRuntime", () => {
         role: "client",
         status: "connected",
       },
+    ]);
+    expect(runtime.visiblePeers()).toMatchObject([
+      { id: "gateway_one", status: "connected" },
+      { id: "client_two", status: "connected" },
     ]);
   });
 
@@ -237,6 +344,108 @@ describe("DesktopFederationRuntime", () => {
             turnId: "turn-1",
           },
         },
+      },
+    ]);
+  });
+
+  it("publishes remote environment setup progress with its source target", () => {
+    const published: CodexEnvironmentSetupProgressEvent[] = [];
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.setEnvironmentSetupProgressPublisher((event) => {
+      published.push(event);
+    });
+
+    const handled = runtime.publishRemoteEnvironmentSetupProgress(
+      {
+        id: "setup-1",
+        kind: "notification",
+        method: FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
+        params: {
+          directoryKey: "directory:/repo/app",
+          environmentId: "node",
+          environmentName: "Node",
+          command: "pnpm install",
+          phase: "stdout",
+          chunk: "Installing",
+          at: 2_000,
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 2_000,
+      },
+      "client_one",
+    );
+
+    expect(handled).toBe(true);
+    expect(published).toEqual([
+      {
+        directoryKey: "directory:/repo/app",
+        federationTarget: { scope: "remote", instanceId: "client_one" },
+        environmentId: "node",
+        environmentName: "Node",
+        command: "pnpm install",
+        phase: "stdout",
+        chunk: "Installing",
+        at: 2_000,
+      },
+    ]);
+  });
+
+  it("relays environment setup progress to the requesting sibling", () => {
+    const published: CodexEnvironmentSetupProgressEvent[] = [];
+    const relayed: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerConnection(
+      createConnection({
+        peerId: "client_one",
+        capabilities: ["environment_actions", "gateway_relay"],
+      }),
+    );
+    router.registerConnection(
+      createConnection({
+        peerId: "client_two",
+        capabilities: ["environment_actions", "gateway_relay"],
+        sendEnvelope: (envelope) => relayed.push(envelope),
+      }),
+    );
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.router = router;
+    runtime.setEnvironmentSetupProgressPublisher((event) => {
+      published.push(event);
+    });
+    const notification: FederationProtocolEnvelope = {
+      id: "setup-relay-1",
+      kind: "notification",
+      method: FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
+      params: {
+        directoryKey: "directory:/repo/app",
+        environmentId: "node",
+        environmentName: "Node",
+        command: "pnpm install",
+        phase: "stdout",
+        chunk: "Installing",
+        at: 2_000,
+      },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "client_two",
+      createdAt: 2_000,
+    };
+
+    const handled = runtime.publishRemoteEnvironmentSetupProgress(
+      notification,
+      "client_one",
+    );
+
+    expect(handled).toBe(true);
+    expect(published).toEqual([]);
+    expect(relayed).toEqual([
+      {
+        ...notification,
+        hopCount: 1,
       },
     ]);
   });

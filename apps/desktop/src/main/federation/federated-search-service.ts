@@ -26,6 +26,7 @@ export class FederatedSearchService {
     private readonly options: {
       local: FederatedSearchLocalBackend;
       peers: () => readonly FederatedSearchPeer[];
+      includeLocal?: boolean;
       now?: () => number;
     },
   ) {}
@@ -36,10 +37,12 @@ export class FederatedSearchService {
     const searchedAt = this.options.now?.() ?? Date.now();
     const failures: FederatedSearchResponse["failures"] = [];
     const resultGroups = await Promise.all([
-      this.searchLocal(query),
+      ...(this.options.includeLocal === false
+        ? []
+        : [this.searchLocal(query, request.backend)]),
       ...this.options.peers().map(async (peer) => {
         try {
-          return await this.searchPeer(peer, query);
+          return await this.searchPeer(peer, query, request.backend);
         } catch (error) {
           failures.push({
             instanceId: peer.instanceId,
@@ -66,8 +69,14 @@ export class FederatedSearchService {
     };
   }
 
-  private async searchLocal(query: string): Promise<FederatedSearchResponse["results"]> {
-    const response = await this.options.local.listThreads({ filter: query });
+  private async searchLocal(
+    query: string,
+    backend?: FederatedSearchRequest["backend"],
+  ): Promise<FederatedSearchResponse["results"]> {
+    const response = await this.options.local.listThreads({
+      backend: backend === "all" ? undefined : backend,
+      filter: query,
+    });
     return response.threads.map((thread) => ({
       ref: buildFederatedThreadRef({
         backend: thread.source,
@@ -82,8 +91,10 @@ export class FederatedSearchService {
   private async searchPeer(
     peer: FederatedSearchPeer,
     query: string,
+    backend?: FederatedSearchRequest["backend"],
   ): Promise<FederatedSearchResponse["results"]> {
     const response: AppServerListThreadsResponse = await peer.backend.listThreads({
+      backend: backend === "all" ? undefined : backend,
       filter: query,
     });
     return response.threads.map((thread) => ({

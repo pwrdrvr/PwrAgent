@@ -1,4 +1,5 @@
 import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
+import type { FederationTarget } from "./federation";
 
 export type BackendSourceKind = "builtin" | "acp";
 
@@ -230,6 +231,7 @@ export type ListBackendsRequest = {
    * refreshes one provider; `true` refreshes every provider.
    */
   refreshModels?: true | AppServerBackendKind;
+  federationTarget?: FederationTarget;
 };
 
 export type ListBackendsResponse = {

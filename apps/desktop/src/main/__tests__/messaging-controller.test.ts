@@ -2268,6 +2268,46 @@ describe("MessagingController", () => {
     });
   });
 
+  it("routes bound remote thread input to its federation target", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.federation = {
+      ref: {
+        backend: "codex",
+        target: { scope: "remote", instanceId: "client_one" },
+        threadId: "thread-1",
+      },
+      instanceLabel: "Studio Mac",
+      peerStatus: "connected",
+    };
+    const harness = await createHarness({ navigation });
+    const event = buildTextEvent("remote request");
+    await harness.store.upsertBinding({
+      id: "binding:remote-client-one",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      federatedThread: navigation.threads[0]!.federation!.ref,
+      routingState: event.routingState,
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        federationTarget: {
+          scope: "remote",
+          instanceId: "client_one",
+        },
+        threadId: "thread-1",
+      }),
+    );
+  });
+
   it("creates a native Telegram topic, attaches a target thread, and posts resume status there", async () => {
     const now = Date.UTC(2026, 5, 9, 23, 5);
     const navigation = buildNavigationSnapshot();

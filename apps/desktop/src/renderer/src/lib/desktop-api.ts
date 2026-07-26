@@ -94,6 +94,10 @@ import type {
   OpenFederationWindowResponse,
   ReadFederationHealthRequest,
   ReadFederationHealthResponse,
+  ReadFederationDiagnosticsRequest,
+  ReadFederationDiagnosticsResponse,
+  RevokeFederationPeerRequest,
+  RevokeFederationPeerResponse,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -434,12 +438,18 @@ export type DesktopApi = {
   readFederationHealth?: (
     request?: ReadFederationHealthRequest,
   ) => Promise<ReadFederationHealthResponse>;
+  readFederationDiagnostics?: (
+    request?: ReadFederationDiagnosticsRequest,
+  ) => Promise<ReadFederationDiagnosticsResponse>;
   generateFederationInvite?: (
     request?: GenerateFederationInviteRequest,
   ) => Promise<GenerateFederationInviteResponse>;
   importFederationInvite?: (
     request: ImportFederationInviteRequest,
   ) => Promise<ImportFederationInviteResponse>;
+  revokeFederationPeer?: (
+    request: RevokeFederationPeerRequest,
+  ) => Promise<RevokeFederationPeerResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

@@ -123,6 +123,71 @@ describe("ThreadSearchPanel", () => {
     expect(screen.getByLabelText("Agent thread")).toHaveTextContent("Agent");
     expect(screen.getByText("Agent match")).toBeInTheDocument();
   });
+
+  it("labels remote search results and preserves their federation target", async () => {
+    const onOpenResult = vi.fn();
+    const searchThreads = vi.fn(async (): Promise<ThreadSearchResponse> => ({
+      backend: "all",
+      contentMode: "available",
+      fetchedAt: 1_000,
+      filters: { backend: "all", includeArchived: false },
+      query: "deploy",
+      results: [
+        {
+          backend: "codex",
+          confidence: "medium",
+          identityKey: "remote:client_one:codex:thread-1",
+          linkedDirectories: [],
+          matchReasons: [{ kind: "title_token_overlap" }],
+          score: 10,
+          snippets: [{ scope: "metadata", text: "Deploy release" }],
+          source: "codex",
+          threadId: "thread-1",
+          title: "Deploy release",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: { scope: "remote", instanceId: "client_one" },
+              threadId: "thread-1",
+            },
+            instanceLabel: "Studio Mac",
+            peerStatus: "connected",
+          },
+        },
+      ],
+      searchedScopes: ["metadata"],
+      semanticMode: "disabled",
+      unavailableScopes: [],
+    }));
+
+    render(
+      <ThreadSearchPanel
+        desktopApi={{ searchThreads } as DesktopApi}
+        onOpenResult={onOpenResult}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Search threads"), {
+      target: { value: "deploy" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText("Studio Mac")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Deploy release/ }));
+
+    expect(onOpenResult).toHaveBeenCalledWith({
+      backend: "codex",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "client_one" },
+          threadId: "thread-1",
+        },
+        instanceLabel: "Studio Mac",
+        peerStatus: "connected",
+      },
+      threadId: "thread-1",
+    });
+  });
 });
 
 describe("basename", () => {

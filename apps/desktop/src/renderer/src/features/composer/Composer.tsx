@@ -5249,6 +5249,8 @@ export function Composer(props: ComposerProps) {
     try {
       const response = await props.desktopApi.startReview({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
         target: reviewCommand.target,
         delivery: "inline",

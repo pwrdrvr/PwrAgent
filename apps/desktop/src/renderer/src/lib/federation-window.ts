@@ -8,3 +8,12 @@ export function readRendererFederationTarget(): FederationRemoteTarget | undefin
     ? { scope: "remote", instanceId: target.instanceId }
     : undefined;
 }
+
+export function readRendererFederationLabel(): string | undefined {
+  const label = (window as typeof window & {
+    __pwragentFederationLabel?: unknown;
+  }).__pwragentFederationLabel;
+  return typeof label === "string" && label.trim()
+    ? label.trim()
+    : undefined;
+}

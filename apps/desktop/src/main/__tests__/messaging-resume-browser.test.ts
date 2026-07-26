@@ -11,6 +11,7 @@ import {
   parseResumeCommandArgs,
   RESUME_BROWSER_PAGE_SIZE,
   resumeBrowserPageSize,
+  selectThreadFromValue,
 } from "../messaging/core/messaging-resume-browser";
 
 describe("messaging resume browser", () => {
@@ -70,6 +71,47 @@ describe("messaging resume browser", () => {
     expect(intent.prompt).not.toContain("1. Thread one");
     expect(intent.fallbackText).toContain("1. Thread one");
     expect(intent.fallbackText).toContain("Reply with a number");
+  });
+
+  it("labels remote threads and preserves their instance in callbacks", () => {
+    const intent = buildResumeIntent({
+      id: "intent-remote",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot({
+        threads: [
+          buildThread({
+            federation: {
+              ref: {
+                backend: "codex",
+                target: { scope: "remote", instanceId: "client_one" },
+                threadId: "thread-1",
+              },
+              instanceLabel: "Studio Mac",
+              peerStatus: "connected",
+            },
+          }),
+        ],
+      }),
+      session: buildBrowseSession({ mode: "recents" }),
+    });
+    expect(intent.fallbackText).toContain("[Studio Mac] Thread one");
+    const action = intent.page.actions.find(
+      (candidate) => candidate.id === "browse:select-thread",
+    );
+    expect(action?.value).toEqual({
+      backend: "codex",
+      federationInstanceId: "client_one",
+      threadId: "thread-1",
+    });
+    expect(selectThreadFromValue(action?.value)).toEqual({
+      backend: "codex",
+      federatedThread: {
+        backend: "codex",
+        target: { scope: "remote", instanceId: "client_one" },
+        threadId: "thread-1",
+      },
+      threadId: "thread-1",
+    });
   });
 
   it("fits middle-page resume controls within LINE action budgets", () => {

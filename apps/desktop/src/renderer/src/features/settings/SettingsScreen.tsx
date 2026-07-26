@@ -659,6 +659,8 @@ function SettingsSectionBody(props: {
         desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
+        onClearSecret={props.settings.clearSecret}
+        onReplaceSecret={props.settings.replaceSecret}
         onSettingsChanged={props.settings.refresh}
         onWriteConfig={props.settings.writeConfig}
       />
