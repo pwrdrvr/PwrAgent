@@ -94,6 +94,204 @@ describe("detectPullRequestsForThread", () => {
     expect(fetcher.fetchAllPullRequestsForBranch).not.toHaveBeenCalled();
   });
 
+  it("uses the tracked remote branch when the local branch was renamed", async () => {
+    const repo = await createRepoWithRenamedTrackedBranch({
+      localBranch: "pr-13268",
+      remoteBranch: "search/query-rewrites",
+    });
+    const expectedPr = {
+      number: 13268,
+      org: "Giphy",
+      repo: "giphy-services",
+      state: "pending" as const,
+      url: "https://github.com/Giphy/giphy-services/pull/13268",
+    };
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
+        branch === "search/query-rewrites" ? [expectedPr] : [],
+      ),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch: "pr-13268",
+      directoryPaths: [repo],
+    });
+
+    expect(prs).toEqual([expectedPr]);
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
+      cwd: repo,
+      branch: "search/query-rewrites",
+    });
+  });
+
+  it("uses the local branch when the tracked remote default is unknown", async () => {
+    const repo = await createRepoWithRenamedTrackedBranch({
+      localBranch: "fix/local-feature",
+      remoteBranch: "main",
+    });
+    await git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+    await git(repo, "branch", "-D", "main");
+    const expectedPr = {
+      number: 13269,
+      org: "Giphy",
+      repo: "giphy-services",
+      state: "pending" as const,
+      url: "https://github.com/Giphy/giphy-services/pull/13269",
+    };
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
+        branch === "fix/local-feature" ? [expectedPr] : [],
+      ),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch: "fix/local-feature",
+      directoryPaths: [repo],
+    });
+
+    expect(prs).toEqual([expectedPr]);
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
+      cwd: repo,
+      branch: "fix/local-feature",
+    });
+  });
+
+  it("does not use a descendant ref when the requested local branch is absent", async () => {
+    const repo = await createRepoWithRenamedTrackedBranch({
+      localBranch: "fix/descendant",
+      remoteBranch: "remote-feature",
+    });
+    const expectedPr = {
+      number: 13271,
+      org: "Giphy",
+      repo: "giphy-services",
+      state: "pending" as const,
+      url: "https://github.com/Giphy/giphy-services/pull/13271",
+    };
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
+        branch === "fix" ? [expectedPr] : [],
+      ),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch: "fix",
+      directoryPaths: [repo],
+    });
+
+    expect(prs).toEqual([expectedPr]);
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
+      cwd: repo,
+      branch: "fix",
+    });
+  });
+
+  it("does not use another local branch configured as the upstream", async () => {
+    const branch = "fix/local-upstream";
+    const repo = await createRepoWithBranch(branch);
+    await git(repo, "branch", "feature/parent");
+    await git(repo, "config", `branch.${branch}.remote`, ".");
+    await git(
+      repo,
+      "config",
+      `branch.${branch}.merge`,
+      "refs/heads/feature/parent",
+    );
+    await git(repo, "checkout", branch);
+    const expectedPr = {
+      number: 13272,
+      org: "Giphy",
+      repo: "giphy-services",
+      state: "pending" as const,
+      url: "https://github.com/Giphy/giphy-services/pull/13272",
+    };
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async ({ branch: lookupBranch }) =>
+        lookupBranch === branch ? [expectedPr] : [],
+      ),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch,
+      directoryPaths: [repo],
+    });
+
+    expect(prs).toEqual([expectedPr]);
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
+      cwd: repo,
+      branch,
+    });
+  });
+
+  it("uses the local branch when its tracked remote is the default branch", async () => {
+    const repo = await createRepoWithRenamedTrackedBranch({
+      localBranch: "fix/local-feature",
+      remoteBranch: "main",
+    });
+    const expectedPr = {
+      number: 13269,
+      org: "Giphy",
+      repo: "giphy-services",
+      state: "pending" as const,
+      url: "https://github.com/Giphy/giphy-services/pull/13269",
+    };
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
+        branch === "fix/local-feature" ? [expectedPr] : [],
+      ),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch: "fix/local-feature",
+      directoryPaths: [repo],
+    });
+
+    expect(prs).toEqual([expectedPr]);
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
+      cwd: repo,
+      branch: "fix/local-feature",
+    });
+  });
+
+  it("uses the local branch when it has no upstream", async () => {
+    const branch = "fix/untracked-pr";
+    const repo = await createRepoWithBranch(branch);
+    await git(repo, "checkout", branch);
+    const expectedPr = {
+      number: 13270,
+      org: "Giphy",
+      repo: "giphy-services",
+      state: "pending" as const,
+      url: "https://github.com/Giphy/giphy-services/pull/13270",
+    };
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async () => [expectedPr]),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch,
+      directoryPaths: [repo],
+    });
+
+    expect(prs).toEqual([expectedPr]);
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
+      cwd: repo,
+      branch,
+    });
+  });
+
   it("lets named-branch lookups degrade through the fetcher for invalid directories", async () => {
     const staleDirectory = await createNonGitDirectory();
     const fetcher = {
@@ -202,6 +400,41 @@ async function createRepoWithDefaultBranch(branch: string): Promise<string> {
     `refs/remotes/origin/${branch}`,
   );
   await git(repo, "branch", "--set-upstream-to", `origin/${branch}`, branch);
+  return repo;
+}
+
+async function createRepoWithRenamedTrackedBranch(params: {
+  localBranch: string;
+  remoteBranch: string;
+}): Promise<string> {
+  const repo = await createRepoWithBranch(params.localBranch);
+  const remote = await mkdtemp(
+    path.join(tmpdir(), "pwragent-pr-detection-remote-"),
+  );
+  tempDirs.push(remote);
+  await git(remote, "init", "--bare");
+  await git(repo, "remote", "add", "origin", remote);
+  await git(
+    repo,
+    "update-ref",
+    `refs/remotes/origin/${params.remoteBranch}`,
+    "HEAD",
+  );
+  await git(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+  await git(
+    repo,
+    "symbolic-ref",
+    "refs/remotes/origin/HEAD",
+    "refs/remotes/origin/main",
+  );
+  await git(
+    repo,
+    "branch",
+    "--set-upstream-to",
+    `origin/${params.remoteBranch}`,
+    params.localBranch,
+  );
+  await git(repo, "checkout", params.localBranch);
   return repo;
 }
 
