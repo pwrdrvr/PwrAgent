@@ -51,6 +51,7 @@ import { getMainLogger } from "../log";
 import type {
   ClientRequest as CodexClientRequest,
   InitializeParams as CodexInitializeParams,
+  InitializeResponse as CodexInitializeResponse,
   ReasoningEffort as CodexReasoningEffort,
   ServerRequest as CodexServerRequest,
 } from "@pwrdrvr/codex-app-server-protocol";
@@ -193,7 +194,7 @@ export class CodexBootstrapDeferredError extends Error {
   }
 }
 
-type InitializeResult = {
+type InitializeResult = Partial<CodexInitializeResponse> & {
   serverInfo?: {
     name?: string;
     version?: string;
@@ -5603,7 +5604,8 @@ export class CodexAppServerClient {
 
   private getProtocolCompatibility(): CodexProtocolCompatibility {
     return resolveCodexProtocolCompatibility(
-      this.initializeResult?.serverInfo?.version,
+      this.initializeResult?.userAgent
+        ?? this.initializeResult?.serverInfo?.version,
     );
   }
 

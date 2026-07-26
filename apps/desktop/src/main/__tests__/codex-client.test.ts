@@ -134,10 +134,11 @@ class MockTransport implements JsonRpcTransport {
           jsonrpc: "2.0",
           id: payload.id,
           result: {
-            serverInfo: {
-              name: "Codex App Server",
-              version: MockTransport.serverVersion,
-            }
+            userAgent:
+              `codex_cli_rs/${MockTransport.serverVersion} (Mac OS 26.0; arm64)`,
+            codexHome: "/Users/huntharo/.codex",
+            platformFamily: "unix",
+            platformOs: "macos",
           }
         })
       );
@@ -5573,7 +5574,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("uses the 0.144 App Server wire contracts for all dynamic-tool request sites", async () => {
-    MockTransport.serverVersion = "codex-cli 0.144.0";
+    MockTransport.serverVersion = "0.144.0";
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const dynamicTools: DynamicToolSpec[] = [
       {
@@ -5647,7 +5648,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("preserves the 0.135 App Server wire contracts for local old servers", async () => {
-    MockTransport.serverVersion = "codex-cli 0.135.0";
+    MockTransport.serverVersion = "0.135.0";
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const dynamicTools: DynamicToolSpec[] = [
       {
