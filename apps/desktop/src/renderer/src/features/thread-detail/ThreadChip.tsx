@@ -1,5 +1,6 @@
 import type { KeyboardEvent, MouseEvent } from "react";
 import { ThreadIcon } from "../../icons";
+import { useLiveThreadLink } from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 
@@ -15,7 +16,7 @@ type ThreadChipProps = {
 };
 
 export function ThreadChip(props: ThreadChipProps) {
-  const { link } = props;
+  const link = useLiveThreadLink(props.link);
   const tooltipController = useViewportTooltip({ className: "viewport-tooltip" });
 
   const label = link.title.trim() || props.fallbackLabel?.trim() || link.threadId;
