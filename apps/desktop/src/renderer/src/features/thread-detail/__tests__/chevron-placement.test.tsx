@@ -64,7 +64,8 @@ describe("transcript disclosure chevron placement", () => {
               kind: "command",
               label: "grep",
               command: {
-                displayCommand: "tool call update",
+                displayCommand: 'grep(pattern="needle")',
+                source: "tool",
                 output: "found 20 matches",
               },
             },
@@ -78,7 +79,7 @@ describe("transcript disclosure chevron placement", () => {
     fireEvent.click(screen.getByRole("button", { name: "grep" }));
 
     expect(screen.getAllByText("grep")).toHaveLength(1);
-    expect(screen.getByText("$ tool call update")).toBeInTheDocument();
+    expect(screen.getByText('grep(pattern="needle")')).toBeInTheDocument();
     expect(screen.getByText("found 20 matches")).toBeInTheDocument();
   });
 });

@@ -653,6 +653,70 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("preserves Grok search arguments across sparse completion updates", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "grep-1",
+        title: "grep",
+        rawInput: {
+          pattern: "grok",
+          glob: "*.{ts,tsx,md,json}",
+          head_limit: 20,
+        },
+        _meta: {
+          "x.ai/tool": {
+            name: "grep",
+            kind: "search",
+          },
+        },
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "grep-1",
+        status: "completed",
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "text",
+              text: "found 9 matches",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "grep-1",
+        summary: "grep",
+        status: "completed",
+        details: [
+          expect.objectContaining({
+            label: "grep",
+            command: {
+              displayCommand:
+                'grep(pattern="grok", glob="*.{ts,tsx,md,json}", head_limit=20)',
+              source: "tool",
+              output: "found 9 matches",
+              exitCode: undefined,
+            },
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("extracts nested ACP tool update content as command output", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

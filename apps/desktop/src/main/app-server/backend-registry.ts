@@ -20763,6 +20763,9 @@ function toThreadReadEntrySummary(
                   ...(detail.command.rawCommand
                     ? { rawCommand: detail.command.rawCommand }
                     : {}),
+                  ...(detail.command.source
+                    ? { source: detail.command.source }
+                    : {}),
                   ...(detail.command.cwd ? { cwd: detail.command.cwd } : {}),
                   ...(output ? { output: output.value } : {}),
                   ...(detail.command.exitCode !== undefined

@@ -4,6 +4,7 @@ import {
   isGenericShellToolTitle,
   readAcpToolCommand,
   readAcpToolContentCommand,
+  readAcpToolInvocation,
 } from "./acp-command-extraction.js";
 
 export function acpToolUpdateNotifications(params: {
@@ -109,7 +110,9 @@ function liveItemForAcpToolUpdate(
   const path = readString(update, "path") ?? readFirstLocationPath(update);
   const status = normalizeAcpToolStatus(readString(update, "status"));
   const output = readAcpToolOutput(update);
-  const command = readAcpToolCommand(update) ?? title;
+  const rawCommand = readAcpToolCommand(update);
+  const invocation = readAcpToolInvocation(update);
+  const command = rawCommand ?? invocation ?? title;
   const commandActions = acpCommandActions({
     kind: toolKind,
     path,
@@ -121,6 +124,7 @@ function liveItemForAcpToolUpdate(
     toolName: toolKind,
     status,
     command,
+    commandSource: rawCommand ? "shell" : "tool",
     ...(commandActions.length ? { commandActions } : {}),
     ...(output ? { data: { output } } : {}),
   };

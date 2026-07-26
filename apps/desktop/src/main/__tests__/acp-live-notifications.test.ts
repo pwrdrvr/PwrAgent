@@ -190,6 +190,43 @@ describe("acpToolUpdateNotifications", () => {
     expect(item?.data).toBeUndefined();
   });
 
+  it("surfaces Grok search arguments as a structured tool invocation", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "grep-1",
+        title: "grep",
+        rawInput: {
+          pattern: "grok",
+          glob: "*.{ts,tsx,md,json}",
+          head_limit: 20,
+        },
+        _meta: {
+          "x.ai/tool": {
+            name: "grep",
+            kind: "search",
+          },
+        },
+      },
+    });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        method: "item/started",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "grep-1",
+            command:
+              'grep(pattern="grok", glob="*.{ts,tsx,md,json}", head_limit=20)',
+            commandSource: "tool",
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("does not render ACP topic updates as live tool activity", () => {
     expect(
       acpToolUpdateNotifications({

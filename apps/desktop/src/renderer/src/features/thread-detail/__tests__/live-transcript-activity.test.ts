@@ -4,6 +4,7 @@ import {
   buildLiveToolDetails,
   buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
+  mergeCommandDetail,
   summarizeLiveActivity,
 } from "../live-transcript-activity";
 
@@ -119,6 +120,30 @@ describe("appendCommandOutputDelta", () => {
     expect(output).toContain("PwrAgent renderer boundary: truncated");
     expect(output).toContain("original length");
     expect(output).not.toContain("x".repeat(60_000));
+  });
+});
+
+describe("mergeCommandDetail", () => {
+  it("keeps a structured invocation when a sparse completion uses a generic command", () => {
+    expect(
+      mergeCommandDetail(
+        {
+          displayCommand:
+            'grep(pattern="grok", glob="*.{ts,tsx,md,json}", head_limit=20)',
+          source: "tool",
+        },
+        {
+          displayCommand: "tool",
+          source: "tool",
+          output: "found 9 matches",
+        },
+      ),
+    ).toEqual({
+      displayCommand:
+        'grep(pattern="grok", glob="*.{ts,tsx,md,json}", head_limit=20)',
+      source: "tool",
+      output: "found 9 matches",
+    });
   });
 });
 

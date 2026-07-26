@@ -378,6 +378,7 @@ export type ThreadReadEntrySummary =
         command?: {
           displayCommand: string;
           rawCommand?: string;
+          source?: "shell" | "tool" | "agent";
           cwd?: string;
           output?: string;
           exitCode?: number;

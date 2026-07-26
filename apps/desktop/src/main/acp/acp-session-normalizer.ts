@@ -13,6 +13,7 @@ import {
   isGenericShellToolTitle,
   readAcpToolCommand,
   readAcpToolContentCommand,
+  readAcpToolInvocation,
 } from "./acp-command-extraction.js";
 
 export type AcpSessionUpdate = {
@@ -803,19 +804,23 @@ function toolActivity(
     readString(update.update, "itemId") ??
     readString(update.update, "item_id") ??
     `${kind}:${update.sessionId}`;
-  const command = readAcpToolCommand(update.update);
+  const rawCommand = readAcpToolCommand(update.update);
+  const invocation = readAcpToolInvocation(update.update);
+  const displayCommand = rawCommand ?? invocation;
   const labelCandidate =
     readString(update.update, "title") ??
     readString(update.update, "name") ??
     readString(update.update, "kind") ??
     kind.replaceAll("_", " ");
   const label =
-    command && isGenericShellToolTitle(labelCandidate) ? command : labelCandidate;
+    displayCommand && isGenericShellToolTitle(labelCandidate)
+      ? displayCommand
+      : labelCandidate;
   const status = readString(update.update, "status");
   const path = readString(update.update, "path") ?? readFirstLocationPath(update.update);
   const output = readToolOutput(update.update);
   const exitCode = readNumber(update.update, "exitCode");
-  const detailKind = command
+  const detailKind = rawCommand
     ? "command"
     : toolDetailKind(readString(update.update, "kind"), path);
 
@@ -841,10 +846,11 @@ function toolActivity(
         label,
         path,
         command:
-          command || output !== undefined || exitCode !== undefined
+          displayCommand || output !== undefined || exitCode !== undefined
             ? {
-                displayCommand: command ?? label,
-                rawCommand: command,
+                displayCommand: displayCommand ?? label,
+                rawCommand,
+                ...(invocation && !rawCommand ? { source: "tool" as const } : {}),
                 output,
                 exitCode,
               }
@@ -887,6 +893,12 @@ function mergeActivity(
                           existingDetail.command?.rawCommand,
                           incomingDetail.command?.rawCommand,
                         ),
+                      source:
+                        incomingDetail.command?.rawCommand &&
+                        existingDetail.command?.source === "tool"
+                          ? "shell"
+                          : incomingDetail.command?.source ??
+                            existingDetail.command?.source,
                       output:
                         incomingDetail.command?.output ??
                         existingDetail.command?.output,

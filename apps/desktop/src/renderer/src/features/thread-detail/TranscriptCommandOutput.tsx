@@ -19,7 +19,11 @@ export function TranscriptCommandOutput(props: TranscriptCommandOutputProps) {
 
   const preview = buildOutputPreview(output, isExpanded);
   const statusText = formatCommandStatus(props.detail);
-  const sourceLabel = isAgentCommand(command.rawCommand) ? "Agent" : "Shell";
+  const source =
+    command.source ??
+    (isAgentCommand(command.rawCommand) ? "agent" : "shell");
+  const sourceLabel =
+    source === "agent" ? "Agent" : source === "tool" ? "Tool" : "Shell";
 
   return (
     <div className="transcript-command">
@@ -37,7 +41,7 @@ export function TranscriptCommandOutput(props: TranscriptCommandOutputProps) {
             void copyText(command.displayCommand);
           }}
         >
-          Copy command
+          {source === "tool" ? "Copy invocation" : "Copy command"}
         </button>
         {output ? (
           <button
@@ -57,7 +61,9 @@ export function TranscriptCommandOutput(props: TranscriptCommandOutputProps) {
         </p>
       ) : null}
       <pre className="transcript-command__block">
-        <code>{`$ ${command.displayCommand}`}</code>
+        <code>
+          {source === "tool" ? command.displayCommand : `$ ${command.displayCommand}`}
+        </code>
       </pre>
       <div className="transcript-command__output" aria-label={`${props.detail.label} output`}>
         {preview.text ? <pre><code>{preview.text}</code></pre> : <p>No output captured.</p>}

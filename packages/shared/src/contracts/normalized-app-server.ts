@@ -406,6 +406,7 @@ export type AppServerThreadFileDiff = {
 export type AppServerThreadCommandDetail = {
   displayCommand: string;
   rawCommand?: string;
+  source?: "shell" | "tool" | "agent";
   cwd?: string;
   output?: string;
   exitCode?: number;
