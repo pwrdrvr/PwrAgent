@@ -717,6 +717,130 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("emits Grok thoughts as transient status instead of transcript text", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "grok",
+        args: ["agent", "stdio"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+      turnId: "turn-1",
+    });
+
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_thought_chunk",
+      content: { type: "text", text: "So the key logic is:\n```" },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_thought_chunk",
+      content: { type: "text", text: "Tracing the image support flags." },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_message_chunk",
+      content: { type: "text", text: "The image flag is disabled." },
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        events
+          .filter(
+            (event) =>
+              event.notification.method === "item/agentThought/updated" ||
+              event.notification.method === "item/agentMessage/delta",
+          )
+          .map((event) => event.notification),
+      ).toEqual([
+        {
+          method: "item/agentThought/updated",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            text: "So the key logic is:\n```",
+          },
+        },
+        {
+          method: "item/agentThought/updated",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            text: "Tracing the image support flags.",
+          },
+        },
+        {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            itemId: "assistant:turn-1:0",
+            delta: "The image flag is disabled.",
+            phase: "final",
+          },
+        },
+      ]);
+    });
+    expect(client.readReplay(session.sessionId).messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        text: "Inspect this",
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        text: "The image flag is disabled.",
+      }),
+    ]);
+
+    await adapter.close();
+  });
+
   it("does not emit replayed ACP assistant text without a live turn", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();

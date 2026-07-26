@@ -2131,6 +2131,188 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingAssistantMessage).toBeUndefined();
   });
 
+  it("replaces Grok thought status without persisting it in the transcript", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "in_progress",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentThought/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            text: "So the key logic is:\n```",
+          },
+        },
+      });
+    });
+
+    expect(result.current.pendingStatusText).toBe("So the key logic is:");
+    expect(result.current.pendingAssistantMessage).toBeUndefined();
+    expect(result.current.messages).toEqual([]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentThought/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            text: "Tracing the image\nsupport flags.",
+          },
+        },
+      });
+    });
+
+    expect(result.current.pendingStatusText).toBe(
+      "Tracing the image support flags."
+    );
+    expect(result.current.messages).toEqual([]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-1",
+              type: "commandExecution",
+              command: "sed -n '1,40p' src/one.ts",
+              commandActions: [{ type: "read", path: "src/one.ts" }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.pendingStatusText).toBe("Thinking");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentThought/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            text: "Found the relevant branch.",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-1",
+            delta: "The image flag is disabled.",
+            phase: "final",
+          },
+        },
+      });
+    });
+
+    expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.pendingAssistantMessage?.text).toBe(
+      "The image flag is disabled."
+    );
+    expect(
+      result.current.messages.some((message) =>
+        message.text.includes("Found the relevant branch.")
+      )
+    ).toBe(false);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "The image flag is disabled." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(
+      result.current.messages.map((message) => message.text)
+    ).toEqual(["The image flag is disabled."]);
+  });
+
   it("retimestamps streamed final assistant messages when the turn completes", async () => {
     let agentEventHandler:
       | ((event: {

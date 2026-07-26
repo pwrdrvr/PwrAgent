@@ -35,7 +35,13 @@ export type AcpSessionReplayNormalizerOptions = {
 };
 
 export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
-  return backendId !== "acp:qwen";
+  return backendId !== "acp:qwen" && backendId !== "acp:grok";
+}
+
+export function shouldSurfaceAcpThoughtsAsTransientStatus(
+  backendId: string,
+): boolean {
+  return backendId === "acp:grok";
 }
 
 export function isGrokTransientUpdateKind(kind: string | undefined): boolean {

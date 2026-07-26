@@ -1082,6 +1082,14 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "item/agentThought/updated";
+      params: {
+        threadId: string;
+        turnId?: string;
+        text: string;
+      };
+    }
+  | {
       method: "turn/completed";
       params: {
         threadId: string;

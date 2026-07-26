@@ -416,6 +416,53 @@ describe("AcpRolloutStore", () => {
     expect(store.readUpdates({ backendId, sessionId: "session-1" })).toEqual([]);
   });
 
+  it("keeps Grok thoughts in the rollout but omits them from replay", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:grok" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "So the key logic is:\n```" },
+      },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Tracing the image support flags." },
+      },
+    });
+
+    expect(store.readUpdates({ backendId, sessionId: "session-1" })).toEqual([
+      expect.objectContaining({
+        update: expect.objectContaining({
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: "So the key logic is:\n```" },
+        }),
+      }),
+      expect.objectContaining({
+        update: expect.objectContaining({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Tracing the image support flags." },
+        }),
+      }),
+    ]);
+    expect(
+      store.readReplay({ backendId, sessionId: "session-1" }).messages,
+    ).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        text: "Tracing the image support flags.",
+      }),
+    ]);
+  });
+
   it("coalesces unchanged tool updates before writing rollout records", () => {
     const store = new AcpRolloutStore(tempDir);
     const backendId = "acp:kimi" as AcpBackendId;

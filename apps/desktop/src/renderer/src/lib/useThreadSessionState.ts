@@ -157,6 +157,7 @@ type ThreadSessionEntry = {
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
+  transientThoughtText?: string;
   pendingTurnUsage?: TurnUsageAccumulator;
   response?: AppServerReadThreadResponse;
   // Lightweight reading state belongs beside the bounded transcript cache.
@@ -2436,11 +2437,18 @@ function isThreadLocalTranscriptNotification(
     notification.method === "item/started" ||
     notification.method === "item/completed" ||
     notification.method === "item/agentMessage/delta" ||
+    notification.method === "item/agentThought/updated" ||
     notification.method === "item/mcpToolCall/progress" ||
     notification.method === "item/commandExecution/outputDelta" ||
     notification.method === "item/fileChange/outputDelta" ||
     notification.method === "thread/tokenUsage/updated"
   );
+}
+
+function formatTransientThoughtStatus(text: string): string | undefined {
+  const beforeCodeFence = text.split("```", 1)[0] ?? "";
+  const compact = beforeCodeFence.replace(/\s+/gu, " ").trim();
+  return compact || undefined;
 }
 
 function liveActivityNotificationSignature(params: {
@@ -3804,6 +3812,9 @@ export function useThreadSessionState(params: {
               ownUpdateStillSettling || reviewUpdateStillSettling
               ? ownUpdateSettlesAt
               : undefined,
+            transientThoughtText: shouldClearStaleThinking
+              ? undefined
+              : current.transientThoughtText,
           };
         });
       } catch (error) {
@@ -4140,6 +4151,7 @@ export function useThreadSessionState(params: {
             lastTouchedAt: nextLastTouchedAt,
             pendingRequest: event.notification,
             pendingStatusText: "Waiting for approval",
+            transientThoughtText: undefined,
           };
         }
 
@@ -4157,6 +4169,7 @@ export function useThreadSessionState(params: {
             lastTouchedAt: nextLastTouchedAt,
             pendingStatusText: "Waiting for input",
             pendingUserInput,
+            transientThoughtText: undefined,
           };
         }
 
@@ -4174,6 +4187,7 @@ export function useThreadSessionState(params: {
             lastTouchedAt: nextLastTouchedAt,
             pendingMcpInteraction,
             pendingStatusText: "Waiting for MCP approval",
+            transientThoughtText: undefined,
           };
         }
 
@@ -4194,7 +4208,13 @@ export function useThreadSessionState(params: {
           const item = getNotificationItem(event.notification.params);
           const details = item ? buildLiveToolDetails(item) : [];
           if (details.length === 0) {
-            return current;
+            return current.transientThoughtText
+              ? {
+                  ...current,
+                  lastTouchedAt: nextLastTouchedAt,
+                  transientThoughtText: undefined,
+                }
+              : current;
           }
 
           const turn = buildTurnMetadata({
@@ -4205,13 +4225,34 @@ export function useThreadSessionState(params: {
             fallbackStartedAt: current.activeTurnStartedAt,
             fallbackStatus: "in_progress",
           });
-          return upsertLiveActivityEntry(current, {
-            details,
-            now: nextLastTouchedAt,
-            suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
-            threadId: notificationThreadId,
-            turn,
-          });
+          return upsertLiveActivityEntry(
+            {
+              ...current,
+              transientThoughtText: undefined,
+            },
+            {
+              details,
+              now: nextLastTouchedAt,
+              suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
+              threadId: notificationThreadId,
+              turn,
+            }
+          );
+        }
+
+        if (event.notification.method === "item/agentThought/updated") {
+          const text = formatTransientThoughtStatus(
+            event.notification.params.text
+          );
+          return {
+            ...current,
+            activeTurnId:
+              event.notification.params.turnId ?? current.activeTurnId,
+            expectOwnUpdate: true,
+            interacted: true,
+            lastTouchedAt: nextLastTouchedAt,
+            transientThoughtText: text,
+          };
         }
 
         if (
@@ -4276,6 +4317,7 @@ export function useThreadSessionState(params: {
               allocatedSequence
             ),
             response: flushedResponse,
+            transientThoughtText: undefined,
           };
         }
 
@@ -4388,6 +4430,7 @@ export function useThreadSessionState(params: {
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
             pendingTurnUsage: undefined,
+            transientThoughtText: undefined,
           };
         }
 
@@ -4663,6 +4706,9 @@ export function useThreadSessionState(params: {
               pendingStatusText: completedTurnMatchesActive
                 ? undefined
                 : current.pendingStatusText,
+              transientThoughtText: completedTurnMatchesActive
+                ? undefined
+                : current.transientThoughtText,
             };
           }
 
@@ -4858,6 +4904,9 @@ export function useThreadSessionState(params: {
               ? undefined
               : current.pendingStatusText,
             response: nextResponse,
+            transientThoughtText: completedTurnMatchesActive
+              ? undefined
+              : current.transientThoughtText,
           };
         }
 
@@ -4899,6 +4948,7 @@ export function useThreadSessionState(params: {
             pendingTurnUsage: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
+            transientThoughtText: undefined,
           };
         }
 
@@ -4934,6 +4984,7 @@ export function useThreadSessionState(params: {
             pendingTurnUsage: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
+            transientThoughtText: undefined,
           };
         }
 
@@ -4970,6 +5021,7 @@ export function useThreadSessionState(params: {
               lastTouchedAt: nextLastTouchedAt,
               pendingAssistantMessage: undefined,
               pendingStatusText: undefined,
+              transientThoughtText: undefined,
             };
           }
         }
@@ -4987,6 +5039,7 @@ export function useThreadSessionState(params: {
             pendingTurnUsage: undefined,
             pendingStatusText: undefined,
             response: undefined,
+            transientThoughtText: undefined,
           };
         }
 
@@ -5619,10 +5672,14 @@ export function useThreadSessionState(params: {
     [sessions]
   );
   const pendingStatusText =
-    selectedSession?.pendingStatusText ??
-    (selectedSession?.activeTurnId || selectedSession?.backendReportedActive
-      ? "Thinking"
-      : undefined);
+    selectedSession?.pendingStatusText &&
+    selectedSession.pendingStatusText !== "Thinking"
+      ? selectedSession.pendingStatusText
+      : selectedSession?.transientThoughtText ??
+        selectedSession?.pendingStatusText ??
+        (selectedSession?.activeTurnId || selectedSession?.backendReportedActive
+          ? "Thinking"
+          : undefined);
   const threadBusy = selectedSession ? hasThinkingState(selectedSession) : false;
 
   return {

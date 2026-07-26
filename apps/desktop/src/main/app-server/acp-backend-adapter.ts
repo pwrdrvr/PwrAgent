@@ -77,6 +77,7 @@ import {
   AcpSessionReplayNormalizer,
   readAcpContentText,
   shouldSurfaceAcpThoughtsAsMessages,
+  shouldSurfaceAcpThoughtsAsTransientStatus,
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { getMainLogger } from "../log";
@@ -1779,6 +1780,25 @@ export class AcpBackendAdapter {
           }
         }
         if (
+          turnId &&
+          updateKind === "agent_thought_chunk" &&
+          shouldSurfaceAcpThoughtsAsTransientStatus(agent.backendId)
+        ) {
+          const text = readAcpUpdateText(update);
+          if (text) {
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "item/agentThought/updated",
+                params: {
+                  threadId: sessionId,
+                  turnId,
+                  text,
+                },
+              },
+            });
+          }
+        } else if (
           turnId &&
           (updateKind === "agent_message_chunk" ||
             (updateKind === "agent_thought_chunk" &&
