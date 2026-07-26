@@ -61,7 +61,7 @@ export function resolveAgentToolCatalogs(params: {
         id: "automation_inspection",
         namespace: PWRAGENT_TOOL_NAMESPACE,
         enabled: true,
-        toolCount: automationDynamicTools.length,
+        toolCount: countDynamicTools(automationDynamicTools),
         fingerprint: buildCatalogFingerprint({
           id: "automation_inspection",
           namespace: PWRAGENT_TOOL_NAMESPACE,
@@ -76,7 +76,7 @@ export function resolveAgentToolCatalogs(params: {
         id: "app_management",
         namespace: PWRAGENT_TOOL_NAMESPACE,
         enabled: true,
-        toolCount: appDynamicTools.length,
+        toolCount: countDynamicTools(appDynamicTools),
         fingerprint: buildCatalogFingerprint({
           id: "app_management",
           namespace: PWRAGENT_TOOL_NAMESPACE,
@@ -91,7 +91,7 @@ export function resolveAgentToolCatalogs(params: {
         id: "thread_inspection",
         namespace: PWRAGENT_TOOL_NAMESPACE,
         enabled: true,
-        toolCount: threadDynamicTools.length,
+        toolCount: countDynamicTools(threadDynamicTools),
         fingerprint: buildCatalogFingerprint({
           id: "thread_inspection",
           namespace: PWRAGENT_TOOL_NAMESPACE,
@@ -106,7 +106,7 @@ export function resolveAgentToolCatalogs(params: {
         id: "messaging_context",
         namespace: PWRAGENT_TOOL_NAMESPACE,
         enabled: true,
-        toolCount: messagingDynamicTools.length,
+        toolCount: countDynamicTools(messagingDynamicTools),
         fingerprint: buildCatalogFingerprint({
           id: "messaging_context",
           namespace: PWRAGENT_TOOL_NAMESPACE,
@@ -121,7 +121,7 @@ export function resolveAgentToolCatalogs(params: {
         id: "thread_orchestration",
         namespace: PWRAGENT_TOOL_NAMESPACE,
         enabled: true,
-        toolCount: threadOrchestrationDynamicTools.length,
+        toolCount: countDynamicTools(threadOrchestrationDynamicTools),
         fingerprint: buildCatalogFingerprint({
           id: "thread_orchestration",
           namespace: PWRAGENT_TOOL_NAMESPACE,
@@ -140,6 +140,20 @@ function buildCatalogFingerprint(params: {
   return [
     params.id,
     params.namespace,
-    ...params.tools.map((tool) => tool.name).sort(),
+    ...params.tools
+      .flatMap((tool) =>
+        tool.type === "namespace"
+          ? tool.tools.map((nestedTool) => `${tool.name}/${nestedTool.name}`)
+          : [tool.name],
+      )
+      .sort(),
   ].join(":");
+}
+
+function countDynamicTools(tools: DynamicToolSpec[]): number {
+  return tools.reduce(
+    (count, tool) =>
+      count + (tool.type === "namespace" ? tool.tools.length : 1),
+    0,
+  );
 }

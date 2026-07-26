@@ -102,8 +102,8 @@ importers:
         specifier: ^0.1.6
         version: 0.1.6
       '@pwrdrvr/codex-app-server-protocol':
-        specifier: 0.135.0
-        version: 0.135.0
+        specifier: 0.144.0
+        version: 0.144.0
       '@pwrdrvr/codex-discovery':
         specifier: ^0.1.4
         version: 0.1.4
@@ -979,8 +979,8 @@ packages:
     resolution: {integrity: sha512-mt+geA0RZEz5A3kEK8poDE3wYDrteWGb2syfXS4/kzzgWEe26DUbQlbdQyFYoa7Zs/Z6L64gNGIfFHgemfzj8g==}
     engines: {node: '>=20'}
 
-  '@pwrdrvr/codex-app-server-protocol@0.135.0':
-    resolution: {integrity: sha512-lmebPpbmaE7yfe0EDqcT2MPRtKurUc1o9NinHAVdA3lBdF3c8ZK3okiHIw6r6GEQLqOTd+7dpEuPsk4a1dEpkw==}
+  '@pwrdrvr/codex-app-server-protocol@0.144.0':
+    resolution: {integrity: sha512-WmURXzmmNEY8lmnNZunNQj/Bnn3yjzS6Rc0gzlDU7sBHMd0kvtskXE9BCMcR+E7sVJ53V/gwjfksRUli0xUgdA==}
     engines: {node: '>=20'}
 
   '@pwrdrvr/codex-discovery@0.1.4':
@@ -4965,7 +4965,7 @@ snapshots:
 
   '@pwrdrvr/codex-app-server-protocol@0.133.0': {}
 
-  '@pwrdrvr/codex-app-server-protocol@0.135.0': {}
+  '@pwrdrvr/codex-app-server-protocol@0.144.0': {}
 
   '@pwrdrvr/codex-discovery@0.1.4':
     dependencies:

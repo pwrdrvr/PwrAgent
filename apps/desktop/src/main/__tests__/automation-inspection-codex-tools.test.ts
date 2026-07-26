@@ -8,20 +8,26 @@ import {
 describe("automation inspection Codex dynamic tools", () => {
   it("projects automation inspection tools into dynamic tool specs", () => {
     expect(buildAutomationInspectionDynamicToolSpecs()).toEqual(
-      expect.arrayContaining([
+      [
         expect.objectContaining({
-          namespace: "pwragent",
-          name: "list_automations",
-          inputSchema: expect.objectContaining({ type: "object" }),
-          deferLoading: false,
+          type: "namespace",
+          name: "pwragent",
+          tools: expect.arrayContaining([
+            expect.objectContaining({
+              type: "function",
+              name: "list_automations",
+              inputSchema: expect.objectContaining({ type: "object" }),
+              deferLoading: false,
+            }),
+            expect.objectContaining({
+              type: "function",
+              name: "get_automation_run_artifact",
+              inputSchema: expect.objectContaining({ type: "object" }),
+              deferLoading: false,
+            }),
+          ]),
         }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "get_automation_run_artifact",
-          inputSchema: expect.objectContaining({ type: "object" }),
-          deferLoading: false,
-        }),
-      ]),
+      ],
     );
   });
 

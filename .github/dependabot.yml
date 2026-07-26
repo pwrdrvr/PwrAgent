@@ -62,6 +62,14 @@ updates:
         update-types:
           - "version-update:semver-major"
     groups:
+      agent-kit:
+        patterns:
+          - "@pwrdrvr/agent-*"
+          - "@pwrdrvr/codex-*"
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
       vite-toolchain:
         patterns:
           - "vite"
@@ -95,6 +103,8 @@ updates:
         patterns:
           - "*"
         exclude-patterns:
+          - "@pwrdrvr/agent-*"
+          - "@pwrdrvr/codex-*"
           - "@tiptap/*"
           - "prosemirror-*"
           - "better-sqlite3"
