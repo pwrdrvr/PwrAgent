@@ -48,19 +48,18 @@ protocol version, source instance, optional target instance, request IDs, and
 deadlines. Gateways may relay envelopes when a client targets another enrolled
 instance.
 
-The first RPC surface intentionally maps read-oriented backend operations:
-
-- `backend.listThreads`
-- `backend.readThread`
-- `backend.listSkills`
-
-This is enough to bootstrap remote windows, thread discovery, and federated
-search without prematurely exposing turn-control or environment mutation.
+The RPC surface maps navigation and thread reads plus the remote operation
+surface used by desktop windows and messaging. It includes thread creation,
+fork/review, turn start/steer/interrupt/compact, pending-request submission,
+model and execution settings, environment actions, environment setup progress,
+and workspace handoff. Capability checks remain attached to every method, so an
+older or restricted peer fails closed instead of silently executing locally.
 
 ## Diagnostics
 
 `federation:get-health` returns a sanitized health snapshot for settings and
-future support tooling:
+support tooling. `federation:get-diagnostics` adds bounded, redacted session
+audit events:
 
 - configured role and enabled status
 - local listener URL when enabled
@@ -111,7 +110,10 @@ In a client profile:
 3. Click Open next to the gateway to work against the gateway, or next to a
    sibling client to route through the gateway.
 
-Remote backend events stream back into the matching remote window, so prompt
-submission should show live turn status, tool activity, and assistant deltas
-without reopening the thread. The MVP still expects you to test against an
-existing client thread; remote new-thread creation is not wired yet.
+Remote backend events and environment setup progress stream back into the
+matching remote window. Remote navigation includes the target instance's
+directories and launchpads, so new threads, forks, and reviews execute on the
+remote machine as well as operations on existing threads.
+
+See `docs/federation.md` for direct-mode and Cloudflare Tunnel setup, Access
+service-token and mTLS credential handling, diagnostics, and revocation.
