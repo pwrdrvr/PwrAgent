@@ -21,6 +21,7 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadPlanStep,
   AppServerThreadTurnMetadata,
+  AppServerTransientThreadMessageEntry,
   AppServerTurnInputItem,
   AppServerThreadReplayPagination,
   AppServerSkillSummary,
@@ -888,6 +889,7 @@ export type ThreadViewProps = {
   };
   threadPricingSummaryEnabled?: boolean;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
+  transientMessage?: AppServerTransientThreadMessageEntry;
   pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
@@ -3091,6 +3093,7 @@ export function ThreadView(props: ThreadViewProps) {
               // "Thinking" indicator.
               pendingActivityEntry={pendingTranscriptActivityEntry}
               pendingAssistantMessage={props.pendingAssistantMessage}
+              transientMessage={props.transientMessage}
               pendingPlanEntry={undefined}
               pendingMcpInteraction={props.pendingMcpInteraction}
               pendingRequest={props.pendingRequest}

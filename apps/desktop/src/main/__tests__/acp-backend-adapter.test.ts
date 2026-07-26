@@ -717,7 +717,7 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
-  it("emits Grok thoughts as transient status instead of transcript text", async () => {
+  it("emits Grok thoughts as transient messages instead of replayable text", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();
     const events: AgentEvent[] = [];
@@ -785,6 +785,10 @@ describe("AcpBackendAdapter", () => {
       content: { type: "text", text: "Tracing the image support flags." },
     });
     transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_thought_chunk",
+      content: { type: "text", text: "```ts\nconst hidden = true;" },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
       session_update: "agent_message_chunk",
       content: { type: "text", text: "The image flag is disabled." },
     });
@@ -794,25 +798,42 @@ describe("AcpBackendAdapter", () => {
         events
           .filter(
             (event) =>
-              event.notification.method === "item/agentThought/updated" ||
+              event.notification.method === "item/transientMessage/updated" ||
               event.notification.method === "item/agentMessage/delta",
           )
           .map((event) => event.notification),
       ).toEqual([
         {
-          method: "item/agentThought/updated",
+          method: "item/transientMessage/updated",
           params: {
             threadId: session.sessionId,
             turnId: "turn-1",
-            text: "So the key logic is:\n```",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
+            text: "So the key logic is:",
+            phase: "commentary",
           },
         },
         {
-          method: "item/agentThought/updated",
+          method: "item/transientMessage/updated",
           params: {
             threadId: session.sessionId,
             turnId: "turn-1",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
             text: "Tracing the image support flags.",
+            phase: "commentary",
+          },
+        },
+        {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
+            text: "",
+            phase: "commentary",
           },
         },
         {

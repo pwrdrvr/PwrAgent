@@ -1139,6 +1139,7 @@ function DesktopAppShell(props: {
       usd: settings.snapshot?.experimental.threadPricingDisplayUsd?.value ?? true,
     },
     pendingAssistantMessage: session.pendingAssistantMessage,
+    transientMessage: session.transientMessage,
     pendingMcpInteraction: session.pendingMcpInteraction,
     pendingRequest: session.pendingRequest,
     pendingUserInput: session.pendingUserInput,

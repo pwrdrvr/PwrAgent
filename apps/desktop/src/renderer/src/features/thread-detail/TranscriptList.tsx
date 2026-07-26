@@ -15,6 +15,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerThreadPlanEntry,
+  AppServerTransientThreadMessageEntry,
   AppServerThreadFileChangeKind,
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
@@ -89,6 +90,7 @@ type TranscriptListProps = {
   pendingProtocolActivityEntry?: AppServerThreadActivityEntry;
   pendingUsageActivityEntry?: AppServerThreadActivityEntry;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
+  transientMessage?: AppServerTransientThreadMessageEntry;
   pendingPlanEntry?: AppServerThreadPlanEntry;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingRequestBusy?: boolean;
@@ -724,6 +726,7 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingProtocolActivityEntry ||
       props.pendingUsageActivityEntry ||
       props.pendingAssistantMessage ||
+      props.transientMessage ||
       props.pendingPlanEntry ||
       props.pendingRequest ||
       props.pendingMcpInteraction ||
@@ -785,12 +788,20 @@ export function TranscriptList(props: TranscriptListProps) {
 
   const transcriptEntries = useMemo(() => {
     const entries = [...props.entries];
+    const transientMessageEntry: AppServerThreadMessageEntry | undefined =
+      props.transientMessage
+        ? {
+            ...props.transientMessage,
+            type: "message",
+          }
+        : undefined;
     for (const pendingEntry of pendingEntriesInEventOrder([
       props.pendingPlanEntry,
       props.pendingActivityEntry,
       props.pendingProtocolActivityEntry,
       props.pendingUsageActivityEntry,
       props.pendingAssistantMessage,
+      transientMessageEntry,
     ])) {
       insertPendingEntry(entries, pendingEntry);
     }
@@ -811,6 +822,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingProtocolActivityEntry,
     props.pendingUsageActivityEntry,
     props.pendingAssistantMessage,
+    props.transientMessage,
     props.pendingPlanEntry,
     props.messagingBindingTransitions,
     props.permissionTransitions,
@@ -832,13 +844,15 @@ export function TranscriptList(props: TranscriptListProps) {
         entries: transcriptEntries,
         activeTurnId: props.activeTurnId,
         activeTurnStartedAt: props.activeTurnStartedAt,
-        activeMessageId: props.pendingAssistantMessage?.id,
+        activeMessageId:
+          props.transientMessage?.id ?? props.pendingAssistantMessage?.id,
         now: renderNow,
       }),
     [
       props.activeTurnId,
       props.activeTurnStartedAt,
       props.pendingAssistantMessage?.id,
+      props.transientMessage?.id,
       renderNow,
       transcriptEntries,
     ]

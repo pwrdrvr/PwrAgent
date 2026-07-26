@@ -507,6 +507,17 @@ export type AppServerThreadMessageEntry = AppServerThreadMessage & {
   turn?: AppServerThreadTurnMetadata;
 };
 
+/**
+ * A live transcript message that must never be added to a thread replay.
+ * Consumers render it alongside replay entries, then replace or discard it
+ * when another transcript boundary is received.
+ */
+export type AppServerTransientThreadMessageEntry = AppServerThreadMessage & {
+  type: "transientMessage";
+  phase?: AppServerTranscriptPhase;
+  turn?: AppServerThreadTurnMetadata;
+};
+
 export type AppServerThreadActivityStatus =
   | "in_progress"
   | "completed"
@@ -1082,11 +1093,15 @@ export type AppServerNotification =
       };
     }
   | {
-      method: "item/agentThought/updated";
+      method: "item/transientMessage/updated";
       params: {
         threadId: string;
         turnId?: string;
+        itemId: string;
+        role: AppServerThreadMessage["role"];
+        /** An empty value explicitly clears the transient message. */
         text: string;
+        phase?: AppServerTranscriptPhase;
       };
     }
   | {

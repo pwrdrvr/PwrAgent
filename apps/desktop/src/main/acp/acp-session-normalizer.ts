@@ -38,7 +38,7 @@ export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
   return backendId !== "acp:qwen" && backendId !== "acp:grok";
 }
 
-export function shouldSurfaceAcpThoughtsAsTransientStatus(
+export function shouldSurfaceAcpThoughtsAsTransientMessages(
   backendId: string,
 ): boolean {
   return backendId === "acp:grok";
@@ -50,6 +50,14 @@ export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
     || kind === "pending_interaction"
     || kind === "interaction_resolved"
   );
+}
+
+export function formatAcpTransientThoughtMessage(
+  text: string,
+): string | undefined {
+  const beforeCodeFence = text.split("```", 1)[0] ?? "";
+  const compact = beforeCodeFence.replace(/\s+/gu, " ").trim();
+  return compact || undefined;
 }
 
 export class AcpSessionReplayNormalizer {

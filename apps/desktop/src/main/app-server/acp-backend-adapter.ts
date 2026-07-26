@@ -75,9 +75,10 @@ import {
 } from "../acp/acp-session-store";
 import {
   AcpSessionReplayNormalizer,
+  formatAcpTransientThoughtMessage,
   readAcpContentText,
   shouldSurfaceAcpThoughtsAsMessages,
-  shouldSurfaceAcpThoughtsAsTransientStatus,
+  shouldSurfaceAcpThoughtsAsTransientMessages,
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { getMainLogger } from "../log";
@@ -1782,18 +1783,22 @@ export class AcpBackendAdapter {
         if (
           turnId &&
           updateKind === "agent_thought_chunk" &&
-          shouldSurfaceAcpThoughtsAsTransientStatus(agent.backendId)
+          shouldSurfaceAcpThoughtsAsTransientMessages(agent.backendId)
         ) {
-          const text = readAcpUpdateText(update);
-          if (text) {
+          const rawText = readAcpUpdateText(update);
+          if (rawText) {
+            const text = formatAcpTransientThoughtMessage(rawText) ?? "";
             await this.emit({
               backend: agent.backendId,
               notification: {
-                method: "item/agentThought/updated",
+                method: "item/transientMessage/updated",
                 params: {
                   threadId: sessionId,
                   turnId,
+                  itemId: `transient-thought:${turnId}`,
+                  role: "assistant",
                   text,
+                  phase: "commentary",
                 },
               },
             });

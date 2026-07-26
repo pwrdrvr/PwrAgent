@@ -1393,6 +1393,57 @@ describe("TranscriptList", () => {
     );
   });
 
+  it("replaces a transient assistant message in transcript order", () => {
+    const entries = [
+      {
+        type: "message" as const,
+        id: "message-1",
+        role: "user" as const,
+        text: "Inspect the image support logic",
+      },
+    ];
+    const { rerender } = render(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        transientMessage={{
+          type: "transientMessage",
+          id: "transient-thought:turn-1",
+          role: "assistant",
+          phase: "commentary",
+          text: "So the key logic is:",
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText("So the key logic is:").closest("article")).toHaveClass(
+      "transcript-message--assistant"
+    );
+
+    rerender(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        transientMessage={{
+          type: "transientMessage",
+          id: "transient-thought:turn-1",
+          role: "assistant",
+          phase: "commentary",
+          text: "Tracing the image support flags.",
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.queryByText("So the key logic is:")).not.toBeInTheDocument();
+    expect(screen.getByText("Tracing the image support flags.")).toBeVisible();
+  });
+
   it("collapses completed assistant commentary before the final answer", () => {
     render(
       <TranscriptList

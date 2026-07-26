@@ -2131,7 +2131,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingAssistantMessage).toBeUndefined();
   });
 
-  it("replaces Grok thought status without persisting it in the transcript", async () => {
+  it("replaces a transient message without persisting it in the transcript", async () => {
     let agentEventHandler:
       | ((event: {
           backend: "codex" | "grok";
@@ -2198,17 +2198,26 @@ describe("useThreadSessionState", () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
-          method: "item/agentThought/updated",
+          method: "item/transientMessage/updated",
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            text: "So the key logic is:\n```",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
+            text: "So the key logic is:",
+            phase: "commentary",
           },
         },
       });
     });
 
-    expect(result.current.pendingStatusText).toBe("So the key logic is:");
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.transientMessage).toMatchObject({
+      id: "transient-thought:turn-1",
+      role: "assistant",
+      text: "So the key logic is:",
+      type: "transientMessage",
+    });
     expect(result.current.pendingAssistantMessage).toBeUndefined();
     expect(result.current.messages).toEqual([]);
 
@@ -2216,20 +2225,57 @@ describe("useThreadSessionState", () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
-          method: "item/agentThought/updated",
+          method: "item/transientMessage/updated",
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            text: "Tracing the image\nsupport flags.",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
+            text: "Tracing the image support flags.",
+            phase: "commentary",
           },
         },
       });
     });
 
-    expect(result.current.pendingStatusText).toBe(
+    expect(result.current.transientMessage?.text).toBe(
       "Tracing the image support flags."
     );
     expect(result.current.messages).toEqual([]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
+            text: "",
+          },
+        },
+      });
+    });
+
+    expect(result.current.transientMessage).toBeUndefined();
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
+            text: "Inspecting the relevant file.",
+          },
+        },
+      });
+    });
 
     act(() => {
       agentEventHandler?.({
@@ -2251,16 +2297,20 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.transientMessage).toBeUndefined();
 
     act(() => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
-          method: "item/agentThought/updated",
+          method: "item/transientMessage/updated",
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
             text: "Found the relevant branch.",
+            phase: "commentary",
           },
         },
       });
@@ -2283,6 +2333,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingAssistantMessage?.text).toBe(
       "The image flag is disabled."
     );
+    expect(result.current.transientMessage).toBeUndefined();
     expect(
       result.current.messages.some((message) =>
         message.text.includes("Found the relevant branch.")
@@ -2308,9 +2359,243 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.transientMessage).toBeUndefined();
     expect(
       result.current.messages.map((message) => message.text)
     ).toEqual(["The image flag is disabled."]);
+  });
+
+  it("isolates transient messages by thread and turn", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const thread1 = buildThread({ id: "thread-1", updatedAt: 1_000 });
+    const thread2 = buildThread({ id: "thread-2", updatedAt: 1_000 });
+    const { result, rerender } = renderHook(
+      ({ currentThread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: currentThread,
+        }),
+      {
+        initialProps: {
+          currentThread: thread1,
+        },
+      }
+    );
+
+    await waitForThreadHydration(result, "thread-1");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "transient:turn-1",
+            role: "assistant",
+            text: "Thread one thought.",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-2",
+            itemId: "transient:turn-2",
+            role: "assistant",
+            text: "Thread two thought.",
+          },
+        },
+      });
+    });
+
+    expect(result.current.transientMessage?.text).toBe("Thread one thought.");
+    expect(result.current.entries).toEqual([]);
+    expect(result.current.messages).toEqual([]);
+
+    rerender({ currentThread: thread2 });
+    await waitForThreadHydration(result, "thread-2");
+
+    expect(result.current.transientMessage?.text).toBe("Thread two thought.");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-3",
+            turn: {
+              id: "turn-3",
+              status: "in_progress",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.transientMessage).toBeUndefined();
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-2",
+            itemId: "transient:turn-2",
+            role: "assistant",
+            text: "Late thought from the previous turn.",
+          },
+        },
+      });
+    });
+
+    expect(result.current.transientMessage).toBeUndefined();
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-3",
+            itemId: "transient:turn-3",
+            role: "assistant",
+            text: "Current turn thought.",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-2",
+            turn: {
+              id: "turn-2",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.transientMessage?.text).toBe("Current turn thought.");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/cancelled",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-3",
+            turn: {
+              id: "turn-3",
+              status: "cancelled",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.transientMessage).toBeUndefined();
+
+    rerender({ currentThread: thread1 });
+    await waitForThreadHydration(result, "thread-1");
+
+    expect(result.current.transientMessage?.text).toBe("Thread one thought.");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: {
+            threadId: "thread-1",
+            status: { type: "idle" },
+          },
+        },
+      });
+    });
+
+    expect(result.current.transientMessage).toBeUndefined();
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "transient:turn-1",
+            role: "assistant",
+            text: "Thought before approval.",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/requestApproval",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            requestId: "approval-1",
+          },
+        },
+      });
+    });
+
+    expect(result.current.transientMessage).toBeUndefined();
+    expect(result.current.pendingStatusText).toBe("Waiting for approval");
   });
 
   it("retimestamps streamed final assistant messages when the turn completes", async () => {
