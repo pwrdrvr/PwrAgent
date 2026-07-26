@@ -153,6 +153,23 @@ export function acpSessionRuntimeStateFromUpdate(
       readString(update, "id");
     return currentModeId ? { currentModeId, updatedAt: now } : undefined;
   }
+  if (kind === "model_changed") {
+    const currentModelId =
+      readString(update, "currentModelId") ??
+      readString(update, "current_model_id") ??
+      readString(update, "modelId") ??
+      readString(update, "model_id");
+    const reasoningEffort =
+      readString(update, "reasoningEffort") ??
+      readString(update, "reasoning_effort");
+    return currentModelId || reasoningEffort
+      ? {
+          ...(currentModelId ? { currentModelId } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          updatedAt: now,
+        }
+      : undefined;
+  }
   if (kind === "config_option_update") {
     const configOption = asRecord(update.configOption ?? update.config_option) ?? update;
     const id =

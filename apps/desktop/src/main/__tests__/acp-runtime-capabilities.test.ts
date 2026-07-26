@@ -3,6 +3,7 @@ import {
   acpRuntimeSupportsSessionHistoryReplay,
   acpSessionRuntimeStateFromCapabilities,
   acpSessionRuntimeStateFromResponse,
+  acpSessionRuntimeStateFromUpdate,
   normalizeAcpRuntimeCapabilities,
 } from "../acp/acp-runtime-capabilities";
 
@@ -143,6 +144,23 @@ describe("ACP runtime capabilities", () => {
       currentModelId: "grok-4.5",
       reasoningEffort: "medium",
       updatedAt: 1002,
+    });
+  });
+
+  it("reads Grok model change notifications as session runtime state", () => {
+    expect(
+      acpSessionRuntimeStateFromUpdate(
+        {
+          sessionUpdate: "model_changed",
+          model_id: "grok-4.5",
+          reasoning_effort: "low",
+        },
+        1000,
+      ),
+    ).toEqual({
+      currentModelId: "grok-4.5",
+      reasoningEffort: "low",
+      updatedAt: 1000,
     });
   });
 });

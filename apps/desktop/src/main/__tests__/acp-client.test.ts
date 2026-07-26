@@ -736,7 +736,7 @@ describe("AcpAgentClient", () => {
     );
   });
 
-  it("updates ACP runtime state without rendering config notifications", async () => {
+  it("updates ACP runtime state without rendering runtime notifications", async () => {
     const runtimeUpdates: unknown[] = [];
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({
@@ -765,17 +765,24 @@ describe("AcpAgentClient", () => {
         currentValue: "yolo",
       },
     });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "model_changed",
+      model_id: "grok-4.5",
+      reasoning_effort: "low",
+    });
 
     expect(store.getSession("acp:gemini", session.sessionId)).toMatchObject({
       acpRuntime: {
         currentModeId: "yolo",
+        currentModelId: "grok-4.5",
+        reasoningEffort: "low",
         configValues: {
           "approval-mode": "yolo",
         },
       },
     });
     expect(client.readReplay(session.sessionId).entries).toEqual([]);
-    expect(runtimeUpdates).toHaveLength(2);
+    expect(runtimeUpdates).toHaveLength(3);
   });
 
   it("keeps requested ACP mode when set_mode returns no fresh runtime state", async () => {
