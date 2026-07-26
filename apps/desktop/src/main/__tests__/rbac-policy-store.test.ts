@@ -149,11 +149,43 @@ describe("rbac policy store", () => {
     expect(policy.attachments).toHaveLength(1);
   });
 
-  it("fails safe to empty policy on malformed TOML", () => {
+  it("fails CLOSED when malformed TOML still shows RBAC was configured", () => {
     const configPath = resolveRbacConfigPath(storeOptions);
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, "[messaging.rbac\nenforced = ");
+    fs.writeFileSync(configPath, "[messaging.rbac]\nenforced = true\n[broken");
+    const policy = readRbacPolicy(storeOptions);
+    expect(policy.enforced).toBe(true);
+    expect(policy.roles).toHaveLength(0);
+    expect(policy.attachments).toHaveLength(0);
+  });
+
+  it("fails open (unenforced) on malformed TOML with no RBAC data", () => {
+    const configPath = resolveRbacConfigPath(storeOptions);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "[general\ntheme = ");
     expect(readRbacPolicy(storeOptions)).toEqual(emptyRbacPolicy());
+  });
+
+  it("fails CLOSED when the section exists but the enforced flag is garbled", () => {
+    const configPath = resolveRbacConfigPath(storeOptions);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      '[messaging.rbac]\nenforced = "yes"\n',
+    );
+    expect(readRbacPolicy(storeOptions).enforced).toBe(true);
+    // Only a clean `enforced = false` turns enforcement off.
+    fs.writeFileSync(configPath, "[messaging.rbac]\nenforced = false\n");
+    expect(readRbacPolicy(storeOptions).enforced).toBe(false);
+  });
+
+  it("fails CLOSED on an unparseable legacy JSON file", () => {
+    const legacyPath = resolveLegacyRbacPolicyJsonPath(storeOptions);
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(legacyPath, "{ not json");
+    const policy = readRbacPolicy(storeOptions);
+    expect(policy.enforced).toBe(true);
+    expect(policy.attachments).toHaveLength(0);
   });
 
   it("falls back to the legacy JSON file and retires it on the next write", () => {

@@ -67,6 +67,26 @@ const RBAC_SECTION = "messaging.rbac";
 const RBAC_SECTION_PATH = ["messaging", "rbac"] as const;
 const LEGACY_JSON_SEGMENT = "rbac-policy.json";
 
+/** Detects `[messaging.rbac]` / `[[messaging.rbac.*]]` headers in raw TOML. */
+const RBAC_HEADER_PATTERN = /^\s*\[\[?\s*messaging\.rbac\b/m;
+
+/**
+ * The fail-closed posture: enforcement ON with no permission-granting
+ * attachments, so every actor is default-denied (with denial audit rows)
+ * until the operator repairs the policy. Returned whenever RBAC data
+ * demonstrably exists but cannot be read. The alternative — falling open to
+ * legacy mode — would silently promote every admitted actor to Admin the
+ * moment a configured policy became unreadable.
+ */
+function failClosedRbacPolicy(): RbacPolicy {
+  return {
+    policyVersion: RBAC_POLICY_VERSION,
+    enforced: true,
+    roles: [],
+    attachments: [],
+  };
+}
+
 export function resolveRbacConfigPath(options?: RbacPolicyStoreOptions): string {
   return resolveActiveProfilePath("config.toml", options);
 }
@@ -78,12 +98,19 @@ export function resolveLegacyRbacPolicyJsonPath(
 }
 
 /**
- * Read the persisted policy. Tolerant by design: a missing file, unreadable
- * file, malformed TOML, or an unrecognized shape all resolve to an empty,
- * unenforced policy so a corrupt file can never brick messaging authorization
- * (it fails safe to legacy-compatible mode). When `config.toml` has no
- * `[messaging.rbac]` section, falls back to the pre-#938 standalone JSON file
- * so dev profiles keep their policy until the next write migrates it.
+ * Read the persisted policy. Failure direction is asymmetric by design:
+ *
+ * - **No RBAC data anywhere** (no config, or config with no `[messaging.rbac]`
+ *   section and no legacy JSON) → the empty, UNENFORCED policy. The feature
+ *   was never configured, so legacy-compatible mode is correct.
+ * - **RBAC data demonstrably exists but cannot be parsed** (malformed TOML
+ *   whose raw text still contains a `[messaging.rbac]` header, or an
+ *   unparseable legacy JSON file) → FAIL CLOSED: enforced with zero
+ *   attachments, default-denying everyone until the operator repairs it.
+ *   Falling open here would silently re-promote every admitted actor to
+ *   Admin — the exact regression enforcement was configured to prevent.
+ *
+ * Enforcement turns off only when we affirmatively know it is off.
  */
 export function readRbacPolicy(options?: RbacPolicyStoreOptions): RbacPolicy {
   const configPath = resolveRbacConfigPath(options);
@@ -98,9 +125,9 @@ export function readRbacPolicy(options?: RbacPolicyStoreOptions): RbacPolicy {
     try {
       tables = parseTomlTables(source, configPath);
     } catch {
-      // Malformed config: fail safe to legacy-compatible mode rather than
-      // resurrecting a stale JSON policy behind the operator's back.
-      return emptyRbacPolicy();
+      return RBAC_HEADER_PATTERN.test(source)
+        ? failClosedRbacPolicy()
+        : readLegacyJsonPolicy(options);
     }
     const section = tables[RBAC_SECTION];
     if (section !== undefined) {
@@ -198,7 +225,9 @@ function policyFromSection(section: Record<string, TomlValue>): RbacPolicy {
       typeof section.policy_version === "number"
         ? section.policy_version
         : RBAC_POLICY_VERSION,
-    enforced: section.enforced === true,
+    // The section exists, so RBAC is configured: only a clean `enforced =
+    // false` turns enforcement off. A missing or garbled flag fails closed.
+    enforced: section.enforced !== false,
     roles: rowsOf(section.roles)
       .map(roleFromRow)
       .filter((role): role is RbacRoleDefinition => role !== null),
@@ -277,17 +306,20 @@ function readStringArrayCell(value: TomlEditScalar | string[] | undefined): stri
 // ---------------------------------------------------------------------------
 
 function readLegacyJsonPolicy(options?: RbacPolicyStoreOptions): RbacPolicy {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(resolveLegacyRbacPolicyJsonPath(options), "utf8");
-  } catch {
+  const legacyPath = resolveLegacyRbacPolicyJsonPath(options);
+  if (!fs.existsSync(legacyPath)) {
     return emptyRbacPolicy();
   }
+  // From here on RBAC data demonstrably exists — unreadable or unparseable
+  // states fail closed rather than falling open to everyone-is-Admin.
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(fs.readFileSync(legacyPath, "utf8"));
   } catch {
-    return emptyRbacPolicy();
+    return failClosedRbacPolicy();
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return failClosedRbacPolicy();
   }
   return sanitizeRbacPolicy(parsed);
 }

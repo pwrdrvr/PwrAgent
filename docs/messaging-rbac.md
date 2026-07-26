@@ -177,9 +177,23 @@ byte-for-byte), which became possible when the TOML editor gained string-array
 cells in table-array rows (PR #938) — earlier revisions of this feature used
 an interim standalone `rbac-policy.json`, which never shipped; the store still
 reads it as a fallback when no `[messaging.rbac]` section exists and retires
-it (renamed `.migrated`) on the first TOML write. Reads fail safe — a missing
-or malformed config resolves to the empty, unenforced policy, and malformed
-roles/attachments are dropped row by row.
+it (renamed `.migrated`) on the first TOML write.
+
+**Read-failure direction is asymmetric by design.** Enforcement turns off only
+when the store affirmatively knows it is off:
+
+- *No RBAC data anywhere* (no config, or a config with no `[messaging.rbac]`
+  section and no legacy JSON) → the empty, unenforced policy. The feature was
+  never configured; legacy-compatible mode is correct.
+- *RBAC data exists but cannot be read* (malformed TOML whose raw text still
+  contains a `[messaging.rbac]` header, an unparseable legacy JSON, or a
+  section whose `enforced` flag is garbled) → **fail closed**: enforced with
+  zero attachments, default-denying every actor (with denial audit rows) until
+  the operator repairs the file. Only a clean `enforced = false` disables
+  enforcement. Falling open here would silently re-promote every admitted
+  actor to Admin — the exact regression enforcement was configured to prevent.
+- Individually malformed role/attachment rows are dropped row by row, which is
+  itself fail-closed: a dropped attachment grants nothing.
 
 ## Full-access guardrails
 
