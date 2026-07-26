@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ai-sdk/xai": "^3.0.83",
+    "@ai-sdk/xai": "^4.0.10",
     "@pwragent/shared": "workspace:*",
     "ai": "^6.0.168"
   },
