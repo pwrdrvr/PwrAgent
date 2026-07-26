@@ -51,6 +51,42 @@ describe("describeInstalledAcpBackend", () => {
     expect(backend.methods).toContain("session/load");
   });
 
+  it("advertises Grok 4.5 reasoning efforts in launchpad options", () => {
+    const backend = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:grok" as AcpBackendId,
+      registryId: "grok",
+      name: "Grok",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        checkedAt: 1000,
+        models: {
+          currentModelId: "grok-4.5",
+          availableModels: [
+            {
+              id: "grok-4.5",
+              label: "Grok 4.5",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(backend.launchpadOptions).toEqual({
+      models: [
+        {
+          id: "grok-4.5",
+          label: "Grok 4.5",
+          current: true,
+          defaultReasoningEffort: "high",
+          reasoningEfforts: ["low", "medium", "high"],
+          supportsReasoning: true,
+        },
+      ],
+    });
+  });
+
   it("suppresses hardcoded execution modes for Kimi once it advertises runtime modes (#658)", () => {
     // Kimi exposes its own Default/Plan/Auto/Yolo runtime modes. Surfacing the
     // hardcoded Default/Full Access modes too produced a second, overlapping

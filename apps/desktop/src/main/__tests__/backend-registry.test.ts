@@ -3327,6 +3327,166 @@ describe("DesktopBackendRegistry", () => {
     expect(acpClient.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("applies Grok ACP reasoning effort without racing turn startup", async () => {
+    const sessions: AcpSessionMetadata[] = [];
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const setRuntimeOption = vi.fn(
+      async (params: {
+        value: string;
+        reasoningEffort?: string;
+      }): Promise<BackendAcpSessionRuntimeState> => ({
+        currentModelId: params.value,
+        reasoningEffort: params.reasoningEffort,
+        updatedAt: 2000,
+      }),
+    );
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async (params: {
+        cwd?: string;
+        executionMode: ThreadExecutionMode;
+        acpRuntime?: BackendAcpSessionRuntimeState;
+      }) => {
+        const metadata: AcpSessionMetadata = {
+          backendId: acpBackendId,
+          sessionId: "grok-session",
+          title: "ACP session",
+          cwd: params.cwd,
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: params.executionMode,
+          acpRuntime: params.acpRuntime,
+          status: "idle",
+        };
+        sessions.push(metadata);
+        return metadata;
+      }),
+      startPrompt: vi.fn((params: {
+        sessionId: string;
+        turnId?: string;
+      }) => ({
+        sessionId: params.sessionId,
+        turnId: params.turnId ?? "grok-turn",
+      })),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      setRuntimeOption,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "grok",
+          name: "Grok",
+          distributionKind: "local",
+          distributionSource: "grok --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-grok-cli",
+          installedAt: 1000,
+          updatedAt: 1000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            checkedAt: 1000,
+            models: {
+              currentModelId: "grok-4.5",
+              availableModels: [
+                {
+                  id: "grok-4.5",
+                  label: "Grok 4.5",
+                  defaultReasoningEffort: "high",
+                  reasoningEfforts: ["low", "medium", "high"],
+                  supportsReasoning: true,
+                },
+              ],
+            },
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startThread({
+      backend: acpBackendId,
+      cwd: "/repo/project",
+      model: "grok-4.5",
+      reasoningEffort: "medium",
+    });
+
+    expect(setRuntimeOption).toHaveBeenLastCalledWith({
+      sessionId: "grok-session",
+      source: "model",
+      optionId: "model",
+      value: "grok-4.5",
+      reasoningEffort: "medium",
+    });
+
+    await registry.setThreadModelSettings({
+      backend: acpBackendId,
+      threadId: "grok-session",
+      reasoningEffort: "low",
+    });
+
+    expect(setRuntimeOption).toHaveBeenLastCalledWith({
+      sessionId: "grok-session",
+      source: "model",
+      optionId: "model",
+      value: "grok-4.5",
+      reasoningEffort: "low",
+    });
+
+    const turnStartupReachedEnsureSession = createDeferred<void>();
+    const releaseTurnStartup = createDeferred<void>();
+    acpClient.ensureSession.mockImplementationOnce(async () => {
+      turnStartupReachedEnsureSession.resolve();
+      await releaseTurnStartup.promise;
+    });
+    const turnPromise = registry.startTurn({
+      backend: acpBackendId,
+      threadId: "grok-session",
+      input: [{ type: "text", text: "start work" }],
+    });
+    await turnStartupReachedEnsureSession.promise;
+
+    const settingsPromise = registry.setThreadModelSettings({
+      backend: acpBackendId,
+      threadId: "grok-session",
+      reasoningEffort: "high",
+    });
+    await flushAsync();
+    expect(acpClient.startPrompt).not.toHaveBeenCalled();
+
+    releaseTurnStartup.resolve();
+    await turnPromise;
+    const runtimeUpdatesAfterPromptStarted = setRuntimeOption.mock.calls.length;
+    await settingsPromise;
+
+    expect(acpClient.startPrompt).toHaveBeenCalledTimes(1);
+    expect(setRuntimeOption).toHaveBeenCalledTimes(
+      runtimeUpdatesAfterPromptStarted,
+    );
+
+    await registry.close();
+  });
+
   it("runs Kimi ACP execution mode changes through slash control prompts", async () => {
     const sessions: AcpSessionMetadata[] = [];
     const acpBackendId = "acp:kimi" as AcpBackendId;

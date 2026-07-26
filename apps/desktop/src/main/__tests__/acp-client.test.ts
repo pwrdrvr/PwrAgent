@@ -736,7 +736,7 @@ describe("AcpAgentClient", () => {
     );
   });
 
-  it("updates ACP runtime state without rendering config notifications", async () => {
+  it("updates ACP runtime state without rendering runtime notifications", async () => {
     const runtimeUpdates: unknown[] = [];
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({
@@ -765,17 +765,31 @@ describe("AcpAgentClient", () => {
         currentValue: "yolo",
       },
     });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "model_changed",
+      model_id: "grok-4.5",
+      reasoning_effort: "low",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "model_changed",
+      model_id: "gemini-3-pro-preview",
+    });
 
     expect(store.getSession("acp:gemini", session.sessionId)).toMatchObject({
       acpRuntime: {
         currentModeId: "yolo",
+        currentModelId: "gemini-3-pro-preview",
         configValues: {
           "approval-mode": "yolo",
         },
       },
     });
+    expect(
+      store.getSession("acp:gemini", session.sessionId)?.acpRuntime
+        ?.reasoningEffort,
+    ).toBeUndefined();
     expect(client.readReplay(session.sessionId).entries).toEqual([]);
-    expect(runtimeUpdates).toHaveLength(2);
+    expect(runtimeUpdates).toHaveLength(4);
   });
 
   it("keeps requested ACP mode when set_mode returns no fresh runtime state", async () => {
@@ -822,14 +836,24 @@ describe("AcpAgentClient", () => {
     });
   });
 
-  it("keeps requested ACP model when set_model returns no fresh runtime state", async () => {
+  it("keeps requested ACP model and clears stale effort without fresh runtime state", async () => {
     const transport = new FakeAcpAgentTransport({
       "session/new": {
         sessionId: "gemini-session",
         models: {
           currentModelId: "gemini-3-flash-preview",
           availableModels: [
-            { modelId: "gemini-3-flash-preview", name: "Gemini 3 Flash Preview" },
+            {
+              modelId: "gemini-3-flash-preview",
+              name: "Gemini 3 Flash Preview",
+              _meta: {
+                reasoningEffort: "high",
+                reasoningEfforts: [
+                  { value: "low" },
+                  { value: "high", default: true },
+                ],
+              },
+            },
             { modelId: "gemini-3-pro-preview", name: "Gemini 3 Pro Preview" },
           ],
         },
@@ -848,6 +872,7 @@ describe("AcpAgentClient", () => {
       cwd: "/repo",
       executionMode: "default",
     });
+    expect(session.acpRuntime?.reasoningEffort).toBe("high");
 
     await expect(
       client.setRuntimeOption({
@@ -869,6 +894,78 @@ describe("AcpAgentClient", () => {
     expect(store.getSession("acp:gemini", session.sessionId)).toMatchObject({
       acpRuntime: {
         currentModelId: "gemini-3-pro-preview",
+      },
+    });
+    expect(
+      store.getSession("acp:gemini", session.sessionId)?.acpRuntime
+        ?.reasoningEffort,
+    ).toBeUndefined();
+  });
+
+  it("sends reasoning effort through ACP model metadata", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "session/new": {
+        sessionId: "grok-session",
+        models: {
+          currentModelId: "grok-4.5",
+          availableModels: [
+            {
+              modelId: "grok-4.5",
+              name: "Grok 4.5",
+              _meta: {
+                supportsReasoningEffort: true,
+                reasoningEffort: "high",
+                reasoningEfforts: [
+                  { value: "low" },
+                  { value: "medium" },
+                  { value: "high" },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      "session/set_model": {},
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    await expect(
+      client.setRuntimeOption({
+        sessionId: session.sessionId,
+        source: "model",
+        optionId: "model",
+        value: "grok-4.5",
+        reasoningEffort: "medium",
+      }),
+    ).resolves.toMatchObject({
+      currentModelId: "grok-4.5",
+      reasoningEffort: "medium",
+    });
+    expect(transport.requests.at(-1)).toEqual({
+      method: "session/set_model",
+      params: {
+        sessionId: "grok-session",
+        modelId: "grok-4.5",
+        _meta: {
+          reasoningEffort: "medium",
+        },
+      },
+    });
+    expect(store.getSession("acp:grok", session.sessionId)).toMatchObject({
+      acpRuntime: {
+        currentModelId: "grok-4.5",
+        reasoningEffort: "medium",
       },
     });
   });

@@ -6669,6 +6669,7 @@ export class DesktopBackendRegistry {
     cwd?: string;
     executionMode: ThreadExecutionMode;
     acpRuntime?: BackendAcpSessionRuntimeState;
+    reasoningEffort?: string;
   }): Promise<{ threadId: string }> {
     const client = await this.acpBackend.getClient(params.backend);
     const initialExecutionMode = this.usesSlashControlledAcpExecutionModes(
@@ -6691,7 +6692,12 @@ export class DesktopBackendRegistry {
         executionMode: params.executionMode,
       });
     }
-    await this.applyAcpRuntimeSelection(client, session.sessionId, params.acpRuntime);
+    await this.applyAcpRuntimeSelection(
+      client,
+      session.sessionId,
+      params.acpRuntime,
+      params.reasoningEffort,
+    );
     return { threadId: session.sessionId };
   }
 
@@ -6699,6 +6705,8 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
     input: AppServerTurnInputItem[];
+    model?: string;
+    reasoningEffort?: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     return await this.acpSessionPromptLocks.run(
       executionModeQueueKey(params.backend, params.threadId),
@@ -6710,6 +6718,8 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
     input: AppServerTurnInputItem[];
+    model?: string;
+    reasoningEffort?: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     const promptPayload = inputToAcpPrompt(params.input);
     if (!promptPayload) {
@@ -6738,6 +6748,21 @@ export class DesktopBackendRegistry {
         await this.assertAcpSessionCanRebindForWorkspace(params.backend, sessionForTurn);
         sessionForTurn = await this.rebindAcpSessionForWorkspace(client, sessionForTurn);
       }
+    }
+    if (
+      params.model &&
+      (
+        sessionForTurn.acpRuntime?.currentModelId !== params.model ||
+        sessionForTurn.acpRuntime?.reasoningEffort !== params.reasoningEffort
+      )
+    ) {
+      await client.setRuntimeOption?.({
+        sessionId: params.threadId,
+        source: "model",
+        optionId: "model",
+        value: params.model,
+        reasoningEffort: params.reasoningEffort,
+      });
     }
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
     await this.emit({
@@ -6797,6 +6822,7 @@ export class DesktopBackendRegistry {
     client: AcpRuntimeClient,
     sessionId: string,
     runtime: BackendAcpSessionRuntimeState | undefined,
+    reasoningEffort?: string,
   ): Promise<void> {
     for (const [optionId, value] of Object.entries(runtime?.configValues ?? {})) {
       await client.setRuntimeOption?.({
@@ -6820,6 +6846,7 @@ export class DesktopBackendRegistry {
         source: "model",
         optionId: "model",
         value: runtime.currentModelId,
+        reasoningEffort,
       });
     }
   }
@@ -8067,6 +8094,7 @@ export class DesktopBackendRegistry {
             cwd,
             executionMode: effectiveExecutionMode,
             acpRuntime,
+            reasoningEffort: modelSettings.reasoningEffort,
           })
         : await this.getClient(backend, effectiveExecutionMode).startThread({
             ...request,
@@ -8606,6 +8634,15 @@ export class DesktopBackendRegistry {
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertNotBootstrap("startTurn");
     if (isAcpBackendId(params.backend)) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      const modelSettings = await this.resolveModelSettings(params.backend, {
+        model: params.model ?? overlay?.model,
+        reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+        reasoningEffortsByModel: overlay?.reasoningEffortsByModel,
+      });
       const reservationKey = buildTurnStartReservationKey(
         params.backend,
         params.threadId,
@@ -8629,6 +8666,8 @@ export class DesktopBackendRegistry {
           backend: params.backend,
           threadId: params.threadId,
           input: params.input,
+          model: modelSettings.model,
+          reasoningEffort: modelSettings.reasoningEffort,
         });
         this.scheduleThreadTitleGeneration({
           backend: params.backend,
@@ -10133,11 +10172,48 @@ export class DesktopBackendRegistry {
       },
       "settings-refresh",
     );
-    await this.overlayStore.setThreadModelSettings({
-      backend: params.backend,
-      threadId: params.threadId,
-      ...modelSettings,
-    });
+    const acpBackend = isAcpBackendId(params.backend)
+      ? params.backend
+      : undefined;
+    const acpRuntimeModelChanged =
+      modelSettings.model !== current?.model ||
+      modelSettings.reasoningEffort !== current?.reasoningEffort;
+    const persistModelSettings = async (): Promise<void> => {
+      await this.overlayStore.setThreadModelSettings({
+        backend: params.backend,
+        threadId: params.threadId,
+        ...modelSettings,
+      });
+    };
+    if (acpBackend && modelSettings.model && acpRuntimeModelChanged) {
+      const runtimeModel = modelSettings.model;
+      await this.acpSessionPromptLocks.run(
+        executionModeQueueKey(acpBackend, params.threadId),
+        async () => {
+          if (!this.threadHasActiveTurn(params.threadId, acpBackend)) {
+            const session = this.acpBackend.getSession(
+              acpBackend,
+              params.threadId,
+            );
+            if (!session) {
+              throw new Error(`ACP session not found: ${params.threadId}`);
+            }
+            const client = await this.acpBackend.getClient(acpBackend);
+            await client.ensureSession?.(session);
+            await client.setRuntimeOption?.({
+              sessionId: params.threadId,
+              source: "model",
+              optionId: "model",
+              value: runtimeModel,
+              reasoningEffort: modelSettings.reasoningEffort,
+            });
+          }
+          await persistModelSettings();
+        },
+      );
+    } else {
+      await persistModelSettings();
+    }
 
     await this.emit({
       backend: params.backend,
@@ -15847,11 +15923,12 @@ export class DesktopBackendRegistry {
         ? session.acpRuntime.configValues.model
         : undefined);
     const reasoningEffort =
-      typeof session?.acpRuntime?.configValues?.reasoningEffort === "string"
+      session?.acpRuntime?.reasoningEffort ??
+      (typeof session?.acpRuntime?.configValues?.reasoningEffort === "string"
         ? session.acpRuntime.configValues.reasoningEffort
         : typeof session?.acpRuntime?.configValues?.reasoning_effort === "string"
           ? session.acpRuntime.configValues.reasoning_effort
-          : undefined;
+          : undefined);
     return {
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),

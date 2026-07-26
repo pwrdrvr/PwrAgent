@@ -187,7 +187,8 @@ function shouldPersistUpdate(update: Record<string, unknown>): boolean {
   if (
     kind === "available_commands_update" ||
     kind === "config_option_update" ||
-    kind === "current_mode_update"
+    kind === "current_mode_update" ||
+    kind === "model_changed"
   ) {
     return false;
   }

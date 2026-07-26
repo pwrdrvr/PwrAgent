@@ -236,6 +236,24 @@ describe("AcpRolloutStore", () => {
     ]);
   });
 
+  it("does not persist model change notifications", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:grok" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "model_changed",
+        model_id: "grok-4.5",
+        reasoning_effort: "low",
+      },
+    });
+
+    expect(store.readUpdates({ backendId, sessionId: "session-1" })).toEqual([]);
+  });
+
   it("coalesces unchanged tool updates before writing rollout records", () => {
     const store = new AcpRolloutStore(tempDir);
     const backendId = "acp:kimi" as AcpBackendId;
