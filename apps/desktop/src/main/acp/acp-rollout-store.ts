@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AcpBackendId, AppServerThreadReplay } from "@pwragent/shared";
+import {
+  isAcpBackendId,
+  type AcpBackendId,
+  type AppServerThreadReplay,
+} from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
   isAcpUserBoilerplateMessage,
@@ -31,12 +35,17 @@ type ChunkBuffer = {
 };
 
 const CHUNK_FLUSH_TEXT_LENGTH = 2_048;
+const LEGACY_BACKEND_PATH_PREFIX = "acp_3A";
+const CURRENT_BACKEND_PATH_PREFIX = "acp_";
+const PATH_LAYOUT_MIGRATION_MARKER = ".backend-path-layout-v2";
 
 export class AcpRolloutStore {
   private readonly chunkBuffers = new Map<string, ChunkBuffer>();
   private readonly lastFingerprints = new Map<string, string>();
 
-  constructor(private readonly rootDir: string) {}
+  constructor(private readonly rootDir: string) {
+    migrateLegacyBackendDirectories(rootDir);
+  }
 
   appendUpdate(params: AcpRolloutStoreAppendParams): void {
     if (!shouldPersistUpdate(params.update)) {
@@ -67,20 +76,9 @@ export class AcpRolloutStore {
     sessionId: string;
   }): AcpRolloutRecord[] {
     this.flushSession(params.backendId, params.sessionId);
-    const rolloutPath = this.rolloutPath(params.backendId, params.sessionId);
-    if (!fs.existsSync(rolloutPath)) {
-      return [];
-    }
-    return fs
-      .readFileSync(rolloutPath, "utf8")
-      .split(/\r?\n/)
-      .flatMap((line) => {
-        if (!line.trim()) {
-          return [];
-        }
-        const parsed = parseJson(line);
-        return isRolloutRecord(parsed) ? [parsed] : [];
-      });
+    return readRolloutRecords(
+      this.rolloutPath(params.backendId, params.sessionId),
+    );
   }
 
   readReplay(params: {
@@ -177,7 +175,7 @@ export class AcpRolloutStore {
   private rolloutPath(backendId: AcpBackendId, sessionId: string): string {
     return path.join(
       this.rootDir,
-      encodePathSegment(backendId),
+      encodeBackendPathSegment(backendId),
       encodePathSegment(sessionId),
       "rollout.jsonl",
     );
@@ -310,6 +308,92 @@ function hashString(value: string): string {
 
 function encodePathSegment(value: string): string {
   return encodeURIComponent(value).replaceAll("%", "_");
+}
+
+function encodeBackendPathSegment(value: AcpBackendId): string {
+  return value.replace(":", "_");
+}
+
+function migrateLegacyBackendDirectories(rootDir: string): void {
+  const markerPath = path.join(rootDir, PATH_LAYOUT_MIGRATION_MARKER);
+  if (fs.existsSync(markerPath)) {
+    return;
+  }
+
+  fs.mkdirSync(rootDir, { recursive: true });
+  const legacyDirectoryNames = fs
+    .readdirSync(rootDir, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        entry.name.startsWith(LEGACY_BACKEND_PATH_PREFIX) &&
+        isAcpBackendId(
+          `acp:${entry.name.slice(LEGACY_BACKEND_PATH_PREFIX.length)}`,
+        ),
+    )
+    .map((entry) => entry.name)
+    .sort(
+      (left, right) =>
+        left.length - right.length || left.localeCompare(right),
+    );
+
+  for (const legacyDirectoryName of legacyDirectoryNames) {
+    const registryId = legacyDirectoryName.slice(
+      LEGACY_BACKEND_PATH_PREFIX.length,
+    );
+    const currentDirectoryName = `${CURRENT_BACKEND_PATH_PREFIX}${registryId}`;
+    const legacyPath = path.join(rootDir, legacyDirectoryName);
+    const currentPath = path.join(rootDir, currentDirectoryName);
+    if (!fs.existsSync(legacyPath)) {
+      continue;
+    }
+    if (fs.existsSync(currentPath)) {
+      throw new Error(
+        `Cannot migrate ACP rollout directory because both paths exist: ${legacyPath} and ${currentPath}`,
+      );
+    }
+    try {
+      fs.renameSync(legacyPath, currentPath);
+    } catch (error) {
+      if (
+        isErrnoException(error) &&
+        error.code === "ENOENT" &&
+        !fs.existsSync(legacyPath) &&
+        fs.existsSync(currentPath)
+      ) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  try {
+    fs.writeFileSync(markerPath, "2\n", { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (!isErrnoException(error) || error.code !== "EEXIST") {
+      throw error;
+    }
+  }
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
+
+function readRolloutRecords(rolloutPath: string): AcpRolloutRecord[] {
+  if (!fs.existsSync(rolloutPath)) {
+    return [];
+  }
+  return fs
+    .readFileSync(rolloutPath, "utf8")
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      if (!line.trim()) {
+        return [];
+      }
+      const parsed = parseJson(line);
+      return isRolloutRecord(parsed) ? [parsed] : [];
+    });
 }
 
 function parseJson(value: string): unknown {
