@@ -91,4 +91,44 @@ describe("ACP runtime capabilities", () => {
 
     expect(capabilities?.agentCapabilities?.prompt?.image).toBe(true);
   });
+
+  it("normalizes model-specific reasoning effort metadata", () => {
+    const capabilities = normalizeAcpRuntimeCapabilities({
+      now: 1000,
+      source: "initialize",
+      value: {
+        models: {
+          currentModelId: "grok-4.5",
+          availableModels: [
+            {
+              modelId: "grok-4.5",
+              name: "Grok 4.5",
+              _meta: {
+                supportsReasoningEffort: true,
+                reasoningEffort: "high",
+                reasoningEfforts: [
+                  { value: "low", label: "Low" },
+                  { value: "medium", label: "Medium" },
+                  { value: "high", label: "High", default: true },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(capabilities?.models).toEqual({
+      currentModelId: "grok-4.5",
+      availableModels: [
+        {
+          id: "grok-4.5",
+          label: "Grok 4.5",
+          defaultReasoningEffort: "high",
+          reasoningEfforts: ["low", "medium", "high"],
+          supportsReasoning: true,
+        },
+      ],
+    });
+  });
 });

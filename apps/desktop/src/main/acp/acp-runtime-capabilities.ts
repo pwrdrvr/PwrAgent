@@ -88,6 +88,9 @@ export function acpSessionRuntimeStateFromCapabilities(
           : [],
       ),
   );
+  const currentModel = capabilities.models?.availableModels.find(
+    (model) => model.id === capabilities.models?.currentModelId,
+  );
   const state: BackendAcpSessionRuntimeState = {
     updatedAt: now,
     ...(Object.keys(configValues).length > 0 ? { configValues } : {}),
@@ -96,6 +99,9 @@ export function acpSessionRuntimeStateFromCapabilities(
       : {}),
     ...(capabilities.models?.currentModelId
       ? { currentModelId: capabilities.models.currentModelId }
+      : {}),
+    ...(currentModel?.defaultReasoningEffort
+      ? { reasoningEffort: currentModel.defaultReasoningEffort }
       : {}),
   };
   return Object.keys(state).length > 1 ? state : undefined;
@@ -266,12 +272,49 @@ function readModel(value: unknown): BackendAcpRuntimeModel[] {
   if (!record || !id) {
     return [];
   }
+  const meta = asRecord(record._meta ?? record.meta);
+  const reasoningEfforts = readReasoningEfforts(
+    meta?.reasoningEfforts ?? meta?.reasoning_efforts,
+  );
+  const defaultReasoningEffort =
+    readString(meta, "reasoningEffort") ??
+    readString(meta, "reasoning_effort");
+  const supportsReasoning =
+    readBoolean(meta, "supportsReasoningEffort") ??
+    readBoolean(meta, "supports_reasoning_effort") ??
+    (reasoningEfforts.length > 0 ? true : undefined);
   return [
     {
       id,
       label: readString(record, "name") ?? readString(record, "label"),
       description: readString(record, "description"),
+      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+      ...(reasoningEfforts.length > 0 ? { reasoningEfforts } : {}),
+      ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
     },
+  ];
+}
+
+function readReasoningEfforts(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      value
+        .flatMap((item) => {
+          if (typeof item === "string") {
+            return [item.trim()];
+          }
+          const record = asRecord(item);
+          return [
+            readString(record, "value") ??
+              readString(record, "id") ??
+              "",
+          ];
+        })
+        .filter(Boolean),
+    ),
   ];
 }
 

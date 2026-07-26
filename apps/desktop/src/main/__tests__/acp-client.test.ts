@@ -873,6 +873,74 @@ describe("AcpAgentClient", () => {
     });
   });
 
+  it("sends reasoning effort through ACP model metadata", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "session/new": {
+        sessionId: "grok-session",
+        models: {
+          currentModelId: "grok-4.5",
+          availableModels: [
+            {
+              modelId: "grok-4.5",
+              name: "Grok 4.5",
+              _meta: {
+                supportsReasoningEffort: true,
+                reasoningEffort: "high",
+                reasoningEfforts: [
+                  { value: "low" },
+                  { value: "medium" },
+                  { value: "high" },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      "session/set_model": {},
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    await expect(
+      client.setRuntimeOption({
+        sessionId: session.sessionId,
+        source: "model",
+        optionId: "model",
+        value: "grok-4.5",
+        reasoningEffort: "medium",
+      }),
+    ).resolves.toMatchObject({
+      currentModelId: "grok-4.5",
+      reasoningEffort: "medium",
+    });
+    expect(transport.requests.at(-1)).toEqual({
+      method: "session/set_model",
+      params: {
+        sessionId: "grok-session",
+        modelId: "grok-4.5",
+        _meta: {
+          reasoningEffort: "medium",
+        },
+      },
+    });
+    expect(store.getSession("acp:grok", session.sessionId)).toMatchObject({
+      acpRuntime: {
+        currentModelId: "grok-4.5",
+        reasoningEffort: "medium",
+      },
+    });
+  });
+
   it("keeps requested ACP config-option mode when response reports stale current mode", async () => {
     const transport = new FakeAcpAgentTransport({
       "session/new": {

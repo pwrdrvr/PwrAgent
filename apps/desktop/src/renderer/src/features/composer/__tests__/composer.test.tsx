@@ -1584,6 +1584,45 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
   });
 
+  it("shows Grok 4.5 ACP reasoning effort in the launchpad", () => {
+    render(
+      <Composer
+        backends={[
+          backendSummary("acp:grok", {
+            models: [
+              {
+                id: "grok-4.5",
+                label: "Grok 4.5",
+                current: true,
+                defaultReasoningEffort: "high",
+                reasoningEfforts: ["low", "medium", "high"],
+                supportsReasoning: true,
+              },
+            ],
+          }),
+        ]}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "acp:grok",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("Model")).toHaveValue("grok-4.5");
+    expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
+  });
+
   it("sends effective model defaults for threads without saved model settings", async () => {
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
