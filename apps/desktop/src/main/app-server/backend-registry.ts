@@ -10172,34 +10172,48 @@ export class DesktopBackendRegistry {
       },
       "settings-refresh",
     );
-    if (
-      isAcpBackendId(params.backend) &&
-      modelSettings.model &&
-      !this.threadHasActiveTurn(params.threadId, params.backend) &&
-      (
-        modelSettings.model !== current?.model ||
-        modelSettings.reasoningEffort !== current?.reasoningEffort
-      )
-    ) {
-      const session = this.acpBackend.getSession(params.backend, params.threadId);
-      if (!session) {
-        throw new Error(`ACP session not found: ${params.threadId}`);
-      }
-      const client = await this.acpBackend.getClient(params.backend);
-      await client.ensureSession?.(session);
-      await client.setRuntimeOption?.({
-        sessionId: params.threadId,
-        source: "model",
-        optionId: "model",
-        value: modelSettings.model,
-        reasoningEffort: modelSettings.reasoningEffort,
+    const acpBackend = isAcpBackendId(params.backend)
+      ? params.backend
+      : undefined;
+    const acpRuntimeModelChanged =
+      modelSettings.model !== current?.model ||
+      modelSettings.reasoningEffort !== current?.reasoningEffort;
+    const persistModelSettings = async (): Promise<void> => {
+      await this.overlayStore.setThreadModelSettings({
+        backend: params.backend,
+        threadId: params.threadId,
+        ...modelSettings,
       });
+    };
+    if (acpBackend && modelSettings.model && acpRuntimeModelChanged) {
+      const runtimeModel = modelSettings.model;
+      await this.acpSessionPromptLocks.run(
+        executionModeQueueKey(acpBackend, params.threadId),
+        async () => {
+          if (!this.threadHasActiveTurn(params.threadId, acpBackend)) {
+            const session = this.acpBackend.getSession(
+              acpBackend,
+              params.threadId,
+            );
+            if (!session) {
+              throw new Error(`ACP session not found: ${params.threadId}`);
+            }
+            const client = await this.acpBackend.getClient(acpBackend);
+            await client.ensureSession?.(session);
+            await client.setRuntimeOption?.({
+              sessionId: params.threadId,
+              source: "model",
+              optionId: "model",
+              value: runtimeModel,
+              reasoningEffort: modelSettings.reasoningEffort,
+            });
+          }
+          await persistModelSettings();
+        },
+      );
+    } else {
+      await persistModelSettings();
     }
-    await this.overlayStore.setThreadModelSettings({
-      backend: params.backend,
-      threadId: params.threadId,
-      ...modelSettings,
-    });
 
     await this.emit({
       backend: params.backend,

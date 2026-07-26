@@ -20,7 +20,7 @@ import {
 import {
   acpRuntimeSupportsSessionHistoryReplay,
   acpRuntimeSupportsSessionLoad,
-  acpSessionRuntimeStateFromCapabilities,
+  acpSessionRuntimeStateFromResponse,
   acpSessionRuntimeStateFromUpdate,
   normalizeAcpRuntimeCapabilities,
 } from "./acp-runtime-capabilities.js";
@@ -277,10 +277,7 @@ export class AcpAgentClient {
       source: "session-new",
       result,
     });
-    const runtimeState = acpSessionRuntimeStateFromCapabilities(
-      runtimeCapabilities,
-      now,
-    );
+    const runtimeState = acpSessionRuntimeStateFromResponse(result, now);
     const combinedRuntimeState =
       params.acpRuntime || runtimeState
         ? mergeAcpRuntimeState(params.acpRuntime, runtimeState ?? {})
@@ -540,19 +537,11 @@ export class AcpAgentClient {
       reasoningEffort: params.reasoningEffort,
     });
     const now = this.now();
-    const responseRuntimeCapabilities = normalizeAcpRuntimeCapabilities({
-      value: result,
-      now,
-      source: "session-load",
-    });
     const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "session-load",
       result,
     });
-    const responseRuntimeState = acpSessionRuntimeStateFromCapabilities(
-      responseRuntimeCapabilities,
-      now,
-    );
+    const responseRuntimeState = acpSessionRuntimeStateFromResponse(result, now);
     const requestedRuntimeState: BackendAcpSessionRuntimeState =
       params.source === "configOption"
         ? {
@@ -971,10 +960,7 @@ export class AcpAgentClient {
       source: "session-load",
       result,
     });
-    const runtimeState = acpSessionRuntimeStateFromCapabilities(
-      runtimeCapabilities,
-      this.now(),
-    );
+    const runtimeState = acpSessionRuntimeStateFromResponse(result, this.now());
     if (runtimeState) {
       this.updateSessionRuntimeState(metadata.sessionId, runtimeState);
       void Promise.resolve(

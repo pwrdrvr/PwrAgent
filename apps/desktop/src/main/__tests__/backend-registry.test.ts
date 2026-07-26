@@ -3327,7 +3327,7 @@ describe("DesktopBackendRegistry", () => {
     expect(acpClient.dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("applies Grok ACP reasoning effort on launch and thread updates", async () => {
+  it("applies Grok ACP reasoning effort without racing turn startup", async () => {
     const sessions: AcpSessionMetadata[] = [];
     const acpBackendId = "acp:grok" as AcpBackendId;
     const setRuntimeOption = vi.fn(
@@ -3362,7 +3362,13 @@ describe("DesktopBackendRegistry", () => {
         sessions.push(metadata);
         return metadata;
       }),
-      startPrompt: vi.fn(),
+      startPrompt: vi.fn((params: {
+        sessionId: string;
+        turnId?: string;
+      }) => ({
+        sessionId: params.sessionId,
+        turnId: params.turnId ?? "grok-turn",
+      })),
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
@@ -3446,6 +3452,37 @@ describe("DesktopBackendRegistry", () => {
       value: "grok-4.5",
       reasoningEffort: "low",
     });
+
+    const turnStartupReachedEnsureSession = createDeferred<void>();
+    const releaseTurnStartup = createDeferred<void>();
+    acpClient.ensureSession.mockImplementationOnce(async () => {
+      turnStartupReachedEnsureSession.resolve();
+      await releaseTurnStartup.promise;
+    });
+    const turnPromise = registry.startTurn({
+      backend: acpBackendId,
+      threadId: "grok-session",
+      input: [{ type: "text", text: "start work" }],
+    });
+    await turnStartupReachedEnsureSession.promise;
+
+    const settingsPromise = registry.setThreadModelSettings({
+      backend: acpBackendId,
+      threadId: "grok-session",
+      reasoningEffort: "high",
+    });
+    await flushAsync();
+    expect(acpClient.startPrompt).not.toHaveBeenCalled();
+
+    releaseTurnStartup.resolve();
+    await turnPromise;
+    const runtimeUpdatesAfterPromptStarted = setRuntimeOption.mock.calls.length;
+    await settingsPromise;
+
+    expect(acpClient.startPrompt).toHaveBeenCalledTimes(1);
+    expect(setRuntimeOption).toHaveBeenCalledTimes(
+      runtimeUpdatesAfterPromptStarted,
+    );
 
     await registry.close();
   });

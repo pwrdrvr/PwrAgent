@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   acpRuntimeSupportsSessionHistoryReplay,
+  acpSessionRuntimeStateFromCapabilities,
+  acpSessionRuntimeStateFromResponse,
   normalizeAcpRuntimeCapabilities,
 } from "../acp/acp-runtime-capabilities";
 
@@ -93,29 +95,30 @@ describe("ACP runtime capabilities", () => {
   });
 
   it("normalizes model-specific reasoning effort metadata", () => {
+    const response = {
+      models: {
+        currentModelId: "grok-4.5",
+        availableModels: [
+          {
+            modelId: "grok-4.5",
+            name: "Grok 4.5",
+            _meta: {
+              supportsReasoningEffort: true,
+              reasoningEffort: "medium",
+              reasoningEfforts: [
+                { value: "low", label: "Low" },
+                { value: "medium", label: "Medium" },
+                { value: "high", label: "High", default: true },
+              ],
+            },
+          },
+        ],
+      },
+    };
     const capabilities = normalizeAcpRuntimeCapabilities({
       now: 1000,
       source: "initialize",
-      value: {
-        models: {
-          currentModelId: "grok-4.5",
-          availableModels: [
-            {
-              modelId: "grok-4.5",
-              name: "Grok 4.5",
-              _meta: {
-                supportsReasoningEffort: true,
-                reasoningEffort: "high",
-                reasoningEfforts: [
-                  { value: "low", label: "Low" },
-                  { value: "medium", label: "Medium" },
-                  { value: "high", label: "High", default: true },
-                ],
-              },
-            },
-          ],
-        },
-      },
+      value: response,
     });
 
     expect(capabilities?.models).toEqual({
@@ -129,6 +132,17 @@ describe("ACP runtime capabilities", () => {
           supportsReasoning: true,
         },
       ],
+    });
+    expect(acpSessionRuntimeStateFromCapabilities(capabilities, 1001)).toEqual({
+      currentModelId: "grok-4.5",
+      updatedAt: 1001,
+    });
+    expect(
+      acpSessionRuntimeStateFromResponse(response, 1002),
+    ).toEqual({
+      currentModelId: "grok-4.5",
+      reasoningEffort: "medium",
+      updatedAt: 1002,
     });
   });
 });
