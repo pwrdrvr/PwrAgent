@@ -13,8 +13,14 @@ const FALLBACK_DEFAULT_BRANCHES = [
 ] as const;
 
 type DefaultBranchInfo = {
+  defaultsByRemote: Map<string, string>;
   names: Set<string>;
-  upstreams: Set<string>;
+  remotes: Set<string>;
+};
+
+type TrackedRemoteBranch = {
+  name: string;
+  remote: string;
 };
 
 /**
@@ -75,19 +81,24 @@ async function resolvePrLookupBranches(params: {
   const defaultBranchInfo = await readDefaultBranchInfo(params.cwd);
 
   if (params.branch !== "HEAD") {
-    const trackedRemoteBranch = await readTrackedRemoteBranchName(
-      params.cwd,
-      params.branch,
-    );
+    const trackedRemoteBranch = await readTrackedRemoteBranch({
+      cwd: params.cwd,
+      localBranch: params.branch,
+      remotes: defaultBranchInfo.remotes,
+    });
     if (defaultBranchInfo.names.has(params.branch)) {
       return [];
     }
     // A local feature branch may track the remote default branch for pulls.
-    // Never query that default name; keep the local feature name instead.
+    // Only substitute a tracked branch after verifying that remote's default.
+    const trackedRemoteDefault = trackedRemoteBranch
+      ? defaultBranchInfo.defaultsByRemote.get(trackedRemoteBranch.remote)
+      : undefined;
     return [
       trackedRemoteBranch
-      && !defaultBranchInfo.names.has(trackedRemoteBranch)
-        ? trackedRemoteBranch
+      && trackedRemoteDefault
+      && trackedRemoteBranch.name !== trackedRemoteDefault
+        ? trackedRemoteBranch.name
         : params.branch,
     ];
   }
@@ -95,26 +106,51 @@ async function resolvePrLookupBranches(params: {
   return [];
 }
 
-async function readTrackedRemoteBranchName(
-  cwd: string,
-  localBranch: string,
-): Promise<string | undefined> {
-  const remoteRef = await readGitLine(cwd, [
-    "for-each-ref",
-    "--format=%(upstream:remoteref)",
-    `refs/heads/${localBranch}`,
-  ]);
-  const prefix = "refs/heads/";
-  if (!remoteRef?.startsWith(prefix)) {
+async function readTrackedRemoteBranch(params: {
+  cwd: string;
+  localBranch: string;
+  remotes: Set<string>;
+}): Promise<TrackedRemoteBranch | undefined> {
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(
+      "git",
+      [
+        "for-each-ref",
+        "--format=%(refname)%09%(upstream:remotename)%09%(upstream:remoteref)",
+        `refs/heads/${params.localBranch}`,
+      ],
+      {
+        cwd: params.cwd,
+        maxBuffer: 64 * 1024,
+        timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
+      },
+    ));
+  } catch {
     return undefined;
   }
-  return remoteRef.slice(prefix.length).trim() || undefined;
+
+  const expectedRef = `refs/heads/${params.localBranch}`;
+  const remoteRefPrefix = "refs/heads/";
+  for (const line of stdout.split(/\r?\n/)) {
+    const [refName = "", remote = "", remoteRef = ""] = line.split("\t");
+    if (
+      refName !== expectedRef
+      || !params.remotes.has(remote)
+      || !remoteRef.startsWith(remoteRefPrefix)
+    ) {
+      continue;
+    }
+    const name = remoteRef.slice(remoteRefPrefix.length).trim();
+    return name ? { name, remote } : undefined;
+  }
+  return undefined;
 }
 
 async function readDefaultBranchInfo(cwd: string): Promise<DefaultBranchInfo> {
   try {
-    const upstreams = await readRemoteDefaultUpstreams(cwd);
-    const names = remoteDefaultBranchNames(upstreams);
+    const { defaultsByRemote, remotes } = await readRemoteDefaultBranches(cwd);
+    const names = new Set(defaultsByRemote.values());
 
     if (names.size === 0) {
       const fallbackDefaultBranch = await readFallbackDefaultBranchName(cwd);
@@ -123,20 +159,27 @@ async function readDefaultBranchInfo(cwd: string): Promise<DefaultBranchInfo> {
       }
     }
 
-    return { names, upstreams };
+    return { defaultsByRemote, names, remotes };
   } catch {
-    return { names: new Set(), upstreams: new Set() };
+    return {
+      defaultsByRemote: new Map(),
+      names: new Set(),
+      remotes: new Set(),
+    };
   }
 }
 
-async function readRemoteDefaultUpstreams(cwd: string): Promise<Set<string>> {
+async function readRemoteDefaultBranches(cwd: string): Promise<{
+  defaultsByRemote: Map<string, string>;
+  remotes: Set<string>;
+}> {
   const { stdout } = await execFileAsync("git", ["remote"], {
     cwd,
     maxBuffer: 64 * 1024,
     timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
   });
   const remotes = uniqueNonEmpty(stdout.split(/\r?\n/));
-  const upstreams = await Promise.all(
+  const defaults = await Promise.all(
     remotes.map(async (remote) => {
       const remoteHead = await readGitLine(cwd, [
         "symbolic-ref",
@@ -144,16 +187,20 @@ async function readRemoteDefaultUpstreams(cwd: string): Promise<Set<string>> {
         "--short",
         `refs/remotes/${remote}/HEAD`,
       ]);
-      return remoteHead ?? "";
+      const prefix = `${remote}/`;
+      return remoteHead?.startsWith(prefix)
+        ? ([remote, remoteHead.slice(prefix.length)] as const)
+        : undefined;
     }),
   );
-  return new Set(uniqueNonEmpty(upstreams));
-}
-
-function remoteDefaultBranchNames(defaultUpstreams: Set<string>): Set<string> {
-  return new Set(
-    [...defaultUpstreams].map((upstream) => upstream.replace(/^[^/]+\//, "")),
-  );
+  return {
+    defaultsByRemote: new Map(
+      defaults.filter(
+        (entry): entry is readonly [string, string] => Boolean(entry?.[1]),
+      ),
+    ),
+    remotes: new Set(remotes),
+  };
 }
 
 async function readFallbackDefaultBranchName(
