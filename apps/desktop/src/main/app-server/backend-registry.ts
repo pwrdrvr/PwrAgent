@@ -5000,10 +5000,38 @@ function resolveGrokApiKeyForLiveClient(): string | undefined {
 function buildCodexParentDynamicToolSpecs(
   agentToolCatalogs: Array<{ dynamicTools: CodexDynamicToolSpec[] }> = [],
 ): CodexDynamicToolSpec[] {
-  return [
+  return mergeCodexDynamicToolSpecs([
     ...agentToolCatalogs.flatMap((catalog) => catalog.dynamicTools),
     ...buildTaskMonitorDynamicToolSpecs("parent"),
-  ];
+  ]);
+}
+
+function mergeCodexDynamicToolSpecs(
+  specs: CodexDynamicToolSpec[],
+): CodexDynamicToolSpec[] {
+  const namespaces = new Map<
+    string,
+    Extract<CodexDynamicToolSpec, { type: "namespace" }>
+  >();
+  const functions: CodexDynamicToolSpec[] = [];
+
+  for (const spec of specs) {
+    if (spec.type !== "namespace") {
+      functions.push(spec);
+      continue;
+    }
+    const existing = namespaces.get(spec.name);
+    if (existing) {
+      existing.tools.push(...spec.tools);
+      continue;
+    }
+    namespaces.set(spec.name, {
+      ...spec,
+      tools: [...spec.tools],
+    });
+  }
+
+  return [...functions, ...namespaces.values()];
 }
 
 function pageNormalizedReplay(

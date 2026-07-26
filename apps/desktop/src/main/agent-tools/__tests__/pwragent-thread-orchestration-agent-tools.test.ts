@@ -11,93 +11,99 @@ describe("pwragent thread orchestration agent tools", () => {
 
     expect(router.buildDynamicToolSpecs()).toEqual([
       expect.objectContaining({
-        namespace: "pwragent",
-        name: "attach_thread_directory",
-        description: expect.stringContaining("secondary worktree"),
-        deferLoading: false,
-        inputSchema: expect.objectContaining({
-          required: ["path"],
-          properties: expect.objectContaining({
-            workspaceMode: expect.objectContaining({
-              enum: ["local", "new_worktree"],
-            }),
-            worktreeBranchMode: expect.objectContaining({
-              enum: ["attached", "detached"],
-            }),
-          }),
-        }),
-      }),
-      expect.objectContaining({
-        namespace: "pwragent",
-        name: "detach_thread_directory",
-        description: expect.stringContaining("primary provider/runtime cwd"),
-        deferLoading: false,
-        inputSchema: expect.objectContaining({
-          additionalProperties: false,
-          properties: expect.objectContaining({
-            directoryId: expect.objectContaining({
-              description: expect.stringContaining("linked-directory id"),
-            }),
-            worktreePath: expect.objectContaining({
-              description: expect.stringContaining("worktree path"),
+        type: "namespace",
+        name: "pwragent",
+        tools: expect.arrayContaining([
+          expect.objectContaining({
+            type: "function",
+            name: "attach_thread_directory",
+            description: expect.stringContaining("secondary worktree"),
+            deferLoading: false,
+            inputSchema: expect.objectContaining({
+              required: ["path"],
+              properties: expect.objectContaining({
+                workspaceMode: expect.objectContaining({
+                  enum: ["local", "new_worktree"],
+                }),
+                worktreeBranchMode: expect.objectContaining({
+                  enum: ["attached", "detached"],
+                }),
+              }),
             }),
           }),
-        }),
-      }),
-      expect.objectContaining({
-        namespace: "pwragent",
-        name: "handoff_task",
-        description: expect.stringContaining("cross-project handoffs are created ungrouped"),
-        deferLoading: false,
-        inputSchema: expect.objectContaining({
-          required: ["task"],
-          properties: expect.objectContaining({
-            seedMode: expect.objectContaining({
-              enum: ["clean", "fork"],
-            }),
-            groupingMode: expect.objectContaining({
-              enum: ["none", "subthread"],
-              description: expect.stringContaining("same-project sub-thread"),
-            }),
-            workspaceMode: expect.objectContaining({
-              enum: ["same", "same_workspace", "project_local", "new_worktree", "none"],
-            }),
-            cwd: expect.objectContaining({
-              description: expect.stringContaining("another project"),
-            }),
-            branchName: expect.objectContaining({
-              description: expect.stringContaining("existing base branch/ref"),
+          expect.objectContaining({
+            type: "function",
+            name: "detach_thread_directory",
+            description: expect.stringContaining("primary provider/runtime cwd"),
+            deferLoading: false,
+            inputSchema: expect.objectContaining({
+              additionalProperties: false,
+              properties: expect.objectContaining({
+                directoryId: expect.objectContaining({
+                  description: expect.stringContaining("linked-directory id"),
+                }),
+                worktreePath: expect.objectContaining({
+                  description: expect.stringContaining("worktree path"),
+                }),
+              }),
             }),
           }),
-        }),
-      }),
-      expect.objectContaining({
-        namespace: "pwragent",
-        name: "move_thread_workspace",
-        description: expect.stringContaining("same-thread continuation"),
-        deferLoading: false,
-        inputSchema: expect.objectContaining({
-          additionalProperties: false,
-          properties: expect.objectContaining({
-            direction: expect.objectContaining({
-              enum: ["local-to-worktree", "worktree-to-local"],
-            }),
-            strategy: expect.objectContaining({
-              enum: ["move-branch", "detached-changes", "new-branch"],
-            }),
-            sourcePath: expect.objectContaining({
-              description: expect.stringContaining("multiple linked directories"),
+          expect.objectContaining({
+            type: "function",
+            name: "handoff_task",
+            description: expect.stringContaining("cross-project handoffs are created ungrouped"),
+            deferLoading: false,
+            inputSchema: expect.objectContaining({
+              required: ["task"],
+              properties: expect.objectContaining({
+                seedMode: expect.objectContaining({
+                  enum: ["clean", "fork"],
+                }),
+                groupingMode: expect.objectContaining({
+                  enum: ["none", "subthread"],
+                  description: expect.stringContaining("same-project sub-thread"),
+                }),
+                workspaceMode: expect.objectContaining({
+                  enum: ["same", "same_workspace", "project_local", "new_worktree", "none"],
+                }),
+                cwd: expect.objectContaining({
+                  description: expect.stringContaining("another project"),
+                }),
+                branchName: expect.objectContaining({
+                  description: expect.stringContaining("existing base branch/ref"),
+                }),
+              }),
             }),
           }),
-        }),
-      }),
-      expect.objectContaining({
-        namespace: "pwragent",
-        name: "send_message_to_thread",
-        deferLoading: false,
-        inputSchema: expect.objectContaining({
-          required: ["backend", "threadId", "prompt"],
-        }),
+          expect.objectContaining({
+            type: "function",
+            name: "move_thread_workspace",
+            description: expect.stringContaining("same-thread continuation"),
+            deferLoading: false,
+            inputSchema: expect.objectContaining({
+              additionalProperties: false,
+              properties: expect.objectContaining({
+                direction: expect.objectContaining({
+                  enum: ["local-to-worktree", "worktree-to-local"],
+                }),
+                strategy: expect.objectContaining({
+                  enum: ["move-branch", "detached-changes", "new-branch"],
+                }),
+                sourcePath: expect.objectContaining({
+                  description: expect.stringContaining("multiple linked directories"),
+                }),
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            type: "function",
+            name: "send_message_to_thread",
+            deferLoading: false,
+            inputSchema: expect.objectContaining({
+              required: ["backend", "threadId", "prompt"],
+            }),
+          }),
+        ]),
       }),
     ]);
   });

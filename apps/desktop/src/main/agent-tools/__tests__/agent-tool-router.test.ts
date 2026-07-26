@@ -17,11 +17,18 @@ describe("AgentToolRouter", () => {
 
     expect(router.buildDynamicToolSpecs()).toEqual([
       {
-        namespace: "pwragent_test",
-        name: "inspect",
-        description: "Inspect test state.",
-        inputSchema: { type: "object", additionalProperties: false },
-        deferLoading: false,
+        type: "namespace",
+        name: "pwragent_test",
+        description: "PwrAgent tools.",
+        tools: [
+          {
+            type: "function",
+            name: "inspect",
+            description: "Inspect test state.",
+            inputSchema: { type: "object", additionalProperties: false },
+            deferLoading: false,
+          },
+        ],
       },
     ]);
   });

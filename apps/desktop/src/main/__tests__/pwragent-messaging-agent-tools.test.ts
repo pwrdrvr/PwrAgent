@@ -35,7 +35,24 @@ describe("PwrAgent messaging agent tools", () => {
     const router = buildPwrAgentMessagingToolRouter(handler);
 
     const specs = router.buildDynamicToolSpecs();
-    expect(specs.map((tool) => tool.name)).toEqual([
+    expect(specs).toEqual([
+      expect.objectContaining({
+        type: "namespace",
+        name: "pwragent",
+        tools: expect.arrayContaining([
+          expect.objectContaining({
+            type: "function",
+            name: "get_current_messaging_surface",
+          }),
+          expect.objectContaining({
+            type: "function",
+            name: "attach_thread_here",
+          }),
+        ]),
+      }),
+    ]);
+    expect(specs[0]?.type === "namespace" ? specs[0].tools.map((tool) => tool.name) : [])
+      .toEqual([
       "get_current_messaging_surface",
       "attach_thread_here",
     ]);
