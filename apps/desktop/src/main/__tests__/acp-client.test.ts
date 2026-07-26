@@ -1957,13 +1957,22 @@ describe("AcpAgentClient", () => {
     expect(client.readReplay(session.sessionId).entries).toEqual([]);
   });
 
-  it("does not render Grok transient vendor interaction updates", async () => {
-    const transport = new FakeAcpAgentTransport();
+  it("preserves a Grok assistant stream across transient vendor updates", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const assistantMessageItemIds: Array<string | undefined> = [];
     const client = new AcpAgentClient({
       backendId: "acp:grok",
       store,
       transport,
       now: () => 1000,
+      onSessionUpdate: ({ assistantMessageItemId, update }) => {
+        if (update.sessionUpdate === "agent_message_chunk") {
+          assistantMessageItemIds.push(assistantMessageItemId);
+        }
+      },
     });
 
     await client.initialize();
@@ -1971,11 +1980,23 @@ describe("AcpAgentClient", () => {
       cwd: "/repo",
       executionMode: "default",
     });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+      turnId: "turn-1",
+    });
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: "Before ",
+      },
+    });
     for (const sessionUpdate of [
       "tool_call_delta_chunk",
       "pending_interaction",
       "interaction_resolved",
-      "turn_completed",
     ]) {
       transport.emitVendorNotification({
         method: "_x.ai/session_notification",
@@ -1983,10 +2004,87 @@ describe("AcpAgentClient", () => {
         update: { sessionUpdate },
       });
     }
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: "after",
+      },
+    });
 
-    expect(client.readReplay(session.sessionId)).toMatchObject({
-      entries: [],
-      threadStatus: "idle",
+    expect(assistantMessageItemIds).toEqual([
+      "assistant:turn-1:0",
+      "assistant:turn-1:0",
+    ]);
+    expect(client.readReplay(session.sessionId).entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+        text: "Inspect this",
+      }),
+      expect.objectContaining({
+        type: "message",
+        role: "assistant",
+        text: "Before after",
+      }),
+    ]);
+
+    promptResponse.resolve({ turnId: "turn-1" });
+    await vi.waitFor(() => {
+      expect(client.readReplay(session.sessionId).threadStatus).toBe("idle");
+    });
+  });
+
+  it("keeps a tracked Grok turn active until session/prompt resolves", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const statuses: string[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ replay }) => {
+        statuses.push(replay.threadStatus ?? "unknown");
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+      turnId: "turn-1",
+    });
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "turn_completed",
+        prompt_id: "turn-1",
+        stop_reason: "end_turn",
+      },
+    });
+
+    expect(client.readReplay(session.sessionId).threadStatus).toBe("active");
+    expect(statuses.at(-1)).toBe("active");
+    expect(() =>
+      client.startPrompt({
+        sessionId: session.sessionId,
+        prompt: "Second turn",
+        turnId: "turn-2",
+      }),
+    ).toThrow("A turn is already active for this ACP session.");
+
+    promptResponse.resolve({ turnId: "turn-1" });
+    await vi.waitFor(() => {
+      expect(client.readReplay(session.sessionId).threadStatus).toBe("idle");
     });
   });
 

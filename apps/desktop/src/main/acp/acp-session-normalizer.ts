@@ -19,6 +19,11 @@ export type AcpSessionUpdate = {
   sessionId: string;
   update: Record<string, unknown>;
   receivedAt?: number;
+  /**
+   * Live clients defer Grok's durable replay terminal until session/prompt
+   * resolves, which is the point at which another turn may safely start.
+   */
+  deferTurnCompletion?: boolean;
 };
 
 export type AcpSessionReplayNormalizerOptions = {
@@ -27,6 +32,14 @@ export type AcpSessionReplayNormalizerOptions = {
 
 export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
   return backendId !== "acp:qwen";
+}
+
+export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
+  return (
+    kind === "tool_call_delta_chunk"
+    || kind === "pending_interaction"
+    || kind === "interaction_resolved"
+  );
 }
 
 export class AcpSessionReplayNormalizer {
@@ -160,18 +173,17 @@ export class AcpSessionReplayNormalizer {
       // Command metadata belongs in provider capabilities, not the transcript.
     } else if (kind === "config_option_update" || kind === "current_mode_update") {
       // Runtime configuration changes belong in ACP session metadata.
-    } else if (
-      kind === "tool_call_delta_chunk"
-      || kind === "pending_interaction"
-      || kind === "interaction_resolved"
-    ) {
+    } else if (isGrokTransientUpdateKind(kind)) {
       // Grok emits these transient xAI extension updates in addition to the
       // canonical ACP tool calls and permission requests. They are transport
       // state, not transcript entries, and must not split assistant bubbles.
     } else if (kind === "turn_completed") {
-      // Grok's xAI extension uses turn_completed before the canonical
-      // turn_finished update. Treat it as an idempotent early completion.
-      this.recordTurnFinished();
+      // Grok persists this as a durable replay terminal, but emits it before
+      // the live session/prompt request resolves. The client defers the live
+      // idle transition until prompt resolution so queued work cannot overlap.
+      if (!update.deferTurnCompletion) {
+        this.recordTurnFinished();
+      }
     } else if (readAcpTopicTitle(update.update)) {
       // Topic updates are thread metadata, not transcript entries.
     } else {

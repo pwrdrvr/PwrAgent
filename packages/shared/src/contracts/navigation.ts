@@ -1187,6 +1187,11 @@ export type ThreadOverlayState = {
   threadId: ThreadIdentifier;
   agent?: ThreadAgentMetadata;
   executionMode?: ThreadExecutionMode;
+  /**
+   * Timestamp of the source that last established `executionMode`.
+   * ACP navigation reconciliation uses this to reject older list snapshots.
+   */
+  executionModeUpdatedAt?: number;
   model?: string;
   reasoningEffort?: string;
   reasoningEffortsByModel?: Record<string, string>;

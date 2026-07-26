@@ -290,6 +290,23 @@ export function normalizeNavigationBrowseMode(
     : DEFAULT_NAVIGATION_BROWSE_MODE;
 }
 
+function shouldApplyAcpExecutionModeSnapshot(
+  current: ThreadOverlayState | undefined,
+  thread: AppServerThreadSummary,
+): boolean {
+  return (
+    isAcpBackendId(thread.source)
+    && thread.executionMode !== undefined
+    && (
+      current?.executionModeUpdatedAt === undefined
+      || (
+        thread.updatedAt !== undefined
+        && thread.updatedAt > current.executionModeUpdatedAt
+      )
+    )
+  );
+}
+
 export class SqliteOverlayStore {
   constructor(private readonly stateDb: StateDb) {}
 
@@ -328,13 +345,22 @@ export class SqliteOverlayStore {
       for (const thread of params.threads) {
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
         const current = this.getThread(threadKey);
+        const applyAcpExecutionModeSnapshot =
+          shouldApplyAcpExecutionModeSnapshot(current, thread);
         this.putThread(threadKey, {
           ...(current ?? {}),
           backend: thread.source,
           threadId: thread.id,
           executionMode: isAcpBackendId(thread.source)
-            ? thread.executionMode ?? current?.executionMode ?? "default"
+            ? applyAcpExecutionModeSnapshot
+              ? thread.executionMode ?? current?.executionMode ?? "default"
+              : current?.executionMode ?? thread.executionMode ?? "default"
             : current?.executionMode ?? thread.executionMode ?? "default",
+          executionModeUpdatedAt: isAcpBackendId(thread.source)
+            ? applyAcpExecutionModeSnapshot && thread.executionMode
+              ? thread.updatedAt
+              : current?.executionModeUpdatedAt
+            : current?.executionModeUpdatedAt,
           model: current?.model ?? thread.model,
           reasoningEffort: current?.reasoningEffort ?? thread.reasoningEffort,
           serviceTier: current?.serviceTier ?? thread.serviceTier,
@@ -370,10 +396,18 @@ export class SqliteOverlayStore {
       }
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       const current = this.getThread(threadKey);
-      if (current && current.executionMode !== thread.executionMode) {
+      if (
+        current
+        && shouldApplyAcpExecutionModeSnapshot(current, thread)
+        && (
+          current.executionMode !== thread.executionMode
+          || current.executionModeUpdatedAt !== thread.updatedAt
+        )
+      ) {
         this.putThread(threadKey, {
           ...current,
           executionMode: thread.executionMode,
+          executionModeUpdatedAt: thread.updatedAt,
         });
       }
     }
@@ -1932,6 +1966,7 @@ export class SqliteOverlayStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     executionMode: ThreadExecutionMode;
+    updatedAt?: number;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey) ?? {
@@ -1942,6 +1977,7 @@ export class SqliteOverlayStore {
     const nextState: ThreadOverlayState = {
       ...current,
       executionMode: params.executionMode,
+      executionModeUpdatedAt: params.updatedAt ?? Date.now(),
     };
     this.putThread(threadKey, nextState);
     return nextState;

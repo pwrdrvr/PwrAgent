@@ -129,8 +129,15 @@ function resolveNavigationExecutionMode(params: {
   thread: AppServerThreadSummary;
 }): NavigationThreadSummary["executionMode"] {
   if (isAcpBackendId(params.thread.source)) {
+    const overlayIsAtLeastAsFresh =
+      params.overlay?.executionModeUpdatedAt !== undefined
+      && (
+        params.thread.updatedAt === undefined
+        || params.overlay.executionModeUpdatedAt >= params.thread.updatedAt
+      );
     return (
-      params.thread.executionMode
+      (overlayIsAtLeastAsFresh ? params.overlay?.executionMode : undefined)
+      ?? params.thread.executionMode
       ?? params.overlay?.executionMode
       ?? "default"
     );
