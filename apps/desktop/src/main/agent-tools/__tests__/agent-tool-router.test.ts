@@ -285,6 +285,27 @@ describe("AgentToolRouter", () => {
 
     expect(
       readAgentDynamicToolCall({
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "inspect",
+          arguments: {},
+        },
+      }),
+    ).toEqual({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: "pwragent",
+      tool: "inspect",
+      arguments: {},
+    });
+
+    expect(
+      readAgentDynamicToolCall({
         method: "thread/update",
         params: {},
       }),

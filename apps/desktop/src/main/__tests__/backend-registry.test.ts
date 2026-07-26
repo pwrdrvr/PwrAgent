@@ -15220,7 +15220,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("handles automation inspection dynamic tool calls without surfacing pending requests", async () => {
+  it("handles namespace-less legacy automation calls without surfacing pending requests", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
@@ -15277,7 +15277,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_automations",
+        namespace: null,
         tool: "list_automations",
         arguments: {
           limit: 2,
@@ -22412,7 +22412,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("creates task monitor delegations for active Codex turns", async () => {
+  it("creates task monitor delegations from namespace-less legacy calls", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
       models: TEST_TASK_MONITOR_MODELS,
@@ -22444,7 +22444,7 @@ script = "printf setup"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_task_monitors",
+        namespace: null,
         tool: "create_monitor_delegation",
         arguments: {
           task: "Watch PR #123 checks until they finish.",

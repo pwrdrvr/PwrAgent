@@ -125,9 +125,11 @@ export function readTaskMonitorDynamicToolCall(request: {
   const callId = readString(call.callId) ?? readString(call.requestId);
   const tool = readString(call.tool);
   const namespace =
-    typeof call.namespace === "string" || call.namespace === null
+    typeof call.namespace === "string"
       ? call.namespace
-      : undefined;
+      : call.namespace === null
+        ? PWRAGENT_TOOL_NAMESPACE
+        : undefined;
   if (!threadId || !callId || !tool || namespace === undefined) {
     return undefined;
   }
