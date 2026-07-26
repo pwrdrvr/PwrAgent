@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ThreadPermissionTransition } from "@pwragent/shared";
+import type {
+  AppServerThreadSummary,
+  ThreadPermissionTransition,
+} from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import {
@@ -155,5 +158,38 @@ describe("SqliteOverlayStore — permission transition log", () => {
     expect(grok?.permissionTransitionLog?.map((entry) => entry.id)).toEqual([
       "grok-1",
     ]);
+  });
+
+  it("repairs a stale ACP overlay from authoritative session metadata", async () => {
+    await store.setThreadExecutionMode({
+      backend: "acp:grok",
+      threadId: "thread-1",
+      executionMode: "default",
+    });
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Grok thread",
+      titleSource: "explicit",
+      source: "acp:grok",
+      linkedDirectories: [],
+      updatedAt: 2000,
+      executionMode: "full-access",
+    };
+
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "acp:grok",
+      fetchedAt: 2000,
+      threads: [thread],
+    });
+
+    expect(snapshot.threads[0]?.executionMode).toBe("full-access");
+    await expect(
+      store.getThreadOverlayState({
+        backend: "acp:grok",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      executionMode: "full-access",
+    });
   });
 });

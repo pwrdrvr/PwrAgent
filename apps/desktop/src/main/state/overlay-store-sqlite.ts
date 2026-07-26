@@ -40,6 +40,7 @@ import {
   buildThreadIdentityKey,
   applyNavigationLaunchpadProviderSettingsPatch,
   estimateOpenAiTokenUsageCost,
+  isAcpBackendId,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
   resolveOpenAiPricingServiceTier,
@@ -331,7 +332,9 @@ export class SqliteOverlayStore {
           ...(current ?? {}),
           backend: thread.source,
           threadId: thread.id,
-          executionMode: current?.executionMode ?? thread.executionMode ?? "default",
+          executionMode: isAcpBackendId(thread.source)
+            ? thread.executionMode ?? current?.executionMode ?? "default"
+            : current?.executionMode ?? thread.executionMode ?? "default",
           model: current?.model ?? thread.model,
           reasoningEffort: current?.reasoningEffort ?? thread.reasoningEffort,
           serviceTier: current?.serviceTier ?? thread.serviceTier,
@@ -357,6 +360,20 @@ export class SqliteOverlayStore {
           messagingBindingTransitionLog:
             current?.messagingBindingTransitionLog,
           turnFailureLog: current?.turnFailureLog,
+        });
+      }
+    }
+
+    for (const thread of params.threads) {
+      if (!isAcpBackendId(thread.source) || !thread.executionMode) {
+        continue;
+      }
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const current = this.getThread(threadKey);
+      if (current && current.executionMode !== thread.executionMode) {
+        this.putThread(threadKey, {
+          ...current,
+          executionMode: thread.executionMode,
         });
       }
     }

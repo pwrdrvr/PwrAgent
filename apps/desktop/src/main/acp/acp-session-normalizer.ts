@@ -160,6 +160,18 @@ export class AcpSessionReplayNormalizer {
       // Command metadata belongs in provider capabilities, not the transcript.
     } else if (kind === "config_option_update" || kind === "current_mode_update") {
       // Runtime configuration changes belong in ACP session metadata.
+    } else if (
+      kind === "tool_call_delta_chunk"
+      || kind === "pending_interaction"
+      || kind === "interaction_resolved"
+    ) {
+      // Grok emits these transient xAI extension updates in addition to the
+      // canonical ACP tool calls and permission requests. They are transport
+      // state, not transcript entries, and must not split assistant bubbles.
+    } else if (kind === "turn_completed") {
+      // Grok's xAI extension uses turn_completed before the canonical
+      // turn_finished update. Treat it as an idempotent early completion.
+      this.recordTurnFinished();
     } else if (readAcpTopicTitle(update.update)) {
       // Topic updates are thread metadata, not transcript entries.
     } else {

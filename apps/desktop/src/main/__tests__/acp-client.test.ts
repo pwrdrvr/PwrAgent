@@ -1957,6 +1957,39 @@ describe("AcpAgentClient", () => {
     expect(client.readReplay(session.sessionId).entries).toEqual([]);
   });
 
+  it("does not render Grok transient vendor interaction updates", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    for (const sessionUpdate of [
+      "tool_call_delta_chunk",
+      "pending_interaction",
+      "interaction_resolved",
+      "turn_completed",
+    ]) {
+      transport.emitVendorNotification({
+        method: "_x.ai/session_notification",
+        sessionId: session.sessionId,
+        update: { sessionUpdate },
+      });
+    }
+
+    expect(client.readReplay(session.sessionId)).toMatchObject({
+      entries: [],
+      threadStatus: "idle",
+    });
+  });
+
   it("reports fire-and-forget prompt failures", async () => {
     const transport = new FakeAcpAgentTransport();
     const quotaError =

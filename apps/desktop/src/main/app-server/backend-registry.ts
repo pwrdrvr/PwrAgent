@@ -6952,6 +6952,13 @@ export class DesktopBackendRegistry {
       executionMode: nextExecutionMode,
       updatedAt: Math.max(session.updatedAt, runtimeState?.updatedAt ?? Date.now()),
     });
+    if (this.isAcpRuntimeExecutionModeOption(params)) {
+      await this.overlayStore.setThreadExecutionMode({
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: nextExecutionMode ?? "default",
+      });
+    }
 
     const fromLabel =
       options?.fromLabel ??
@@ -9711,6 +9718,11 @@ export class DesktopBackendRegistry {
       ...session,
       executionMode: params.executionMode,
       updatedAt: Math.max(session.updatedAt, updatedAt),
+    });
+    await this.overlayStore.setThreadExecutionMode({
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: params.executionMode,
     });
 
     await this.appendPermissionTransition({
