@@ -48,6 +48,71 @@ describe("AcpRolloutStore", () => {
     ]);
   });
 
+  it("stores ACP rollouts under readable backend directory names", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:grok" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "hello",
+        turnId: "turn-1",
+      },
+    });
+
+    expect(
+      fs.existsSync(path.join(tempDir, "acp_grok", "session-1", "rollout.jsonl")),
+    ).toBe(true);
+    expect(fs.existsSync(path.join(tempDir, "acp_3Agrok"))).toBe(false);
+  });
+
+  it("merges legacy encoded backend rollout history with new records", () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const legacyRolloutPath = path.join(
+      tempDir,
+      "acp_3Agrok",
+      "session-1",
+      "rollout.jsonl",
+    );
+    fs.mkdirSync(path.dirname(legacyRolloutPath), { recursive: true });
+    fs.writeFileSync(
+      legacyRolloutPath,
+      `${JSON.stringify({
+        type: "update",
+        receivedAt: 1000,
+        update: {
+          kind: "pwragent_user_prompt",
+          prompt: "from the old path",
+          turnId: "turn-1",
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const store = new AcpRolloutStore(tempDir);
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        session_update: "agent_message_chunk",
+        content: { type: "text", text: "from the new path" },
+      },
+    });
+    const replay = store.readReplay({ backendId, sessionId: "session-1" });
+
+    expect(
+      fs.existsSync(path.join(tempDir, "acp_grok", "session-1", "rollout.jsonl")),
+    ).toBe(true);
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "from the old path",
+      "from the new path",
+    ]);
+  });
+
   it("hides Qwen thought chunks when restoring rollout replay", () => {
     const store = new AcpRolloutStore(tempDir);
     const backendId = "acp:qwen" as AcpBackendId;

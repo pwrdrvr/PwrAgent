@@ -67,20 +67,9 @@ export class AcpRolloutStore {
     sessionId: string;
   }): AcpRolloutRecord[] {
     this.flushSession(params.backendId, params.sessionId);
-    const rolloutPath = this.rolloutPath(params.backendId, params.sessionId);
-    if (!fs.existsSync(rolloutPath)) {
-      return [];
-    }
-    return fs
-      .readFileSync(rolloutPath, "utf8")
-      .split(/\r?\n/)
-      .flatMap((line) => {
-        if (!line.trim()) {
-          return [];
-        }
-        const parsed = parseJson(line);
-        return isRolloutRecord(parsed) ? [parsed] : [];
-      });
+    return this.readRolloutPaths(params.backendId, params.sessionId)
+      .flatMap((rolloutPath) => readRolloutRecords(rolloutPath))
+      .sort((left, right) => left.receivedAt - right.receivedAt);
   }
 
   readReplay(params: {
@@ -177,10 +166,27 @@ export class AcpRolloutStore {
   private rolloutPath(backendId: AcpBackendId, sessionId: string): string {
     return path.join(
       this.rootDir,
-      encodePathSegment(backendId),
+      encodeBackendPathSegment(backendId),
       encodePathSegment(sessionId),
       "rollout.jsonl",
     );
+  }
+
+  private readRolloutPaths(
+    backendId: AcpBackendId,
+    sessionId: string,
+  ): string[] {
+    const sessionPathSegment = encodePathSegment(sessionId);
+    const legacyPath = path.join(
+      this.rootDir,
+      encodePathSegment(backendId),
+      sessionPathSegment,
+      "rollout.jsonl",
+    );
+    const currentPath = this.rolloutPath(backendId, sessionId);
+    return legacyPath === currentPath
+      ? [currentPath]
+      : [legacyPath, currentPath];
   }
 }
 
@@ -310,6 +316,26 @@ function hashString(value: string): string {
 
 function encodePathSegment(value: string): string {
   return encodeURIComponent(value).replaceAll("%", "_");
+}
+
+function encodeBackendPathSegment(value: AcpBackendId): string {
+  return value.replace(":", "_");
+}
+
+function readRolloutRecords(rolloutPath: string): AcpRolloutRecord[] {
+  if (!fs.existsSync(rolloutPath)) {
+    return [];
+  }
+  return fs
+    .readFileSync(rolloutPath, "utf8")
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      if (!line.trim()) {
+        return [];
+      }
+      const parsed = parseJson(line);
+      return isRolloutRecord(parsed) ? [parsed] : [];
+    });
 }
 
 function parseJson(value: string): unknown {
