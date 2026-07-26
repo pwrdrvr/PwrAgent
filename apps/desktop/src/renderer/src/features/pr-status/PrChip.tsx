@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent } from "react";
+import { useEffect, type KeyboardEvent, type MouseEvent } from "react";
 import type { PrSummary } from "@pwragent/shared";
 import { CloseIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -29,6 +29,7 @@ export function PrChip(props: PrChipProps) {
   const tooltipController = useViewportTooltip({
     className: "viewport-tooltip",
   });
+  const updateTooltip = tooltipController.update;
   const label = props.showRepoPrefix
     ? `${pr.org}/${pr.repo}#${pr.number}`
     : `#${pr.number}`;
@@ -39,6 +40,9 @@ export function PrChip(props: PrChipProps) {
   const tooltip = title
     ? `${title}\n${identity} — ${status}`
     : `${identity} — ${status}`;
+  useEffect(() => {
+    updateTooltip(tooltip);
+  }, [tooltip, updateTooltip]);
 
   // Draft and merge-conflict ride ALONGSIDE the check-state dot color rather
   // than replacing it: an OPEN draft keeps its real status color and gains a
@@ -140,6 +144,16 @@ export function PrChip(props: PrChipProps) {
 }
 
 function prStatusLabel(pr: PrSummary): string {
+  if (
+    pr.state === "unknown"
+    && !pr.checkState
+    && !pr.lifecycleState
+    && !pr.reviewState
+    && !pr.mergeState
+  ) {
+    return "status unknown";
+  }
+
   const lifecycleState = resolveLifecycleState(pr);
   const parts: string[] = [];
   if (lifecycleState === "merged") {
