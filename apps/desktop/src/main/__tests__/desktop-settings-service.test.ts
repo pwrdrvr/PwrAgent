@@ -601,6 +601,63 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("notifies onConfigWritten subscribers after every successful write", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const listener = vi.fn();
+    const unsubscribe = service.onConfigWritten(listener);
+
+    // Fires for the experimental flag the background poller cares about — this
+    // is what makes the toggle take effect without a restart.
+    await service.writeConfigPatch({
+      experimental: { backgroundPrPolling: true },
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+    // The listener runs AFTER the write lands, so a re-read sees the new value.
+    expect(
+      (await service.readSettings()).experimental.backgroundPrPolling?.value,
+    ).toBe(true);
+
+    // Generic: fires for unrelated writes too (cheap; the poller just re-reads).
+    await service.writeConfigPatch({ updates: { channel: "prerelease" } });
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    // Unsubscribe stops delivery.
+    unsubscribe();
+    await service.writeConfigPatch({
+      experimental: { backgroundPrPolling: false },
+    });
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps writes alive when an onConfigWritten listener throws", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    service.onConfigWritten(() => {
+      throw new Error("listener boom");
+    });
+
+    // A throwing side-effect listener must not fail the settings write.
+    await expect(
+      service.writeConfigPatch({ experimental: { backgroundPrPolling: true } }),
+    ).resolves.toBeDefined();
+    expect(
+      (await service.readSettings()).experimental.backgroundPrPolling?.value,
+    ).toBe(true);
+  });
+
   it("defaults the image upload profile and only persists non-default values", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

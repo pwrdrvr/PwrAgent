@@ -837,6 +837,8 @@ class DesktopAppServerService {
   private prDiscoveryTimer: NodeJS.Timeout | undefined;
   /** Per-thread last discovery branch-lookup time, driving the slow rotation. */
   private readonly prDiscoveryLastRefreshedAt = new Map<string, number>();
+  /** Set once we subscribe to settings writes for live flag re-sync. */
+  private prPollingSettingsUnsubscribe: (() => void) | undefined;
   /**
    * Threads the operator currently has selected / on screen, pushed from the
    * renderer. Drives the poller's fast tier — main cannot infer selection.
@@ -3033,11 +3035,28 @@ class DesktopAppServerService {
    * without an app restart. With the flag off nothing is scheduled and PR chips
    * behave exactly as they did before the poller existed.
    */
-  private syncPrPollingSchedulerState(): void {
+  /**
+   * Start or stop the background PR poller to match the experimental flag.
+   * Public + idempotent: called on every navigation snapshot AND the moment the
+   * setting is written, so toggling takes effect without a restart.
+   */
+  syncPrPollingSchedulerState(): void {
     void (async () => {
       let enabled = DEFAULT_BACKGROUND_PR_POLLING;
       try {
-        const settings = await getDesktopSettingsService().readSettings();
+        const settingsService = getDesktopSettingsService();
+        // Subscribe lazily on the first sync (which the first navigation
+        // snapshot triggers), so a later toggle re-syncs immediately without a
+        // restart. Done here rather than at IPC-registration time so tests that
+        // don't stub the settings singleton aren't forced to construct it.
+        if (!this.prPollingSettingsUnsubscribe) {
+          this.prPollingSettingsUnsubscribe = settingsService.onConfigWritten(
+            () => {
+              this.syncPrPollingSchedulerState();
+            },
+          );
+        }
+        const settings = await settingsService.readSettings();
         enabled =
           settings.experimental.backgroundPrPolling?.value
           ?? DEFAULT_BACKGROUND_PR_POLLING;
@@ -3056,6 +3075,7 @@ class DesktopAppServerService {
   }
 
   private stopPrPollingScheduler(): void {
+    const wasRunning = this.prPollingScheduler !== undefined;
     if (this.prPollingScheduler) {
       this.prPollingScheduler.stop();
       this.prPollingScheduler = undefined;
@@ -3065,6 +3085,11 @@ class DesktopAppServerService {
       this.prDiscoveryTimer = undefined;
     }
     this.prDiscoveryLastRefreshedAt.clear();
+    if (wasRunning) {
+      // Info, not debug: an operator toggling the experimental flag should see
+      // it take effect in the normal log without turning on debug collection.
+      appServerLog.info("background PR polling disabled");
+    }
   }
 
   /**
@@ -3075,6 +3100,7 @@ class DesktopAppServerService {
     if (this.prPollingScheduler) {
       return;
     }
+    appServerLog.info("background PR polling enabled — starting poller");
     const scheduler = new PrPollingScheduler({
       listTargets: () => this.collectPrPollTargets(),
       getFocusedThreadKeys: () => this.prPollingFocusThreadKeys,
@@ -3097,8 +3123,16 @@ class DesktopAppServerService {
     // would see an empty target list and idle for a tick.
     void Promise.all([this.loadPrStatusRegistry(), this.loadPrLookupRegistry()])
       .then(() => {
+        // A late toggle-off could have torn the scheduler down while the
+        // registries were still loading; don't resurrect it.
+        if (this.prPollingScheduler !== scheduler) {
+          return;
+        }
         scheduler.start();
         this.startPrDiscoveryRefresh();
+        appServerLog.info("background PR polling started", {
+          trackedPrCount: this.collectPrPollTargets().length,
+        });
       })
       .catch((error) => {
         appServerLog.warn("failed to start PR polling scheduler", {
@@ -4051,6 +4085,8 @@ class DesktopAppServerService {
       this.prDiscoveryTimer = undefined;
     }
     this.prDiscoveryLastRefreshedAt.clear();
+    this.prPollingSettingsUnsubscribe?.();
+    this.prPollingSettingsUnsubscribe = undefined;
     this.prGraphqlClient = undefined;
     this.prPollingFocusThreadKeys = new Set();
     this.prPollBackendByKey.clear();
