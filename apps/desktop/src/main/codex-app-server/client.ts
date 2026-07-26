@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   estimateOpenAiTokenUsageCost,
+  formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
   formatTokenUsageStandardRateSuffix,
   formatTokenUsageUsd,
@@ -3294,6 +3295,7 @@ function summarizeActivityItems(
       for (const [index, action] of actions.entries()) {
         const actionType = pickString(action, ["type"]);
         const actionPath = pickString(action, ["path"]);
+        const actionQuery = pickString(action, ["query"]);
         const fallbackName = pickString(action, ["name"]);
         const detailId = `${itemId}-${index + 1}`;
 
@@ -3312,29 +3314,29 @@ function summarizeActivityItems(
           continue;
         }
 
-        if (actionType === "search" && actionPath) {
+        if (actionType === "search") {
           inspectedFiles += 1;
           pushActivityDetail(details, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(
-              `Searched ${path.basename(actionPath) || actionPath}`,
+              formatSearchCommandActionLabel({
+                path: actionPath,
+                query: actionQuery,
+              }),
               elapsedMs
             ),
-            path: actionPath,
+            ...(actionPath ? { path: actionPath } : {}),
             status: itemStatus
           });
           continue;
         }
 
-        if (actionType === "listFiles" || actionType === "search") {
+        if (actionType === "listFiles") {
           inspectedFiles += 1;
-          const label =
-            actionType === "listFiles"
-              ? actionPath
-                ? `Listed ${path.basename(actionPath) || actionPath}`
-                : "Listed files"
-              : "Ran search";
+          const label = actionPath
+            ? `Listed ${path.basename(actionPath) || actionPath}`
+            : "Listed files";
           pushActivityDetail(details, {
             id: detailId,
             kind: "read",

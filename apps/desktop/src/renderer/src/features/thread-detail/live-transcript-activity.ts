@@ -1,5 +1,6 @@
 import {
   estimateOpenAiTokenUsageCost,
+  formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
   formatTokenUsageStandardRateSuffix,
   formatTokenUsageUsd,
@@ -513,18 +514,19 @@ function readCommandActionLabel(item: Record<string, unknown>): string | undefin
 
     const actionType = readString(record, "type");
     const actionPath = readString(record, "path");
+    const actionQuery = readString(record, "query");
     const fallbackName = readString(record, "name");
     if (actionType === "read" && actionPath) {
       return `Read ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
-    }
-    if (actionType === "search" && actionPath) {
-      return `Searched ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
     }
     if (actionType === "listFiles") {
       return "Listed files";
     }
     if (actionType === "search") {
-      return "Ran search";
+      return formatSearchCommandActionLabel({
+        path: actionPath,
+        query: actionQuery,
+      });
     }
     if (fallbackName) {
       return fallbackName;

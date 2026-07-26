@@ -48,6 +48,50 @@ describe("messaging tool activity", () => {
     });
   });
 
+  it("summarizes Codex searches by query instead of root path", () => {
+    const activity = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "codex-search-1",
+        type: "commandExecution",
+        command: "rg -n -i 'grok' .",
+        commandActions: [
+          {
+            type: "search",
+            command: "rg -n -i 'grok' .",
+            query: "grok",
+            path: ".",
+          },
+        ],
+      }),
+    );
+
+    expect(activity).toMatchObject({
+      kind: "search",
+      title: 'Searched "grok"',
+    });
+  });
+
+  it("redacts sensitive Codex search queries in messaging summaries", () => {
+    const activity = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "codex-search-sensitive",
+        type: "commandExecution",
+        command: "rg -n 'token=abc123' .",
+        commandActions: [
+          {
+            type: "search",
+            command: "rg -n 'token=abc123' .",
+            query: "token=abc123",
+            path: ".",
+          },
+        ],
+      }),
+    );
+
+    expect(activity?.title).toBe('Searched "token=[redacted]"');
+    expect(activity?.title).not.toContain("abc123");
+  });
+
   it("summarizes Grok read_file dynamic tools with path context", () => {
     const activity = summarizeToolActivityFromBackendEvent(
       buildCompletedItem({

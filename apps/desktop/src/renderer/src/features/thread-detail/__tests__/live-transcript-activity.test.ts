@@ -56,6 +56,55 @@ describe("buildLiveToolDetails", () => {
     ]);
   });
 
+  it("labels Codex command searches with the query instead of the root path", () => {
+    const details = buildLiveToolDetails({
+      type: "commandExecution",
+      id: "command-search",
+      status: "completed",
+      command: "rg -n -i 'grok' .",
+      commandActions: [
+        {
+          type: "search",
+          command: "rg -n -i 'grok' .",
+          query: "grok",
+          path: ".",
+        },
+      ],
+    });
+
+    expect(details).toEqual([
+      {
+        id: "command-search",
+        kind: "read",
+        label: 'Searched "grok"',
+        status: "completed",
+        command: expect.objectContaining({
+          displayCommand: "rg -n -i 'grok' .",
+          rawCommand: "rg -n -i 'grok' .",
+        }),
+      },
+    ]);
+  });
+
+  it("uses a quiet search label when Codex only identifies the root path", () => {
+    const details = buildLiveToolDetails({
+      type: "commandExecution",
+      id: "command-search-root",
+      status: "completed",
+      command: "rg --files .",
+      commandActions: [
+        {
+          type: "search",
+          command: "rg --files .",
+          query: null,
+          path: ".",
+        },
+      ],
+    });
+
+    expect(details[0]?.label).toBe("Searched");
+  });
+
   it("surfaces collaboration agent activity from live tool items", () => {
     const details = buildLiveToolDetails({
       type: "collabAgentToolCall",
