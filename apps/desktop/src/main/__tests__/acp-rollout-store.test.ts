@@ -69,7 +69,7 @@ describe("AcpRolloutStore", () => {
     expect(fs.existsSync(path.join(tempDir, "acp_3Agrok"))).toBe(false);
   });
 
-  it("merges legacy encoded backend rollout history with new records", () => {
+  it("migrates legacy encoded backend rollout history before writing", () => {
     const backendId = "acp:grok" as AcpBackendId;
     const legacyRolloutPath = path.join(
       tempDir,
@@ -104,13 +104,106 @@ describe("AcpRolloutStore", () => {
     });
     const replay = store.readReplay({ backendId, sessionId: "session-1" });
 
+    expect(fs.existsSync(path.join(tempDir, "acp_3Agrok"))).toBe(false);
     expect(
       fs.existsSync(path.join(tempDir, "acp_grok", "session-1", "rollout.jsonl")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(tempDir, ".backend-path-layout-v2")),
     ).toBe(true);
     expect(replay.messages.map((message) => message.text)).toEqual([
       "from the old path",
       "from the new path",
     ]);
+  });
+
+  it("keeps colliding legacy backend names disjoint after migration", () => {
+    const sessionId = "shared-session";
+    const writeLegacyRollout = (
+      backendDirectory: string,
+      prompt: string,
+    ): void => {
+      const rolloutPath = path.join(
+        tempDir,
+        backendDirectory,
+        sessionId,
+        "rollout.jsonl",
+      );
+      fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+      fs.writeFileSync(
+        rolloutPath,
+        `${JSON.stringify({
+          type: "update",
+          receivedAt: 1000,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt,
+            turnId: "turn-1",
+          },
+        })}\n`,
+        "utf8",
+      );
+    };
+    writeLegacyRollout("acp_3Agrok", "grok history");
+    writeLegacyRollout("acp_3A3Agrok", "3Agrok history");
+
+    const store = new AcpRolloutStore(tempDir);
+
+    expect(
+      store
+        .readReplay({
+          backendId: "acp:grok" as AcpBackendId,
+          sessionId,
+        })
+        .messages.map((message) => message.text),
+    ).toEqual(["grok history"]);
+    expect(
+      store
+        .readReplay({
+          backendId: "acp:3Agrok" as AcpBackendId,
+          sessionId,
+        })
+        .messages.map((message) => message.text),
+    ).toEqual(["3Agrok history"]);
+    expect(fs.existsSync(path.join(tempDir, "acp_grok"))).toBe(true);
+    expect(fs.existsSync(path.join(tempDir, "acp_3Agrok"))).toBe(true);
+    expect(fs.existsSync(path.join(tempDir, "acp_3A3Agrok"))).toBe(false);
+  });
+
+  it("does not remigrate new backend directories on later startups", () => {
+    const backendId = "acp:3Agrok" as AcpBackendId;
+    const firstStore = new AcpRolloutStore(tempDir);
+    firstStore.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "belongs to 3Agrok",
+        turnId: "turn-1",
+      },
+    });
+
+    const secondStore = new AcpRolloutStore(tempDir);
+
+    expect(
+      secondStore
+        .readReplay({ backendId, sessionId: "session-1" })
+        .messages.map((message) => message.text),
+    ).toEqual(["belongs to 3Agrok"]);
+    expect(fs.existsSync(path.join(tempDir, "acp_3Agrok"))).toBe(true);
+    expect(fs.existsSync(path.join(tempDir, "acp_grok"))).toBe(false);
+  });
+
+  it("refuses to overwrite an existing migration destination", () => {
+    fs.mkdirSync(path.join(tempDir, "acp_3Agrok"), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, "acp_grok"), { recursive: true });
+
+    expect(() => new AcpRolloutStore(tempDir)).toThrow(
+      /both paths exist/,
+    );
+    expect(fs.existsSync(path.join(tempDir, "acp_3Agrok"))).toBe(true);
+    expect(fs.existsSync(path.join(tempDir, "acp_grok"))).toBe(true);
   });
 
   it("hides Qwen thought chunks when restoring rollout replay", () => {
