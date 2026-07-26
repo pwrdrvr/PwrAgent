@@ -31,8 +31,13 @@ import {
   useThreadLinks,
   type ThreadLinkContextValue,
 } from "../../lib/thread-links";
+import {
+  resolvePullRequestHref,
+  usePullRequestLinks,
+} from "../../lib/pull-request-links";
 import { expandTildePath, tildifyPath } from "../../lib/tildify-path";
 import { SkillChip } from "../composer/SkillChip";
+import { PullRequestLinkChip } from "../pr-status/PullRequestLinkChip";
 import { ThreadChip } from "./ThreadChip";
 import { remarkTableProfile } from "./remark-table-profile";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
@@ -111,6 +116,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
   const threadLinks = useThreadLinks();
+  const pullRequestLinks = usePullRequestLinks();
   const editorApplication = useMemo(
     () =>
       props.applications?.editors.find(
@@ -210,6 +216,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           // the author's text rather than an anchor that goes nowhere — and
           // never let `pwragent:` reach the external-open path below.
           return <>{anchorProps.children}</>;
+        }
+
+        const pullRequest = resolvePullRequestHref(href, pullRequestLinks);
+        if (pullRequest) {
+          return <PullRequestLinkChip pr={pullRequest} />;
         }
 
         if (label.startsWith("@") && localTarget) {
@@ -440,6 +451,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       openLocalFileInEditor,
       openLocalFileLink,
       props.desktopApi,
+      pullRequestLinks,
       skillsByPath,
       threadLinks,
     ]
