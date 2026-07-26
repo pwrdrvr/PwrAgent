@@ -41,7 +41,10 @@ import {
   acpCliPathOverrideFor,
   readDesktopSettingsConfigSafe,
 } from "../settings/desktop-config";
-import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
+import {
+  acpToolUpdateNotifications,
+  acpTurnCompletedUsageNotification,
+} from "../acp/acp-live-notifications";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import {
@@ -1318,6 +1321,17 @@ export class AcpBackendAdapter {
           await this.emit({
             backend: agent.backendId,
             notification,
+          });
+        }
+        const usageNotification = acpTurnCompletedUsageNotification({
+          threadId: sessionId,
+          turnId,
+          update,
+        });
+        if (usageNotification) {
+          await this.emit({
+            backend: agent.backendId,
+            notification: usageNotification,
           });
         }
         if (updateKind === "turn_finished" && turnId) {

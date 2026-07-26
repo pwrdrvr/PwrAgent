@@ -34,6 +34,7 @@ export class AcpSessionReplayNormalizer {
   private messages: AppServerThreadMessage[] = [];
   private status: AppServerThreadStatus = "idle";
   private currentTurnId?: string;
+  private currentTurnStartedAt?: number;
   private activeAssistantMessageId?: string;
   private activeAssistantMessagePhase?: AppServerTranscriptPhase;
   private assistantMessageSequence = 0;
@@ -53,6 +54,7 @@ export class AcpSessionReplayNormalizer {
     const id = `user:${params.turnId}`;
     const normalizedPrompt = normalizeUserPrompt(params.prompt, params.parts);
     this.currentTurnId = params.turnId;
+    this.currentTurnStartedAt = createdAt;
     this.activeAssistantMessageId = undefined;
     this.activeAssistantMessagePhase = undefined;
     this.assistantMessageSequence = 0;
@@ -70,14 +72,20 @@ export class AcpSessionReplayNormalizer {
     return this.replay();
   }
 
-  recordTurnFinished(turnId?: string): AppServerThreadReplay {
-    if (turnId) {
-      this.removeAgentWaitingActivity(turnId);
+  recordTurnFinished(
+    turnId?: string,
+    completedAt = Date.now(),
+  ): AppServerThreadReplay {
+    const completedTurnId = turnId ?? this.currentTurnId;
+    if (completedTurnId) {
+      this.removeAgentWaitingActivity(completedTurnId);
+      this.completeTurnEntries(completedTurnId, "completed", completedAt);
     } else {
       this.removeCurrentAgentWaitingActivity();
     }
     if (!turnId || this.currentTurnId === turnId) {
       this.currentTurnId = undefined;
+      this.currentTurnStartedAt = undefined;
     }
     this.activeAssistantMessageId = undefined;
     this.activeAssistantMessagePhase = undefined;
@@ -93,8 +101,10 @@ export class AcpSessionReplayNormalizer {
   }): AppServerThreadReplay {
     const createdAt = params.receivedAt ?? Date.now();
     this.removeAgentWaitingActivity(params.turnId);
+    this.completeTurnEntries(params.turnId, "failed", createdAt);
     if (this.currentTurnId === params.turnId) {
       this.currentTurnId = undefined;
+      this.currentTurnStartedAt = undefined;
     }
     this.activeAssistantMessageId = undefined;
     this.activeAssistantMessagePhase = undefined;
@@ -158,8 +168,24 @@ export class AcpSessionReplayNormalizer {
       this.applyUserMessageChunk(update, createdAt);
     } else if (kind === "available_commands_update") {
       // Command metadata belongs in provider capabilities, not the transcript.
-    } else if (kind === "config_option_update" || kind === "current_mode_update") {
+    } else if (
+      kind === "config_option_update" ||
+      kind === "current_mode_update" ||
+      kind === "model_changed"
+    ) {
       // Runtime configuration changes belong in ACP session metadata.
+    } else if (
+      kind === "tool_call_delta_chunk" ||
+      kind === "pending_interaction" ||
+      kind === "interaction_resolved"
+    ) {
+      // Grok vendor lifecycle updates that either precede canonical ACP tool
+      // calls or mirror permission state handled by ACP requests.
+    } else if (kind === "turn_completed") {
+      // Grok's durable vendor terminal carries usage (forwarded separately
+      // through thread/tokenUsage/updated) and can close an interrupted replay
+      // even when PwrAgent's synthetic turn_finished was never persisted.
+      this.recordTurnFinished(undefined, createdAt);
     } else if (readAcpTopicTitle(update.update)) {
       // Topic updates are thread metadata, not transcript entries.
     } else {
@@ -177,7 +203,7 @@ export class AcpSessionReplayNormalizer {
       } else if (kind === "turn_started") {
         this.status = "active";
       } else if (kind === "turn_finished") {
-        this.recordTurnFinished(readString(update.update, "turnId"));
+        this.recordTurnFinished(readString(update.update, "turnId"), createdAt);
       } else if (kind === "pwragent_turn_failed") {
         this.recordTurnFailed({
           sessionId: update.sessionId,
@@ -331,17 +357,18 @@ export class AcpSessionReplayNormalizer {
   }
 
   private upsertActivity(activity: AppServerThreadActivityEntry): void {
+    const activityWithTurn = this.withCurrentTurn(activity);
     const index = this.entries.findIndex(
       (existing): existing is AppServerThreadActivityEntry =>
-        existing.type === "activity" && existing.id === activity.id,
+        existing.type === "activity" && existing.id === activityWithTurn.id,
     );
     if (index === -1) {
-      this.entries.push(activity);
+      this.entries.push(activityWithTurn);
       return;
     }
     this.entries[index] = mergeActivity(
       this.entries[index] as AppServerThreadActivityEntry,
-      activity,
+      activityWithTurn,
     );
   }
 
@@ -381,12 +408,15 @@ export class AcpSessionReplayNormalizer {
   }
 
   private upsertEntry(entry: AppServerThreadEntry): void {
-    const index = this.entries.findIndex((existing) => existing.id === entry.id);
+    const entryWithTurn = this.withCurrentTurn(entry);
+    const index = this.entries.findIndex(
+      (existing) => existing.id === entryWithTurn.id,
+    );
     if (index === -1) {
-      this.entries.push(entry);
+      this.entries.push(entryWithTurn);
       return;
     }
-    this.entries[index] = entry;
+    this.entries[index] = entryWithTurn;
   }
 
   private upsertMessage(message: AppServerThreadMessage): void {
@@ -437,15 +467,58 @@ export class AcpSessionReplayNormalizer {
     if (existingEntry) {
       existingEntry.text = appendTranscriptChunk(existingEntry.text, params.text);
     } else {
-      this.entries.push({
+      this.entries.push(this.withCurrentTurn({
         type: "message",
         id: params.id,
         phase: params.phase,
         role: params.role,
         text: params.text,
         createdAt: params.createdAt,
-      });
+      }));
     }
+  }
+
+  private withCurrentTurn<T extends AppServerThreadEntry>(entry: T): T {
+    if (!this.currentTurnId) {
+      return entry;
+    }
+    return {
+      ...entry,
+      turn: {
+        id: this.currentTurnId,
+        status: "in_progress",
+        ...(this.currentTurnStartedAt !== undefined
+          ? { startedAt: this.currentTurnStartedAt }
+          : {}),
+      },
+    };
+  }
+
+  private completeTurnEntries(
+    turnId: string,
+    status: "completed" | "failed",
+    completedAt: number,
+  ): void {
+    this.entries = this.entries.map((entry) => {
+      if (entry.turn?.id !== turnId) {
+        return entry;
+      }
+      const startedAt = entry.turn.startedAt ?? this.currentTurnStartedAt;
+      return {
+        ...entry,
+        turn: {
+          ...entry.turn,
+          status,
+          completedAt,
+          ...(startedAt !== undefined
+            ? {
+                startedAt,
+                durationMs: Math.max(0, completedAt - startedAt),
+              }
+            : {}),
+        },
+      };
+    });
   }
 }
 

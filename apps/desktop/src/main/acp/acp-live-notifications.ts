@@ -37,6 +37,55 @@ export function acpToolUpdateNotifications(params: {
   ];
 }
 
+export function acpTurnCompletedUsageNotification(params: {
+  threadId: string;
+  turnId?: string;
+  update: Record<string, unknown>;
+}): AppServerNotification | undefined {
+  if (readKind(params.update) !== "turn_completed") {
+    return undefined;
+  }
+  const usage = asRecord(params.update.usage);
+  if (!usage) {
+    return undefined;
+  }
+  const inputTokens = readNumber(usage, "inputTokens");
+  const cachedInputTokens = readNumber(usage, "cachedReadTokens");
+  const outputTokens = readNumber(usage, "outputTokens");
+  const reasoningOutputTokens = readNumber(usage, "reasoningTokens");
+  const totalTokens = readNumber(usage, "totalTokens");
+  if (
+    inputTokens === undefined &&
+    outputTokens === undefined &&
+    totalTokens === undefined
+  ) {
+    return undefined;
+  }
+  const modelUsage = asRecord(usage.modelUsage);
+  const model = modelUsage ? Object.keys(modelUsage)[0] : undefined;
+  return {
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: params.threadId,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      ...(model ? { model } : {}),
+      tokenUsage: {
+        last_token_usage: {
+          ...(inputTokens !== undefined ? { input_tokens: inputTokens } : {}),
+          ...(cachedInputTokens !== undefined
+            ? { cached_input_tokens: cachedInputTokens }
+            : {}),
+          ...(outputTokens !== undefined ? { output_tokens: outputTokens } : {}),
+          ...(reasoningOutputTokens !== undefined
+            ? { reasoning_output_tokens: reasoningOutputTokens }
+            : {}),
+          ...(totalTokens !== undefined ? { total_tokens: totalTokens } : {}),
+        },
+      },
+    },
+  } as AppServerNotification;
+}
+
 function liveItemForAcpToolUpdate(
   update: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -153,6 +202,22 @@ function readString(
 ): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readNumber(
+  record: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function readFirstLocationPath(record: Record<string, unknown>): string | undefined {

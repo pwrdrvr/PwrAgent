@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  acpSessionRuntimeStateFromUpdate,
   acpRuntimeSupportsSessionHistoryReplay,
   normalizeAcpRuntimeCapabilities,
 } from "../acp/acp-runtime-capabilities";
@@ -90,5 +91,21 @@ describe("ACP runtime capabilities", () => {
     });
 
     expect(capabilities?.agentCapabilities?.prompt?.image).toBe(true);
+  });
+
+  it("tracks Grok model_changed vendor updates as session runtime state", () => {
+    expect(
+      acpSessionRuntimeStateFromUpdate(
+        {
+          sessionUpdate: "model_changed",
+          model_id: "grok-4.5",
+          reasoning_effort: "high",
+        },
+        1000,
+      ),
+    ).toEqual({
+      currentModelId: "grok-4.5",
+      updatedAt: 1000,
+    });
   });
 });

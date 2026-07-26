@@ -995,6 +995,125 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("silently ignores Grok tool-stream and interaction lifecycle updates", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    for (const [index, update] of [
+      {
+        sessionUpdate: "tool_call_delta_chunk",
+        tool_call_id: "grep-1",
+        tool_index: 0,
+        name: "grep",
+      },
+      {
+        sessionUpdate: "pending_interaction",
+        tool_call_id: "grep-1",
+        kind: "permission",
+      },
+      {
+        sessionUpdate: "interaction_resolved",
+        tool_call_id: "grep-1",
+      },
+      {
+        sessionUpdate: "model_changed",
+        model_id: "grok-4.5",
+        reasoning_effort: "high",
+      },
+      {
+        sessionUpdate: "turn_completed",
+        prompt_id: "prompt-1",
+        stop_reason: "end_turn",
+        usage: {
+          inputTokens: 1_200,
+          outputTokens: 50,
+          totalTokens: 1_250,
+        },
+      },
+    ].entries()) {
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1000 + index,
+        update,
+      });
+    }
+
+    expect(normalizer.replay().entries).toEqual([]);
+  });
+
+  it("marks all ACP work entries with their completed turn metadata", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.recordUserPrompt({
+      sessionId: "session-1",
+      prompt: "Inspect the renderer.",
+      turnId: "turn-1",
+      receivedAt: 1000,
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1100,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "I will search first." },
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1200,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "grep-1",
+        kind: "search",
+        title: "grep",
+        status: "completed",
+      },
+    });
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 2500,
+      update: {
+        sessionUpdate: "turn_completed",
+        prompt_id: "prompt-1",
+        stop_reason: "end_turn",
+        usage: {
+          inputTokens: 1_200,
+          outputTokens: 50,
+          totalTokens: 1_250,
+        },
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        id: "user:turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          startedAt: 1000,
+          completedAt: 2500,
+          durationMs: 1500,
+        },
+      }),
+      expect.objectContaining({
+        type: "message",
+        phase: "commentary",
+        turn: expect.objectContaining({
+          id: "turn-1",
+          status: "completed",
+        }),
+      }),
+      expect.objectContaining({
+        type: "activity",
+        id: "grep-1",
+        turn: expect.objectContaining({
+          id: "turn-1",
+          status: "completed",
+        }),
+      }),
+    ]);
+  });
+
   it("splits assistant response messages around tool activity", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

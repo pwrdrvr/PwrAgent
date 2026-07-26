@@ -358,12 +358,12 @@ export class AcpAgentClient {
       );
       result = await promptRequest;
     } catch (error) {
-      this.finishTrackedTurn(params.sessionId);
+      this.finishTrackedTurn(params.sessionId, this.now());
       this.recordPromptFailure(params.sessionId, turnId, error);
       throw error;
     }
-    this.finishTrackedTurn(params.sessionId);
     const finishedAt = this.now();
+    this.finishTrackedTurn(params.sessionId, finishedAt);
     this.appendHistoryUpdate(params.sessionId, finishedAt, {
       kind: "turn_finished",
       turnId,
@@ -454,8 +454,8 @@ export class AcpAgentClient {
     );
     void promptRequest
       .then(() => {
-        const finished = this.finishTrackedTurn(params.sessionId);
         const receivedAt = this.now();
+        const finished = this.finishTrackedTurn(params.sessionId, receivedAt);
         this.appendHistoryUpdate(params.sessionId, receivedAt, {
           kind: "turn_finished",
           ...(finished.turnId ? { turnId: finished.turnId } : {}),
@@ -472,7 +472,7 @@ export class AcpAgentClient {
         });
       })
       .catch((error) => {
-        this.finishTrackedTurn(params.sessionId);
+        this.finishTrackedTurn(params.sessionId, this.now());
         this.recordPromptFailure(params.sessionId, turnId, error);
         return Promise.resolve(
           this.options.onPromptError?.({
@@ -1013,7 +1013,7 @@ export class AcpAgentClient {
     this.updateSessionStatus(sessionId, "active");
   }
 
-  private finishTrackedTurn(sessionId: string): {
+  private finishTrackedTurn(sessionId: string, completedAt: number): {
     assistantText: string;
     replay: AppServerThreadReplay;
     turnId?: string;
@@ -1022,6 +1022,7 @@ export class AcpAgentClient {
     this.activeTurns.delete(sessionId);
     const replay = this.normalizerFor(sessionId).recordTurnFinished(
       activeTurn?.turnId,
+      completedAt,
     );
     this.updateSessionStatus(sessionId, "idle");
     return {
