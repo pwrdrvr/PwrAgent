@@ -343,6 +343,97 @@ describe("GithubPrFetcher", () => {
     return { fetcher, exec, probeGhAvailable };
   }
 
+  describe("primeBranchLookup (batched in-process discovery)", () => {
+    const primedPr = {
+      provider: "github.com",
+      number: 42,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing" as const,
+      checkState: "passing" as const,
+      lifecycleState: "open" as const,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/42",
+    };
+
+    it("answers from the primed value without spawning gh", async () => {
+      const { fetcher, exec } = buildFetcher();
+      fetcher.primeBranchLookup([
+        { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
+      ]);
+
+      const result = await fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/repo",
+        branch: "feat/x",
+      });
+
+      expect(result).toEqual([primedPr]);
+      expect(exec).not.toHaveBeenCalled();
+    });
+
+    it("honors a primed empty answer — that is an authoritative 'no PRs'", async () => {
+      const { fetcher, exec } = buildFetcher();
+      fetcher.primeBranchLookup([{ cwd: "/repo", branch: "feat/x", prs: [] }]);
+
+      await expect(
+        fetcher.fetchAllPullRequestsForBranch({ cwd: "/repo", branch: "feat/x" }),
+      ).resolves.toEqual([]);
+      expect(exec).not.toHaveBeenCalled();
+    });
+
+    it("is single-use, so a later refresh gets its own fresh read", async () => {
+      const { fetcher, exec } = buildFetcher();
+      fetcher.primeBranchLookup([
+        { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
+      ]);
+
+      await fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/repo",
+        branch: "feat/x",
+      });
+      await fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/repo",
+        branch: "feat/x",
+      });
+
+      // Second call fell through to gh rather than silently reusing the
+      // prefetch a user-triggered refresh did not ask for.
+      expect(exec).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not answer for a different branch or directory", async () => {
+      const { fetcher, exec } = buildFetcher();
+      fetcher.primeBranchLookup([
+        { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
+      ]);
+
+      await fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/repo",
+        branch: "feat/other",
+      });
+      await fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/other-repo",
+        branch: "feat/x",
+      });
+
+      expect(exec).toHaveBeenCalledTimes(2);
+    });
+
+    it("falls back to gh once the primed value has expired", async () => {
+      const { fetcher, exec } = buildFetcher();
+      fetcher.primeBranchLookup(
+        [{ cwd: "/repo", branch: "feat/x", prs: [primedPr] }],
+        -1,
+      );
+
+      await fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/repo",
+        branch: "feat/x",
+      });
+
+      expect(exec).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("fetchOpenPullRequests (batched by repo)", () => {
     it("returns [] without invoking gh when gh is not available", async () => {
       const { fetcher, exec } = buildFetcher({ ghAvailable: false });

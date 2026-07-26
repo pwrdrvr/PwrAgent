@@ -141,6 +141,22 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
     ]);
   });
 
+  it("writes the background PR polling flag", () => {
+    const edits = desktopSettingsPatchToEdits({
+      experimental: {
+        backgroundPrPolling: true,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["experimental", "background_pr_polling"],
+        value: true,
+      },
+    ]);
+  });
+
   it("writes the thread pricing summary flag", () => {
     const edits = desktopSettingsPatchToEdits({
       experimental: {

@@ -693,6 +693,20 @@ describe("SettingsScreen", () => {
       });
     });
 
+    // The snapshot fixture omits `backgroundPrPolling` entirely, which is the
+    // real shape an older/stale snapshot has — the toggle must still render
+    // (unchecked, from the shared default) rather than crash.
+    const backgroundPrPollingSwitch = screen.getByRole("switch", {
+      name: "Enable background pull request status",
+    });
+    expect(backgroundPrPollingSwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(backgroundPrPollingSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { backgroundPrPolling: true },
+      });
+    });
+
     fireEvent.click(
       screen.getByRole("switch", {
         name: "Enable Codex skill questions",

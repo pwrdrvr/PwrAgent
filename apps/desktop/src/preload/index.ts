@@ -133,6 +133,7 @@ import type {
   UnbindMessagingThreadRequest,
   UnbindMessagingThreadResponse,
   RefreshThreadPullRequestsRequest,
+  SetPullRequestPollingFocusRequest,
   RefreshThreadPullRequestsResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
@@ -388,6 +389,7 @@ import {
   NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
   NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+  NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
@@ -1179,6 +1181,10 @@ const desktopApi = Object.freeze({
       NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
       request,
     ),
+  setPullRequestPollingFocus: async (
+    request: SetPullRequestPollingFocusRequest,
+  ): Promise<void> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL, request),
   detachThreadPullRequest: async (
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse> =>

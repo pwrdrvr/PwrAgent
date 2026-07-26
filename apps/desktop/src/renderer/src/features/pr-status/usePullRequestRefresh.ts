@@ -5,6 +5,11 @@ import { resolveFetchableDirectoryPaths } from "./resolveFetchableDirectoryPaths
 import type { DesktopApi } from "../../lib/desktop-api";
 
 const SELECTED_REFRESH_INTERVAL_MS = 60_000;
+/**
+ * Selection can change many times a second under keyboard nav; the poller only
+ * needs the resting value.
+ */
+const POLLING_FOCUS_DEBOUNCE_MS = 400;
 
 type PullRequestLookupTarget = {
   branch: string;
@@ -101,6 +106,31 @@ export function usePullRequestRefresh(params: {
       window.clearInterval(intervalId);
     };
   }, [selectedRefreshKey, refresh]);
+
+  // Tell main's background PR poller which thread the operator is actually
+  // looking at, so its PRs land on the fast tier while the other 20-30 open
+  // projects poll slowly. Main has no other way to know this — selection lives
+  // entirely in renderer route state.
+  //
+  // This does NOT replace the interval above: that one re-runs a *branch*
+  // lookup, which is what discovers a PR newly opened on the selected branch.
+  // The poller only refreshes PRs it already knows by number.
+  const selectedThreadKey = selected
+    ? buildThreadIdentityKey(selected.source, selected.id)
+    : undefined;
+  useEffect(() => {
+    const setFocus = desktopApi?.setPullRequestPollingFocus;
+    if (!setFocus) return;
+    const threadKeys = selectedThreadKey ? [selectedThreadKey] : [];
+    const timeoutId = window.setTimeout(() => {
+      void setFocus({ threadKeys }).catch(() => {
+        // Logged in main — keep the renderer silent.
+      });
+    }, POLLING_FOCUS_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [desktopApi, selectedThreadKey]);
 
   // Hover prefetch: dedupe so a flood of mouseenter events for the same
   // thread doesn't trigger a flood of gh subprocesses. User-triggered

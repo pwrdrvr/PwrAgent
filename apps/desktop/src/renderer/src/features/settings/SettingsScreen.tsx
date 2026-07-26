@@ -414,6 +414,11 @@ function SettingsSectionBody(props: {
             experimental: { lightweightNavigationRefresh: enabled },
           });
         }}
+        onBackgroundPrPollingChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { backgroundPrPolling: enabled },
+          });
+        }}
         onThreadPricingSummaryChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { threadPricingSummary: enabled },

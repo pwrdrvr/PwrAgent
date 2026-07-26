@@ -103,6 +103,7 @@ export type DesktopSettingsConfig = {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
     lightweightNavigationRefresh?: boolean;
+    backgroundPrPolling?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
@@ -654,6 +655,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "lightweight_navigation_refresh"],
       patch.experimental.lightweightNavigationRefresh,
+    );
+  }
+  if (patch.experimental?.backgroundPrPolling !== undefined) {
+    set(
+      ["experimental", "background_pr_polling"],
+      patch.experimental.backgroundPrPolling,
     );
   }
   if (patch.experimental?.threadPricingSummary !== undefined) {
@@ -1323,6 +1330,7 @@ function normalizeDesktopConfig(
       lightweightNavigationRefresh: readBoolean(
         experimental?.lightweight_navigation_refresh,
       ),
+      backgroundPrPolling: readBoolean(experimental?.background_pr_polling),
       threadPricingSummary: readBoolean(experimental?.thread_pricing_summary),
       threadPricingDisplayUsd: readBoolean(
         experimental?.thread_pricing_display_usd,

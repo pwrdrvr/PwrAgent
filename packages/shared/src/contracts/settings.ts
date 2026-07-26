@@ -21,6 +21,13 @@ export type DesktopWorktreeStorageLocation =
 export const DESKTOP_WORKTREE_STORAGE_DEFAULT: DesktopWorktreeStorageLocation =
   "user-home";
 
+/**
+ * Background PR status polling ships opt-in while it is experimental. With it
+ * off, PR chips behave exactly as they did before the poller existed, so the
+ * flag is a true kill switch rather than a tuning knob.
+ */
+export const DEFAULT_BACKGROUND_PR_POLLING = false;
+
 export const DESKTOP_UPDATE_CHANNELS = ["latest", "prerelease"] as const;
 
 export type DesktopUpdateChannel = (typeof DESKTOP_UPDATE_CHANNELS)[number];
@@ -481,6 +488,14 @@ export type DesktopSettingsSnapshot = {
      */
     lightweightNavigationRefresh: DesktopSettingsValue<boolean>;
     /**
+     * Gates background pull-request status polling. When disabled, PR chips
+     * refresh only on the pre-existing triggers (selecting a thread, hovering
+     * a row, a turn finishing). When enabled, a main-process poller keeps
+     * every open project's non-terminal PRs fresh on a priority-tiered
+     * cadence, and a slow rotation looks for newly opened PRs.
+     */
+    backgroundPrPolling?: DesktopSettingsValue<boolean>;
+    /**
      * Gates the thread context-rail Pricing tab. The pricing ledger may still
      * collect data for validation, but the user-visible summary stays hidden
      * while this experimental setting is disabled.
@@ -742,6 +757,7 @@ export type DesktopSettingsConfigPatch = {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
     lightweightNavigationRefresh?: boolean;
+    backgroundPrPolling?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
