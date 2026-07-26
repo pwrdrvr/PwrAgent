@@ -118,6 +118,57 @@ describe("pull request links in transcript markdown", () => {
     expect(screen.getByText("Draft PR:").parentElement).toBe(markdownNode);
   });
 
+  it("preserves an authored PR deep link while hydrating its live status", () => {
+    const deepLink = `${PR_URL}/files?diff=split#discussion_r1`;
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderWithPullRequests(`Review [the changed files](${deepLink})`, [
+      prSummary(),
+    ]);
+
+    const chip = screen.getByRole("button", {
+      name: /Open Giphy\/giphy-services#13290 \(draft · checks pending\) in browser/,
+    });
+    expect(chip).toHaveClass("pr-chip--pending", "pr-chip--draft");
+
+    fireEvent.click(chip);
+    expect(open).toHaveBeenCalledWith(
+      deepLink,
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
+  it("returns to unknown status when the last matching PR metadata disappears", () => {
+    const text = `Draft PR: [Giphy/giphy-services#13290](${PR_URL})`;
+    const { rerender } = renderWithPullRequests(text, [prSummary()]);
+
+    const hydratedChip = screen.getByRole("button", {
+      name: /draft · checks pending/,
+    });
+    fireEvent.mouseEnter(hydratedChip);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "Document JDK 17 for EMR jobs",
+    );
+
+    rerender(
+      <PullRequestLinkProvider threads={[threadSummary([])]}>
+        <ThreadMarkdown text={text} />
+      </PullRequestLinkProvider>,
+    );
+
+    const fallbackChip = screen.getByRole("button", {
+      name: /Open Giphy\/giphy-services#13290 \(status unknown\) in browser/,
+    });
+    expect(fallbackChip).toHaveClass("pr-chip--unknown");
+    expect(fallbackChip).not.toHaveClass("pr-chip--draft");
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "Giphy/giphy-services#13290 — status unknown",
+    );
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent(
+      "Document JDK 17 for EMR jobs",
+    );
+  });
+
   it("renders an unhydrated bare GitHub PR URL as an unknown-status chip", () => {
     renderWithPullRequests(`Draft PR: ${PR_URL}`, []);
 

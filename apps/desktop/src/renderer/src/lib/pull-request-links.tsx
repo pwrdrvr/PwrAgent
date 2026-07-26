@@ -46,6 +46,7 @@ function samePullRequestChip(
  * are notified; ThreadMarkdown stays behind a stable context value.
  */
 class PullRequestLinkMetadataStore {
+  private hydratedSnapshots = new WeakMap<PrSummary, Map<string, PrSummary>>();
   private listeners = new Map<string, Set<() => void>>();
   private prs = new Map<string, PrSummary>();
 
@@ -54,7 +55,29 @@ class PullRequestLinkMetadataStore {
   }
 
   getSnapshot(fallback: PrSummary): PrSummary {
-    return this.prs.get(buildPullRequestStatusKey(fallback)) ?? fallback;
+    const live = this.prs.get(buildPullRequestStatusKey(fallback));
+    if (!live) {
+      return fallback;
+    }
+    if (live.url === fallback.url) {
+      return live;
+    }
+
+    // Status/title metadata belongs to the PR identity, but the URL belongs to
+    // this authored transcript link. Preserve deep links such as /files or a
+    // discussion fragment instead of replacing them with the cached root URL.
+    const snapshotsByUrl = this.hydratedSnapshots.get(live) ?? new Map();
+    const cached = snapshotsByUrl.get(fallback.url);
+    if (cached) {
+      return cached;
+    }
+    const hydrated = {
+      ...live,
+      url: fallback.url,
+    };
+    snapshotsByUrl.set(fallback.url, hydrated);
+    this.hydratedSnapshots.set(live, snapshotsByUrl);
+    return hydrated;
   }
 
   subscribe(pr: PrSummary, listener: () => void): () => void {
@@ -138,8 +161,10 @@ export function PullRequestLinkProvider(props: {
         return store.getSnapshot(fallback);
       },
       resolve(href) {
-        const fallback = parseGitHubPullRequestUrl(href);
-        return fallback ? store.getSnapshot(fallback) : undefined;
+        // Keep the parsed unknown summary as the chip's durable fallback. The
+        // live hook hydrates it synchronously from the store, and can return to
+        // it if the last matching navigation PR is later detached.
+        return parseGitHubPullRequestUrl(href);
       },
       subscribe(pr, listener) {
         return store.subscribe(pr, listener);
