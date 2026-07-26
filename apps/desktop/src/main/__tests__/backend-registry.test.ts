@@ -5971,7 +5971,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("advertises PwrAgent dynamic tools when continuing existing Codex threads", async () => {
+  it("does not attempt to refresh dynamic tools on existing Codex threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
@@ -5993,21 +5993,12 @@ script = "echo setup"
       input: [{ type: "text", text: "continue" }],
     });
 
-    expectPwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools, [
-      "list_automations",
-      "manage_pwragent",
-      "search_threads",
-      "read_thread",
-      "get_current_messaging_surface",
-      "handoff_task",
-      "send_message_to_thread",
-      "create_monitor_delegation",
-    ]);
+    expect(codexClient.lastStartTurnParams?.dynamicTools).toBeUndefined();
 
     await registry.close();
   });
 
-  it("preserves Agent dynamic tools when continuing existing Agent Codex threads", async () => {
+  it("relies on persisted dynamic tools when continuing Agent Codex threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
@@ -6045,14 +6036,7 @@ script = "echo setup"
       input: [{ type: "text", text: "continue" }],
     });
 
-    expectPwragentDynamicTools(codexClient.lastStartTurnParams?.dynamicTools, [
-      "list_automations",
-      "search_threads",
-      "manage_pwragent",
-      "attach_thread_here",
-      "handoff_task",
-      "create_monitor_delegation",
-    ]);
+    expect(codexClient.lastStartTurnParams?.dynamicTools).toBeUndefined();
 
     await registry.close();
   });

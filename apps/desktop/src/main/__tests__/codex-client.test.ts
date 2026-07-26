@@ -5573,7 +5573,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("uses the 0.144 App Server wire contracts for all dynamic-tool request sites", async () => {
+  it("uses the 0.144 App Server wire contracts and advertises tools only at thread start", async () => {
     MockTransport.serverVersion = "0.144.0";
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const dynamicTools: DynamicToolSpec[] = [
@@ -5612,7 +5612,6 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-existing",
       input: [{ type: "text", text: "Continue" }],
       approvalPolicy: "on-failure",
-      dynamicTools,
     });
 
     const requests = MockTransport.instances.at(-1)!.sentMessages.map(
@@ -5640,9 +5639,9 @@ describe("CodexAppServerClient", () => {
       expect(payload).toMatchObject({ approvalPolicy: "on-request" });
     }
     expect(turnStart).toMatchObject({ approvalPolicy: "on-request" });
-    for (const payload of [threadStart, threadResume, turnStart]) {
-      expect(payload?.dynamicTools).toEqual(dynamicTools);
-    }
+    expect(threadStart?.dynamicTools).toEqual(dynamicTools);
+    expect(threadResume).not.toHaveProperty("dynamicTools");
+    expect(turnStart).not.toHaveProperty("dynamicTools");
 
     await client.close();
   });
@@ -5698,7 +5697,6 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-existing",
       input: [{ type: "text", text: "Continue" }],
       approvalPolicy: "on-failure",
-      dynamicTools,
     });
 
     const requests = MockTransport.instances.at(-1)!.sentMessages.map(
@@ -5728,9 +5726,9 @@ describe("CodexAppServerClient", () => {
       });
     }
     expect(turnStart).toMatchObject({ approvalPolicy: "on-failure" });
-    for (const payload of [threadStart, threadResume, turnStart]) {
-      expect(payload?.dynamicTools).toEqual(legacyDynamicTools);
-    }
+    expect(threadStart?.dynamicTools).toEqual(legacyDynamicTools);
+    expect(threadResume).not.toHaveProperty("dynamicTools");
+    expect(turnStart).not.toHaveProperty("dynamicTools");
 
     await client.close();
   });
@@ -6689,7 +6687,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("passes dynamic tool specs when resuming and starting a turn on an existing thread", async () => {
+  it("does not resend dynamic tools when resuming or starting a turn", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -6700,25 +6698,6 @@ describe("CodexAppServerClient", () => {
     await client.startTurn({
       threadId: "thread-2",
       input: [{ type: "text", text: "Reply to the existing thread" }],
-      dynamicTools: [
-        {
-          type: "namespace",
-          name: "pwragent_task_monitors",
-          description: "PwrAgent task-monitoring tools.",
-          tools: [
-            {
-              type: "function",
-              name: "create_monitor_delegation",
-              description: "Delegate monitoring work.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-              },
-              deferLoading: false,
-            },
-          ],
-        },
-      ],
     });
 
     const transport = MockTransport.instances.at(-1);
@@ -6730,50 +6709,10 @@ describe("CodexAppServerClient", () => {
       .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
       .find((payload) => payload.method === "turn/start");
 
-    expect(resumePayload?.params).toMatchObject({
-      threadId: "thread-2",
-      dynamicTools: [
-        {
-          type: "namespace",
-          name: "pwragent_task_monitors",
-          description: "PwrAgent task-monitoring tools.",
-          tools: [
-            {
-              type: "function",
-              name: "create_monitor_delegation",
-              description: "Delegate monitoring work.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-              },
-              deferLoading: false,
-            },
-          ],
-        },
-      ],
-    });
-    expect(turnStartPayload?.params).toMatchObject({
-      threadId: "thread-2",
-      dynamicTools: [
-        {
-          type: "namespace",
-          name: "pwragent_task_monitors",
-          description: "PwrAgent task-monitoring tools.",
-          tools: [
-            {
-              type: "function",
-              name: "create_monitor_delegation",
-              description: "Delegate monitoring work.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-              },
-              deferLoading: false,
-            },
-          ],
-        },
-      ],
-    });
+    expect(resumePayload?.params).toEqual({ threadId: "thread-2" });
+    expect(turnStartPayload?.params).toMatchObject({ threadId: "thread-2" });
+    expect(resumePayload?.params).not.toHaveProperty("dynamicTools");
+    expect(turnStartPayload?.params).not.toHaveProperty("dynamicTools");
 
     await client.close();
   });

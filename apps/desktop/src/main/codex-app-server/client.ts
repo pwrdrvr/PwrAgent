@@ -235,7 +235,6 @@ type CodexThreadResumePayload = Omit<
   "approvalPolicy"
 > & {
   approvalPolicy?: CompatibleApprovalPolicy;
-  dynamicTools?: CompatibleDynamicToolSpec[] | null;
   persistExtendedHistory?: boolean;
 };
 
@@ -252,7 +251,6 @@ type CodexTurnStartPayload = Omit<
   "approvalPolicy"
 > & {
   approvalPolicy?: CompatibleApprovalPolicy;
-  dynamicTools?: CompatibleDynamicToolSpec[] | null;
 };
 
 type SkillCatalogEntry = {
@@ -5007,7 +5005,6 @@ function buildThreadResumePayloads(params: {
   fastMode?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   defaultModeRequestUserInput?: boolean;
-  dynamicTools?: CodexDynamicToolSpec[];
 }, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
     threadId: params.threadId,
@@ -5055,19 +5052,6 @@ function buildThreadResumePayloads(params: {
   );
   if (config) {
     base.config = config;
-  }
-
-  if (params.dynamicTools?.length) {
-    return [
-      {
-        ...base,
-        dynamicTools: serializeCompatibleDynamicTools(
-          params.dynamicTools,
-          compatibility,
-        ),
-      },
-      base,
-    ];
   }
 
   return [base];
@@ -5149,7 +5133,6 @@ function buildTurnStartPayload(params: {
   collaborationMode?: AppServerCollaborationModeRequest;
   collaborationFallbackModel?: string;
   collaborationFallbackReasoningEffort?: string;
-  dynamicTools?: CodexDynamicToolSpec[];
 }, compatibility: CodexProtocolCompatibility): CodexTurnStartPayload {
   const base: CodexTurnStartPayload = {
     threadId: params.threadId,
@@ -5185,13 +5168,6 @@ function buildTurnStartPayload(params: {
   if (params.outputSchema) {
     base.outputSchema = params.outputSchema;
   }
-  if (params.dynamicTools?.length) {
-    base.dynamicTools = serializeCompatibleDynamicTools(
-      params.dynamicTools,
-      compatibility,
-    );
-  }
-
   const collaborationOverrides = buildCollaborationModeOverrides({
     collaborationMode: params.collaborationMode,
     fallbackModel: params.collaborationFallbackModel ?? params.model,
@@ -6282,7 +6258,6 @@ export class CodexAppServerClient {
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     defaultModeRequestUserInput?: boolean;
-    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -6294,6 +6269,8 @@ export class CodexAppServerClient {
     // before later turn/start calls. A just-created thread has no rollout
     // yet, so resume is guaranteed to be too early; turn/start already
     // carries the permission/model overrides needed for the first turn.
+    // Dynamic tools are intentionally absent here: Codex accepts them only
+    // on thread/start and restores that persisted catalog on thread/resume.
     const resumeResult =
       pendingFirstTurnResult ??
       (await requestWithFallbacks({
@@ -6311,7 +6288,6 @@ export class CodexAppServerClient {
             fastMode: params.fastMode,
             codexEnvironmentRuntime: params.codexEnvironmentRuntime,
             defaultModeRequestUserInput: params.defaultModeRequestUserInput,
-            dynamicTools: params.dynamicTools,
           },
           this.getProtocolCompatibility(),
         ),
@@ -6349,7 +6325,6 @@ export class CodexAppServerClient {
               "reasoningEffort",
               "reasoning_effort"
             ),
-            dynamicTools: params.dynamicTools,
           },
           this.getProtocolCompatibility(),
         ),

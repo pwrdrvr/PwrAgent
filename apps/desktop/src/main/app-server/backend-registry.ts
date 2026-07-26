@@ -8750,13 +8750,6 @@ export class DesktopBackendRegistry {
           ? await this.withCodexThreadClient(params.threadId, async (client, mode) => {
               const effectiveMode = params.executionMode ?? mode;
               const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
-              const agentToolCatalogs = resolveAgentToolCatalogs({
-                appManagementHandler: this.appManagementHandler,
-                automationInspectionHandler: this.automationInspectionHandler,
-                messagingHandler: this.messagingHandler,
-                threadInspectionHandler: this.threadInspectionHandler,
-                threadOrchestrationHandler: this.threadOrchestrationHandler,
-              });
               const started = await client.startTurn({
                 threadId: params.threadId,
                 input,
@@ -8770,7 +8763,6 @@ export class DesktopBackendRegistry {
                   : {}),
                 defaultModeRequestUserInput:
                   this.resolveCodexDefaultModeRequestUserInputFn(),
-                dynamicTools: buildCodexParentDynamicToolSpecs(agentToolCatalogs),
               });
               activeTurnMode = effectiveMode;
               return started;
