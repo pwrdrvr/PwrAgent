@@ -61,6 +61,9 @@ export type BackendAcpRuntimeModel = {
   label?: string;
   description?: string;
   current?: boolean;
+  defaultReasoningEffort?: string;
+  reasoningEfforts?: string[];
+  supportsReasoning?: boolean;
 };
 
 export type BackendAcpRuntimeModelState = {
@@ -110,6 +113,7 @@ export type BackendAcpSessionRuntimeState = {
   configValues?: Record<string, string>;
   currentModeId?: string;
   currentModelId?: string;
+  reasoningEffort?: string;
   updatedAt?: number;
 };
 

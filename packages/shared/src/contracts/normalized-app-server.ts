@@ -251,6 +251,7 @@ export type AppServerAcpSessionRuntimeState = {
   configValues?: Record<string, string>;
   currentModeId?: string;
   currentModelId?: string;
+  reasoningEffort?: string;
   updatedAt?: number;
 };
 

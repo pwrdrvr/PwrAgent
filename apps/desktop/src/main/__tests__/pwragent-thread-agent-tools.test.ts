@@ -15,26 +15,30 @@ describe("PwrAgent thread agent tools", () => {
     }));
     const router = buildPwrAgentThreadToolRouter(handler);
 
-    expect(router.buildDynamicToolSpecs()).toEqual(
-      expect.arrayContaining([
+    expect(router.buildDynamicToolSpecs()).toEqual([
+      expect.objectContaining({
+        type: "namespace",
+        name: "pwragent",
+        tools: expect.arrayContaining([
         expect.objectContaining({
-          namespace: "pwragent",
+          type: "function",
           name: "search_threads",
         }),
         expect.objectContaining({
-          namespace: "pwragent",
+          type: "function",
           name: "read_thread",
         }),
         expect.objectContaining({
-          namespace: "pwragent",
+          type: "function",
           name: "get_thread_status",
         }),
         expect.objectContaining({
-          namespace: "pwragent",
+          type: "function",
           name: "mutate_thread",
         }),
-      ]),
-    );
+        ]),
+      }),
+    ]);
 
     await expect(
       router.handleDynamicToolCall({

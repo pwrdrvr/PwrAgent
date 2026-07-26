@@ -1009,6 +1009,19 @@ export type ReorderDirectoryPinsResponse = {
   pinnedRanks: Record<string, string>;
 };
 
+/**
+ * Tells the main-process PR poller which threads the operator is actually
+ * looking at, so their PRs poll on the fast tier and everything else backs off.
+ *
+ * Main has no other way to know this — selection lives entirely in renderer
+ * route state. Without this signal the poller can only treat every open project
+ * equally, which is what forces the budget to be spread thin.
+ */
+export type SetPullRequestPollingFocusRequest = {
+  /** Thread keys (`backend:threadId`) currently selected or on screen. */
+  threadKeys: string[];
+};
+
 export type RefreshThreadPullRequestsRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;

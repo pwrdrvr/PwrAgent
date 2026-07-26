@@ -89,6 +89,8 @@ export const NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL =
   "navigation:reorder-directory-pins";
 export const NAVIGATION_REFRESH_THREAD_PRS_CHANNEL =
   "navigation:refresh-thread-prs";
+export const NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL =
+  "navigation:set-pr-polling-focus";
 export const NAVIGATION_DETACH_THREAD_PR_CHANNEL =
   "navigation:detach-thread-pr";
 export const NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL =

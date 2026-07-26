@@ -101,6 +101,27 @@ export function acpSessionRuntimeStateFromCapabilities(
   return Object.keys(state).length > 1 ? state : undefined;
 }
 
+export function acpSessionRuntimeStateFromResponse(
+  value: unknown,
+  now: number,
+): BackendAcpSessionRuntimeState | undefined {
+  const responseCapabilities = normalizeAcpRuntimeCapabilities({
+    value,
+    now,
+    source: "session-load",
+  });
+  const state = acpSessionRuntimeStateFromCapabilities(responseCapabilities, now);
+  const reasoningEffort = readCurrentReasoningEffort(value);
+  if (!state?.currentModelId && !reasoningEffort) {
+    return state;
+  }
+  return {
+    ...state,
+    reasoningEffort,
+    updatedAt: now,
+  };
+}
+
 export function acpRuntimeSupportsSessionLoad(
   capabilities: BackendAcpRuntimeCapabilities | undefined,
 ): boolean {
@@ -134,10 +155,20 @@ export function acpSessionRuntimeStateFromUpdate(
   }
   if (kind === "model_changed") {
     const currentModelId =
+      readString(update, "currentModelId") ??
+      readString(update, "current_model_id") ??
       readString(update, "modelId") ??
-      readString(update, "model_id") ??
-      readString(update, "id");
-    return currentModelId ? { currentModelId, updatedAt: now } : undefined;
+      readString(update, "model_id");
+    const reasoningEffort =
+      readString(update, "reasoningEffort") ??
+      readString(update, "reasoning_effort");
+    return currentModelId || reasoningEffort
+      ? {
+          ...(currentModelId ? { currentModelId } : {}),
+          reasoningEffort,
+          updatedAt: now,
+        }
+      : undefined;
   }
   if (kind === "config_option_update") {
     const configOption = asRecord(update.configOption ?? update.config_option) ?? update;
@@ -273,13 +304,87 @@ function readModel(value: unknown): BackendAcpRuntimeModel[] {
   if (!record || !id) {
     return [];
   }
+  const meta = asRecord(record._meta ?? record.meta);
+  const reasoningEffortOptions = readReasoningEfforts(
+    meta?.reasoningEfforts ?? meta?.reasoning_efforts,
+  );
+  const supportsReasoning =
+    readBoolean(meta, "supportsReasoningEffort") ??
+    readBoolean(meta, "supports_reasoning_effort") ??
+    (reasoningEffortOptions.values.length > 0 ? true : undefined);
   return [
     {
       id,
       label: readString(record, "name") ?? readString(record, "label"),
       description: readString(record, "description"),
+      ...(reasoningEffortOptions.defaultValue
+        ? { defaultReasoningEffort: reasoningEffortOptions.defaultValue }
+        : {}),
+      ...(reasoningEffortOptions.values.length > 0
+        ? { reasoningEfforts: reasoningEffortOptions.values }
+        : {}),
+      ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
     },
   ];
+}
+
+function readReasoningEfforts(value: unknown): {
+  defaultValue?: string;
+  values: string[];
+} {
+  if (!Array.isArray(value)) {
+    return { values: [] };
+  }
+  let defaultValue: string | undefined;
+  const values = [
+    ...new Set(
+      value
+        .flatMap((item) => {
+          if (typeof item === "string") {
+            return [item.trim()];
+          }
+          const record = asRecord(item);
+          const optionValue =
+            readString(record, "value") ??
+            readString(record, "id");
+          if (optionValue && readBoolean(record, "default") === true) {
+            defaultValue = optionValue;
+          }
+          return optionValue ? [optionValue] : [];
+        })
+        .filter(Boolean),
+    ),
+  ];
+  return {
+    ...(defaultValue ? { defaultValue } : {}),
+    values,
+  };
+}
+
+function readCurrentReasoningEffort(value: unknown): string | undefined {
+  const record = asRecord(value);
+  const models = asRecord(record?.models);
+  const availableModels = Array.isArray(models?.availableModels)
+    ? models.availableModels
+    : [];
+  const currentModelId =
+    readString(models, "currentModelId") ??
+    readString(models, "modelId");
+  const currentModel =
+    availableModels
+      .map(asRecord)
+      .find((model) =>
+        currentModelId
+          ? readString(model, "modelId") === currentModelId ||
+            readString(model, "id") === currentModelId
+          : readBoolean(model, "current") === true,
+      ) ??
+    (availableModels.length === 1 ? asRecord(availableModels[0]) : undefined);
+  const meta = asRecord(currentModel?._meta ?? currentModel?.meta);
+  return (
+    readString(meta, "reasoningEffort") ??
+    readString(meta, "reasoning_effort")
+  );
 }
 
 function readAgentCapabilities(

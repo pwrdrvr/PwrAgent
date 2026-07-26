@@ -52,11 +52,11 @@ import { getMainLogger } from "../log";
 import type {
   ClientRequest as CodexClientRequest,
   InitializeParams as CodexInitializeParams,
+  InitializeResponse as CodexInitializeResponse,
   ReasoningEffort as CodexReasoningEffort,
   ServerRequest as CodexServerRequest,
 } from "@pwrdrvr/codex-app-server-protocol";
 import type {
-  AskForApproval as CodexAskForApproval,
   ConfigValueWriteParams as CodexConfigValueWriteParams,
   ModelListParams as CodexModelListParams,
   SandboxMode as CodexSandboxMode,
@@ -93,6 +93,14 @@ import type {
   ThreadTitleAdapterParams,
   ThreadTitleAdapterResult,
 } from "../app-server/thread-title-generation-service";
+import {
+  normalizeCompatibleApprovalPolicy,
+  resolveCodexProtocolCompatibility,
+  serializeCompatibleDynamicTools,
+  type CodexProtocolCompatibility,
+  type CompatibleApprovalPolicy,
+  type CompatibleDynamicToolSpec,
+} from "./protocol-compatibility";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
@@ -187,7 +195,7 @@ export class CodexBootstrapDeferredError extends Error {
   }
 }
 
-type InitializeResult = {
+type InitializeResult = Partial<CodexInitializeResponse> & {
   serverInfo?: {
     name?: string;
     version?: string;
@@ -214,12 +222,36 @@ type RawCodexThreadListPage = {
   threads: RawCodexThreadSummary[];
 };
 
-type CodexThreadResumePayload = CodexThreadResumeParams & {
-  dynamicTools?: CodexDynamicToolSpec[] | null;
+type CodexThreadStartPayload = Omit<
+  CodexThreadStartParams,
+  "approvalPolicy" | "dynamicTools"
+> & {
+  approvalPolicy?: CompatibleApprovalPolicy;
+  dynamicTools?: CompatibleDynamicToolSpec[] | null;
+  persistExtendedHistory?: boolean;
 };
 
-type CodexTurnStartPayload = CodexTurnStartParams & {
-  dynamicTools?: CodexDynamicToolSpec[] | null;
+type CodexThreadResumePayload = Omit<
+  CodexThreadResumeParams,
+  "approvalPolicy"
+> & {
+  approvalPolicy?: CompatibleApprovalPolicy;
+  persistExtendedHistory?: boolean;
+};
+
+type CodexThreadForkPayload = Omit<
+  CodexThreadForkParams,
+  "approvalPolicy"
+> & {
+  approvalPolicy?: CompatibleApprovalPolicy;
+  persistExtendedHistory?: boolean;
+};
+
+type CodexTurnStartPayload = Omit<
+  CodexTurnStartParams,
+  "approvalPolicy"
+> & {
+  approvalPolicy?: CompatibleApprovalPolicy;
 };
 
 type SkillCatalogEntry = {
@@ -4673,21 +4705,6 @@ function hydrateMissingLinkedDirectoriesFromSiblingRepos(
   });
 }
 
-function normalizeCodexApprovalPolicy(
-  value?: string
-): CodexAskForApproval | undefined {
-  const normalized = value?.trim();
-  if (
-    normalized === "untrusted" ||
-    normalized === "on-failure" ||
-    normalized === "on-request" ||
-    normalized === "never"
-  ) {
-    return normalized;
-  }
-  return undefined;
-}
-
 function normalizeCodexSandboxMode(
   value?: string
 ): CodexSandboxMode | undefined {
@@ -4790,11 +4807,13 @@ function buildThreadStartPayload(params: {
   defaultModeRequestUserInput?: boolean;
   dynamicTools?: CodexDynamicToolSpec[];
   threadSource?: CodexThreadStartParams["threadSource"];
-}): CodexThreadStartParams {
-  const base: CodexThreadStartParams = {
+}, compatibility: CodexProtocolCompatibility): CodexThreadStartPayload {
+  const base: CodexThreadStartPayload = {
     experimentalRawEvents: false,
-    persistExtendedHistory: false,
   };
+  if (compatibility.includePersistExtendedHistory) {
+    base.persistExtendedHistory = false;
+  }
 
   if (params.cwd?.trim()) {
     base.cwd = params.cwd.trim();
@@ -4806,7 +4825,10 @@ function buildThreadStartPayload(params: {
     base.model = params.model.trim();
   }
 
-  const approvalPolicy = normalizeCodexApprovalPolicy(params.approvalPolicy);
+  const approvalPolicy = normalizeCompatibleApprovalPolicy(
+    params.approvalPolicy,
+    compatibility,
+  );
   if (approvalPolicy) {
     base.approvalPolicy = approvalPolicy;
   }
@@ -4837,7 +4859,10 @@ function buildThreadStartPayload(params: {
     base.config = config;
   }
   if (params.dynamicTools) {
-    base.dynamicTools = params.dynamicTools;
+    base.dynamicTools = serializeCompatibleDynamicTools(
+      params.dynamicTools,
+      compatibility,
+    );
   }
   if (
     params.codexEnvironmentRuntime?.executionTarget === "remote" &&
@@ -4917,13 +4942,15 @@ function buildThreadForkPayload(params: {
   serviceTier?: string;
   fastMode?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-}): CodexThreadForkParams {
-  const base: CodexThreadForkParams = {
+}, compatibility: CodexProtocolCompatibility): CodexThreadForkPayload {
+  const base: CodexThreadForkPayload = {
     threadId: params.threadId,
     excludeTurns: true,
-    persistExtendedHistory: false,
     threadSource: "user",
   };
+  if (compatibility.includePersistExtendedHistory) {
+    base.persistExtendedHistory = false;
+  }
 
   if (params.path?.trim()) {
     base.path = params.path.trim();
@@ -4935,7 +4962,10 @@ function buildThreadForkPayload(params: {
     base.model = params.model.trim();
   }
 
-  const approvalPolicy = normalizeCodexApprovalPolicy(params.approvalPolicy);
+  const approvalPolicy = normalizeCompatibleApprovalPolicy(
+    params.approvalPolicy,
+    compatibility,
+  );
   if (approvalPolicy) {
     base.approvalPolicy = approvalPolicy;
   }
@@ -4977,12 +5007,13 @@ function buildThreadResumePayloads(params: {
   fastMode?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   defaultModeRequestUserInput?: boolean;
-  dynamicTools?: CodexDynamicToolSpec[];
-}): CodexThreadResumePayload[] {
+}, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
     threadId: params.threadId,
-    persistExtendedHistory: false,
   };
+  if (compatibility.includePersistExtendedHistory) {
+    base.persistExtendedHistory = false;
+  }
 
   if (params.cwd?.trim()) {
     base.cwd = params.cwd.trim();
@@ -4991,7 +5022,10 @@ function buildThreadResumePayloads(params: {
     base.model = params.model.trim();
   }
 
-  const approvalPolicy = normalizeCodexApprovalPolicy(params.approvalPolicy);
+  const approvalPolicy = normalizeCompatibleApprovalPolicy(
+    params.approvalPolicy,
+    compatibility,
+  );
   if (approvalPolicy) {
     base.approvalPolicy = approvalPolicy;
   }
@@ -5020,16 +5054,6 @@ function buildThreadResumePayloads(params: {
   );
   if (config) {
     base.config = config;
-  }
-
-  if (params.dynamicTools?.length) {
-    return [
-      {
-        ...base,
-        dynamicTools: params.dynamicTools,
-      },
-      base,
-    ];
   }
 
   return [base];
@@ -5111,8 +5135,7 @@ function buildTurnStartPayload(params: {
   collaborationMode?: AppServerCollaborationModeRequest;
   collaborationFallbackModel?: string;
   collaborationFallbackReasoningEffort?: string;
-  dynamicTools?: CodexDynamicToolSpec[];
-}): CodexTurnStartPayload {
+}, compatibility: CodexProtocolCompatibility): CodexTurnStartPayload {
   const base: CodexTurnStartPayload = {
     threadId: params.threadId,
     input: params.input.map(toCodexUserInput),
@@ -5133,7 +5156,10 @@ function buildTurnStartPayload(params: {
   if (serviceTier !== undefined) {
     base.serviceTier = serviceTier;
   }
-  const approvalPolicy = normalizeCodexApprovalPolicy(params.approvalPolicy);
+  const approvalPolicy = normalizeCompatibleApprovalPolicy(
+    params.approvalPolicy,
+    compatibility,
+  );
   if (approvalPolicy) {
     base.approvalPolicy = approvalPolicy;
   }
@@ -5144,10 +5170,6 @@ function buildTurnStartPayload(params: {
   if (params.outputSchema) {
     base.outputSchema = params.outputSchema;
   }
-  if (params.dynamicTools?.length) {
-    base.dynamicTools = params.dynamicTools;
-  }
-
   const collaborationOverrides = buildCollaborationModeOverrides({
     collaborationMode: params.collaborationMode,
     fallbackModel: params.collaborationFallbackModel ?? params.model,
@@ -5556,6 +5578,13 @@ export class CodexAppServerClient {
   async getInitializeResult(): Promise<InitializeResult> {
     await this.ensureInitialized();
     return this.initializeResult ?? {};
+  }
+
+  private getProtocolCompatibility(): CodexProtocolCompatibility {
+    return resolveCodexProtocolCompatibility(
+      this.initializeResult?.userAgent
+        ?? this.initializeResult?.serverInfo?.version,
+    );
   }
 
   async trustProject(params: {
@@ -6164,7 +6193,9 @@ export class CodexAppServerClient {
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/start"],
-      payloads: [buildThreadStartPayload(params)],
+      payloads: [
+        buildThreadStartPayload(params, this.getProtocolCompatibility()),
+      ],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
@@ -6197,7 +6228,9 @@ export class CodexAppServerClient {
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/fork"],
-      payloads: [buildThreadForkPayload(params)],
+      payloads: [
+        buildThreadForkPayload(params, this.getProtocolCompatibility()),
+      ],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
@@ -6227,7 +6260,6 @@ export class CodexAppServerClient {
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     defaultModeRequestUserInput?: boolean;
-    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -6239,24 +6271,28 @@ export class CodexAppServerClient {
     // before later turn/start calls. A just-created thread has no rollout
     // yet, so resume is guaranteed to be too early; turn/start already
     // carries the permission/model overrides needed for the first turn.
+    // Dynamic tools are intentionally absent here: Codex accepts them only
+    // on thread/start and restores that persisted catalog on thread/resume.
     const resumeResult =
       pendingFirstTurnResult ??
       (await requestWithFallbacks({
         client: this.connection,
         methods: ["thread/resume"],
-        payloads: buildThreadResumePayloads({
-          threadId: params.threadId,
-          cwd: params.cwd,
-          approvalPolicy: params.approvalPolicy,
-          sandbox: params.sandbox,
-          model: params.model,
-          serviceTier: params.serviceTier,
-          reasoningEffort: params.reasoningEffort,
-          fastMode: params.fastMode,
-          codexEnvironmentRuntime: params.codexEnvironmentRuntime,
-          defaultModeRequestUserInput: params.defaultModeRequestUserInput,
-          dynamicTools: params.dynamicTools,
-        }),
+        payloads: buildThreadResumePayloads(
+          {
+            threadId: params.threadId,
+            cwd: params.cwd,
+            approvalPolicy: params.approvalPolicy,
+            sandbox: params.sandbox,
+            model: params.model,
+            serviceTier: params.serviceTier,
+            reasoningEffort: params.reasoningEffort,
+            fastMode: params.fastMode,
+            codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+            defaultModeRequestUserInput: params.defaultModeRequestUserInput,
+          },
+          this.getProtocolCompatibility(),
+        ),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
       }).catch((error: unknown) => {
         codexClientLog.warn("thread/resume failed before turn/start", {
@@ -6272,26 +6308,28 @@ export class CodexAppServerClient {
       client: this.connection,
       methods: ["turn/start"],
       payloads: [
-        buildTurnStartPayload({
-          threadId: params.threadId,
-          input: params.input,
-          cwd: params.cwd,
-          model: params.model,
-          reasoningEffort: params.reasoningEffort,
-          serviceTier: params.serviceTier,
-          fastMode: params.fastMode,
-          approvalPolicy: params.approvalPolicy,
-          sandbox: params.sandbox,
-          collaborationMode: params.collaborationMode,
-          collaborationFallbackModel:
-            params.model?.trim() || extractStringProperty(resumeResult, "model"),
-          collaborationFallbackReasoningEffort: extractStringProperty(
-            resumeResult,
-            "reasoningEffort",
-            "reasoning_effort"
-          ),
-          dynamicTools: params.dynamicTools,
-        }),
+        buildTurnStartPayload(
+          {
+            threadId: params.threadId,
+            input: params.input,
+            cwd: params.cwd,
+            model: params.model,
+            reasoningEffort: params.reasoningEffort,
+            serviceTier: params.serviceTier,
+            fastMode: params.fastMode,
+            approvalPolicy: params.approvalPolicy,
+            sandbox: params.sandbox,
+            collaborationMode: params.collaborationMode,
+            collaborationFallbackModel:
+              params.model?.trim() || extractStringProperty(resumeResult, "model"),
+            collaborationFallbackReasoningEffort: extractStringProperty(
+              resumeResult,
+              "reasoningEffort",
+              "reasoning_effort"
+            ),
+          },
+          this.getProtocolCompatibility(),
+        ),
       ],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
@@ -6346,22 +6384,28 @@ export class CodexAppServerClient {
         client: this.connection,
         methods: ["thread/start"],
         payloads: [
-          buildThreadStartPayload({
-            cwd: helperWorkspaceDir,
-            runtimeWorkspaceRoots: [helperWorkspaceDir],
-            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
-            serviceTier: null,
-            ephemeral: true,
-            config: CODEX_THREAD_TITLE_CONFIG,
-          }),
-          buildThreadStartPayload({
-            cwd: helperWorkspaceDir,
-            runtimeWorkspaceRoots: [helperWorkspaceDir],
-            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
-            serviceTier: null,
-            ephemeral: true,
-            config: LEGACY_CODEX_THREAD_TITLE_CONFIG,
-          }),
+          buildThreadStartPayload(
+            {
+              cwd: helperWorkspaceDir,
+              runtimeWorkspaceRoots: [helperWorkspaceDir],
+              model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+              serviceTier: null,
+              ephemeral: true,
+              config: CODEX_THREAD_TITLE_CONFIG,
+            },
+            this.getProtocolCompatibility(),
+          ),
+          buildThreadStartPayload(
+            {
+              cwd: helperWorkspaceDir,
+              runtimeWorkspaceRoots: [helperWorkspaceDir],
+              model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+              serviceTier: null,
+              ephemeral: true,
+              config: LEGACY_CODEX_THREAD_TITLE_CONFIG,
+            },
+            this.getProtocolCompatibility(),
+          ),
         ],
         timeoutMs,
       });
@@ -6379,14 +6423,17 @@ export class CodexAppServerClient {
         client: this.connection,
         methods: ["turn/start"],
         payloads: [
-          buildTurnStartPayload({
-            threadId: helperThreadId,
-            input: [{ type: "text", text: params.prompt }],
-            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
-            serviceTier: null,
-            reasoningEffort: "low",
-            outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
-          }),
+          buildTurnStartPayload(
+            {
+              threadId: helperThreadId,
+              input: [{ type: "text", text: params.prompt }],
+              model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+              serviceTier: null,
+              reasoningEffort: "low",
+              outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
+            },
+            this.getProtocolCompatibility(),
+          ),
         ],
         timeoutMs,
       });
@@ -6458,15 +6505,18 @@ export class CodexAppServerClient {
       await requestWithFallbacks({
         client: this.connection,
         methods: ["thread/resume"],
-        payloads: buildThreadResumePayloads({
-          threadId: params.threadId,
-          cwd: params.cwd,
-          model: params.model,
-          serviceTier: params.serviceTier,
-          reasoningEffort: params.reasoningEffort,
-          fastMode: params.fastMode,
-          codexEnvironmentRuntime: params.codexEnvironmentRuntime,
-        }),
+        payloads: buildThreadResumePayloads(
+          {
+            threadId: params.threadId,
+            cwd: params.cwd,
+            model: params.model,
+            serviceTier: params.serviceTier,
+            reasoningEffort: params.reasoningEffort,
+            fastMode: params.fastMode,
+            codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+          },
+          this.getProtocolCompatibility(),
+        ),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       }).catch(() => undefined);
     }
@@ -6520,7 +6570,10 @@ export class CodexAppServerClient {
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/resume"],
-      payloads: buildThreadResumePayloads(params),
+      payloads: buildThreadResumePayloads(
+        params,
+        this.getProtocolCompatibility(),
+      ),
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     });
 
@@ -6610,9 +6663,12 @@ export class CodexAppServerClient {
     await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/resume"],
-      payloads: buildThreadResumePayloads({
-        threadId: params.threadId,
-      }),
+      payloads: buildThreadResumePayloads(
+        {
+          threadId: params.threadId,
+        },
+        this.getProtocolCompatibility(),
+      ),
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     }).catch(() => undefined);
 
@@ -6660,9 +6716,12 @@ export class CodexAppServerClient {
     await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/resume"],
-      payloads: buildThreadResumePayloads({
-        threadId: params.threadId,
-      }),
+      payloads: buildThreadResumePayloads(
+        {
+          threadId: params.threadId,
+        },
+        this.getProtocolCompatibility(),
+      ),
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     }).catch(() => undefined);
 
@@ -6696,9 +6755,12 @@ export class CodexAppServerClient {
     await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/resume"],
-      payloads: buildThreadResumePayloads({
-        threadId: params.threadId,
-      }),
+      payloads: buildThreadResumePayloads(
+        {
+          threadId: params.threadId,
+        },
+        this.getProtocolCompatibility(),
+      ),
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     }).catch(() => undefined);
 

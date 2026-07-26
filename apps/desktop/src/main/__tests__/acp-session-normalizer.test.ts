@@ -1022,6 +1022,22 @@ describe("AcpSessionReplayNormalizer", () => {
     });
   });
 
+  it("omits model change notifications from transcript replay", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "model_changed",
+        model_id: "grok-4.5",
+        reasoning_effort: "low",
+      },
+    });
+
+    expect(replay.entries).toEqual([]);
+  });
+
   it("records PwrAgent turn failures as warning activity", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

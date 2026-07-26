@@ -17,11 +17,18 @@ describe("AgentToolRouter", () => {
 
     expect(router.buildDynamicToolSpecs()).toEqual([
       {
-        namespace: "pwragent_test",
-        name: "inspect",
-        description: "Inspect test state.",
-        inputSchema: { type: "object", additionalProperties: false },
-        deferLoading: false,
+        type: "namespace",
+        name: "pwragent_test",
+        description: "PwrAgent tools.",
+        tools: [
+          {
+            type: "function",
+            name: "inspect",
+            description: "Inspect test state.",
+            inputSchema: { type: "object", additionalProperties: false },
+            deferLoading: false,
+          },
+        ],
       },
     ]);
   });
@@ -272,6 +279,27 @@ describe("AgentToolRouter", () => {
       turnId: "turn-1",
       callId: "request-1",
       namespace: "pwragent_test",
+      tool: "inspect",
+      arguments: {},
+    });
+
+    expect(
+      readAgentDynamicToolCall({
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "inspect",
+          arguments: {},
+        },
+      }),
+    ).toEqual({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: "pwragent",
       tool: "inspect",
       arguments: {},
     });
