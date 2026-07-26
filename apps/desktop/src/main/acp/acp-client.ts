@@ -558,9 +558,9 @@ export class AcpAgentClient {
             }
           : {
               currentModelId: params.value,
-              ...(params.reasoningEffort
-                ? { reasoningEffort: params.reasoningEffort }
-                : {}),
+              reasoningEffort:
+                responseRuntimeState?.reasoningEffort ??
+                params.reasoningEffort,
               updatedAt: now,
             };
     const runtimeState = mergeAcpRuntimeState(

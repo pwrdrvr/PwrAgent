@@ -112,7 +112,7 @@ export function acpSessionRuntimeStateFromResponse(
   });
   const state = acpSessionRuntimeStateFromCapabilities(responseCapabilities, now);
   const reasoningEffort = readCurrentReasoningEffort(value);
-  if (!reasoningEffort) {
+  if (!state?.currentModelId && !reasoningEffort) {
     return state;
   }
   return {
@@ -165,7 +165,7 @@ export function acpSessionRuntimeStateFromUpdate(
     return currentModelId || reasoningEffort
       ? {
           ...(currentModelId ? { currentModelId } : {}),
-          ...(reasoningEffort ? { reasoningEffort } : {}),
+          reasoningEffort,
           updatedAt: now,
         }
       : undefined;

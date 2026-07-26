@@ -163,4 +163,37 @@ describe("ACP runtime capabilities", () => {
       updatedAt: 1000,
     });
   });
+
+  it("marks missing effort as cleared when a session response selects a model", () => {
+    const state = acpSessionRuntimeStateFromResponse(
+      {
+        models: {
+          currentModelId: "gemini-3-pro-preview",
+          availableModels: [
+            {
+              modelId: "gemini-3-pro-preview",
+              name: "Gemini 3 Pro Preview",
+            },
+          ],
+        },
+      },
+      1000,
+    );
+
+    expect(state).toHaveProperty("currentModelId", "gemini-3-pro-preview");
+    expect(state).toHaveProperty("reasoningEffort", undefined);
+  });
+
+  it("marks missing effort as cleared in model change notifications", () => {
+    const state = acpSessionRuntimeStateFromUpdate(
+      {
+        sessionUpdate: "model_changed",
+        model_id: "gemini-3-pro-preview",
+      },
+      1000,
+    );
+
+    expect(state).toHaveProperty("currentModelId", "gemini-3-pro-preview");
+    expect(state).toHaveProperty("reasoningEffort", undefined);
+  });
 });
