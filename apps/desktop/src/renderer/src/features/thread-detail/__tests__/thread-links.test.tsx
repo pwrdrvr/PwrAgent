@@ -156,4 +156,38 @@ describe("thread links in transcript markdown", () => {
       screen.getByRole("button", { name: "Open thread RELATED query deranking issue" }),
     ).toBeInTheDocument();
   });
+
+  it("updates only the referenced chip metadata when a thread is renamed", () => {
+    const text = `See [Untitled thread](pwragent://thread/${CHILD_THREAD_ID})`;
+    const onShowThread = vi.fn();
+    const { rerender } = render(
+      <ThreadLinkProvider
+        onShowThread={onShowThread}
+        threads={[threadSummary({ title: "Untitled thread", titleSource: "fallback" })]}
+      >
+        <ThreadMarkdown text={text} />
+      </ThreadLinkProvider>,
+    );
+
+    const markdownNode = screen.getByText("See").parentElement;
+    expect(
+      screen.getByRole("button", { name: "Open thread Untitled thread" }),
+    ).toBeInTheDocument();
+
+    rerender(
+      <ThreadLinkProvider
+        onShowThread={onShowThread}
+        threads={[threadSummary({ title: "EMR JDK 17 guidance" })]}
+      >
+        <ThreadMarkdown text={text} />
+      </ThreadLinkProvider>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Open thread EMR JDK 17 guidance" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open thread Untitled thread" }))
+      .not.toBeInTheDocument();
+    expect(screen.getByText("See").parentElement).toBe(markdownNode);
+  });
 });
