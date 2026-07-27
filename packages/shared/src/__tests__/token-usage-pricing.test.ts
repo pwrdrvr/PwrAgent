@@ -49,6 +49,21 @@ describe("token usage pricing", () => {
     });
   });
 
+  it("uses the observed service tier ahead of configured fast-mode intent", () => {
+    expect(
+      resolveOpenAiPricingServiceTier({
+        fastMode: true,
+        serviceTier: "default",
+      }),
+    ).toBe("standard");
+    expect(
+      resolveOpenAiPricingServiceTier({
+        fastMode: false,
+        serviceTier: "priority",
+      }),
+    ).toBe("priority");
+  });
+
   it("bills separately reported reasoning tokens at the output rate", () => {
     const cost = estimateOpenAiTokenUsageCost({
       cachedInputTokens: 0,
@@ -329,29 +344,44 @@ describe("token usage pricing", () => {
     });
   });
 
-  it("estimates GPT-5.6 Codex Credits", () => {
-    const credits = estimateOpenAiCodexCreditUsage({
-      at: Date.UTC(2026, 6, 12),
-      cachedInputTokens: 1_000_000,
-      fastMode: true,
-      model: "gpt-5.6-terra",
-      outputTokens: 1_000_000,
-      uncachedInputTokens: 1_000_000,
-    });
+  it("estimates GPT-5.6 Fast Codex Credits at 2.5x Standard", () => {
+    const cases = [
+      ["gpt-5.6-sol", "GPT-5.6 Sol Fast", 312.5, 31.25, 1875, 2_218_750_000],
+      ["gpt-5.6-terra", "GPT-5.6 Terra Fast", 156.25, 15.625, 937.5, 1_109_375_000],
+      ["gpt-5.6-luna", "GPT-5.6 Luna Fast", 62.5, 6.25, 375, 443_750_000],
+    ] as const;
 
-    expect(credits).toMatchObject({
-      catalogId: "openai-codex-credits",
-      catalogVersion: "2026-07-09",
-      displayName: "GPT-5.6 Terra Fast",
-      inputCreditsPerMillion: 125,
-      cachedInputCreditsPerMillion: 12.5,
-      outputCreditsPerMillion: 750,
-      provider: "openai",
-      rateId: "openai:2026-07-09:codex-credits:gpt-5.6-terra:priority",
-      serviceTier: "priority",
-      totalCreditMicros: 887_500_000,
-      totalCredits: 887.5,
-    });
+    for (const [
+      model,
+      displayName,
+      inputCreditsPerMillion,
+      cachedInputCreditsPerMillion,
+      outputCreditsPerMillion,
+      totalCreditMicros,
+    ] of cases) {
+      const credits = estimateOpenAiCodexCreditUsage({
+        at: Date.UTC(2026, 6, 27),
+        cachedInputTokens: 1_000_000,
+        model,
+        outputTokens: 1_000_000,
+        serviceTier: "priority",
+        uncachedInputTokens: 1_000_000,
+      });
+
+      expect(credits).toMatchObject({
+        catalogId: "openai-codex-credits",
+        catalogVersion: "2026-07-27",
+        displayName,
+        inputCreditsPerMillion,
+        cachedInputCreditsPerMillion,
+        outputCreditsPerMillion,
+        provider: "openai",
+        rateId: `openai:2026-07-27:codex-credits:${model}:priority`,
+        serviceTier: "priority",
+        totalCreditMicros,
+        totalCredits: totalCreditMicros / 1_000_000,
+      });
+    }
   });
 
   it("does not invent Codex Credit rates for unsupported Fast models", () => {
