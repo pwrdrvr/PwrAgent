@@ -1216,7 +1216,11 @@ function DesktopAppShell(props: {
   };
 
   return (
-    <TranscriptLinkProvider onShowThread={showThreadFromLink} threads={navigation.threads}>
+    <TranscriptLinkProvider
+      activeThread={navigation.selectedThread}
+      onShowThread={showThreadFromLink}
+      threads={navigation.threads}
+    >
       <AppTitleBar
         desktopApi={desktopApi}
         onOpenMessagingActivity={openMessagingActivityWindow}

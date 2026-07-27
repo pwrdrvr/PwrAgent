@@ -16,8 +16,10 @@ import {
 
 type PullRequestLinkContextValue = {
   getSnapshot: (fallback: PrSummary) => PrSummary;
+  getNumberSnapshot: (number: number) => PrSummary | undefined;
   resolve: (href: string) => PrSummary | undefined;
   subscribe: (pr: PrSummary, listener: () => void) => () => void;
+  subscribeNumber: (number: number, listener: () => void) => () => void;
 };
 
 function samePullRequestChip(
@@ -48,10 +50,20 @@ function samePullRequestChip(
 class PullRequestLinkMetadataStore {
   private hydratedSnapshots = new WeakMap<PrSummary, Map<string, PrSummary>>();
   private listeners = new Map<string, Set<() => void>>();
+  private numberListeners = new Map<number, Set<() => void>>();
   private prs = new Map<string, PrSummary>();
+  private shorthandPrs = new Map<number, PrSummary>();
 
-  constructor(threads: NavigationThreadSummary[]) {
+  constructor(
+    threads: NavigationThreadSummary[],
+    activeThread: NavigationThreadSummary | undefined,
+  ) {
     this.prs = pullRequestsByKey(threads);
+    this.shorthandPrs = pullRequestsByNumberForActiveProject({
+      activeThread,
+      prsByKey: this.prs,
+      threads,
+    });
   }
 
   getSnapshot(fallback: PrSummary): PrSummary {
@@ -94,7 +106,27 @@ class PullRequestLinkMetadataStore {
     };
   }
 
-  update(threads: NavigationThreadSummary[]): void {
+  getNumberSnapshot(number: number): PrSummary | undefined {
+    return this.shorthandPrs.get(number);
+  }
+
+  subscribeNumber(number: number, listener: () => void): () => void {
+    const listeners = this.numberListeners.get(number) ?? new Set();
+    listeners.add(listener);
+    this.numberListeners.set(number, listeners);
+
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) {
+        this.numberListeners.delete(number);
+      }
+    };
+  }
+
+  update(
+    threads: NavigationThreadSummary[],
+    activeThread: NavigationThreadSummary | undefined,
+  ): void {
     const candidates = pullRequestsByKey(threads);
     const nextPrs = new Map<string, PrSummary>();
     const changedKeys = new Set<string>();
@@ -114,9 +146,32 @@ class PullRequestLinkMetadataStore {
       }
     }
 
+    const nextShorthandPrs = pullRequestsByNumberForActiveProject({
+      activeThread,
+      prsByKey: nextPrs,
+      threads,
+    });
+    const changedNumbers = new Set<number>();
+    for (const [number, candidate] of nextShorthandPrs) {
+      if (!samePullRequestChip(this.shorthandPrs.get(number), candidate)) {
+        changedNumbers.add(number);
+      }
+    }
+    for (const number of this.shorthandPrs.keys()) {
+      if (!nextShorthandPrs.has(number)) {
+        changedNumbers.add(number);
+      }
+    }
+
     this.prs = nextPrs;
+    this.shorthandPrs = nextShorthandPrs;
     for (const key of changedKeys) {
       for (const listener of this.listeners.get(key) ?? []) {
+        listener();
+      }
+    }
+    for (const number of changedNumbers) {
+      for (const listener of this.numberListeners.get(number) ?? []) {
         listener();
       }
     }
@@ -138,27 +193,106 @@ function pullRequestsByKey(
   return prs;
 }
 
+function pullRequestsByNumberForActiveProject(params: {
+  activeThread: NavigationThreadSummary | undefined;
+  prsByKey: Map<string, PrSummary>;
+  threads: NavigationThreadSummary[];
+}): Map<number, PrSummary> {
+  if (!params.activeThread) {
+    return new Map();
+  }
+
+  const activeThread = params.threads.find(
+    (thread) =>
+      thread.source === params.activeThread?.source
+      && thread.id === params.activeThread.id,
+  ) ?? params.activeThread;
+  const projectKeys = threadProjectKeys(activeThread);
+  const candidatesByNumber = new Map<number, Map<string, PrSummary>>();
+
+  for (const thread of params.threads) {
+    const sameThread =
+      thread.source === activeThread.source && thread.id === activeThread.id;
+    if (!sameThread && !sharesProjectKey(projectKeys, threadProjectKeys(thread))) {
+      continue;
+    }
+    for (const pr of thread.prs ?? []) {
+      const key = buildPullRequestStatusKey(pr);
+      const byKey = candidatesByNumber.get(pr.number) ?? new Map();
+      byKey.set(key, params.prsByKey.get(key) ?? pr);
+      candidatesByNumber.set(pr.number, byKey);
+    }
+  }
+
+  const resolved = new Map<number, PrSummary>();
+  for (const [number, candidates] of candidatesByNumber) {
+    if (candidates.size === 1) {
+      const [pr] = candidates.values();
+      if (pr) {
+        resolved.set(number, pr);
+      }
+    }
+  }
+  return resolved;
+}
+
+function threadProjectKeys(thread: NavigationThreadSummary): Set<string> {
+  const keys = new Set<string>();
+  const projectKey = normalizeProjectPath(thread.projectKey);
+  if (projectKey) {
+    keys.add(projectKey);
+  }
+  for (const directory of thread.linkedDirectories ?? []) {
+    const directoryPath = normalizeProjectPath(directory.path);
+    if (directoryPath) {
+      keys.add(directoryPath);
+    }
+  }
+  return keys;
+}
+
+function normalizeProjectPath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().replace(/\/+$/, "");
+  return trimmed || undefined;
+}
+
+function sharesProjectKey(left: Set<string>, right: Set<string>): boolean {
+  for (const key of left) {
+    if (right.has(key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const PullRequestLinkContext =
   createContext<PullRequestLinkContextValue | undefined>(undefined);
 
 export function PullRequestLinkProvider(props: {
+  activeThread?: NavigationThreadSummary;
   children: ReactNode;
   threads: NavigationThreadSummary[];
 }) {
   const storeRef = useRef<PullRequestLinkMetadataStore | null>(null);
   if (!storeRef.current) {
-    storeRef.current = new PullRequestLinkMetadataStore(props.threads);
+    storeRef.current = new PullRequestLinkMetadataStore(
+      props.threads,
+      props.activeThread,
+    );
   }
   const store = storeRef.current;
 
   useLayoutEffect(() => {
-    store.update(props.threads);
-  }, [props.threads, store]);
+    store.update(props.threads, props.activeThread);
+  }, [props.activeThread, props.threads, store]);
 
   const value = useMemo<PullRequestLinkContextValue>(
     () => ({
       getSnapshot(fallback) {
         return store.getSnapshot(fallback);
+      },
+      getNumberSnapshot(number) {
+        return store.getNumberSnapshot(number);
       },
       resolve(href) {
         // Keep the parsed unknown summary as the chip's durable fallback. The
@@ -168,6 +302,9 @@ export function PullRequestLinkProvider(props: {
       },
       subscribe(pr, listener) {
         return store.subscribe(pr, listener);
+      },
+      subscribeNumber(number, listener) {
+        return store.subscribeNumber(number, listener);
       },
     }),
     [store],
@@ -199,6 +336,25 @@ export function useLivePullRequest(pr: PrSummary): PrSummary {
     subscribe,
     getSnapshot,
     () => pr,
+  );
+}
+
+export function useLivePullRequestNumber(number: number): PrSummary | undefined {
+  const links = usePullRequestLinks();
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      links?.subscribeNumber(number, listener) ?? (() => {}),
+    [links, number],
+  );
+  const getSnapshot = useCallback(
+    () => links?.getNumberSnapshot(number),
+    [links, number],
+  );
+
+  return useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    () => undefined,
   );
 }
 

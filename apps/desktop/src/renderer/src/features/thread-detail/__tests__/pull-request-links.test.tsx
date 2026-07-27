@@ -27,7 +27,10 @@ function prSummary(overrides: Partial<PrSummary> = {}): PrSummary {
   };
 }
 
-function threadSummary(prs: PrSummary[]): NavigationThreadSummary {
+function threadSummary(
+  prs: PrSummary[],
+  overrides: Partial<NavigationThreadSummary> = {},
+): NavigationThreadSummary {
   return {
     id: "thread-pr-link",
     title: "EMR JDK 17 guidance",
@@ -36,6 +39,7 @@ function threadSummary(prs: PrSummary[]): NavigationThreadSummary {
     linkedDirectories: [],
     inbox: { inInbox: true, unread: false },
     prs,
+    ...overrides,
   } as NavigationThreadSummary;
 }
 
@@ -43,11 +47,34 @@ function renderWithPullRequests(
   text: string,
   prs: PrSummary[],
 ) {
+  const thread = threadSummary(prs);
   return render(
-    <PullRequestLinkProvider threads={[threadSummary(prs)]}>
+    <PullRequestLinkProvider activeThread={thread} threads={[thread]}>
       <ThreadMarkdown text={text} />
     </PullRequestLinkProvider>,
   );
+}
+
+function projectThread(params: {
+  id: string;
+  path: string;
+  prs?: PrSummary[];
+  worktreePath?: string;
+}): NavigationThreadSummary {
+  const worktreePath = params.worktreePath ?? `${params.path}-${params.id}`;
+  return threadSummary(params.prs ?? [], {
+    id: params.id,
+    projectKey: worktreePath,
+    linkedDirectories: [
+      {
+        id: worktreePath,
+        kind: "worktree",
+        label: params.path.split("/").pop() ?? params.path,
+        path: params.path,
+        worktreePath,
+      },
+    ],
+  });
 }
 
 afterEach(() => {
@@ -70,6 +97,182 @@ describe("pull request links in transcript markdown", () => {
 
     fireEvent.click(chip);
     expect(open).toHaveBeenCalledWith(PR_URL, "_blank", "noopener,noreferrer");
+  });
+
+  it("hydrates the exact draft-PR link shape emitted by a completed thread", () => {
+    renderWithPullRequests(
+      `Draft PR: [#13290 — Document JDK 17 for EMR jobs](${PR_URL})`,
+      [prSummary()],
+    );
+
+    expect(screen.getByRole("button", {
+      name: /Open Giphy\/giphy-services#13290 \(draft · checks pending\) in browser/,
+    })).toHaveTextContent("Giphy/giphy-services#13290");
+    expect(screen.queryByRole("link", {
+      name: "#13290 — Document JDK 17 for EMR jobs",
+    })).not.toBeInTheDocument();
+  });
+
+  it("hydrates a bare PR number known on the active thread", () => {
+    renderWithPullRequests("Rebased onto current origin/main, including #13290.", [
+      prSummary(),
+    ]);
+
+    expect(screen.getByRole("button", {
+      name: /Open Giphy\/giphy-services#13290 \(draft · checks pending\) in browser/,
+    })).toBeInTheDocument();
+  });
+
+  it("hydrates a bare PR number known by a sibling thread in the same repository", () => {
+    const activeThread = projectThread({
+      id: "thread-active",
+      path: "/repos/giphy-services",
+    });
+    const siblingThread = projectThread({
+      id: "thread-sibling",
+      path: "/repos/giphy-services",
+      prs: [prSummary()],
+    });
+
+    render(
+      <PullRequestLinkProvider
+        activeThread={activeThread}
+        threads={[activeThread, siblingThread]}
+      >
+        <ThreadMarkdown text="The related fix landed in #13290." />
+      </PullRequestLinkProvider>,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /Open Giphy\/giphy-services#13290 \(draft · checks pending\) in browser/,
+    })).toBeInTheDocument();
+  });
+
+  it("leaves a bare number plain when the known PR belongs to another project", () => {
+    const activeThread = projectThread({
+      id: "thread-active",
+      path: "/repos/current-project",
+    });
+    const unrelatedThread = projectThread({
+      id: "thread-unrelated",
+      path: "/repos/giphy-services",
+      prs: [prSummary()],
+    });
+
+    render(
+      <PullRequestLinkProvider
+        activeThread={activeThread}
+        threads={[activeThread, unrelatedThread]}
+      >
+        <ThreadMarkdown text="Do not guess at #13290." />
+      </PullRequestLinkProvider>,
+    );
+
+    expect(screen.queryByRole("button", {
+      name: /Giphy\/giphy-services#13290/,
+    })).not.toBeInTheDocument();
+    expect(screen.getByText(/#13290/)).toBeInTheDocument();
+  });
+
+  it("leaves a bare number plain when it is ambiguous across linked repositories", () => {
+    const firstPath = "/repos/giphy-services";
+    const secondPath = "/repos/analytics";
+    const activeThread = threadSummary([], {
+      id: "thread-active",
+      linkedDirectories: [
+        {
+          id: "active-first",
+          kind: "worktree",
+          label: "giphy-services",
+          path: firstPath,
+          worktreePath: "/worktrees/active-first",
+        },
+        {
+          id: "active-second",
+          kind: "worktree",
+          label: "analytics",
+          path: secondPath,
+          worktreePath: "/worktrees/active-second",
+        },
+      ],
+    });
+    const firstSibling = projectThread({
+      id: "thread-first",
+      path: firstPath,
+      prs: [prSummary()],
+    });
+    const secondSibling = projectThread({
+      id: "thread-second",
+      path: secondPath,
+      prs: [
+        prSummary({
+          org: "Giphy",
+          repo: "analytics",
+          url: "https://github.com/Giphy/analytics/pull/13290",
+        }),
+      ],
+    });
+
+    render(
+      <PullRequestLinkProvider
+        activeThread={activeThread}
+        threads={[activeThread, firstSibling, secondSibling]}
+      >
+        <ThreadMarkdown text="Ambiguous reference #13290 stays plain." />
+      </PullRequestLinkProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: /#13290/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/#13290/)).toBeInTheDocument();
+  });
+
+  it("does not hydrate PR-style text inside code or an authored non-PR link", () => {
+    renderWithPullRequests(
+      "Keep `#13290` literal and [issue #13290](https://github.com/Giphy/giphy-services/issues/13290) linked.",
+      [prSummary()],
+    );
+
+    expect(screen.queryByRole("button", { name: /#13290/ })).not.toBeInTheDocument();
+    expect(screen.getByText("#13290", { selector: "code" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "issue #13290" })).toBeInTheDocument();
+  });
+
+  it("hydrates a bare number when same-project PR metadata arrives later", () => {
+    const activeThread = projectThread({
+      id: "thread-active",
+      path: "/repos/giphy-services",
+    });
+    const siblingWithoutPr = projectThread({
+      id: "thread-sibling",
+      path: "/repos/giphy-services",
+    });
+    const { rerender } = render(
+      <PullRequestLinkProvider
+        activeThread={activeThread}
+        threads={[activeThread, siblingWithoutPr]}
+      >
+        <ThreadMarkdown text="Waiting on #13290." />
+      </PullRequestLinkProvider>,
+    );
+    expect(screen.queryByRole("button", { name: /#13290/ })).not.toBeInTheDocument();
+
+    const siblingWithPr = projectThread({
+      id: "thread-sibling",
+      path: "/repos/giphy-services",
+      prs: [prSummary()],
+    });
+    rerender(
+      <PullRequestLinkProvider
+        activeThread={activeThread}
+        threads={[activeThread, siblingWithPr]}
+      >
+        <ThreadMarkdown text="Waiting on #13290." />
+      </PullRequestLinkProvider>,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /Open Giphy\/giphy-services#13290 \(draft · checks pending\) in browser/,
+    })).toBeInTheDocument();
   });
 
   it("updates chip modes and a visible tooltip from live PR status metadata", () => {
@@ -196,6 +399,14 @@ describe("pull request links in transcript markdown", () => {
 
     expect(screen.queryByRole("button", { name: /#13290/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "#13290" })).toBeInTheDocument();
+  });
+
+  it("leaves bare PR-style text plain on surfaces without navigation metadata", () => {
+    render(<ThreadMarkdown text="Related: #13290." />);
+
+    expect(screen.queryByRole("button", { name: /#13290/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "#13290" })).not.toBeInTheDocument();
+    expect(screen.getByText(/#13290/)).toBeInTheDocument();
   });
 });
 
