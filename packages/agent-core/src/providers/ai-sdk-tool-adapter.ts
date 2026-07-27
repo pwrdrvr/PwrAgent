@@ -144,7 +144,7 @@ function createWebSearchTool(params: {
           }
           const result = await params.runtime.generateText({
             model: params.runtime.searchModel(),
-            system: buildNestedSearchSystemPrompt("web"),
+            instructions: buildNestedSearchSystemPrompt("web"),
             prompt: buildNestedSearchPrompt(args.query),
             abortSignal: signal,
             toolChoice: "required",
@@ -217,7 +217,7 @@ function createXSearchTool(params: {
           }
           const result = await params.runtime.generateText({
             model: params.runtime.searchModel(),
-            system: buildNestedSearchSystemPrompt("x"),
+            instructions: buildNestedSearchSystemPrompt("x"),
             prompt: buildNestedSearchPrompt(args.query),
             abortSignal: signal,
             toolChoice: "required",

@@ -7,9 +7,9 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ai-sdk/xai": "^3.0.83",
+    "@ai-sdk/xai": "^4.0.10",
     "@pwragent/shared": "workspace:*",
-    "ai": "^6.0.168"
+    "ai": "^7.0.22"
   },
   "scripts": {
     "test": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project agent-core",

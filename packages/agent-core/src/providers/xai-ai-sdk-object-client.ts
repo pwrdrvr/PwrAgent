@@ -53,7 +53,7 @@ export class XaiAiSdkObjectClient {
     });
     const result = await generateObject({
       model: provider.responses(params.model?.trim() || this.defaultModel || DEFAULT_GROK_MODEL),
-      system: params.system,
+      instructions: params.system,
       prompt: params.prompt,
       schema: jsonSchema(params.schema as Parameters<typeof jsonSchema>[0]),
       schemaName: params.schemaName,

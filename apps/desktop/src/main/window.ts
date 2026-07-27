@@ -8,7 +8,8 @@ import {
   type MenuItemConstructorOptions,
 } from "electron";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
 import { resolveHotCpuProfileConfig } from "./diagnostics/hot-cpu-profile-config";
@@ -58,6 +59,7 @@ import { placementForCursorDisplay } from "./window-placement";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
 const isWindows = process.platform === "win32";
+const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const MAIN_WINDOW_WIDTH = 1440;
 const MAIN_WINDOW_HEIGHT = 960;
 const mainLog = getMainLogger("pwragent:main");
@@ -75,7 +77,7 @@ function serializeError(error: unknown): string {
 }
 
 export function getPreloadPath(): string {
-  return join(__dirname, "../preload/index.cjs");
+  return join(moduleDirectory, "../preload/index.cjs");
 }
 
 export function getRendererEntry(): { kind: "url" | "file"; value: string } {
@@ -85,7 +87,7 @@ export function getRendererEntry(): { kind: "url" | "file"; value: string } {
 
   return {
     kind: "file",
-    value: join(__dirname, "../renderer/index.html")
+    value: join(moduleDirectory, "../renderer/index.html")
   };
 }
 
