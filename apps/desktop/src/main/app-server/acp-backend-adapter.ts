@@ -128,6 +128,7 @@ export type AcpBackendAdapterOptions = {
   createAcpClient?: AcpClientFactory;
   createAcpTransport?: AcpTransportFactory;
   discoverLocalAcpAgents?: LocalAcpDiscovery;
+  isAcpAgentEnabled?: (registryId: string) => boolean;
   emit: (event: AgentEvent) => Promise<void>;
   handleServerRequest: (
     backend: AcpBackendId,
@@ -700,6 +701,7 @@ export class AcpBackendAdapter {
   private readonly createAcpClient: AcpClientFactory;
   private readonly createAcpTransport?: AcpTransportFactory;
   private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
+  private readonly isAcpAgentEnabled?: (registryId: string) => boolean;
   private readonly emit: (event: AgentEvent) => Promise<void>;
   private readonly handleServerRequest: (
     backend: AcpBackendId,
@@ -761,15 +763,26 @@ export class AcpBackendAdapter {
         });
         return records;
       });
+    this.isAcpAgentEnabled = options.isAcpAgentEnabled;
     this.createAcpTransport = options.createAcpTransport;
     this.createAcpClient =
       options.createAcpClient ?? ((agent) => this.createDefaultClient(agent));
   }
 
-  describeInstalledBackends(): Promise<BackendSummary[]> {
-    return this.listAvailableAgents().then((installedAgents) =>
-      installedAgents.map((agent) => describeInstalledAcpBackend(agent)),
-    );
+  async describeInstalledBackends(): Promise<BackendSummary[]> {
+    const config = readDesktopSettingsConfigSafe();
+    const installedAgents = await this.listAvailableAgents();
+    return installedAgents
+      .filter((agent) =>
+        this.isAcpAgentEnabled
+          ? this.isAcpAgentEnabled(agent.registryId)
+          : acpAgentEnabledFor(config, agent.registryId),
+      )
+      .map((agent) => describeInstalledAcpBackend(agent));
+  }
+
+  invalidateLocalAgentDiscovery(): void {
+    this.localAcpAgentsPromise = undefined;
   }
 
   listSessions(

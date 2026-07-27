@@ -5514,6 +5514,7 @@ export class DesktopBackendRegistry {
     acpAgentStore?: AcpBackendAdapterOptions["acpAgentStore"];
     acpSessionStore?: AcpSessionStoreLike | null;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
+    isAcpAgentEnabled?: (registryId: string) => boolean;
     createAcpClient?: AcpClientFactory;
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
@@ -5667,6 +5668,7 @@ export class DesktopBackendRegistry {
       captureStores: this.captureStores,
       createAcpClient: options?.createAcpClient,
       discoverLocalAcpAgents: options?.discoverLocalAcpAgents,
+      isAcpAgentEnabled: options?.isAcpAgentEnabled,
       emit: async (event) => await this.emit(event),
       handleServerRequest: async (backend, request) =>
         await this.handleServerRequest(backend, request),
@@ -6200,6 +6202,10 @@ export class DesktopBackendRegistry {
         ? [...summaries, ...acpSummaries]
         : [...summaries, ...acpSummaries].filter((backend) => backend.available),
     };
+  }
+
+  invalidateAcpBackendDiscovery(): void {
+    this.acpBackend.invalidateLocalAgentDiscovery();
   }
 
   /**

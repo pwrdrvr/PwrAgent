@@ -122,6 +122,10 @@ async function refreshModelBackendsIfNeeded(params: {
     || params.secret === "grokApiKey"
   ) {
     await disposeDesktopBackendRegistry();
+    return;
+  }
+  if (params.patch?.acpAgents !== undefined) {
+    getDesktopBackendRegistry().invalidateAcpBackendDiscovery();
   }
 }
 
