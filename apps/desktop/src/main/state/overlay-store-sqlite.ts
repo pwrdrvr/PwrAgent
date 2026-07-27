@@ -1425,6 +1425,26 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async setThreadArchiveTombstone(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    archivedAt?: number;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      archiveTombstonedAt: params.archivedAt,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadPin(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -3566,6 +3586,7 @@ export type OverlayStoreLike = Pick<
   | "readRecentThreadToolInvocations"
   | "upsertThreadSubAgent"
   | "setThreadReaction"
+  | "setThreadArchiveTombstone"
   | "setThreadPin"
   | "setThreadParent"
   | "setThreadAgent"

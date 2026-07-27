@@ -1217,6 +1217,13 @@ export type ThreadOverlayState = {
   lastSeenUpdatedAt?: number;
   dismissedAt?: number;
   snoozedUntil?: number;
+  /**
+   * Records a local archive tombstone when Codex reports that the thread's
+   * rollout is already missing. Codex can continue returning stale metadata
+   * for that thread from `thread/list`; PwrAgent filters tombstoned rows so
+   * they do not reappear after refresh or restart.
+   */
+  archiveTombstonedAt?: number;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   extraLinkedDirectories: LinkedDirectorySummary[];
   worktreeSnapshots?: WorktreeSnapshotSummary[];

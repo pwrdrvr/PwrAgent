@@ -436,6 +436,29 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setThreadArchiveTombstone: async ({
+      backend,
+      threadId,
+      archivedAt,
+    }: {
+      backend: ThreadOverlayState["backend"];
+      threadId: string;
+      archivedAt?: number;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        archiveTombstonedAt: archivedAt,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     setThreadModelSettings: async (settings: {
       backend: "codex" | "grok";
       threadId: string;
@@ -1158,6 +1181,7 @@ class MockBackendClient {
       listThreadsError?: Error;
       listThreadsDelay?: Promise<unknown>;
       archivedThreads?: AppServerThreadSummary[];
+      archiveThreadError?: Error;
       startThreadResult?: { threadId: string };
       startTurnDelay?: Promise<unknown>;
       startTurnError?: Error;
@@ -1214,6 +1238,9 @@ class MockBackendClient {
 
   async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
     this.lastArchiveThreadParams = params;
+    if (this.options.archiveThreadError) {
+      throw this.options.archiveThreadError;
+    }
     return { threadId: params.threadId };
   }
 
@@ -25759,6 +25786,233 @@ script = "printf setup"
         },
       ],
     });
+
+    await registry.close();
+  });
+
+  it("tombstones a Codex thread when its rollout is already missing", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-missing-rollout",
+      title: "Stale thread",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+      archiveThreadError: new Error(
+        "json-rpc error (-32600): no rollout found for thread id thread-missing-rollout",
+      ),
+    });
+    const overlayStore = createOverlayStoreMock();
+    const setThreadArchiveTombstone = vi.spyOn(
+      overlayStore,
+      "setThreadArchiveTombstone",
+    );
+    const requestBindingRevokeAllForThread = vi.fn(async () => ({
+      notifiedCount: 0,
+      revokedCount: 0,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      messagingArchiveCleaner: {
+        requestBindingRevokeAllForThread,
+      },
+      overlayStore,
+    });
+
+    const response = await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-missing-rollout",
+    });
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-missing-rollout",
+      archivedAt: expect.any(Number),
+      cleanup: [],
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-missing-rollout",
+      }),
+    ).resolves.toMatchObject({
+      archiveTombstonedAt: response.archivedAt,
+    });
+    expect(requestBindingRevokeAllForThread).toHaveBeenCalledTimes(1);
+    expect(
+      requestBindingRevokeAllForThread.mock.invocationCallOrder[0]!,
+    ).toBeLessThan(setThreadArchiveTombstone.mock.invocationCallOrder[0]!);
+    await expect(
+      registry.listThreads({
+        backend: "codex",
+        forceRefresh: true,
+      }),
+    ).resolves.toEqual([]);
+
+    await registry.restoreThread({
+      backend: "codex",
+      threadId: "thread-missing-rollout",
+    });
+    await expect(
+      registry.listThreads({
+        backend: "codex",
+        forceRefresh: true,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-missing-rollout",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("finishes best-effort cleanup before leaving a missing-rollout thread retryable", async () => {
+    const parentThread: AppServerThreadSummary = {
+      id: "thread-missing-rollout",
+      title: "Stale thread",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "worktree",
+          worktreePath: "/repo/.worktrees/stale-thread",
+        },
+      ],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const childThread: AppServerThreadSummary = {
+      id: "thread-child",
+      title: "Child thread",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 1,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [parentThread, childThread],
+      archiveThreadError: new Error(
+        "json-rpc error (-32600): no rollout found for thread id thread-missing-rollout",
+      ),
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-child": {
+          backend: "codex",
+          threadId: "thread-child",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          parentThreadId: "thread-missing-rollout",
+        },
+      },
+    });
+    const setThreadParent = vi
+      .spyOn(overlayStore, "setThreadParent")
+      .mockRejectedValue(new Error("ungroup unavailable"));
+    const requestBindingRevokeAllForThread = vi.fn(async () => {
+      throw new Error("messaging unavailable");
+    });
+    const archiveWorktree = vi.fn(async () => {
+      throw new Error("worktree unavailable");
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      messagingArchiveCleaner: {
+        requestBindingRevokeAllForThread,
+      },
+      overlayStore,
+      worktreeArchiveService: {
+        archive: archiveWorktree,
+      } as unknown as WorktreeArchiveService,
+    });
+
+    await expect(
+      registry.archiveThread({
+        backend: "codex",
+        threadId: "thread-missing-rollout",
+      }),
+    ).rejects.toThrow(
+      /messaging cleanup failed: messaging unavailable; child ungrouping failed: ungroup unavailable; worktree cleanup failed.*worktree unavailable/,
+    );
+
+    expect(requestBindingRevokeAllForThread).toHaveBeenCalledTimes(1);
+    expect(setThreadParent).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-child",
+      parentThreadId: undefined,
+    });
+    expect(archiveWorktree).toHaveBeenCalledTimes(1);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-missing-rollout",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      registry.listThreads({
+        backend: "codex",
+        forceRefresh: true,
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "thread-missing-rollout",
+        }),
+      ]),
+    );
+
+    await registry.close();
+  });
+
+  it("preserves non-rollout Codex archive failures", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-archive-error",
+      title: "Archive error",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+      archiveThreadError: new Error("archive transport unavailable"),
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await expect(
+      registry.archiveThread({
+        backend: "codex",
+        threadId: "thread-archive-error",
+      }),
+    ).rejects.toThrow("archive transport unavailable");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-archive-error",
+      }),
+    ).resolves.toBeUndefined();
 
     await registry.close();
   });
