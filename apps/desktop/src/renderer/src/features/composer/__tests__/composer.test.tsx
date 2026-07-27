@@ -11984,6 +11984,7 @@ describe("Composer", () => {
       expect.objectContaining({
         title: "Images not supported",
         message: expect.stringContaining("GPT-5.3-Codex-Spark"),
+        tone: "warning",
       })
     );
     expect(
