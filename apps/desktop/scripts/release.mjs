@@ -426,6 +426,49 @@ function configureStageGithubReleaseType() {
   console.log(`  configured GitHub releaseType=${releaseType} for ${version}`);
 }
 
+function assertRequiredGrokBundle() {
+  if (process.env.PWRAGENT_REQUIRE_GROK_BUNDLE !== "1") {
+    return;
+  }
+  const executable = process.platform === "win32" ? "grok.exe" : "grok";
+  const bundledExecutable = join(
+    stageDir,
+    "build",
+    "bundled-agents",
+    "grok",
+    executable,
+  );
+  if (!existsSync(bundledExecutable)) {
+    throw new Error(
+      `PWRAGENT_REQUIRE_GROK_BUNDLE=1 but the staged executable is missing at ${bundledExecutable}`,
+    );
+  }
+  console.log(`  verified bundled Grok runtime: ${bundledExecutable}`);
+}
+
+function verifyPackagedGrok(resourcesDirectory) {
+  const executable = process.platform === "win32" ? "grok.exe" : "grok";
+  const bundledExecutable = join(
+    resourcesDirectory,
+    "agents",
+    "grok",
+    executable,
+  );
+  if (!existsSync(bundledExecutable)) {
+    if (process.env.PWRAGENT_REQUIRE_GROK_BUNDLE === "1") {
+      throw new Error(
+        `Packaged Grok runtime is missing at ${bundledExecutable}`,
+      );
+    }
+    return undefined;
+  }
+  runChecked(bundledExecutable, ["--version"], {
+    cwd: dirname(bundledExecutable),
+    env: { GROK_INSTALLER: "pwragent", NO_COLOR: "1" },
+  });
+  return bundledExecutable;
+}
+
 // 1. Decode CI-provided Apple API key (if present) to a real .p8 file.
 function maybeDecodeAppleApiKey() {
   if (process.env.APPLE_API_KEY && existsSync(process.env.APPLE_API_KEY)) {
@@ -511,14 +554,18 @@ if (!signStageOnly) {
   for (const file of ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"]) {
     copyFileSync(join(repoRoot, file), join(stageDir, file));
   }
+  assertRequiredGrokBundle();
 
   if (prepareOnly) {
     step("prepared release-stage");
     console.log(`  stage: ${stageDir}`);
     process.exit(0);
   }
-} else if (!existsSync(stageDir)) {
-  throw new Error(`release-stage is missing at ${stageDir}`);
+} else {
+  if (!existsSync(stageDir)) {
+    throw new Error(`release-stage is missing at ${stageDir}`);
+  }
+  assertRequiredGrokBundle();
 }
 
 // 5. electron-builder.
@@ -585,6 +632,9 @@ const dist = join(stageDir, "dist");
 if (win) {
   const builtApp = findWindowsUnpackedDir(dist);
 
+  step("verify packaged Grok runtime");
+  verifyPackagedGrok(join(builtApp, "resources"));
+
   step("verify packaged asar contents");
   runChecked(
     "node",
@@ -603,6 +653,9 @@ if (win) {
 
 if (linux) {
   const builtApp = findLinuxUnpackedDir(dist);
+
+  step("verify packaged Grok runtime");
+  verifyPackagedGrok(join(builtApp, "resources"));
 
   step("verify packaged asar contents");
   runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);
@@ -666,6 +719,18 @@ for (const { binding, lipoArch, packageName } of MAC_CANVAS_BINDINGS) {
     ),
     "-verify_arch",
     lipoArch,
+  ]);
+}
+
+const bundledGrokExecutable = verifyPackagedGrok(
+  join(builtApp, "Contents", "Resources"),
+);
+if (bundledGrokExecutable) {
+  runChecked("lipo", [
+    bundledGrokExecutable,
+    "-verify_arch",
+    "x86_64",
+    "arm64",
   ]);
 }
 

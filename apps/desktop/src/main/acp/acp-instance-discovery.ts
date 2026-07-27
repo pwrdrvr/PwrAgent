@@ -25,6 +25,7 @@ import type {
 } from "@pwragent/shared";
 import { resolveActiveAcpInstance } from "./acp-instance-resolver.js";
 import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
+import { resolveBundledGrokCommand } from "./acp-bundled-agent.js";
 import { normalizeAcpLaunchDescriptor } from "./acp-launch-descriptor.js";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
 import type {
@@ -81,6 +82,11 @@ export type DiscoverAcpAgentInstancesOptions = {
     command: string,
     env: NodeJS.ProcessEnv,
   ) => Promise<string | undefined>;
+  /**
+   * Packaged PwrAgent Grok executable. `undefined` auto-detects it under
+   * Electron resources; `null` disables it (primarily for tests).
+   */
+  bundledGrokCommand?: string | null;
 };
 
 /**
@@ -105,12 +111,20 @@ export async function discoverAcpAgentInstances(
   }
 
   const discover = options?.discover ?? discoverLocalAcpAgentInstances;
-  const groups = await discover({
+  const discoveredGroups = await discover({
     ...(strategies !== undefined ? { strategies } : {}),
     ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     ...(options?.env ? { env: options.env } : {}),
     ...(options?.now ? { now: options.now } : {}),
   });
+  const groups = withBundledGrok(
+    discoveredGroups,
+    strategies,
+    options?.bundledGrokCommand === undefined
+      ? resolveBundledGrokCommand()
+      : options.bundledGrokCommand,
+    options?.now?.() ?? Date.now(),
+  );
 
   const byRegistryId = new Map<string, AcpInstanceDiscovery>();
   for (const group of groups) {
@@ -159,13 +173,23 @@ export async function discoverLocalAcpAgentRecords(
   }
 
   const discover = options?.discover ?? discoverLocalAcpAgentInstances;
-  const groups = await discover({
+  const discoveredGroups = await discover({
     ...(strategies !== undefined ? { strategies } : {}),
     ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     ...(options?.env ? { env: options.env } : {}),
     ...(options?.now ? { now: options.now } : {}),
   });
   const now = options?.now?.() ?? Date.now();
+  const bundledGrokCommand =
+    options?.bundledGrokCommand === undefined
+      ? resolveBundledGrokCommand()
+      : options.bundledGrokCommand;
+  const groups = withBundledGrok(
+    discoveredGroups,
+    strategies,
+    bundledGrokCommand,
+    now,
+  );
 
   const records: AcpInstalledAgentRecord[] = [];
   for (const group of groups) {
@@ -203,7 +227,13 @@ export async function discoverLocalAcpAgentRecords(
       distributionKind: "local",
       command: active.command,
       args: group.args,
-      env: group.env,
+      env: {
+        ...group.env,
+        ...(group.strategyId === "grok"
+          && active.command === bundledGrokCommand
+          ? { GROK_INSTALLER: "pwragent" }
+          : {}),
+      },
     });
     const registryAgent: AcpRegistryAgent = {
       id: group.strategyId,
@@ -377,4 +407,53 @@ function strategiesForEnabledRegistryIds(
   }
   const enabled = new Set(enabledRegistryIds);
   return ACP_DISCOVERY_STRATEGIES.filter((strategy) => enabled.has(strategy.id));
+}
+
+function withBundledGrok(
+  discoveredGroups: readonly DiscoveredAcpAgentGroup[],
+  enabledStrategies: readonly AcpAgentStrategy[] | undefined,
+  bundledGrokCommand: string | null | undefined,
+  discoveredAt: number,
+): DiscoveredAcpAgentGroup[] {
+  const groups = discoveredGroups.map((group) => ({
+    ...group,
+    instances: [...group.instances],
+  }));
+  if (!bundledGrokCommand) {
+    return groups;
+  }
+
+  const grokStrategy = (enabledStrategies ?? BUILT_IN_ACP_STRATEGIES).find(
+    (strategy) => strategy.id === "grok",
+  );
+  if (!grokStrategy) {
+    return groups;
+  }
+
+  const bundledInstance = {
+    command: bundledGrokCommand,
+    source: "fallback" as const,
+  };
+  const grokGroup = groups.find((group) => group.strategyId === "grok");
+  if (grokGroup) {
+    if (
+      !grokGroup.instances.some(
+        (instance) => instance.command === bundledGrokCommand,
+      )
+    ) {
+      grokGroup.instances.push(bundledInstance);
+    }
+    return groups;
+  }
+
+  groups.push({
+    strategyId: grokStrategy.id,
+    backendId: grokStrategy.backendId,
+    name: grokStrategy.displayName,
+    args: [...grokStrategy.spawn.args],
+    env: { ...grokStrategy.spawn.env },
+    instances: [bundledInstance],
+    discoveredAt,
+  });
+  return groups;
 }

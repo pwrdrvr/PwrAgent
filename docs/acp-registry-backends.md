@@ -14,7 +14,7 @@ Core behind ACP.
   rule, verification state, auth state, and launch descriptor.
 - ACP session metadata in the same navigation/thread model used by built-in
   backends.
-- Client-owned mediation for ACP filesystem, terminal, and cancellation flows.
+- Client-owned mediation for ACP permission requests and prompt cancellation.
 
 ## Allowlist Policy
 
@@ -42,11 +42,14 @@ permits that exact unverified source, and Settings surfaces that state.
 
 ## Trust Boundary
 
-Default Access and Full Access map to ACP requests that PwrAgent owns, such as
-filesystem writes and terminal creation requests sent through the ACP client
-API. PwrAgent cannot sandbox internal behavior an external ACP process performs
-outside those protocol requests. Treat installed ACP agents as third-party local
-executables with their own credential, network, and subprocess behavior.
+PwrAgent currently advertises ACP client filesystem and terminal capabilities
+as unsupported and handles only `session/request_permission` on the reverse
+request path. Default Access and Full Access affect that permission flow, but
+they do not turn an external ACP process into a PwrAgent-sandboxed process.
+PwrAgent cannot mediate filesystem, terminal, network, or subprocess behavior
+that an external agent performs internally. Treat installed ACP agents as
+third-party local executables with their own credential and operating-system
+access.
 
 ## Runtime State
 
@@ -65,5 +68,5 @@ than sqlite; see [thread-history-persistence.md](thread-history-persistence.md).
 
 Ship with a narrow allowlist. Add new agents only after agent-specific smoke
 testing covers install, launch, session creation, prompt turn, cancellation,
-filesystem/terminal requests, auth/setup status, and registry-unavailable
-startup.
+permission requests, rejection of unsupported reverse requests, auth/setup
+status, and registry-unavailable startup.
