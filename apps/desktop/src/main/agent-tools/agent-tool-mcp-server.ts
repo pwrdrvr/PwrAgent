@@ -257,6 +257,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         if (!clientContext) {
           return forbiddenMcpResponse("Unknown PwrAgent MCP client.");
         }
+        if (!clientContext.threadId) {
+          return forbiddenMcpResponse(
+            "PwrAgent MCP tools are callable only after the client is bound to a thread.",
+          );
+        }
         const callContext = await this.options.resolveCallContext(clientContext);
         if (!callContext) {
           return forbiddenMcpResponse(

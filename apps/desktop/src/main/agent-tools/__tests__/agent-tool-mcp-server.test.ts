@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentToolRouter } from "../agent-tool-router";
 import {
   AgentToolMcpServer,
+  type AgentToolMcpClientContext,
   type AgentToolMcpRegistration,
 } from "../agent-tool-mcp-server";
 import { agentToolSuccess } from "../agent-tool-definition";
@@ -91,6 +92,83 @@ describe("AgentToolMcpServer", () => {
         turnId: "turn-1",
       },
     );
+  });
+
+  it("lists tools but rejects calls until the registration is thread-bound", async () => {
+    const dispatch = vi.fn(() => agentToolSuccess({ status: "ok" }));
+    const catalog = buildCatalog(
+      new AgentToolRouter([
+        {
+          namespace: "pwragent",
+          name: "inspect",
+          description: "Inspect test state.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+          },
+          dispatch,
+        },
+      ]),
+    );
+    const resolveCallContext = vi.fn(
+      (context: AgentToolMcpClientContext) => ({
+        backend: context.backend,
+        threadId: context.threadId ?? "unrelated-thread",
+        turnId: "turn-1",
+      }),
+    );
+    const server = new AgentToolMcpServer({
+      resolveCallContext,
+      resolveCatalogs: () => [catalog],
+    });
+    openServers.push(server);
+    const registration = await server.registerClient({
+      backend: "acp:kimi",
+    });
+    const client = await connectClient(registration);
+
+    try {
+      await expect(client.listTools()).resolves.toMatchObject({
+        tools: [
+          {
+            name: "inspect",
+          },
+        ],
+      });
+      await expect(
+        client.callTool({
+          name: "inspect",
+          arguments: {},
+        }),
+      ).resolves.toMatchObject({
+        isError: true,
+        structuredContent: {
+          code: "forbidden",
+        },
+      });
+      expect(resolveCallContext).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+
+      registration.bindThread("thread-1");
+      await expect(
+        client.callTool({
+          name: "inspect",
+          arguments: {},
+        }),
+      ).resolves.toMatchObject({
+        structuredContent: {
+          status: "ok",
+        },
+      });
+    } finally {
+      await client.close();
+    }
+
+    expect(resolveCallContext).toHaveBeenCalledWith({
+      backend: "acp:kimi",
+      threadId: "thread-1",
+    });
+    expect(dispatch).toHaveBeenCalledOnce();
   });
 
   it("rejects unauthenticated, cross-origin, and inactive-turn calls", async () => {

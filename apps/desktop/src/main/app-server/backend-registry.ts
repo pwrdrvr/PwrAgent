@@ -16374,6 +16374,9 @@ export class DesktopBackendRegistry {
   private resolveAgentToolMcpCallContext(
     context: AgentToolMcpClientContext,
   ): ResolvedAgentToolMcpCallContext | undefined {
+    if (!context.threadId) {
+      return undefined;
+    }
     const matchingTurns = [...this.activeTurnKeys]
       .map(parseActiveTurnKey)
       .filter(
@@ -16383,10 +16386,7 @@ export class DesktopBackendRegistry {
           Boolean(
             candidate
             && candidate.backend === context.backend
-            && (
-              !context.threadId
-              || candidate.threadId === context.threadId
-            ),
+            && candidate.threadId === context.threadId,
           ),
       );
     return matchingTurns.length === 1 ? matchingTurns[0] : undefined;
