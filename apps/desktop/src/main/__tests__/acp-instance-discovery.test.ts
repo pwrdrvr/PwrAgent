@@ -415,13 +415,15 @@ describe("resolveBundledGrokCommand", () => {
     expect(exists).toHaveBeenCalledWith(command);
   });
 
-  it("uses the Windows executable suffix and omits absent bundles", () => {
+  it("uses Windows path semantics and the executable suffix", () => {
+    const exists = vi.fn(() => true);
     const command = resolveBundledGrokCommand({
       resourcesPath: "C:\\PwrAgent\\resources",
       platform: "win32",
-      exists: () => false,
+      exists,
     });
 
-    expect(command).toBeUndefined();
+    expect(command).toBe("C:\\PwrAgent\\resources\\agents\\grok\\grok.exe");
+    expect(exists).toHaveBeenCalledWith(command);
   });
 });

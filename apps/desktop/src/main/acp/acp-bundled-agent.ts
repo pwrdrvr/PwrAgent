@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { posix, win32 } from "node:path";
 
 export const BUNDLED_GROK_RELATIVE_PATH = ["agents", "grok"] as const;
 
@@ -12,10 +12,10 @@ export function resolveBundledGrokCommand(options?: {
   if (!resourcesPath) {
     return undefined;
   }
-  const executable = (options?.platform ?? process.platform) === "win32"
-    ? "grok.exe"
-    : "grok";
-  const command = resolve(
+  const platform = options?.platform ?? process.platform;
+  const executable = platform === "win32" ? "grok.exe" : "grok";
+  const pathApi = platform === "win32" ? win32 : posix;
+  const command = pathApi.resolve(
     resourcesPath,
     ...BUNDLED_GROK_RELATIVE_PATH,
     executable,
