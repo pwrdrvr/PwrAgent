@@ -5169,6 +5169,8 @@ describe("MessagingController", () => {
         codexEnvironmentId: "codex-environment",
         codexEnvironmentExecutionTarget: "local",
         codexEnvironmentActionId: "codex-action",
+        model: "shared-model",
+        reasoningEffort: "high",
         codexEnvironmentOptions: [
           {
             id: "codex-environment",
@@ -5188,11 +5190,15 @@ describe("MessagingController", () => {
             codexEnvironmentId: "codex-environment",
             codexEnvironmentExecutionTarget: "local",
             codexEnvironmentActionId: "codex-action",
+            model: "shared-model",
+            reasoningEffort: "high",
           },
           grok: {
             codexEnvironmentId: "grok-environment",
             codexEnvironmentExecutionTarget: "local",
             codexEnvironmentActionId: "grok-action",
+            model: "grok-4.20-reasoning",
+            reasoningEffort: "low",
           },
         },
       },
@@ -5215,7 +5221,10 @@ describe("MessagingController", () => {
             kind: "codex",
             label: "Codex",
             launchpadOptions: {
-              models: [{ id: "gpt-5.3-codex", label: "GPT-5.3 Codex" }],
+              models: [
+                { id: "shared-model", label: "Shared Model" },
+                { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+              ],
               reasoningEfforts: ["low", "medium", "high"],
               supportsFastMode: true,
             },
@@ -5224,7 +5233,10 @@ describe("MessagingController", () => {
             kind: "grok",
             label: "Grok",
             launchpadOptions: {
-              models: [{ id: "grok-4.20-reasoning", label: "Grok 4.20 Reasoning" }],
+              models: [
+                { id: "shared-model", label: "Shared Model" },
+                { id: "grok-4.20-reasoning", label: "Grok 4.20 Reasoning" },
+              ],
               reasoningEfforts: ["low", "medium", "high"],
               supportsFastMode: false,
             },
@@ -5260,6 +5272,25 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-model",
+        value: { model: "shared-model" },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-reasoning",
+        value: { reasoningEffort: "high" },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-environment",
+        value: { environmentId: "codex-environment" },
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "browse:new:backend" }),
     );
     expect(harness.delivered.at(-1)).toMatchObject({
@@ -5291,7 +5322,7 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining(
-        "Provider: Grok\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Grok Environment",
+        "Provider: Grok\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Grok Environment\nModel: grok-4.20-reasoning\nReasoning: low",
       ),
       actions: expect.arrayContaining([
         expect.objectContaining({
@@ -5313,6 +5344,40 @@ describe("MessagingController", () => {
       },
     });
 
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:backend" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-backend",
+        value: { backend: "codex" },
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining(
+        "Provider: Codex\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Codex Environment\nModel: shared-model\nReasoning: high",
+      ),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:backend" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-backend",
+        value: { backend: "grok" },
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining(
+        "Provider: Grok\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Grok Environment\nModel: grok-4.20-reasoning\nReasoning: low",
+      ),
+    });
+
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug with Grok"));
 
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
@@ -5323,6 +5388,8 @@ describe("MessagingController", () => {
           codexEnvironmentActionId: "grok-action",
           codexEnvironmentExecutionTarget: "local",
           codexEnvironmentId: "grok-environment",
+          model: "grok-4.20-reasoning",
+          reasoningEffort: "low",
         }),
       }),
       expectMaterializeOptions(),
