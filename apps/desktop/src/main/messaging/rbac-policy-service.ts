@@ -15,8 +15,9 @@ import {
 import { MESSAGING_PERMISSION_CATALOG } from "@pwragent/shared";
 
 import {
-  readRbacPolicy,
+  readRbacPolicyState,
   writeRbacPolicy,
+  type RbacPolicyReadState,
   type RbacPolicyStoreOptions,
 } from "../settings/rbac-policy-store";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
@@ -55,7 +56,7 @@ export type RbacPolicyAuditSink = (
  * invalidated on write.
  */
 export class RbacPolicyService {
-  private cache: RbacPolicy | null = null;
+  private cache: RbacPolicyReadState | null = null;
 
   constructor(
     private readonly options?: RbacPolicyStoreOptions,
@@ -67,15 +68,24 @@ export class RbacPolicyService {
     this.cache = null;
   }
 
-  private policy(): RbacPolicy {
+  private state(): RbacPolicyReadState {
     if (!this.cache) {
-      this.cache = readRbacPolicy(this.options);
+      this.cache = readRbacPolicyState(this.options);
     }
     return this.cache;
   }
 
+  private policy(): RbacPolicy {
+    return this.state().policy;
+  }
+
   isEnforcing(): boolean {
     return this.policy().enforced;
+  }
+
+  /** True when the loaded policy is the fail-closed stand-in (unreadable data). */
+  isFailClosed(): boolean {
+    return this.state().failClosed;
   }
 
   /** Built-in roles first, then custom roles from the policy file. */
@@ -111,6 +121,7 @@ export class RbacPolicyService {
       roles: this.allRoles(),
       attachments: policy.attachments,
       permissionCatalog: MESSAGING_PERMISSION_CATALOG,
+      ...(this.isFailClosed() ? { failClosed: true } : {}),
     };
   }
 
@@ -121,7 +132,7 @@ export class RbacPolicyService {
   private mutate(next: (policy: RbacPolicy) => RbacPolicy): void {
     const updated = next(structuredClonePolicy(this.policy()));
     writeRbacPolicy(updated, this.options);
-    this.cache = updated;
+    this.cache = { policy: updated, failClosed: false };
   }
 
   /**

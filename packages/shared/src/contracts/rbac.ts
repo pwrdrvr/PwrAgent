@@ -787,6 +787,13 @@ export type ReadRbacPolicyResponse = {
   roles: RbacRoleDefinition[];
   attachments: RbacAttachment[];
   permissionCatalog: readonly MessagingPermissionDescriptor[];
+  /**
+   * True when RBAC data exists on disk but could not be parsed, so the store
+   * failed closed: enforcement locked ON with zero attachments (every actor
+   * default-denied). The pane surfaces a repair callout instead of showing a
+   * puzzlingly empty enforced graph.
+   */
+  failClosed?: boolean;
 };
 
 export type WriteRbacRoleRequest = {

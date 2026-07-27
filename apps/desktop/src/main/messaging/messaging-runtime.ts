@@ -464,7 +464,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       }
     }
     // No messaging controller started this turn → desktop-operator turn →
-    // unrestricted (RBAC only governs messaging-originated agents).
+    // unrestricted (RBAC only governs messaging-originated agents). Note:
+    // origins are controller-memory only, so a controller torn down mid-turn
+    // makes its still-running turn land here too — see the "Known window"
+    // note on MessagingController.checkDynamicToolPermission.
     return { allowed: true };
   }
 

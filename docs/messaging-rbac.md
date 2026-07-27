@@ -105,6 +105,20 @@ A bucket attachment only matches when the actor was actually **admitted via
 that path** — a named authorized user is not silently widened by a bucket
 role, and a bucket role never applies on a platform other than its own.
 
+Two operator consequences of that rule are worth internalizing:
+
+- **A contact authorized *after* enforcement was enabled starts with zero
+  permissions.** The Admin seed only runs at enable time, so a newly added
+  `authorizedUserIds` contact is admitted by the provider but default-denied
+  by RBAC until you attach a role — the Access Control pane shows them wired
+  to the REJECTED sink.
+- **Named actors can have *less* capability than the bucket around them.**
+  Because bucket roles never widen named actors, a role-less named actor in a
+  bucket-enabled Slack channel is denied while their unnamed peers chat via
+  the bucket role. That asymmetry is deliberate — naming someone gives them an
+  individually controlled grant, not the crowd's — but it can look like a bug
+  if you don't expect it.
+
 ## Resolution semantics
 
 - **Strictly additive.** An actor's effective permission set is the UNION of
@@ -192,6 +206,10 @@ when the store affirmatively knows it is off:
   the operator repairs the file. Only a clean `enforced = false` disables
   enforcement. Falling open here would silently re-promote every admitted
   actor to Admin — the exact regression enforcement was configured to prevent.
+  The fail-closed state is surfaced explicitly: the policy read carries a
+  `failClosed` flag and the Access Control pane shows a repair callout
+  (fix the file by hand; pane edits may fail while the TOML is malformed)
+  instead of a puzzlingly empty enforced graph.
 - Individually malformed role/attachment rows are dropped row by row, which is
   itself fail-closed: a dropped attachment grants nothing.
 

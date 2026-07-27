@@ -465,6 +465,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
   }
 
   const enforced = policy?.enforced ?? false;
+  const failClosed = policy?.failClosed === true;
   const roles = policy?.roles ?? [];
   const catalog = policy?.permissionCatalog ?? [];
 
@@ -502,6 +503,27 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
           <div>
             <div className="rbac-callout__title">Something went wrong</div>
             <div className="rbac-callout__body">{error}</div>
+          </div>
+        </div>
+      ) : null}
+
+      {failClosed ? (
+        <div className="rbac-callout is-danger" role="alert">
+          <span className="rbac-callout__icon">
+            <Alert />
+          </span>
+          <div>
+            <div className="rbac-callout__title">
+              Stored policy could not be read — failing closed
+            </div>
+            <div className="rbac-callout__body">
+              Access Control data exists but is unreadable, so enforcement is
+              locked on and <b>every messaging actor is denied</b> until it is
+              repaired. Fix the <code>[messaging.rbac]</code> section in this
+              profile&apos;s <code>config.toml</code> (or its legacy{" "}
+              <code>rbac-policy.json</code>) by hand; edits from this screen
+              may fail while the file is malformed.
+            </div>
           </div>
         </div>
       ) : null}

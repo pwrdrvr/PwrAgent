@@ -12,6 +12,7 @@ import {
 
 import {
   readRbacPolicy,
+  readRbacPolicyState,
   resolveLegacyRbacPolicyJsonPath,
   resolveRbacConfigPath,
   writeRbacPolicy,
@@ -177,6 +178,21 @@ describe("rbac policy store", () => {
     // Only a clean `enforced = false` turns enforcement off.
     fs.writeFileSync(configPath, "[messaging.rbac]\nenforced = false\n");
     expect(readRbacPolicy(storeOptions).enforced).toBe(false);
+  });
+
+  it("reports failClosed via readRbacPolicyState only on fail-closed paths", () => {
+    // Absent config: not configured, not fail-closed.
+    expect(readRbacPolicyState(storeOptions).failClosed).toBe(false);
+    const configPath = resolveRbacConfigPath(storeOptions);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    // Corrupt TOML that still shows RBAC data: fail-closed.
+    fs.writeFileSync(configPath, "[messaging.rbac]\nenforced = true\n[broken");
+    expect(readRbacPolicyState(storeOptions).failClosed).toBe(true);
+    // Healthy section: enforced but readable, so not fail-closed.
+    fs.writeFileSync(configPath, "[messaging.rbac]\nenforced = true\n");
+    const healthy = readRbacPolicyState(storeOptions);
+    expect(healthy.failClosed).toBe(false);
+    expect(healthy.policy.enforced).toBe(true);
   });
 
   it("fails CLOSED on an unparseable legacy JSON file", () => {

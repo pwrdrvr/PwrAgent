@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -60,6 +63,30 @@ describe("rbac permission coverage", () => {
       "skills:search",
     ];
     for (const actionId of GATED_STATUS_ACTIONS) {
+      const permission = permissionForActionId(actionId);
+      expect(permission, `${actionId} must map to a permission`).toBeDefined();
+      expect(ALL_MESSAGING_PERMISSIONS).toContain(permission);
+    }
+  });
+
+  it("maps every status:* literal that appears in the status-card source", () => {
+    // Belt to the curated list's suspenders: scan the status card's source for
+    // `"status:..."` id literals so a brand-new button cannot ship ungated
+    // just because nobody added it to GATED_STATUS_ACTIONS above. Prefix-gated
+    // families (handoff:/skills:/questionnaire:) don't need scanning — the
+    // permissionForActionId prefix rules cover any id in those namespaces.
+    const source = fs.readFileSync(
+      fileURLToPath(
+        new URL("../messaging/core/messaging-status-card.ts", import.meta.url),
+      ),
+      "utf8",
+    );
+    const ids = new Set(
+      [...source.matchAll(/"(status:[a-z0-9_-]+)"/g)].map((match) => match[1]),
+    );
+    // Sanity: the scan actually found the card's buttons (regex not stale).
+    expect(ids.size).toBeGreaterThanOrEqual(15);
+    for (const actionId of ids) {
       const permission = permissionForActionId(actionId);
       expect(permission, `${actionId} must map to a permission`).toBeDefined();
       expect(ALL_MESSAGING_PERMISSIONS).toContain(permission);

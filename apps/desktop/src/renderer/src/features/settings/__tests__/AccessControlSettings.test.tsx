@@ -106,6 +106,27 @@ describe("AccessControlSettings", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows the repair callout when the policy failed closed", async () => {
+    const api = makeApi({
+      readRbacPolicy: vi.fn(async () => ({
+        enforced: true,
+        roles: [...BUILT_IN_ROLES],
+        attachments: [],
+        permissionCatalog: MESSAGING_PERMISSION_CATALOG,
+        failClosed: true,
+      })),
+    });
+    render(<AccessControlSettings desktopApi={api} />);
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Stored policy could not be read/i),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(/every messaging actor is denied/i),
+    ).toBeInTheDocument();
+  });
+
   it("shows the migration banner when enforcement is off", async () => {
     const api = makeApi({
       readRbacPolicy: vi.fn(async () => ({

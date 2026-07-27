@@ -54,6 +54,12 @@ import {
  * Built-in roles are NEVER persisted here — they are code constants
  * (`BUILT_IN_ROLES` in `@pwragent/shared`) so upgrades can extend them. Only
  * custom roles and attachments live in the config.
+ *
+ * Concurrency: writes are read-modify-write with an atomic tmp+rename, the
+ * same unlocked pattern as `applyDesktopSettingsPatch`. Two app instances
+ * sharing a profile can last-write-wins each other's config edits — a
+ * pre-existing property of all config.toml writers, accepted because policy
+ * edits are operator-driven Settings actions, not concurrent hot paths.
  */
 
 export type RbacPolicyStoreOptions = {
@@ -113,6 +119,24 @@ export function resolveLegacyRbacPolicyJsonPath(
  * Enforcement turns off only when we affirmatively know it is off.
  */
 export function readRbacPolicy(options?: RbacPolicyStoreOptions): RbacPolicy {
+  return readRbacPolicyState(options).policy;
+}
+
+export type RbacPolicyReadState = {
+  policy: RbacPolicy;
+  /**
+   * True when the policy came from the fail-closed path — RBAC data exists on
+   * disk but could not be parsed, so enforcement is locked ON with zero
+   * attachments. The Access Control pane surfaces this so the operator knows
+   * to repair the file instead of puzzling over an empty enforced graph.
+   */
+  failClosed: boolean;
+};
+
+/** `readRbacPolicy` plus the fail-closed flag for surfacing in the UI. */
+export function readRbacPolicyState(
+  options?: RbacPolicyStoreOptions,
+): RbacPolicyReadState {
   const configPath = resolveRbacConfigPath(options);
   let source: string | null;
   try {
@@ -126,15 +150,15 @@ export function readRbacPolicy(options?: RbacPolicyStoreOptions): RbacPolicy {
       tables = parseTomlTables(source, configPath);
     } catch {
       return RBAC_HEADER_PATTERN.test(source)
-        ? failClosedRbacPolicy()
-        : readLegacyJsonPolicy(options);
+        ? { policy: failClosedRbacPolicy(), failClosed: true }
+        : readLegacyJsonPolicyState(options);
     }
     const section = tables[RBAC_SECTION];
     if (section !== undefined) {
-      return policyFromSection(section);
+      return { policy: policyFromSection(section), failClosed: false };
     }
   }
-  return readLegacyJsonPolicy(options);
+  return readLegacyJsonPolicyState(options);
 }
 
 /**
@@ -305,10 +329,12 @@ function readStringArrayCell(value: TomlEditScalar | string[] | undefined): stri
 // Legacy standalone-JSON fallback (pre-#938 dev profiles; never shipped)
 // ---------------------------------------------------------------------------
 
-function readLegacyJsonPolicy(options?: RbacPolicyStoreOptions): RbacPolicy {
+function readLegacyJsonPolicyState(
+  options?: RbacPolicyStoreOptions,
+): RbacPolicyReadState {
   const legacyPath = resolveLegacyRbacPolicyJsonPath(options);
   if (!fs.existsSync(legacyPath)) {
-    return emptyRbacPolicy();
+    return { policy: emptyRbacPolicy(), failClosed: false };
   }
   // From here on RBAC data demonstrably exists — unreadable or unparseable
   // states fail closed rather than falling open to everyone-is-Admin.
@@ -316,12 +342,12 @@ function readLegacyJsonPolicy(options?: RbacPolicyStoreOptions): RbacPolicy {
   try {
     parsed = JSON.parse(fs.readFileSync(legacyPath, "utf8"));
   } catch {
-    return failClosedRbacPolicy();
+    return { policy: failClosedRbacPolicy(), failClosed: true };
   }
   if (typeof parsed !== "object" || parsed === null) {
-    return failClosedRbacPolicy();
+    return { policy: failClosedRbacPolicy(), failClosed: true };
   }
-  return sanitizeRbacPolicy(parsed);
+  return { policy: sanitizeRbacPolicy(parsed), failClosed: false };
 }
 
 /**

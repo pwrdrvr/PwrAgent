@@ -16736,6 +16736,14 @@ export class MessagingController {
    * allow-all; otherwise gate on the tool's required permission and audit
    * denials. This is the second RBAC surface — the agent reaching BEYOND the
    * bound thread — distinct from the actor's direct command/button surface.
+   *
+   * Known window: turn origins live only in this in-memory map. If a
+   * controller is torn down mid-turn (messaging stop / adapter restart), a
+   * still-running turn it started loses its origin, every controller answers
+   * `owns: false`, and the runtime treats the turn as desktop-originated
+   * (unrestricted). Accepted for Phase 1: teardown also severs the actor's
+   * channel back to that turn, and persisting origins would couple RBAC to
+   * turn-lifecycle storage. Revisit if turns ever survive controller restarts.
    */
   checkDynamicToolPermission(params: {
     backend: AppServerBackendKind;
