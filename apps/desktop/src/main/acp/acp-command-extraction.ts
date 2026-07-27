@@ -70,13 +70,18 @@ export function readAcpWebSearch(
   const action = asRecord(rawOutput?.action);
   const metadata = readAcpToolMetadata(record);
   const variant = readString(rawInput ?? {}, "variant");
-  const title = readString(record, "title");
+  const toolCallId =
+    readString(record, "toolCallId") ??
+    readString(record, "tool_call_id");
+  const outputId = readString(rawOutput ?? {}, "id");
+  const isGrokWebSearchOutput =
+    readString(action ?? {}, "type") === "search"
+    && [toolCallId, outputId].some((id) => id?.startsWith("ws_"));
   const isWebSearch =
-    variant?.toLowerCase() === "websearch"
+    variant === "WebSearch"
     || readString(metadata ?? {}, "name") === "web_search"
     || readString(metadata ?? {}, "kind") === "web_search"
-    || readString(action ?? {}, "type") === "search"
-    || /^web search:?$/i.test(title ?? "");
+    || isGrokWebSearchOutput;
   if (!isWebSearch) {
     return undefined;
   }

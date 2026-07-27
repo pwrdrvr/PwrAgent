@@ -725,7 +725,7 @@ describe("AcpSessionReplayNormalizer", () => {
       receivedAt: 1000,
       update: {
         sessionUpdate: "tool_call",
-        toolCallId: "web-search-1",
+        toolCallId: "ws_grok-search-1",
         title: "Web search:",
         kind: "search",
         status: "in_progress",
@@ -740,7 +740,7 @@ describe("AcpSessionReplayNormalizer", () => {
       receivedAt: 1001,
       update: {
         sessionUpdate: "tool_call_update",
-        toolCallId: "web-search-1",
+        toolCallId: "ws_grok-search-1",
         title: "Web search:",
         status: "completed",
         rawOutput: {
@@ -763,24 +763,24 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.entries).toEqual([
       expect.objectContaining({
         type: "activity",
-        id: "web-search-1",
+        id: "ws_grok-search-1",
         summary: "Searched Web",
         status: "completed",
         details: [
           {
-            id: "web-search-1:detail",
+            id: "ws_grok-search-1:detail",
             kind: "read",
             label: "Searched Web: Grok 4.5 image support",
             status: "completed",
           },
           {
-            id: "web-search-1:source:1",
+            id: "ws_grok-search-1:source:1",
             kind: "read",
             label: "https://x.ai/news/grok-4-5",
             url: "https://x.ai/news/grok-4-5",
           },
           {
-            id: "web-search-1:source:2",
+            id: "ws_grok-search-1:source:2",
             kind: "read",
             label: "Models",
             url: "https://docs.x.ai/developers/models",

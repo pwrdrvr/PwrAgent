@@ -233,7 +233,7 @@ describe("acpToolUpdateNotifications", () => {
       turnId: "turn-1",
       update: {
         sessionUpdate: "tool_call_update",
-        toolCallId: "web-search-1",
+        toolCallId: "ws_grok-search-1",
         status: "completed",
         title: "Web search:",
         rawOutput: {
@@ -258,7 +258,7 @@ describe("acpToolUpdateNotifications", () => {
         method: "item/completed",
         params: expect.objectContaining({
           item: {
-            id: "web-search-1",
+            id: "ws_grok-search-1",
             type: "webSearch",
             toolName: "search_web",
             status: "completed",
@@ -273,6 +273,41 @@ describe("acpToolUpdateNotifications", () => {
               },
             ],
           },
+        }),
+      }),
+    ]);
+  });
+
+  it("does not classify a generic ACP search action as Grok web search", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "search-1",
+        status: "completed",
+        title: "Search repository",
+        rawOutput: {
+          action: {
+            type: "search",
+            query: "rendering",
+            sources: [
+              { type: "url", url: "https://example.com/search-result" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "search-1",
+            type: "commandExecution",
+            command: "Search repository",
+          }),
         }),
       }),
     ]);
