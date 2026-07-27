@@ -1444,6 +1444,85 @@ describe("TranscriptList", () => {
     expect(screen.getByText("Tracing the image support flags.")).toBeVisible();
   });
 
+  it("keeps settled transient segments ordered between tool invocations", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "activity",
+            id: "tool-1",
+            summary: "Read Composer.tsx",
+            details: [],
+            createdAt: 20,
+            turn: { id: "turn-1", status: "in_progress" },
+          },
+          {
+            type: "activity",
+            id: "tool-2",
+            summary: "Searched image support",
+            details: [],
+            createdAt: 40,
+            turn: { id: "turn-1", status: "in_progress" },
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        transientMessages={[
+          {
+            type: "transientMessage",
+            id: "transient-thought:turn-1:settled:1",
+            role: "assistant",
+            phase: "commentary",
+            text: "I will inspect the composer first.",
+            createdAt: 10,
+            turn: { id: "turn-1", status: "in_progress" },
+          },
+          {
+            type: "transientMessage",
+            id: "transient-thought:turn-1:settled:3",
+            role: "assistant",
+            phase: "commentary",
+            text: "The image check is in the next branch.",
+            createdAt: 30,
+            turn: { id: "turn-1", status: "in_progress" },
+          },
+        ]}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const firstThought = screen
+      .getByText("I will inspect the composer first.")
+      .closest("article");
+    const firstTool = screen
+      .getByText("Read Composer.tsx")
+      .closest(".transcript-activity");
+    const secondThought = screen
+      .getByText("The image check is in the next branch.")
+      .closest("article");
+    const secondTool = screen
+      .getByText("Searched image support")
+      .closest(".transcript-activity");
+
+    expect(firstThought).not.toBeNull();
+    expect(firstTool).not.toBeNull();
+    expect(secondThought).not.toBeNull();
+    expect(secondTool).not.toBeNull();
+    expect(
+      firstThought!.compareDocumentPosition(firstTool!)
+      & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      firstTool!.compareDocumentPosition(secondThought!)
+      & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      secondThought!.compareDocumentPosition(secondTool!)
+      & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it("collapses completed assistant commentary before the final answer", () => {
     render(
       <TranscriptList

@@ -59,6 +59,7 @@ import {
   ACTIVE_WORK_GROUP_THRESHOLD_MS,
   buildTranscriptRenderItems,
 } from "./transcript-render-items";
+import { readRendererSequence } from "./live-transcript-activity";
 
 type TranscriptViewport = {
   distanceFromBottom: number;
@@ -91,6 +92,7 @@ type TranscriptListProps = {
   pendingUsageActivityEntry?: AppServerThreadActivityEntry;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   transientMessage?: AppServerTransientThreadMessageEntry;
+  transientMessages?: AppServerTransientThreadMessageEntry[];
   pendingPlanEntry?: AppServerThreadPlanEntry;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingRequestBusy?: boolean;
@@ -183,6 +185,16 @@ function pendingEntriesInEventOrder(
       Boolean(item.entry)
     )
     .sort((left, right) => {
+      const leftSequence = readRendererSequence(left.entry);
+      const rightSequence = readRendererSequence(right.entry);
+      if (
+        typeof leftSequence === "number"
+        && typeof rightSequence === "number"
+        && leftSequence !== rightSequence
+      ) {
+        return leftSequence - rightSequence;
+      }
+
       const leftCreatedAt = entryCreatedAt(left.entry);
       const rightCreatedAt = entryCreatedAt(right.entry);
       if (
@@ -216,6 +228,22 @@ function insertPendingEntry(
   const existingIndex = entries.findIndex((entry) => entry.id === pendingEntry.id);
   if (existingIndex >= 0) {
     entries[existingIndex] = pendingEntry;
+    return;
+  }
+
+  const pendingSequence = readRendererSequence(pendingEntry);
+  const sequencedIndex =
+    typeof pendingSequence === "number"
+      ? entries.findIndex((entry) => {
+          const entrySequence = readRendererSequence(entry);
+          return (
+            typeof entrySequence === "number"
+            && entrySequence > pendingSequence
+          );
+        })
+      : -1;
+  if (sequencedIndex !== -1) {
+    entries.splice(sequencedIndex, 0, pendingEntry);
     return;
   }
 
@@ -727,6 +755,7 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingUsageActivityEntry ||
       props.pendingAssistantMessage ||
       props.transientMessage ||
+      props.transientMessages?.length ||
       props.pendingPlanEntry ||
       props.pendingRequest ||
       props.pendingMcpInteraction ||
@@ -788,20 +817,20 @@ export function TranscriptList(props: TranscriptListProps) {
 
   const transcriptEntries = useMemo(() => {
     const entries = [...props.entries];
-    const transientMessageEntry: AppServerThreadMessageEntry | undefined =
-      props.transientMessage
-        ? {
-            ...props.transientMessage,
-            type: "message",
-          }
-        : undefined;
+    const transientMessageEntries: AppServerThreadMessageEntry[] =
+      (props.transientMessages ??
+        (props.transientMessage ? [props.transientMessage] : []))
+        .map((transientMessage) => ({
+          ...transientMessage,
+          type: "message",
+        }));
     for (const pendingEntry of pendingEntriesInEventOrder([
       props.pendingPlanEntry,
       props.pendingActivityEntry,
       props.pendingProtocolActivityEntry,
       props.pendingUsageActivityEntry,
       props.pendingAssistantMessage,
-      transientMessageEntry,
+      ...transientMessageEntries,
     ])) {
       insertPendingEntry(entries, pendingEntry);
     }
@@ -823,11 +852,21 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingUsageActivityEntry,
     props.pendingAssistantMessage,
     props.transientMessage,
+    props.transientMessages,
     props.pendingPlanEntry,
     props.messagingBindingTransitions,
     props.permissionTransitions,
     props.turnFailures,
   ]);
+  const alwaysVisibleTransientMessageIds = useMemo(
+    () =>
+      new Set(
+        (props.transientMessages ??
+          (props.transientMessage ? [props.transientMessage] : []))
+          .map((message) => message.id),
+      ),
+    [props.transientMessage, props.transientMessages],
+  );
   const pendingApprovalContext = useMemo(
     () =>
       props.pendingRequest
@@ -846,6 +885,7 @@ export function TranscriptList(props: TranscriptListProps) {
         activeTurnStartedAt: props.activeTurnStartedAt,
         activeMessageId:
           props.transientMessage?.id ?? props.pendingAssistantMessage?.id,
+        alwaysVisibleEntryIds: alwaysVisibleTransientMessageIds,
         now: renderNow,
       }),
     [
@@ -853,6 +893,7 @@ export function TranscriptList(props: TranscriptListProps) {
       props.activeTurnStartedAt,
       props.pendingAssistantMessage?.id,
       props.transientMessage?.id,
+      alwaysVisibleTransientMessageIds,
       renderNow,
       transcriptEntries,
     ]

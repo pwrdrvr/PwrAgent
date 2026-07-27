@@ -205,11 +205,17 @@ formatting until the final update or final assistant message arrives.
 
 ## Transient Transcript Messages
 
-Transient transcript messages are local, replaceable desktop UI state. They are
-not assistant response streams and are not part of the generic messaging
-surface contract. The messaging controller must discard transient transcript
-updates at the backend-event boundary without converting them into `message`,
-`stream_update`, status, progress, or typing intents.
+Transient transcript messages are local, replaceable desktop UI state. A
+desktop renderer may freeze completed segments in transcript order so live
+commentary remains visible between tool invocations, but those segments remain
+bounded, in-memory, and separate from durable replay entries. They are evicted
+before durable transcript state and discarded on reload, compaction, or cache
+eviction.
+
+Transient messages are not assistant response streams and are not part of the
+generic messaging surface contract. The messaging controller must discard
+transient transcript updates at the backend-event boundary without converting
+them into `message`, `stream_update`, status, progress, or typing intents.
 
 This keeps transient text out of provider queues, delivery retries, rate
 budgets, pending-intent persistence, conversation history, and outbound

@@ -509,8 +509,9 @@ export type AppServerThreadMessageEntry = AppServerThreadMessage & {
 
 /**
  * A live transcript message that must never be added to a thread replay.
- * Consumers render it alongside replay entries, then replace or discard it
- * when another transcript boundary is received.
+ * Consumers may replace its active value or retain bounded, in-memory settled
+ * segments alongside replay entries. They must discard those segments on
+ * reload, compaction, or cache eviction.
  */
 export type AppServerTransientThreadMessageEntry = AppServerThreadMessage & {
   type: "transientMessage";
@@ -1099,7 +1100,7 @@ export type AppServerNotification =
         turnId?: string;
         itemId: string;
         role: AppServerThreadMessage["role"];
-        /** An empty value explicitly clears the transient message. */
+        /** Full replacement text; an empty value clears the active segment. */
         text: string;
         phase?: AppServerTranscriptPhase;
       };

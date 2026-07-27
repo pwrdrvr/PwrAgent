@@ -2218,6 +2218,7 @@ describe("useThreadSessionState", () => {
       text: "So the key logic is:",
       type: "transientMessage",
     });
+    expect(result.current.transientMessages).toHaveLength(1);
     expect(result.current.pendingAssistantMessage).toBeUndefined();
     expect(result.current.messages).toEqual([]);
 
@@ -2241,6 +2242,9 @@ describe("useThreadSessionState", () => {
     expect(result.current.transientMessage?.text).toBe(
       "Tracing the image support flags."
     );
+    expect(result.current.transientMessages.map((message) => message.text)).toEqual([
+      "Tracing the image support flags.",
+    ]);
     expect(result.current.messages).toEqual([]);
 
     act(() => {
@@ -2260,6 +2264,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.transientMessage).toBeUndefined();
+    expect(result.current.transientMessages).toEqual([]);
 
     act(() => {
       agentEventHandler?.({
@@ -2298,6 +2303,9 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.pendingStatusText).toBe("Thinking");
     expect(result.current.transientMessage).toBeUndefined();
+    expect(result.current.transientMessages.map((message) => message.text)).toEqual([
+      "Inspecting the relevant file.",
+    ]);
 
     act(() => {
       agentEventHandler?.({
@@ -2334,6 +2342,10 @@ describe("useThreadSessionState", () => {
       "The image flag is disabled."
     );
     expect(result.current.transientMessage).toBeUndefined();
+    expect(result.current.transientMessages.map((message) => message.text)).toEqual([
+      "Inspecting the relevant file.",
+      "Found the relevant branch.",
+    ]);
     expect(
       result.current.messages.some((message) =>
         message.text.includes("Found the relevant branch.")
@@ -2360,9 +2372,71 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.pendingStatusText).toBeUndefined();
     expect(result.current.transientMessage).toBeUndefined();
+    expect(result.current.transientMessages.map((message) => message.text)).toEqual([
+      "Inspecting the relevant file.",
+      "Found the relevant branch.",
+    ]);
     expect(
       result.current.messages.map((message) => message.text)
     ).toEqual(["The image flag is disabled."]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/compacted",
+          params: {
+            threadId: "thread-1",
+          },
+        },
+      });
+    });
+
+    expect(result.current.transientMessages).toEqual([]);
+
+    act(() => {
+      for (let index = 1; index <= 51; index += 1) {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "item/transientMessage/updated",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-cap",
+              itemId: "transient-thought:turn-cap",
+              role: "assistant",
+              text: `Ephemeral segment ${index}.`,
+              phase: "commentary",
+            },
+          },
+        });
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "item/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-cap",
+              item: {
+                id: `read-${index}`,
+                type: "commandExecution",
+                command: `sed -n '${index}p' src/file.ts`,
+                commandActions: [{ type: "read", path: "src/file.ts" }],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.transientMessages).toHaveLength(50);
+    expect(result.current.transientMessages[0]?.text).toBe(
+      "Ephemeral segment 2.",
+    );
+    expect(result.current.transientMessages[49]?.text).toBe(
+      "Ephemeral segment 51.",
+    );
+    expect(result.current.messages).toEqual([]);
   });
 
   it("isolates transient messages by thread and turn", async () => {
@@ -2476,6 +2550,9 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.transientMessage).toBeUndefined();
+    expect(result.current.transientMessages.map((message) => message.text)).toEqual([
+      "Thread two thought.",
+    ]);
 
     act(() => {
       agentEventHandler?.({
@@ -2494,6 +2571,9 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.transientMessage).toBeUndefined();
+    expect(result.current.transientMessages.map((message) => message.text)).toEqual([
+      "Thread two thought.",
+    ]);
 
     act(() => {
       agentEventHandler?.({
@@ -2546,6 +2626,10 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.transientMessage).toBeUndefined();
+    expect(result.current.transientMessages.map((message) => message.text)).toEqual([
+      "Thread two thought.",
+      "Current turn thought.",
+    ]);
 
     rerender({ currentThread: thread1 });
     await waitForThreadHydration(result, "thread-1");
@@ -2566,6 +2650,9 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.transientMessage).toBeUndefined();
+    expect(result.current.transientMessages.map((message) => message.text)).toEqual([
+      "Thread one thought.",
+    ]);
 
     act(() => {
       agentEventHandler?.({
@@ -2595,6 +2682,10 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.transientMessage).toBeUndefined();
+    expect(result.current.transientMessages.map((message) => message.text)).toEqual([
+      "Thread one thought.",
+      "Thought before approval.",
+    ]);
     expect(result.current.pendingStatusText).toBe("Waiting for approval");
   });
 

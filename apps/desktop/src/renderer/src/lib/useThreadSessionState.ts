@@ -156,6 +156,7 @@ type ThreadSessionEntry = {
   pendingUsageActivityEntry?: AppServerThreadActivityEntry;
   pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
+  settledTransientMessages: AppServerTransientThreadMessageEntry[];
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
   transientMessage?: AppServerTransientThreadMessageEntry;
@@ -203,6 +204,7 @@ function createEmptyThreadSessionEntry(): ThreadSessionEntry {
     needsHydrationAfterCompletion: false,
     nextLiveEntrySequence: 1,
     optimisticEntries: [],
+    settledTransientMessages: [],
   };
 }
 
@@ -3429,7 +3431,7 @@ function isMcpElicitationNotification(
   );
 }
 
-const TRANSIENT_MESSAGE_BOUNDARY_METHODS = new Set([
+const TRANSIENT_MESSAGE_SETTLEMENT_METHODS = new Set([
   "item/agentMessage/delta",
   "item/commandExecution/outputDelta",
   "item/completed",
@@ -3443,10 +3445,49 @@ const TRANSIENT_MESSAGE_BOUNDARY_METHODS = new Set([
   "turn/started",
 ]);
 
-function clearTransientMessageAtBoundary(
+const MAX_SETTLED_TRANSIENT_MESSAGES = 50;
+
+function settleTransientMessage(
+  current: ThreadSessionEntry,
+): ThreadSessionEntry {
+  if (!current.transientMessage) {
+    return current;
+  }
+  const sequence =
+    readRendererSequence(current.transientMessage)
+    ?? current.nextLiveEntrySequence;
+  const settledTransientMessage = {
+    ...current.transientMessage,
+    id: `${current.transientMessage.id}:settled:${sequence}`,
+  };
+  return {
+    ...current,
+    settledTransientMessages: [
+      ...current.settledTransientMessages,
+      settledTransientMessage,
+    ].slice(-MAX_SETTLED_TRANSIENT_MESSAGES),
+    transientMessage: undefined,
+  };
+}
+
+function transitionTransientMessagesAtBoundary(
   current: ThreadSessionEntry,
   notification: AppServerNotification
 ): ThreadSessionEntry {
+  if (notification.method === "thread/compacted") {
+    if (
+      !current.transientMessage &&
+      current.settledTransientMessages.length === 0
+    ) {
+      return current;
+    }
+    return {
+      ...current,
+      settledTransientMessages: [],
+      transientMessage: undefined,
+    };
+  }
+
   if (
     !current.transientMessage ||
     notification.method === "item/transientMessage/updated"
@@ -3462,7 +3503,7 @@ function clearTransientMessageAtBoundary(
       ? notification.params.status.type
       : undefined;
   const isBoundary =
-    TRANSIENT_MESSAGE_BOUNDARY_METHODS.has(notification.method) ||
+    TRANSIENT_MESSAGE_SETTLEMENT_METHODS.has(notification.method) ||
     isApprovalRequestNotification(notification) ||
     isRequestUserInputNotification(notification) ||
     isMcpElicitationNotification(notification) ||
@@ -3484,10 +3525,7 @@ function clearTransientMessageAtBoundary(
     return current;
   }
 
-  return {
-    ...current,
-    transientMessage: undefined,
-  };
+  return settleTransientMessage(current);
 }
 
 function readCompletedTurnText(
@@ -3556,6 +3594,7 @@ export function useThreadSessionState(params: {
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
   transientMessage?: AppServerTransientThreadMessageEntry;
+  transientMessages: AppServerTransientThreadMessageEntry[];
   runningTurnUsageText?: string;
   approvalRequestThreadKeys: Record<string, boolean>;
   inputRequestThreadKeys: Record<string, boolean>;
@@ -3822,6 +3861,10 @@ export function useThreadSessionState(params: {
               targetThreadKey,
             });
           }
+          const currentAfterStaleThinking =
+            shouldClearStaleThinking
+              ? settleTransientMessage(current)
+              : current;
 
           // A window that opens a thread mid-turn (a fresh local window, or a
           // federation remote viewer) never saw turn/started, so the hydrated
@@ -3837,7 +3880,7 @@ export function useThreadSessionState(params: {
             && shouldAdoptStartedTurn(current, trailingInProgressTurn.id);
 
           return {
-            ...current,
+            ...currentAfterStaleThinking,
             activeTurnId: shouldClearStaleThinking
               ? undefined
               : shouldAdoptHydratedTurn
@@ -4207,7 +4250,7 @@ export function useThreadSessionState(params: {
       }
 
       updateSession(targetThreadKey, (session) => {
-        const current = clearTransientMessageAtBoundary(
+        const current = transitionTransientMessagesAtBoundary(
           session,
           event.notification
         );
@@ -5783,6 +5826,18 @@ export function useThreadSessionState(params: {
             ? "Thinking"
             : undefined);
   const threadBusy = selectedSession ? hasThinkingState(selectedSession) : false;
+  const transientMessages = useMemo(
+    () => [
+      ...(selectedSession?.settledTransientMessages ?? []),
+      ...(selectedSession?.transientMessage
+        ? [selectedSession.transientMessage]
+        : []),
+    ],
+    [
+      selectedSession?.settledTransientMessages,
+      selectedSession?.transientMessage,
+    ],
+  );
 
   return {
     activeTurnId: selectedSession?.activeTurnId,
@@ -5803,6 +5858,7 @@ export function useThreadSessionState(params: {
     pendingUserInput: selectedSession?.pendingUserInput,
     pendingStatusText,
     transientMessage: selectedSession?.transientMessage,
+    transientMessages,
     runningTurnUsageText: runningTurnUsageTextFromEntry(
       selectedSession?.pendingUsageActivityEntry
     ),

@@ -1140,6 +1140,7 @@ function DesktopAppShell(props: {
     },
     pendingAssistantMessage: session.pendingAssistantMessage,
     transientMessage: session.transientMessage,
+    transientMessages: session.transientMessages,
     pendingMcpInteraction: session.pendingMcpInteraction,
     pendingRequest: session.pendingRequest,
     pendingUserInput: session.pendingUserInput,

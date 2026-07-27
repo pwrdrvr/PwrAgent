@@ -27,6 +27,7 @@ export function buildTranscriptRenderItems(params: {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   activeMessageId?: string;
+  alwaysVisibleEntryIds?: ReadonlySet<string>;
   now?: number;
 }): TranscriptRenderItem[] {
   const activeTurnId =
@@ -38,12 +39,17 @@ export function buildTranscriptRenderItems(params: {
   }
 
   if (activeTurnId) {
-    const groups = buildCompletedGroups(params.entries, activeTurnId);
+    const groups = buildCompletedGroups(
+      params.entries,
+      activeTurnId,
+      params.alwaysVisibleEntryIds,
+    );
     const activeGroups = buildActiveWorkGroups(
       params.entries,
       activeTurnId,
       params.now,
-      params.activeTurnStartedAt
+      params.activeTurnStartedAt,
+      params.alwaysVisibleEntryIds,
     );
     groups.push(...activeGroups);
     if (groups.length > 0) {
@@ -53,12 +59,19 @@ export function buildTranscriptRenderItems(params: {
     return params.entries.map((entry) => ({ type: "entry", entry }));
   }
 
-  const completedGroups = buildCompletedGroups(params.entries);
+  const completedGroups = buildCompletedGroups(
+    params.entries,
+    undefined,
+    params.alwaysVisibleEntryIds,
+  );
   if (completedGroups.length > 0) {
     return renderWithGroups(params.entries, completedGroups);
   }
 
-  const fallbackGroups = buildCommentaryOnlyGroups(params.entries);
+  const fallbackGroups = buildCommentaryOnlyGroups(
+    params.entries,
+    params.alwaysVisibleEntryIds,
+  );
   if (fallbackGroups.length === 0) {
     return params.entries.map((entry) => ({ type: "entry", entry }));
   }
@@ -78,7 +91,8 @@ function buildActiveWorkGroups(
   entries: AppServerThreadEntry[],
   activeTurnId: string,
   now = Date.now(),
-  activeTurnStartedAt?: number
+  activeTurnStartedAt?: number,
+  alwaysVisibleEntryIds?: ReadonlySet<string>,
 ): RenderGroup[] {
   const turn = entries.find((entry) => entry.turn?.id === activeTurnId)?.turn;
   const startedAtCandidates = [activeTurnStartedAt, turn?.startedAt].filter(
@@ -98,7 +112,11 @@ function buildActiveWorkGroups(
   const activeEntries: AppServerThreadEntry[] = [];
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    if (entry.turn?.id !== activeTurnId || !isConcreteWorkEntry(entry)) {
+    if (
+      alwaysVisibleEntryIds?.has(entry.id)
+      || entry.turn?.id !== activeTurnId
+      || !isConcreteWorkEntry(entry)
+    ) {
       break;
     }
     activeEntries.unshift(entry);
@@ -121,7 +139,8 @@ function buildActiveWorkGroups(
 
 function buildCompletedGroups(
   entries: AppServerThreadEntry[],
-  excludeTurnId?: string
+  excludeTurnId?: string,
+  alwaysVisibleEntryIds?: ReadonlySet<string>,
 ): RenderGroup[] {
   const groups: RenderGroup[] = [];
   const groupIds = new Set<string>();
@@ -169,9 +188,10 @@ function buildCompletedGroups(
   for (const entry of entries) {
     const turnId = entry.turn?.id;
     const canJoinGroup =
-      Boolean(turnId) &&
-      turnId !== excludeTurnId &&
-      isWorkPhaseEntry(entry);
+      !alwaysVisibleEntryIds?.has(entry.id)
+      && Boolean(turnId)
+      && turnId !== excludeTurnId
+      && isWorkPhaseEntry(entry);
 
     if (!canJoinGroup) {
       flushCurrent();
@@ -201,7 +221,10 @@ function buildCommentaryOnlyGroup(
   };
 }
 
-function buildCommentaryOnlyGroups(entries: AppServerThreadEntry[]): RenderGroup[] {
+function buildCommentaryOnlyGroups(
+  entries: AppServerThreadEntry[],
+  alwaysVisibleEntryIds?: ReadonlySet<string>,
+): RenderGroup[] {
   const groups: RenderGroup[] = [];
   let currentMessages: AppServerThreadMessageEntry[] = [];
 
@@ -222,8 +245,9 @@ function buildCommentaryOnlyGroups(entries: AppServerThreadEntry[]): RenderGroup
 
   for (const entry of entries) {
     if (
-      isAssistantCommentaryMessage(entry) &&
-      !isLiveInProgressTurn(entry.turn, completedTurnIds)
+      !alwaysVisibleEntryIds?.has(entry.id)
+      && isAssistantCommentaryMessage(entry)
+      && !isLiveInProgressTurn(entry.turn, completedTurnIds)
     ) {
       currentMessages.push(entry);
       continue;
