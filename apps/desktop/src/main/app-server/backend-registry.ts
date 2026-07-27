@@ -6683,9 +6683,17 @@ export class DesktopBackendRegistry {
       await this.acpBackend.readReplay(backend, request.threadId),
       request,
     );
+    const pricing =
+      typeof this.overlayStore.readThreadPricing === "function"
+        ? await this.overlayStore.readThreadPricing({
+            backend,
+            threadId: request.threadId,
+          })
+        : { lines: [], summaries: [] };
     return {
       backend,
       fetchedAt: Date.now(),
+      pricing,
       threadId: request.threadId,
       ...(replay.threadStatus ? { threadStatus: replay.threadStatus } : {}),
       replay,
