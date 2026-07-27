@@ -732,6 +732,7 @@ describe("AcpSessionReplayNormalizer", () => {
         rawInput: {
           variant: "WebSearch",
           backend: true,
+          query: "Grok 4.5 image support",
         },
       },
     });
@@ -789,6 +790,41 @@ describe("AcpSessionReplayNormalizer", () => {
       }),
     ]);
   });
+
+  it.each(["failed", "cancelled"] as const)(
+    "uses terminal wording for %s Grok web searches",
+    (status) => {
+      const normalizer = new AcpSessionReplayNormalizer();
+
+      const replay = normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1000,
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: `ws_${status}-search`,
+          status,
+          rawInput: {
+            variant: "WebSearch",
+            query: "Grok 4.5 pricing",
+          },
+        },
+      });
+
+      expect(replay.entries).toEqual([
+        expect.objectContaining({
+          type: "activity",
+          summary: "Searched Web",
+          status,
+          details: [
+            expect.objectContaining({
+              label: "Searched Web: Grok 4.5 pricing",
+              status,
+            }),
+          ],
+        }),
+      ]);
+    },
+  );
 
   it("renders Grok web fetches as tool-backed reads across sparse updates", () => {
     const normalizer = new AcpSessionReplayNormalizer();

@@ -821,7 +821,7 @@ function toolActivity(
   const webSearch = readAcpWebSearch(update.update);
   if (webSearch) {
     const status = normalizeToolActivityStatus(readString(update.update, "status"));
-    const summary = status === "completed" ? "Searched Web" : "Searching Web";
+    const summary = status === "in_progress" ? "Searching Web" : "Searched Web";
     const detailLabel = webSearch.query
       ? `${summary}: ${webSearch.query}`
       : summary;
@@ -933,70 +933,89 @@ function mergeActivity(
   existing: AppServerThreadActivityEntry,
   incoming: AppServerThreadActivityEntry,
 ): AppServerThreadActivityEntry {
-  const existingDetail = existing.details[0];
-  const incomingDetail = incoming.details[0];
   return {
     ...existing,
     createdAt: existing.createdAt ?? incoming.createdAt,
     summary: preferSpecificLabel(existing.summary, incoming.summary),
     status: incoming.status ?? existing.status,
-    details:
-      existingDetail && incomingDetail
-        ? [
-            {
-              ...existingDetail,
-              ...incomingDetail,
-              kind:
-                isGenericActivityLabel(incomingDetail.label) &&
-                !isGenericActivityLabel(existingDetail.label)
-                  ? existingDetail.kind
-                  : incomingDetail.kind,
-              label: preferSpecificLabel(existingDetail.label, incomingDetail.label),
-              path: incomingDetail.path ?? existingDetail.path,
-              command:
-                existingDetail.command || incomingDetail.command
-                  ? {
-                      displayCommand:
-                        preferSpecificCommand(
-                          existingDetail.command?.displayCommand,
-                          incomingDetail.command?.displayCommand,
-                        ) ??
-                        preferSpecificLabel(existingDetail.label, incomingDetail.label),
-                      rawCommand:
-                        preferSpecificCommand(
-                          existingDetail.command?.rawCommand,
-                          incomingDetail.command?.rawCommand,
-                        ),
-                      source:
-                        incomingDetail.command?.rawCommand &&
-                        existingDetail.command?.source === "tool"
-                          ? "shell"
-                          : incomingDetail.command?.source ??
-                            existingDetail.command?.source,
-                      output:
-                        incomingDetail.command?.output ??
-                        existingDetail.command?.output,
-                      exitCode:
-                        incomingDetail.command?.exitCode ??
-                        existingDetail.command?.exitCode,
-                      durationMs:
-                        incomingDetail.command?.durationMs ??
-                        existingDetail.command?.durationMs,
-                      cwd:
-                        incomingDetail.command?.cwd ??
-                        existingDetail.command?.cwd,
-                    }
-                  : undefined,
-              fileDiff: incomingDetail.fileDiff ?? existingDetail.fileDiff,
-            },
-          ]
-        : incoming.details.length > 0
-          ? incoming.details
-          : existing.details,
+    details: mergeActivityEntryDetails(existing.details, incoming.details),
   };
 }
 
+function mergeActivityEntryDetails(
+  existing: AppServerThreadActivityEntry["details"],
+  incoming: AppServerThreadActivityEntry["details"],
+): AppServerThreadActivityEntry["details"] {
+  const merged = [...existing];
+  for (const incomingDetail of incoming) {
+    const existingIndex = merged.findIndex(
+      (detail) => detail.id === incomingDetail.id,
+    );
+    if (existingIndex < 0) {
+      merged.push(incomingDetail);
+      continue;
+    }
+    const existingDetail = merged[existingIndex];
+    if (!existingDetail) {
+      continue;
+    }
+    merged[existingIndex] = {
+      ...existingDetail,
+      ...incomingDetail,
+      kind:
+        isGenericActivityLabel(incomingDetail.label)
+        && !isGenericActivityLabel(existingDetail.label)
+          ? existingDetail.kind
+          : incomingDetail.kind,
+      label: preferSpecificLabel(existingDetail.label, incomingDetail.label),
+      path: incomingDetail.path ?? existingDetail.path,
+      command:
+        existingDetail.command || incomingDetail.command
+          ? {
+              displayCommand:
+                preferSpecificCommand(
+                  existingDetail.command?.displayCommand,
+                  incomingDetail.command?.displayCommand,
+                )
+                ?? preferSpecificLabel(existingDetail.label, incomingDetail.label),
+              rawCommand:
+                preferSpecificCommand(
+                  existingDetail.command?.rawCommand,
+                  incomingDetail.command?.rawCommand,
+                ),
+              source:
+                incomingDetail.command?.rawCommand
+                && existingDetail.command?.source === "tool"
+                  ? "shell"
+                  : incomingDetail.command?.source
+                    ?? existingDetail.command?.source,
+              output:
+                incomingDetail.command?.output
+                ?? existingDetail.command?.output,
+              exitCode:
+                incomingDetail.command?.exitCode
+                ?? existingDetail.command?.exitCode,
+              durationMs:
+                incomingDetail.command?.durationMs
+                ?? existingDetail.command?.durationMs,
+              cwd:
+                incomingDetail.command?.cwd
+                ?? existingDetail.command?.cwd,
+            }
+          : undefined,
+      fileDiff: incomingDetail.fileDiff ?? existingDetail.fileDiff,
+    };
+  }
+  return merged;
+}
+
 function preferSpecificLabel(existing: string, incoming: string): string {
+  if (
+    existing.toLowerCase().startsWith("searching web")
+    && incoming.toLowerCase().startsWith("searched web")
+  ) {
+    return incoming;
+  }
   return isGenericActivityLabel(existing) && incoming
     ? incoming
     : existing || incoming;
