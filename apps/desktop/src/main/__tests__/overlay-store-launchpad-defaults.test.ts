@@ -138,7 +138,7 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
 
-    const initialLaunchpad = {
+    const initialLaunchpad: NavigationLaunchpadDraft = {
       directoryKey: "directory:/repo",
       directoryKind: "directory",
       directoryLabel: "Repo",
@@ -179,7 +179,7 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
       branchName: "feature/provider-memory",
       createdAt: 1,
       updatedAt: 1,
-    } as unknown as NavigationLaunchpadDraft;
+    };
 
     try {
       await store.upsertDirectoryLaunchpad(

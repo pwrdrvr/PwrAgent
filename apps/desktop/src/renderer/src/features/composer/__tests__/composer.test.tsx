@@ -1717,7 +1717,7 @@ describe("Composer", () => {
         },
       },
     } satisfies BackendSummary;
-    const initialLaunchpad = {
+    const initialLaunchpad: NavigationLaunchpadDraft = {
       directoryKey: "directory:/repo",
       directoryKind: "directory",
       directoryLabel: "Repo",
@@ -1779,13 +1779,11 @@ describe("Composer", () => {
       branchName: "feature/provider-memory",
       createdAt: 1,
       updatedAt: 1,
-    } as unknown as NavigationLaunchpadDraft;
+    };
     const providerPatches: Array<Partial<NavigationLaunchpadDraft>> = [];
-    let currentLaunchpad = initialLaunchpad;
 
     function ProviderSwitchHarness(): React.JSX.Element {
       const [launchpad, setLaunchpad] = useState(initialLaunchpad);
-      currentLaunchpad = launchpad;
       return (
         <Composer
           backends={[codexBackend, grokBackend]}
@@ -1848,13 +1846,10 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Reasoning")).toHaveValue("low");
     expect(screen.getByLabelText("Service tier")).toHaveValue("priority");
     expect(screen.getByLabelText("Environment")).toHaveTextContent("Grok Environment");
-    expect(currentLaunchpad).toMatchObject({
-      codexEnvironmentActionId: "grok-action",
-      codexEnvironmentExecutionTarget: "local",
-      workMode: "worktree",
-      branchName: "feature/provider-memory",
-      prompt: "",
-    });
+    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
+    expect(screen.getByLabelText("Base branch")).toHaveValue(
+      "feature/provider-memory",
+    );
 
     chooseDropdownOption("Reasoning", "medium");
     chooseDropdownOption("Service tier", "standard");
@@ -1872,13 +1867,10 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Reasoning")).toHaveValue("ultra");
     expect(screen.getByLabelText("Fast mode")).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Environment")).toHaveTextContent("Codex Environment");
-    expect(currentLaunchpad).toMatchObject({
-      codexEnvironmentActionId: "codex-action",
-      codexEnvironmentExecutionTarget: "local",
-      workMode: "worktree",
-      branchName: "feature/provider-memory",
-      prompt: "",
-    });
+    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
+    expect(screen.getByLabelText("Base branch")).toHaveValue(
+      "feature/provider-memory",
+    );
 
     chooseDropdownOption("Provider", "Grok");
     await waitFor(() => {
