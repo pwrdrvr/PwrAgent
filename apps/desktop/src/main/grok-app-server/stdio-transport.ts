@@ -115,7 +115,20 @@ export class GrokStdioJsonRpcTransport implements JsonRpcTransport {
     if (!child) {
       return;
     }
-    child.kill();
+    await new Promise<void>((resolve, reject) => {
+      const handleClose = (): void => {
+        resolve();
+      };
+      child.once("close", handleClose);
+      try {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill();
+        }
+      } catch (error) {
+        child.off("close", handleClose);
+        reject(error);
+      }
+    });
   }
 
   send(message: string): void {
