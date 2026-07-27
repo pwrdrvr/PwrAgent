@@ -1,5 +1,7 @@
 export type TokenUsagePricingServiceTier = "standard" | "priority";
 
+export type TokenUsagePricingProvider = "openai" | "xai";
+
 export type TokenUsagePriceStatus = "priced" | "unpriced";
 
 export type TokenUsagePriceUnavailableReason =
@@ -139,7 +141,7 @@ export type TokenUsagePricingCatalogRate = {
   model: string;
   outputMicrosPerMillion: number;
   outputUsdPerMillion: number;
-  provider: "openai";
+  provider: TokenUsagePricingProvider;
   rateId: string;
   serviceTier: TokenUsagePricingServiceTier;
 };
@@ -156,10 +158,11 @@ export type TokenUsageCostEstimate = {
   effectiveTo?: number;
   inputUsdPerMillion: number;
   model: string;
+  outputTokensIncludeReasoning: boolean;
   outputCostMicros: number;
   outputUsd: number;
   outputUsdPerMillion: number;
-  provider: "openai";
+  provider: TokenUsagePricingProvider;
   rateId: string;
   serviceTier: TokenUsagePricingServiceTier;
   standardCachedInputRateMultiplier?: number;
@@ -196,6 +199,7 @@ export type TokenUsageCreditEstimate = {
 };
 
 type PricingCatalogEntry = {
+  aliases?: readonly string[];
   cachedInputUsdPerMillion: number;
   catalogId: string;
   catalogVersion: string;
@@ -206,7 +210,8 @@ type PricingCatalogEntry = {
   inputUsdPerMillion: number;
   model: string;
   outputUsdPerMillion: number;
-  provider: "openai";
+  outputTokensIncludeReasoning?: boolean;
+  provider: TokenUsagePricingProvider;
   serviceTier: TokenUsagePricingServiceTier;
 };
 
@@ -234,6 +239,9 @@ const OPENAI_GPT56_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 9);
 const OPENAI_CODEX_CREDITS_CATALOG_ID = "openai-codex-credits";
 const OPENAI_CODEX_CREDITS_CATALOG_VERSION = "2026-06-16";
 const OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION = "2026-07-09";
+const XAI_PRICING_CATALOG_ID = "xai-api";
+const XAI_PRICING_CATALOG_VERSION = "2026-07-17";
+const XAI_GROK45_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 8);
 
 const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   {
@@ -394,6 +402,33 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   },
 ];
 
+const XAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
+  {
+    aliases: [
+      "grok-4.5-build",
+      "grok-4.5-latest",
+      "grok-build-latest",
+    ],
+    catalogId: XAI_PRICING_CATALOG_ID,
+    catalogVersion: XAI_PRICING_CATALOG_VERSION,
+    model: "grok-4.5",
+    displayModel: "Grok 4.5",
+    displayTier: "Standard",
+    effectiveFrom: XAI_GROK45_PRICING_EFFECTIVE_FROM,
+    outputTokensIncludeReasoning: true,
+    provider: "xai",
+    serviceTier: "standard",
+    inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.3,
+    outputUsdPerMillion: 6,
+  },
+];
+
+const TOKEN_USAGE_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
+  ...OPENAI_PRICING_CATALOG,
+  ...XAI_PRICING_CATALOG,
+];
+
 const OPENAI_CODEX_CREDITS_CATALOG: readonly CodexCreditsCatalogEntry[] = [
   {
     catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
@@ -549,6 +584,10 @@ export function listOpenAiTokenUsagePricingRates(): TokenUsagePricingCatalogRate
   return OPENAI_PRICING_CATALOG.map(toPublicRate);
 }
 
+export function listTokenUsagePricingRates(): TokenUsagePricingCatalogRate[] {
+  return TOKEN_USAGE_PRICING_CATALOG.map(toPublicRate);
+}
+
 export function estimateOpenAiTokenUsageCost(params: {
   cachedInputTokens: number;
   at?: number;
@@ -560,30 +599,69 @@ export function estimateOpenAiTokenUsageCost(params: {
   serviceTier?: string;
   uncachedInputTokens: number;
 }): TokenUsageCostEstimate | undefined {
+  return estimateTokenUsageCostFromCatalog(params, OPENAI_PRICING_CATALOG);
+}
+
+export function estimateTokenUsageCost(params: {
+  cachedInputTokens: number;
+  at?: number;
+  fastMode?: boolean;
+  outputTokensIncludeReasoning?: boolean;
+  model?: string;
+  outputTokens: number;
+  reasoningOutputTokens?: number;
+  serviceTier?: string;
+  uncachedInputTokens: number;
+}): TokenUsageCostEstimate | undefined {
+  return estimateTokenUsageCostFromCatalog(params, TOKEN_USAGE_PRICING_CATALOG);
+}
+
+function estimateTokenUsageCostFromCatalog(
+  params: {
+    cachedInputTokens: number;
+    at?: number;
+    fastMode?: boolean;
+    outputTokensIncludeReasoning?: boolean;
+    model?: string;
+    outputTokens: number;
+    reasoningOutputTokens?: number;
+    serviceTier?: string;
+    uncachedInputTokens: number;
+  },
+  catalog: readonly PricingCatalogEntry[],
+): TokenUsageCostEstimate | undefined {
   const model = params.model?.trim();
   if (!model) {
     return undefined;
   }
 
-  const serviceTier = resolveOpenAiPricingServiceTier({
-    fastMode: params.fastMode,
-    serviceTier: params.serviceTier,
-  });
-  const entry = OPENAI_PRICING_CATALOG.find(
+  const matchingEntries = catalog.filter(
     (candidate) =>
-      candidate.model === model &&
-      candidate.serviceTier === serviceTier &&
-      pricingEntryAppliesAt(candidate, params.at),
+      pricingEntryMatchesModel(candidate, model)
+      && pricingEntryAppliesAt(candidate, params.at),
+  );
+  const provider = matchingEntries[0]?.provider;
+  const serviceTier =
+    provider === "xai"
+      ? resolveXaiPricingServiceTier(params.serviceTier)
+      : resolveOpenAiPricingServiceTier({
+          fastMode: params.fastMode,
+          serviceTier: params.serviceTier,
+        });
+  const entry = matchingEntries.find(
+    (candidate) =>
+      candidate.serviceTier === serviceTier,
   );
   if (!entry) {
     return undefined;
   }
 
-  const standardEntry = OPENAI_PRICING_CATALOG.find(
+  const standardEntry = catalog.find(
     (candidate) =>
-      candidate.model === model &&
-      candidate.serviceTier === "standard" &&
-      pricingEntryAppliesAt(candidate, params.at),
+      candidate.model === entry.model
+      && candidate.provider === entry.provider
+      && candidate.serviceTier === "standard"
+      && pricingEntryAppliesAt(candidate, params.at),
   );
   const uncachedInputCostMicros = calculateTokenCostMicros(
     params.uncachedInputTokens,
@@ -593,7 +671,11 @@ export function estimateOpenAiTokenUsageCost(params: {
     params.cachedInputTokens,
     entry.cachedInputUsdPerMillion,
   );
-  const billedOutputTokens = params.outputTokensIncludeReasoning
+  const outputTokensIncludeReasoning =
+    params.outputTokensIncludeReasoning
+    ?? entry.outputTokensIncludeReasoning
+    ?? false;
+  const billedOutputTokens = outputTokensIncludeReasoning
     ? params.outputTokens
     : params.outputTokens + Math.max(0, params.reasoningOutputTokens ?? 0);
   const outputCostMicros = calculateTokenCostMicros(
@@ -618,6 +700,7 @@ export function estimateOpenAiTokenUsageCost(params: {
     ...(entry.effectiveTo ? { effectiveTo: entry.effectiveTo } : {}),
     inputUsdPerMillion: entry.inputUsdPerMillion,
     model,
+    outputTokensIncludeReasoning,
     outputCostMicros,
     outputUsd,
     outputUsdPerMillion: entry.outputUsdPerMillion,
@@ -734,6 +817,15 @@ export function resolveOpenAiPricingServiceTier(params: {
   return undefined;
 }
 
+function resolveXaiPricingServiceTier(
+  serviceTier: string | undefined,
+): TokenUsagePricingServiceTier | undefined {
+  const normalized = serviceTier?.trim().toLowerCase();
+  return !normalized || normalized === "default" || normalized === "standard"
+    ? "standard"
+    : undefined;
+}
+
 export function formatTokenUsageUsd(value: number): string {
   if (value > 0 && value < 0.001) {
     return "<$0.001";
@@ -833,6 +925,13 @@ function pricingEntryAppliesAt(
     return entry.effectiveTo === undefined;
   }
   return entry.effectiveFrom <= at && (entry.effectiveTo === undefined || entry.effectiveTo > at);
+}
+
+function pricingEntryMatchesModel(
+  entry: PricingCatalogEntry,
+  model: string,
+): boolean {
+  return entry.model === model || entry.aliases?.includes(model) === true;
 }
 
 function buildPricingRateId(entry: PricingCatalogEntry): string {

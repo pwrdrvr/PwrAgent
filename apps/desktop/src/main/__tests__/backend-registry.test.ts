@@ -3363,6 +3363,70 @@ describe("DesktopBackendRegistry", () => {
     expect(acpClient.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("includes persisted pricing when reading ACP threads", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const threadId = "grok-session-pricing";
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.upsertThreadUsageLine({
+      line: {
+        backend: acpBackendId,
+        usageLineId: `${acpBackendId}:${threadId}:turn-1:live-token-usage`,
+        threadId,
+        turnId: "turn-1",
+        scope: "turn",
+        source: "live",
+        status: "finalized",
+        model: "grok-4.5-build",
+        currency: "USD",
+        inputTokens: 18_881,
+        cachedInputTokens: 11_136,
+        uncachedInputTokens: 7_745,
+        outputTokens: 68,
+        reasoningOutputTokens: 35,
+        totalTokens: 18_949,
+        priceStatus: "priced",
+        provider: "xai",
+        cachedInputCostMicros: 3_341,
+        uncachedInputCostMicros: 15_490,
+        outputCostMicros: 408,
+        totalCostMicros: 19_239,
+        createdAt: 1_000,
+      },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore,
+      sessionId: threadId,
+      sessions: [
+        {
+          backendId: acpBackendId,
+          sessionId: threadId,
+          title: "Grok pricing",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+    });
+
+    const response = await registry.readThread({
+      backend: acpBackendId,
+      threadId,
+    });
+
+    expect(response.pricing?.lines).toEqual([
+      expect.objectContaining({
+        backend: acpBackendId,
+        provider: "xai",
+        threadId,
+        totalCostMicros: 19_239,
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("applies Grok ACP reasoning effort without racing turn startup", async () => {
     const sessions: AcpSessionMetadata[] = [];
     const acpBackendId = "acp:grok" as AcpBackendId;

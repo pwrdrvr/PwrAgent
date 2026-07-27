@@ -713,6 +713,219 @@ describe("StateDb", () => {
     });
   });
 
+  it("migrates legacy Grok pricing without billing fork baselines", () => {
+    stateDb.close();
+
+    const dbPath = path.join(tempDir, "grok-pricing-provider-repair-state.db");
+    stateDb = StateDb.open(dbPath);
+    stateDb.raw
+      .prepare(
+        `INSERT INTO thread_usage_lines (
+          usage_line_id,
+          usage_turn_id,
+          provider,
+          backend,
+          thread_id,
+          turn_id,
+          source,
+          source_item_id,
+          scope,
+          status,
+          created_at,
+          completed_at,
+          model,
+          service_tier,
+          fast_mode,
+          input_tokens,
+          cached_input_tokens,
+          uncached_input_tokens,
+          output_tokens,
+          reasoning_output_tokens,
+          total_tokens,
+          price_status,
+          price_unavailable_reason,
+          currency,
+          uncached_input_cost_micros,
+          cached_input_cost_micros,
+          output_cost_micros,
+          total_cost_micros,
+          updated_at
+        ) VALUES (
+          'live-line-grok-4-5',
+          'openai:acp-grok:thread-1:turn-1',
+          'openai',
+          'acp:grok',
+          'thread-1',
+          'turn-1',
+          'live',
+          'thread-token-usage',
+          'turn',
+          'pending',
+          ?,
+          ?,
+          'grok-4.5-build',
+          NULL,
+          0,
+          21208,
+          11136,
+          10072,
+          45,
+          28,
+          21253,
+          'unpriced',
+          'missing-rate',
+          'USD',
+          0,
+          0,
+          0,
+          0,
+          ?
+        )`,
+      )
+      .run(
+        Date.UTC(2026, 6, 26),
+        Date.UTC(2026, 6, 26),
+        Date.UTC(2026, 6, 26),
+      );
+    stateDb.raw
+      .prepare(
+        `INSERT INTO thread_usage_lines (
+          usage_line_id,
+          provider,
+          backend,
+          thread_id,
+          parent_thread_id,
+          source,
+          scope,
+          status,
+          created_at,
+          model,
+          input_tokens,
+          cached_input_tokens,
+          uncached_input_tokens,
+          output_tokens,
+          reasoning_output_tokens,
+          total_tokens,
+          price_status,
+          currency,
+          uncached_input_cost_micros,
+          cached_input_cost_micros,
+          output_cost_micros,
+          total_cost_micros,
+          updated_at
+        ) VALUES (
+          'fork-baseline-grok-4-5',
+          'openai',
+          'acp:grok',
+          'thread-fork',
+          'thread-parent',
+          'hydration',
+          'fork-baseline',
+          'finalized',
+          ?,
+          'grok-4.5-build',
+          21208,
+          11136,
+          10072,
+          45,
+          28,
+          21253,
+          'priced',
+          'USD',
+          0,
+          0,
+          0,
+          0,
+          ?
+        )`,
+      )
+      .run(Date.UTC(2026, 6, 26), Date.UTC(2026, 6, 26));
+    stateDb.raw.pragma("user_version = 28");
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    const line = stateDb.raw
+      .prepare(
+        `SELECT
+           provider,
+           price_status,
+           price_unavailable_reason,
+           pricing_catalog_id,
+           pricing_catalog_version,
+           pricing_rate_id,
+           total_cost_micros
+         FROM thread_usage_lines
+         WHERE usage_line_id = 'live-line-grok-4-5'`,
+      )
+      .get();
+    const forkBaseline = stateDb.raw
+      .prepare(
+        `SELECT
+           provider,
+           price_status,
+           pricing_catalog_id,
+           pricing_catalog_version,
+           pricing_rate_id,
+           uncached_input_cost_micros,
+           cached_input_cost_micros,
+           output_cost_micros,
+           total_cost_micros
+         FROM thread_usage_lines
+         WHERE usage_line_id = 'fork-baseline-grok-4-5'`,
+      )
+      .get();
+    const summary = stateDb.raw
+      .prepare(
+        `SELECT provider, priced_usage_line_count, total_cost_micros
+         FROM thread_pricing_summaries
+         WHERE backend = 'acp:grok'
+           AND thread_id = 'thread-1'
+           AND currency = 'USD'`,
+      )
+      .get();
+    const forkSummary = stateDb.raw
+      .prepare(
+        `SELECT provider, priced_usage_line_count, total_cost_micros
+         FROM thread_pricing_summaries
+         WHERE backend = 'acp:grok'
+           AND thread_id = 'thread-parent'
+           AND currency = 'USD'`,
+      )
+      .get();
+
+    expect(line).toEqual({
+      provider: "xai",
+      price_status: "priced",
+      price_unavailable_reason: null,
+      pricing_catalog_id: "xai-api",
+      pricing_catalog_version: "2026-07-17",
+      pricing_rate_id: "xai:2026-07-17:grok-4.5:standard",
+      total_cost_micros: 23_755,
+    });
+    expect(forkBaseline).toEqual({
+      provider: "openai",
+      price_status: "priced",
+      pricing_catalog_id: null,
+      pricing_catalog_version: null,
+      pricing_rate_id: null,
+      uncached_input_cost_micros: 0,
+      cached_input_cost_micros: 0,
+      output_cost_micros: 0,
+      total_cost_micros: 0,
+    });
+    expect(forkSummary).toEqual({
+      provider: "openai",
+      priced_usage_line_count: 1,
+      total_cost_micros: 0,
+    });
+    expect(summary).toEqual({
+      provider: "xai",
+      priced_usage_line_count: 1,
+      total_cost_micros: 23_755,
+    });
+  });
+
   it("reprices existing GPT-5.6 usage rows when the pricing catalog updates", () => {
     stateDb.close();
 

@@ -333,6 +333,35 @@ describe("buildTokenUsageActivityEntry", () => {
     ]);
   });
 
+  it("prices the Grok ACP build model alias without double-billing reasoning", () => {
+    const entry = buildTokenUsageActivityEntry({
+      id: "usage-grok-45",
+      model: "grok-4.5-build",
+      tokenUsage: {
+        last_token_usage: {
+          input_tokens: 21_208,
+          cached_input_tokens: 11_136,
+          output_tokens: 45,
+          reasoning_output_tokens: 28,
+          total_tokens: 21_253,
+        },
+      },
+    });
+
+    expect(entry?.summary).toContain("10,072 uncached in");
+    expect(entry?.summary).toContain("11,136 cached");
+    expect(entry?.summary).toContain("45 out (28 reasoning)");
+    expect(entry?.summary).toContain("$0.024 list price");
+    expect(entry?.details.map((detail) => detail.label)).toEqual([
+      "Input: 21,208 tokens (10,072 uncached, 11,136 cached)",
+      "Output: 45 tokens, including 28 reasoning",
+      "Uncached input cost: 10,072 tokens at $2.00/M = $0.021",
+      "Cached input cost: 11,136 tokens at $0.30/M (0.15x uncached) = $0.004",
+      "Output cost: 45 tokens at $6.00/M = <$0.001",
+      "Cost: $0.024 list price for Grok 4.5 Standard",
+    ]);
+  });
+
   it("uses Fast priority rates and labels the model variant", () => {
     const entry = buildTokenUsageActivityEntry({
       fastMode: true,

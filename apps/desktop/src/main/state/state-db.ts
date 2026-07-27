@@ -3,13 +3,13 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import {
-  estimateOpenAiTokenUsageCost,
+  estimateTokenUsageCost,
   resolveOpenAiPricingServiceTier,
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 28;
+export const CURRENT_STATE_DB_USER_VERSION = 29;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -882,7 +882,7 @@ export class StateDb {
     }
     if ((db.pragma("user_version", { simple: true }) as number) < 22) {
       db.transaction(() => {
-        repairOpenAiThreadUsagePricing(db);
+        repairTokenUsagePricing(db);
         db.pragma("user_version = 22");
       })();
     }
@@ -932,7 +932,13 @@ export class StateDb {
     }
     if ((db.pragma("user_version", { simple: true }) as number) < 28) {
       db.transaction(() => {
-        repairOpenAiThreadUsagePricing(db);
+        repairTokenUsagePricing(db);
+        db.pragma("user_version = 28");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 29) {
+      db.transaction(() => {
+        repairTokenUsagePricing(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1590,7 +1596,7 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
 `);
 }
 
-function repairOpenAiThreadUsagePricing(db: BetterSqlite3.Database): void {
+function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
   if (
     !tableExists(db, "thread_usage_lines") ||
     !tableExists(db, "thread_pricing_summaries")
@@ -1610,11 +1616,13 @@ function repairOpenAiThreadUsagePricing(db: BetterSqlite3.Database): void {
          model,
          output_tokens,
          price_status,
+         provider,
          reasoning_output_tokens,
          service_tier,
          uncached_input_tokens
        FROM thread_usage_lines
-       WHERE provider = 'openai'`,
+       WHERE provider = 'openai'
+         AND scope != 'fork-baseline'`,
     )
     .all() as Array<{
       cached_input_tokens: number;
@@ -1624,6 +1632,7 @@ function repairOpenAiThreadUsagePricing(db: BetterSqlite3.Database): void {
       model: string | null;
       output_tokens: number;
       price_status: string;
+      provider: string;
       reasoning_output_tokens: number;
       service_tier: string | null;
       uncached_input_tokens: number;
@@ -1641,13 +1650,14 @@ function repairOpenAiThreadUsagePricing(db: BetterSqlite3.Database): void {
        uncached_input_cost_micros = @uncachedInputCostMicros,
        cached_input_cost_micros = @cachedInputCostMicros,
        output_cost_micros = @outputCostMicros,
+       provider = @provider,
        total_cost_micros = @totalCostMicros,
        updated_at = @updatedAt
      WHERE usage_line_id = @usageLineId`,
   );
 
   for (const row of rows) {
-    const cost = estimateOpenAiTokenUsageCost({
+    const cost = estimateTokenUsageCost({
       at: row.created_at,
       cachedInputTokens: row.cached_input_tokens,
       fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
@@ -1679,6 +1689,7 @@ function repairOpenAiThreadUsagePricing(db: BetterSqlite3.Database): void {
       currency: cost?.currency ?? row.currency,
       outputCostMicros: cost?.outputCostMicros ?? 0,
       priceStatus: cost ? "priced" : "unpriced",
+      provider: cost?.provider ?? row.provider,
       priceUnavailableReason,
       pricingCatalogId: cost?.catalogId ?? null,
       pricingCatalogVersion: cost?.catalogVersion ?? null,

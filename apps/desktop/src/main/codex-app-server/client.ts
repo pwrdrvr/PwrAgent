@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  estimateOpenAiTokenUsageCost,
+  estimateTokenUsageCost,
   formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
   formatTokenUsageStandardRateSuffix,
@@ -2902,7 +2902,7 @@ function summarizeTokenUsageActivity(
     readTokenUsagePricingContext(record),
     pricingContext
   );
-  const cost = estimateOpenAiTokenUsageCost({
+  const cost = estimateTokenUsageCost({
     cachedInputTokens,
     at: createdAt,
     fastMode: resolvedPricingContext.fastMode,

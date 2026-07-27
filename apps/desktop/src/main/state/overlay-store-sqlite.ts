@@ -41,7 +41,7 @@ import {
   buildNavigationSnapshot,
   buildNavigationSnapshotHash,
   applyNavigationLaunchpadProviderSettingsPatch,
-  estimateOpenAiTokenUsageCost,
+  estimateTokenUsageCost,
   isAcpBackendId,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
@@ -674,7 +674,7 @@ export class SqliteOverlayStore {
     line: ThreadUsageLineRecord;
   }): Promise<{ line: ThreadUsageLineRecord; summary: ThreadPricingSummary }> {
     const now = Date.now();
-    let line = repriceOpenAiUsageLine(normalizeThreadUsageLine(params.line, now));
+    let line = repriceTokenUsageLine(normalizeThreadUsageLine(params.line, now));
     const upsert = this.stateDb.raw.transaction(() => {
       const existing = this.readThreadUsageLineSync(line.usageLineId);
       if (existing) {
@@ -3163,7 +3163,7 @@ function mergeThreadUsageLineForUpsert(
     ),
   };
 
-  return repriceOpenAiUsageLine(merged);
+  return repriceTokenUsageLine(merged);
 }
 
 function mergeUsageSettingValue<T extends string>(
@@ -3176,7 +3176,7 @@ function mergeUsageSettingValue<T extends string>(
   return next;
 }
 
-function repriceOpenAiUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRecord {
+function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRecord {
   if (line.provider !== "openai") {
     return line;
   }
@@ -3203,7 +3203,7 @@ function repriceOpenAiUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRec
     };
   }
 
-  const cost = estimateOpenAiTokenUsageCost({
+  const cost = estimateTokenUsageCost({
     at: line.createdAt,
     cachedInputTokens: line.cachedInputTokens,
     fastMode: line.fastMode,
@@ -3239,6 +3239,7 @@ function repriceOpenAiUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRec
     currency: cost?.currency ?? line.currency,
     outputCostMicros: cost?.outputCostMicros ?? 0,
     priceStatus: cost ? "priced" : "unpriced",
+    provider: cost?.provider ?? line.provider,
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
