@@ -776,18 +776,33 @@ describe("AcpBackendAdapter", () => {
       turnId: "turn-1",
     });
 
+    for (const text of [
+      "The ",
+      "code ",
+      "seems ",
+      "to ",
+      "be ",
+      "over ",
+      "here",
+      ".",
+    ]) {
+      transport.emitSessionUpdate(session.sessionId, {
+        session_update: "agent_thought_chunk",
+        content: { type: "text", text },
+      });
+    }
     transport.emitSessionUpdate(session.sessionId, {
-      session_update: "agent_thought_chunk",
-      content: { type: "text", text: "So the key logic is:\n```" },
+      session_update: "tool_call",
+      tool_call_id: "tool-1",
+      title: "cat package.json",
+      status: "completed",
     });
-    transport.emitSessionUpdate(session.sessionId, {
-      session_update: "agent_thought_chunk",
-      content: { type: "text", text: "Tracing the image support flags." },
-    });
-    transport.emitSessionUpdate(session.sessionId, {
-      session_update: "agent_thought_chunk",
-      content: { type: "text", text: "```ts\nconst hidden = true;" },
-    });
+    for (const text of ["So ", "the ", "key ", "logic is:\n```"]) {
+      transport.emitSessionUpdate(session.sessionId, {
+        session_update: "agent_thought_chunk",
+        content: { type: "text", text },
+      });
+    }
     transport.emitSessionUpdate(session.sessionId, {
       session_update: "agent_message_chunk",
       content: { type: "text", text: "The image flag is disabled." },
@@ -810,7 +825,7 @@ describe("AcpBackendAdapter", () => {
             turnId: "turn-1",
             itemId: "transient-thought:turn-1",
             role: "assistant",
-            text: "So the key logic is:",
+            text: "The",
             phase: "commentary",
           },
         },
@@ -821,7 +836,7 @@ describe("AcpBackendAdapter", () => {
             turnId: "turn-1",
             itemId: "transient-thought:turn-1",
             role: "assistant",
-            text: "Tracing the image support flags.",
+            text: "The code",
             phase: "commentary",
           },
         },
@@ -832,10 +847,31 @@ describe("AcpBackendAdapter", () => {
             turnId: "turn-1",
             itemId: "transient-thought:turn-1",
             role: "assistant",
-            text: "",
+            text: "The code seems",
             phase: "commentary",
           },
         },
+        ...[
+          "The code seems to",
+          "The code seems to be",
+          "The code seems to be over",
+          "The code seems to be over here",
+          "The code seems to be over here.",
+          "So",
+          "So the",
+          "So the key",
+          "So the key logic is:",
+        ].map((text) => ({
+          method: "item/transientMessage/updated" as const,
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            itemId: "transient-thought:turn-1",
+            role: "assistant" as const,
+            text,
+            phase: "commentary" as const,
+          },
+        })),
         {
           method: "item/agentMessage/delta",
           params: {

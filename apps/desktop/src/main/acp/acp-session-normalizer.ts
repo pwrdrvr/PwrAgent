@@ -481,7 +481,10 @@ export class AcpSessionReplayNormalizer {
       (message) => message.id === params.id,
     );
     if (existingMessage) {
-      existingMessage.text = appendTranscriptChunk(existingMessage.text, params.text);
+      existingMessage.text = appendAcpTranscriptChunk(
+        existingMessage.text,
+        params.text,
+      );
     } else {
       this.messages.push({
         id: params.id,
@@ -496,7 +499,10 @@ export class AcpSessionReplayNormalizer {
         entry.type === "message" && entry.id === params.id,
     );
     if (existingEntry) {
-      existingEntry.text = appendTranscriptChunk(existingEntry.text, params.text);
+      existingEntry.text = appendAcpTranscriptChunk(
+        existingEntry.text,
+        params.text,
+      );
     } else {
       this.entries.push(this.withCurrentTurn({
         type: "message",
@@ -553,7 +559,10 @@ export class AcpSessionReplayNormalizer {
   }
 }
 
-function appendTranscriptChunk(existing: string, next: string): string {
+export function appendAcpTranscriptChunk(
+  existing: string,
+  next: string,
+): string {
   if (!existing || !next) {
     return `${existing}${next}`;
   }

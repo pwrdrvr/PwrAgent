@@ -75,6 +75,7 @@ import {
 } from "../acp/acp-session-store";
 import {
   AcpSessionReplayNormalizer,
+  appendAcpTranscriptChunk,
   formatAcpTransientThoughtMessage,
   readAcpContentText,
   shouldSurfaceAcpThoughtsAsMessages,
@@ -912,6 +913,7 @@ export class AcpBackendAdapter {
   private closePromise?: Promise<void>;
   private readonly closeTimeoutMs: number;
   private readonly liveTurnUsage = new Map<string, AcpLiveTurnUsage>();
+  private readonly transientThoughtText = new Map<string, string>();
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
 
   constructor(options: AcpBackendAdapterOptions) {
@@ -1546,6 +1548,7 @@ export class AcpBackendAdapter {
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
     this.liveTurnUsage.clear();
+    this.transientThoughtText.clear();
     this.closePromise = this.closeResources(acpClients);
     return await this.closePromise;
   }
@@ -1725,6 +1728,16 @@ export class AcpBackendAdapter {
               turnId,
             })
           : undefined;
+        const transientThoughtKey =
+          turnId
+            ? `${agent.backendId}:${sessionId}:${turnId}`
+            : undefined;
+        if (
+          transientThoughtKey &&
+          updateKind !== "agent_thought_chunk"
+        ) {
+          this.transientThoughtText.delete(transientThoughtKey);
+        }
         if (title) {
           await this.emit({
             backend: agent.backendId,
@@ -1786,8 +1799,17 @@ export class AcpBackendAdapter {
           shouldSurfaceAcpThoughtsAsTransientMessages(agent.backendId)
         ) {
           const rawText = readAcpUpdateText(update);
-          if (rawText) {
-            const text = formatAcpTransientThoughtMessage(rawText) ?? "";
+          if (rawText && transientThoughtKey) {
+            const accumulatedText = appendAcpTranscriptChunk(
+              this.transientThoughtText.get(transientThoughtKey) ?? "",
+              rawText,
+            );
+            this.transientThoughtText.set(
+              transientThoughtKey,
+              accumulatedText,
+            );
+            const text =
+              formatAcpTransientThoughtMessage(accumulatedText) ?? "";
             await this.emit({
               backend: agent.backendId,
               notification: {
@@ -1893,6 +1915,9 @@ export class AcpBackendAdapter {
       onPromptError: async ({ sessionId, turnId, error }) => {
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),
+        );
+        this.transientThoughtText.delete(
+          `${agent.backendId}:${sessionId}:${turnId}`,
         );
         await this.emit({
           backend: agent.backendId,
