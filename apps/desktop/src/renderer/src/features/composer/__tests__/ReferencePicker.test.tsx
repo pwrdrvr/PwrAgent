@@ -15,8 +15,25 @@ import {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   delete (window as unknown as { __pwragentHomeDir?: unknown }).__pwragentHomeDir;
 });
+
+/** Stub the panel's measured rect so the viewport clamp sees real geometry
+ *  (jsdom rects are all zeros otherwise). */
+function mockPanelRect(left: number, right: number): void {
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+    left,
+    right,
+    top: 0,
+    bottom: 420,
+    width: right - left,
+    height: 420,
+    x: left,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
 
 const dirA: NavigationDirectorySummary = {
   key: "directory:/Users/me/code/PwrAgent",
@@ -213,6 +230,34 @@ describe("ReferencePicker", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("nudges the panel left when it would overflow the right viewport gutter", () => {
+    // jsdom viewport is 1024 wide; gutter is 12 → right limit 1012.
+    mockPanelRect(800, 1240);
+    renderPicker({ directories: [dirA] });
+
+    expect(screen.getByRole("dialog", { name: "Add reference" })).toHaveStyle({
+      transform: "translateX(-228px)",
+    });
+  });
+
+  it("nudges the panel right when it would overflow the left viewport gutter", () => {
+    mockPanelRect(-50, 390);
+    renderPicker({ directories: [dirA] });
+
+    expect(screen.getByRole("dialog", { name: "Add reference" })).toHaveStyle({
+      transform: "translateX(62px)",
+    });
+  });
+
+  it("leaves the panel unshifted when it already fits the viewport", () => {
+    mockPanelRect(100, 540);
+    renderPicker({ directories: [dirA] });
+
+    expect(
+      screen.getByRole("dialog", { name: "Add reference" }),
+    ).not.toHaveAttribute("style");
   });
 
   it("renders nothing but the trigger child when closed", () => {

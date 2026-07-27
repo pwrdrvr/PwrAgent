@@ -948,6 +948,64 @@ describe("AcpSessionReplayNormalizer", () => {
     ).toBeUndefined();
   });
 
+  it("ignores transient Grok interaction updates without splitting text", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { sessionUpdate: "agent_message_chunk", content: "Before " },
+    });
+    for (const sessionUpdate of [
+      "tool_call_delta_chunk",
+      "pending_interaction",
+      "interaction_resolved",
+    ]) {
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1001,
+        update: { sessionUpdate },
+      });
+    }
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: { sessionUpdate: "agent_message_chunk", content: "after" },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "assistant",
+        text: "Before after",
+      }),
+    ]);
+  });
+
+  it("treats Grok turn_completed as an idempotent turn finish", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    normalizer.recordUserPrompt({
+      sessionId: "session-1",
+      prompt: "Inspect this",
+      turnId: "turn-1",
+      receivedAt: 1000,
+      waitingForAgent: true,
+    });
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: { sessionUpdate: "turn_completed" },
+    });
+
+    expect(replay.threadStatus).toBe("idle");
+    expect(
+      replay.entries.some(
+        (entry) => entry.type === "activity" && entry.status === "in_progress",
+      ),
+    ).toBe(false);
+  });
+
   it("records thought chunks as assistant response messages", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

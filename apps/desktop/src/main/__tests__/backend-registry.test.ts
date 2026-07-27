@@ -287,7 +287,7 @@ function createOverlayStoreMock(params?: {
       backend,
       threadId,
     }: {
-      backend: "codex" | "grok";
+      backend: ThreadOverlayState["backend"];
       threadId: string;
     }) => overlays.get(`${backend}:${threadId}`),
     getThreadOverlayStates: async ({ threadIds }: { threadIds: string[] }) =>
@@ -421,7 +421,7 @@ function createOverlayStoreMock(params?: {
       threadId,
       executionMode,
     }: {
-      backend: "codex" | "grok";
+      backend: ThreadOverlayState["backend"];
       threadId: string;
       executionMode: "default" | "full-access";
     }) => {
@@ -3578,10 +3578,11 @@ describe("DesktopBackendRegistry", () => {
         threadStatus: "idle",
       })),
     };
+    const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       grokClient: new MockBackendClient({ threads: [] }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
@@ -3635,6 +3636,14 @@ describe("DesktopBackendRegistry", () => {
       sessionId: "kimi-session-1",
       prompt: "/yolo",
     });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "kimi-session-1",
+      }),
+    ).resolves.toMatchObject({
+      executionMode: "full-access",
+    });
 
     sendControlPrompt.mockClear();
     await expect(
@@ -3653,6 +3662,14 @@ describe("DesktopBackendRegistry", () => {
       prompt: "/yolo",
     });
     expect(sessions[0]?.executionMode).toBe("default");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "kimi-session-1",
+      }),
+    ).resolves.toMatchObject({
+      executionMode: "default",
+    });
 
     await registry.close();
   });
@@ -3693,6 +3710,13 @@ describe("DesktopBackendRegistry", () => {
       })),
       refreshSession: vi.fn(async () => undefined),
       cancelSession: vi.fn(),
+      setRuntimeOption: vi.fn(
+        async (): Promise<BackendAcpSessionRuntimeState> => ({
+          configValues: { "approval-mode": "yolo" },
+          currentModeId: "yolo",
+          updatedAt: 2000,
+        }),
+      ),
       readReplay: vi.fn((): AppServerThreadReplay => ({
         entries: [],
         messages: [],
@@ -3700,10 +3724,11 @@ describe("DesktopBackendRegistry", () => {
         threadStatus: "idle",
       })),
     };
+    const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       grokClient: new MockBackendClient({ threads: [] }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
@@ -3769,7 +3794,28 @@ describe("DesktopBackendRegistry", () => {
       threadId: "kimi-session-1",
       executionMode: "default",
     });
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      source: "configOption",
+      optionId: "approval-mode",
+      value: "yolo",
+    });
     expect(sendControlPrompt).not.toHaveBeenCalled();
+    expect(acpClient.setRuntimeOption).toHaveBeenCalledWith({
+      sessionId: "kimi-session-1",
+      source: "configOption",
+      optionId: "approval-mode",
+      value: "yolo",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "kimi-session-1",
+      }),
+    ).resolves.toMatchObject({
+      executionMode: "full-access",
+    });
 
     await registry.close();
   });
@@ -3828,10 +3874,11 @@ describe("DesktopBackendRegistry", () => {
         threadStatus: "idle",
       })),
     };
+    const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       grokClient: new MockBackendClient({ threads: [] }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
@@ -3885,6 +3932,14 @@ describe("DesktopBackendRegistry", () => {
       prompt: "/always-approve on",
     });
     expect(sessions[0]?.executionMode).toBe("full-access");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "grok-session-1",
+      }),
+    ).resolves.toMatchObject({
+      executionMode: "full-access",
+    });
 
     // This is the assertion the user-reported bug fails on: listThreads
     // must surface the just-applied "full-access" mode so the renderer
@@ -3896,6 +3951,33 @@ describe("DesktopBackendRegistry", () => {
     );
     expect(thread).toBeDefined();
     expect(thread?.executionMode).toBe("full-access");
+
+    const permissionEvents: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      permissionEvents.push(event);
+    });
+    const handlePermissionRequest = (
+      registry as unknown as {
+        handleServerRequest(
+          backend: AcpBackendId,
+          request: AppServerPendingRequestNotification,
+        ): Promise<unknown>;
+      }
+    ).handleServerRequest.bind(registry);
+    const permissionRequest: AppServerPendingRequestNotification = {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "grok-session-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        acpMethod: "session/request_permission",
+        command: "pnpm build",
+      },
+    };
+    await expect(
+      handlePermissionRequest(acpBackendId, permissionRequest),
+    ).resolves.toEqual({ decision: "approve" });
+    expect(permissionEvents).toEqual([]);
 
     sendControlPrompt.mockClear();
     await expect(
@@ -3914,7 +3996,39 @@ describe("DesktopBackendRegistry", () => {
       prompt: "/always-approve off",
     });
     expect(sessions[0]?.executionMode).toBe("default");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "grok-session-1",
+      }),
+    ).resolves.toMatchObject({
+      executionMode: "default",
+    });
 
+    permissionEvents.length = 0;
+    const defaultResponse = handlePermissionRequest(
+      acpBackendId,
+      permissionRequest,
+    );
+    await waitForCondition(() =>
+      permissionEvents.some(
+        (event) =>
+          event.notification.method === "item/commandExecution/requestApproval",
+      ),
+    );
+    expect(permissionEvents).toContainEqual({
+      backend: acpBackendId,
+      notification: permissionRequest,
+    });
+    await registry.submitServerRequest({
+      backend: acpBackendId,
+      threadId: "grok-session-1",
+      requestId: "approval-1",
+      response: { decision: "approve" },
+    });
+    await expect(defaultResponse).resolves.toEqual({ decision: "approve" });
+
+    unsubscribe();
     await registry.close();
   });
 
@@ -4408,10 +4522,11 @@ describe("DesktopBackendRegistry", () => {
         }),
       ),
     };
+    const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       grokClient: new MockBackendClient({ threads: [] }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
@@ -4479,6 +4594,14 @@ describe("DesktopBackendRegistry", () => {
           executionMode: "default",
         },
       },
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "qwen-session-1",
+      }),
+    ).resolves.toMatchObject({
+      executionMode: "default",
     });
 
     unsubscribe();
