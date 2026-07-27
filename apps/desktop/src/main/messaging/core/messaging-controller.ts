@@ -2364,7 +2364,7 @@ export class MessagingController {
       entry.binding,
       "queued_turn_notice",
     );
-    const canSteer = this.canSteerQueuedTurn(activeTurn);
+    const canSteer = this.canSteerQueuedTurn(entry, activeTurn);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("queued-turn"),
       capabilityProfile: this.capabilityProfile,
@@ -2394,6 +2394,7 @@ export class MessagingController {
   }
 
   private canSteerQueuedTurn(
+    entry: MessagingQueuedTurnEntry,
     activeTurn: MessagingActiveTurnSummary | undefined,
   ): boolean {
     return Boolean(
