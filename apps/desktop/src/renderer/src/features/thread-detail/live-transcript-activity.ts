@@ -968,12 +968,14 @@ export function mergeCommandDetail(
   if (!displayCommand) {
     return undefined;
   }
+  const source =
+    next?.rawCommand && existing?.source === "tool"
+      ? "shell"
+      : next?.source ?? existing?.source;
 
   return {
     displayCommand,
-    ...(next?.source || existing?.source
-      ? { source: next?.source ?? existing?.source }
-      : {}),
+    ...(source ? { source } : {}),
     ...(existing?.rawCommand || next?.rawCommand
       ? { rawCommand: next?.rawCommand ?? existing?.rawCommand }
       : {}),

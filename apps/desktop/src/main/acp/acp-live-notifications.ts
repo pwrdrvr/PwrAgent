@@ -43,7 +43,7 @@ export function acpTurnCompletedUsageNotification(params: {
   turnId?: string;
   update: Record<string, unknown>;
 }): AppServerNotification | undefined {
-  if (readKind(params.update) !== "turn_completed") {
+  if (!params.turnId || readKind(params.update) !== "turn_completed") {
     return undefined;
   }
   const usage = asRecord(params.update.usage);
@@ -68,7 +68,7 @@ export function acpTurnCompletedUsageNotification(params: {
     method: "thread/tokenUsage/updated",
     params: {
       threadId: params.threadId,
-      ...(params.turnId ? { turnId: params.turnId } : {}),
+      turnId: params.turnId,
       ...(model ? { model } : {}),
       tokenUsage: {
         last_token_usage: {

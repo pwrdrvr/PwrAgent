@@ -194,6 +194,25 @@ describe("mergeCommandDetail", () => {
       output: "found 9 matches",
     });
   });
+
+  it("promotes a tool invocation to shell when a raw command arrives", () => {
+    expect(
+      mergeCommandDetail(
+        {
+          displayCommand: 'grep(pattern="grok")',
+          source: "tool",
+        },
+        {
+          displayCommand: "rg -n grok .",
+          rawCommand: "rg -n grok .",
+        },
+      ),
+    ).toEqual({
+      displayCommand: "rg -n grok .",
+      rawCommand: "rg -n grok .",
+      source: "shell",
+    });
+  });
 });
 
 describe("buildTokenUsageActivityEntry", () => {

@@ -289,6 +289,22 @@ describe("acpToolUpdateNotifications", () => {
     });
   });
 
+  it("ignores replayed turn completion usage without a live turn", () => {
+    expect(
+      acpTurnCompletedUsageNotification({
+        threadId: "session-1",
+        update: {
+          sessionUpdate: "turn_completed",
+          usage: {
+            inputTokens: 348_051,
+            outputTokens: 3_124,
+            totalTokens: 351_175,
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it("ignores turn completion notifications without usable token counts", () => {
     expect(
       acpTurnCompletedUsageNotification({
