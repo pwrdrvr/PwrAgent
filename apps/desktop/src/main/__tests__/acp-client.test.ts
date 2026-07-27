@@ -1674,6 +1674,78 @@ describe("AcpAgentClient", () => {
     ).toHaveLength(1);
   });
 
+  it("does not let synthetic PwrAgent messages suppress provider session/load history", async () => {
+    const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
+    rolloutStore.appendUpdate({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      receivedAt: 1100,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: "Monitor completed.",
+        },
+        messageId: "monitor-1:message:1100",
+        _meta: {
+          pwragentSynthetic: true,
+          source: "pwragent_task_monitor",
+        },
+      },
+    });
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      rolloutStore,
+      store,
+      transport: {
+        request: async (method, params) => {
+          const result = await transport.request(method, params);
+          if (method === "session/load") {
+            transport.emitSessionUpdate("session-1", {
+              session_update: "user_message_chunk",
+              content: { type: "text", text: "What is the status?" },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "agent_message_chunk",
+              content: { type: "text", text: "Still running." },
+            });
+          }
+          return result;
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 2000,
+    });
+    store.upsertSession({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      title: "Kimi session",
+      cwd: "/repo",
+      createdAt: 1000,
+      updatedAt: 1100,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    const replay = await client.loadSession(
+      store.getSession("acp:kimi", "session-1")!,
+    );
+
+    expect(transport.requests.map((request) => request.method)).toEqual([
+      "initialize",
+      "session/load",
+    ]);
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "What is the status?",
+      "Still running.",
+    ]);
+  });
+
   it("returns empty replay when no provider session/load support is advertised", async () => {
     const transport = new FakeAcpAgentTransport({
       initialize: {

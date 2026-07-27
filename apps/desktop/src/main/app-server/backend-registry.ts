@@ -5486,6 +5486,7 @@ export class DesktopBackendRegistry {
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
     acpAgentStore?: AcpBackendAdapterOptions["acpAgentStore"];
+    acpRolloutStore?: AcpBackendAdapterOptions["acpRolloutStore"];
     acpSessionStore?: AcpSessionStoreLike | null;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
     createAcpClient?: AcpClientFactory;
@@ -5654,6 +5655,7 @@ export class DesktopBackendRegistry {
           });
     this.acpBackend = new AcpBackendAdapter({
       acpAgentStore: options?.acpAgentStore,
+      acpRolloutStore: options?.acpRolloutStore,
       acpSessionStore: options?.acpSessionStore,
       agentToolMcpServer,
       captureStores: this.captureStores,
@@ -18325,11 +18327,22 @@ export class DesktopBackendRegistry {
     const requestedReasoningEffort = normalizePreferredMonitorReasoningEffort(
       args.preferredReasoningEffort,
     );
-    const { preferredModel, preferredReasoningEffort } =
-      await this.resolveTaskMonitorModelSettings({
+    let preferredModel: string;
+    let preferredReasoningEffort: string;
+    try {
+      const resolved = await this.resolveTaskMonitorModelSettings({
         preferredModel: requestedModel,
         preferredReasoningEffort: requestedReasoningEffort,
       });
+      preferredModel = resolved.preferredModel;
+      preferredReasoningEffort = resolved.preferredReasoningEffort;
+    } catch (error) {
+      return taskMonitorFailure(
+        "create_monitor_delegation",
+        "internal_error",
+        `Task monitor delegation requires an available Codex model: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const startupTimeoutSeconds = DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS;
     const parentAgentGuidance = buildMonitorParentAgentGuidance({
       pollIntervalSeconds,
@@ -19151,6 +19164,28 @@ export class DesktopBackendRegistry {
     parentThreadId: string;
     text: string;
   }): Promise<void> {
+    const receivedAt = Date.now();
+    const messageId = `${params.monitorId}:message:${receivedAt}`;
+    if (isAcpBackendId(params.backend)) {
+      const persisted = this.acpBackend.persistSyntheticAssistantMessage({
+        backend: params.backend,
+        messageId,
+        receivedAt,
+        sessionId: params.parentThreadId,
+        source: "pwragent_task_monitor",
+        text: params.text,
+      });
+      if (!persisted) {
+        backendRegistryLog.warn(
+          "ACP task monitor completion could not be persisted",
+          {
+            backend: params.backend,
+            monitorId: params.monitorId,
+            threadId: params.parentThreadId,
+          },
+        );
+      }
+    }
     if (params.backend !== "codex") {
       await this.emit({
         backend: params.backend,
@@ -19160,7 +19195,7 @@ export class DesktopBackendRegistry {
             threadId: params.parentThreadId,
             turnId: `monitor:${params.monitorId}`,
             item: {
-              id: `${params.monitorId}:message:${Date.now()}`,
+              id: messageId,
               type: "agentMessage",
               text: params.text,
               data: {

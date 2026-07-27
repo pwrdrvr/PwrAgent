@@ -56,6 +56,7 @@ import { GitDirectoryService } from "../app-server/git-directory-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
+import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
@@ -1681,8 +1682,10 @@ type KimiStartPrompt = (params: {
 
 function createKimiAcpRegistry(options?: {
   acpBackendId?: AcpBackendId;
+  acpRolloutStore?: AcpRolloutStore;
   sessionId?: string;
   sessions?: AcpSessionMetadata[];
+  replay?: AppServerThreadReplay;
   sendControlPrompt?: KimiSendControlPrompt;
   startPrompt?: KimiStartPrompt;
   overlayStore?: ReturnType<typeof createOverlayStoreMock>;
@@ -1706,6 +1709,16 @@ function createKimiAcpRegistry(options?: {
   const startPrompt: KimiStartPrompt =
     options?.startPrompt ??
     vi.fn(() => ({ sessionId, turnId: "turn-1" }));
+  const replay: AppServerThreadReplay =
+    options?.replay ?? {
+      entries: [],
+      messages: [],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle",
+    };
   const acpClient = {
     controlPromptReceiverMarker: true,
     initialize: vi.fn(async () => undefined),
@@ -1738,26 +1751,10 @@ function createKimiAcpRegistry(options?: {
     startPrompt,
     sendControlPrompt,
     ensureSession: vi.fn(async () => undefined),
-    loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
-      entries: [],
-      messages: [],
-      pagination: {
-        supportsPagination: false,
-        hasPreviousPage: false,
-      },
-      threadStatus: "idle",
-    })),
+    loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => replay),
     refreshSession: vi.fn(async () => undefined),
     cancelSession: vi.fn(),
-    readReplay: vi.fn((): AppServerThreadReplay => ({
-      entries: [],
-      messages: [],
-      pagination: {
-        supportsPagination: false,
-        hasPreviousPage: false,
-      },
-      threadStatus: "idle",
-    })),
+    readReplay: vi.fn((): AppServerThreadReplay => replay),
   };
   const registry = new DesktopBackendRegistry({
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
@@ -1766,6 +1763,7 @@ function createKimiAcpRegistry(options?: {
     acpAgentStore: createAcpAgentStoreMock([
       createKimiAgentRecord(acpBackendId, options?.runtimeCapabilities),
     ]),
+    acpRolloutStore: options?.acpRolloutStore,
     acpSessionStore: createAcpSessionStoreMock(sessions),
     createAcpClient: () => acpClient,
     codexEnvironmentCommandRunner: options?.codexEnvironmentCommandRunner,
@@ -2751,6 +2749,18 @@ describe("DesktopBackendRegistry", () => {
           allowlistRuleId: "local-gemini-cli",
           installedAt: 1000,
           updatedAt: 2000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            source: "initialize",
+            discoveredAt: 1000,
+            checkedAt: 1000,
+            agentCapabilities: {
+              mcp: {
+                http: true,
+              },
+            },
+          },
         },
       ]),
       acpSessionStore: createAcpSessionStoreMock([
@@ -28484,6 +28494,231 @@ script = "printf setup"
         }),
       ],
     });
+
+    await registry.close();
+  });
+
+  it("persists ACP monitor completions without starting a parent turn", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "acp-parent";
+    const rolloutRoot = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-acp-monitor-rollout-"),
+    );
+    const acpRolloutStore = new AcpRolloutStore(rolloutRoot);
+    const providerReplay: AppServerThreadReplay = {
+      entries: [
+        {
+          type: "message",
+          id: "assistant:provider",
+          role: "assistant",
+          text: "Deployment monitoring started.",
+          createdAt: 1001,
+        },
+      ],
+      messages: [
+        {
+          id: "assistant:provider",
+          role: "assistant",
+          text: "Deployment monitoring started.",
+          createdAt: 1001,
+        },
+      ],
+      lastAssistantMessage: "Deployment monitoring started.",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle",
+    };
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: parentThreadId,
+        title: "ACP Parent",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        hasConversationHistory: true,
+        status: "idle",
+      },
+    ];
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? `turn:${params.sessionId}`,
+    }));
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      acpRolloutStore,
+      sessions,
+      sessionId: "unused-child",
+      startPrompt,
+      codexClient,
+      replay: providerReplay,
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: 1000,
+        checkedAt: 1000,
+        source: "initialize",
+        agentCapabilities: {
+          loadSession: true,
+          sessionHistoryReplay: true,
+        },
+      },
+    });
+
+    try {
+      await registry.publishLocalEvent({
+        backend: acpBackendId,
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: parentThreadId,
+            turnId: "parent-turn",
+            turn: { id: "parent-turn" },
+          },
+        },
+      });
+      const response = await callRegistryMcpTool({
+        registry,
+        backend: acpBackendId,
+        threadId: parentThreadId,
+        turnId: "parent-turn",
+        tool: "create_monitor_delegation",
+        args: {
+          task: "Watch the deployment until it finishes.",
+        },
+      });
+      const monitorId = String(response.structuredContent?.monitorId);
+      await emitCompletedTurn(
+        registry,
+        acpBackendId,
+        parentThreadId,
+        "parent-turn",
+      );
+
+      await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "turn-1",
+          callId: "complete-monitor",
+          requestId: "complete-monitor",
+          namespace: "pwragent",
+          tool: "complete_monitoring",
+          arguments: {
+            monitorId,
+            outcome: "success",
+            summary: "Deployment completed.",
+            triggerParentTurn: false,
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(startPrompt).not.toHaveBeenCalled();
+      const diskReplay = new AcpRolloutStore(rolloutRoot).readReplay({
+        backendId: acpBackendId,
+        sessionId: parentThreadId,
+      });
+      expect(diskReplay.lastAssistantMessage).toContain(
+        "Deployment completed.",
+      );
+      await expect(
+        registry.readThread({
+          backend: acpBackendId,
+          threadId: parentThreadId,
+        }),
+      ).resolves.toMatchObject({
+        replay: {
+          messages: [
+            expect.objectContaining({
+              id: "assistant:provider",
+              text: "Deployment monitoring started.",
+            }),
+            expect.objectContaining({
+              id: expect.stringMatching(
+                new RegExp(`^${monitorId}:message:`),
+              ),
+              text: expect.stringContaining("Deployment completed."),
+            }),
+          ],
+          lastAssistantMessage: expect.stringContaining(
+            "Deployment completed.",
+          ),
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(rolloutRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a structured ACP MCP error when no Codex monitor model is available", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "acp-parent";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [],
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      codexClient,
+      sessions: [
+        {
+          backendId: acpBackendId,
+          sessionId: parentThreadId,
+          title: "ACP Parent",
+          cwd: "/repo/app",
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+    });
+
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: "parent-turn",
+      tool: "create_monitor_delegation",
+      args: {
+        task: "Watch the deployment until it finishes.",
+      },
+    });
+
+    expect(response).toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "internal_error",
+        message: expect.stringContaining(
+          "requires an available Codex model",
+        ),
+      },
+    });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
 
     await registry.close();
   });

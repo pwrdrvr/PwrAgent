@@ -38,6 +38,19 @@ const CHUNK_FLUSH_TEXT_LENGTH = 2_048;
 const LEGACY_BACKEND_PATH_PREFIX = "acp_3A";
 const CURRENT_BACKEND_PATH_PREFIX = "acp_";
 const PATH_LAYOUT_MIGRATION_MARKER = ".backend-path-layout-v2";
+const PWRAGENT_SYNTHETIC_UPDATE_META_KEY = "pwragentSynthetic";
+
+export function isPwrAgentSyntheticAcpUpdate(
+  update: Record<string, unknown>,
+): boolean {
+  const meta = update._meta;
+  return Boolean(
+    meta
+    && typeof meta === "object"
+    && !Array.isArray(meta)
+    && (meta as Record<string, unknown>)[PWRAGENT_SYNTHETIC_UPDATE_META_KEY] === true,
+  );
+}
 
 export class AcpRolloutStore {
   private readonly chunkBuffers = new Map<string, ChunkBuffer>();
@@ -210,6 +223,9 @@ function shouldPersistUpdate(update: Record<string, unknown>): boolean {
 function streamingChunkKey(
   params: AcpRolloutStoreAppendParams,
 ): string | undefined {
+  if (isPwrAgentSyntheticAcpUpdate(params.update)) {
+    return undefined;
+  }
   const kind = readKind(params.update);
   if (kind !== "agent_message_chunk" && kind !== "agent_thought_chunk") {
     return undefined;

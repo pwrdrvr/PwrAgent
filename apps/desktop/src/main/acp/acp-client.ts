@@ -34,9 +34,10 @@ import type {
   AcpSessionMetadata,
   AcpSessionStore,
 } from "./acp-session-store.js";
-import type {
-  AcpRolloutRecord,
-  AcpRolloutStoreAppendParams,
+import {
+  isPwrAgentSyntheticAcpUpdate,
+  type AcpRolloutRecord,
+  type AcpRolloutStoreAppendParams,
 } from "./acp-rollout-store.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log.js";
@@ -845,6 +846,9 @@ export class AcpAgentClient {
       sessionId: metadata.sessionId,
     });
     for (const record of records) {
+      if (isPwrAgentSyntheticAcpUpdate(record.update)) {
+        continue;
+      }
       if (isTranscriptReplayUpdate(record.update)) {
         hasTranscriptHistory = true;
       }
