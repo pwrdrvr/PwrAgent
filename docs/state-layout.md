@@ -85,8 +85,11 @@ rules.
 The Grok child uses the active profile's
 `state/grok-app-server/` directory by default. An explicit `state_root` in
 Grok config still wins. Existing default-profile installations that already
-have legacy `~/.pwragent/grok-app-server/threads/` data continue using that
-root so upgrades do not hide their threads.
+have legacy `${XDG_STATE_HOME:-~/.local/state}/grok-app-server/threads/` data
+continue using that root so upgrades do not hide their threads. The later
+legacy `~/.pwragent/grok-app-server/threads/` location is probed next. An
+explicit `PWRAGENT_HOME` keeps both config and legacy-state lookup anchored
+under that root.
 
 Grok runtime config remains at `~/.config/grok-app-server/config.toml`
 (or the matching XDG config location). When `PWRAGENT_HOME` is set, its

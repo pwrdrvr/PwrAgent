@@ -121,6 +121,31 @@ describe("test harness helpers", () => {
     await temp.cleanup();
   });
 
+  it("can load values into an isolated child-process environment", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const envPath = path.join(temp.path, ".env.local");
+    const env = {
+      XAI_API_KEY: "exported-key",
+    } as NodeJS.ProcessEnv;
+    await fs.writeFile(
+      envPath,
+      "XAI_API_KEY=project-key\nGROK_MODEL=grok-4.20-reasoning\n",
+    );
+
+    const result = loadLocalEnv({
+      env,
+      envPath,
+      override: false,
+    });
+
+    expect(result.loaded).toBe(true);
+    expect(env.XAI_API_KEY).toBe("exported-key");
+    expect(env.GROK_MODEL).toBe("grok-4.20-reasoning");
+    expect(process.env.GROK_MODEL).toBeUndefined();
+
+    await temp.cleanup();
+  });
+
   it("loads Grok app-server config from the XDG config directory", async () => {
     const temp = await createTemporaryTestDirectory();
     process.env.HOME = temp.path;

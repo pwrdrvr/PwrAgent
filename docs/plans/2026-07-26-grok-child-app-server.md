@@ -36,6 +36,10 @@ JSON-RPC over stdio.
 - [x] Run focused tests, full lint/typecheck/boundaries/licenses, desktop build,
       relevant unit suites, and packaged-path smoke/E2E.
 - [x] Commit, push, and open a draft pull request.
+- [x] Preserve the pre-process-boundary XDG state root for upgraded default
+      profiles.
+- [x] Build the child during the normal desktop development bootstrap.
+- [x] Pass the repository-local env path explicitly to development children.
 
 ## Validation record
 
@@ -45,8 +49,9 @@ JSON-RPC over stdio.
 - Pinned runtime: Node `v24.14.1`, pnpm `10.33.0`.
 - `pnpm lint` passed, including SQL, Codex storage, renderer colors, licenses,
   ESLint, workspace typecheck, and Dependency Cruiser.
-- `pnpm exec vitest run --config vitest.workspace.ts --testTimeout 30000`
-  passed 4,953 tests across 382 files. The larger timeout avoids two existing
+- `pnpm test --testTimeout 30000` passed 4,970 tests across 384 files after
+  rebasing onto current `origin/main` and applying review follow-ups. The larger
+  timeout avoids two existing
   5-second environment-action tests flaking under the full parallel suite.
 - Focused child-process and config coverage passed, including initialization,
   profile persistence, thread operations, turn notifications, bidirectional
@@ -54,7 +59,7 @@ JSON-RPC over stdio.
   endpoint, clean shutdown, and child failure.
 - Desktop production build passed. The post-build guard scanned 13 Electron
   main chunks and found no AI SDK/xAI runtime; `out/main/index.js` was
-  2,325,616 bytes while the separately staged child was 828,747 bytes.
+  2,329,589 bytes while the separately staged child was 828,821 bytes.
 - Electron replay smoke passed (`e2e/smoke.spec.ts`).
 - macOS universal package dry-run passed. ASAR verification found 6,919
   entries, required Grok child present, and no forbidden patterns.
@@ -62,3 +67,6 @@ JSON-RPC over stdio.
   `ELECTRON_RUN_AS_NODE=1` and returned valid `initialize` and `shutdown`
   responses. The dry-run release path now disables hardened runtime only for
   its ad-hoc signature; signed releases retain hardened runtime.
+- Review follow-up coverage verifies the default-profile XDG legacy-state
+  probe, isolated child env loading with keychain precedence, and child build
+  execution during the normal desktop dev bootstrap.

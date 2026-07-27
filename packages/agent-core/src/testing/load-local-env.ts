@@ -46,11 +46,12 @@ export function defaultGrokAppServerConfigPaths(options?: {
 }
 
 export function loadLocalEnv(options?: {
+  env?: NodeJS.ProcessEnv;
   envPath?: string;
   override?: boolean;
 }): LocalEnvLoadResult {
   const envPath = options?.envPath ?? defaultLocalEnvPath();
-  return loadEnvFile(envPath, options?.override);
+  return loadEnvFile(envPath, options?.override, options?.env);
 }
 
 export function loadGrokAppServerConfig(options?: {
@@ -78,6 +79,7 @@ export function loadGrokAppServerConfig(options?: {
 function loadEnvFile(
   envPath: string,
   override = false,
+  env: NodeJS.ProcessEnv = process.env,
 ): LocalEnvLoadResult {
   if (!fs.existsSync(envPath)) {
     return {
@@ -104,8 +106,8 @@ function loadEnvFile(
     if (!key) {
       throw new Error(`Invalid env key on line ${index + 1} in ${envPath}`);
     }
-    if (override || process.env[key] === undefined) {
-      process.env[key] = value;
+    if (override || env[key] === undefined) {
+      env[key] = value;
     }
     entries.push(key);
   }

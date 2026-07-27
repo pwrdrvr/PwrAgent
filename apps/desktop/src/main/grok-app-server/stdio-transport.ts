@@ -3,6 +3,7 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { app } from "electron";
@@ -19,6 +20,7 @@ const STDERR_LOG_MAX_LINES_PER_WINDOW = 100;
 const STDERR_LOG_WINDOW_MS = 10_000;
 const STDERR_LOG_MAX_LINE_LENGTH = 4000;
 const PROFILE_STATE_ROOT_ENV = "PWRAGENT_GROK_PROFILE_STATE_ROOT";
+const LOCAL_ENV_PATH_ENV = "PWRAGENT_GROK_LOCAL_ENV_PATH";
 
 export type GrokStdioJsonRpcTransportOptions = {
   apiKey?: string;
@@ -64,6 +66,10 @@ export class GrokStdioJsonRpcTransport implements JsonRpcTransport {
         this.options.apiKey?.trim()
         || this.options.resolveApiKey?.()?.trim()
         || undefined,
+      localEnvPath:
+        app?.isPackaged === true
+          ? undefined
+          : resolveProjectLocalEnvPath(entryPath),
     });
     grokTransportLog.info("launch app-server", {
       command,
@@ -162,25 +168,67 @@ export function resolveGrokAppServerEntryPath(): string {
 function buildGrokAppServerEnv(params: {
   baseEnv: NodeJS.ProcessEnv;
   apiKey?: string;
+  localEnvPath?: string;
 }): NodeJS.ProcessEnv {
+  const homeDir =
+    params.baseEnv.HOME?.trim()
+    || params.baseEnv.USERPROFILE?.trim()
+    || os.homedir();
   const profileName = resolveActiveProfileName({ env: params.baseEnv });
-  const activeProfileDir = resolveActiveProfileDir({ env: params.baseEnv });
-  const legacyStateRoot = path.join(
-    resolvePwragentRoot({ env: params.baseEnv }),
+  const activeProfileDir = resolveActiveProfileDir({
+    env: params.baseEnv,
+    homeDir,
+  });
+  const pwragentLegacyStateRoot = path.join(
+    resolvePwragentRoot({
+      env: params.baseEnv,
+      homeDir,
+    }),
     "grok-app-server",
   );
-  const legacyThreadsRoot = path.join(legacyStateRoot, "threads");
+  const xdgStateHome =
+    params.baseEnv.XDG_STATE_HOME?.trim()
+    || path.join(homeDir, ".local", "state");
+  const legacyStateRoots = params.baseEnv.PWRAGENT_HOME?.trim()
+    ? [pwragentLegacyStateRoot]
+    : [
+        path.join(xdgStateHome, "grok-app-server"),
+        pwragentLegacyStateRoot,
+      ];
+  const legacyStateRoot =
+    profileName === "default"
+      ? legacyStateRoots.find((candidate) =>
+          fs.existsSync(path.join(candidate, "threads")),
+        )
+      : undefined;
   const profileStateRoot =
-    profileName === "default" && fs.existsSync(legacyThreadsRoot)
+    legacyStateRoot
       ? legacyStateRoot
       : path.join(activeProfileDir, "state", "grok-app-server");
 
-  return {
+  const childEnv: NodeJS.ProcessEnv = {
     ...params.baseEnv,
     ELECTRON_RUN_AS_NODE: "1",
     [PROFILE_STATE_ROOT_ENV]: profileStateRoot,
     ...(params.apiKey ? { XAI_API_KEY: params.apiKey } : {}),
   };
+  delete childEnv[LOCAL_ENV_PATH_ENV];
+  if (params.localEnvPath) {
+    childEnv[LOCAL_ENV_PATH_ENV] = params.localEnvPath;
+  }
+  return childEnv;
+}
+
+function resolveProjectLocalEnvPath(entryPath: string): string | undefined {
+  const entryDirectory = path.dirname(path.resolve(entryPath));
+  const packageDirectory = path.dirname(entryDirectory);
+  if (
+    path.basename(entryDirectory) !== "dist"
+    || path.basename(packageDirectory) !== "grok-app-server"
+  ) {
+    return undefined;
+  }
+  return path.resolve(packageDirectory, "..", "..", ".env.local");
 }
 
 function mirrorStderr(child: ChildProcessWithoutNullStreams): void {

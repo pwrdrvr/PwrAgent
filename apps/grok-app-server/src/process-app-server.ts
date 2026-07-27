@@ -11,6 +11,7 @@ import {
 export const GROK_GENERATE_OBJECT_METHOD = "pwragent/xai/generateObject";
 export const GROK_SHUTDOWN_METHOD = "shutdown";
 const PROFILE_STATE_ROOT_ENV = "PWRAGENT_GROK_PROFILE_STATE_ROOT";
+const LOCAL_ENV_PATH_ENV = "PWRAGENT_GROK_LOCAL_ENV_PATH";
 
 type NotificationHandler = (
   notification: {
@@ -46,7 +47,14 @@ type GenerateObjectRequest = {
 export function createProcessAppServer(
   env: NodeJS.ProcessEnv = process.env,
 ): ProcessAppServer {
-  loadLocalEnv({ override: false });
+  const localEnvPath = env[LOCAL_ENV_PATH_ENV]?.trim();
+  if (localEnvPath) {
+    loadLocalEnv({
+      env,
+      envPath: localEnvPath,
+      override: false,
+    });
+  }
   const runtimeConfig = resolveGrokAppServerRuntimeConfig({
     env,
     profileStateRoot: env[PROFILE_STATE_ROOT_ENV],

@@ -238,7 +238,9 @@ Production hosts this package in `apps/grok-app-server`, never in Electron
 main. `pnpm --filter @pwragent/grok-app-server build` produces the standalone
 stdio entrypoint. Desktop's normal `pnpm build` stages it under
 `out/grok-app-server/` and checks that AI SDK/xAI implementation did not leak
-into `out/main/`.
+into `out/main/`. The desktop `pnpm dev` bootstrap also builds the child before
+starting Electron, so a clean checkout does not depend on ignored `dist/`
+artifacts.
 
 Supported app-server methods today:
 
@@ -278,8 +280,11 @@ Runtime config keys:
 - `state_root`
 
 Project-local env and already-exported shell env still win over the user
-config. The runtime loader also preserves legacy fallback support under
-`~/.config/grok-app-server` for `config.env`, `.env.local`, and `.env`.
+config. For desktop development, the launcher passes the repository-root
+`.env.local` path explicitly to the bundled child rather than inferring it
+from `dist/index.mjs`. The runtime loader also preserves legacy fallback
+support under `~/.config/grok-app-server` for `config.env`, `.env.local`, and
+`.env`.
 
 CI uses the existing `live-agent-core` workflow job with the
 `XAI_API_KEY` repository secret. No separate tool-test secret is required.
