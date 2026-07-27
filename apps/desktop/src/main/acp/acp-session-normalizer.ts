@@ -15,6 +15,7 @@ import {
   readAcpToolContentCommand,
   readAcpToolInvocation,
 } from "./acp-command-extraction.js";
+import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
 
 export type AcpSessionUpdate = {
   sessionId: string;
@@ -707,12 +708,12 @@ function normalizeUserPrompt(
 
 function readToolOutput(record: Record<string, unknown>): string | undefined {
   const contentText = readContentText(record, "content");
-  return (
-    readString(record, "output") ??
-    readString(record, "stdout") ??
-    readString(record, "stderr") ??
-    readString(record, "result") ??
-    (readAcpToolContentCommand(record) ? undefined : contentText)
+  return sanitizeAcpToolOutput(
+    readString(record, "output")
+      ?? readString(record, "stdout")
+      ?? readString(record, "stderr")
+      ?? readString(record, "result")
+      ?? (readAcpToolContentCommand(record) ? undefined : contentText),
   );
 }
 

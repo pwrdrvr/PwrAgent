@@ -14,18 +14,32 @@ export type AcpLaunchDescriptor = {
 export function normalizeAcpLaunchDescriptor(
   descriptor: AcpLaunchDescriptor,
 ): AcpLaunchDescriptor {
-  if (descriptor.registryId !== "gemini" || !descriptor.args.includes("--acp")) {
-    return descriptor;
+  const normalizedDescriptor =
+    descriptor.registryId === "grok"
+      ? {
+          ...descriptor,
+          env: {
+            ...descriptor.env,
+            NO_COLOR: "1",
+          },
+        }
+      : descriptor;
+
+  if (
+    normalizedDescriptor.registryId !== "gemini"
+    || !normalizedDescriptor.args.includes("--acp")
+  ) {
+    return normalizedDescriptor;
   }
 
-  const args = descriptor.args.includes("--skip-trust")
-    ? descriptor.args
-    : [...descriptor.args, "--skip-trust"];
+  const args = normalizedDescriptor.args.includes("--skip-trust")
+    ? normalizedDescriptor.args
+    : [...normalizedDescriptor.args, "--skip-trust"];
   return {
-    ...descriptor,
+    ...normalizedDescriptor,
     args,
     env: {
-      ...descriptor.env,
+      ...normalizedDescriptor.env,
       GEMINI_CLI_TRUST_WORKSPACE: "true",
     },
   };

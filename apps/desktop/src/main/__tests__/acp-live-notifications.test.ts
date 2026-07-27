@@ -89,6 +89,43 @@ describe("acpToolUpdateNotifications", () => {
     ]);
   });
 
+  it("strips terminal control sequences from live ACP tool output", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "gh-pr-list-1",
+        kind: "execute",
+        title: "Shell",
+        status: "completed",
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "text",
+              text: "\u001b[1;37m{\u001b[0m\u001b[1;34m\"number\"\u001b[0m: 1014}",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "gh-pr-list-1",
+            data: {
+              output: "{\"number\": 1014}",
+            },
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("keeps non-shell ACP content with command fields as live output", () => {
     const output = "{\"command\":\"npm view pnpm\",\"result\":\"found text\"}";
     const notifications = acpToolUpdateNotifications({

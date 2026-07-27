@@ -6,6 +6,7 @@ import {
   readAcpToolContentCommand,
   readAcpToolInvocation,
 } from "./acp-command-extraction.js";
+import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
 
 export function acpToolUpdateNotifications(params: {
   threadId: string;
@@ -181,12 +182,12 @@ function isTerminalToolStatus(status: unknown): boolean {
 
 function readAcpToolOutput(record: Record<string, unknown>): string | undefined {
   const contentText = readAcpContentText(record.content);
-  return (
-    readString(record, "output") ??
-    readString(record, "stdout") ??
-    readString(record, "stderr") ??
-    readString(record, "result") ??
-    (readAcpToolContentCommand(record) ? undefined : contentText)
+  return sanitizeAcpToolOutput(
+    readString(record, "output")
+      ?? readString(record, "stdout")
+      ?? readString(record, "stderr")
+      ?? readString(record, "result")
+      ?? (readAcpToolContentCommand(record) ? undefined : contentText),
   );
 }
 
