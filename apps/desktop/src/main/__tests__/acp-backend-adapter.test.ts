@@ -776,7 +776,7 @@ describe("AcpBackendAdapter", () => {
       turnId: "turn-1",
     });
 
-    for (const text of [
+    const firstThoughtChunks = [
       "The ",
       "code ",
       "seems ",
@@ -785,23 +785,44 @@ describe("AcpBackendAdapter", () => {
       "over ",
       "here",
       ".",
-    ]) {
+    ];
+    for (const [index, text] of firstThoughtChunks.entries()) {
       transport.emitSessionUpdate(session.sessionId, {
         session_update: "agent_thought_chunk",
         content: { type: "text", text },
       });
+      if (index === 0) {
+        transport.emitSessionUpdate(session.sessionId, {
+          session_update: "available_commands_update",
+          available_commands: [
+            {
+              name: "review",
+              description: "Review the current changes",
+            },
+          ],
+        });
+      }
     }
-    transport.emitSessionUpdate(session.sessionId, {
+    const completedToolUpdate = {
       session_update: "tool_call",
       tool_call_id: "tool-1",
       title: "cat package.json",
       status: "completed",
-    });
-    for (const text of ["So ", "the ", "key ", "logic is:\n```"]) {
+    };
+    transport.emitSessionUpdate(session.sessionId, completedToolUpdate);
+    for (const [index, text] of [
+      "So ",
+      "the ",
+      "key ",
+      "logic is:\n```",
+    ].entries()) {
       transport.emitSessionUpdate(session.sessionId, {
         session_update: "agent_thought_chunk",
         content: { type: "text", text },
       });
+      if (index === 0) {
+        transport.emitSessionUpdate(session.sessionId, completedToolUpdate);
+      }
     }
     transport.emitSessionUpdate(session.sessionId, {
       session_update: "agent_message_chunk",
@@ -884,6 +905,17 @@ describe("AcpBackendAdapter", () => {
         },
       ]);
     });
+    expect(
+      events.filter(
+        (event) =>
+          event.notification.method === "thread/availableCommands/updated",
+      ),
+    ).toHaveLength(1);
+    expect(
+      events.filter(
+        (event) => event.notification.method === "item/completed",
+      ),
+    ).toHaveLength(1);
     expect(client.readReplay(session.sessionId).messages).toEqual([
       expect.objectContaining({
         role: "user",

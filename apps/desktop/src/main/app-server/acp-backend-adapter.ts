@@ -1732,10 +1732,28 @@ export class AcpBackendAdapter {
           turnId
             ? `${agent.backendId}:${sessionId}:${turnId}`
             : undefined;
-        if (
-          transientThoughtKey &&
-          updateKind !== "agent_thought_chunk"
-        ) {
+        const agentMessageDelta =
+          updateKind === "agent_message_chunk"
+            ? readAcpUpdateText(update)
+            : undefined;
+        const toolNotifications = fromSessionLoad
+          ? []
+          : acpToolUpdateNotifications({
+              threadId: sessionId,
+              turnId,
+              update,
+            }).filter((notification) =>
+              this.shouldEmitLiveToolNotification(agent.backendId, notification),
+            );
+        // Reset only when this callback will emit a notification that settles
+        // the renderer's active segment. Metadata and deduplicated tool updates
+        // must preserve both sides of the replacement-value contract.
+        const settlesTransientThought =
+          Boolean(agentMessageDelta)
+          || toolNotifications.length > 0
+          || (updateKind === "turn_finished" && Boolean(turnId))
+          || replay.threadStatus === "idle";
+        if (transientThoughtKey && settlesTransientThought) {
           this.transientThoughtText.delete(transientThoughtKey);
         }
         if (title) {
@@ -1831,7 +1849,7 @@ export class AcpBackendAdapter {
             (updateKind === "agent_thought_chunk" &&
               shouldSurfaceAcpThoughtsAsMessages(agent.backendId)))
         ) {
-          const delta = readAcpUpdateText(update);
+          const delta = agentMessageDelta ?? readAcpUpdateText(update);
           if (delta) {
             const phase =
               updateKind === "agent_thought_chunk" ? "commentary" : "final";
@@ -1851,15 +1869,6 @@ export class AcpBackendAdapter {
             });
           }
         }
-        const toolNotifications = fromSessionLoad
-          ? []
-          : acpToolUpdateNotifications({
-              threadId: sessionId,
-              turnId,
-              update,
-            }).filter((notification) =>
-              this.shouldEmitLiveToolNotification(agent.backendId, notification),
-            );
         for (const notification of toolNotifications) {
           await this.emit({
             backend: agent.backendId,
