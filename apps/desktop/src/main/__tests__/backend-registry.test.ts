@@ -8390,6 +8390,56 @@ script = "pnpm install"
     await registry.close();
   });
 
+  it("derives launchpad identity when a late update recreates a missing row", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const updated = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+      patch: { prompt: "Late composer update" },
+    });
+
+    expect(updated.launchpad).toMatchObject({
+      directoryKind: "directory",
+      directoryLabel: "PwrAgnt",
+      directoryPath: "/Users/huntharo/github/PwrAgnt",
+      prompt: "Late composer update",
+    });
+
+    const trailingWhitespace = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/tmp/repo ",
+      patch: { prompt: "Preserve the exact path" },
+    });
+
+    expect(trailingWhitespace.launchpad).toMatchObject({
+      directoryKind: "directory",
+      directoryLabel: "repo ",
+      directoryPath: "/tmp/repo ",
+      prompt: "Preserve the exact path",
+    });
+
+    const workspace = await registry.updateDirectoryLaunchpad({
+      directoryKey: "workspace:new-thread",
+      patch: { prompt: "Late directory-less update" },
+    });
+
+    expect(workspace.launchpad).toMatchObject({
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: undefined,
+      prompt: "Late directory-less update",
+    });
+
+    await registry.close();
+  });
+
   it("falls back to OpenAI launchpad state when sticky Grok defaults are unavailable", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
