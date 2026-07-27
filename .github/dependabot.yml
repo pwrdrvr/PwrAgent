@@ -70,6 +70,17 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      # The core and provider majors share one LanguageModel protocol version.
+      # Updating either package alone can pass installation but fail at runtime.
+      ai-sdk:
+        patterns:
+          - "ai"
+          - "@ai-sdk/xai"
+        dependency-type: "production"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
       vite-toolchain:
         patterns:
           - "vite"
@@ -105,6 +116,8 @@ updates:
         exclude-patterns:
           - "@pwrdrvr/agent-*"
           - "@pwrdrvr/codex-*"
+          - "ai"
+          - "@ai-sdk/xai"
           - "@tiptap/*"
           - "prosemirror-*"
           - "better-sqlite3"

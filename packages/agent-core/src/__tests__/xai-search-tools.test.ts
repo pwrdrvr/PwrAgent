@@ -103,7 +103,7 @@ describe("xAI search tool wrappers", () => {
     });
     expect(generateTextImpl.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
-        system: expect.stringContaining("Return at most 5 findings."),
+        instructions: expect.stringContaining("Return at most 5 findings."),
         prompt: expect.stringContaining("xAI posts with videos"),
         toolChoice: "required",
       }),
@@ -204,7 +204,7 @@ describe("xAI search tool wrappers", () => {
     });
     expect(generateTextImpl.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
-        system: expect.stringContaining("Return at most 5 findings."),
+        instructions: expect.stringContaining("Return at most 5 findings."),
         prompt: expect.stringContaining("AI SDK docs"),
         toolChoice: "required",
       }),
