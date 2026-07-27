@@ -1,4 +1,4 @@
-import { stepCountIs } from "ai";
+import { APICallError, stepCountIs } from "ai";
 import type { AppServerProvider, ProviderActiveTurn, ProviderTurnEventListener, ProviderTurnParams, ProviderTurnResult } from "./provider-contract.js";
 import { buildAiSdkMessages } from "./ai-sdk-message-builder.js";
 import { createAiSdkTools } from "./ai-sdk-tool-adapter.js";
@@ -11,6 +11,7 @@ export type GrokProviderOptions = XaiAiSdkRuntimeOptions & {
 
 const DEFAULT_MAX_TOOL_ROUNDS = 12;
 const MAX_RETRY_TOOL_OUTPUT_CHARS = 8_000;
+const MAX_PROVIDER_ERROR_CHARS = 2_000;
 
 type AiSdkStreamTextResult = {
   text: PromiseLike<string>;
@@ -90,6 +91,7 @@ async function runAiSdkTurn(params: {
   emit: (event: Parameters<ProviderTurnEventListener>[0]) => Promise<void>;
   hasListeners: () => boolean;
 }): Promise<ProviderTurnResult> {
+  let streamErrorMessage: string | undefined;
   const messages = await buildAiSdkMessages({
     history: params.params.previousResponseId ? undefined : params.params.history,
     input: params.params.input,
@@ -112,15 +114,34 @@ async function runAiSdkTurn(params: {
       reasoningEffort: params.params.thread.reasoningEffort,
       previousResponseId: params.params.previousResponseId,
     }),
+    onError: ({ error }: { error: unknown }) => {
+      streamErrorMessage ??= formatProviderStreamError(error);
+    },
   }) as AiSdkStreamTextResult;
 
-  const [assistantText, response, sources, providerMetadata, steps] = await Promise.all([
-    result.text,
-    result.response,
-    result.sources ?? Promise.resolve([]),
-    result.providerMetadata ?? Promise.resolve(undefined),
-    result.steps ?? Promise.resolve([]),
-  ]);
+  let assistantText: string;
+  let response: { id?: string };
+  let sources: unknown[];
+  let providerMetadata: unknown;
+  let steps: AiSdkStep[];
+  try {
+    [assistantText, response, sources, providerMetadata, steps] =
+      await Promise.all([
+        result.text,
+        result.response,
+        result.sources ?? Promise.resolve([]),
+        result.providerMetadata ?? Promise.resolve(undefined),
+        result.steps ?? Promise.resolve([]),
+      ]);
+  } catch (error) {
+    if (streamErrorMessage) {
+      // The original AI SDK error can retain request bodies. Preserve only the
+      // sanitized diagnostic instead of attaching the caught error as `cause`.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error(streamErrorMessage);
+    }
+    throw error;
+  }
   const finalResult = assistantText.trim()
     ? { assistantText, response, sources, providerMetadata }
     : await retryFinalText({
@@ -137,6 +158,36 @@ async function runAiSdkTurn(params: {
     sources: normalizeAiSdkSources(finalResult.sources),
     providerMetadata: normalizeProviderMetadata(finalResult.providerMetadata),
   };
+}
+
+function formatProviderStreamError(error: unknown): string {
+  if (APICallError.isInstance(error)) {
+    const status =
+      error.statusCode === undefined ? "" : ` (HTTP ${error.statusCode})`;
+    const detail = sanitizeProviderErrorText(
+      error.responseBody?.trim() || error.message,
+    );
+    return detail
+      ? `xAI stream request failed${status}: ${detail}`
+      : `xAI stream request failed${status}`;
+  }
+
+  const detail = sanitizeProviderErrorText(
+    error instanceof Error ? error.message : String(error),
+  );
+  return detail ? `xAI stream failed: ${detail}` : "xAI stream failed";
+}
+
+function sanitizeProviderErrorText(value: string): string {
+  return value
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(
+      /(["']?(?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION)[A-Z0-9_]*|api[-_ ]?key)["']?\s*(?:[:=]\s*|\s+))("[^"]*"|'[^']*'|[^\s,;}]+)/gi,
+      "$1[redacted]",
+    )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_PROVIDER_ERROR_CHARS);
 }
 
 async function retryFinalText(params: {

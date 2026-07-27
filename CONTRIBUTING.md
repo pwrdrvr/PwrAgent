@@ -297,6 +297,8 @@ Live smoke commands:
   1Password account's `Private` vault. Override `PWRAGENT_XAI_OP_ACCOUNT`,
   `PWRAGENT_XAI_OP_VAULT`, `PWRAGENT_XAI_OP_ITEM`, or
   `PWRAGENT_XAI_OP_FIELD` when the credential lives elsewhere.
+- Ordinary `pnpm test` runs always skip the network-backed Grok live suite,
+  even when an ambient shell or user config contains `XAI_API_KEY`.
 - Covers live thread continuation via `thread/resume`.
 - Covers live context compaction via `thread/compact/start`.
 - Covers live repository-tool usage against a temporary workspace.

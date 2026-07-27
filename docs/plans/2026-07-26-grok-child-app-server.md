@@ -40,6 +40,11 @@ JSON-RPC over stdio.
       profiles.
 - [x] Build the child during the normal desktop development bootstrap.
 - [x] Pass the repository-local env path explicitly to development children.
+- [x] Gate network-backed Grok tests behind the explicit `test:live` lifecycle
+      so ambient user credentials cannot turn the ordinary suite into a live
+      run.
+- [x] Preserve sanitized xAI stream diagnostics when the AI SDK reports a
+      no-output result.
 
 ## Validation record
 
@@ -49,10 +54,11 @@ JSON-RPC over stdio.
 - Pinned runtime: Node `v24.14.1`, pnpm `10.33.0`.
 - `pnpm lint` passed, including SQL, Codex storage, renderer colors, licenses,
   ESLint, workspace typecheck, and Dependency Cruiser.
-- `pnpm test --testTimeout 30000` passed 4,970 tests across 384 files after
-  rebasing onto current `origin/main` and applying review follow-ups. The larger
-  timeout avoids two existing
-  5-second environment-action tests flaking under the full parallel suite.
+- `pnpm test --testTimeout 30000` passed 4,973 tests across 385 files, with
+  the one live-test file and its three network-backed tests skipped as intended,
+  after rebasing onto current `origin/main` and applying review follow-ups. The
+  larger timeout avoids two existing 5-second environment-action tests flaking
+  under the full parallel suite.
 - Focused child-process and config coverage passed, including initialization,
   profile persistence, thread operations, turn notifications, bidirectional
   approval requests, structured generation against a local xAI-compatible
@@ -70,3 +76,7 @@ JSON-RPC over stdio.
 - Review follow-up coverage verifies the default-profile XDG legacy-state
   probe, isolated child env loading with keychain precedence, and child build
   execution during the normal desktop dev bootstrap.
+- The 1Password-backed live runner passed all three Grok scenarios against
+  xAI. Focused coverage also verifies that ordinary tests skip the live suite
+  despite an ambient API key and that provider diagnostics retain HTTP status
+  while redacting bearer tokens and API-key values.
