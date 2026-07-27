@@ -23,6 +23,10 @@ import type {
   DynamicToolNamespaceTool,
   DynamicToolSpec,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
+import {
+  TASK_MONITOR_CREATE_TOOL_DESCRIPTION,
+  TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA,
+} from "../agent-tools/pwragent-task-monitor-agent-tools.js";
 
 export type TaskMonitorHandler = (
   request: TaskMonitorRequest,
@@ -34,22 +38,8 @@ export function buildTaskMonitorDynamicToolSpecs(
   const createTool: DynamicToolNamespaceTool = {
     type: "function",
     name: "create_monitor_delegation",
-    description:
-      "Create and start a lightweight PwrAgent-managed monitor thread for long-running asynchronous work or repeatable status checks. Use this instead of polling from the parent agent when the task may take more than one short status check, especially when you are about to sleep/wait/poll every few seconds for a command, job, service, or external operation to finish. If you have checked something for progress for about 30 seconds and the check is repeatable, hand it to this monitor with enough context to run that check for you. The task and monitorContext must include the exact monitoring procedure the parent was about to run itself: cwd or target location, command/status command or wait API, poll cadence, terminal success/failure conditions, and relevant log collection steps. Do not pass parent-local Codex/tool session ids such as exec_command/write_stdin session_id values; monitor threads cannot access those sessions, stdout/stderr streams, stdin, or exit status. For a local build/test/script, delegate before starting it and provide cwd plus the exact command so the monitor starts it and captures output itself. Prefer separate stdout/stderr capture files plus a combined output file when practical, and include those file paths in the final handoff. If the command is already running, provide durable process/log/status files that the monitor can read. Use pollIntervalSeconds as the combined poll and heartbeat cadence; default to 30 seconds unless the delegated procedure clearly needs a different cadence. PwrAgent starts the monitor with the returned preferred model/reasoning settings and the monitor callback tools attached; do not call generic spawnAgent for this flow.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        task: { type: "string" },
-        monitorContext: { type: "string" },
-        cwd: { type: "string" },
-        pollIntervalSeconds: { type: "number", minimum: 5 },
-        preferredModel: { type: "string" },
-        preferredReasoningEffort: { type: "string" },
-        finalHandoffPrompt: { type: "string" },
-      },
-      required: ["task"],
-      additionalProperties: false,
-    },
+    description: TASK_MONITOR_CREATE_TOOL_DESCRIPTION,
+    inputSchema: TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA,
     deferLoading: false,
   };
   const monitorTools: DynamicToolNamespaceTool[] = [

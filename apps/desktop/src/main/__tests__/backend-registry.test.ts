@@ -22,6 +22,7 @@ import type {
   AppServerTurnInputItem,
   AttachThreadPullRequestToolArgs,
   BackendAccountSummary,
+  BackendAcpRuntimeCapabilities,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   BackendModelOption,
@@ -30,6 +31,10 @@ import type {
   LinkedDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
+  PwrAgentThreadOrchestrationRequest,
+  PwrAgentThreadOrchestrationResponse,
+  TaskMonitorRequest,
+  TaskMonitorResponse,
   ThreadExecutionMode,
   ThreadOverlayState,
   ThreadUsageLineRecord,
@@ -53,6 +58,7 @@ import type { WorktreeArchiveService } from "../app-server/worktree-archive-serv
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
+import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 
 const mainLoggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -1633,6 +1639,7 @@ function createAcpSessionStoreMock(records: AcpSessionMetadata[]) {
 
 function createKimiAgentRecord(
   backendId: AcpBackendId = "acp:kimi" as AcpBackendId,
+  runtimeCapabilities?: BackendAcpRuntimeCapabilities,
 ): AcpInstalledAgentRecord {
   return {
     backendId,
@@ -1647,6 +1654,7 @@ function createKimiAgentRecord(
     allowlistRuleId: "local-kimi-cli",
     installedAt: 1000,
     updatedAt: 2000,
+    ...(runtimeCapabilities ? { runtimeCapabilities } : {}),
     launchDescriptor: {
       backendId,
       registryId: "kimi",
@@ -1681,6 +1689,8 @@ function createKimiAcpRegistry(options?: {
   codexClient?: MockBackendClient;
   codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
   gitDirectoryService?: unknown;
+  gitWorkspaceHandoffService?: unknown;
+  runtimeCapabilities?: BackendAcpRuntimeCapabilities;
   acpWorktreeRepositoryResolver?: (
     cwd: string,
   ) => Promise<LinkedDirectorySummary | undefined>;
@@ -1753,11 +1763,15 @@ function createKimiAcpRegistry(options?: {
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
     grokClient: new MockBackendClient({ threads: [] }),
     overlayStore: options?.overlayStore ?? createOverlayStoreMock(),
-    acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord(acpBackendId)]),
+    acpAgentStore: createAcpAgentStoreMock([
+      createKimiAgentRecord(acpBackendId, options?.runtimeCapabilities),
+    ]),
     acpSessionStore: createAcpSessionStoreMock(sessions),
     createAcpClient: () => acpClient,
     codexEnvironmentCommandRunner: options?.codexEnvironmentCommandRunner,
     gitDirectoryService: options?.gitDirectoryService as never,
+    gitWorkspaceHandoffService:
+      options?.gitWorkspaceHandoffService as never,
     acpWorktreeRepositoryResolver: options?.acpWorktreeRepositoryResolver,
   });
   return {
@@ -1768,6 +1782,45 @@ function createKimiAcpRegistry(options?: {
     sessions,
     startPrompt,
   };
+}
+
+async function callRegistryMcpTool(params: {
+  registry: DesktopBackendRegistry;
+  backend: AppServerBackendKind;
+  threadId: string;
+  turnId: string;
+  tool: string;
+  args: Record<string, unknown>;
+}) {
+  const internal = params.registry as unknown as {
+    handleCreateMonitorAgentRequest(
+      request: TaskMonitorRequest<"create_monitor_delegation">,
+    ): Promise<TaskMonitorResponse<"create_monitor_delegation">>;
+    threadOrchestrationHandler: (
+      request: PwrAgentThreadOrchestrationRequest,
+    ) => Promise<PwrAgentThreadOrchestrationResponse>;
+  };
+  const catalogs = resolveAgentToolCatalogs({
+    taskMonitorHandler: async (request) =>
+      await internal.handleCreateMonitorAgentRequest(request),
+    threadOrchestrationHandler: internal.threadOrchestrationHandler,
+  });
+  const router = catalogs
+    .map((catalog) => catalog.router)
+    .find((candidate) =>
+      candidate.acceptsMcpToolCall({ tool: params.tool }),
+    );
+  if (!router) {
+    throw new Error(`MCP tool was not advertised: ${params.tool}`);
+  }
+  return await router.handleMcpToolCall({
+    backend: params.backend,
+    threadId: params.threadId,
+    turnId: params.turnId,
+    callId: `mcp:${params.tool}`,
+    tool: params.tool,
+    args: params.args,
+  });
 }
 
 async function emitCompletedTurn(
@@ -28281,6 +28334,410 @@ script = "printf setup"
 
       await registry.close();
     });
+  });
+
+  it("runs monitor delegations from an ACP MCP parent through completion", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "acp-parent";
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: parentThreadId,
+        title: "ACP Parent",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? `turn:${params.sessionId}`,
+    }));
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        [`${acpBackendId}:${parentThreadId}`]: {
+          backend: acpBackendId,
+          threadId: parentThreadId,
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions,
+      sessionId: "unused-child",
+      startPrompt,
+      codexClient,
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: "parent-turn",
+      tool: "create_monitor_delegation",
+      args: {
+        task: "Watch the deployment until it finishes.",
+      },
+    });
+    const monitorId = String(response.structuredContent?.monitorId);
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        parentThreadId,
+        monitorThreadId: "monitor-thread",
+        startedByPwrAgent: true,
+      },
+    });
+    expect(monitorId).toMatch(/^monitor-/u);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: parentThreadId,
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          backend: "codex",
+          monitorId,
+          monitorThreadId: "monitor-thread",
+          status: "running",
+        }),
+      ],
+    });
+
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          turn: {
+            id: "parent-turn",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "turn-1",
+        callId: "complete-monitor",
+        requestId: "complete-monitor",
+        namespace: "pwragent",
+        tool: "complete_monitoring",
+        arguments: {
+          monitorId,
+          outcome: "success",
+          summary: "Deployment completed.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    await vi.waitFor(() => {
+      expect(startPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: parentThreadId,
+          prompt: expect.stringContaining("Deployment completed."),
+        }),
+      );
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: parentThreadId,
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          monitorId,
+          outcome: "success",
+          status: "success",
+        }),
+      ],
+    });
+
+    await registry.close();
+  });
+
+  it("creates same-backend handoff threads from an ACP MCP parent", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "acp-parent";
+    const childThreadId = "acp-child";
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: parentThreadId,
+        title: "ACP Parent",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? `turn:${params.sessionId}`,
+    }));
+    const { registry, acpClient } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions,
+      sessionId: childThreadId,
+      startPrompt,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          [`${acpBackendId}:${parentThreadId}`]: {
+            backend: acpBackendId,
+            threadId: parentThreadId,
+            executionMode: "default",
+            extraLinkedDirectories: [],
+          },
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: "parent-turn",
+      tool: "handoff_task",
+      args: {
+        task: "Investigate the failing deployment.",
+        workspaceMode: "none",
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: acpBackendId,
+        threadId: childThreadId,
+        seedMode: "clean",
+      },
+    });
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionMode: "default",
+      }),
+    );
+    expect(startPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: childThreadId,
+        prompt: expect.stringContaining(
+          "Investigate the failing deployment.",
+        ),
+      }),
+    );
+
+    await registry.close();
+  });
+
+  it("moves an ACP thread workspace after its MCP turn completes", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const threadId = "acp-parent";
+    const sourcePath = "/repo/app";
+    const worktreePath = "/repo/app/.worktrees/acp-parent";
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: threadId,
+        title: "ACP Parent",
+        cwd: sourcePath,
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        hasConversationHistory: true,
+        status: "idle",
+      },
+    ];
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? `turn:${params.sessionId}`,
+    }));
+    const handoff = vi.fn(async () => ({
+      backend: acpBackendId,
+      threadId,
+      direction: "local-to-worktree" as const,
+      strategy: "detached-changes" as const,
+      workMode: "worktree" as const,
+      branch: "HEAD",
+      repositoryPath: sourcePath,
+      targetPath: worktreePath,
+      linkedDirectory: {
+        id: `pwragent-handoff:${acpBackendId}:${threadId}`,
+        kind: "worktree" as const,
+        label: "app",
+        path: sourcePath,
+        worktreePath,
+      },
+      warnings: [],
+      completedAt: 2000,
+    }));
+    const { registry, acpClient } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions,
+      sessionId: threadId,
+      startPrompt,
+      gitWorkspaceHandoffService: { handoff },
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: 1000,
+        checkedAt: 1000,
+        source: "initialize",
+        agentCapabilities: {
+          loadSession: true,
+        },
+      },
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          [`${acpBackendId}:${threadId}`]: {
+            backend: acpBackendId,
+            threadId,
+            executionMode: "default",
+            extraLinkedDirectories: [
+              {
+                id: `local:${sourcePath}`,
+                kind: "local",
+                label: "app",
+                path: sourcePath,
+              },
+            ],
+          },
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId,
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId,
+      turnId: "parent-turn",
+      tool: "move_thread_workspace",
+      args: {
+        sourcePath,
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: acpBackendId,
+        threadId,
+        status: "queued",
+        phase: "waiting_for_turn_boundary",
+      },
+    });
+    expect(handoff).not.toHaveBeenCalled();
+
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId,
+          turnId: "parent-turn",
+          turn: {
+            id: "parent-turn",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(handoff).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: acpBackendId,
+          threadId,
+          sourcePath,
+        }),
+      );
+      expect(startPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: threadId,
+          prompt: expect.stringContaining(
+            "PwrAgent workspace move completed",
+          ),
+        }),
+      );
+    });
+    expect(acpClient.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: threadId,
+        cwd: worktreePath,
+        hasConversationHistory: true,
+        requiresAgentSessionRebind: true,
+      }),
+    );
+    expect(acpClient.startSession).not.toHaveBeenCalled();
+    expect(sessions.find((session) => session.sessionId === threadId)?.cwd)
+      .toBe(worktreePath);
+    expect(
+      sessions.find((session) => session.sessionId === threadId)
+        ?.requiresAgentSessionRebind,
+    ).toBeUndefined();
+
+    await registry.close();
   });
 
   describe("notification wiring", () => {

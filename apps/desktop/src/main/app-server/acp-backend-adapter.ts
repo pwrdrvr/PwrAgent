@@ -343,6 +343,23 @@ function normalizeInstalledAcpAgent(
     : { ...agent, runtimeCapabilities };
 }
 
+function effectiveAcpAgentCapabilities(
+  agent: AcpInstalledAgentRecord,
+): AcpAgentCapabilities {
+  const configured =
+    agent.capabilities ??
+    acpAgentCapabilitiesForRegistryId(agent.registryId);
+  return {
+    ...configured,
+    liveWorkspaceHandoff:
+      configured.liveWorkspaceHandoff ||
+      (
+        agent.runtimeCapabilities !== undefined &&
+        acpRuntimeSupportsSessionLoad(agent.runtimeCapabilities)
+      ),
+  };
+}
+
 function resolveDefaultAcpRolloutRoot(): string {
   return getAppStateMode() === "bootstrap"
     ? resolveBootstrapProfilePath("state/acp-rollouts")
@@ -807,9 +824,9 @@ export class AcpBackendAdapter {
 
   sessionToThreadSummary(session: AcpSessionMetadata): AppServerThreadSummary {
     const agent = this.getInstalledAgent(session.backendId);
-    const capabilities =
-      agent?.capabilities ??
-      (agent ? acpAgentCapabilitiesForRegistryId(agent.registryId) : undefined);
+    const capabilities = agent
+      ? effectiveAcpAgentCapabilities(agent)
+      : undefined;
     return acpSessionToThreadSummary(session, capabilities);
   }
 
@@ -1136,10 +1153,7 @@ export class AcpBackendAdapter {
 
   async supportsLiveWorkspaceHandoff(backend: AcpBackendId): Promise<boolean> {
     const agent = await this.resolveInstalledAgent(backend);
-    return (
-      agent.capabilities ??
-      acpAgentCapabilitiesForRegistryId(agent.registryId)
-    ).liveWorkspaceHandoff;
+    return effectiveAcpAgentCapabilities(agent).liveWorkspaceHandoff;
   }
 
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {

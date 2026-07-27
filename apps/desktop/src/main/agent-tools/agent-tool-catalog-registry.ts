@@ -21,10 +21,14 @@ import {
   type PwrAgentMessagingHandler,
 } from "./pwragent-messaging-agent-tools.js";
 import {
-  buildPwrAgentThreadOrchestrationToolRouter,
+  buildPwrAgentThreadOrchestrationToolDefinitions,
   type PwrAgentThreadOrchestrationHandler,
 } from "./pwragent-thread-orchestration-agent-tools.js";
-import type { AgentToolRouter } from "./agent-tool-router.js";
+import {
+  buildPwrAgentTaskMonitorToolDefinitions,
+  type PwrAgentTaskMonitorHandler,
+} from "./pwragent-task-monitor-agent-tools.js";
+import { AgentToolRouter } from "./agent-tool-router.js";
 
 export type ResolvedAgentToolCatalog = {
   id: AgentToolCatalogId;
@@ -37,6 +41,7 @@ export function resolveAgentToolCatalogs(params: {
   appManagementHandler?: PwrAgentAppManagementHandler;
   automationInspectionHandler?: AutomationInspectionHandler;
   messagingHandler?: PwrAgentMessagingHandler;
+  taskMonitorHandler?: PwrAgentTaskMonitorHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
   threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
 }): ResolvedAgentToolCatalog[] {
@@ -50,8 +55,13 @@ export function resolveAgentToolCatalogs(params: {
   const threadDynamicTools = threadRouter.buildDynamicToolSpecs();
   const messagingRouter = buildPwrAgentMessagingToolRouter(params.messagingHandler);
   const messagingDynamicTools = messagingRouter.buildDynamicToolSpecs();
-  const threadOrchestrationRouter = buildPwrAgentThreadOrchestrationToolRouter(
-    params.threadOrchestrationHandler,
+  const threadOrchestrationRouter = new AgentToolRouter(
+    [
+      ...buildPwrAgentThreadOrchestrationToolDefinitions(
+        params.threadOrchestrationHandler,
+      ),
+      ...buildPwrAgentTaskMonitorToolDefinitions(params.taskMonitorHandler),
+    ],
   );
   const threadOrchestrationDynamicTools =
     threadOrchestrationRouter.buildDynamicToolSpecs();

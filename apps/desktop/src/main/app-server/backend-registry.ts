@@ -239,7 +239,6 @@ import {
 import {
   buildMonitorParentAgentGuidance,
   buildMonitorDelegationPrompt,
-  buildTaskMonitorDynamicToolErrorResponse,
   buildTaskMonitorDynamicToolSpecs,
   findUnsupportedCodexExecSessionReference,
   handleTaskMonitorDynamicToolCall,
@@ -2231,6 +2230,7 @@ type TaskMonitorDelegationRecord = {
   monitorId: string;
   monitorThreadId?: string;
   monitorTurnId?: string;
+  parentBackend: AppServerBackendKind;
   parentThreadId: string;
   heartbeatIntervalSeconds: number;
   pollIntervalSeconds: number;
@@ -5006,10 +5006,9 @@ function resolveGrokApiKeyForLiveClient(): string | undefined {
 function buildCodexParentDynamicToolSpecs(
   agentToolCatalogs: Array<{ dynamicTools: CodexDynamicToolSpec[] }> = [],
 ): CodexDynamicToolSpec[] {
-  return mergeCodexDynamicToolSpecs([
-    ...agentToolCatalogs.flatMap((catalog) => catalog.dynamicTools),
-    ...buildTaskMonitorDynamicToolSpecs("parent"),
-  ]);
+  return mergeCodexDynamicToolSpecs(
+    agentToolCatalogs.flatMap((catalog) => catalog.dynamicTools),
+  );
 }
 
 function mergeCodexDynamicToolSpecs(
@@ -5647,6 +5646,8 @@ export class DesktopBackendRegistry {
                 appManagementHandler: this.appManagementHandler,
                 automationInspectionHandler: this.automationInspectionHandler,
                 messagingHandler: this.messagingHandler,
+                taskMonitorHandler: async (request) =>
+                  await this.handleCreateMonitorAgentRequest(request),
                 threadInspectionHandler: this.threadInspectionHandler,
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
               }),
@@ -7332,6 +7333,13 @@ export class DesktopBackendRegistry {
     client: AcpRuntimeClient,
     session: AcpSessionMetadata,
   ): Promise<AcpSessionMetadata> {
+    if (acpSessionHasConversationHistory(session)) {
+      await client.ensureSession(session);
+      const rebound = { ...session };
+      delete rebound.requiresAgentSessionRebind;
+      this.acpBackend.upsertSession(rebound);
+      return rebound;
+    }
     return await client.startSession({
       sessionId: session.sessionId,
       cwd: session.cwd,
@@ -8118,6 +8126,8 @@ export class DesktopBackendRegistry {
       appManagementHandler: this.appManagementHandler,
       automationInspectionHandler: this.automationInspectionHandler,
       messagingHandler: this.messagingHandler,
+      taskMonitorHandler: async (request) =>
+        await this.handleCreateMonitorAgentRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
       threadOrchestrationHandler: this.threadOrchestrationHandler,
     });
@@ -13346,7 +13356,7 @@ export class DesktopBackendRegistry {
       });
       if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
         const line = buildTaskMonitorUsageLine({
-          backend: event.backend,
+          backend: monitorRecord.parentBackend,
           model: monitorRecord.preferredModel,
           monitorId: monitorRecord.monitorId,
           monitorThreadId: monitorRecord.monitorThreadId ?? notification.params.threadId,
@@ -13359,7 +13369,7 @@ export class DesktopBackendRegistry {
         logUnpricedThreadUsageLine(line);
         await this.overlayStore.upsertThreadUsageLine({ line });
         await this.emitThreadPricingUpdated({
-          backend: event.backend,
+          backend: monitorRecord.parentBackend,
           threadId: line.parentThreadId ?? line.threadId,
         });
       }
@@ -14448,7 +14458,7 @@ export class DesktopBackendRegistry {
     > = {},
   ): Promise<void> {
     const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: record.backend,
+      backend: record.parentBackend,
       threadId: record.parentThreadId,
     });
     const existing = overlay?.subAgents?.find(
@@ -14491,13 +14501,13 @@ export class DesktopBackendRegistry {
       startupTimeoutSeconds: record.startupTimeoutSeconds,
     };
     await this.overlayStore.upsertThreadSubAgent({
-      backend: record.backend,
+      backend: record.parentBackend,
       threadId: record.parentThreadId,
       subAgent,
     });
-    this.invalidateThreadListCache(record.backend);
+    this.invalidateThreadListCache(record.parentBackend);
     await this.emit({
-      backend: record.backend,
+      backend: record.parentBackend,
       notification: {
         method: "thread/subAgents/updated",
         params: {
@@ -16273,32 +16283,6 @@ export class DesktopBackendRegistry {
       params: request.params,
     });
     if (taskMonitorToolCall && isTaskMonitorDynamicToolCall(taskMonitorToolCall)) {
-      if (backend !== "codex") {
-        return buildTaskMonitorDynamicToolErrorResponse({
-          code: "forbidden",
-          message: "Task monitor dynamic tools are only available for Codex threads.",
-        });
-      }
-      const requiresActiveTurn =
-        taskMonitorToolCall.tool === "create_monitor_delegation";
-      if (
-        requiresActiveTurn &&
-        !this.isLiveDynamicToolCall(backend, taskMonitorToolCall)
-      ) {
-        backendRegistryLog.warn("rejecting task monitor dynamic tool call", {
-          backend,
-          callId: taskMonitorToolCall.callId,
-          namespace: taskMonitorToolCall.namespace,
-          threadId: taskMonitorToolCall.threadId,
-          tool: taskMonitorToolCall.tool,
-          turnId: taskMonitorToolCall.turnId,
-        });
-        return buildTaskMonitorDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Task monitor delegations must originate from an active Codex turn.",
-        });
-      }
       backendRegistryLog.debug("handling task monitor dynamic tool call", {
         backend,
         callId: taskMonitorToolCall.callId,
@@ -16311,7 +16295,7 @@ export class DesktopBackendRegistry {
         backend,
         call: taskMonitorToolCall,
         handler: async (monitorRequest) =>
-          await this.handleTaskMonitorRequest(monitorRequest),
+          await this.handleAgentTaskMonitorRequest(monitorRequest),
       });
     }
 
@@ -16967,13 +16951,6 @@ export class DesktopBackendRegistry {
         "Thread workspace move tools must be invoked from a live turn.",
       );
     }
-    if (sourceBackend !== "codex") {
-      return threadOrchestrationFailure(
-        "unsupported_backend",
-        "Thread workspace move tools are currently available only from Codex threads.",
-      );
-    }
-
     const backend = request.args.backend ?? sourceBackend;
     if (!isAppServerBackendKind(backend)) {
       return threadOrchestrationFailure(
@@ -16981,10 +16958,10 @@ export class DesktopBackendRegistry {
         "backend must be a known PwrAgent backend.",
       );
     }
-    if (backend !== sourceBackend || backend !== "codex") {
+    if (backend !== sourceBackend) {
       return threadOrchestrationFailure(
         "unsupported_backend",
-        "Thread workspace move currently supports only same-thread Codex workspace moves.",
+        "Thread workspace move currently supports only the invoking thread backend.",
       );
     }
 
@@ -17537,18 +17514,11 @@ export class DesktopBackendRegistry {
         "Thread handoff tools must be invoked from a live turn.",
       );
     }
-    if (sourceBackend !== "codex") {
-      return threadOrchestrationFailure(
-        "unsupported_backend",
-        "Thread handoff tools are currently available only from Codex threads.",
-      );
-    }
-
     const backend = request.args.backend ?? sourceBackend;
-    if (backend !== "codex") {
+    if (!isAppServerBackendKind(backend)) {
       return threadOrchestrationFailure(
-        "unsupported_backend",
-        "Thread handoff can currently create only Codex threads.",
+        "invalid_arguments",
+        "backend must be a known PwrAgent backend.",
       );
     }
 
@@ -17652,11 +17622,13 @@ export class DesktopBackendRegistry {
     });
     const executionMode =
       request.args.executionMode ??
-      this.activeCodexTurnModes.get(
-        buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
-      ) ??
+      (sourceBackend === "codex"
+        ? this.activeCodexTurnModes.get(
+            buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
+          )
+        : undefined) ??
       sourceOverlay.executionMode ??
-      (await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId));
+      "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
 
     if (
@@ -17677,7 +17649,7 @@ export class DesktopBackendRegistry {
           "Waiting for the operator to confirm the requested directory may be used for Default Access handoffs.",
       });
       const confirmed = await this.requestHandoffCwdTrustConfirmation({
-        backend,
+        backend: sourceBackend,
         cwd: requestedCwd,
         handoffId,
         threadId: sourceThreadId,
@@ -17733,18 +17705,29 @@ export class DesktopBackendRegistry {
     const inheritedSettings: HandoffTaskInheritedSettings = {
       backend,
       executionMode,
-      model: request.args.model ?? sourceOverlay.model,
+      model:
+        request.args.model ??
+        (backend === sourceBackend ? sourceOverlay.model : undefined),
       reasoningEffort:
-        request.args.reasoningEffort ?? sourceOverlay.reasoningEffort,
-      serviceTier: request.args.serviceTier ?? sourceOverlay.serviceTier,
-      fastMode: request.args.fastMode ?? sourceOverlay.fastMode,
+        request.args.reasoningEffort ??
+        (backend === sourceBackend
+          ? sourceOverlay.reasoningEffort
+          : undefined),
+      serviceTier:
+        request.args.serviceTier ??
+        (backend === sourceBackend ? sourceOverlay.serviceTier : undefined),
+      fastMode:
+        request.args.fastMode ??
+        (backend === sourceBackend ? sourceOverlay.fastMode : undefined),
       approvalPolicy: request.args.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.args.sandbox ?? modeSettings.sandbox,
-      codexEnvironmentRuntime: shouldInheritHandoffCodexEnvironmentRuntime({
-        callerCwd,
-        requestedCwd,
-        workspaceMode,
-      })
+      codexEnvironmentRuntime:
+        backend === "codex" &&
+        shouldInheritHandoffCodexEnvironmentRuntime({
+          callerCwd,
+          requestedCwd,
+          workspaceMode,
+        })
         ? sourceOverlay.codexEnvironmentRuntime
         : undefined,
     };
@@ -17789,6 +17772,7 @@ export class DesktopBackendRegistry {
     });
     const groupingMode: HandoffTaskGroupingMode =
       requestedGroupingMode === "subthread" &&
+      backend === sourceBackend &&
       sameHandoffProjectBoundary(callerProjectBoundary, childProjectBoundary)
         ? "subthread"
         : "none";
@@ -17796,7 +17780,7 @@ export class DesktopBackendRegistry {
       this.updatePendingThreadHandoff(handoffId, {
         groupingMode,
         message:
-          "Requested subthread grouping crosses a project boundary, so the child thread will be created ungrouped.",
+          "Requested subthread grouping crosses a backend or project boundary, so the child thread will be created ungrouped.",
       });
       if (workspaceMode === "same_workspace") {
         const message =
@@ -18267,6 +18251,42 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private async handleAgentTaskMonitorRequest(
+    request: TaskMonitorRequest,
+  ): Promise<TaskMonitorResponse> {
+    if (request.operation === "create_monitor_delegation") {
+      return await this.handleCreateMonitorAgentRequest(request);
+    }
+    return await this.handleTaskMonitorRequest(request);
+  }
+
+  private async handleCreateMonitorAgentRequest(
+    request: TaskMonitorRequest<"create_monitor_delegation">,
+  ): Promise<TaskMonitorResponse<"create_monitor_delegation">> {
+    if (
+      !this.isLiveDynamicToolCall(request.context.backend, {
+        threadId: request.context.threadId,
+        turnId: request.context.turnId,
+      })
+    ) {
+      backendRegistryLog.warn("rejecting task monitor tool call", {
+        backend: request.context.backend,
+        threadId: request.context.threadId,
+        tool: request.operation,
+        turnId: request.context.turnId,
+      });
+      return taskMonitorFailure(
+        "create_monitor_delegation",
+        "forbidden",
+        "Task monitor delegations must originate from an active turn.",
+      );
+    }
+    return await this.createTaskMonitorDelegation(
+      request.context,
+      request.args,
+    );
+  }
+
   private async createTaskMonitorDelegation(
     context: TaskMonitorRequest<"create_monitor_delegation">["context"],
     args: CreateMonitorDelegationToolArgs,
@@ -18343,6 +18363,7 @@ export class DesktopBackendRegistry {
       heartbeatIntervalSeconds,
       lastActivityAt: Date.now(),
       monitorId,
+      parentBackend: context.backend,
       parentThreadId,
       pollIntervalSeconds,
       preferredModel,
@@ -18469,24 +18490,25 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId: string;
   }> {
-    const executionMode =
-      this.activeCodexTurnModes.get(
-        buildActiveTurnModeKey(params.context.threadId, params.context.turnId),
-      ) ??
-      (await this.resolveCodexThreadExecutionModeForActiveTurn(
-        params.context.threadId,
-      ));
-    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: "codex",
+    const sourceOverlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.context.backend,
       threadId: params.context.threadId,
     });
+    const executionMode =
+      (params.context.backend === "codex"
+        ? this.activeCodexTurnModes.get(
+            buildActiveTurnModeKey(params.context.threadId, params.context.turnId),
+          )
+        : undefined) ??
+      sourceOverlay?.executionMode ??
+      "default";
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const cwd =
       params.cwd?.trim() ||
       (await this.resolveThreadEnvironmentCwd(
-        "codex",
+        params.context.backend,
         params.context.threadId,
-        overlay,
+        sourceOverlay,
       ));
     const client = this.getClient("codex", executionMode);
     const dynamicTools = buildTaskMonitorDynamicToolSpecs("monitor");
@@ -18494,10 +18516,15 @@ export class DesktopBackendRegistry {
     backendRegistryLog.info("starting managed task monitor thread", {
       cwd: cwd ?? null,
       executionMode,
-      hasCodexEnvironmentRuntime: Boolean(overlay?.codexEnvironmentRuntime),
-      shellEnvironmentKeyCount: overlay?.codexEnvironmentRuntime?.shellEnvironment
-        ? Object.keys(overlay.codexEnvironmentRuntime.shellEnvironment).length
-        : 0,
+      hasCodexEnvironmentRuntime: Boolean(
+        sourceOverlay?.codexEnvironmentRuntime,
+      ),
+      shellEnvironmentKeyCount:
+        sourceOverlay?.codexEnvironmentRuntime?.shellEnvironment
+          ? Object.keys(
+              sourceOverlay.codexEnvironmentRuntime.shellEnvironment,
+            ).length
+          : 0,
       monitorId: params.monitorId,
       model: params.preferredModel,
       parentThreadId: params.context.threadId,
@@ -18513,8 +18540,8 @@ export class DesktopBackendRegistry {
       model: params.preferredModel,
       reasoningEffort: params.preferredReasoningEffort,
       sandbox: modeSettings.sandbox,
-      ...(overlay?.codexEnvironmentRuntime
-        ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+      ...(sourceOverlay?.codexEnvironmentRuntime
+        ? { codexEnvironmentRuntime: sourceOverlay.codexEnvironmentRuntime }
         : {}),
     });
     this.reservedCodexStartThreadIds.add(thread.threadId);
@@ -18528,8 +18555,11 @@ export class DesktopBackendRegistry {
         model: params.preferredModel,
         reasoningEffort: params.preferredReasoningEffort,
         sandbox: modeSettings.sandbox,
-        ...(overlay?.codexEnvironmentRuntime
-          ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+        ...(sourceOverlay?.codexEnvironmentRuntime
+          ? {
+              codexEnvironmentRuntime:
+                sourceOverlay.codexEnvironmentRuntime,
+            }
           : {}),
       });
       this.activeTurnKeys.add(
@@ -18545,7 +18575,9 @@ export class DesktopBackendRegistry {
 
     backendRegistryLog.info("managed task monitor turn started", {
       executionMode,
-      hasCodexEnvironmentRuntime: Boolean(overlay?.codexEnvironmentRuntime),
+      hasCodexEnvironmentRuntime: Boolean(
+        sourceOverlay?.codexEnvironmentRuntime,
+      ),
       monitorId: params.monitorId,
       monitorThreadId: turn.threadId,
       monitorTurnId: turn.turnId,
@@ -18580,6 +18612,7 @@ export class DesktopBackendRegistry {
     });
     await this.emitTaskMonitorProgressMessage({
       monitorId: bound.record.monitorId,
+      parentBackend: bound.record.parentBackend,
       parentThreadId: bound.record.parentThreadId,
       text: formatTaskMonitorProgressMessage({
         message,
@@ -18674,13 +18707,16 @@ export class DesktopBackendRegistry {
       outcome: params.outcome,
       status: params.outcome,
     });
-    await this.injectCodexMonitorMessage({
+    await this.injectTaskMonitorCompletionMessage({
+      backend: params.record.parentBackend,
+      monitorId: params.record.monitorId,
       parentThreadId: params.record.parentThreadId,
       text: finalText,
     });
     if (params.record.latestUsage) {
       await this.emitTaskMonitorUsageActivity({
         monitorId: params.record.monitorId,
+        parentBackend: params.record.parentBackend,
         parentThreadId: params.record.parentThreadId,
         phase: "completion",
         usage: params.record.latestUsage,
@@ -18690,6 +18726,7 @@ export class DesktopBackendRegistry {
       completionSource: params.completionSource,
       monitorId: params.record.monitorId,
       outcome: params.outcome,
+      parentBackend: params.record.parentBackend,
       parentThreadId: params.record.parentThreadId,
     });
 
@@ -18703,7 +18740,7 @@ export class DesktopBackendRegistry {
       | undefined;
     if (params.triggerParentTurn) {
       const submitted = await this.submitTurn({
-        backend: "codex",
+        backend: params.record.parentBackend,
         threadId: params.record.parentThreadId,
         input: [
           {
@@ -18883,7 +18920,7 @@ export class DesktopBackendRegistry {
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const client = this.getClient("codex", executionMode);
     const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: "codex",
+      backend: record.parentBackend,
       threadId: record.parentThreadId,
     });
 
@@ -18992,13 +19029,14 @@ export class DesktopBackendRegistry {
 
   private async emitTaskMonitorProgressMessage(params: {
     monitorId: string;
+    parentBackend: AppServerBackendKind;
     parentThreadId: string;
     text: string;
     usage?: TaskMonitorUsageSnapshot;
   }): Promise<void> {
     const now = Date.now();
     await this.emit({
-      backend: "codex",
+      backend: params.parentBackend,
       notification: {
         method: "item/completed",
         params: {
@@ -19029,13 +19067,14 @@ export class DesktopBackendRegistry {
 
   private async emitTaskMonitorUsageActivity(params: {
     monitorId: string;
+    parentBackend: AppServerBackendKind;
     parentThreadId: string;
     phase: "completion" | "progress";
     usage: TaskMonitorUsageSnapshot;
   }): Promise<void> {
     const now = Date.now();
     await this.emit({
-      backend: "codex",
+      backend: params.parentBackend,
       notification: {
         method: "item/completed",
         params: {
@@ -19063,11 +19102,12 @@ export class DesktopBackendRegistry {
     completionSource: TaskMonitorCompletionSource;
     monitorId: string;
     outcome: CompleteMonitoringToolArgs["outcome"];
+    parentBackend: AppServerBackendKind;
     parentThreadId: string;
   }): Promise<void> {
     const now = Date.now();
     await this.emit({
-      backend: "codex",
+      backend: params.parentBackend,
       notification: {
         method: "item/completed",
         params: {
@@ -19091,10 +19131,35 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private async injectCodexMonitorMessage(params: {
+  private async injectTaskMonitorCompletionMessage(params: {
+    backend: AppServerBackendKind;
+    monitorId: string;
     parentThreadId: string;
     text: string;
   }): Promise<void> {
+    if (params.backend !== "codex") {
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: params.parentThreadId,
+            turnId: `monitor:${params.monitorId}`,
+            item: {
+              id: `${params.monitorId}:message:${Date.now()}`,
+              type: "agentMessage",
+              text: params.text,
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: params.monitorId,
+                transient: false,
+              },
+            },
+          },
+        },
+      });
+      return;
+    }
     await this.withCodexThreadClient(params.parentThreadId, async (client) => {
       if (!client.injectThreadItems) {
         throw new Error("Codex thread item injection is not available.");
