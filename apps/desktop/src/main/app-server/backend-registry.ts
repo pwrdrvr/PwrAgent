@@ -7001,12 +7001,24 @@ export class DesktopBackendRegistry {
         ? "full-access"
         : "default"
       : session.executionMode;
+    const updatedAt = Math.max(
+      session.updatedAt,
+      runtimeState?.updatedAt ?? Date.now(),
+    );
     this.acpBackend.upsertSession({
       ...session,
       acpRuntime: mergedRuntime,
       executionMode: nextExecutionMode,
-      updatedAt: Math.max(session.updatedAt, runtimeState?.updatedAt ?? Date.now()),
+      updatedAt,
     });
+    if (this.isAcpRuntimeExecutionModeOption(params)) {
+      await this.overlayStore.setThreadExecutionMode({
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: nextExecutionMode ?? "default",
+        updatedAt,
+      });
+    }
 
     const fromLabel =
       options?.fromLabel ??
@@ -9770,6 +9782,12 @@ export class DesktopBackendRegistry {
       ...session,
       executionMode: params.executionMode,
       updatedAt: Math.max(session.updatedAt, updatedAt),
+    });
+    await this.overlayStore.setThreadExecutionMode({
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: params.executionMode,
+      updatedAt,
     });
 
     await this.appendPermissionTransition({

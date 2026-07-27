@@ -71,6 +71,49 @@ function buildAutomationSummary(
   };
 }
 
+describe("navigation execution mode authority", () => {
+  it("uses authoritative ACP session mode over a stale overlay", () => {
+    const [thread] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "acp:grok:thread-1": {
+          backend: "acp:grok",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+      previousKnownThreadKeys: ["acp:grok:thread-1"],
+      threads: [
+        buildThread({
+          source: "acp:grok",
+          executionMode: "full-access",
+        }),
+      ],
+    });
+
+    expect(thread?.executionMode).toBe("full-access");
+  });
+
+  it("continues to use the overlay as Codex execution mode authority", () => {
+    const [thread] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread({ executionMode: "full-access" })],
+    });
+
+    expect(thread?.executionMode).toBe("default");
+  });
+});
+
 describe("navigation fork metadata", () => {
   it("materializes fork origin metadata from thread overlays", () => {
     const [thread] = materializeNavigationThreads({

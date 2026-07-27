@@ -12,6 +12,7 @@ import type {
 } from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
+  isGrokTransientUpdateKind,
   readAcpContentText,
   readAcpTopicTitle,
   shouldSurfaceAcpThoughtsAsMessages,
@@ -698,7 +699,11 @@ export class AcpAgentClient {
       if (updateKind === "agent_message_chunk") {
         activeTurn.assistantText += text;
       }
-    } else if (!isAssistantTextUpdate && activeTurn) {
+    } else if (
+      !isAssistantTextUpdate
+      && activeTurn
+      && !isGrokTransientUpdateKind(updateKind)
+    ) {
       activeTurn.activeAssistantMessageItemId = undefined;
       activeTurn.activeAssistantMessagePhase = undefined;
     }
@@ -706,6 +711,8 @@ export class AcpAgentClient {
       sessionId,
       update,
       receivedAt,
+      deferTurnCompletion:
+        updateKind === "turn_completed" && activeTurn !== undefined,
     } satisfies AcpSessionUpdate);
     void this.notifySessionUpdate({
       assistantMessageItemId,

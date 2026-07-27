@@ -13,7 +13,11 @@ import type {
   NavigationLaunchpadDefaults,
   ThreadOverlayState,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey, isToolManagedWorktreePath } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  isAcpBackendId,
+  isToolManagedWorktreePath,
+} from "@pwragent/shared";
 import { deriveInboxState, rankInboxThreadKeys } from "./inbox";
 import { buildDirectorySummaries } from "./directory-navigation";
 
@@ -120,6 +124,32 @@ function resolveNavigationObservedBranch(params: {
   return params.thread.observedGitBranch ?? params.overlay?.observedGitBranch;
 }
 
+function resolveNavigationExecutionMode(params: {
+  overlay?: ThreadOverlayState;
+  thread: AppServerThreadSummary;
+}): NavigationThreadSummary["executionMode"] {
+  if (isAcpBackendId(params.thread.source)) {
+    const overlayIsAtLeastAsFresh =
+      params.overlay?.executionModeUpdatedAt !== undefined
+      && (
+        params.thread.updatedAt === undefined
+        || params.overlay.executionModeUpdatedAt >= params.thread.updatedAt
+      );
+    return (
+      (overlayIsAtLeastAsFresh ? params.overlay?.executionMode : undefined)
+      ?? params.thread.executionMode
+      ?? params.overlay?.executionMode
+      ?? "default"
+    );
+  }
+
+  return (
+    params.overlay?.executionMode
+    ?? params.thread.executionMode
+    ?? "default"
+  );
+}
+
 function resolveNavigationParentThreadId(params: {
   overlay?: ThreadOverlayState;
   overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
@@ -190,7 +220,7 @@ export function materializeNavigationThreads(params: {
       gitBranch,
       observedGitBranch,
       retainedBranchDriftPairs: overlay?.retainedBranchDriftPairs,
-      executionMode: overlay?.executionMode ?? thread.executionMode ?? "default",
+      executionMode: resolveNavigationExecutionMode({ overlay, thread }),
       queuedExecutionMode: overlay?.queuedExecutionMode,
       queuedExecutionModeAt: overlay?.queuedExecutionModeAt,
       permissionTransitionLog: overlay?.permissionTransitionLog,

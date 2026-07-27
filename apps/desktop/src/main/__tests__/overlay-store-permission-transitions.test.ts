@@ -1,5 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ThreadPermissionTransition } from "@pwragent/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  AppServerThreadSummary,
+  ThreadPermissionTransition,
+} from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import {
@@ -31,6 +34,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   stateDb.close();
 });
 
@@ -155,5 +159,74 @@ describe("SqliteOverlayStore — permission transition log", () => {
     expect(grok?.permissionTransitionLog?.map((entry) => entry.id)).toEqual([
       "grok-1",
     ]);
+  });
+
+  it("repairs a stale ACP overlay from authoritative session metadata", async () => {
+    await store.setThreadExecutionMode({
+      backend: "acp:grok",
+      threadId: "thread-1",
+      executionMode: "default",
+      updatedAt: 1000,
+    });
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Grok thread",
+      titleSource: "explicit",
+      source: "acp:grok",
+      linkedDirectories: [],
+      updatedAt: 2000,
+      executionMode: "full-access",
+    };
+
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "acp:grok",
+      fetchedAt: 2000,
+      threads: [thread],
+    });
+
+    expect(snapshot.threads[0]?.executionMode).toBe("full-access");
+    await expect(
+      store.getThreadOverlayState({
+        backend: "acp:grok",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      executionMode: "full-access",
+    });
+  });
+
+  it("does not replace a newer ACP mode with an older navigation snapshot", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2000);
+    await store.setThreadExecutionMode({
+      backend: "acp:grok",
+      threadId: "thread-1",
+      executionMode: "full-access",
+    });
+    const staleThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Grok thread",
+      titleSource: "explicit",
+      source: "acp:grok",
+      linkedDirectories: [],
+      updatedAt: 1000,
+      executionMode: "default",
+    };
+
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "acp:grok",
+      fetchedAt: 3000,
+      threads: [staleThread],
+    });
+
+    expect(snapshot.threads[0]?.executionMode).toBe("full-access");
+    await expect(
+      store.getThreadOverlayState({
+        backend: "acp:grok",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      executionMode: "full-access",
+    });
   });
 });
