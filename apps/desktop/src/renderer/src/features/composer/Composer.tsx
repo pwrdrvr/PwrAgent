@@ -7971,32 +7971,12 @@ export function Composer(props: ComposerProps) {
                 value: candidate.kind,
               }))}
               onChange={(value) => {
-                const currentLaunchpad = props.launchpad;
-                if (!currentLaunchpad) {
+                if (!props.launchpad) {
                   return;
                 }
                 const nextBackend = value as NavigationLaunchpadDraft["backend"];
-                const nextBackendSummary = props.backends?.find(
-                  (candidate) => candidate.kind === nextBackend
-                );
-                const executionModeStillAvailable = nextBackendSummary?.executionModes.some(
-                  (mode) => mode.available && mode.mode === currentLaunchpad.executionMode
-                );
-                const nextModelOption = getDefaultModelOption(nextBackendSummary);
                 handleLaunchpadPatch({
                   backend: nextBackend,
-                  executionMode: executionModeStillAvailable
-                    ? currentLaunchpad.executionMode
-                    : "default",
-                  model: nextModelOption?.id,
-                  reasoningEffort: nextModelOption?.supportsReasoning
-                    ? getDefaultReasoningEffort(nextBackendSummary, nextModelOption)
-                    : undefined,
-                  serviceTier: undefined,
-                  fastMode: undefined,
-                  codexEnvironmentId: undefined,
-                  codexEnvironmentExecutionTarget: undefined,
-                  codexEnvironmentActionId: undefined,
                 });
               }}
             />

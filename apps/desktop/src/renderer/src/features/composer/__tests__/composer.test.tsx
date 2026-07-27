@@ -1807,7 +1807,10 @@ describe("Composer", () => {
           onUpdateLaunchpad={async (_directoryKey, patch) => {
             providerPatches.push(patch);
             setLaunchpad((current) =>
-              applyNavigationLaunchpadProviderSettingsPatch(current, patch),
+              applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
+                current,
+                patch,
+              ),
             );
           }}
           skills={[]}
