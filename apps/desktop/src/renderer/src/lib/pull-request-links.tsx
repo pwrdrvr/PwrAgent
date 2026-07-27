@@ -207,13 +207,12 @@ function pullRequestsByNumberForActiveProject(params: {
       thread.source === params.activeThread?.source
       && thread.id === params.activeThread.id,
   ) ?? params.activeThread;
-  const projectKeys = threadProjectKeys(activeThread);
   const candidatesByNumber = new Map<number, Map<string, PrSummary>>();
 
   for (const thread of params.threads) {
     const sameThread =
       thread.source === activeThread.source && thread.id === activeThread.id;
-    if (!sameThread && !sharesProjectKey(projectKeys, threadProjectKeys(thread))) {
+    if (!sameThread && !siblingPullRequestsAreInScope(activeThread, thread)) {
       continue;
     }
     for (const pr of thread.prs ?? []) {
@@ -236,33 +235,42 @@ function pullRequestsByNumberForActiveProject(params: {
   return resolved;
 }
 
-function threadProjectKeys(thread: NavigationThreadSummary): Set<string> {
-  const keys = new Set<string>();
-  const projectKey = normalizeProjectPath(thread.projectKey);
-  if (projectKey) {
-    keys.add(projectKey);
+function siblingPullRequestsAreInScope(
+  activeThread: NavigationThreadSummary,
+  siblingThread: NavigationThreadSummary,
+): boolean {
+  const activeRepositories = threadRepositoryPaths(activeThread);
+  const siblingRepositories = threadRepositoryPaths(siblingThread);
+  if (siblingRepositories.size > 0) {
+    return (
+      activeRepositories.size > 0
+      && [...siblingRepositories].every((path) => activeRepositories.has(path))
+    );
   }
+
+  const activeProjectKey = normalizeProjectPath(activeThread.projectKey);
+  const siblingProjectKey = normalizeProjectPath(siblingThread.projectKey);
+  return Boolean(
+    activeProjectKey
+    && siblingProjectKey
+    && activeProjectKey === siblingProjectKey,
+  );
+}
+
+function threadRepositoryPaths(thread: NavigationThreadSummary): Set<string> {
+  const paths = new Set<string>();
   for (const directory of thread.linkedDirectories ?? []) {
     const directoryPath = normalizeProjectPath(directory.path);
     if (directoryPath) {
-      keys.add(directoryPath);
+      paths.add(directoryPath);
     }
   }
-  return keys;
+  return paths;
 }
 
 function normalizeProjectPath(value: string | undefined): string | undefined {
   const trimmed = value?.trim().replace(/\/+$/, "");
   return trimmed || undefined;
-}
-
-function sharesProjectKey(left: Set<string>, right: Set<string>): boolean {
-  for (const key of left) {
-    if (right.has(key)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 const PullRequestLinkContext =

@@ -148,6 +148,52 @@ describe("pull request links in transcript markdown", () => {
     })).toBeInTheDocument();
   });
 
+  it("excludes PRs from a sibling that also links repositories outside the active scope", () => {
+    const activeThread = projectThread({
+      id: "thread-active",
+      path: "/repos/giphy-services",
+    });
+    const multiRepositorySibling = threadSummary([
+      prSummary({
+        org: "Giphy",
+        repo: "analytics",
+        url: "https://github.com/Giphy/analytics/pull/13290",
+      }),
+    ], {
+      id: "thread-multi-repository",
+      linkedDirectories: [
+        {
+          id: "sibling-giphy-services",
+          kind: "worktree",
+          label: "giphy-services",
+          path: "/repos/giphy-services",
+          worktreePath: "/worktrees/sibling-giphy-services",
+        },
+        {
+          id: "sibling-analytics",
+          kind: "worktree",
+          label: "analytics",
+          path: "/repos/analytics",
+          worktreePath: "/worktrees/sibling-analytics",
+        },
+      ],
+    });
+
+    render(
+      <PullRequestLinkProvider
+        activeThread={activeThread}
+        threads={[activeThread, multiRepositorySibling]}
+      >
+        <ThreadMarkdown text="Do not cross repositories for #13290." />
+      </PullRequestLinkProvider>,
+    );
+
+    expect(screen.queryByRole("button", {
+      name: /Giphy\/analytics#13290/,
+    })).not.toBeInTheDocument();
+    expect(screen.getByText(/#13290/)).toBeInTheDocument();
+  });
+
   it("leaves a bare number plain when the known PR belongs to another project", () => {
     const activeThread = projectThread({
       id: "thread-active",
