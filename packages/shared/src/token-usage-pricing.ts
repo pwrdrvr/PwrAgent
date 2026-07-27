@@ -223,7 +223,6 @@ type CodexCreditsCatalogEntry = {
   displayTier: string;
   effectiveFrom: number;
   effectiveTo?: number;
-  fastRateMultiplier?: number;
   inputCreditsPerMillion: number;
   model: string;
   outputCreditsPerMillion: number;
@@ -231,14 +230,32 @@ type CodexCreditsCatalogEntry = {
   serviceTier: TokenUsagePricingServiceTier;
 };
 
+type CodexCreditsStandardRates = Pick<
+  CodexCreditsCatalogEntry,
+  | "cachedInputCreditsPerMillion"
+  | "inputCreditsPerMillion"
+  | "outputCreditsPerMillion"
+>;
+
 const OPENAI_PRICING_CATALOG_ID = "openai-api";
 const OPENAI_PRICING_CATALOG_VERSION = "2026-06-16";
 const OPENAI_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 3, 23);
+// Standard: https://developers.openai.com/api/docs/models
+// Priority: https://openai.com/api-priority-processing/
 const OPENAI_GPT56_PRICING_CATALOG_VERSION = "2026-07-09";
 const OPENAI_GPT56_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 9);
 const OPENAI_CODEX_CREDITS_CATALOG_ID = "openai-codex-credits";
 const OPENAI_CODEX_CREDITS_CATALOG_VERSION = "2026-06-16";
-const OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION = "2026-07-09";
+const OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION = "2026-07-27";
+// ChatGPT/Codex Fast credit multipliers are separate from API Priority rates.
+// https://learn.chatgpt.com/docs/agent-configuration/speed.md currently says
+// GPT-5.6 consumes 2.5x credits, while API Priority remains 2x. Keep the
+// disputed GPT-5.6 assumption here so one value controls every derived rate.
+const OPENAI_CODEX_FAST_RATE_MULTIPLIERS = {
+  "gpt-5.4": 2,
+  "gpt-5.5": 2.5,
+  "gpt-5.6": 2.5,
+} as const;
 const XAI_PRICING_CATALOG_ID = "xai-api";
 const XAI_PRICING_CATALOG_VERSION = "2026-07-17";
 const XAI_GROK45_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 8);
@@ -429,155 +446,120 @@ const TOKEN_USAGE_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   ...XAI_PRICING_CATALOG,
 ];
 
+function buildCodexCreditsCatalogEntries(params: {
+  catalogVersion: string;
+  displayModel: string;
+  effectiveFrom: number;
+  fastRateMultiplier?: number;
+  model: string;
+  standardRates: CodexCreditsStandardRates;
+}): CodexCreditsCatalogEntry[] {
+  const standardEntry: CodexCreditsCatalogEntry = {
+    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+    catalogVersion: params.catalogVersion,
+    model: params.model,
+    displayModel: params.displayModel,
+    displayTier: "Standard",
+    effectiveFrom: params.effectiveFrom,
+    provider: "openai",
+    serviceTier: "standard",
+    ...params.standardRates,
+  };
+  if (params.fastRateMultiplier === undefined) {
+    return [standardEntry];
+  }
+
+  return [
+    standardEntry,
+    {
+      ...standardEntry,
+      displayTier: "Fast",
+      serviceTier: "priority",
+      inputCreditsPerMillion:
+        params.standardRates.inputCreditsPerMillion
+        * params.fastRateMultiplier,
+      cachedInputCreditsPerMillion:
+        params.standardRates.cachedInputCreditsPerMillion
+        * params.fastRateMultiplier,
+      outputCreditsPerMillion:
+        params.standardRates.outputCreditsPerMillion
+        * params.fastRateMultiplier,
+    },
+  ];
+}
+
 const OPENAI_CODEX_CREDITS_CATALOG: readonly CodexCreditsCatalogEntry[] = [
-  {
-    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+  ...buildCodexCreditsCatalogEntries({
     catalogVersion: OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION,
     model: "gpt-5.6-sol",
     displayModel: "GPT-5.6 Sol",
-    displayTier: "Standard",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    inputCreditsPerMillion: 125,
-    cachedInputCreditsPerMillion: 12.5,
-    outputCreditsPerMillion: 750,
-  },
-  {
-    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
-    catalogVersion: OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION,
-    model: "gpt-5.6-sol",
-    displayModel: "GPT-5.6 Sol",
-    displayTier: "Fast",
-    effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
-    fastRateMultiplier: 2,
-    provider: "openai",
-    serviceTier: "priority",
-    inputCreditsPerMillion: 250,
-    cachedInputCreditsPerMillion: 25,
-    outputCreditsPerMillion: 1500,
-  },
-  {
-    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+    fastRateMultiplier: OPENAI_CODEX_FAST_RATE_MULTIPLIERS["gpt-5.6"],
+    standardRates: {
+      inputCreditsPerMillion: 125,
+      cachedInputCreditsPerMillion: 12.5,
+      outputCreditsPerMillion: 750,
+    },
+  }),
+  ...buildCodexCreditsCatalogEntries({
     catalogVersion: OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION,
     model: "gpt-5.6-terra",
     displayModel: "GPT-5.6 Terra",
-    displayTier: "Standard",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    inputCreditsPerMillion: 62.5,
-    cachedInputCreditsPerMillion: 6.25,
-    outputCreditsPerMillion: 375,
-  },
-  {
-    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
-    catalogVersion: OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION,
-    model: "gpt-5.6-terra",
-    displayModel: "GPT-5.6 Terra",
-    displayTier: "Fast",
-    effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
-    fastRateMultiplier: 2,
-    provider: "openai",
-    serviceTier: "priority",
-    inputCreditsPerMillion: 125,
-    cachedInputCreditsPerMillion: 12.5,
-    outputCreditsPerMillion: 750,
-  },
-  {
-    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+    fastRateMultiplier: OPENAI_CODEX_FAST_RATE_MULTIPLIERS["gpt-5.6"],
+    standardRates: {
+      inputCreditsPerMillion: 62.5,
+      cachedInputCreditsPerMillion: 6.25,
+      outputCreditsPerMillion: 375,
+    },
+  }),
+  ...buildCodexCreditsCatalogEntries({
     catalogVersion: OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION,
     model: "gpt-5.6-luna",
     displayModel: "GPT-5.6 Luna",
-    displayTier: "Standard",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    inputCreditsPerMillion: 25,
-    cachedInputCreditsPerMillion: 2.5,
-    outputCreditsPerMillion: 150,
-  },
-  {
-    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
-    catalogVersion: OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION,
-    model: "gpt-5.6-luna",
-    displayModel: "GPT-5.6 Luna",
-    displayTier: "Fast",
-    effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
-    fastRateMultiplier: 2,
-    provider: "openai",
-    serviceTier: "priority",
-    inputCreditsPerMillion: 50,
-    cachedInputCreditsPerMillion: 5,
-    outputCreditsPerMillion: 300,
-  },
-  {
-    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+    fastRateMultiplier: OPENAI_CODEX_FAST_RATE_MULTIPLIERS["gpt-5.6"],
+    standardRates: {
+      inputCreditsPerMillion: 25,
+      cachedInputCreditsPerMillion: 2.5,
+      outputCreditsPerMillion: 150,
+    },
+  }),
+  ...buildCodexCreditsCatalogEntries({
     catalogVersion: OPENAI_CODEX_CREDITS_CATALOG_VERSION,
     model: "gpt-5.5",
     displayModel: "GPT-5.5",
-    displayTier: "Standard",
     effectiveFrom: OPENAI_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    inputCreditsPerMillion: 125,
-    cachedInputCreditsPerMillion: 12.5,
-    outputCreditsPerMillion: 750,
-  },
-  {
-    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
-    catalogVersion: OPENAI_CODEX_CREDITS_CATALOG_VERSION,
-    model: "gpt-5.5",
-    displayModel: "GPT-5.5",
-    displayTier: "Fast",
-    effectiveFrom: OPENAI_PRICING_EFFECTIVE_FROM,
-    fastRateMultiplier: 2.5,
-    provider: "openai",
-    serviceTier: "priority",
-    inputCreditsPerMillion: 312.5,
-    cachedInputCreditsPerMillion: 31.25,
-    outputCreditsPerMillion: 1875,
-  },
-  {
-    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+    fastRateMultiplier: OPENAI_CODEX_FAST_RATE_MULTIPLIERS["gpt-5.5"],
+    standardRates: {
+      inputCreditsPerMillion: 125,
+      cachedInputCreditsPerMillion: 12.5,
+      outputCreditsPerMillion: 750,
+    },
+  }),
+  ...buildCodexCreditsCatalogEntries({
     catalogVersion: OPENAI_CODEX_CREDITS_CATALOG_VERSION,
     model: "gpt-5.4",
     displayModel: "GPT-5.4",
-    displayTier: "Standard",
     effectiveFrom: OPENAI_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    inputCreditsPerMillion: 62.5,
-    cachedInputCreditsPerMillion: 6.25,
-    outputCreditsPerMillion: 375,
-  },
-  {
-    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
-    catalogVersion: OPENAI_CODEX_CREDITS_CATALOG_VERSION,
-    model: "gpt-5.4",
-    displayModel: "GPT-5.4",
-    displayTier: "Fast",
-    effectiveFrom: OPENAI_PRICING_EFFECTIVE_FROM,
-    fastRateMultiplier: 2,
-    provider: "openai",
-    serviceTier: "priority",
-    inputCreditsPerMillion: 125,
-    cachedInputCreditsPerMillion: 12.5,
-    outputCreditsPerMillion: 750,
-  },
-  {
-    catalogId: OPENAI_CODEX_CREDITS_CATALOG_ID,
+    fastRateMultiplier: OPENAI_CODEX_FAST_RATE_MULTIPLIERS["gpt-5.4"],
+    standardRates: {
+      inputCreditsPerMillion: 62.5,
+      cachedInputCreditsPerMillion: 6.25,
+      outputCreditsPerMillion: 375,
+    },
+  }),
+  ...buildCodexCreditsCatalogEntries({
     catalogVersion: OPENAI_CODEX_CREDITS_CATALOG_VERSION,
     model: "gpt-5.4-mini",
     displayModel: "GPT-5.4 mini",
-    displayTier: "Standard",
     effectiveFrom: OPENAI_PRICING_EFFECTIVE_FROM,
-    provider: "openai",
-    serviceTier: "standard",
-    inputCreditsPerMillion: 18.75,
-    cachedInputCreditsPerMillion: 1.875,
-    outputCreditsPerMillion: 113,
-  },
+    standardRates: {
+      inputCreditsPerMillion: 18.75,
+      cachedInputCreditsPerMillion: 1.875,
+      outputCreditsPerMillion: 113,
+    },
+  }),
 ];
 
 export function listOpenAiTokenUsagePricingRates(): TokenUsagePricingCatalogRate[] {
@@ -803,18 +785,19 @@ export function resolveOpenAiPricingServiceTier(params: {
   fastMode?: boolean;
   serviceTier?: string;
 }): "standard" | "priority" | undefined {
-  if (params.fastMode === true) {
-    return "priority";
-  }
-
+  // Prefer an explicit tier over the legacy Boolean intent so callers that can
+  // observe an effective response tier can override the requested Fast mode.
   const serviceTier = params.serviceTier?.trim().toLowerCase();
-  if (!serviceTier || serviceTier === "default" || serviceTier === "standard") {
+  if (serviceTier === "default" || serviceTier === "standard") {
     return "standard";
   }
   if (serviceTier === "fast" || serviceTier === "priority") {
     return "priority";
   }
-  return undefined;
+  if (serviceTier) {
+    return undefined;
+  }
+  return params.fastMode === true ? "priority" : "standard";
 }
 
 function resolveXaiPricingServiceTier(
