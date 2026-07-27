@@ -400,6 +400,57 @@ describe("AcpAgentClient", () => {
     });
   });
 
+  it("binds a pending HTTP MCP registration after session/new returns", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const bindThread = vi.fn();
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      mcpServers: () => ({
+        servers: [
+          {
+            name: "pwragent",
+            type: "http",
+            url: "http://127.0.0.1:43123/mcp",
+            headers: [
+              {
+                name: "Authorization",
+                value: "Bearer test-token",
+              },
+            ],
+          },
+        ],
+        bindThread,
+      }),
+    });
+
+    await client.initialize();
+    await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    expect(transport.requests[1]?.params).toEqual({
+      cwd: "/repo",
+      mcpServers: [
+        {
+          name: "pwragent",
+          type: "http",
+          url: "http://127.0.0.1:43123/mcp",
+          headers: [
+            {
+              name: "Authorization",
+              value: "Bearer test-token",
+            },
+          ],
+        },
+      ],
+    });
+    expect(bindThread).toHaveBeenCalledWith("session-1");
+  });
+
   it("sends pasted images as ACP image content and keeps structured parts in live replay", async () => {
     const transport = new FakeAcpAgentTransport();
     const imageUrl = "data:image/png;base64,aGVsbG8=";

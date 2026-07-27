@@ -1,7 +1,7 @@
 import type { AppServerBackendKind, ThreadIdentifier } from "@pwragent/shared";
 import type { DynamicToolCallResponse } from "@pwrdrvr/codex-app-server-protocol/v2";
 
-export type AgentToolTransport = "codex_dynamic_tool" | "acp_mcp";
+export type AgentToolTransport = "codex_dynamic_tool" | "mcp";
 
 export type AgentToolCallContext = {
   backend: AppServerBackendKind;

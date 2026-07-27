@@ -106,18 +106,21 @@ can inspect the same profile without also executing the profile's schedules.
 
 Agent-attached automations publish timeline cards out of band. They are not
 inserted into the next user message as fake context. Codex-backed Agent threads
-receive read-only `pwragent_automations` dynamic tools so the Agent can list its
-own attached automations, inspect recent runs, and fetch stored run artifacts
-when a user asks what happened. PwrAgent authorizes the tool call at execution
-time; ordinary work threads receive a forbidden response even if the Codex
-thread was born with the dynamic tool catalog.
+receive the `pwragent` Dynamic Tools catalog so the Agent can inspect automation
+runs alongside the app, thread, messaging, and orchestration operations.
 
-ACP-backed Agent threads use the same inspection operations through MCP/CLI
-adapters when the runtime supports MCP server configuration. Unsupported ACP
-runtimes keep starting with an empty MCP server list instead of failing session
-creation. Set `PWRAGENT_AUTOMATION_INSPECTION_MCP_COMMAND` to the command that
-serves the automation inspection MCP bridge for ACP runtimes that support MCP
-server launch configuration.
+ACP-backed Agent threads receive that same catalog from a PwrAgent-owned
+Streamable HTTP MCP server when the ACP runtime advertises HTTP MCP support.
+PwrAgent binds the server to an ephemeral `127.0.0.1` port, registers it with
+the ACP session automatically, and authenticates each session with a
+thread-scoped bearer credential. Tool calls remain authorized at execution
+time and are rejected unless the registered thread has exactly one active turn.
+ACP runtimes without HTTP MCP support keep starting without the PwrAgent MCP
+instead of failing session creation.
+
+`PWRAGENT_AUTOMATION_INSPECTION_MCP_COMMAND` remains a compatibility fallback
+for the older automation-only stdio bridge. New integrations should use the
+self-registered `pwragent` HTTP MCP catalog.
 
 Manual smoke test:
 

@@ -280,6 +280,12 @@ import type { PwrAgentThreadOrchestrationHandler } from "../agent-tools/pwragent
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
+import {
+  AgentToolMcpServer,
+  type AgentToolMcpClientContext,
+  type AgentToolMcpServerLike,
+  type ResolvedAgentToolMcpCallContext,
+} from "../agent-tools/agent-tool-mcp-server";
 import { createScratchProjectDirectory } from "./scratch-projects";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
@@ -5484,6 +5490,7 @@ export class DesktopBackendRegistry {
     acpSessionStore?: AcpSessionStoreLike | null;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
     createAcpClient?: AcpClientFactory;
+    agentToolMcpServer?: AgentToolMcpServerLike | null;
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     automationInspectionMcpCommand?: string;
@@ -5628,9 +5635,26 @@ export class DesktopBackendRegistry {
     this.worktreeArchiveService =
       options?.worktreeArchiveService ??
       new WorktreeArchiveService({ gitEnv: codexEnv });
+    const agentToolMcpServer =
+      options?.agentToolMcpServer === null
+        ? undefined
+        : options?.agentToolMcpServer ??
+          new AgentToolMcpServer({
+            resolveCallContext: (context) =>
+              this.resolveAgentToolMcpCallContext(context),
+            resolveCatalogs: () =>
+              resolveAgentToolCatalogs({
+                appManagementHandler: this.appManagementHandler,
+                automationInspectionHandler: this.automationInspectionHandler,
+                messagingHandler: this.messagingHandler,
+                threadInspectionHandler: this.threadInspectionHandler,
+                threadOrchestrationHandler: this.threadOrchestrationHandler,
+              }),
+          });
     this.acpBackend = new AcpBackendAdapter({
       acpAgentStore: options?.acpAgentStore,
       acpSessionStore: options?.acpSessionStore,
+      agentToolMcpServer,
       captureStores: this.captureStores,
       createAcpClient: options?.createAcpClient,
       discoverLocalAcpAgents: options?.discoverLocalAcpAgents,
@@ -16345,6 +16369,27 @@ export class DesktopBackendRegistry {
     const turnId = call.turnId?.trim();
     if (!turnId) return false;
     return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
+  }
+
+  private resolveAgentToolMcpCallContext(
+    context: AgentToolMcpClientContext,
+  ): ResolvedAgentToolMcpCallContext | undefined {
+    const matchingTurns = [...this.activeTurnKeys]
+      .map(parseActiveTurnKey)
+      .filter(
+        (
+          candidate,
+        ): candidate is ResolvedAgentToolMcpCallContext =>
+          Boolean(
+            candidate
+            && candidate.backend === context.backend
+            && (
+              !context.threadId
+              || candidate.threadId === context.threadId
+            ),
+          ),
+      );
+    return matchingTurns.length === 1 ? matchingTurns[0] : undefined;
   }
 
   private async handleThreadOrchestrationRequest(

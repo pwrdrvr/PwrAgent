@@ -32,9 +32,16 @@ import {
 import {
   AcpAgentClient,
   type AcpJsonRpcTransport,
+  type AcpMcpServerRegistration,
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
-import { buildAutomationInspectionAcpMcpServers } from "../automations/automation-inspection-cli.js";
+import {
+  acpRuntimeSupportsHttpMcp,
+  buildAutomationInspectionAcpMcpServers,
+} from "../automations/automation-inspection-cli.js";
+import type {
+  AgentToolMcpServerLike,
+} from "../agent-tools/agent-tool-mcp-server.js";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
   acpAgentEnabledFor,
@@ -124,6 +131,7 @@ export type AcpBackendAdapterOptions = {
   acpRolloutStore?: Pick<AcpRolloutStore, "appendUpdate" | "readReplay" | "readUpdates"> | null;
   acpSessionStore?: AcpSessionStoreLike | null;
   captureStores: ProtocolCaptureStore[];
+  agentToolMcpServer?: AgentToolMcpServerLike;
   automationInspectionMcpCommand?: string;
   createAcpClient?: AcpClientFactory;
   createAcpTransport?: AcpTransportFactory;
@@ -696,6 +704,7 @@ export class AcpBackendAdapter {
   >;
   private readonly acpSessionStore?: AcpSessionStoreLike;
   private readonly captureStores: ProtocolCaptureStore[];
+  private readonly agentToolMcpServer?: AgentToolMcpServerLike;
   private readonly automationInspectionMcpCommand?: string;
   private readonly createAcpClient: AcpClientFactory;
   private readonly createAcpTransport?: AcpTransportFactory;
@@ -711,6 +720,7 @@ export class AcpBackendAdapter {
 
   constructor(options: AcpBackendAdapterOptions) {
     this.captureStores = options.captureStores;
+    this.agentToolMcpServer = options.agentToolMcpServer;
     this.automationInspectionMcpCommand = options.automationInspectionMcpCommand;
     this.emit = options.emit;
     this.handleServerRequest = options.handleServerRequest;
@@ -1165,6 +1175,7 @@ export class AcpBackendAdapter {
         await client?.dispose();
       }),
     );
+    await this.agentToolMcpServer?.close();
   }
 
   private shouldEmitLiveToolNotification(
@@ -1488,13 +1499,42 @@ export class AcpBackendAdapter {
       },
       onRequest: async (request) =>
         await this.handleServerRequest(agent.backendId, request),
-      mcpServers: ({ backendId, sessionId }) =>
-        buildAutomationInspectionAcpMcpServers({
+      mcpServers: async ({
+        backendId,
+        runtimeCapabilities,
+        sessionId,
+      }): Promise<
+        AcpMcpServerRegistration
+        | ReturnType<typeof buildAutomationInspectionAcpMcpServers>
+      > => {
+        if (
+          this.agentToolMcpServer
+          && acpRuntimeSupportsHttpMcp(runtimeCapabilities)
+        ) {
+          try {
+            const registration = await this.agentToolMcpServer.registerClient({
+              backend: backendId,
+              threadId: sessionId,
+            });
+            return {
+              servers: [registration.server],
+              bindThread: registration.bindThread,
+            };
+          } catch (error) {
+            acpBackendAdapterLog.warn("agent_tool_mcp_start_failed", {
+              backend: backendId,
+              error: error instanceof Error ? error.message : String(error),
+              sessionId: sessionId ?? null,
+            });
+          }
+        }
+        return buildAutomationInspectionAcpMcpServers({
           backend: backendId,
           command: this.automationInspectionMcpCommand,
-          runtimeCapabilities: agent.runtimeCapabilities,
+          runtimeCapabilities,
           threadId: sessionId,
-        }),
+        });
+      },
     });
   }
 }

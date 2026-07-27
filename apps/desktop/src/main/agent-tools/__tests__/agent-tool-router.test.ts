@@ -121,8 +121,10 @@ describe("AgentToolRouter", () => {
       { limit: 1 },
       {
         backend: "codex",
+        callId: undefined,
         threadId: "thread-1",
-        transport: "acp_mcp",
+        transport: "mcp",
+        turnId: undefined,
       },
     );
   });

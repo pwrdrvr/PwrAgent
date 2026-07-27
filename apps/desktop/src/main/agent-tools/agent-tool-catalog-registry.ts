@@ -24,11 +24,13 @@ import {
   buildPwrAgentThreadOrchestrationToolRouter,
   type PwrAgentThreadOrchestrationHandler,
 } from "./pwragent-thread-orchestration-agent-tools.js";
+import type { AgentToolRouter } from "./agent-tool-router.js";
 
 export type ResolvedAgentToolCatalog = {
   id: AgentToolCatalogId;
   summary: AgentToolCatalogSummary;
   dynamicTools: DynamicToolSpec[];
+  router: AgentToolRouter;
 };
 
 export function resolveAgentToolCatalogs(params: {
@@ -57,6 +59,7 @@ export function resolveAgentToolCatalogs(params: {
     {
       id: "automation_inspection",
       dynamicTools: automationDynamicTools,
+      router: automationRouter,
       summary: {
         id: "automation_inspection",
         namespace: PWRAGENT_TOOL_NAMESPACE,
@@ -72,6 +75,7 @@ export function resolveAgentToolCatalogs(params: {
     {
       id: "app_management",
       dynamicTools: appDynamicTools,
+      router: appRouter,
       summary: {
         id: "app_management",
         namespace: PWRAGENT_TOOL_NAMESPACE,
@@ -87,6 +91,7 @@ export function resolveAgentToolCatalogs(params: {
     {
       id: "thread_inspection",
       dynamicTools: threadDynamicTools,
+      router: threadRouter,
       summary: {
         id: "thread_inspection",
         namespace: PWRAGENT_TOOL_NAMESPACE,
@@ -102,6 +107,7 @@ export function resolveAgentToolCatalogs(params: {
     {
       id: "messaging_context",
       dynamicTools: messagingDynamicTools,
+      router: messagingRouter,
       summary: {
         id: "messaging_context",
         namespace: PWRAGENT_TOOL_NAMESPACE,
@@ -117,6 +123,7 @@ export function resolveAgentToolCatalogs(params: {
     {
       id: "thread_orchestration",
       dynamicTools: threadOrchestrationDynamicTools,
+      router: threadOrchestrationRouter,
       summary: {
         id: "thread_orchestration",
         namespace: PWRAGENT_TOOL_NAMESPACE,
