@@ -67,7 +67,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const request: WriteDesktopSettingsConfigRequest = { patch };
         const response = await desktopApi.writeSettingsConfig(request);
         setSnapshot(response.snapshot);
-        if (patch.models?.codex?.path !== undefined) {
+        if (
+          patch.models?.codex?.path !== undefined
+          || patch.acpAgents !== undefined
+        ) {
           window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
         }
         return true;

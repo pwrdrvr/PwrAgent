@@ -373,6 +373,18 @@ describe("settings ipc", () => {
         },
       },
     );
+    await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
+      {},
+      {
+        patch: {
+          acpAgents: {
+            gemini: {
+              enabled: false,
+            },
+          },
+        },
+      },
+    );
     await handlers.get(SETTINGS_CLEAR_SECRET_CHANNEL)?.(
       {},
       {
@@ -380,7 +392,7 @@ describe("settings ipc", () => {
       },
     );
 
-    expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(2);
+    expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(3);
   });
 
   it("does not run the saved Codex path when discovery rejected it", async () => {

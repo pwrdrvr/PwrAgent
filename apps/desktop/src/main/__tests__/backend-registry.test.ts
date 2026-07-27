@@ -2418,6 +2418,7 @@ describe("DesktopBackendRegistry", () => {
       codexClient: new MockBackendClient({}),
       grokClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
+      isAcpAgentEnabled: () => true,
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: "acp:gemini",
@@ -2516,6 +2517,7 @@ describe("DesktopBackendRegistry", () => {
       grokClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
+      isAcpAgentEnabled: () => true,
       discoverLocalAcpAgents: async () => [
         {
           backendId: "acp:gemini",
@@ -2609,6 +2611,83 @@ describe("DesktopBackendRegistry", () => {
       await registry.close();
       localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockReset();
       localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([]);
+      if (previousHome === undefined) {
+        delete process.env.PWRAGENT_HOME;
+      } else {
+        process.env.PWRAGENT_HOME = previousHome;
+      }
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("omits disabled persisted ACP agents from backend pickers", async () => {
+    const tempRoot = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-backend-registry-"),
+    );
+    const previousHome = process.env.PWRAGENT_HOME;
+    const profileDir = path.join(tempRoot, "profiles", "default");
+    await mkdir(profileDir, { recursive: true });
+    await writeFile(
+      path.join(profileDir, "config.toml"),
+      [
+        "[acp_agents.gemini]",
+        "enabled = false",
+        "",
+      ].join("\n"),
+    );
+    process.env.PWRAGENT_HOME = tempRoot;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 1000,
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([
+        {
+          backendId: "acp:gemini",
+          sessionId: "persisted-session",
+          title: "Existing Gemini thread",
+          cwd: "/repo/project",
+          createdAt: 1000,
+          updatedAt: 2000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ]),
+      discoverLocalAcpAgents: async () => [],
+    });
+
+    try {
+      const response = await registry.listBackends({
+        includeUnavailable: true,
+      });
+
+      expect(
+        response.backends.some((backend) => backend.kind === "acp:gemini"),
+      ).toBe(false);
+      await expect(
+        registry.listThreads({ backend: "acp:gemini" }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          id: "persisted-session",
+          source: "acp:gemini",
+        }),
+      ]);
+    } finally {
+      await registry.close();
       if (previousHome === undefined) {
         delete process.env.PWRAGENT_HOME;
       } else {
