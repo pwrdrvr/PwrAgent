@@ -21,7 +21,7 @@ import {
   type AcpBackendId,
   buildThreadMarkdownLink,
   buildThreadUrl,
-  estimateOpenAiTokenUsageCost,
+  estimateTokenUsageCost,
   formatTokenUsageUsd,
   isToolManagedWorktreePath,
   resolveOpenAiPricingServiceTier,
@@ -3264,7 +3264,7 @@ function estimateTaskMonitorUsageCost(params: {
   serviceTier?: string;
   uncachedInputTokens: number;
 }): { model: string; totalUsd: number } | undefined {
-  const cost = estimateOpenAiTokenUsageCost(params);
+  const cost = estimateTokenUsageCost(params);
   return cost ? { model: cost.model, totalUsd: cost.totalUsd } : undefined;
 }
 
@@ -3320,7 +3320,7 @@ function buildTaskMonitorUsageLine(params: {
     tokenUsage.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
   );
   const model = params.model ?? params.usage.model ?? params.usage.cost?.model;
-  const cost = estimateOpenAiTokenUsageCost({
+  const cost = estimateTokenUsageCost({
     cachedInputTokens,
     fastMode: params.fastMode,
     model,
@@ -3539,7 +3539,7 @@ function buildLiveThreadUsageLine(params: {
   const cumulativeTokens = params.cumulativeTokenUsage
     ? normalizeTaskMonitorPricingTokens(params.cumulativeTokenUsage)
     : undefined;
-  const cost = estimateOpenAiTokenUsageCost({
+  const cost = estimateTokenUsageCost({
     cachedInputTokens,
     fastMode: params.fastMode,
     model: params.model,

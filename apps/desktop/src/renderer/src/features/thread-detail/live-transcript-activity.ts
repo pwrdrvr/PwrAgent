@@ -1,5 +1,5 @@
 import {
-  estimateOpenAiTokenUsageCost,
+  estimateTokenUsageCost,
   formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
   formatTokenUsageStandardRateSuffix,
@@ -278,8 +278,7 @@ export function buildTokenUsageActivityEntry(params: {
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
   const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
   const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
-  const billedOutputTokens = outputTokens + reasoningOutputTokens;
-  const cost = estimateOpenAiTokenUsageCost({
+  const cost = estimateTokenUsageCost({
     cachedInputTokens,
     fastMode: params.fastMode,
     model: params.model,
@@ -288,6 +287,9 @@ export function buildTokenUsageActivityEntry(params: {
     serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
+  const billedOutputTokens = cost?.outputTokensIncludeReasoning
+    ? outputTokens
+    : outputTokens + reasoningOutputTokens;
   const summaryParts = [
     `${formatTokenCount(uncachedInputTokens)} uncached in`,
     `${formatTokenCount(cachedInputTokens)} cached`,

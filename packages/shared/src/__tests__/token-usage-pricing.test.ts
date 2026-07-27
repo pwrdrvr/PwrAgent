@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   estimateOpenAiCodexCreditUsage,
   estimateOpenAiTokenUsageCost,
+  estimateTokenUsageCost,
   listOpenAiTokenUsagePricingRates,
+  listTokenUsagePricingRates,
   resolveOpenAiPricingServiceTier,
 } from "../token-usage-pricing";
 
@@ -202,6 +204,36 @@ describe("token usage pricing", () => {
     ).toBeUndefined();
   });
 
+  it("prices the Grok ACP build model alias with the Grok 4.5 rate", () => {
+    const cost = estimateTokenUsageCost({
+      at: Date.UTC(2026, 6, 26),
+      cachedInputTokens: 11_136,
+      model: "grok-4.5-build",
+      outputTokens: 45,
+      reasoningOutputTokens: 28,
+      uncachedInputTokens: 10_072,
+    });
+
+    expect(cost).toMatchObject({
+      cachedInputCostMicros: 3_341,
+      catalogId: "xai-api",
+      catalogVersion: "2026-07-17",
+      displayName: "Grok 4.5 Standard",
+      inputUsdPerMillion: 2,
+      cachedInputUsdPerMillion: 0.3,
+      model: "grok-4.5-build",
+      outputCostMicros: 270,
+      outputTokensIncludeReasoning: true,
+      outputUsdPerMillion: 6,
+      provider: "xai",
+      rateId: "xai:2026-07-17:grok-4.5:standard",
+      serviceTier: "standard",
+      totalCostMicros: 23_755,
+      totalUsd: 0.023755,
+      uncachedInputCostMicros: 20_144,
+    });
+  });
+
   it("returns undefined for unsupported models or service tiers", () => {
     expect(
       estimateOpenAiTokenUsageCost({
@@ -241,6 +273,19 @@ describe("token usage pricing", () => {
         provider: "openai",
         rateId: "openai:2026-07-09:gpt-5.6-luna:priority",
         serviceTier: "priority",
+      }),
+    );
+    expect(listTokenUsagePricingRates()).toContainEqual(
+      expect.objectContaining({
+        cachedInputUsdPerMillion: 0.3,
+        catalogId: "xai-api",
+        catalogVersion: "2026-07-17",
+        displayName: "Grok 4.5 Standard",
+        inputUsdPerMillion: 2,
+        model: "grok-4.5",
+        outputUsdPerMillion: 6,
+        provider: "xai",
+        rateId: "xai:2026-07-17:grok-4.5:standard",
       }),
     );
   });

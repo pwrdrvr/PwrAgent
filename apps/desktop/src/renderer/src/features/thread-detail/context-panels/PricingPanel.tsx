@@ -9,7 +9,7 @@ import type {
 } from "@pwragent/shared";
 import {
   estimateOpenAiCodexCreditUsage,
-  estimateOpenAiTokenUsageCost,
+  estimateTokenUsageCost,
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
 import { useEffect, useState } from "react";
@@ -765,7 +765,7 @@ function buildEstimatedHistoricalGapLine(params: {
   anchorLine: ThreadUsageLineRecord;
   gapTokens: PricingTokenBreakdown;
 }): PricingUsageLine | undefined {
-  const cost = estimateOpenAiTokenUsageCost({
+  const cost = estimateTokenUsageCost({
     at: params.anchorLine.createdAt,
     cachedInputTokens: params.gapTokens.cachedInputTokens,
     fastMode: false,
