@@ -28,6 +28,8 @@ function createComposerDraftStore(): ComposerDraftStore {
     getPendingSteer: vi.fn(),
     getQueuedTurn: (scopeKey) => queuedTurns.get(scopeKey)?.[0],
     getQueuedTurns: (scopeKey) => queuedTurns.get(scopeKey) ?? [],
+    getQueuedTurnVersion: () => 0,
+    subscribeQueuedTurns: () => () => {},
     removeQueuedTurnAt: (scopeKey, index) => {
       const current = queuedTurns.get(scopeKey) ?? [];
       const next = [...current];
@@ -151,12 +153,14 @@ describe("useQueuedTurnRelease", () => {
         id: "queued-1",
         text: "First background reply",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "First background reply" }],
       },
       {
         id: "queued-2",
         text: "Second background reply",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Second background reply" }],
       },
     ]);
@@ -235,12 +239,14 @@ describe("useQueuedTurnRelease", () => {
         id: "queued-1",
         text: "First background reply",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "First background reply" }],
       },
       {
         id: "queued-2",
         text: "Second background reply",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Second background reply" }],
       },
     ]);
@@ -311,6 +317,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-idle",
       text: "Idle status reply",
       imageAttachments: [],
+      fileAttachments: [],
       input: [{ type: "text", text: "Idle status reply" }],
     });
 
@@ -382,6 +389,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-scheduled",
       text: "Future background reply",
       imageAttachments: [],
+      fileAttachments: [],
       scheduledSendAt: Date.now() + 15 * 60_000,
       input: [{ type: "text", text: "Future background reply" }],
     });
@@ -464,6 +472,7 @@ describe("useQueuedTurnRelease", () => {
         id: "queued-later",
         text: "Later background reply",
         imageAttachments: [],
+        fileAttachments: [],
         scheduledSendAt: Date.now() + 2 * 60 * 60_000,
         input: [{ type: "text", text: "Later background reply" }],
       },
@@ -471,6 +480,7 @@ describe("useQueuedTurnRelease", () => {
         id: "queued-sooner",
         text: "Sooner background reply",
         imageAttachments: [],
+        fileAttachments: [],
         scheduledSendAt: Date.now() + 15 * 60_000,
         input: [{ type: "text", text: "Sooner background reply" }],
       },
@@ -540,6 +550,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-review",
       text: "/review main",
       imageAttachments: [],
+      fileAttachments: [],
       reviewCommand: {
         cwd: "/repo/selected-worktree",
         displayText: "Review changes against main",
@@ -631,6 +642,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-review",
       text: "/review main",
       imageAttachments: [],
+      fileAttachments: [],
       reviewCommand: {
         displayText: "Review changes against main",
         target: {
@@ -712,12 +724,14 @@ describe("useQueuedTurnRelease", () => {
         id: "queued-1",
         text: "First background reply",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "First background reply" }],
       },
       {
         id: "queued-2",
         text: "Second background reply",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Second background reply" }],
       },
     ]);
@@ -799,6 +813,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-branch",
       text: "Guarded background reply",
       imageAttachments: [],
+      fileAttachments: [],
       input: [{ type: "text", text: "Guarded background reply" }],
     });
 
@@ -872,6 +887,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-review",
       text: "/review main",
       imageAttachments: [],
+      fileAttachments: [],
       reviewCommand: {
         cwd: "/repo/background-worktree",
         displayText: "Review changes against main",
@@ -956,6 +972,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-review",
       text: "/review main",
       imageAttachments: [],
+      fileAttachments: [],
       reviewCommand: {
         cwd: "/repo/polled-worktree",
         displayText: "Review changes against main",
@@ -1036,6 +1053,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-review",
       text: "/review main",
       imageAttachments: [],
+      fileAttachments: [],
       reviewCommand: {
         cwd: "/repo/retained-worktree",
         displayText: "Review changes against main",
@@ -1117,6 +1135,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-review",
       text: "/review main",
       imageAttachments: [],
+      fileAttachments: [],
       reviewCommand: {
         cwd: "/repo/retained-worktree",
         displayText: "Review changes against main",
@@ -1207,6 +1226,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-review",
       text: "/review main",
       imageAttachments: [],
+      fileAttachments: [],
       reviewCommand: {
         cwd: "/repo/polled-worktree",
         displayText: "Review changes against main",
@@ -1299,6 +1319,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-branch",
       text: "Release background reply",
       imageAttachments: [],
+      fileAttachments: [],
       input: [{ type: "text", text: "Release background reply" }],
     });
 
@@ -1372,6 +1393,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-branch",
       text: "Release background reply",
       imageAttachments: [],
+      fileAttachments: [],
       input: [{ type: "text", text: "Release background reply" }],
     });
 
@@ -1459,6 +1481,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-old",
       text: "Stale background reply",
       imageAttachments: [],
+      fileAttachments: [],
       input: [{ type: "text", text: "Stale background reply" }],
     });
 
@@ -1503,6 +1526,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-new",
       text: "Current background reply",
       imageAttachments: [],
+      fileAttachments: [],
       input: [{ type: "text", text: "Current background reply" }],
     });
     await act(async () => {
@@ -1539,6 +1563,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-1",
       text: "Focused reply",
       imageAttachments: [],
+      fileAttachments: [],
       input: [{ type: "text", text: "Focused reply" }],
     });
 
@@ -1611,6 +1636,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-review",
       text: "/review main",
       imageAttachments: [],
+      fileAttachments: [],
       reviewCommand: {
         cwd: "/repo/polled-worktree",
         displayText: "Review changes against main",
@@ -1669,6 +1695,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-review",
       text: "/review main",
       imageAttachments: [],
+      fileAttachments: [],
       reviewCommand: {
         cwd: "/repo/polled-worktree",
         displayText: "Review changes against main",
@@ -1756,6 +1783,7 @@ describe("useQueuedTurnRelease", () => {
       id: "queued-review",
       text: "/review main",
       imageAttachments: [],
+      fileAttachments: [],
       reviewCommand: {
         cwd: "/repo/polled-worktree",
         displayText: "Review changes against main",

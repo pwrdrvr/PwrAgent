@@ -9,6 +9,7 @@ import type {
 import {
   buildThreadIdentityKey,
   compareThreadsByCreatedAtDesc,
+  isSubthreadLaunchpadKey,
   isToolManagedWorktreePath,
 } from "@pwragent/shared";
 
@@ -578,6 +579,17 @@ export function buildDirectorySummaries(params: {
 
   for (const [directoryKey, launchpad] of Object.entries(params.launchpadsByKey ?? {})) {
     if (!launchpad || !hasPersistableLaunchpadState(launchpad)) {
+      continue;
+    }
+    // Sub-thread launchpads (`subthread:<source>:<parent>:<mode>`) are
+    // thread-scoped drafts composed inline under their parent thread — they are
+    // never a project directory. Synthesizing one into a Directories-lens row
+    // duplicated the parent's real directory as a phantom entry that survived
+    // cancelling ("create sub-thread" → type → cancel/navigate away). The live,
+    // open composer resolves its draft from the renderer's `localLaunchpads`
+    // merge, so skipping the persisted overlay row here only drops the leaked /
+    // abandoned copies and never hides an active composer.
+    if (isSubthreadLaunchpadKey(directoryKey)) {
       continue;
     }
     const launchpadPath = launchpad.directoryPath ?? pathFromDirectoryKey(directoryKey);

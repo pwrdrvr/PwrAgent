@@ -423,6 +423,242 @@ describe("applyTomlEdits", () => {
   });
 });
 
+describe("applyTomlEdits with string-array cells in table-array rows", () => {
+  it("writes a [[section]] row containing a string-array cell", () => {
+    const result = applyTomlEdits("[messaging.rbac]\n", [
+      {
+        op: "setTableArray",
+        path: ["messaging", "rbac", "roles"],
+        value: [
+          {
+            id: "role_oncall",
+            name: "On-call",
+            permissions: ["thread.status.view", "message.reply"],
+          },
+        ],
+      },
+    ]);
+
+    expect(result).toBe(
+      [
+        "[messaging.rbac]",
+        "",
+        "[[messaging.rbac.roles]]",
+        'id = "role_oncall"',
+        'name = "On-call"',
+        'permissions = ["thread.status.view", "message.reply"]',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("writes a row mixing scalar cells and two string-array cells", () => {
+    const result = applyTomlEdits("[messaging.rbac]\n", [
+      {
+        op: "setTableArray",
+        path: ["messaging", "rbac", "attachments"],
+        value: [
+          {
+            platform: "slack",
+            subject_kind: "actor",
+            actor_id: "U123",
+            role_ids: ["admin", "role_oncall"],
+            permissions: ["message.reply", "approval.respond.default"],
+          },
+        ],
+      },
+    ]);
+
+    expect(result).toBe(
+      [
+        "[messaging.rbac]",
+        "",
+        "[[messaging.rbac.attachments]]",
+        'platform = "slack"',
+        'subject_kind = "actor"',
+        'actor_id = "U123"',
+        'role_ids = ["admin", "role_oncall"]',
+        'permissions = ["message.reply", "approval.respond.default"]',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("writes an empty array cell as []", () => {
+    const result = applyTomlEdits("[messaging.rbac]\n", [
+      {
+        op: "setTableArray",
+        path: ["messaging", "rbac", "attachments"],
+        value: [{ platform: "slack", role_ids: [] }],
+      },
+    ]);
+
+    expect(result).toBe(
+      [
+        "[messaging.rbac]",
+        "",
+        "[[messaging.rbac.attachments]]",
+        'platform = "slack"',
+        "role_ids = []",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("escapes quotes, backslashes, and preserves unicode in array cells", () => {
+    const values = ['has "quotes"', "back\\slash", "café ☃ 日本"];
+    const written = applyTomlEdits("[messaging.rbac]\n", [
+      {
+        op: "setTableArray",
+        path: ["messaging", "rbac", "roles"],
+        value: [{ id: "r1", permissions: values }],
+      },
+    ]);
+
+    // Mirrors the top-level string-array escaping the editor already emits.
+    expect(written).toContain(
+      'permissions = ["has \\"quotes\\"", "back\\\\slash", "café ☃ 日本"]',
+    );
+
+    const reparsed = parseTomlTables(written, "/x");
+    const roles = reparsed["messaging.rbac"].roles as Record<
+      string,
+      string | string[]
+    >[];
+    expect(roles[0].permissions).toEqual(values);
+  });
+
+  it("writes multiple rows in one array-of-tables, each with array cells", () => {
+    const result = applyTomlEdits("[messaging.rbac]\n", [
+      {
+        op: "setTableArray",
+        path: ["messaging", "rbac", "roles"],
+        value: [
+          { id: "role_a", permissions: ["p1"] },
+          { id: "role_b", permissions: ["p2", "p3"] },
+        ],
+      },
+    ]);
+
+    expect(result).toBe(
+      [
+        "[messaging.rbac]",
+        "",
+        "[[messaging.rbac.roles]]",
+        'id = "role_a"',
+        'permissions = ["p1"]',
+        "",
+        "[[messaging.rbac.roles]]",
+        'id = "role_b"',
+        'permissions = ["p2", "p3"]',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("round-trips the RBAC-shaped roles + attachments document", () => {
+    const source = [
+      "[[messaging.rbac.roles]]",
+      'id = "role_oncall"',
+      'name = "On-call"',
+      'permissions = ["thread.status.view", "message.reply", "approval.respond.default"]',
+      "",
+      "[[messaging.rbac.attachments]]",
+      'platform = "slack"',
+      'subject_kind = "actor"',
+      'actor_id = "U123"',
+      'role_ids = ["admin", "role_oncall"]',
+      "",
+      "[[messaging.rbac.attachments]]",
+      'platform = "slack"',
+      'subject_kind = "bucket"',
+      'bucket = "channel_any_user"',
+      'scope_id = "C123"',
+      'role_ids = ["chat_user"]',
+      "",
+    ].join("\n");
+
+    const parsed = parseTomlTables(source, "/x");
+    const rbac = parsed["messaging.rbac"] as Record<
+      string,
+      Record<string, string | string[]>[]
+    >;
+
+    const reserialized = applyTomlEdits("", [
+      {
+        op: "setTableArray",
+        path: ["messaging", "rbac", "roles"],
+        value: rbac.roles,
+      },
+      {
+        op: "setTableArray",
+        path: ["messaging", "rbac", "attachments"],
+        value: rbac.attachments,
+      },
+    ]);
+
+    const reparsed = parseTomlTables(reserialized, "/x");
+    expect(reparsed).toEqual(parsed);
+  });
+
+  it("preserves unrelated sections and comments when adding an array-cell table-array", () => {
+    const source = [
+      "# top-level config",
+      "[general]",
+      'name = "My App"',
+      "count = 3",
+      "",
+      "# legacy authorized users (scalar table-array from an older build)",
+      "[[messaging.telegram.authorized_users]]",
+      'id = "111"',
+      'display_name = "Harold"',
+      "",
+    ].join("\n");
+
+    const result = applyTomlEdits(source, [
+      {
+        op: "setTableArray",
+        path: ["messaging", "rbac", "roles"],
+        value: [{ id: "r1", permissions: ["p1"] }],
+      },
+    ]);
+
+    // Everything already in the file is byte-stable — the new block is appended.
+    expect(result.startsWith(source)).toBe(true);
+    expect(result).toBe(
+      source
+      + [
+        "",
+        "[[messaging.rbac.roles]]",
+        'id = "r1"',
+        'permissions = ["p1"]',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("deletes a table-array whose rows contained array cells, leaving other sections intact", () => {
+    const source = [
+      "[[messaging.rbac.roles]]",
+      'id = "r1"',
+      'permissions = ["p1", "p2"]',
+      "",
+      "[messaging.telegram]",
+      "enabled = true",
+      "",
+    ].join("\n");
+
+    const result = applyTomlEdits(source, [
+      { op: "deleteTableArray", path: ["messaging", "rbac", "roles"] },
+    ]);
+
+    expect(result).not.toContain("[[messaging.rbac.roles]]");
+    expect(result).not.toContain("permissions");
+    expect(result).toContain("[messaging.telegram]");
+    expect(result).toContain("enabled = true");
+  });
+});
+
 describe("parseTomlTables", () => {
   it("parses float values", () => {
     const tables = parseTomlTables('[s]\nratio = 1.5\nneg = -2.25\n', "/x");
@@ -491,6 +727,38 @@ describe("parseTomlTables", () => {
     expect(tables["messaging.telegram"].authorized_users).toEqual([
       { id: "8460800771", display_name: "Harold" },
       { id: "1234567890", display_name: "" },
+    ]);
+  });
+
+  it("parses string-array cells inside array-of-tables rows", () => {
+    const tables = parseTomlTables(
+      [
+        "[[messaging.rbac.attachments]]",
+        'platform = "slack"',
+        'subject_kind = "actor"',
+        'actor_id = "U123"',
+        'role_ids = ["admin", "role_oncall"]',
+        "",
+        "[[messaging.rbac.attachments]]",
+        'platform = "slack"',
+        'subject_kind = "bucket"',
+        'role_ids = []',
+      ].join("\n"),
+      "/x",
+    );
+
+    expect(tables["messaging.rbac"].attachments).toEqual([
+      {
+        platform: "slack",
+        subject_kind: "actor",
+        actor_id: "U123",
+        role_ids: ["admin", "role_oncall"],
+      },
+      {
+        platform: "slack",
+        subject_kind: "bucket",
+        role_ids: [],
+      },
     ]);
   });
 

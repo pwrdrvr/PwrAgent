@@ -99,6 +99,42 @@ vi.mock("../window-show-thread", () => ({
   requestShowThread: requestShowThreadMock,
 }));
 
+type DynamicToolTestSpec = {
+  name: string;
+  description?: string;
+  inputSchema?: {
+    required?: string[];
+  };
+};
+
+function pwragentDynamicTools(dynamicTools: unknown): DynamicToolTestSpec[] {
+  if (!Array.isArray(dynamicTools)) {
+    return [];
+  }
+  const namespace = dynamicTools.find(
+    (tool): tool is { type: "namespace"; name: string; tools: unknown[] } =>
+      Boolean(tool)
+      && typeof tool === "object"
+      && (tool as { type?: unknown }).type === "namespace"
+      && (tool as { name?: unknown }).name === "pwragent"
+      && Array.isArray((tool as { tools?: unknown }).tools),
+  );
+  return namespace?.tools as DynamicToolTestSpec[] ?? [];
+}
+
+function expectPwragentDynamicTools(dynamicTools: unknown, names: string[]): void {
+  expect(pwragentDynamicTools(dynamicTools)).toEqual(
+    expect.arrayContaining(
+      names.map((name) =>
+        expect.objectContaining({
+          type: "function",
+          name,
+        }),
+      ),
+    ),
+  );
+}
+
 // These tests pre-date the agent-core Grok experimental flag and exercise
 // the direct xAI HTTP provider's behavior (model warm-up, availability
 // reporting, etc.). The flag now defaults to off; enable it for this file
@@ -3327,6 +3363,166 @@ describe("DesktopBackendRegistry", () => {
     expect(acpClient.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("applies Grok ACP reasoning effort without racing turn startup", async () => {
+    const sessions: AcpSessionMetadata[] = [];
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const setRuntimeOption = vi.fn(
+      async (params: {
+        value: string;
+        reasoningEffort?: string;
+      }): Promise<BackendAcpSessionRuntimeState> => ({
+        currentModelId: params.value,
+        reasoningEffort: params.reasoningEffort,
+        updatedAt: 2000,
+      }),
+    );
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async (params: {
+        cwd?: string;
+        executionMode: ThreadExecutionMode;
+        acpRuntime?: BackendAcpSessionRuntimeState;
+      }) => {
+        const metadata: AcpSessionMetadata = {
+          backendId: acpBackendId,
+          sessionId: "grok-session",
+          title: "ACP session",
+          cwd: params.cwd,
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: params.executionMode,
+          acpRuntime: params.acpRuntime,
+          status: "idle",
+        };
+        sessions.push(metadata);
+        return metadata;
+      }),
+      startPrompt: vi.fn((params: {
+        sessionId: string;
+        turnId?: string;
+      }) => ({
+        sessionId: params.sessionId,
+        turnId: params.turnId ?? "grok-turn",
+      })),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      setRuntimeOption,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "grok",
+          name: "Grok",
+          distributionKind: "local",
+          distributionSource: "grok --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-grok-cli",
+          installedAt: 1000,
+          updatedAt: 1000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            checkedAt: 1000,
+            models: {
+              currentModelId: "grok-4.5",
+              availableModels: [
+                {
+                  id: "grok-4.5",
+                  label: "Grok 4.5",
+                  defaultReasoningEffort: "high",
+                  reasoningEfforts: ["low", "medium", "high"],
+                  supportsReasoning: true,
+                },
+              ],
+            },
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startThread({
+      backend: acpBackendId,
+      cwd: "/repo/project",
+      model: "grok-4.5",
+      reasoningEffort: "medium",
+    });
+
+    expect(setRuntimeOption).toHaveBeenLastCalledWith({
+      sessionId: "grok-session",
+      source: "model",
+      optionId: "model",
+      value: "grok-4.5",
+      reasoningEffort: "medium",
+    });
+
+    await registry.setThreadModelSettings({
+      backend: acpBackendId,
+      threadId: "grok-session",
+      reasoningEffort: "low",
+    });
+
+    expect(setRuntimeOption).toHaveBeenLastCalledWith({
+      sessionId: "grok-session",
+      source: "model",
+      optionId: "model",
+      value: "grok-4.5",
+      reasoningEffort: "low",
+    });
+
+    const turnStartupReachedEnsureSession = createDeferred<void>();
+    const releaseTurnStartup = createDeferred<void>();
+    acpClient.ensureSession.mockImplementationOnce(async () => {
+      turnStartupReachedEnsureSession.resolve();
+      await releaseTurnStartup.promise;
+    });
+    const turnPromise = registry.startTurn({
+      backend: acpBackendId,
+      threadId: "grok-session",
+      input: [{ type: "text", text: "start work" }],
+    });
+    await turnStartupReachedEnsureSession.promise;
+
+    const settingsPromise = registry.setThreadModelSettings({
+      backend: acpBackendId,
+      threadId: "grok-session",
+      reasoningEffort: "high",
+    });
+    await flushAsync();
+    expect(acpClient.startPrompt).not.toHaveBeenCalled();
+
+    releaseTurnStartup.resolve();
+    await turnPromise;
+    const runtimeUpdatesAfterPromptStarted = setRuntimeOption.mock.calls.length;
+    await settingsPromise;
+
+    expect(acpClient.startPrompt).toHaveBeenCalledTimes(1);
+    expect(setRuntimeOption).toHaveBeenCalledTimes(
+      runtimeUpdatesAfterPromptStarted,
+    );
+
+    await registry.close();
+  });
+
   it("runs Kimi ACP execution mode changes through slash control prompts", async () => {
     const sessions: AcpSessionMetadata[] = [];
     const acpBackendId = "acp:kimi" as AcpBackendId;
@@ -4004,6 +4200,49 @@ describe("DesktopBackendRegistry", () => {
       },
     });
     expect(response.turnId).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("preserves the project Working Updates override after materialization", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/project",
+          workMode: "local" as const,
+        })),
+      } as never,
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/project",
+      launchpad: {
+        directoryKey: "directory:/repo/project",
+        directoryKind: "directory",
+        directoryLabel: "project",
+        directoryPath: "/repo/project",
+        backend: "codex",
+        executionMode: "default",
+        messagingToolUpdateMode: "show_more",
+        prompt: "Fix bug",
+        workMode: "local",
+        createdAt: 1000,
+        updatedAt: 2000,
+      },
+    });
+
+    const resetLaunchpad = await overlayStore.getDirectoryLaunchpad({
+      directoryKey: "directory:/repo/project",
+    });
+    expect(resetLaunchpad).toMatchObject({
+      messagingToolUpdateMode: "show_more",
+      prompt: "",
+    });
+    expect(resetLaunchpad?.settingsTouchedAt).toBeUndefined();
 
     await registry.close();
   });
@@ -5806,48 +6045,16 @@ script = "echo setup"
 
     await registry.startThread({ backend: "codex" });
 
-    const dynamicTools = codexClient.lastStartThreadParams?.dynamicTools as
-      | Array<{ namespace: string; name: string }>
-      | undefined;
-    expect(dynamicTools).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "list_automations",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "manage_pwragent",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "search_threads",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "read_thread",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "get_current_messaging_surface",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "handoff_task",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "send_message_to_thread",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "create_monitor_delegation",
-        }),
-      ]),
-    );
-    expect(new Set(dynamicTools?.map((tool) => tool.namespace))).toEqual(
-      new Set(["pwragent"]),
-    );
+    expectPwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools, [
+      "list_automations",
+      "manage_pwragent",
+      "search_threads",
+      "read_thread",
+      "get_current_messaging_surface",
+      "handoff_task",
+      "send_message_to_thread",
+      "create_monitor_delegation",
+    ]);
 
     await registry.close();
   });
@@ -5877,113 +6084,35 @@ script = "echo setup"
       },
     });
 
-    expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "list_automations",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "get_automation_run_artifact",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "create_monitor_delegation",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "manage_pwragent",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "search_threads",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "read_thread",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "get_thread_status",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "mutate_thread",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "get_current_messaging_surface",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "attach_thread_here",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "handoff_task",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "send_message_to_thread",
-        }),
-      ]),
-    );
-    expect(
-      new Set(
-        (codexClient.lastStartThreadParams?.dynamicTools as Array<{
-          namespace: string;
-        }>).map((tool) => tool.namespace),
-      ),
-    ).toEqual(
-      new Set(["pwragent"]),
-    );
-    expect(
-      (codexClient.lastStartThreadParams?.dynamicTools as Array<{
-        namespace: string;
-        name: string;
-      }> | undefined)
-        ?.filter((tool) => tool.name === "create_monitor_delegation")
-        .map((tool) => tool.name),
-    ).toEqual(["create_monitor_delegation"]);
-    const getThreadStatusTool = (
-      codexClient.lastStartThreadParams?.dynamicTools as Array<{
-        description?: string;
-        inputSchema?: {
-          required?: string[];
-        };
-        name: string;
-        namespace: string;
-      }> | undefined
-    )?.find((tool) => tool.name === "get_thread_status");
+    const dynamicTools = codexClient.lastStartThreadParams?.dynamicTools;
+    expectPwragentDynamicTools(dynamicTools, [
+      "list_automations",
+      "get_automation_run_artifact",
+      "create_monitor_delegation",
+      "manage_pwragent",
+      "search_threads",
+      "read_thread",
+      "get_thread_status",
+      "mutate_thread",
+      "get_current_messaging_surface",
+      "attach_thread_here",
+      "handoff_task",
+      "send_message_to_thread",
+    ]);
+    const getThreadStatusTool = pwragentDynamicTools(dynamicTools)
+      .find((tool) => tool.name === "get_thread_status");
     expect(getThreadStatusTool?.description).toContain(
       "Omit backend and threadId to inspect the current thread",
     );
     expect(getThreadStatusTool?.inputSchema?.required ?? []).toEqual([]);
-    const attachPullRequestTool = (
-      codexClient.lastStartThreadParams?.dynamicTools as Array<{
-        description?: string;
-        inputSchema?: {
-          required?: string[];
-        };
-        name: string;
-        namespace: string;
-      }> | undefined
-    )?.find((tool) => tool.name === "attach_thread_pull_request");
+    const attachPullRequestTool = pwragentDynamicTools(dynamicTools)
+      .find((tool) => tool.name === "attach_thread_pull_request");
     expect(attachPullRequestTool?.description).toContain(
       "Omit backend and threadId to attach to the current thread",
     );
     expect(attachPullRequestTool?.inputSchema?.required ?? []).toEqual([]);
-    const checkPullRequestStatusTool = (
-      codexClient.lastStartThreadParams?.dynamicTools as Array<{
-        description?: string;
-        inputSchema?: {
-          required?: string[];
-        };
-        name: string;
-        namespace: string;
-      }> | undefined
-    )?.find((tool) => tool.name === "check_thread_pull_request_status");
+    const checkPullRequestStatusTool = pwragentDynamicTools(dynamicTools)
+      .find((tool) => tool.name === "check_thread_pull_request_status");
     expect(checkPullRequestStatusTool?.description).toContain(
       "Omit backend and threadId to check the current thread",
     );
@@ -6002,7 +6131,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("advertises PwrAgent dynamic tools when continuing existing Codex threads", async () => {
+  it("does not attempt to refresh dynamic tools on existing Codex threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
@@ -6024,55 +6153,12 @@ script = "echo setup"
       input: [{ type: "text", text: "continue" }],
     });
 
-    expect(codexClient.lastStartTurnParams?.dynamicTools).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "list_automations",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "manage_pwragent",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "search_threads",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "read_thread",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "get_current_messaging_surface",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "handoff_task",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "send_message_to_thread",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "create_monitor_delegation",
-        }),
-      ]),
-    );
-    expect(
-      (codexClient.lastStartTurnParams?.dynamicTools as Array<{
-        namespace: string;
-        name: string;
-      }> | undefined)
-        ?.filter((tool) => tool.name === "create_monitor_delegation")
-        .map((tool) => tool.name),
-    ).toEqual(["create_monitor_delegation"]);
+    expect(codexClient.lastStartTurnParams?.dynamicTools).toBeUndefined();
 
     await registry.close();
   });
 
-  it("preserves Agent dynamic tools when continuing existing Agent Codex threads", async () => {
+  it("relies on persisted dynamic tools when continuing Agent Codex threads", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
@@ -6110,34 +6196,7 @@ script = "echo setup"
       input: [{ type: "text", text: "continue" }],
     });
 
-    expect(codexClient.lastStartTurnParams?.dynamicTools).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "list_automations",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "search_threads",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "manage_pwragent",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "attach_thread_here",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "handoff_task",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "create_monitor_delegation",
-        }),
-      ]),
-    );
+    expect(codexClient.lastStartTurnParams?.dynamicTools).toBeUndefined();
 
     await registry.close();
   });
@@ -8232,34 +8291,14 @@ script = "pnpm install"
       },
     });
 
-    expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "list_automations",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "search_threads",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "manage_pwragent",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "get_current_messaging_surface",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "attach_thread_here",
-        }),
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "handoff_task",
-        }),
-      ]),
-    );
+    expectPwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools, [
+      "list_automations",
+      "search_threads",
+      "manage_pwragent",
+      "get_current_messaging_surface",
+      "attach_thread_here",
+      "handoff_task",
+    ]);
 
     await registry.close();
   });
@@ -8369,13 +8408,10 @@ script = "pnpm install"
       fastMode: undefined,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
-      dynamicTools: expect.arrayContaining([
-        expect.objectContaining({
-          namespace: "pwragent",
-          name: "create_monitor_delegation",
-        }),
-      ]),
     });
+    expectPwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools, [
+      "create_monitor_delegation",
+    ]);
 
     await registry.close();
   });
@@ -11588,9 +11624,12 @@ command = "pnpm dev"
       },
     });
 
+    // Canonical thread-identity keys: the ACP backend kind ("acp:grok") is
+    // URI-encoded so the quit dialog can split backend from thread id and link
+    // to the thread.
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 2,
-      threadIds: ["acp:grok:acp-thread-1", "codex:thread-1"],
+      threadIds: ["acp%3Agrok:acp-thread-1", "codex:thread-1"],
     });
 
     await registry.close();
@@ -15341,7 +15380,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("handles automation inspection dynamic tool calls without surfacing pending requests", async () => {
+  it("handles namespace-less legacy automation calls without surfacing pending requests", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
@@ -15398,7 +15437,7 @@ command = "pnpm dev"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_automations",
+        namespace: null,
         tool: "list_automations",
         arguments: {
           limit: 2,
@@ -16639,7 +16678,14 @@ script = "printf setup"
       handoffId: "handoff:codex:ordinary-thread:turn-1:handoff-call-1",
       threadId: "thread-1",
       groupedUnderThreadId: "ordinary-thread",
+      // The handoff result hands the model a finished link. Without this the
+      // model paraphrases `threadId` into a bare, unclickable uuid — which is
+      // exactly what this protocol exists to stop.
+      threadUrl: "pwragent://thread/thread-1?backend=codex",
     });
+    expect(handoffPayload.threadLink).toBe(
+      `[${handoffPayload.title}](pwragent://thread/thread-1?backend=codex)`,
+    );
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
@@ -19695,6 +19741,10 @@ script = "printf setup"
       threadId: "target-thread",
       turnId: "turn-1",
       promptPreview: "Please pick up the CI failure.",
+      // The model gets a finished link, not just an id to paraphrase into a
+      // bare uuid. It is told to reproduce `threadLink` verbatim.
+      threadUrl: "pwragent://thread/target-thread?backend=codex",
+      threadLink: "[target-thread](pwragent://thread/target-thread?backend=codex)",
       settings: {
         executionMode: "full-access",
         model: "gpt-5.5",
@@ -22522,7 +22572,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("creates task monitor delegations for active Codex turns", async () => {
+  it("creates task monitor delegations from namespace-less legacy calls", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
       models: TEST_TASK_MONITOR_MODELS,
@@ -22554,7 +22604,7 @@ script = "printf setup"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_task_monitors",
+        namespace: null,
         tool: "create_monitor_delegation",
         arguments: {
           task: "Watch PR #123 checks until they finish.",
@@ -22599,10 +22649,8 @@ script = "printf setup"
       sandbox: "workspace-write",
     });
     expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();
-    expect(
-      (codexClient.lastStartThreadParams?.dynamicTools as Array<{ name: string }> | undefined)
-        ?.map((tool) => tool.name),
-    ).toEqual(["inject_progress", "complete_monitoring"]);
+    expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools)
+      .map((tool) => tool.name)).toEqual(["inject_progress", "complete_monitoring"]);
     expect(codexClient.startTurnCallCount).toBe(1);
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "monitor-thread",

@@ -453,6 +453,7 @@ export type UpdateDirectoryLaunchpadRequest = {
     Pick<
       NavigationLaunchpadDraft,
       | "imageAttachments"
+      | "fileAttachments"
       | "prompt"
       | "editorDocument"
       | "backend"
@@ -462,6 +463,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "serviceTier"
       | "fastMode"
       | "acpRuntime"
+      | "messagingToolUpdateMode"
       | "workMode"
       | "branchName"
       | "parentThreadId"
@@ -601,6 +603,44 @@ export type SetCodexThreadEnvironmentResponse = {
 export type PickDirectoryFromDiskResponse =
   | { canceled: true }
   | { canceled: false; path: string };
+
+/**
+ * Result of the composer's "Add file…" reference picker. Multi-select is
+ * allowed — each picked path becomes one file-reference chip or tray
+ * attachment. Files are referenced by path only; contents are never read
+ * by the picker.
+ */
+export type PickFileFromDiskResponse =
+  | { canceled: true }
+  | { canceled: false; paths: string[] };
+
+/**
+ * Result of the composer's combined "Add file or directory…" reference
+ * picker (macOS only — Electron can combine `openFile` + `openDirectory`
+ * there; Windows/Linux dialogs cannot, so those platforms keep separate
+ * file/directory pickers). Each entry is classified main-side via
+ * `fs.stat`; unreadable paths are skipped.
+ */
+export type PickReferenceFromDiskResponse =
+  | { canceled: true }
+  | {
+      canceled: false;
+      entries: { path: string; kind: "file" | "directory" }[];
+    };
+
+/**
+ * Recently referenced files for the composer's reference picker. The main
+ * process persists a small most-recent-first list of paths (capped,
+ * deduped by path) and computes each label from the path's basename.
+ */
+export type ListRecentFileReferencesResponse = {
+  files: { label: string; path: string }[];
+};
+
+/** Fire-and-forget record of freshly committed file references. */
+export type RecordRecentFileReferencesRequest = {
+  paths: string[];
+};
 
 export type RegisterDirectoryFromDiskRequest = {
   /** Absolute path the user picked from the system dialog. */

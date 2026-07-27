@@ -158,7 +158,11 @@ export class AcpSessionReplayNormalizer {
       this.applyUserMessageChunk(update, createdAt);
     } else if (kind === "available_commands_update") {
       // Command metadata belongs in provider capabilities, not the transcript.
-    } else if (kind === "config_option_update" || kind === "current_mode_update") {
+    } else if (
+      kind === "config_option_update" ||
+      kind === "current_mode_update" ||
+      kind === "model_changed"
+    ) {
       // Runtime configuration changes belong in ACP session metadata.
     } else if (readAcpTopicTitle(update.update)) {
       // Topic updates are thread metadata, not transcript entries.

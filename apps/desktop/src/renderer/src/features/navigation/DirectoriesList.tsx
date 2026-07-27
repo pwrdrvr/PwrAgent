@@ -19,6 +19,7 @@ import {
   comparePinnedThreads,
   isPinnedDirectory,
   isPinnedThread,
+  isSubthreadLaunchpadKey,
   moveDirectoryKey,
   moveThreadKey,
   parseThreadIdentityKey,
@@ -35,11 +36,15 @@ import {
   getDropIndicatorPosition,
   type DropIndicatorState,
 } from "./drag-drop";
+import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { ThreadRow } from "./ThreadRow";
 
 type DirectoriesListProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
+  /** Thread keys with a live integrated terminal in the main process. */
+  terminalThreadKeys?: Record<string, boolean>;
   inputRequestThreadKeys?: Record<string, boolean>;
+  queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   composerSourceThreadKey?: string;
   directories: NavigationDirectorySummary[];
   selectedItemKey?: string;
@@ -133,6 +138,16 @@ function isPinnableDirectoryKind(
   return directory.kind === "directory" || directory.kind === "workspace";
 }
 
+/**
+ * Drives the row's orange "has-draft" marker. This means "you have composed
+ * something here" — typed text or attached images — and nothing else.
+ *
+ * `settingsTouchedAt` is deliberately NOT part of it. That stamp records that
+ * the user picked a model / reasoning level / access mode for this project,
+ * which is a sticky preference we keep, not an unsent draft. Including it made
+ * every project the user had ever configured look permanently half-drafted, and
+ * the marker survived Cancel because the stamp is persisted.
+ */
 function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolean {
   const launchpad = directory.launchpad;
   if (!launchpad) {
@@ -141,8 +156,7 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
 
   return (
     launchpad.prompt.trim().length > 0 ||
-    (launchpad.imageAttachments?.length ?? 0) > 0 ||
-    launchpad.settingsTouchedAt !== undefined
+    (launchpad.imageAttachments?.length ?? 0) > 0
   );
 }
 
@@ -242,24 +256,41 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const directoryDragEnabled = Boolean(
     props.onSetDirectoryPin && props.onReorderDirectoryPins,
   );
+  /**
+   * Sub-thread launchpads (`subthread:<source>:<parent>:<mode>`) are transient,
+   * thread-scoped composers rendered inline under their parent thread — never a
+   * project directory. The main-process snapshot already omits them, but the
+   * renderer's launchpad merge synthesizes a `kind: "directory"` summary for the
+   * one that's currently open, so filter them here too. Otherwise the open
+   * composer shows up as a phantom row duplicating its parent's directory, and
+   * (having no threads) it would be offered the "Remove Directory" action — which
+   * would delete the overlay row of the sub-thread being composed.
+   */
+  const visibleDirectories = useMemo(
+    () =>
+      props.directories.filter(
+        (directory) => !isSubthreadLaunchpadKey(directory.key),
+      ),
+    [props.directories],
+  );
   const pinnedDirectories = useMemo(
     () =>
-      props.directories
+      visibleDirectories
         .filter(isPinnedDirectory)
         .sort(comparePinnedDirectories),
-    [props.directories],
+    [visibleDirectories],
   );
   const pinnedDirectoryKeys = useMemo(
     () => pinnedDirectories.map((directory) => directory.key),
     [pinnedDirectories],
   );
   const unpinnedDirectories = useMemo(
-    () => props.directories.filter((directory) => !isPinnedDirectory(directory)),
-    [props.directories],
+    () => visibleDirectories.filter((directory) => !isPinnedDirectory(directory)),
+    [visibleDirectories],
   );
   const directoryByKey = useMemo(
-    () => new Map(props.directories.map((directory) => [directory.key, directory])),
-    [props.directories],
+    () => new Map(visibleDirectories.map((directory) => [directory.key, directory])),
+    [visibleDirectories],
   );
 
   const reorderDirectoryPins = (nextKeys: string[]): void => {
@@ -373,7 +404,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       previousSelectedItemKeyRef.current = undefined;
       return;
     }
-    const matchingDirectory = props.directories.find(
+    const matchingDirectory = visibleDirectories.find(
       (directory) =>
         selectedItemKey === buildLaunchpadSelectionKey(directory.key) ||
         directory.threadKeys.includes(selectedItemKey),
@@ -406,9 +437,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
         [matchingDirectory.key]: true,
       };
     });
-  }, [props.directories, props.selectedItemKey]);
+  }, [visibleDirectories, props.selectedItemKey]);
 
-  if (props.directories.length === 0) {
+  if (visibleDirectories.length === 0) {
     return <p className="sidebar-empty">No directory-linked threads.</p>;
   }
 
@@ -486,7 +517,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
             <ThreadRow
               key={`${directory.key}:${childKey}`}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              terminalThreadKeys={props.terminalThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
+              queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               compact
               draggable={reorderable}
@@ -614,7 +647,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
           <ThreadRow
             key={`${directory.key}:${threadKey}`}
             approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+            terminalThreadKeys={props.terminalThreadKeys}
             inputRequestThreadKeys={props.inputRequestThreadKeys}
+            queuedMessageThreadKeys={props.queuedMessageThreadKeys}
             composerSourceThreadKey={props.composerSourceThreadKey}
             compact
             draggable={Boolean(props.onReorderThreadPins)}
@@ -919,7 +954,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                          terminalThreadKeys={props.terminalThreadKeys}
                           inputRequestThreadKeys={props.inputRequestThreadKeys}
+                          queuedMessageThreadKeys={props.queuedMessageThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           compact
                           dropIndicator={

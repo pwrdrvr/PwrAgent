@@ -32,8 +32,14 @@ describe("PwrAgent app agent tools", () => {
 
     expect(router.buildDynamicToolSpecs()).toEqual([
       expect.objectContaining({
-        namespace: "pwragent",
-        name: "manage_pwragent",
+        type: "namespace",
+        name: "pwragent",
+        tools: [
+          expect.objectContaining({
+            type: "function",
+            name: "manage_pwragent",
+          }),
+        ],
       }),
     ]);
 

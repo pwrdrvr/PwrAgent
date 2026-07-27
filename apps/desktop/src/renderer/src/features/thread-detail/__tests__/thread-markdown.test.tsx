@@ -679,4 +679,48 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.textContent).toContain("<em>safe</em>");
   });
+
+  it("renders composer directory references as chips", () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const { container } = render(
+        <ThreadMarkdown
+          text={
+            "[@agent-kit](~/pwrdrvr/agent-kit) and "
+            + "[@PwrAgnt](/Users/huntharo/pwrdrvr/PwrAgnt) are projects."
+          }
+        />
+      );
+
+      const chips = container.querySelectorAll(".directory-chip");
+      expect(chips).toHaveLength(2);
+      expect(chips[0]).toHaveTextContent("@agent-kit");
+      expect(chips[0]).toHaveAttribute("data-tooltip", "~/pwrdrvr/agent-kit");
+      expect(chips[1]).toHaveTextContent("@PwrAgnt");
+      expect(
+        screen.queryByRole("link", { name: "@agent-kit" })
+      ).not.toBeInTheDocument();
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("decodes percent-encoded directory reference paths in the chip tooltip", () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const { container } = render(
+        <ThreadMarkdown text={"[@repo](~/Backup%20%2850%25%20old%29/repo) has it."} />
+      );
+
+      const chip = container.querySelector(".directory-chip");
+      expect(chip).toHaveTextContent("@repo");
+      expect(chip).toHaveAttribute("data-tooltip", "~/Backup (50% old)/repo");
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
 });

@@ -17,11 +17,15 @@ import {
   getDropIndicatorPosition,
   type DropIndicatorState,
 } from "./drag-drop";
+import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { ThreadRow } from "./ThreadRow";
 
 type RecentsListProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
+  /** Thread keys with a live integrated terminal in the main process. */
+  terminalThreadKeys?: Record<string, boolean>;
   inputRequestThreadKeys?: Record<string, boolean>;
+  queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   composerSourceThreadKey?: string;
   selectedThreadKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
@@ -141,7 +145,9 @@ export function RecentsList(props: RecentsListProps) {
             <ThreadRow
               key={childKey}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              terminalThreadKeys={props.terminalThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
+              queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               dropIndicator={
                 dropIndicator?.targetKey === rowDropKey
@@ -232,7 +238,9 @@ export function RecentsList(props: RecentsListProps) {
       <div key={key} className="thread-group">
         <ThreadRow
           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+          terminalThreadKeys={props.terminalThreadKeys}
           inputRequestThreadKeys={props.inputRequestThreadKeys}
+          queuedMessageThreadKeys={props.queuedMessageThreadKeys}
           composerSourceThreadKey={props.composerSourceThreadKey}
           dropIndicator={
             dropIndicator?.targetKey === key

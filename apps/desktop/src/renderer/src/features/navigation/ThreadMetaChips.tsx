@@ -1,14 +1,23 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted } from "@pwragent/shared";
-import { BranchIcon, FolderIcon, PinIcon, WorktreeIcon } from "../../icons";
+import { BranchIcon, FolderIcon, PinIcon, TerminalIcon, WorktreeIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText } from "../../lib/copy-text";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 
 type ThreadMetaChipsProps = {
   hasApprovalRequest?: boolean;
+  /** A shell is alive for this thread — the row is how you find it again. */
+  hasIntegratedTerminal?: boolean;
   hasInputRequest?: boolean;
+  /**
+   * When set, renders the "Scheduled" (future send time) or "Queued"
+   * (waiting on the active turn) chip. Resolved upstream so a thread with
+   * both pending states shows only the higher-priority "Scheduled".
+   */
+  queuedMessageState?: ThreadQueuedMessageState;
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
   thread: NavigationThreadSummary;
@@ -16,7 +25,9 @@ type ThreadMetaChipsProps = {
 
 export function ThreadMetaChips({
   hasApprovalRequest = false,
+  hasIntegratedTerminal = false,
   hasInputRequest = false,
+  queuedMessageState,
   includeLinkedDirectories = false,
   linkedDirectoryMode = "label",
   thread,
@@ -28,6 +39,9 @@ export function ThreadMetaChips({
   // scroll region, matching the copyable branch/path chips.
   const pinTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const gitStateTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // Sidebar rows are a clipped scroll region, so a native `title` gets
+  // edge-clipped — the viewport tooltip is what the neighbouring chips use.
+  const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
@@ -133,6 +147,24 @@ export function ThreadMetaChips({
         {formatBackendLabel(thread.source)}
       </span>
 
+      {queuedMessageState === "scheduled" ? (
+        <span
+          aria-label="A message is scheduled to send"
+          className="thread-row__chip thread-row__chip--scheduled"
+          title="A message is scheduled to send"
+        >
+          Scheduled
+        </span>
+      ) : queuedMessageState === "queued" ? (
+        <span
+          aria-label="A message is queued to send"
+          className="thread-row__chip thread-row__chip--queued"
+          title="A message is queued to send"
+        >
+          Queued
+        </span>
+      ) : null}
+
       {hasApprovalRequest ? (
         <span
           aria-label="Waiting for approval"
@@ -150,6 +182,22 @@ export function ThreadMetaChips({
           title="Input needed"
         >
           Input needed
+        </span>
+      ) : null}
+
+      {hasIntegratedTerminal ? (
+        <span
+          aria-label="Integrated terminal running"
+          role="img"
+          className="thread-row__chip thread-row__chip--terminal"
+          onMouseEnter={(event) =>
+            terminalTooltip.show(event.currentTarget, "Integrated terminal running")
+          }
+          onMouseLeave={terminalTooltip.hide}
+        >
+          <span aria-hidden="true" className="thread-row__chip-icon">
+            <TerminalIcon size={12} />
+          </span>
         </span>
       ) : null}
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.0.0-beta.49 - 2026-07-15
+
+- Composer References - Added `@` directory and file references, with durable chips, reference pickers, and drag-and-drop or paste support for non-image files. Referenced projects are linked to the thread automatically when sent.
+- Scheduled Messages - Added Scheduled and Queued indicators to sidebar threads, plus reliable Send now controls and an explicit schedule toggle while editing.
+- Integrated Terminals - Running terminals now survive navigation and view refreshes instead of becoming detached from the UI; active terminals are visible from thread rows and the quit dialog.
+- Diagnostics - Added Developer Mode heap snapshots and copyable process IDs for investigating idle resource usage.
+- Thread Navigation - Added Cmd/Ctrl+K quick thread search, improved find-bar focus behavior, and stopped streamed transcript updates from unexpectedly scrolling the current view.
+- Launchpads and Directories - Cancelling a new-thread or sub-thread launchpad now clears stale persisted drafts and phantom directory rows while preserving recoverable text with ArrowUp; empty directories can now be removed directly.
+
+## v1.0.0-beta.48 - 2026-07-13
+
+- GPT-5.6 Models - Added Codex GPT-5.6 Sol, Terra, and Luna to model discovery and pickers, including model-specific reasoning choices such as `max` and `ultra`, per-model reasoning memory, and GPT-5.6 pricing/Codex Credits estimates.
+- Composer Scheduling - Added scheduled sends from the composer, with quick choices like 15m, 30m, 1h, 2h, and future reset timing when available; scheduled drafts stay editable/deletable until dispatch.
+- Tool Output Accounting - Added opt-in experimental tool-output accounting in the Pricing panel, including noisy command categories, recent invocations, warning/error/debug counts, truncation signals, and polling alerts.
+- Messaging - Fixed Telegram Stop buttons after controller restarts, restored queued Steer actions when an active turn still exists, and kept messaging handoffs targeted at the requested repo instead of falling back to scratch/generated workspaces.
+- Handoffs and PR Refresh - Prevented cross-project handoffs from becoming broken subthreads, and refreshed retained PR chips correctly for detached-HEAD worktree threads.
+- Reliability and Navigation - Added quit confirmation for running integrated terminals, hardened terminal shutdown callbacks, kept background title-helper usage on standard pricing, and revealed history-selected threads in collapsed or scrolled-out sidebar sections.
+- Agent Tooling - Added a repo-local Codex rollout forensics skill for bounded tool-output accounting analysis.
+
 ## v1.0.0-beta.47 - 2026-07-09
 
 - AI Providers - Fixed Refresh and backend discovery so disabled ACP providers are no longer probed, preventing disabled agents such as Gemini from triggering browser login flows while still allowing cached disabled entries to remain visible.

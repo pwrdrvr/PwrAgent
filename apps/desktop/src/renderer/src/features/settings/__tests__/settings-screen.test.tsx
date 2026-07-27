@@ -552,7 +552,13 @@ describe("SettingsScreen", () => {
       });
     });
 
-    expect(screen.getByRole("radio", { name: /5 seconds/ })).not.toBeDisabled();
+    // "5 seconds" appears in both the profiling-start-delay and the
+    // heap-snapshot-delay groups, so scope to the group under test.
+    expect(
+      within(
+        screen.getByRole("radiogroup", { name: "Profiling start delay" }),
+      ).getByRole("radio", { name: /5 seconds/ }),
+    ).not.toBeDisabled();
     expect(screen.getByRole("radio", { name: /Slowburn/ })).not.toBeDisabled();
     expect(
       screen.getByRole("switch", { name: "Smart heap snapshots" }),
@@ -684,6 +690,20 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { lightweightNavigationRefresh: true },
+      });
+    });
+
+    // The snapshot fixture omits `backgroundPrPolling` entirely, which is the
+    // real shape an older/stale snapshot has — the toggle must still render
+    // (unchecked, from the shared default) rather than crash.
+    const backgroundPrPollingSwitch = screen.getByRole("switch", {
+      name: "Enable background pull request status",
+    });
+    expect(backgroundPrPollingSwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(backgroundPrPollingSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { backgroundPrPolling: true },
       });
     });
 
@@ -960,7 +980,11 @@ describe("SettingsScreen", () => {
 
     render(<SettingsScreen settings={settings} onClose={() => undefined} />);
 
-    fireEvent.click(screen.getByRole("radio", { name: /5 seconds/ }));
+    fireEvent.click(
+      within(
+        screen.getByRole("radiogroup", { name: "Profiling start delay" }),
+      ).getByRole("radio", { name: /5 seconds/ }),
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {

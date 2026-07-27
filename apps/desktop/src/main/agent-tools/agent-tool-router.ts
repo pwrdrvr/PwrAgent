@@ -1,7 +1,11 @@
-import type { AppServerBackendKind } from "@pwragent/shared";
+import {
+  PWRAGENT_TOOL_NAMESPACE,
+  type AppServerBackendKind,
+} from "@pwragent/shared";
 import type {
   DynamicToolCallParams,
   DynamicToolCallResponse,
+  DynamicToolNamespaceTool,
   DynamicToolSpec,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type {
@@ -50,15 +54,28 @@ export class AgentToolRouter {
   }
 
   buildDynamicToolSpecs(): DynamicToolSpec[] {
-    return this.definitions
-      .filter((definition) => definition.advertise !== false)
-      .map((definition) => ({
-        namespace: definition.namespace,
+    const toolsByNamespace = new Map<string, DynamicToolNamespaceTool[]>();
+    for (const definition of this.definitions) {
+      if (definition.advertise === false) {
+        continue;
+      }
+      const tools = toolsByNamespace.get(definition.namespace) ?? [];
+      tools.push({
+        type: "function",
         name: definition.name,
         description: definition.description,
-        inputSchema: definition.inputSchema as DynamicToolSpec["inputSchema"],
+        inputSchema: definition.inputSchema as DynamicToolNamespaceTool["inputSchema"],
         deferLoading: definition.deferLoading ?? false,
-      }));
+      });
+      toolsByNamespace.set(definition.namespace, tools);
+    }
+
+    return Array.from(toolsByNamespace, ([name, tools]) => ({
+      type: "namespace" as const,
+      name,
+      description: "PwrAgent tools.",
+      tools,
+    }));
   }
 
   buildMcpTools(): AgentMcpTool[] {
@@ -164,9 +181,11 @@ export function readAgentDynamicToolCall(
   const callId = readString(call.callId) ?? readString(call.requestId);
   const tool = readString(call.tool);
   const namespace =
-    typeof call.namespace === "string" || call.namespace === null
+    typeof call.namespace === "string"
       ? call.namespace
-      : undefined;
+      : call.namespace === null
+        ? PWRAGENT_TOOL_NAMESPACE
+        : undefined;
   if (!threadId || !callId || !tool || namespace === undefined) {
     return undefined;
   }

@@ -4884,6 +4884,419 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("deletes the persisted overlay row when a sub-thread launchpad is cancelled", async () => {
+    const parentThread = {
+      id: "thread-parent",
+      title: "Local parent",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [
+        {
+          id: "/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "local" as const,
+        },
+      ],
+      inbox: {
+        inInbox: true,
+        reason: "new-thread" as const,
+      },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const launchpad = {
+      directoryKey: "subthread:codex:thread-parent:local",
+      directoryKind: "directory" as const,
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "local" as const,
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({ launchpad, defaults }));
+    const updateDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: { ...launchpad, updatedAt: 2 },
+      defaults,
+    }));
+    const resetDirectoryLaunchpad = vi.fn(async () => ({
+      directoryKey: "subthread:codex:thread-parent:local",
+      defaults,
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-parent"],
+      threads: [parentThread],
+      directories: [],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      updateDirectoryLaunchpad,
+      resetDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-parent");
+    });
+
+    await act(async () => {
+      await result.current.createSubthread(parentThread, "local");
+    });
+    expect(result.current.selectedLaunchpad?.directoryKey).toBe(
+      "subthread:codex:thread-parent:local",
+    );
+
+    await act(async () => {
+      result.current.discardLaunchpad("subthread:codex:thread-parent:local");
+    });
+
+    // A sub-thread launchpad has no registeredAt, so cancel drops the whole
+    // overlay row instead of leaving a phantom directory behind.
+    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "subthread:codex:thread-parent:local",
+    });
+    expect(result.current.selectedLaunchpad).toBeUndefined();
+  });
+
+  it("returns to the source thread when a sub-thread launchpad is cancelled after a refresh", async () => {
+    const parentThread = {
+      id: "thread-parent",
+      title: "Local parent",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [
+        {
+          id: "/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "local" as const,
+        },
+      ],
+      inbox: {
+        inInbox: true,
+        reason: "new-thread" as const,
+      },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const launchpad = {
+      directoryKey: "subthread:codex:thread-parent:local",
+      directoryKind: "directory" as const,
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "local" as const,
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({ launchpad, defaults }));
+    const updateDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: { ...launchpad, updatedAt: 2 },
+      defaults,
+    }));
+    const resetDirectoryLaunchpad = vi.fn(async () => ({
+      directoryKey: "subthread:codex:thread-parent:local",
+      defaults,
+    }));
+    // The main-process snapshot deliberately omits sub-thread launchpads, so a
+    // refresh while the composer is open wipes the row from state.response —
+    // it survives only in localLaunchpads.
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-parent"],
+      threads: [parentThread],
+      directories: [],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      updateDirectoryLaunchpad,
+      resetDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-parent");
+    });
+
+    await act(async () => {
+      await result.current.createSubthread(parentThread, "local");
+    });
+
+    // Authoritative refresh lands while the sub-thread composer is still open.
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.selectedLaunchpad?.directoryKey).toBe(
+      "subthread:codex:thread-parent:local",
+    );
+
+    await act(async () => {
+      result.current.discardLaunchpad("subthread:codex:thread-parent:local");
+    });
+
+    // Cancel must still resolve the launchpad (from localLaunchpads via the
+    // merged memo) so it deletes the overlay row AND returns the user to the
+    // card they composed from, rather than clearing selection entirely.
+    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "subthread:codex:thread-parent:local",
+    });
+    expect(result.current.selectedItemKey).toBe("codex:thread-parent");
+  });
+
+  it("keeps a registered directory but clears its message when its launchpad is cancelled", async () => {
+    const registeredLaunchpad = {
+      directoryKey: "directory:/repo/app",
+      directoryKind: "directory" as const,
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "local" as const,
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "leftover draft",
+      registeredAt: 1_500,
+      settingsTouchedAt: 1_600,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const updateDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: { ...registeredLaunchpad, prompt: "", updatedAt: 3 },
+      defaults,
+    }));
+    const resetDirectoryLaunchpad = vi.fn(async () => ({
+      directoryKey: "directory:/repo/app",
+      defaults,
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: "directory:/repo/app",
+          kind: "directory" as const,
+          label: "app",
+          path: "/repo/app",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          latestUpdatedAt: 2,
+          launchpad: registeredLaunchpad,
+        },
+      ],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      updateDirectoryLaunchpad,
+      resetDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(
+        result.current.directories.some(
+          (directory) => directory.key === "directory:/repo/app",
+        ),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      result.current.discardLaunchpad("directory:/repo/app");
+    });
+
+    // Registered directory: keep the row, wipe only the composed message.
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "directory:/repo/app",
+      patch: { prompt: "", imageAttachments: [], editorDocument: undefined },
+    });
+    expect(resetDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(
+      result.current.directories.some(
+        (directory) => directory.key === "directory:/repo/app",
+      ),
+    ).toBe(true);
+  });
+
+  it("removes an empty registered directory and deletes its overlay row", async () => {
+    const registeredLaunchpad = {
+      directoryKey: "directory:/repo/app",
+      directoryKind: "directory" as const,
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "local" as const,
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      registeredAt: 1_500,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const resetDirectoryLaunchpad = vi.fn(async () => ({
+      directoryKey: "directory:/repo/app",
+      defaults,
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: "directory:/repo/app",
+          kind: "directory" as const,
+          label: "app",
+          path: "/repo/app",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          latestUpdatedAt: 2,
+          launchpad: registeredLaunchpad,
+        },
+      ],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      resetDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(
+        result.current.directories.some(
+          (directory) => directory.key === "directory:/repo/app",
+        ),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      await result.current.removeDirectory("directory:/repo/app");
+    });
+
+    // The empty row is pruned immediately and its overlay row is deleted so it
+    // can't reappear on the next snapshot.
+    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "directory:/repo/app",
+    });
+    expect(
+      result.current.directories.some(
+        (directory) => directory.key === "directory:/repo/app",
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses to remove a directory that still has threads", async () => {
+    const thread = {
+      id: "thread-1",
+      title: "Live work",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [
+        { id: "/repo/app", label: "app", path: "/repo/app", kind: "local" as const },
+      ],
+      inbox: { inInbox: false },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const resetDirectoryLaunchpad = vi.fn(async () => ({
+      directoryKey: "directory:/repo/app",
+      defaults,
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [thread],
+      directories: [
+        {
+          key: "directory:/repo/app",
+          kind: "directory" as const,
+          label: "app",
+          path: "/repo/app",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          latestUpdatedAt: 2,
+        },
+      ],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      resetDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(
+        result.current.directories.some(
+          (directory) => directory.key === "directory:/repo/app",
+        ),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      await result.current.removeDirectory("directory:/repo/app");
+    });
+
+    // Deleting the overlay row would strip the directory's registration and
+    // sticky settings while its threads kept the row on screen.
+    expect(resetDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(
+      result.current.directories.some(
+        (directory) => directory.key === "directory:/repo/app",
+      ),
+    ).toBe(true);
+  });
+
   it("opens new-worktree sub-thread launchpads with stable worktree mode", async () => {
     const parentThread = {
       id: "thread-parent",
@@ -6959,6 +7372,78 @@ describe("useThreadNavigation", () => {
         result.current.clearPickDirectoryError();
       });
       expect(result.current.pickDirectoryError).toBeUndefined();
+    });
+
+    it("pickDirectoryForReference registers the pick without navigating and returns it", async () => {
+      const launchpad = buildPickedLaunchpad();
+      const pickDirectoryFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        path: "/Users/me/repos/PwrAgent",
+      }));
+      const registerDirectoryFromDisk = vi.fn(async () => ({
+        ok: true as const,
+        directoryPath: "/Users/me/repos/PwrAgent",
+        directoryKey: launchpad.directoryKey,
+        directoryLabel: "PwrAgent",
+        currentBranch: "main",
+        launchpad,
+        defaults: launchpadDefaults,
+      }));
+      const desktopApi = buildBaseDesktopApi({
+        pickDirectoryFromDisk,
+        registerDirectoryFromDisk,
+      });
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      let picked: { label: string; path: string } | undefined;
+      await act(async () => {
+        picked = await result.current.pickDirectoryForReference();
+      });
+
+      expect(picked).toEqual({
+        label: "PwrAgent",
+        path: "/Users/me/repos/PwrAgent",
+      });
+      expect(registerDirectoryFromDisk).toHaveBeenCalledExactlyOnceWith({
+        path: "/Users/me/repos/PwrAgent",
+      });
+      // The tracked set learns the directory, but nothing navigates.
+      expect(
+        result.current.directories.map((directory) => directory.label),
+      ).toContain("PwrAgent");
+      expect(result.current.selectedItemKey).toBeUndefined();
+      expect(result.current.pickDirectoryError).toBeUndefined();
+      expect(result.current.pickingDirectory).toBe(false);
+    });
+
+    it("pickDirectoryForReference surfaces validation failures and resolves undefined", async () => {
+      const pickDirectoryFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        path: "/tmp/not-a-repo",
+      }));
+      const registerDirectoryFromDisk = vi.fn(async () => ({
+        ok: false as const,
+        reason: "not-a-git-repo" as const,
+        message: "/tmp/not-a-repo is not inside a git repository.",
+      }));
+      const desktopApi = buildBaseDesktopApi({
+        pickDirectoryFromDisk,
+        registerDirectoryFromDisk,
+      });
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      let picked: { label: string; path: string } | undefined;
+      await act(async () => {
+        picked = await result.current.pickDirectoryForReference();
+      });
+
+      expect(picked).toBeUndefined();
+      expect(result.current.pickDirectoryError).toContain("not inside a git");
+      expect(result.current.selectedItemKey).toBeUndefined();
     });
   });
 });

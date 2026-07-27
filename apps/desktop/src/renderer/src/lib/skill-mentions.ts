@@ -10,9 +10,20 @@ export type SkillMentionPart =
       label: string;
       name: string;
       path: string;
+    }
+  | {
+      /**
+       * Composer directory-reference chip, serialized as
+       * `[@label](~/path)`. `name` is the label without the `@`; `path`
+       * is as-written (usually tilde form — callers expand it).
+       */
+      type: "directory";
+      label: string;
+      name: string;
+      path: string;
     };
 
-const SKILL_MENTION_PATTERN = /\[(\$[^\]\r\n]+)\]\(([^)\r\n]+)\)/g;
+const SKILL_MENTION_PATTERN = /\[([$@][^\]\r\n]+)\]\(([^)\r\n]+)\)/g;
 const SKILL_TOKEN_BOUNDARY = "(?=$|\\s|[.,!?;:])";
 
 function escapeRegExp(value: string): string {
@@ -57,7 +68,7 @@ export function parseSkillMentionParts(text: string): SkillMentionPart[] {
     }
 
     output.push({
-      type: "skill",
+      type: label.startsWith("@") ? "directory" : "skill",
       label,
       name: label.slice(1),
       path,

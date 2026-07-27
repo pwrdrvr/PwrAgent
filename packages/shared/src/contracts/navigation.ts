@@ -19,6 +19,7 @@ import type {
 import type {
   MessagingChannelKind,
   MessagingConversationKind,
+  MessagingToolUpdateMode,
 } from "./messaging";
 import type { DesktopGhDiscoverySnapshot } from "./settings";
 import type { BackendAcpSessionRuntimeState } from "./backend";
@@ -507,9 +508,12 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
    */
   editorDocument?: Record<string, unknown>;
   imageAttachments?: NavigationLaunchpadImageAttachment[];
+  fileAttachments?: NavigationLaunchpadFileAttachment[];
   prompt: string;
   registeredAt?: number;
   settingsTouchedAt?: number;
+  /** Explicit messaging `/new` override for this project. */
+  messagingToolUpdateMode?: MessagingToolUpdateMode;
   workMode: LaunchpadWorkMode;
   branchName?: string;
   parentThreadId?: string;
@@ -544,6 +548,20 @@ export type NavigationLaunchpadImageAttachment = {
   type: string;
   url: string;
   width?: number;
+};
+
+/**
+ * A file referenced by path from the composer's attachment tray
+ * (drag-and-drop or the "+ Add file…" picker). Path-only by design —
+ * contents are never captured; the outgoing text carries a
+ * `[@label](~/path)` reference the agent reads itself.
+ */
+export type NavigationLaunchpadFileAttachment = {
+  id: string;
+  /** Display label, normally the file's basename. */
+  label: string;
+  /** Absolute on-disk path. */
+  path: string;
 };
 
 /**
@@ -789,6 +807,19 @@ export function buildThreadIdentityKey(
   return `${encodeURIComponent(backend)}:${threadId}`;
 }
 
+/**
+ * Directory-key prefix for a sub-thread launchpad
+ * (`subthread:<source>:<parent>:<mode>`). Sub-thread launchpads are transient,
+ * thread-scoped composers — never a project directory — so several layers must
+ * recognize and exclude them. Centralized here so the key format has one source
+ * of truth and the exclusions can't drift apart.
+ */
+export const SUBTHREAD_LAUNCHPAD_KEY_PREFIX = "subthread:";
+
+export function isSubthreadLaunchpadKey(directoryKey: string): boolean {
+  return directoryKey.startsWith(SUBTHREAD_LAUNCHPAD_KEY_PREFIX);
+}
+
 export function parseThreadIdentityKey(
   threadKey: string,
 ): ThreadIdentityKeyParts | undefined {
@@ -976,6 +1007,19 @@ export type ReorderDirectoryPinsRequest = {
 
 export type ReorderDirectoryPinsResponse = {
   pinnedRanks: Record<string, string>;
+};
+
+/**
+ * Tells the main-process PR poller which threads the operator is actually
+ * looking at, so their PRs poll on the fast tier and everything else backs off.
+ *
+ * Main has no other way to know this — selection lives entirely in renderer
+ * route state. Without this signal the poller can only treat every open project
+ * equally, which is what forces the budget to be spread thin.
+ */
+export type SetPullRequestPollingFocusRequest = {
+  /** Thread keys (`backend:threadId`) currently selected or on screen. */
+  threadKeys: string[];
 };
 
 export type RefreshThreadPullRequestsRequest = {

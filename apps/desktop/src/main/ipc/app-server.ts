@@ -1,4 +1,5 @@
 import { BrowserWindow, dialog, ipcMain } from "electron";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -46,12 +47,17 @@ import {
   type GetGhStatusRequest,
   type GhStatus,
   type LinkedDirectorySummary,
+  type ListRecentFileReferencesResponse,
   type PickDirectoryFromDiskResponse,
+  type PickFileFromDiskResponse,
+  type PickReferenceFromDiskResponse,
+  type RecordRecentFileReferencesRequest,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
   type RefreshThreadPullRequestsRequest,
+  type SetPullRequestPollingFocusRequest,
   type RefreshThreadPullRequestsResponse,
   type RegisterDirectoryFromDiskRequest,
   type RegisterDirectoryFromDiskResponse,
@@ -110,6 +116,8 @@ import {
   type PwrAgentThreadInspectionResponse,
 } from "@pwragent/shared";
 import {
+  DEFAULT_BACKGROUND_PR_POLLING,
+  DEFAULT_PULL_REQUEST_PROVIDER,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   isAppServerBackendKind,
@@ -124,6 +132,10 @@ import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-p
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { getAppStateDb } from "../state/app-state";
+import {
+  listRecentFileReferencePaths,
+  recordRecentFileReferencePaths,
+} from "../state/recent-file-references-store";
 import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
@@ -151,6 +163,7 @@ import {
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+  NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -161,7 +174,11 @@ import {
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
+  NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
+  NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
+  NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
@@ -175,6 +192,24 @@ import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindin
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { detectPullRequestsForThread } from "../pr-status/pr-detection";
+import {
+  GithubGraphqlPrClient,
+  branchRefKey,
+} from "../pr-status/github-graphql-client";
+import type { BranchRef } from "../pr-status/github-graphql-client";
+import { resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
+import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
+import type { PrPollTarget } from "../pr-status/pr-polling-scheduler";
+import { isTerminalPullRequest, mergeCommitShas } from "../pr-status/pr-derivations";
+import {
+  computePrStatusTransition,
+  summarizePrStatusTransition,
+} from "../pr-status/pr-transitions";
+import type { PrStatusTransition } from "../pr-status/pr-transitions";
+import { selectDiscoveryDueThreadKeys } from "../pr-status/pr-discovery";
+
+/** Listener registered via `onPrStatusTransition` — the future CI-event seam. */
+type PrStatusTransitionListener = (transition: PrStatusTransition) => void;
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { ThreadMigrationService } from "../app-server/thread-migration-service";
@@ -204,6 +239,13 @@ const DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS = 5 * 60_000;
 // 747" collapses to "747, 732".
 const DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS = 3_000;
 const STARTUP_WORKTREE_WORKING_STATE_REFRESH_LIMIT = 8;
+// PR discovery (Layer B): a slow branch-lookup rotation across ALL open threads
+// to catch newly opened PRs on projects the operator is not looking at. Tick
+// often, but sweep each thread rarely and only a few per tick, so discovery
+// never drains the shared PR token bucket away from the fast status poller.
+const PR_DISCOVERY_TICK_INTERVAL_MS = 60_000;
+const PR_DISCOVERY_CADENCE_MS = 5 * 60_000;
+const PR_DISCOVERY_MAX_PER_TICK = 3;
 // Per-worktree working state changes as the agent edits/commits, but each
 // such turn pushes a fresh probe, so the background freshness window only
 // needs to catch out-of-band changes (terminal/IDE edits) on the next
@@ -251,6 +293,30 @@ function rejectNonDirectoryPinKey(directoryKey: string): void {
       `Cannot pin synthetic directory entry: ${directoryKey} (only directory:* and workspace:* keys are pinnable)`,
     );
   }
+}
+
+/**
+ * Classify combined reference-picker paths as files or directories via
+ * `fs.stat`. Unreadable paths (and exotic kinds like sockets) are
+ * skipped — the renderer only knows how to route these two kinds.
+ */
+function classifyReferencePaths(
+  paths: string[],
+): { path: string; kind: "file" | "directory" }[] {
+  const entries: { path: string; kind: "file" | "directory" }[] = [];
+  for (const candidate of paths) {
+    try {
+      const stats = fs.statSync(candidate);
+      if (stats.isDirectory()) {
+        entries.push({ path: candidate, kind: "directory" });
+      } else if (stats.isFile()) {
+        entries.push({ path: candidate, kind: "file" });
+      }
+    } catch {
+      // Skip unreadable paths.
+    }
+  }
+  return entries;
 }
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
@@ -766,6 +832,22 @@ class DesktopAppServerService {
   private readonly prStatusTokenBucket = new PrStatusTokenBucket();
   private prStatusRegistryLoaded = false;
   private prLookupRegistryLoaded = false;
+  private prGraphqlClient: GithubGraphqlPrClient | undefined;
+  private prPollingScheduler: PrPollingScheduler | undefined;
+  private prDiscoveryTimer: NodeJS.Timeout | undefined;
+  /** Per-thread last discovery branch-lookup time, driving the slow rotation. */
+  private readonly prDiscoveryLastRefreshedAt = new Map<string, number>();
+  /** Set once we subscribe to settings writes for live flag re-sync. */
+  private prPollingSettingsUnsubscribe: (() => void) | undefined;
+  /**
+   * Threads the operator currently has selected / on screen, pushed from the
+   * renderer. Drives the poller's fast tier — main cannot infer selection.
+   */
+  private prPollingFocusThreadKeys: ReadonlySet<string> = new Set();
+  /** prKey → backend to publish its status updates on. Rebuilt per poll pass. */
+  private readonly prPollBackendByKey = new Map<string, AppServerBackendKind>();
+  /** Subscribers to PR status transitions (the future CI-event ingestor seam). */
+  private readonly prStatusTransitionListeners = new Set<PrStatusTransitionListener>();
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
     NavigationSnapshot["directories"]
@@ -1185,6 +1267,7 @@ class DesktopAppServerService {
     await this.loadThreadGitWorkingStateCache();
     this.rememberThreadWorktreePaths(canonicalSnapshot.threads);
     this.rememberThreadPrRefreshContexts(canonicalSnapshot.threads);
+    this.syncPrPollingSchedulerState();
     const detachedPrsByThreadKey = await this.readDetachedPrsByThreadKey(
       canonicalSnapshot.threads,
     );
@@ -1913,6 +1996,9 @@ class DesktopAppServerService {
     }
 
     if (method === "turn/completed") {
+      // A finished turn is real activity on this thread even when it is off
+      // screen — thaw its PRs if the poller had iceboxed them.
+      this.prPollingScheduler?.noteThreadInteraction([threadKey]);
       const prContexts = this.prRefreshContextByThreadKey.get(threadKey);
       if (prContexts?.length) {
         for (const prContext of prContexts) {
@@ -2662,6 +2748,7 @@ class DesktopAppServerService {
 
   private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): PrSummary[] {
     const changedPrs: PrSummary[] = [];
+    const transitions: PrStatusTransition[] = [];
     for (const pr of prs.map(normalizePrSummary)) {
       const key = getPrStatusKey(pr);
       const current = this.prStatusRegistry.get(key);
@@ -2670,6 +2757,14 @@ class DesktopAppServerService {
       }
       if (!current || !prSummariesEqual([current.pr], [pr])) {
         changedPrs.push(pr);
+        // A meaningful field flip (CI, merge, conflict, draft, title) becomes a
+        // typed transition. `current?.pr` undefined (first sight / cache load)
+        // yields no transition, so boot does not emit a flood.
+        const transition = computePrStatusTransition(current?.pr, pr);
+        if (transition) {
+          transition.threadKeys = this.findThreadKeysForPrKey(key);
+          transitions.push(transition);
+        }
       }
       this.prStatusRegistry.set(key, {
         ...current,
@@ -2677,7 +2772,69 @@ class DesktopAppServerService {
         fetchedAt,
       });
     }
+    if (transitions.length > 0) {
+      this.emitPrStatusTransitions(transitions);
+    }
     return changedPrs;
+  }
+
+  /**
+   * Subscribe to PR status transitions. This is the seam the future CI-event
+   * ingestor hooks into (brainstorm) — it can turn a `checkState → failing`
+   * into an inbound thread event without the poller knowing it exists. Returns
+   * an unsubscribe function.
+   */
+  onPrStatusTransition(listener: PrStatusTransitionListener): () => void {
+    this.prStatusTransitionListeners.add(listener);
+    return () => {
+      this.prStatusTransitionListeners.delete(listener);
+    };
+  }
+
+  private emitPrStatusTransitions(transitions: PrStatusTransition[]): void {
+    for (const transition of transitions) {
+      appServerLog.debug(
+        "pr status transition",
+        summarizePrStatusTransition(transition),
+      );
+      for (const listener of this.prStatusTransitionListeners) {
+        try {
+          listener(transition);
+        } catch (error) {
+          appServerLog.warn("pr status transition listener failed", {
+            prKey: transition.prKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Best-effort: which threads currently display this PR. Only runs when a
+   * transition actually fired (rare), so the O(threads) scan is cheap. A PR
+   * touched only via a path that has not yet been remembered in a navigation
+   * snapshot resolves to `[]` — acceptable for the logging consumer, and the
+   * future ingestor can re-resolve at delivery time.
+   */
+  private findThreadKeysForPrKey(prKey: string): string[] {
+    const threadKeys: string[] = [];
+    for (const [threadKey, contexts] of this.prRefreshContextByThreadKey) {
+      const displays = contexts.some((context) => {
+        const lookup = this.prLookupRegistry.get(
+          getPullRequestLookupKey({
+            provider: DEFAULT_PULL_REQUEST_PROVIDER,
+            branch: context.branch,
+            directoryPaths: context.directoryPaths,
+          }),
+        );
+        return lookup?.prs.some((pr) => getPrStatusKey(pr) === prKey) ?? false;
+      });
+      if (displays) {
+        threadKeys.push(threadKey);
+      }
+    }
+    return threadKeys;
   }
 
   private rememberPrLookup(entry: {
@@ -2853,6 +3010,393 @@ class DesktopAppServerService {
         });
       }),
     );
+  }
+
+  /**
+   * Renderer tells us which threads are selected / on screen. Their PRs move to
+   * the poller's fast tier; everything else backs off. Cheap and idempotent —
+   * the renderer debounces, and this only swaps a Set.
+   */
+  setPullRequestPollingFocus(request: SetPullRequestPollingFocusRequest): void {
+    this.prPollingFocusThreadKeys = new Set(request.threadKeys);
+  }
+
+  private getPrGraphqlClient(): GithubGraphqlPrClient {
+    if (!this.prGraphqlClient) {
+      this.prGraphqlClient = new GithubGraphqlPrClient();
+    }
+    return this.prGraphqlClient;
+  }
+
+  /**
+   * Start or stop the background poller to match the experimental setting.
+   *
+   * Called on every navigation snapshot, so toggling the setting takes effect
+   * without an app restart. With the flag off nothing is scheduled and PR chips
+   * behave exactly as they did before the poller existed.
+   */
+  /**
+   * Start or stop the background PR poller to match the experimental flag.
+   * Public + idempotent: called on every navigation snapshot AND the moment the
+   * setting is written, so toggling takes effect without a restart.
+   */
+  syncPrPollingSchedulerState(): void {
+    void (async () => {
+      let enabled = DEFAULT_BACKGROUND_PR_POLLING;
+      try {
+        const settingsService = getDesktopSettingsService();
+        // Subscribe lazily on the first sync (which the first navigation
+        // snapshot triggers), so a later toggle re-syncs immediately without a
+        // restart. Done here rather than at IPC-registration time so tests that
+        // don't stub the settings singleton aren't forced to construct it.
+        if (!this.prPollingSettingsUnsubscribe) {
+          this.prPollingSettingsUnsubscribe = settingsService.onConfigWritten(
+            () => {
+              this.syncPrPollingSchedulerState();
+            },
+          );
+        }
+        const settings = await settingsService.readSettings();
+        enabled =
+          settings.experimental.backgroundPrPolling?.value
+          ?? DEFAULT_BACKGROUND_PR_POLLING;
+      } catch (error) {
+        appServerLog.warn("failed to read background PR polling setting", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      if (!enabled) {
+        this.stopPrPollingScheduler();
+        return;
+      }
+      this.ensurePrPollingSchedulerStarted();
+    })();
+  }
+
+  private stopPrPollingScheduler(): void {
+    const wasRunning = this.prPollingScheduler !== undefined;
+    if (this.prPollingScheduler) {
+      this.prPollingScheduler.stop();
+      this.prPollingScheduler = undefined;
+    }
+    if (this.prDiscoveryTimer) {
+      clearInterval(this.prDiscoveryTimer);
+      this.prDiscoveryTimer = undefined;
+    }
+    this.prDiscoveryLastRefreshedAt.clear();
+    if (wasRunning) {
+      // Info, not debug: an operator toggling the experimental flag should see
+      // it take effect in the normal log without turning on debug collection.
+      appServerLog.info("background PR polling disabled");
+    }
+  }
+
+  /**
+   * Boot the background poller once we have a navigation snapshot (and thus
+   * thread→PR contexts to poll). Idempotent: called on every snapshot.
+   */
+  private ensurePrPollingSchedulerStarted(): void {
+    if (this.prPollingScheduler) {
+      return;
+    }
+    appServerLog.info("background PR polling enabled — starting poller");
+    const scheduler = new PrPollingScheduler({
+      listTargets: () => this.collectPrPollTargets(),
+      getFocusedThreadKeys: () => this.prPollingFocusThreadKeys,
+      isWindowVisible: () =>
+        BrowserWindow.getAllWindows().some(
+          (window) =>
+            !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
+        ),
+      // One token per GraphQL REQUEST (which covers up to a batch of PRs), not
+      // per PR — the same bucket the on-demand scheduled refreshes draw from.
+      tryTakeToken: () => this.prStatusTokenBucket.tryTake(),
+      fetchPullRequests: async (refs) =>
+        await this.getPrGraphqlClient().fetchPullRequests(refs),
+      applyResults: async (prs, fetchedAt) =>
+        await this.applyPolledPrStatuses(prs, fetchedAt),
+    });
+    this.prPollingScheduler = scheduler;
+
+    // The registries are lazily hydrated from sqlite; polling before they load
+    // would see an empty target list and idle for a tick.
+    void Promise.all([this.loadPrStatusRegistry(), this.loadPrLookupRegistry()])
+      .then(() => {
+        // A late toggle-off could have torn the scheduler down while the
+        // registries were still loading; don't resurrect it.
+        if (this.prPollingScheduler !== scheduler) {
+          return;
+        }
+        scheduler.start();
+        this.startPrDiscoveryRefresh();
+        appServerLog.info("background PR polling started", {
+          trackedPrCount: this.collectPrPollTargets().length,
+        });
+      })
+      .catch((error) => {
+        appServerLog.warn("failed to start PR polling scheduler", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  /**
+   * Start the slow discovery rotation (Layer B). Idempotent. See
+   * `pr-discovery.ts` for why this re-runs the branch lookup rather than a
+   * search/`since` crawl.
+   */
+  private startPrDiscoveryRefresh(): void {
+    if (this.prDiscoveryTimer) {
+      return;
+    }
+    this.prDiscoveryTimer = setInterval(() => {
+      this.runPrDiscoveryTick();
+    }, PR_DISCOVERY_TICK_INTERVAL_MS);
+    // Discovery must never hold the process open.
+    this.prDiscoveryTimer.unref?.();
+  }
+
+  private runPrDiscoveryTick(): void {
+    // Discovery is a background nicety; skip it entirely while hidden rather
+    // than spend `gh` subprocesses and tokens no one will see.
+    const visible = BrowserWindow.getAllWindows().some(
+      (window) => !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
+    );
+    if (!visible) {
+      return;
+    }
+
+    const now = Date.now();
+    const threadKeys = [...this.prRefreshContextByThreadKey.keys()];
+    this.prunePrDiscoveryState(threadKeys);
+
+    const due = selectDiscoveryDueThreadKeys({
+      threadKeys,
+      lastRefreshedAt: this.prDiscoveryLastRefreshedAt,
+      now,
+      cadenceMs: PR_DISCOVERY_CADENCE_MS,
+      maxPerTick: PR_DISCOVERY_MAX_PER_TICK,
+      // The selected / on-screen threads already get a fast branch-lookup from
+      // the renderer — re-doing it here would just burn budget.
+      skipThreadKeys: this.prPollingFocusThreadKeys,
+    });
+
+    const dueContexts: ThreadPrRefreshContext[] = [];
+    for (const threadKey of due) {
+      // Mark before firing so a slow refresh cannot keep re-selecting the same
+      // thread on the next tick.
+      this.prDiscoveryLastRefreshedAt.set(threadKey, now);
+      dueContexts.push(...(this.prRefreshContextByThreadKey.get(threadKey) ?? []));
+    }
+    if (dueContexts.length === 0) {
+      return;
+    }
+
+    // Answer every due branch lookup in one batched in-process request, then
+    // let the normal refresh path consume those answers. Best-effort: anything
+    // not primed simply falls back to the `gh` subprocess.
+    void this.primeDiscoveryBranchLookups(dueContexts)
+      .catch((error) => {
+        appServerLog.debug("pr discovery prefetch failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.startDiscoveryRefreshes(dueContexts);
+      });
+  }
+
+  /**
+   * Resolve each due (directory, branch) to a GitHub repo and look them all up
+   * in one batched GraphQL request, priming the fetcher with the results.
+   *
+   * This is what keeps discovery from spawning one `gh pr list` per branch.
+   * Only branches GitHub actually answered for are primed — a missing answer
+   * falls through to `gh` rather than being recorded as "no PRs".
+   */
+  private async primeDiscoveryBranchLookups(
+    contexts: ThreadPrRefreshContext[],
+  ): Promise<void> {
+    const wanted = new Map<string, { cwd: string; branch: string; ref: BranchRef }>();
+    for (const context of contexts) {
+      const branch = context.branch.trim();
+      // "HEAD" contexts are not branch lookups, and the detection path skips
+      // default branches entirely — priming either would be wasted work.
+      if (!branch || branch === "HEAD") {
+        continue;
+      }
+      for (const cwd of context.directoryPaths) {
+        const dedupeKey = `${cwd} ${branch}`;
+        if (wanted.has(dedupeKey)) {
+          continue;
+        }
+        const repo = await resolveGitHubRepoForDirectory(cwd);
+        if (!repo || repo.host !== DEFAULT_PULL_REQUEST_PROVIDER) {
+          continue;
+        }
+        wanted.set(dedupeKey, {
+          cwd,
+          branch,
+          ref: { owner: repo.owner, repo: repo.repo, branch },
+        });
+      }
+    }
+
+    if (wanted.size === 0) {
+      return;
+    }
+
+    const entries = [...wanted.values()];
+    const byRefKey = await this.getPrGraphqlClient().fetchPullRequestsForBranches(
+      entries.map((entry) => entry.ref),
+    );
+    const primed = entries
+      .map((entry) => ({
+        cwd: entry.cwd,
+        branch: entry.branch,
+        prs: byRefKey.get(branchRefKey(entry.ref)),
+      }))
+      .filter(
+        (entry): entry is { cwd: string; branch: string; prs: PrSummary[] } =>
+          entry.prs !== undefined,
+      );
+    if (primed.length === 0) {
+      return;
+    }
+    this.getPrFetcher().primeBranchLookup(primed);
+    appServerLog.debug("pr discovery primed branch lookups", {
+      requested: entries.length,
+      primed: primed.length,
+    });
+  }
+
+  private startDiscoveryRefreshes(contexts: ThreadPrRefreshContext[]): void {
+    for (const context of contexts) {
+      // `trigger: "scheduled"` routes through the existing per-lookup cooldown
+      // and the shared token bucket, so discovery self-limits against the
+      // fast poller and the terminal short-circuit still applies.
+      void this.refreshThreadPullRequests({
+        backend: context.backend,
+        threadId: context.threadId,
+        provider: DEFAULT_PULL_REQUEST_PROVIDER,
+        trigger: "scheduled",
+        branch: context.branch,
+        directoryPaths: context.directoryPaths,
+      }).catch((error) => {
+        appServerLog.debug("pr discovery refresh failed", {
+          threadId: context.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  }
+
+  private prunePrDiscoveryState(threadKeys: string[]): void {
+    if (this.prDiscoveryLastRefreshedAt.size === 0) {
+      return;
+    }
+    const live = new Set(threadKeys);
+    for (const threadKey of this.prDiscoveryLastRefreshedAt.keys()) {
+      if (!live.has(threadKey)) {
+        this.prDiscoveryLastRefreshedAt.delete(threadKey);
+      }
+    }
+  }
+
+  /**
+   * Every tracked, non-terminal PR the poller should keep fresh, with the
+   * threads that display it.
+   *
+   * Walks the remembered per-thread refresh contexts (populated on every
+   * navigation snapshot) back through the lookup registry. That pairing is
+   * what lets the poller cover EVERY open project rather than only whichever
+   * thread the renderer happens to have selected.
+   */
+  private collectPrPollTargets(): PrPollTarget[] {
+    const byKey = new Map<string, PrPollTarget>();
+    this.prPollBackendByKey.clear();
+
+    for (const [threadKey, contexts] of this.prRefreshContextByThreadKey) {
+      for (const context of contexts) {
+        const lookup = this.prLookupRegistry.get(
+          getPullRequestLookupKey({
+            provider: DEFAULT_PULL_REQUEST_PROVIDER,
+            branch: context.branch,
+            directoryPaths: context.directoryPaths,
+          }),
+        );
+        if (!lookup) {
+          continue;
+        }
+        for (const pr of lookup.prs) {
+          const prKey = getPrStatusKey(pr);
+          // The lookup entry holds the PRs as of its own fetch; the status
+          // registry holds the newest state for each one. Trust the latter.
+          const latest = this.prStatusRegistry.get(prKey)?.pr ?? pr;
+          if (isTerminalPullRequest(latest)) {
+            continue;
+          }
+          this.prPollBackendByKey.set(prKey, context.backend);
+
+          const existing = byKey.get(prKey);
+          if (existing) {
+            if (!existing.threadKeys.includes(threadKey)) {
+              existing.threadKeys.push(threadKey);
+            }
+            continue;
+          }
+          byKey.set(prKey, { prKey, pr: latest, threadKeys: [threadKey] });
+        }
+      }
+    }
+    return [...byKey.values()];
+  }
+
+  /**
+   * Fold a poll result into the registry + cache, and publish only what
+   * actually changed. Returns the changed prKeys so the scheduler can keep its
+   * quiet-demotion clock.
+   */
+  private async applyPolledPrStatuses(
+    prs: PrSummary[],
+    fetchedAt: number,
+  ): Promise<string[]> {
+    // The poller fetches only the PR's head commit (see the cost note in
+    // github-graphql-client). `commitShas` is load-bearing for merged-PR
+    // "pushed" detection and the `gh` path fills in the full list, so union
+    // forward instead of overwriting a richer set with a poorer one.
+    const merged = prs.map((pr) => {
+      const previous = this.prStatusRegistry.get(getPrStatusKey(pr))?.pr;
+      const commitShas = mergeCommitShas(previous?.commitShas, pr.commitShas);
+      return commitShas.length > 0 ? { ...pr, commitShas } : pr;
+    });
+
+    const changed = this.rememberPrStatuses(merged, fetchedAt);
+    if (changed.length === 0) {
+      return [];
+    }
+
+    await this.writePrStatusesToCache(changed, fetchedAt);
+
+    // Publish on the backend that owns each PR's thread. Group so we emit one
+    // batch per backend rather than one call per PR.
+    const changedByBackend = new Map<AppServerBackendKind, PrSummary[]>();
+    for (const pr of changed) {
+      const backend = this.prPollBackendByKey.get(getPrStatusKey(pr)) ?? "codex";
+      const bucket = changedByBackend.get(backend);
+      if (bucket) {
+        bucket.push(pr);
+      } else {
+        changedByBackend.set(backend, [pr]);
+      }
+    }
+    await Promise.all(
+      [...changedByBackend].map(async ([backend, prs]) =>
+        await this.publishPullRequestStatusUpdates({ backend, prs }),
+      ),
+    );
+    return changed.map((pr) => getPrStatusKey(pr));
   }
 
   async getGhStatus(request: GetGhStatusRequest): Promise<GhStatus> {
@@ -3246,6 +3790,96 @@ class DesktopAppServerService {
     return { canceled: false, path: result.filePaths[0] };
   }
 
+  async pickFileFromDisk(
+    parentWindow?: BrowserWindow,
+  ): Promise<PickFileFromDiskResponse> {
+    const e2ePickPaths = process.env.PWRAGENT_REPLAY_FIXTURE_PATH
+      ? process.env.PWRAGENT_E2E_PICK_FILE_PATHS?.trim()
+      : undefined;
+    if (e2ePickPaths) {
+      return {
+        canceled: false,
+        paths: e2ePickPaths.split(":").filter(Boolean),
+      };
+    }
+
+    const window =
+      parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    const defaultPath = this.lastPickedDirectoryParent ?? os.homedir();
+    const options = {
+      title: "Add file",
+      buttonLabel: "Add file",
+      defaultPath,
+      properties: ["openFile", "multiSelections"] as Array<
+        "openFile" | "multiSelections"
+      >,
+    };
+    const result = window
+      ? await dialog.showOpenDialog(window, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    this.lastPickedDirectoryParent = path.dirname(result.filePaths[0]);
+    return { canceled: false, paths: result.filePaths };
+  }
+
+  /**
+   * Combined file-or-directory reference picker. Only macOS can combine
+   * `openFile` + `openDirectory` in one dialog (Electron limitation on
+   * Windows/Linux — which is why the composer's reference picker keeps
+   * separate "Add directory…" / "Add file…" actions off-macOS). Each
+   * pick is classified via `fs.stat`; unreadable paths are skipped.
+   */
+  async pickReferenceFromDisk(
+    parentWindow?: BrowserWindow,
+  ): Promise<PickReferenceFromDiskResponse> {
+    const e2ePickPaths = process.env.PWRAGENT_REPLAY_FIXTURE_PATH
+      ? process.env.PWRAGENT_E2E_PICK_REFERENCE_PATHS?.trim()
+      : undefined;
+    if (e2ePickPaths) {
+      return {
+        canceled: false,
+        entries: classifyReferencePaths(e2ePickPaths.split(":").filter(Boolean)),
+      };
+    }
+
+    const window =
+      parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    const defaultPath = this.lastPickedDirectoryParent ?? os.homedir();
+    const options = {
+      title: "Add reference",
+      buttonLabel: "Add reference",
+      defaultPath,
+      properties: (process.platform === "darwin"
+        ? ["openFile", "openDirectory", "multiSelections"]
+        : ["openFile", "multiSelections"]) as Array<
+        "openFile" | "openDirectory" | "multiSelections"
+      >,
+    };
+    const result = window
+      ? await dialog.showOpenDialog(window, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    this.lastPickedDirectoryParent = path.dirname(result.filePaths[0]);
+    return { canceled: false, entries: classifyReferencePaths(result.filePaths) };
+  }
+
+  listRecentFileReferences(): ListRecentFileReferencesResponse {
+    return {
+      files: listRecentFileReferencePaths(getAppStateDb()).map((filePath) => ({
+        label: path.basename(filePath),
+        path: filePath,
+      })),
+    };
+  }
+
+  recordRecentFileReferences(request: RecordRecentFileReferencesRequest): void {
+    recordRecentFileReferencePaths(getAppStateDb(), request.paths ?? []);
+  }
+
   async registerDirectoryFromDisk(
     request: RegisterDirectoryFromDiskRequest,
   ): Promise<RegisterDirectoryFromDiskResponse> {
@@ -3444,6 +4078,19 @@ class DesktopAppServerService {
     this.focusedDiffServiceApiKey = undefined;
     this.focusedDiffServiceModel = undefined;
     this.prFetcher = undefined;
+    this.prPollingScheduler?.stop();
+    this.prPollingScheduler = undefined;
+    if (this.prDiscoveryTimer) {
+      clearInterval(this.prDiscoveryTimer);
+      this.prDiscoveryTimer = undefined;
+    }
+    this.prDiscoveryLastRefreshedAt.clear();
+    this.prPollingSettingsUnsubscribe?.();
+    this.prPollingSettingsUnsubscribe = undefined;
+    this.prGraphqlClient = undefined;
+    this.prPollingFocusThreadKeys = new Set();
+    this.prPollBackendByKey.clear();
+    this.prStatusTransitionListeners.clear();
     this.pendingNavigationSnapshots.clear();
     this.pendingThreadPullRequestRefreshes.clear();
     this.pendingEditCommitResolves.clear();
@@ -3975,6 +4622,13 @@ export function registerAppServerIpcHandlers(): void {
       });
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
+    async (_event, request: SetPullRequestPollingFocusRequest): Promise<void> => {
+      appServerService.setPullRequestPollingFocus(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_DETACH_THREAD_PR_CHANNEL);
   ipcMain.handle(
     NAVIGATION_DETACH_THREAD_PR_CHANNEL,
@@ -4084,6 +4738,43 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.pickDirectoryFromDisk(
         senderWindow ?? undefined,
       );
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
+    async (event): Promise<PickFileFromDiskResponse> => {
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      return await appServerService.pickFileFromDisk(
+        senderWindow ?? undefined,
+      );
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
+    async (event): Promise<PickReferenceFromDiskResponse> => {
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      return await appServerService.pickReferenceFromDisk(
+        senderWindow ?? undefined,
+      );
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
+    async (): Promise<ListRecentFileReferencesResponse> => {
+      return appServerService.listRecentFileReferences();
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
+    async (
+      _event,
+      request: RecordRecentFileReferencesRequest,
+    ): Promise<void> => {
+      appServerService.recordRecentFileReferences(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);

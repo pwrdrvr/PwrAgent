@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
@@ -43,7 +43,22 @@ vi.mock("../IntegratedTerminal", () => ({
   ),
 }));
 
-import { ThreadView } from "../ThreadView";
+import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
+import {
+  ThreadView as ThreadViewWithTerminals,
+  type ThreadViewProps,
+} from "../ThreadView";
+
+/**
+ * `terminals` is owned by App in production (it has to outlive ThreadView's
+ * unmounts). Tests drive ThreadView directly, so stand the real controller up
+ * here against each test's mock `desktopApi` — that keeps the terminal
+ * assertions exercising the actual open/hide/close logic rather than a stub.
+ */
+function ThreadView(props: Omit<ThreadViewProps, "terminals">): ReactElement {
+  const terminals = useIntegratedTerminals(props.desktopApi);
+  return <ThreadViewWithTerminals {...props} terminals={terminals} />;
+}
 
 function buildRendererLiveDiffEvent(params: {
   additions: number;
@@ -589,6 +604,115 @@ describe("ThreadView", () => {
     expect(closeIntegratedTerminal).toHaveBeenCalledWith({
       threadKey: "codex:thread-a",
     });
+  });
+
+  // Regression: terminal state used to live in ThreadView's useState, so every
+  // unmount (search view, or a refresh that flips `threadDetailPending`) left
+  // the PTY running in main with nothing in the UI pointing at it. Main is the
+  // owner now, so a freshly mounted ThreadView must rediscover live sessions.
+  it("restores a running terminal reported by the main process without a click", async () => {
+    const selectedThread: NavigationThreadSummary = {
+      id: "thread-detached",
+      title: "Thread Detached",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      projectKey: "/repo/detached",
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+    };
+    const desktopApi = {
+      listIntegratedTerminals: async () => [
+        {
+          sessionId: "session-1",
+          threadKey: "codex:thread-detached",
+          cwd: "/repo/detached",
+          shell: "/bin/zsh",
+          pid: 4242,
+          panelHidden: false,
+          createdAt: 1000,
+        },
+      ],
+    } satisfies DesktopApi;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={desktopApi}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+
+    const terminal = await screen.findByLabelText("Integrated terminal");
+    expect(terminal).toHaveAttribute("data-thread-key", "codex:thread-detached");
+    expect(terminal).toBeVisible();
+    expect(
+      await screen.findByRole("button", { name: "Hide integrated terminal" }),
+    ).toBeInTheDocument();
+  });
+
+  it("flags a running terminal the user collapsed instead of silently hiding it", async () => {
+    const selectedThread: NavigationThreadSummary = {
+      id: "thread-collapsed",
+      title: "Thread Collapsed",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      projectKey: "/repo/collapsed",
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+    };
+    const desktopApi = {
+      listIntegratedTerminals: async () => [
+        {
+          sessionId: "session-2",
+          threadKey: "codex:thread-collapsed",
+          cwd: "/repo/collapsed",
+          shell: "/bin/zsh",
+          pid: 4243,
+          panelHidden: true,
+          createdAt: 1000,
+        },
+      ],
+    } satisfies DesktopApi;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={desktopApi}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+
+    // The shell is alive but collapsed: the pane stays mounted-but-hidden and
+    // the toggle advertises that there is something to come back to.
+    const toggle = await screen.findByRole("button", {
+      name: "Show running integrated terminal",
+    });
+    expect(toggle).toHaveClass("is-running");
+    expect(screen.getByLabelText("Integrated terminal")).not.toBeVisible();
   });
 
   it("opens the integrated terminal in the local handoff directory when projectKey is stale", async () => {

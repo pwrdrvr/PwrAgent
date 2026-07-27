@@ -13,12 +13,14 @@ import {
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
+  type AppServerBackendKind,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
+import { useThreadJump } from "./features/navigation/useThreadJump";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
 import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
@@ -52,6 +54,7 @@ import {
   useNavigationHistory,
   type NavigationHistoryLocation,
 } from "./lib/useNavigationHistory";
+import { TranscriptLinkProvider } from "./lib/transcript-links";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
@@ -60,12 +63,19 @@ import {
   useThreadSessionState,
 } from "./lib/useThreadSessionState";
 import { setSidebarResizing } from "./lib/sidebar-resize-signal";
+import { useIntegratedTerminals } from "./lib/useIntegratedTerminals";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
+import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { resolveBackendErrorNotice } from "./features/notifications/backend-error-notice";
+import {
+  buildHeapSnapshotHandoffMessage,
+  describeHeapSnapshotResult,
+  HEAP_SNAPSHOT_SECRET_WARNING,
+} from "../../shared/heap-snapshot";
 import {
   buildHotCpuProfileHandoffMessage,
   formatHotCpuProfileTriggerSummary,
@@ -216,8 +226,8 @@ function DesktopAppShell(props: {
     threadKey: string;
     turnId?: string;
   }>();
-  // Thread-list quick-jump popup (⌘F while the sidebar is focused).
-  const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
+  // Bumped on every ⌘F so an already-open find bar takes focus back.
+  const [findFocusNonce, setFindFocusNonce] = useState(0);
   // Initial section for SettingsScreen — non-undefined when navigation
   // came from a deep-link to a specific section. Resets when the user
   // switches mainView. The Messaging Activity surface is its own
@@ -251,6 +261,8 @@ function DesktopAppShell(props: {
   // archive notice so the two never clobber each other.
   const [composerNotice, setComposerNotice] = useState<AppNoticeToastNotice>();
   const [hotCpuProfileNotice, setHotCpuProfileNotice] =
+    useState<AppNoticeToastNotice>();
+  const [heapSnapshotNotice, setHeapSnapshotNotice] =
     useState<AppNoticeToastNotice>();
   // Sticky (manual-dismiss) notice for backend turn failures and system
   // errors. These used to vanish silently — the turn just stopped thinking
@@ -299,6 +311,38 @@ function DesktopAppShell(props: {
           heapSnapshotSummary,
           " Copy this notice to hand off the profile path.",
         ].join(""),
+      });
+    });
+  }, [desktopApi]);
+
+  // On-demand heap snapshots. The capture (and its countdown) run in main, so
+  // the result can land here even if Settings was closed to stage the scenario.
+  useEffect(() => {
+    return desktopApi?.onHeapSnapshotCaptured?.((result) => {
+      const failed = result.artifacts.length === 0;
+      // A capture can half-succeed (main written, renderer window gone). Saying
+      // "captured" and hiding the errors would send someone off to analyze a
+      // snapshot that is missing the half they cared about.
+      const partial = !failed && result.errors.length > 0;
+      const title = failed
+        ? "Heap snapshot failed"
+        : partial
+          ? "Heap snapshot partially captured"
+          : "Heap snapshot captured";
+      const message = failed
+        ? result.errors.join("; ")
+        : [
+            describeHeapSnapshotResult(result),
+            partial ? ` Not captured: ${result.errors.join("; ")}.` : "",
+            ` ${HEAP_SNAPSHOT_SECRET_WARNING}`,
+          ].join("");
+      setHeapSnapshotNotice({
+        autoDismiss: false,
+        copyText: buildHeapSnapshotHandoffMessage(result),
+        detail: failed ? undefined : `Session: ${result.sessionDirectoryName}`,
+        id: `heap-snapshot:${result.capturedAt}`,
+        title,
+        message,
       });
     });
   }, [desktopApi]);
@@ -416,16 +460,28 @@ function DesktopAppShell(props: {
       }
     });
   }, [desktopApi]);
-  const revealSelectedThreadInList = useCallback(() => {
-    const selectedRow = document.querySelector<HTMLElement>(
-      ".sidebar .thread-row.is-selected",
-    );
-    selectedRow?.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
-      inline: "nearest",
-    });
-  }, []);
+  // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
+  // a smooth scroll is animated over several frames, and hiding the sidebar
+  // mid-animation abandons it wherever it got to. An instant scroll lands in one
+  // frame, and Chromium keeps the offset across `display: none` — so the row is
+  // already centered when the sidebar comes back.
+  //
+  // Takes an options object rather than a bare `behavior` string so a caller
+  // that wires this straight to an event handler (which would pass the event as
+  // the first argument) still gets the default.
+  const revealSelectedThreadInList = useCallback(
+    (options?: { instant?: boolean }) => {
+      const selectedRow = document.querySelector<HTMLElement>(
+        ".sidebar .thread-row.is-selected",
+      );
+      selectedRow?.scrollIntoView({
+        behavior: options?.instant === true ? "auto" : "smooth",
+        block: "center",
+        inline: "nearest",
+      });
+    },
+    [],
+  );
   const settings = props.settings;
 
   // Persisted layout setters — update local state immediately and write the
@@ -433,12 +489,19 @@ function DesktopAppShell(props: {
   // writeConfig call is fire-and-forget; a failed write just means the
   // preference isn't remembered next launch.
   const writeConfig = settings.writeConfig;
+  // Thread-list quick search (⌘K anywhere, ⌘F while the sidebar is focused).
+  // Owns its own open state and the sidebar peek it needs to render.
+  const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
+  const endSidebarPeek = threadJump.endPeek;
   const setSidebarHiddenPersisted = useCallback(
     (next: boolean) => {
+      // An explicit toggle (⌘B, the chips) is the operator stating a preference,
+      // so it ends any quick-search peek in flight.
+      endSidebarPeek();
       setSidebarHidden(next);
       void writeConfig({ ui: { sidebarHidden: next } });
     },
-    [writeConfig],
+    [endSidebarPeek, writeConfig],
   );
   const setContextRailPinnedPersisted = useCallback(
     (next: boolean) => {
@@ -543,6 +606,16 @@ function DesktopAppShell(props: {
     return undefined;
   }, [mainView, navigation.selectedThreadKey]);
   const showThread = navigation.showThread;
+  // Target of `pwragent://thread/…` chips in the transcript. Navigation-only:
+  // the scheme never carries an action, so this is the entire surface it can
+  // reach. Mirrors the tray/notification `onShowThreadRequested` path below.
+  const showThreadFromLink = useCallback(
+    (request: { backend: AppServerBackendKind; threadId: string }): void => {
+      setMainView("thread");
+      void showThread(request);
+    },
+    [showThread],
+  );
   const restoreHistoryLocation = useCallback(
     (location: NavigationHistoryLocation): void => {
       if (location.view === "search") {
@@ -577,22 +650,31 @@ function DesktopAppShell(props: {
     restore: restoreHistoryLocation,
   });
   useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
-  // ⌘⇧F / ⌃⇧F opens the global thread search screen. ⌘F (in-thread find /
-  // thread-list quick search) is wired onto this same owner further below.
+  // ⌘⇧F / ⌃⇧F opens the global thread search screen; ⌘F is the focus-sensitive
+  // context find; ⌘K always lands on the thread-list quick search.
   useFindHotkeys({
     onOpenSearch: () => setMainView(mainView === "search" ? "thread" : "search"),
     onFind: () => {
-      // The thread-list quick search (below) claims ⌘F while the sidebar is
-      // focused; anywhere else ⌘F finds within the open thread.
+      // The thread-list quick search claims ⌘F while the sidebar is focused;
+      // anywhere else ⌘F finds within the open thread. Focus decides — which is
+      // precisely why ⌘K exists: reaching for the thread list from inside a
+      // thread would otherwise open the in-thread find.
       const active = document.activeElement as HTMLElement | null;
       if (active?.closest(".sidebar")) {
-        setSidebarSearchOpen(true);
+        threadJump.openJump();
         return;
       }
       if (mainView === "thread") {
         setManualFindOpen(true);
+        // Re-arm focus: a second ⌘F with the bar already open (operator clicked
+        // into the transcript, then reached back for find) must put the caret
+        // back in the field, the way a browser's find does.
+        setFindFocusNonce((nonce) => nonce + 1);
       }
     },
+    // ⌘K toggles, like ⌘⇧F toggles the search screen: pressing it again backs
+    // out of a jump you didn't mean to start, without reaching for Escape.
+    onThreadJump: threadJump.toggleJump,
   });
   // Manual find is per-thread chrome: drop it when the operator leaves the
   // thread view or switches threads. The deep-link find (findRequest) closes
@@ -653,6 +735,13 @@ function DesktopAppShell(props: {
     composerDraftStore,
     desktopApi,
     selectedThread: navigation.selectedThread,
+    threads: navigation.threads,
+  });
+  // Per-thread "Scheduled"/"Queued" chip state, derived from the same
+  // queued-turn store useQueuedTurnRelease drains. Keyed by thread identity
+  // key so it threads down beside approvalRequestThreadKeys.
+  const queuedMessageThreadKeys = useThreadQueuedMessageIndicators({
+    composerDraftStore,
     threads: navigation.threads,
   });
   // Fetch the boot info once at mount. Stable for the renderer's
@@ -810,6 +899,20 @@ function DesktopAppShell(props: {
     launchpad: navigation.selectedLaunchpad,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
+  // Lives here, not in ThreadView: ThreadView unmounts on the search view and
+  // on any refresh that flips `threadDetailPending`, and terminal state kept
+  // inside it left the main process's PTYs running with nothing in the UI
+  // pointing at them.
+  const terminals = useIntegratedTerminals(desktopApi);
+  // Sidebar rows wear a terminal chip when a shell is alive for that thread —
+  // without it, a collapsed terminal is unfindable from the thread list.
+  const terminalThreadKeys = useMemo(
+    () =>
+      Object.fromEntries(
+        [...terminals.liveThreadKeys].map((threadKey) => [threadKey, true]),
+      ),
+    [terminals.liveThreadKeys],
+  );
   // Window-level masthead actions (Automations / Settings / New Thread).
   // Shared by the sidebar masthead's home (AppTitleBar on Windows) and the
   // thread-header relocation when the sidebar is hidden on macOS/Linux.
@@ -841,6 +944,7 @@ function DesktopAppShell(props: {
   const threadViewProps = {
     activeTurnId: session.activeTurnId,
     activeTurnStartedAt: session.activeTurnStartedAt,
+    terminals,
     addOptimisticReviewEntry: session.addOptimisticReviewEntry,
     addOptimisticUserMessage: session.addOptimisticUserMessage,
     backendError: backendSummaries.error,
@@ -914,6 +1018,13 @@ function DesktopAppShell(props: {
     onPickAndAttachDirectoryToThread: () => {
       void navigation.pickAndAttachDirectoryToSelectedThread();
     },
+    onPickDirectoryForReference: () => navigation.pickDirectoryForReference(),
+    onAttachDirectoryReferences: (
+      paths: string[],
+      target: { backend: AppServerBackendKind; threadId: string }
+    ) => {
+      void navigation.attachDirectoryPathsToThread(target, paths);
+    },
     onClearPickDirectoryError: navigation.clearPickDirectoryError,
     setExecutionModeError: navigation.setThreadExecutionModeError,
     setThreadModelSettingsError: navigation.setThreadModelSettingsError,
@@ -957,6 +1068,7 @@ function DesktopAppShell(props: {
     findOpen: threadFindOpen,
     findInitialQuery: threadFindInitialQuery,
     findTurnId: threadFindTurnId,
+    findFocusNonce,
     onFindOpenChange: (open: boolean) => {
       // The bar only ever calls this to close itself (Escape / ✕). Clear both
       // the manual toggle and any deep-link request so it stays closed.
@@ -975,7 +1087,24 @@ function DesktopAppShell(props: {
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: navigation.discardLaunchpad,
-    onMaterializeLaunchpad: navigation.materializeDirectoryLaunchpad,
+    // The composer's 5th argument is `extraDirectoryPaths` (draft
+    // `@`-references); the hook's 5th is `parentThreadId` (resolved from
+    // the launchpad draft internally), so map positions explicitly.
+    onMaterializeLaunchpad: (
+      directoryKey,
+      input,
+      collaborationMode,
+      reviewTarget,
+      extraDirectoryPaths
+    ) =>
+      navigation.materializeDirectoryLaunchpad(
+        directoryKey,
+        input,
+        collaborationMode,
+        reviewTarget,
+        undefined,
+        extraDirectoryPaths
+      ),
     onPendingStatusChange: session.setPendingStatusText,
     onRefreshNavigation: navigation.refresh,
     onSetExecutionMode: navigation.selectedThread
@@ -1087,7 +1216,7 @@ function DesktopAppShell(props: {
   };
 
   return (
-    <>
+    <TranscriptLinkProvider onShowThread={showThreadFromLink} threads={navigation.threads}>
       <AppTitleBar
         desktopApi={desktopApi}
         onOpenMessagingActivity={openMessagingActivityWindow}
@@ -1123,6 +1252,8 @@ function DesktopAppShell(props: {
           loading={navigation.loading}
           approvalRequestThreadKeys={session.approvalRequestThreadKeys}
           inputRequestThreadKeys={session.inputRequestThreadKeys}
+          terminalThreadKeys={terminalThreadKeys}
+          queuedMessageThreadKeys={queuedMessageThreadKeys}
           composerSourceThreadKey={navigation.composerSourceThreadKey}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
@@ -1169,12 +1300,28 @@ function DesktopAppShell(props: {
             setMainView("thread");
             navigation.selectThread(thread);
           }}
-          threadJumpOpen={sidebarSearchOpen}
-          onThreadJumpOpenChange={setSidebarSearchOpen}
+          threadJumpOpen={threadJump.open}
+          onThreadJumpOpenChange={(open) => {
+            // Every close (Escape, outside click, picking a thread) goes through
+            // closeJump so a peeked-open sidebar goes back to hidden.
+            if (open) {
+              threadJump.openJump();
+              return;
+            }
+            threadJump.closeJump();
+          }}
           onJumpToThread={(thread) => {
             setMainView("thread");
             navigation.selectThread(thread);
-            requestAnimationFrame(() => revealSelectedThreadInList());
+            // Reveal on the next frame, once the new selection has rendered.
+            // Do it even when the sidebar is only peeked open (⌘K over a hidden
+            // sidebar) — the popup is closing and taking the sidebar with it,
+            // but the scroll offset survives, so bringing the sidebar back later
+            // shows the thread we jumped to instead of stranding it off-screen.
+            // That reveal must be instant: an animated scroll wouldn't finish
+            // before the sidebar hides.
+            const instant = threadJump.isPeeking();
+            requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
           }}
           onArchiveThread={navigation.archiveThread}
           onRenameThread={navigation.renameThread}
@@ -1186,6 +1333,9 @@ function DesktopAppShell(props: {
           onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
           onSetDirectoryPin={navigation.setDirectoryPin}
           onReorderDirectoryPins={navigation.reorderDirectoryPins}
+          onRemoveDirectory={(directory) => {
+            void navigation.removeDirectory(directory.key);
+          }}
           onPrefetchPullRequests={pullRequests.prefetch}
           onDetachPullRequest={async (thread, pr) => {
             if (!desktopApi?.detachThreadPullRequest) return;
@@ -1415,6 +1565,11 @@ function DesktopAppShell(props: {
           />
           <AppNoticeToast
             desktopApi={desktopApi}
+            notice={heapSnapshotNotice}
+            onDismiss={() => setHeapSnapshotNotice(undefined)}
+          />
+          <AppNoticeToast
+            desktopApi={desktopApi}
             notice={backendErrorNotice}
             onDismiss={() => setBackendErrorNotice(undefined)}
           />
@@ -1426,7 +1581,7 @@ function DesktopAppShell(props: {
           <AppUpdateBanner desktopApi={desktopApi} />
         </div>
       </div>
-    </>
+    </TranscriptLinkProvider>
   );
 }
 

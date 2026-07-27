@@ -19,6 +19,8 @@ import { requestShowThread } from "../window-show-thread";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   type AcpBackendId,
+  buildThreadMarkdownLink,
+  buildThreadUrl,
   estimateOpenAiTokenUsageCost,
   formatTokenUsageUsd,
   isToolManagedWorktreePath,
@@ -329,6 +331,7 @@ import {
 } from "./codex-environment-config";
 import {
   applyLocalCodexEnvironmentSelection,
+  attachDetachedCommandThreadId,
   CodexEnvironmentStartupError,
   startLocalCodexEnvironmentAction,
   stopCodexEnvironmentDetachedCommand,
@@ -2125,11 +2128,17 @@ function parseReservedAcpStartThreadKey(
   return { backend, threadId };
 }
 
+/**
+ * Quit blockers are keyed the same way as every other thread identity, so the
+ * quit dialog can parse them back into `{backend, threadId}` and link to the
+ * thread. The hand-rolled `${backend}:${threadId}` this used to build was
+ * ambiguous for ACP backends, whose kind ("acp:grok") already contains a colon.
+ */
 function formatQuitThreadKey(
   backend: AppServerBackendKind,
   threadId: string,
 ): string {
-  return `${backend}:${threadId}`;
+  return buildThreadIdentityKey(backend, threadId);
 }
 
 function prependAutomationRuntimeContext(params: {
@@ -4261,7 +4270,7 @@ async function resetLaunchpadAfterMaterialize(params: {
     directoryKey: launchpad.directoryKey,
   });
 
-  if (!launchpad.codexEnvironmentId) {
+  if (!launchpad.codexEnvironmentId && !launchpad.messagingToolUpdateMode) {
     return;
   }
 
@@ -4280,9 +4289,11 @@ async function resetLaunchpadAfterMaterialize(params: {
     prompt: "",
     workMode: defaultLaunchpadWorkMode(launchpad, defaults),
     branchName: launchpad.branchName,
+    messagingToolUpdateMode: launchpad.messagingToolUpdateMode,
     codexEnvironmentId: launchpad.codexEnvironmentId,
-    codexEnvironmentExecutionTarget:
-      launchpad.codexEnvironmentExecutionTarget ?? "local",
+    codexEnvironmentExecutionTarget: launchpad.codexEnvironmentId
+      ? launchpad.codexEnvironmentExecutionTarget ?? "local"
+      : undefined,
     createdAt: now,
     updatedAt: now,
   });
@@ -4989,10 +5000,38 @@ function resolveGrokApiKeyForLiveClient(): string | undefined {
 function buildCodexParentDynamicToolSpecs(
   agentToolCatalogs: Array<{ dynamicTools: CodexDynamicToolSpec[] }> = [],
 ): CodexDynamicToolSpec[] {
-  return [
+  return mergeCodexDynamicToolSpecs([
     ...agentToolCatalogs.flatMap((catalog) => catalog.dynamicTools),
     ...buildTaskMonitorDynamicToolSpecs("parent"),
-  ];
+  ]);
+}
+
+function mergeCodexDynamicToolSpecs(
+  specs: CodexDynamicToolSpec[],
+): CodexDynamicToolSpec[] {
+  const namespaces = new Map<
+    string,
+    Extract<CodexDynamicToolSpec, { type: "namespace" }>
+  >();
+  const functions: CodexDynamicToolSpec[] = [];
+
+  for (const spec of specs) {
+    if (spec.type !== "namespace") {
+      functions.push(spec);
+      continue;
+    }
+    const existing = namespaces.get(spec.name);
+    if (existing) {
+      existing.tools.push(...spec.tools);
+      continue;
+    }
+    namespaces.set(spec.name, {
+      ...spec,
+      tools: [...spec.tools],
+    });
+  }
+
+  return [...functions, ...namespaces.values()];
 }
 
 function pageNormalizedReplay(
@@ -6658,6 +6697,7 @@ export class DesktopBackendRegistry {
     cwd?: string;
     executionMode: ThreadExecutionMode;
     acpRuntime?: BackendAcpSessionRuntimeState;
+    reasoningEffort?: string;
   }): Promise<{ threadId: string }> {
     const client = await this.acpBackend.getClient(params.backend);
     const initialExecutionMode = this.usesSlashControlledAcpExecutionModes(
@@ -6680,7 +6720,12 @@ export class DesktopBackendRegistry {
         executionMode: params.executionMode,
       });
     }
-    await this.applyAcpRuntimeSelection(client, session.sessionId, params.acpRuntime);
+    await this.applyAcpRuntimeSelection(
+      client,
+      session.sessionId,
+      params.acpRuntime,
+      params.reasoningEffort,
+    );
     return { threadId: session.sessionId };
   }
 
@@ -6688,6 +6733,8 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
     input: AppServerTurnInputItem[];
+    model?: string;
+    reasoningEffort?: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     return await this.acpSessionPromptLocks.run(
       executionModeQueueKey(params.backend, params.threadId),
@@ -6699,6 +6746,8 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
     input: AppServerTurnInputItem[];
+    model?: string;
+    reasoningEffort?: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     const promptPayload = inputToAcpPrompt(params.input);
     if (!promptPayload) {
@@ -6727,6 +6776,21 @@ export class DesktopBackendRegistry {
         await this.assertAcpSessionCanRebindForWorkspace(params.backend, sessionForTurn);
         sessionForTurn = await this.rebindAcpSessionForWorkspace(client, sessionForTurn);
       }
+    }
+    if (
+      params.model &&
+      (
+        sessionForTurn.acpRuntime?.currentModelId !== params.model ||
+        sessionForTurn.acpRuntime?.reasoningEffort !== params.reasoningEffort
+      )
+    ) {
+      await client.setRuntimeOption?.({
+        sessionId: params.threadId,
+        source: "model",
+        optionId: "model",
+        value: params.model,
+        reasoningEffort: params.reasoningEffort,
+      });
     }
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
     await this.emit({
@@ -6786,6 +6850,7 @@ export class DesktopBackendRegistry {
     client: AcpRuntimeClient,
     sessionId: string,
     runtime: BackendAcpSessionRuntimeState | undefined,
+    reasoningEffort?: string,
   ): Promise<void> {
     for (const [optionId, value] of Object.entries(runtime?.configValues ?? {})) {
       await client.setRuntimeOption?.({
@@ -6809,6 +6874,7 @@ export class DesktopBackendRegistry {
         source: "model",
         optionId: "model",
         value: runtime.currentModelId,
+        reasoningEffort,
       });
     }
   }
@@ -8056,6 +8122,7 @@ export class DesktopBackendRegistry {
             cwd,
             executionMode: effectiveExecutionMode,
             acpRuntime,
+            reasoningEffort: modelSettings.reasoningEffort,
           })
         : await this.getClient(backend, effectiveExecutionMode).startThread({
             ...request,
@@ -8595,6 +8662,15 @@ export class DesktopBackendRegistry {
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertNotBootstrap("startTurn");
     if (isAcpBackendId(params.backend)) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      const modelSettings = await this.resolveModelSettings(params.backend, {
+        model: params.model ?? overlay?.model,
+        reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+        reasoningEffortsByModel: overlay?.reasoningEffortsByModel,
+      });
       const reservationKey = buildTurnStartReservationKey(
         params.backend,
         params.threadId,
@@ -8618,6 +8694,8 @@ export class DesktopBackendRegistry {
           backend: params.backend,
           threadId: params.threadId,
           input: params.input,
+          model: modelSettings.model,
+          reasoningEffort: modelSettings.reasoningEffort,
         });
         this.scheduleThreadTitleGeneration({
           backend: params.backend,
@@ -8711,13 +8789,6 @@ export class DesktopBackendRegistry {
           ? await this.withCodexThreadClient(params.threadId, async (client, mode) => {
               const effectiveMode = params.executionMode ?? mode;
               const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
-              const agentToolCatalogs = resolveAgentToolCatalogs({
-                appManagementHandler: this.appManagementHandler,
-                automationInspectionHandler: this.automationInspectionHandler,
-                messagingHandler: this.messagingHandler,
-                threadInspectionHandler: this.threadInspectionHandler,
-                threadOrchestrationHandler: this.threadOrchestrationHandler,
-              });
               const started = await client.startTurn({
                 threadId: params.threadId,
                 input,
@@ -8731,7 +8802,6 @@ export class DesktopBackendRegistry {
                   : {}),
                 defaultModeRequestUserInput:
                   this.resolveCodexDefaultModeRequestUserInputFn(),
-                dynamicTools: buildCodexParentDynamicToolSpecs(agentToolCatalogs),
               });
               activeTurnMode = effectiveMode;
               return started;
@@ -10122,11 +10192,48 @@ export class DesktopBackendRegistry {
       },
       "settings-refresh",
     );
-    await this.overlayStore.setThreadModelSettings({
-      backend: params.backend,
-      threadId: params.threadId,
-      ...modelSettings,
-    });
+    const acpBackend = isAcpBackendId(params.backend)
+      ? params.backend
+      : undefined;
+    const acpRuntimeModelChanged =
+      modelSettings.model !== current?.model ||
+      modelSettings.reasoningEffort !== current?.reasoningEffort;
+    const persistModelSettings = async (): Promise<void> => {
+      await this.overlayStore.setThreadModelSettings({
+        backend: params.backend,
+        threadId: params.threadId,
+        ...modelSettings,
+      });
+    };
+    if (acpBackend && modelSettings.model && acpRuntimeModelChanged) {
+      const runtimeModel = modelSettings.model;
+      await this.acpSessionPromptLocks.run(
+        executionModeQueueKey(acpBackend, params.threadId),
+        async () => {
+          if (!this.threadHasActiveTurn(params.threadId, acpBackend)) {
+            const session = this.acpBackend.getSession(
+              acpBackend,
+              params.threadId,
+            );
+            if (!session) {
+              throw new Error(`ACP session not found: ${params.threadId}`);
+            }
+            const client = await this.acpBackend.getClient(acpBackend);
+            await client.ensureSession?.(session);
+            await client.setRuntimeOption?.({
+              sessionId: params.threadId,
+              source: "model",
+              optionId: "model",
+              value: runtimeModel,
+              reasoningEffort: modelSettings.reasoningEffort,
+            });
+          }
+          await persistModelSettings();
+        },
+      );
+    } else {
+      await persistModelSettings();
+    }
 
     await this.emit({
       backend: params.backend,
@@ -10907,6 +11014,10 @@ export class DesktopBackendRegistry {
           nextRuntime = await startLocalCodexEnvironmentAction({
             actionId: request.actionId,
             runId,
+            owner: {
+              backend: request.backend,
+              threadId: request.threadId,
+            },
             commandRunner: this.codexEnvironmentCommandRunner,
             env: this.codexEnvironmentCommandEnv,
             runtime: runtimeForAction,
@@ -11465,6 +11576,10 @@ export class DesktopBackendRegistry {
         onActionDetachedExit,
         onActionDetachedOutput,
         actionRunId: autoActionRunId,
+        // The thread doesn't exist yet — `attachDetachedCommandThreadId` below
+        // back-fills it once `startThread` returns. Registering the owner now
+        // is what keeps an auto-started dev server visible to the quit dialog.
+        owner: { backend: codexActionBackend },
         hydrationStore: this.codexEnvironmentHydrationStore,
         selection: codexEnvironmentSelection,
       });
@@ -11493,6 +11608,10 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime,
     });
     pendingActionThreadId = startThreadResponse.threadId;
+    // The auto-started environment action spawned before this thread existed;
+    // give its detached-process record an owner now so the quit dialog can name
+    // it and link back here.
+    attachDetachedCommandThreadId(autoActionRunId, startThreadResponse.threadId);
     if (request.parentThreadId?.trim()) {
       await this.overlayStore.setThreadParent?.({
         backend: startThreadResponse.backend,
@@ -15824,11 +15943,12 @@ export class DesktopBackendRegistry {
         ? session.acpRuntime.configValues.model
         : undefined);
     const reasoningEffort =
-      typeof session?.acpRuntime?.configValues?.reasoningEffort === "string"
+      session?.acpRuntime?.reasoningEffort ??
+      (typeof session?.acpRuntime?.configValues?.reasoningEffort === "string"
         ? session.acpRuntime.configValues.reasoningEffort
         : typeof session?.acpRuntime?.configValues?.reasoning_effort === "string"
           ? session.acpRuntime.configValues.reasoning_effort
-          : undefined;
+          : undefined);
     return {
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -17302,6 +17422,15 @@ export class DesktopBackendRegistry {
         approvalPolicy: request.args.approvalPolicy,
         sandbox: request.args.sandbox,
       });
+      // Best-effort: give the link its human title so it reads well on
+      // surfaces that can't resolve the id against the live snapshot (the
+      // desktop chip shows the live title regardless). `listThreads` is
+      // cached, so this usually costs nothing.
+      const targetThread = await this.findThreadForWorkspaceHandoff({
+        backend,
+        callerReason: "send-message-link",
+        threadId: turn.threadId,
+      });
       return {
         ok: true,
         data: {
@@ -17309,6 +17438,12 @@ export class DesktopBackendRegistry {
           threadId: turn.threadId,
           turnId: turn.turnId,
           promptPreview: truncateThreadInspectionText(prompt, 240),
+          threadUrl: buildThreadUrl({ backend, threadId: turn.threadId }),
+          threadLink: buildThreadMarkdownLink({
+            backend,
+            threadId: turn.threadId,
+            title: targetThread?.title,
+          }),
           settings,
         },
       };
@@ -17842,6 +17977,8 @@ export class DesktopBackendRegistry {
         turnId,
         handoffId,
         title,
+        threadUrl: buildThreadUrl({ backend, threadId }),
+        threadLink: buildThreadMarkdownLink({ backend, threadId, title }),
         seedMode,
         groupingMode,
         ...(groupedParentThreadId

@@ -296,7 +296,10 @@ export function describeInstalledAcpBackend(
     ],
     capabilities: buildAcpCapabilities(),
     executionModes: buildAcpExecutionModes(agent, available, unavailableReason),
-    launchpadOptions: buildAcpLaunchpadOptions(runtimeCapabilities),
+    launchpadOptions: buildAcpLaunchpadOptions(
+      runtimeCapabilities,
+      agent.registryId,
+    ),
     unavailableReason,
   };
 }
@@ -399,14 +402,25 @@ function buildAcpExecutionModes(
 
 export function buildAcpLaunchpadOptions(
   runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
+  registryId?: string,
 ): BackendLaunchpadOptions | undefined {
   const modelOptions =
     runtimeCapabilities?.models?.availableModels.map(
-      (model): BackendModelOption => ({
-        id: model.id,
-        label: model.label,
-        current: runtimeCapabilities.models?.currentModelId === model.id,
-      }),
+      (model): BackendModelOption => {
+        const isGrok45 = registryId === "grok" && model.id === "grok-4.5";
+        return {
+          id: model.id,
+          label: model.label,
+          current: runtimeCapabilities.models?.currentModelId === model.id,
+          defaultReasoningEffort:
+            model.defaultReasoningEffort ?? (isGrok45 ? "high" : undefined),
+          reasoningEfforts:
+            model.reasoningEfforts ??
+            (isGrok45 ? ["low", "medium", "high"] : undefined),
+          supportsReasoning:
+            model.supportsReasoning ?? (isGrok45 ? true : undefined),
+        };
+      },
     ) ?? [];
   const configModelOption =
     runtimeCapabilities?.configOptions
@@ -792,8 +806,10 @@ export class AcpBackendAdapter {
     if (!isAcpBackendId(backend)) {
       return undefined;
     }
+    const agent = this.acpAgentStore?.getInstalledAgent(backend);
     return buildAcpLaunchpadOptions(
-      this.acpAgentStore?.getInstalledAgent(backend)?.runtimeCapabilities,
+      agent?.runtimeCapabilities,
+      agent?.registryId,
     );
   }
 

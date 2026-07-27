@@ -30,6 +30,7 @@ import type {
 } from "@pwragent/shared";
 import { execFile } from "node:child_process";
 import {
+  DEFAULT_BACKGROUND_PR_POLLING,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
@@ -340,6 +341,7 @@ export class DesktopSettingsService {
   private readonly env: NodeJS.ProcessEnv;
   private readonly argv: readonly string[];
   private readonly configPath: string;
+  private readonly configWriteListeners = new Set<() => void>();
   private readonly now: () => number;
   private readonly startupCodexHome?: string;
   private loggedObsoleteComposerConfig = false;
@@ -590,6 +592,10 @@ export class DesktopSettingsService {
         lightweightNavigationRefresh: this.resolveConfigBoolean(
           config.experimental?.lightweightNavigationRefresh,
           false,
+        ),
+        backgroundPrPolling: this.resolveConfigBoolean(
+          config.experimental?.backgroundPrPolling,
+          DEFAULT_BACKGROUND_PR_POLLING,
         ),
         threadPricingSummary: this.resolveConfigBoolean(
           config.experimental?.threadPricingSummary,
@@ -1180,7 +1186,30 @@ export class DesktopSettingsService {
         density: next?.density ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
       });
     }
+    // Any successful write notifies generic listeners so main-process services
+    // (e.g. the background PR poller) can react to a changed experimental flag
+    // without waiting for the next navigation snapshot to re-read settings.
+    for (const listener of this.configWriteListeners) {
+      try {
+        listener();
+      } catch {
+        // Listeners are best-effort side effects; never fail a settings write.
+      }
+    }
     return this.readSettings();
+  }
+
+  /**
+   * Subscribe to successful config writes. Returns an unsubscribe function.
+   * Fires after the write lands, so a listener that re-reads settings sees the
+   * new value. Kept generic (not keyed to a section) — callers cheaply re-read
+   * only what they care about.
+   */
+  onConfigWritten(listener: () => void): () => void {
+    this.configWriteListeners.add(listener);
+    return () => {
+      this.configWriteListeners.delete(listener);
+    };
   }
 
   async replaceSecret(

@@ -29,6 +29,7 @@ import {
   buildThreadIdentityKey,
   compareThreadsByCreatedAtDesc,
   insertSubthreadIdAfter,
+  isSubthreadLaunchpadKey,
   shortenDerivedThreadTitle,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
@@ -2116,6 +2117,7 @@ export function useThreadNavigation(
     collaborationMode?: AppServerCollaborationModeRequest,
     reviewTarget?: AppServerReviewTarget,
     parentThreadId?: string,
+    extraDirectoryPaths?: string[],
   ) => Promise<void>;
   /** Directory the New Thread button resolves to by default, or undefined for the directory-less workspace. */
   newThreadDirectoryLabel?: string;
@@ -2133,10 +2135,36 @@ export function useThreadNavigation(
   ) => Promise<void>;
   /** Existing-thread picker: OS dialog -> validate -> attach as an extra linked directory. */
   pickAndAttachDirectoryToSelectedThread: () => Promise<void>;
+  /**
+   * No-navigation variant of `pickAndRegisterDirectory` for the composer's
+   * reference pickers ("@ → Add directory…", the "+" menu): OS dialog →
+   * validate/register → fold the new launchpad into the snapshot so the
+   * tracked set knows it, then resolve with the picked directory's
+   * label/path for the caller to mint a chip. Never changes the selected
+   * item. Resolves undefined on cancel or failure (failures also surface
+   * via `pickDirectoryError`).
+   */
+  pickDirectoryForReference: () => Promise<
+    { label: string; path: string } | undefined
+  >;
+  /**
+   * Attach known directory paths (composer `@`-references) to a specific
+   * thread. The target is explicit — the composer resolves it from the
+   * turn it just sent — so a selection change while the turn request was
+   * in flight (or a queued turn firing later) cannot link the directories
+   * to the wrong thread. Per-path failures are non-fatal — the turn
+   * already carries the path as text, so a failed link only loses the
+   * sidebar association.
+   */
+  attachDirectoryPathsToThread: (
+    target: { backend: AppServerBackendKind; threadId: string },
+    paths: string[],
+  ) => Promise<void>;
   pickDirectoryError?: string;
   pickingDirectory: boolean;
   clearPickDirectoryError: () => void;
   resetDirectoryLaunchpad: (directoryKey: string) => Promise<void>;
+  removeDirectory: (directoryKey: string) => Promise<void>;
   selectedDirectory?: NavigationDirectorySummary;
   selectedItemKey?: string;
   selectedLaunchpad?: NavigationLaunchpadDraft;
@@ -4230,6 +4258,63 @@ export function useThreadNavigation(
     [desktopApi, refresh],
   );
 
+  const pickDirectoryForReference = useCallback(async (): Promise<
+    { label: string; path: string } | undefined
+  > => {
+    // No-navigation sibling of pickAndRegisterDirectory: the composer's
+    // reference pickers register the picked directory (so the tracked set
+    // and the `@` autocomplete know it) but keep the current selection —
+    // the caller mints a chip in place instead of moving to the new
+    // launchpad. Same cancel-vs-failure split as the sibling: cancel is
+    // silent, validation failure surfaces via `pickDirectoryError`.
+    if (
+      !desktopApi?.pickDirectoryFromDisk ||
+      !desktopApi?.registerDirectoryFromDisk
+    ) {
+      setPickDirectoryError("Desktop bridge is missing the directory picker.");
+      return undefined;
+    }
+
+    setPickDirectoryError(undefined);
+    setPickingDirectory(true);
+    try {
+      const pick = await desktopApi.pickDirectoryFromDisk();
+      if (pick.canceled) {
+        return undefined;
+      }
+      const result = await desktopApi.registerDirectoryFromDisk({
+        path: pick.path,
+      });
+      if (!result.ok) {
+        setPickDirectoryError(result.message);
+        return undefined;
+      }
+      setLocalLaunchpads((current) => ({
+        ...current,
+        [result.directoryKey]: result.launchpad,
+      }));
+      setState((current) => ({
+        ...current,
+        response: applyLaunchpadUpdate(
+          current.response,
+          result.launchpad,
+          result.defaults,
+        ),
+      }));
+      return {
+        label: result.launchpad.directoryLabel,
+        path: result.launchpad.directoryPath ?? pick.path,
+      };
+    } catch (error) {
+      setPickDirectoryError(
+        error instanceof Error ? error.message : String(error),
+      );
+      return undefined;
+    } finally {
+      setPickingDirectory(false);
+    }
+  }, [desktopApi]);
+
   const pickAndAttachDirectoryToSelectedThread = useCallback(async (): Promise<void> => {
     if (
       !desktopApi?.pickDirectoryFromDisk ||
@@ -4269,6 +4354,59 @@ export function useThreadNavigation(
       setPickingDirectory(false);
     }
   }, [desktopApi, refresh, selectedThread]);
+
+  const attachDirectoryPathsToThread = useCallback(
+    async (
+      target: { backend: AppServerBackendKind; threadId: string },
+      paths: string[],
+    ): Promise<void> => {
+      // Composer `@`-reference links (no OS dialog — the paths are already
+      // known). The caller names the thread explicitly so a selection
+      // change during the send cannot misdirect the attach. Failures stay
+      // non-fatal: the sent turn carries the path as text either way, so a
+      // failed link only loses the association.
+      if (!desktopApi?.attachDirectoryToThread || paths.length === 0) {
+        return;
+      }
+
+      let attachedAny = false;
+      for (const path of paths) {
+        try {
+          const result = await desktopApi.attachDirectoryToThread({
+            backend: target.backend,
+            threadId: target.threadId,
+            path,
+            preferredBackend: target.backend,
+          });
+          if (result.ok) {
+            attachedAny = true;
+          } else {
+            console.warn(
+              `Could not link referenced directory ${path}: ${result.message}`,
+            );
+          }
+        } catch (error) {
+          console.warn(
+            `Could not link referenced directory ${path}:`,
+            error,
+          );
+        }
+      }
+      if (attachedAny) {
+        try {
+          await refresh(
+            buildThreadIdentityKey(target.backend, target.threadId),
+          );
+        } catch (error) {
+          // The attach itself landed and the threadDirectories/updated
+          // event will still reach the snapshot; a failed refresh here is
+          // not worth surfacing (and the caller fire-and-forgets us).
+          console.warn("Could not refresh after linking directories:", error);
+        }
+      }
+    },
+    [desktopApi, refresh],
+  );
 
   const clearPickDirectoryError = useCallback((): void => {
     setPickDirectoryError(undefined);
@@ -4449,6 +4587,83 @@ export function useThreadNavigation(
     [desktopApi, directories, optimisticThread, state.response, threads]
   );
 
+  /**
+   * Remove an empty directory (one with no linked threads) from the Directories
+   * list. Such a row is kept alive solely by its registered
+   * `directory_launchpads` overlay row, so deleting that row via
+   * `resetDirectoryLaunchpad` clears `registeredAt` and the directory drops out
+   * of the next snapshot. We optimistically prune the row (and any local
+   * launchpad draft) so the list updates instantly; a directory that still has
+   * threads is left in place, and a failed delete is reconciled by `refresh`.
+   */
+  const removeDirectory = useCallback(
+    async (directoryKey: string): Promise<void> => {
+      if (!desktopApi?.resetDirectoryLaunchpad) {
+        setLaunchpadError("Desktop bridge is missing resetDirectoryLaunchpad().");
+        return;
+      }
+
+      // Only an empty directory may be removed. One that still holds threads
+      // keeps its row from the thread side, so deleting its overlay row would
+      // silently drop its registration and sticky settings while the row stayed
+      // on screen. Sub-thread launchpads are transient composers, not
+      // directories, and must never be torn down through this path.
+      const directory = directories.find(
+        (candidate) => candidate.key === directoryKey,
+      );
+      if (
+        !directory
+        || directory.threadKeys.length > 0
+        || isSubthreadLaunchpadKey(directoryKey)
+      ) {
+        return;
+      }
+
+      setLaunchpadError(undefined);
+      setLocalLaunchpads((current) => {
+        if (!current[directoryKey]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[directoryKey];
+        return next;
+      });
+      setState((current) => {
+        if (!current.response) {
+          return current;
+        }
+        return {
+          ...current,
+          response: {
+            ...current.response,
+            directories: current.response.directories.filter(
+              (directory) =>
+                directory.key !== directoryKey
+                || directory.threadKeys.length > 0,
+            ),
+          },
+        };
+      });
+      setSelectedItemKey((current) =>
+        current === buildLaunchpadSelectionKey(directoryKey) ? undefined : current,
+      );
+
+      try {
+        await desktopApi.resetDirectoryLaunchpad({ directoryKey });
+        // Drop the pin overlay too. It lives in a separate `directory_overlay`
+        // row that resetDirectoryLaunchpad does not touch, and a stale
+        // pinnedRank would silently re-pin the directory if it is ever re-added.
+        if (directory.pinnedRank) {
+          await desktopApi.setDirectoryPin?.({ directoryKey, pinnedRank: null });
+        }
+      } catch (error) {
+        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        await refresh();
+      }
+    },
+    [desktopApi, directories, refresh],
+  );
+
   const materializeDirectoryLaunchpad = useCallback(
     async (
       directoryKey: string,
@@ -4456,6 +4671,7 @@ export function useThreadNavigation(
       collaborationMode?: AppServerCollaborationModeRequest,
       reviewTarget?: AppServerReviewTarget,
       parentThreadId?: string,
+      extraDirectoryPaths?: string[],
     ): Promise<void> => {
       if (!desktopApi?.materializeDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing materializeDirectoryLaunchpad().");
@@ -4560,6 +4776,29 @@ export function useThreadNavigation(
       if (response.turnStartFailure) {
         setLaunchpadError(response.turnStartFailure.message);
       }
+      // Link composer `@`-referenced directories to the just-created
+      // thread before the refresh below so the snapshot comes back with
+      // them. Non-fatal per path — the turn already carries the path as
+      // text, so a failed link only loses the sidebar association.
+      if (extraDirectoryPaths && extraDirectoryPaths.length > 0) {
+        for (const path of extraDirectoryPaths) {
+          try {
+            const attachResult = await desktopApi.attachDirectoryToThread?.({
+              backend: response.backend,
+              threadId: response.threadId,
+              path,
+              preferredBackend: response.backend,
+            });
+            if (attachResult && !attachResult.ok) {
+              console.warn(
+                `Could not link referenced directory ${path}: ${attachResult.message}`,
+              );
+            }
+          } catch (error) {
+            console.warn(`Could not link referenced directory ${path}:`, error);
+          }
+        }
+      }
       setState((current) => ({
         ...current,
         response: current.response
@@ -4588,11 +4827,23 @@ export function useThreadNavigation(
    * selection to the source card the user invoked it from.
    */
   const discardLaunchpad = useCallback((directoryKey: string): void => {
-    const launchpad = stateRef.current.response?.directories.find(
+    // Read from the merged `directories` memo, not the raw snapshot: the
+    // main-process snapshot deliberately omits sub-thread launchpads, so after
+    // an authoritative refresh they exist only in `localLaunchpads`. Sourcing
+    // from the raw snapshot would lose `sourceThreadId` (which is never
+    // persisted anyway) and drop the user to no selection instead of returning
+    // them to the card they composed from. Mirrors materializeDirectoryLaunchpad.
+    const launchpad = directories.find(
       (candidate) => candidate.key === directoryKey,
     )?.launchpad;
     const sourceThreadId = launchpad?.sourceThreadId;
     const sourceBackend = launchpad?.backend;
+    // An explicitly-registered directory (user added it, or it already holds
+    // threads) must stay in the Directories list — Cancel only discards its
+    // un-submitted message. Everything else (sub-thread launchpads, transient
+    // launchpad-only rows) exists solely because of the draft, so drop the row
+    // entirely instead of leaving it behind as a phantom directory entry.
+    const isRegisteredDirectory = launchpad?.registeredAt !== undefined;
 
     setLocalLaunchpads((current) => {
       if (!current[directoryKey]) {
@@ -4618,7 +4869,28 @@ export function useThreadNavigation(
         ? buildThreadIdentityKey(sourceBackend, sourceThreadId)
         : undefined,
     );
-  }, []);
+
+    // Persist the discard so the overlay row can't rehydrate the cancelled
+    // draft on the next open (or after a refresh / restart / in another window).
+    // The in-memory reset above only affects this render.
+    const handleDiscardError = (error: unknown): void => {
+      setLaunchpadError(error instanceof Error ? error.message : String(error));
+    };
+    if (isRegisteredDirectory) {
+      // Keep the registered directory (and its remembered sticky settings);
+      // clear just the composed message.
+      void desktopApi
+        ?.updateDirectoryLaunchpad?.({
+          directoryKey,
+          patch: { prompt: "", imageAttachments: [], editorDocument: undefined },
+        })
+        .catch(handleDiscardError);
+    } else {
+      void desktopApi
+        ?.resetDirectoryLaunchpad?.({ directoryKey })
+        .catch(handleDiscardError);
+    }
+  }, [desktopApi, directories]);
 
   const archiveThread = useCallback(
     async (
@@ -5464,10 +5736,13 @@ export function useThreadNavigation(
     openWorkspaceLaunchpad,
     pickAndRegisterDirectory,
     pickAndAttachDirectoryToSelectedThread,
+    pickDirectoryForReference,
+    attachDirectoryPathsToThread,
     pickDirectoryError,
     pickingDirectory,
     clearPickDirectoryError,
     resetDirectoryLaunchpad,
+    removeDirectory,
     selectedDirectory,
     selectedItemKey,
     selectedLaunchpad,

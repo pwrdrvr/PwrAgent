@@ -131,6 +131,8 @@ function createComposerDraftStore(): ComposerDraftStore {
     getPendingSteer: (scopeKey) => pendingSteers.get(scopeKey),
     getQueuedTurn: (scopeKey) => queuedTurns.get(scopeKey)?.[0],
     getQueuedTurns: (scopeKey) => queuedTurns.get(scopeKey) ?? [],
+    getQueuedTurnVersion: () => 0,
+    subscribeQueuedTurns: () => () => {},
     removeQueuedTurnAt: (scopeKey, index) => {
       const current = queuedTurns.get(scopeKey) ?? [];
       const next = [...current];
@@ -378,6 +380,73 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(copyText).toHaveBeenCalledWith(launchpadError);
     });
+  });
+
+  it("parks the launchpad's message in the recovery buffer when cancelled", async () => {
+    // Cancel empties the composer without losing the message: it is recorded as
+    // "abandoned" (an ArrowUp-recoverable status) and the active draft is
+    // cleared. Leaving the draft in place would rehydrate it into the next
+    // launchpad opened for this key and keep the row's orange marker lit.
+    const deleteDraft = vi.fn();
+    const recordHistory = vi.fn();
+    const draftStore: ComposerDraftStore = {
+      delete: deleteDraft,
+      recordHistory,
+      get: () => undefined,
+      deletePendingSteer: vi.fn(),
+      deleteQueuedTurn: vi.fn(),
+      getPendingSteer: () => undefined,
+      getQueuedTurn: () => undefined,
+      getQueuedTurns: () => [],
+      getQueuedTurnVersion: () => 0,
+      subscribeQueuedTurns: () => () => undefined,
+      removeQueuedTurnAt: () => undefined,
+      removeQueuedTurnById: () => undefined,
+      shiftQueuedTurn: () => undefined,
+      setPendingSteer: vi.fn(),
+      setQueuedTurn: vi.fn(),
+      setQueuedTurns: vi.fn(),
+      set: vi.fn(),
+    };
+    const onCancelLaunchpad = vi.fn();
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        draftStore={draftStore}
+        launchpad={{
+          directoryKey: "subthread:codex:thread-parent:local",
+          directoryKind: "directory",
+          directoryLabel: "media-service",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Make a PR to swap all the icons",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onCancelLaunchpad={onCancelLaunchpad}
+        skills={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    // Recoverable via ArrowUp ("abandoned" is a recovery status), then cleared.
+    expect(recordHistory).toHaveBeenCalledWith(
+      "launchpad:subthread:codex:thread-parent:local",
+      expect.objectContaining({ draft: "Make a PR to swap all the icons" }),
+      "abandoned",
+    );
+    expect(deleteDraft).toHaveBeenCalledWith(
+      "launchpad:subthread:codex:thread-parent:local",
+    );
+    expect(onCancelLaunchpad).toHaveBeenCalledWith(
+      "subthread:codex:thread-parent:local",
+    );
   });
 
   it("renders unavailable reason when provided", async () => {
@@ -1328,25 +1397,101 @@ describe("Composer", () => {
       />
     );
 
-    expect(
-      screen.getByRole("img", {
-        name: "Context window 50% full, 64k/128k tokens, full moon",
-      })
-    ).toBeInTheDocument();
-    expect(screen.getByRole("img")).toHaveAttribute(
-      "data-tooltip",
-      [
-        "Context window: 50% full (full moon)",
-        "Current snapshot: 64k / 128k tokens",
-        "Remaining: 64k tokens, 50% remaining",
-        "Current breakdown: 63k input, 32k cached (50.8%), 1k output",
-        "Cumulative usage reported: 80k tokens",
-        "Cumulative cached input: 48k (66.7%)",
-        "Cumulative output: 8k output, 4k reasoning",
-      ].join("\n")
-    );
-    expect(screen.getByRole("img")).not.toHaveAttribute("title");
+    const moon = screen.getByRole("img", {
+      name: "Context window 50% full, 64k/128k tokens, full moon",
+    });
+    expect(moon).toBeInTheDocument();
+    expect(moon).not.toHaveAttribute("title");
+    expect(moon).not.toHaveAttribute("data-tooltip");
     expect(screen.getByText("50%")).toBeInTheDocument();
+
+    // Hovering the moon opens the structured usage card.
+    fireEvent.mouseEnter(moon);
+    const card = screen.getByRole("tooltip");
+    expect(within(card).getByText("Context window")).toBeInTheDocument();
+    expect(within(card).getByText("full moon")).toBeInTheDocument();
+    expect(within(card).getByText("50% full")).toBeInTheDocument();
+    expect(within(card).getByText("64k left")).toBeInTheDocument();
+    expect(within(card).getByText("64k of 128k tokens")).toBeInTheDocument();
+
+    expect(within(card).getByText("Current request")).toBeInTheDocument();
+    expect(within(card).getByText("Input")).toBeInTheDocument();
+    expect(within(card).getByText("63k")).toBeInTheDocument();
+    expect(within(card).getByText("32k cached (50.8%)")).toBeInTheDocument();
+    expect(within(card).getAllByText("Output")).toHaveLength(2);
+    expect(within(card).getByText("1k")).toBeInTheDocument();
+
+    expect(within(card).getByText("Session total")).toBeInTheDocument();
+    expect(within(card).getByText("80k")).toBeInTheDocument();
+    expect(within(card).getByText("48k cached (66.7%)")).toBeInTheDocument();
+    expect(within(card).getByText("8k")).toBeInTheDocument();
+    expect(within(card).getByText("Reasoning")).toBeInTheDocument();
+    expect(within(card).getByText("4k")).toBeInTheDocument();
+
+    fireEvent.mouseLeave(moon);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("live-updates the open context usage card as token usage changes", () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Context usage",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const composerFor = (
+      contextWindow:
+        | Parameters<typeof Composer>[0]["contextWindow"]
+        | undefined
+    ) => (
+      <Composer
+        backends={[backendSummary("codex")]}
+        contextWindow={contextWindow}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    const { rerender } = render(
+      composerFor({
+        modelContextWindow: 128_000,
+        phase: 4,
+        remainingPercent: 50,
+        remainingTokens: 64_000,
+        totalTokens: 64_000,
+        usedPercent: 50,
+      })
+    );
+
+    fireEvent.mouseEnter(screen.getByRole("img", { name: /Context window/ }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("50% full");
+
+    // A fresh token-usage notification while the card is open updates it
+    // in place — no re-hover required.
+    rerender(
+      composerFor({
+        modelContextWindow: 128_000,
+        phase: 6,
+        remainingPercent: 25,
+        remainingTokens: 32_000,
+        totalTokens: 96_000,
+        usedPercent: 75,
+      })
+    );
+
+    const card = screen.getByRole("tooltip");
+    expect(card).toHaveTextContent("75% full");
+    expect(card).toHaveTextContent("32k left");
+    expect(card).toHaveTextContent("96k of 128k tokens");
+    expect(card).not.toHaveTextContent("50% full");
+
+    // Losing the context state entirely (thread switch) drops the card.
+    rerender(composerFor(undefined));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
   it("shows OpenAI model and reasoning defaults without a Default option", () => {
@@ -1437,6 +1582,45 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Model")).toHaveValue("grok-4.20-reasoning");
     expect(screen.queryByLabelText("Reasoning")).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
+  });
+
+  it("shows Grok 4.5 ACP reasoning effort in the launchpad", () => {
+    render(
+      <Composer
+        backends={[
+          backendSummary("acp:grok", {
+            models: [
+              {
+                id: "grok-4.5",
+                label: "Grok 4.5",
+                current: true,
+                defaultReasoningEffort: "high",
+                reasoningEfforts: ["low", "medium", "high"],
+                supportsReasoning: true,
+              },
+            ],
+          }),
+        ]}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "acp:grok",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("Model")).toHaveValue("grok-4.5");
+    expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
   });
 
   it("sends effective model defaults for threads without saved model settings", async () => {
@@ -1748,10 +1932,16 @@ describe("Composer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(textarea).toHaveValue("Original scheduled text");
-    expect(screen.getByRole("button", { name: "Send in 1h" })).toBeEnabled();
+    // The Send button is plain "Send"; the schedule surfaces as an armed
+    // toggle beside it rather than a countdown label on Send itself.
+    const scheduleToggle = screen.getByRole("switch");
+    expect(scheduleToggle).toBeChecked();
+    expect(scheduleToggle).toHaveTextContent("in 1h");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 
     fireEvent.change(textarea, { target: { value: "Edited scheduled text" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send in 1h" }));
+    // Toggle stays armed → Send keeps the schedule (re-queues at the same time).
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(textarea).toHaveValue("");
@@ -1761,6 +1951,105 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
       "Edited scheduled text"
     );
+  });
+
+  it("sends now when the schedule toggle is unchecked while editing a scheduled draft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-scheduled",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Edit scheduled send",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Scheduled text" } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    // Uncheck the schedule so Send fires immediately instead of re-queuing.
+    fireEvent.click(screen.getByRole("switch"));
+    expect(screen.getByRole("switch")).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(startTurn.mock.calls[0]![0].input).toEqual([
+      { type: "text", text: "Scheduled text" },
+    ]);
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    // The toggle is gone once the schedule is consumed.
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("sends a scheduled queued message now via Send now when no turn is active", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-scheduled",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Send scheduled now",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Scheduled for later" } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+
+    // No active turn → the queued entry offers "Send now", not a dead "Steer".
+    expect(screen.queryByRole("button", { name: "Steer" })).not.toBeInTheDocument();
+    const sendNow = screen.getByRole("button", { name: "Send now" });
+
+    await act(async () => {
+      fireEvent.click(sendNow);
+    });
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(startTurn.mock.calls[0]![0].input).toEqual([
+      { type: "text", text: "Scheduled for later" },
+    ]);
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
   });
 
   it("preserves schedule selection through bare review configuration", async () => {
@@ -1817,6 +2106,48 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
       "Review changes against main"
     );
+  });
+
+  it("hides the schedule toggle while the review-config panel owns the schedule", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(async (request: StartReviewRequest) => ({
+            backend: request.backend,
+            threadId: request.threadId,
+            reviewThreadId: request.threadId,
+            turnId: "turn-review-1",
+          })),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Scheduled review",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 30m" }));
+
+    // The review panel owns the scheduled-send button; the main-composer
+    // schedule toggle must NOT appear (it doesn't gate the review submit, so
+    // it would be a dead control that pretends to unarm the schedule).
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
   it("shows a 5h context reset schedule option when the backend exposes a reset", async () => {
@@ -2335,18 +2666,21 @@ describe("Composer", () => {
         id: "queued-1",
         text: "First duplicate-owned turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "First duplicate-owned turn" }],
       },
       {
         id: "queued-2",
         text: "Second duplicate-owned turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Second duplicate-owned turn" }],
       },
       {
         id: "queued-3",
         text: "Third duplicate-owned turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Third duplicate-owned turn" }],
       },
     ]);
@@ -2394,6 +2728,7 @@ describe("Composer", () => {
         id: "queued-review",
         text: "/review main",
         imageAttachments: [],
+        fileAttachments: [],
         reviewCommand: {
           displayText: "Review changes against main",
           target: { type: "baseBranch", branch: "main" },
@@ -2403,6 +2738,7 @@ describe("Composer", () => {
         id: "queued-turn",
         text: "Run after failed review",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Run after failed review" }],
       },
     ]);
@@ -4295,6 +4631,7 @@ describe("Composer", () => {
         id: "queued-later",
         text: "Later scheduled turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Later scheduled turn" }],
         scheduledSendAt: Date.now() + 2 * 60 * 60_000,
       },
@@ -4302,6 +4639,7 @@ describe("Composer", () => {
         id: "queued-sooner",
         text: "Sooner scheduled turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Sooner scheduled turn" }],
         scheduledSendAt: Date.now() + 15 * 60_000,
       },
@@ -9211,6 +9549,771 @@ describe("Composer", () => {
     });
   });
 
+  it("inserts a tilde path from the @ directory autocomplete and links it on start", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "Repo",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const repoDirectory: NavigationDirectorySummary = {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 20,
+      };
+      const searchProductDirectory: NavigationDirectorySummary = {
+        key: "directory:/Users/huntharo/GIPHY/search-product",
+        kind: "directory",
+        label: "search-product",
+        path: "/Users/huntharo/GIPHY/search-product",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 10,
+      };
+      const onMaterializeLaunchpad = vi.fn(async () => undefined);
+
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          directory={repoDirectory}
+          directories={[repoDirectory, searchProductDirectory]}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={onMaterializeLaunchpad}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("New thread"), {
+        target: { value: "Read SEARCH-4803 in @search" },
+      });
+
+      const listbox = screen.getByRole("listbox", { name: "Directories" });
+      fireEvent.click(
+        within(listbox).getByRole("button", { name: /search-product/ })
+      );
+
+      // The commit mints a zero-width chip: the plain draft keeps only
+      // the surrounding text plus the guaranteed post-chip space, the
+      // editor shows an @label mention chip, and the serialized draft
+      // (asserted on materialize below) carries the markdown link.
+      await waitFor(() => {
+        expect(screen.getByLabelText("New thread")).toHaveValue(
+          "Read SEARCH-4803 in  "
+        );
+      });
+      // Caret parks after the guaranteed post-chip space (set in a
+      // requestAnimationFrame after the commit).
+      await waitFor(() => {
+        expect(
+          (screen.getByLabelText("New thread") as HTMLInputElement)
+            .selectionStart
+        ).toBe("Read SEARCH-4803 in  ".length);
+      });
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      const chip = within(richInput).getByText("@search-product");
+      expect(chip).toHaveAttribute("data-mention-kind", "directory");
+      expect(chip).toHaveAttribute(
+        "data-skill-path",
+        "/Users/huntharo/GIPHY/search-product"
+      );
+      expect(
+        screen.queryByRole("listbox", { name: "Directories" })
+      ).not.toBeInTheDocument();
+
+      await clickButton("Start thread");
+
+      await waitFor(() => {
+        expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+          "directory:/repo",
+          [
+            {
+              type: "text",
+              text: "Read SEARCH-4803 in [@search-product](~/GIPHY/search-product)",
+            },
+          ],
+          undefined,
+          undefined,
+          ["/Users/huntharo/GIPHY/search-product"]
+        );
+      });
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("rebuilds a directory chip from a prompt-only launchpad restore", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "Repo",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        // Serialized canonical prompt only — no editorDocument, as after
+        // an app restart that dropped the rich document.
+        prompt: "check [@agent-kit](~/pwrdrvr/agent-kit) please",
+        workMode: "local",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const onMaterializeLaunchpad = vi.fn(async () => undefined);
+
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          directory={{
+            key: "directory:/repo",
+            kind: "directory",
+            label: "Repo",
+            path: "/repo",
+            threadKeys: [],
+            needsAttentionCount: 0,
+          }}
+          directories={[]}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={onMaterializeLaunchpad}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      );
+
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      await waitFor(() => {
+        expect(within(richInput).getByText("@agent-kit")).toBeInTheDocument();
+      });
+      expect(within(richInput).getByText("@agent-kit")).toHaveAttribute(
+        "data-skill-path",
+        "/Users/huntharo/pwrdrvr/agent-kit"
+      );
+
+      await clickButton("Start thread");
+
+      // The token alone drives the attach — `directories` is empty, so
+      // the text scan cannot resolve this path against a tracked entry.
+      await waitFor(() => {
+        expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+          "directory:/repo",
+          [
+            {
+              type: "text",
+              text: "check [@agent-kit](~/pwrdrvr/agent-kit) please",
+            },
+          ],
+          undefined,
+          undefined,
+          ["/Users/huntharo/pwrdrvr/agent-kit"]
+        );
+      });
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("links a hand-typed directory reference after sending a reply", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const onAttachDirectoryReferences = vi.fn();
+      const searchProductDirectory: NavigationDirectorySummary = {
+        key: "directory:/Users/huntharo/GIPHY/search-product",
+        kind: "directory",
+        label: "search-product",
+        path: "/Users/huntharo/GIPHY/search-product",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 10,
+      };
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            startTurn,
+          }}
+          directories={[searchProductDirectory]}
+          disabled={false}
+          skills={[]}
+          onAttachDirectoryReferences={onAttachDirectoryReferences}
+          thread={{
+            id: "thread-1",
+            title: "Search cleanup",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "It might be in ~/GIPHY/search-product." },
+      });
+      await clickButton("Send");
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalled();
+      });
+      expect(onAttachDirectoryReferences).toHaveBeenCalledWith(
+        ["/Users/huntharo/GIPHY/search-product"],
+        { backend: "codex", threadId: "thread-1" },
+      );
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("mints file chips from the @ popover's Add file… action", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "Repo",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const repoDirectory: NavigationDirectorySummary = {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 20,
+      };
+      const pickFileFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        paths: ["/Users/huntharo/notes/spec.md"],
+      }));
+      const onMaterializeLaunchpad = vi.fn(
+        async (..._args: unknown[]) => undefined,
+      );
+
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            pickFileFromDisk,
+          }}
+          directory={repoDirectory}
+          directories={[repoDirectory]}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={onMaterializeLaunchpad}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("New thread"), {
+        target: { value: "Check @" },
+      });
+
+      const listbox = screen.getByRole("listbox", { name: "Directories" });
+      // Only the file action renders — this composer has no
+      // onPickDirectoryForReference, so the directory action is hidden.
+      expect(
+        within(listbox).queryByRole("button", { name: "+ Add directory…" })
+      ).not.toBeInTheDocument();
+      expect(
+        within(listbox).getByRole("button", { name: "+ Add file…" })
+      ).toBeInTheDocument();
+      await clickButton("+ Add file…");
+
+      expect(pickFileFromDisk).toHaveBeenCalledOnce();
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      await waitFor(() => {
+        expect(within(richInput).getByText("@spec.md")).toBeInTheDocument();
+      });
+      const chip = within(richInput).getByText("@spec.md");
+      expect(chip).toHaveAttribute("data-mention-kind", "file");
+      expect(chip).toHaveAttribute(
+        "data-skill-path",
+        "/Users/huntharo/notes/spec.md"
+      );
+      expect(
+        screen.queryByRole("listbox", { name: "Directories" })
+      ).not.toBeInTheDocument();
+
+      await clickButton("Start thread");
+
+      await waitFor(() => {
+        expect(onMaterializeLaunchpad).toHaveBeenCalled();
+      });
+      const materializedInput = onMaterializeLaunchpad.mock
+        .calls[0][1] as unknown as { type: string; text: string }[];
+      expect(materializedInput).toEqual([
+        {
+          type: "text",
+          text: "Check [@spec.md](~/notes/spec.md)",
+        },
+      ]);
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("mints a directory chip from the @ popover's Add directory… action", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "Repo",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const repoDirectory: NavigationDirectorySummary = {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 20,
+      };
+      const onPickDirectoryForReference = vi.fn(async () => ({
+        label: "agent-kit",
+        path: "/Users/huntharo/pwrdrvr/agent-kit",
+      }));
+
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          directory={repoDirectory}
+          directories={[repoDirectory]}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={async () => undefined}
+          onPickDirectoryForReference={onPickDirectoryForReference}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("New thread"), {
+        target: { value: "Look in @" },
+      });
+
+      screen.getByRole("listbox", { name: "Directories" });
+      await clickButton("+ Add directory…");
+
+      expect(onPickDirectoryForReference).toHaveBeenCalledOnce();
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      await waitFor(() => {
+        expect(within(richInput).getByText("@agent-kit")).toBeInTheDocument();
+      });
+      const chip = within(richInput).getByText("@agent-kit");
+      expect(chip).toHaveAttribute("data-mention-kind", "directory");
+      expect(chip).toHaveAttribute(
+        "data-skill-path",
+        "/Users/huntharo/pwrdrvr/agent-kit"
+      );
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("attaches picked files to the tray from the + Add reference menu", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const pickFileFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        paths: ["/Users/huntharo/notes/spec.md"],
+      }));
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            pickFileFromDisk,
+          }}
+          disabled={false}
+          skills={[]}
+          onPickDirectoryForReference={async () => undefined}
+          thread={{
+            id: "thread-1",
+            title: "Build Codex client",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      // While closed, the trigger carries the CSS tooltip.
+      expect(
+        screen.getByRole("button", { name: "Add reference" })
+      ).toHaveAttribute("data-tooltip", "Reference a directory or file");
+
+      await clickButton("Add reference");
+
+      const dialog = screen.getByRole("dialog", { name: "Add reference" });
+      // The tooltip is omitted while the popover is open so the
+      // pseudo-element can't linger over the panel.
+      expect(
+        screen.getByRole("button", { name: "Add reference" })
+      ).not.toHaveAttribute("data-tooltip");
+      // No platform reported → separate add rows (non-macOS behavior).
+      expect(
+        within(dialog).getByRole("button", { name: "Add directory…" })
+      ).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(
+          within(dialog).getByRole("button", { name: "Add file…" })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(pickFileFromDisk).toHaveBeenCalledOnce();
+      // The pick lands in the attachment tray as a pill, not as an
+      // editor chip, and the picker closes.
+      expect(await screen.findByText("spec.md")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Remove spec.md" })
+      ).toBeInTheDocument();
+      expect(screen.queryByText("@spec.md")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("dialog", { name: "Add reference" })
+      ).not.toBeInTheDocument();
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("attaches a recent file to the tray from the reference picker's Files tab", async () => {
+    const listRecentFileReferences = vi.fn(async () => ({
+      files: [
+        { label: "notes.md", path: "/Users/huntharo/notes/notes.md" },
+        { label: "todo.txt", path: "/Users/huntharo/notes/todo.txt" },
+      ],
+    }));
+    const recordRecentFileReferences = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          listRecentFileReferences,
+          recordRecentFileReferences,
+          pickFileFromDisk: vi.fn(async () => ({ canceled: true as const })),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    await clickButton("Add reference");
+
+    expect(listRecentFileReferences).toHaveBeenCalledOnce();
+    const dialog = screen.getByRole("dialog", { name: "Add reference" });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("tab", { name: "Files" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole("option", { name: /notes\.md/ })
+      );
+      await Promise.resolve();
+    });
+
+    // The recent file lands in the attachment tray as a pill and the
+    // picker closes; committing it re-records the reference.
+    expect(await screen.findByText("notes.md")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remove notes.md" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Add reference" })
+    ).not.toBeInTheDocument();
+    expect(recordRecentFileReferences).toHaveBeenCalledWith({
+      paths: ["/Users/huntharo/notes/notes.md"],
+    });
+  });
+
+  it("mints a directory chip from the reference picker's Projects tab", async () => {
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const repoDirectory: NavigationDirectorySummary = {
+      key: "directory:/repo",
+      kind: "directory",
+      label: "Repo",
+      path: "/repo",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 20,
+    };
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          pickFileFromDisk: vi.fn(async () => ({ canceled: true as const })),
+        }}
+        directory={repoDirectory}
+        directories={[repoDirectory]}
+        draftStore={createComposerDraftStore()}
+        launchpad={launchpad}
+        onMaterializeLaunchpad={async () => undefined}
+        onPickDirectoryForReference={async () => undefined}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    await clickButton("Add reference");
+
+    const dialog = screen.getByRole("dialog", { name: "Add reference" });
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("option", { name: /Repo/ }));
+      await Promise.resolve();
+    });
+
+    const richInput = screen.getByTestId("composer-tiptap-input");
+    await waitFor(() => {
+      expect(within(richInput).getByText("@Repo")).toBeInTheDocument();
+    });
+    const chip = within(richInput).getByText("@Repo");
+    expect(chip).toHaveAttribute("data-mention-kind", "directory");
+    expect(chip).toHaveAttribute("data-skill-path", "/repo");
+    expect(
+      screen.queryByRole("dialog", { name: "Add reference" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("routes the combined macOS picker's entries to tray pills and directory chips", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "Repo",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const repoDirectory: NavigationDirectorySummary = {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 20,
+      };
+      const pickReferenceFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        entries: [
+          {
+            path: "/Users/huntharo/notes/spec.md",
+            kind: "file" as const,
+          },
+          {
+            path: "/Users/huntharo/pwrdrvr/agent-kit",
+            kind: "directory" as const,
+          },
+        ],
+      }));
+      // Registration failures are non-fatal — the chip mints anyway and
+      // the send-time attach re-registers.
+      const registerDirectoryFromDisk = vi.fn(async () => ({
+        ok: false as const,
+        reason: "not-a-git-repo" as const,
+        message: "That folder isn't a git repository.",
+      }));
+
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            platform: "darwin",
+            pickFileFromDisk: vi.fn(async () => ({ canceled: true as const })),
+            pickReferenceFromDisk,
+            registerDirectoryFromDisk,
+          }}
+          directory={repoDirectory}
+          directories={[repoDirectory]}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={async () => undefined}
+          onPickDirectoryForReference={async () => undefined}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      );
+
+      await clickButton("Add reference");
+
+      const dialog = screen.getByRole("dialog", { name: "Add reference" });
+      // macOS gets the single combined action row.
+      expect(
+        within(dialog).queryByRole("button", { name: "Add directory…" })
+      ).not.toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(
+          within(dialog).getByRole("button", {
+            name: "Add file or directory…",
+          })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(pickReferenceFromDisk).toHaveBeenCalledOnce();
+      expect(registerDirectoryFromDisk).toHaveBeenCalledWith({
+        path: "/Users/huntharo/pwrdrvr/agent-kit",
+      });
+      // File → tray pill; directory → editor chip.
+      expect(await screen.findByText("spec.md")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Remove spec.md" })
+      ).toBeInTheDocument();
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      await waitFor(() => {
+        expect(within(richInput).getByText("@agent-kit")).toBeInTheDocument();
+      });
+      expect(within(richInput).getByText("@agent-kit")).toHaveAttribute(
+        "data-mention-kind",
+        "directory"
+      );
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("commits a provider slash command insert without looping the draft", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "deployaudit",
+            description: "Audit the most recent deploy.",
+            backend: "codex",
+            scope: "backend",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Deploy audit",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, { target: { value: "/deploy" } });
+    expect(
+      within(screen.getByRole("listbox", { name: "Commands" })).getByRole(
+        "button",
+        { name: /\/deployaudit/i },
+      ),
+    ).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("/deployaudit ");
+    });
+    expect(
+      screen.queryByRole("listbox", { name: "Commands" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("does not restore a submitted launchpad draft when materialization unmounts before local clear", async () => {
     const draftStore = createComposerDraftStore();
     const launchpad: NavigationLaunchpadDraft = {
@@ -9260,7 +10363,9 @@ describe("Composer", () => {
       expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
         "directory:/repo",
         [{ type: "text", text: "Submitted launchpad should not come back" }],
-        undefined
+        undefined,
+        undefined,
+        []
       );
     });
 
@@ -9335,7 +10440,8 @@ describe("Composer", () => {
         "directory:/repo",
         undefined,
         undefined,
-        { type: "baseBranch", branch: "main" }
+        { type: "baseBranch", branch: "main" },
+        []
       );
     });
 
@@ -9622,7 +10728,9 @@ describe("Composer", () => {
     expect(screen.getByRole("listbox", { name: "Skills" })).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(textarea).toHaveValue("Use ");
+    // The commit always leaves one space after the chip (the second
+    // space here; the first is the one typed before the trigger).
+    expect(textarea).toHaveValue("Use  ");
     expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
 
     await clickButton("Send");
@@ -9751,7 +10859,7 @@ describe("Composer", () => {
 
     const richInput = screen.getByTestId("composer-tiptap-input");
     expect(within(richInput).getByText("$ce:plan")).toBeInTheDocument();
-    expect((input as HTMLInputElement).value).toMatch(/Let's use $/);
+    expect((input as HTMLInputElement).value).toMatch(/Let's use {2}$/);
     expect(richInput).toHaveTextContent("Let's use");
     expect(richInput).not.toHaveTextContent("Let's use $ce:plan plan");
 
@@ -10368,7 +11476,7 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan")).toBeInTheDocument();
-    expect(textarea).toHaveValue("Use ");
+    expect(textarea).toHaveValue("Use  ");
 
     await clickButton("Send");
 
@@ -11110,6 +12218,183 @@ describe("Composer", () => {
     });
   });
 
+  it("attaches a dropped non-image file as a path-only reference and appends it to the sent text", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const notesFile = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            getPathForFile: (file: File) => `/Users/huntharo/notes/${file.name}`,
+            startTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Build Codex client",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "Look at this" } });
+      fireEvent.drop(textarea, {
+        dataTransfer: {
+          files: [],
+          items: [
+            { kind: "file", type: "text/plain", getAsFile: () => notesFile },
+          ],
+        },
+      });
+
+      expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+      expect(normalizeImageFile).not.toHaveBeenCalled();
+
+      await clickButton("Send");
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            input: [
+              {
+                type: "text",
+                text: "Look at this\n\n[@notes.txt](~/notes/notes.txt)",
+              },
+            ],
+          })
+        );
+      });
+      // The submitted draft clears, and the file pill clears with it.
+      await waitFor(() =>
+        expect(screen.queryByText("notes.txt")).not.toBeInTheDocument()
+      );
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("sends a files-only draft as just the reference block", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const notesFile = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            getPathForFile: (file: File) => `/Users/huntharo/notes/${file.name}`,
+            startTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Build Codex client",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      fireEvent.drop(screen.getByLabelText("Reply"), {
+        dataTransfer: {
+          files: [],
+          items: [
+            { kind: "file", type: "text/plain", getAsFile: () => notesFile },
+          ],
+        },
+      });
+
+      expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+
+      await clickButton("Send");
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            input: [
+              { type: "text", text: "[@notes.txt](~/notes/notes.txt)" },
+            ],
+          })
+        );
+      });
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("removes a file attachment via its pill remove button", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const notesFile = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            getPathForFile: (file: File) => `/Users/huntharo/notes/${file.name}`,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Build Codex client",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      fireEvent.drop(screen.getByLabelText("Reply"), {
+        dataTransfer: {
+          files: [],
+          items: [
+            { kind: "file", type: "text/plain", getAsFile: () => notesFile },
+          ],
+        },
+      });
+
+      expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Remove notes.txt" })
+      );
+
+      await waitFor(() =>
+        expect(screen.queryByText("notes.txt")).not.toBeInTheDocument()
+      );
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
   it("keeps Shift+Enter available for a newline", () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
@@ -11191,7 +12476,7 @@ describe("Composer", () => {
     fireEvent.keyDown(option, { key: "Enter" });
 
     expect(within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan")).toBeInTheDocument();
-    expect(screen.getByLabelText("Reply")).toHaveValue("");
+    expect(screen.getByLabelText("Reply")).toHaveValue(" ");
     expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
   });
 
@@ -11627,12 +12912,14 @@ describe("Composer", () => {
         id: "queued-1",
         text: "First queued stale turn",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "First queued stale turn" }],
       },
       {
         id: "queued-2",
         text: "Second queued follow-up",
         imageAttachments: [],
+        fileAttachments: [],
         input: [{ type: "text", text: "Second queued follow-up" }],
       },
     ]);

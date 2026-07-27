@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
+import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 
 const codexClientLogError = vi.hoisted(() => vi.fn());
 const codexClientLogDebug = vi.hoisted(() => vi.fn());
@@ -21,6 +22,7 @@ vi.mock("../log", () => ({
 
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];
+  static serverVersion = "1.0.0";
   static readThreadErrorByThreadId = new Map<string, { code: number; message: string }>();
   static readThreadResultByThreadId = new Map<string, unknown>();
   static threadStartResult: unknown = {
@@ -132,10 +134,11 @@ class MockTransport implements JsonRpcTransport {
           jsonrpc: "2.0",
           id: payload.id,
           result: {
-            serverInfo: {
-              name: "Codex App Server",
-              version: "1.0.0"
-            }
+            userAgent:
+              `codex_cli_rs/${MockTransport.serverVersion} (Mac OS 26.0; arm64)`,
+            codexHome: "/Users/huntharo/.codex",
+            platformFamily: "unix",
+            platformOs: "macos",
           }
         })
       );
@@ -969,6 +972,7 @@ describe("CodexAppServerClient", () => {
     codexClientLogInfo.mockClear();
     codexClientLogWarn.mockClear();
     MockTransport.instances.length = 0;
+    MockTransport.serverVersion = "1.0.0";
     MockTransport.readThreadErrorByThreadId.clear();
     MockTransport.readThreadResultByThreadId.clear();
     MockTransport.threadStartResult = {
@@ -5468,7 +5472,6 @@ describe("CodexAppServerClient", () => {
         "shell_environment_policy.set.NVM_DIR": "/Users/huntharo/.nvm",
       },
       excludeTurns: true,
-      persistExtendedHistory: false,
       threadSource: "user",
     });
 
@@ -5501,7 +5504,6 @@ describe("CodexAppServerClient", () => {
       path: "/Users/example/.codex/sessions/source-thread.jsonl",
       cwd: "/Users/example/project",
       excludeTurns: true,
-      persistExtendedHistory: false,
       threadSource: "user",
     });
 
@@ -5520,14 +5522,21 @@ describe("CodexAppServerClient", () => {
       cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
       dynamicTools: [
         {
-          namespace: "pwragent_automations",
-          name: "list_automations",
-          description: "List attached automations.",
-          inputSchema: {
-            type: "object",
-            additionalProperties: false,
-          },
-          deferLoading: false,
+          type: "namespace",
+          name: "pwragent_automations",
+          description: "PwrAgent automation tools.",
+          tools: [
+            {
+              type: "function",
+              name: "list_automations",
+              description: "List attached automations.",
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+              },
+              deferLoading: false,
+            },
+          ],
         },
       ],
     });
@@ -5542,17 +5551,184 @@ describe("CodexAppServerClient", () => {
       cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
       dynamicTools: [
         {
-          namespace: "pwragent_automations",
-          name: "list_automations",
-          description: "List attached automations.",
-          inputSchema: {
-            type: "object",
-            additionalProperties: false,
-          },
-          deferLoading: false,
+          type: "namespace",
+          name: "pwragent_automations",
+          description: "PwrAgent automation tools.",
+          tools: [
+            {
+              type: "function",
+              name: "list_automations",
+              description: "List attached automations.",
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+              },
+              deferLoading: false,
+            },
+          ],
         },
       ],
     });
+
+    await client.close();
+  });
+
+  it("uses the 0.144 App Server wire contracts and advertises tools only at thread start", async () => {
+    MockTransport.serverVersion = "0.144.0";
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const dynamicTools: DynamicToolSpec[] = [
+      {
+        type: "namespace",
+        name: "pwragent",
+        description: "PwrAgent tools.",
+        tools: [
+          {
+            type: "function",
+            name: "search_threads",
+            description: "Search PwrAgent threads.",
+            inputSchema: {
+              type: "object",
+              additionalProperties: false,
+            },
+            deferLoading: false,
+          },
+        ],
+      },
+    ];
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startThread({
+      approvalPolicy: "on-failure",
+      dynamicTools,
+    });
+    await client.forkThread({
+      threadId: "thread-to-fork",
+      approvalPolicy: "on-failure",
+    });
+    await client.startTurn({
+      threadId: "thread-existing",
+      input: [{ type: "text", text: "Continue" }],
+      approvalPolicy: "on-failure",
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) =>
+        JSON.parse(message) as {
+          method?: string;
+          params?: Record<string, unknown>;
+        },
+    );
+    const threadStart = requests.find(
+      (request) => request.method === "thread/start",
+    )?.params;
+    const threadFork = requests.find(
+      (request) => request.method === "thread/fork",
+    )?.params;
+    const threadResume = requests.find(
+      (request) => request.method === "thread/resume",
+    )?.params;
+    const turnStart = requests.find(
+      (request) => request.method === "turn/start",
+    )?.params;
+
+    for (const payload of [threadStart, threadFork, threadResume]) {
+      expect(payload).not.toHaveProperty("persistExtendedHistory");
+      expect(payload).toMatchObject({ approvalPolicy: "on-request" });
+    }
+    expect(turnStart).toMatchObject({ approvalPolicy: "on-request" });
+    expect(threadStart?.dynamicTools).toEqual(dynamicTools);
+    expect(threadResume).not.toHaveProperty("dynamicTools");
+    expect(turnStart).not.toHaveProperty("dynamicTools");
+
+    await client.close();
+  });
+
+  it("preserves the 0.135 App Server wire contracts for local old servers", async () => {
+    MockTransport.serverVersion = "0.135.0";
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const dynamicTools: DynamicToolSpec[] = [
+      {
+        type: "namespace",
+        name: "pwragent",
+        description: "PwrAgent tools.",
+        tools: [
+          {
+            type: "function",
+            name: "search_threads",
+            description: "Search PwrAgent threads.",
+            inputSchema: {
+              type: "object",
+              additionalProperties: false,
+            },
+            deferLoading: false,
+          },
+        ],
+      },
+    ];
+    const legacyDynamicTools = [
+      {
+        namespace: "pwragent",
+        name: "search_threads",
+        description: "Search PwrAgent threads.",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+        },
+        deferLoading: false,
+      },
+    ];
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startThread({
+      approvalPolicy: "on-failure",
+      dynamicTools,
+    });
+    await client.forkThread({
+      threadId: "thread-to-fork",
+      approvalPolicy: "on-failure",
+    });
+    await client.startTurn({
+      threadId: "thread-existing",
+      input: [{ type: "text", text: "Continue" }],
+      approvalPolicy: "on-failure",
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) =>
+        JSON.parse(message) as {
+          method?: string;
+          params?: Record<string, unknown>;
+        },
+    );
+    const threadStart = requests.find(
+      (request) => request.method === "thread/start",
+    )?.params;
+    const threadFork = requests.find(
+      (request) => request.method === "thread/fork",
+    )?.params;
+    const threadResume = requests.find(
+      (request) => request.method === "thread/resume",
+    )?.params;
+    const turnStart = requests.find(
+      (request) => request.method === "turn/start",
+    )?.params;
+
+    for (const payload of [threadStart, threadFork, threadResume]) {
+      expect(payload).toMatchObject({
+        approvalPolicy: "on-failure",
+        persistExtendedHistory: false,
+      });
+    }
+    expect(turnStart).toMatchObject({ approvalPolicy: "on-failure" });
+    expect(threadStart?.dynamicTools).toEqual(legacyDynamicTools);
+    expect(threadResume).not.toHaveProperty("dynamicTools");
+    expect(turnStart).not.toHaveProperty("dynamicTools");
 
     await client.close();
   });
@@ -6511,7 +6687,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("passes dynamic tool specs when resuming and starting a turn on an existing thread", async () => {
+  it("does not resend dynamic tools when resuming or starting a turn", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -6522,18 +6698,6 @@ describe("CodexAppServerClient", () => {
     await client.startTurn({
       threadId: "thread-2",
       input: [{ type: "text", text: "Reply to the existing thread" }],
-      dynamicTools: [
-        {
-          namespace: "pwragent_task_monitors",
-          name: "create_monitor_delegation",
-          description: "Delegate monitoring work.",
-          inputSchema: {
-            type: "object",
-            additionalProperties: false,
-          },
-          deferLoading: false,
-        },
-      ],
     });
 
     const transport = MockTransport.instances.at(-1);
@@ -6545,36 +6709,10 @@ describe("CodexAppServerClient", () => {
       .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
       .find((payload) => payload.method === "turn/start");
 
-    expect(resumePayload?.params).toMatchObject({
-      threadId: "thread-2",
-      dynamicTools: [
-        {
-          namespace: "pwragent_task_monitors",
-          name: "create_monitor_delegation",
-          description: "Delegate monitoring work.",
-          inputSchema: {
-            type: "object",
-            additionalProperties: false,
-          },
-          deferLoading: false,
-        },
-      ],
-    });
-    expect(turnStartPayload?.params).toMatchObject({
-      threadId: "thread-2",
-      dynamicTools: [
-        {
-          namespace: "pwragent_task_monitors",
-          name: "create_monitor_delegation",
-          description: "Delegate monitoring work.",
-          inputSchema: {
-            type: "object",
-            additionalProperties: false,
-          },
-          deferLoading: false,
-        },
-      ],
-    });
+    expect(resumePayload?.params).toEqual({ threadId: "thread-2" });
+    expect(turnStartPayload?.params).toMatchObject({ threadId: "thread-2" });
+    expect(resumePayload?.params).not.toHaveProperty("dynamicTools");
+    expect(turnStartPayload?.params).not.toHaveProperty("dynamicTools");
 
     await client.close();
   });

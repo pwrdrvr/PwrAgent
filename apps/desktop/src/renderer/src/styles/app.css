@@ -353,13 +353,16 @@
 /* Suppress directory / PR / agent / binding chips in the list. Reaction
    and pin markers stay visible — reactions because they're user-curated
    signals, pin because the pin marker on its own is information-dense.
+   The "Scheduled"/"Queued" pending-send chips also stay visible: a pending
+   outbound message is a time-sensitive commitment the operator needs to
+   spot at a glance, so it survives the density strip like the pin marker.
 
    Scope the rule to `.thread-row__chips` so non-list surfaces that
    carry a `.thread-row__chip--*` variant (e.g. the questionnaire's mode
    chip in the transcript) don't get collapsed when compact density is
    on. The skill chip in the composer and the standalone SkillChip use
    `.chip` directly and aren't affected by this rule. */
-:root[data-density="compact"] .thread-row__chips .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--pin) {
+:root[data-density="compact"] .thread-row__chips .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--pin):not(.thread-row__chip--scheduled):not(.thread-row__chip--queued) {
   display: none;
 }
 
@@ -1222,6 +1225,24 @@ textarea,
 .thread-header__terminal-toggle.is-open:hover {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent-bright);
+}
+
+/* A shell is running behind a collapsed panel. Without this the terminal is
+   invisible from the thread — the toggle looks identical to "no terminal". */
+.thread-header__terminal-toggle.is-running {
+  position: relative;
+  color: var(--accent);
+}
+
+.thread-header__terminal-toggle.is-running::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 /* Browser-style Back/Forward pair at the leading edge of the thread/search
@@ -3625,6 +3646,38 @@ textarea,
 .thread-row__chip--approval:hover,
 .thread-row__chip--input:hover {
   background: var(--accent-strong);
+}
+
+/* Icon-only marker: this thread has a live shell. Quieter than the approval /
+   input CTAs — it is a "you left something running here", not a call to act. */
+.thread-row__chip--terminal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+/* Pending outbound-message chips. "Scheduled" is the solid-accent CTA —
+   a future send time is the highest-priority signal, so it mirrors the
+   approval/input pill weight. "Queued" (waiting on the active turn) is
+   the softer accent-tinted variant so it reads as subordinate when the
+   two labels sit in the same list. Only one renders per row (priority is
+   resolved upstream), but they share the base pill sizing. */
+.thread-row__chip--scheduled {
+  border: 1px solid var(--accent-strong);
+  background: var(--accent);
+  color: var(--button-text);
+  font-weight: 700;
+}
+
+.thread-row__chip--queued {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-weight: 600;
 }
 
 .path-copy-target {
@@ -6376,6 +6429,25 @@ textarea,
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
+}
+
+/* A value an operator has to hand to someone else verbatim (process ids,
+   diagnostic paths): monospaced pill + Copy. */
+.settings-copyvalue {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-copyvalue__value {
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .settings-segmented__button:hover,
@@ -11380,6 +11452,28 @@ textarea,
   border: 1px solid var(--border-subtle);
 }
 
+/* Composer directory-reference mention chip (`@label`). Same silhouette
+   as the skill chip; neutral surface so the accent stays reserved for
+   skills, per the one-accent rule. */
+.directory-chip {
+  max-width: 100%;
+  vertical-align: middle;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+}
+
+/* Composer file-reference mention chip (`@basename`). Same neutral
+   silhouette as the directory chip — files are path references, not
+   skills, so the accent stays reserved. */
+.file-chip {
+  max-width: 100%;
+  vertical-align: middle;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+}
+
 .skill-chip--removable {
   gap: 6px;
   padding-right: 4px;
@@ -11414,6 +11508,39 @@ textarea,
   border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent-bright);
+}
+
+/* Reference to another thread, rendered inline in transcript prose from a
+   `pwragent://thread/…` link (or a bare thread id an agent wrote as code).
+   Sits on the `.chip` primitive so it carries the same pill geometry as the
+   skill chip; the interactive states are what set it apart. */
+.thread-chip {
+  max-width: 100%;
+  height: 22px;
+  vertical-align: middle;
+  border: 1px solid var(--accent-border);
+  cursor: pointer;
+}
+
+.thread-chip:hover,
+.thread-chip:focus-visible {
+  background: var(--bg-row-active);
+}
+
+.thread-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-chip__icon {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.thread-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .context-rail {
@@ -14403,21 +14530,23 @@ textarea,
 /* ============================================================
    Composer pickers — shared popover language
 
-   The project picker and the branch picker share ONE popover
-   look: an elevated panel, a search header (search icon +
-   borderless input + bottom divider), an uppercase section
-   eyebrow, and rows (leading check column + icon + label) that
-   tint to the accent on hover / keyboard focus. Picker-specific
-   content — a directory's path, a branch's badges + timestamp —
+   The project picker, the branch picker, and the "+" reference
+   picker share ONE popover look: an elevated panel, a search
+   header (search icon + borderless input + bottom divider), an
+   uppercase section eyebrow, and rows (leading check column +
+   icon + label) that tint to the accent on hover / keyboard
+   focus. Picker-specific content — a directory's path, a
+   branch's badges + timestamp, the reference picker's tabs —
    layers on top of these primitives.
 
    Edit the shared look HERE. Keep only genuinely per-picker
    overrides (panel anchor/size, project path/error, branch
-   badges/timestamp) in the `.project-picker__*` /
-   `.branch-picker__*` blocks.
+   badges/timestamp, reference tabs) in the `.project-picker__*`
+   / `.branch-picker__*` / `.reference-picker__*` blocks.
    ============================================================ */
 .project-picker__pop,
-.branch-picker__menu {
+.branch-picker__menu,
+.reference-picker__pop {
   position: absolute;
   z-index: 30;
   bottom: calc(100% + 8px);
@@ -14431,7 +14560,8 @@ textarea,
 }
 
 .project-picker__search,
-.branch-picker__search {
+.branch-picker__search,
+.reference-picker__search {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -14442,7 +14572,8 @@ textarea,
 }
 
 .project-picker__search-icon,
-.branch-picker__search-icon {
+.branch-picker__search-icon,
+.reference-picker__search-icon {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -14450,7 +14581,8 @@ textarea,
 }
 
 .project-picker__search-input,
-.branch-picker__search-input {
+.branch-picker__search-input,
+.reference-picker__search-input {
   flex: 1 1 auto;
   min-width: 0;
   border: 0;
@@ -14462,7 +14594,8 @@ textarea,
 }
 
 .project-picker__search-input::placeholder,
-.branch-picker__search-input::placeholder {
+.branch-picker__search-input::placeholder,
+.reference-picker__search-input::placeholder {
   color: var(--text-muted);
 }
 
@@ -14478,14 +14611,16 @@ textarea,
 }
 
 .project-picker__list,
-.branch-picker__list {
+.branch-picker__list,
+.reference-picker__list {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
 .project-picker__row,
-.branch-picker__option {
+.branch-picker__option,
+.reference-picker__row {
   display: flex;
   width: 100%;
   align-items: center;
@@ -14507,7 +14642,9 @@ textarea,
 .project-picker__row:focus-visible:not(:disabled),
 .branch-picker__option:hover,
 .branch-picker__option:focus-visible,
-.branch-picker__option.is-active {
+.branch-picker__option.is-active,
+.reference-picker__row:hover:not(:disabled),
+.reference-picker__row:focus-visible:not(:disabled) {
   background: var(--accent-soft);
   color: var(--accent-bright);
   outline: none;
@@ -14525,7 +14662,8 @@ textarea,
 
 /* Leading row glyph (folder / branch icon). */
 .project-picker__row-icon,
-.branch-picker__option-icon {
+.branch-picker__option-icon,
+.reference-picker__row-icon {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -14693,6 +14831,71 @@ textarea,
 
 .composer__attach-directory-button {
   gap: 6px;
+}
+
+/* Draft `@`-referenced directory (linked to the thread when the turn is
+   sent). Informational — the reference is removed by deleting the path
+   from the draft text, so the chip has no close affordance. */
+.composer__directory-reference {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.composer__directory-reference-label {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dropped/picked file reference pill in the attachments tray. Same
+   28px silhouette as the directory-reference pill, but a solid border:
+   the file is an explicit attachment with its own remove control, not
+   an informational echo of the draft text. */
+.composer__file-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.composer__file-attachment-label {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__file-attachment-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.composer__file-attachment-remove:hover {
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
 }
 
 .composer__inline-error {
@@ -14895,7 +15098,8 @@ textarea,
   cursor: default;
 }
 
-.project-picker__row-name {
+.project-picker__row-name,
+.reference-picker__row-name {
   flex: 0 0 auto;
   max-width: 160px;
   overflow: hidden;
@@ -14904,7 +15108,8 @@ textarea,
   font-weight: 500;
 }
 
-.project-picker__row-path {
+.project-picker__row-path,
+.reference-picker__row-path {
   flex: 1;
   font-family: var(--font-mono);
   font-size: 11px;
@@ -14915,14 +15120,16 @@ textarea,
   text-align: right;
 }
 
-.project-picker__row--action {
+.project-picker__row--action,
+.reference-picker__row--action {
   flex: 0 0 auto;
   color: var(--accent-bright);
 }
 
 /* The "+" sits in the leading icon column; it follows the action row's
    accent color (not the muted glyph color) so it reads as an affordance. */
-.project-picker__plus {
+.project-picker__plus,
+.reference-picker__plus {
   display: inline-flex;
   flex: 0 0 14px;
   width: 14px;
@@ -14930,14 +15137,16 @@ textarea,
   font-weight: 700;
 }
 
-.project-picker__separator {
+.project-picker__separator,
+.reference-picker__separator {
   flex: 0 0 auto;
   height: 1px;
   margin: 4px 2px;
   background: var(--border-subtle);
 }
 
-.project-picker__empty {
+.project-picker__empty,
+.reference-picker__empty {
   padding: 8px 12px;
   color: var(--text-muted);
   font-size: 12px;
@@ -14997,6 +15206,76 @@ textarea,
   transform: translateX(-50%) rotate(45deg);
   background: currentColor;
   border-radius: 1px;
+}
+
+/* ---- Reference picker specifics (the composer's setup-row "+") ----
+   Shares the popover language above; adds a Projects / Files tab
+   switch under the panel top. Like the project picker, the panel is a
+   FIXED-size flex column: tabs + search pin to the top, the add-…
+   action row(s) pin to the bottom, and only the list scrolls. */
+.reference-picker {
+  display: inline-flex;
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.reference-picker__pop {
+  /* Anchor to the trigger's right edge so the panel opens leftward, floating
+     over the composer/transcript — the "+" trigger is the LAST control in
+     the setup row, so a left-edge anchor would push the panel past the
+     viewport's right gutter on almost every window width (and the focused
+     search input would then drag overflow-hidden ancestors sideways). A
+     viewport clamp in ReferencePicker nudges it back in on narrow windows,
+     mirroring the branch picker. */
+  right: 0;
+  left: auto;
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  height: 420px;
+  max-height: calc(100dvh - 128px);
+  gap: 4px;
+  overflow: hidden;
+}
+
+.reference-picker__tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding: 0 4px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.reference-picker__tab {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reference-picker__tab:hover,
+.reference-picker__tab:focus-visible {
+  color: var(--text-primary);
+  outline: none;
+}
+
+.reference-picker__tab.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.reference-picker__list {
+  /* Only the list scrolls; it's the sole flex-grow child of the
+     fixed-height panel, so the action row(s) stay pinned. */
+  flex: 1 1 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .workspace-handoff-modal {
@@ -15543,6 +15822,23 @@ textarea,
   line-height: 1.45;
 }
 
+/* Divider between the matched options and the "Add directory… / Add
+   file…" action rows at the bottom of the `@` popover. */
+.composer__autocomplete-separator {
+  flex: 0 0 auto;
+  margin: 4px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.composer__autocomplete-option--action .composer__autocomplete-title {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.composer__autocomplete-option--action:hover .composer__autocomplete-title {
+  color: var(--text-primary);
+}
+
 .composer__review-config {
   display: flex;
   flex-direction: column;
@@ -15720,12 +16016,16 @@ textarea,
   gap: 8px;
 }
 
+/* Same chip language as the footer's Stop/Send/Queue pills
+   (.composer__actions .button) so queued-row and review actions read as
+   one family instead of taller squared-off strays. */
 .composer__secondary-action,
 .composer__primary-action {
-  min-height: 34px;
+  min-height: 26px;
   padding: 0 12px;
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: 999px;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -15878,6 +16178,65 @@ textarea,
 
 .composer__send-split--open .composer__send-schedule-button svg {
   transform: rotate(180deg);
+}
+
+/* Middle zone of the split pill shown only while a draft schedule is pending
+   (e.g. editing a scheduled item). A checkbox + countdown that arms/disarms
+   the schedule: armed → Send keeps the schedule, unarmed → Send fires now.
+   Reuses the pill's seam convention (right-hairline between zones). */
+.composer__actions .composer__send-split-pill .composer__send-schedule-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid var(--accent-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.composer__send-split-pill:hover .composer__send-schedule-toggle,
+.composer__send-split--open .composer__send-split-pill .composer__send-schedule-toggle {
+  border-right-color: transparent;
+}
+
+.composer__send-schedule-toggle-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  color: var(--button-text);
+}
+
+.composer__send-schedule-toggle.is-armed .composer__send-schedule-toggle-box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.composer__send-schedule-toggle:not(.is-armed) .composer__send-schedule-toggle-label {
+  opacity: 0.6;
+}
+
+/* Hover fills this zone like the caret/Send zones so it's clear a click lands
+   here — but keep the armed check box readable by giving it a solid outline. */
+.composer__send-split-pill .composer__send-schedule-toggle:not(:disabled):hover {
+  background: var(--accent);
+  color: var(--button-text);
+}
+
+.composer__send-split-pill
+  .composer__send-schedule-toggle:not(:disabled):hover
+  .composer__send-schedule-toggle-box {
+  border-color: var(--button-text);
 }
 
 /* Per-zone hover so it's always obvious which half a click will fire — the fix
@@ -16085,6 +16444,158 @@ textarea,
 .context-window-moon__label {
   max-width: 4ch;
   overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Portal-rendered hover card for the context-window moon (rendered by
+   useViewportTooltip). A structured usage card — meter + stat rows —
+   instead of a text-blob tooltip. */
+.context-usage-card {
+  position: fixed;
+  z-index: 90;
+  width: 264px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--popover-bg);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  pointer-events: none;
+  text-align: left;
+}
+
+.context-usage-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-usage-card__eyebrow,
+.context-usage-card__section-title {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.context-usage-card__phase {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.context-usage-card__headline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.context-usage-card__percent {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.context-usage-card__remaining {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.context-usage-card__meter {
+  display: block;
+  height: 6px;
+  margin-top: 7px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  overflow: hidden;
+}
+
+.context-usage-card__meter-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.context-usage-card__meter-fill--critical {
+  background: var(--status-error);
+}
+
+.context-usage-card__caption {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.context-usage-card__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.context-usage-card__section-title {
+  margin-bottom: 2px;
+}
+
+.context-usage-card__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-usage-card__row-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.context-usage-card__row-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.context-usage-card__cache {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-usage-card__cache-meter {
+  display: block;
+  flex: 1 1 auto;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  overflow: hidden;
+}
+
+.context-usage-card__cache-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--text-secondary) 62%, transparent);
+}
+
+.context-usage-card__cache-label {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
   white-space: nowrap;
 }
 

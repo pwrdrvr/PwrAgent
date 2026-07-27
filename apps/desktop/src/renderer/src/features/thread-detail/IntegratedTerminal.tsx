@@ -40,6 +40,15 @@ export function IntegratedTerminal({
   const replayingBufferedOutputRef = useRef(false);
   const fitAndResizeRef = useRef<() => void>(() => undefined);
   const visibleRef = useRef(visible);
+  // `cwd` is a create-time hint only — main resolves it (falling back to the
+  // home directory) and the running PTY's directory can't be changed after the
+  // fact. Keeping it OUT of the mount effect's deps matters: the pane's `cwd`
+  // flips from the requested value to main's resolved one once the session
+  // lands (undefined -> "/Users/…" for a thread with no directory), and with
+  // `cwd` in the deps that tore down the freshly built xterm and rebuilt it,
+  // discarding anything the user had typed during the spawn.
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
   const [status, setStatus] = useState<string>("Starting shell...");
 
   useEffect(() => {
@@ -139,7 +148,7 @@ export function IntegratedTerminal({
         const dimensions = fitAddon.proposeDimensions();
         void createIntegratedTerminal({
           threadKey,
-          cwd,
+          cwd: cwdRef.current,
           cols: dimensions?.cols ?? terminal.cols,
           rows: dimensions?.rows ?? terminal.rows,
         })
@@ -197,7 +206,8 @@ export function IntegratedTerminal({
       fitAndResizeRef.current = () => undefined;
       cleanupTerminal?.();
     };
-  }, [cwd, desktopApi, threadKey]);
+    // `cwd` is intentionally not a dependency — see `cwdRef` above.
+  }, [desktopApi, threadKey]);
 
   useEffect(() => {
     if (!visible) {

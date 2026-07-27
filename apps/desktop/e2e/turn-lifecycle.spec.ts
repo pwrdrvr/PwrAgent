@@ -443,11 +443,21 @@ test("renders the context window moon from token usage notifications", async () 
     await app.advance({ stepId: "turn-started-1" });
     await app.advance({ stepId: "token-usage-1" });
 
-    await expect(
-      app.window.getByRole("img", {
-        name: /Context window 0% full, 1\.2k\/258\.4k tokens, new/,
-      })
-    ).toBeVisible();
+    const moon = app.window.getByRole("img", {
+      name: /Context window 0% full, 1\.2k\/258\.4k tokens, new/,
+    });
+    await expect(moon).toBeVisible();
+
+    await moon.hover();
+    const card = app.window.getByRole("tooltip");
+    await expect(card).toBeVisible();
+    await expect(card).toContainText("Context window");
+    await expect(card).toContainText("0% full");
+    await expect(card).toContainText("257.2k left");
+    await expect(card).toContainText("1.2k of 258.4k tokens");
+    await expect(card).toContainText("Current request");
+    await expect(card).toContainText("Input");
+    await expect(card).toContainText("1.2k");
   } finally {
     await app.close();
   }

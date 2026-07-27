@@ -17,6 +17,7 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  buildThreadUrl,
   comparePinnedDirectories,
   comparePinnedThreads,
   isPinnedDirectory,
@@ -39,6 +40,7 @@ import {
   runtimeGitRefCopyValue,
 } from "../../lib/runtime-identity";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { formatPrimaryAccel } from "../../lib/keyboard-accel";
 import {
   DetachPullRequestWarning,
@@ -81,7 +83,14 @@ type SidebarProps = {
   threadSearchActive?: boolean;
   settingsActive?: boolean;
   approvalRequestThreadKeys?: Record<string, boolean>;
+  /** Thread keys with a live integrated terminal in the main process. */
+  terminalThreadKeys?: Record<string, boolean>;
   inputRequestThreadKeys?: Record<string, boolean>;
+  /**
+   * Identity key → pending outbound-message state, for the
+   * "Scheduled"/"Queued" thread-row chip. Absent key = no pending send.
+   */
+  queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   /** Identity key of the card to highlight as the open composer's source. */
   composerSourceThreadKey?: string;
   selectedItemKey?: string;
@@ -152,6 +161,13 @@ type SidebarProps = {
     pinned: boolean,
   ) => Promise<void>;
   onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
+  /**
+   * Remove an empty directory (no linked threads) from the Directories list.
+   * Offered in the directory context menu only when the directory has no
+   * threads; deletes the registered launchpad overlay row that keeps the empty
+   * row visible.
+   */
+  onRemoveDirectory?: (directory: NavigationDirectorySummary) => void;
   /**
    * Called by thread rows when the user hovers a non-merged PR chip
    * (or the row itself, depending on chip strategy). Used to prefetch
@@ -525,6 +541,13 @@ export function Sidebar(props: SidebarProps) {
   ): void => {
     setDirectoryContextMenu(undefined);
     void props.onSetDirectoryPin?.(directory, !directory.pinnedRank);
+  };
+
+  const removeDirectoryFromContextMenu = (
+    directory: NavigationDirectorySummary,
+  ): void => {
+    setDirectoryContextMenu(undefined);
+    props.onRemoveDirectory?.(directory);
   };
 
   /**
@@ -914,7 +937,9 @@ export function Sidebar(props: SidebarProps) {
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+              terminalThreadKeys={props.terminalThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
+              queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               directories={props.directories}
               selectedItemKey={props.selectedItemKey}
@@ -943,7 +968,9 @@ export function Sidebar(props: SidebarProps) {
             ) : (
               <RecentsList
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                terminalThreadKeys={props.terminalThreadKeys}
                 inputRequestThreadKeys={props.inputRequestThreadKeys}
+                queuedMessageThreadKeys={props.queuedMessageThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 selectedThreadKey={props.selectedItemKey}
                 thinkingThreadKeys={props.thinkingThreadKeys}
@@ -1242,6 +1269,20 @@ export function Sidebar(props: SidebarProps) {
             <button
               role="menuitem"
               type="button"
+              onClick={() =>
+                copyFromContextMenu(
+                  buildThreadUrl({
+                    backend: contextMenu.thread.source,
+                    threadId: contextMenu.thread.id,
+                  }),
+                )
+              }
+            >
+              Copy Thread Link
+            </button>
+            <button
+              role="menuitem"
+              type="button"
               onClick={() => copyFromContextMenu(contextMenu.thread.id)}
             >
               Copy Thread ID
@@ -1362,6 +1403,24 @@ export function Sidebar(props: SidebarProps) {
               </>
             ) : null}
           </div>
+          {props.onRemoveDirectory
+            && directoryContextMenu.directory.kind === "directory"
+            && directoryContextMenu.directory.threadKeys.length === 0 ? (
+            <>
+              <div className="thread-context-menu__separator" role="separator" />
+              <div className="thread-context-menu__section">
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() =>
+                    removeDirectoryFromContextMenu(directoryContextMenu.directory)
+                  }
+                >
+                  Remove Directory
+                </button>
+              </div>
+            </>
+          ) : null}
         </div>
       ) : null}
 

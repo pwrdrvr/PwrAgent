@@ -686,6 +686,46 @@ describe("ThreadRow chip flow", () => {
     expect(dirtyChip).not.toHaveTextContent("-0");
   });
 
+  it("renders a solid-accent Scheduled chip when the thread has a scheduled message", () => {
+    const { container } = renderRow({
+      queuedMessageThreadKeys: { "codex:thread-chips": "scheduled" },
+    });
+    const chip = container.querySelector(".thread-row__chip--scheduled");
+    expect(chip).not.toBeNull();
+    expect(chip).toHaveTextContent("Scheduled");
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      "A message is scheduled to send",
+    );
+    // The lower-priority variant must not also render.
+    expect(container.querySelector(".thread-row__chip--queued")).toBeNull();
+  });
+
+  it("renders a softer Queued chip when the thread has a queued (non-scheduled) message", () => {
+    const { container } = renderRow({
+      queuedMessageThreadKeys: { "codex:thread-chips": "queued" },
+    });
+    const chip = container.querySelector(".thread-row__chip--queued");
+    expect(chip).not.toBeNull();
+    expect(chip).toHaveTextContent("Queued");
+    expect(chip).toHaveAttribute("aria-label", "A message is queued to send");
+    expect(container.querySelector(".thread-row__chip--scheduled")).toBeNull();
+  });
+
+  it("renders no pending-send chip when the thread has no queued message", () => {
+    const { container } = renderRow({ queuedMessageThreadKeys: {} });
+    expect(container.querySelector(".thread-row__chip--scheduled")).toBeNull();
+    expect(container.querySelector(".thread-row__chip--queued")).toBeNull();
+  });
+
+  it("only keys the pending-send chip to the matching thread identity key", () => {
+    const { container } = renderRow({
+      queuedMessageThreadKeys: { "codex:some-other-thread": "scheduled" },
+    });
+    expect(container.querySelector(".thread-row__chip--scheduled")).toBeNull();
+    expect(container.querySelector(".thread-row__chip--queued")).toBeNull();
+  });
+
   it("renders no git working-state chips when the tree is clean and pushed", () => {
     const { container } = renderRow({
       thread: {

@@ -1,7 +1,7 @@
 {
   "name": "@pwragent/desktop",
   "productName": "PwrAgent",
-  "version": "1.0.0-beta.47",
+  "version": "1.0.0-beta.49",
   "private": true,
   "description": "Thread-centric coding agent desktop app",
   "homepage": "https://pwragent.ai",
@@ -47,6 +47,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@octokit/graphql": "^9.0.3",
     "@pwragent/agent-core": "workspace:*",
     "@pwragent/messaging-interface": "workspace:*",
     "@pwragent/messaging-provider-discord": "workspace:*",
@@ -60,7 +61,7 @@
     "@pwrdrvr/agent-client": "^0.6.1",
     "@pwrdrvr/agent-core": "^0.2.0",
     "@pwrdrvr/agent-transport": "^0.1.6",
-    "@pwrdrvr/codex-app-server-protocol": "0.135.0",
+    "@pwrdrvr/codex-app-server-protocol": "0.144.0",
     "@pwrdrvr/codex-discovery": "^0.1.4",
     "@shutterstock/p-map-iterable": "^1.1.2",
     "@tiptap/extension-mention": "^3.22.5",

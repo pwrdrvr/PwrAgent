@@ -10,6 +10,13 @@ export type AppMetadata = {
   electronVersion: string;
   chromeVersion: string;
   nodeVersion: string;
+  /**
+   * OS process ids, so an operator running several Electron apps (or several
+   * dev builds) can tell a profiler, `lldb`, or a bug report exactly which
+   * process to attach to. `rendererProcessId` is the window that asked.
+   */
+  mainProcessId: number;
+  rendererProcessId?: number;
 };
 
 export type AppLicenseDocumentKind = "license" | "third-party-licenses";

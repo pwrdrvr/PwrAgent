@@ -9,6 +9,7 @@ import {
   extractMessagingPairingToken,
   formatMessagingQuestionnaireText,
   looksLikePairingAttempt,
+  messagingQuestionnaireAnswerDisplay,
   messagingQuestionnaireActions,
   normalizeMessagingQuestionnaireIntent,
 } from "../index";
@@ -218,6 +219,73 @@ describe("messaging interface package", () => {
     });
     expect(answeringText).toContain("Current answer: Secret answer provided");
     expect(answeringText).not.toContain("sk-live-secret");
+  });
+
+  it("shows option labels even when a questionnaire question is secret", () => {
+    expect(
+      messagingQuestionnaireAnswerDisplay(
+        {
+          kind: "option",
+          optionId: "precedence:option:1",
+          value: "Project setting wins",
+        },
+        { secret: true },
+      ),
+    ).toBe("Project setting wins");
+    expect(
+      messagingQuestionnaireAnswerDisplay(
+        {
+          kind: "custom",
+          value: "private explanation",
+        },
+        { secret: true },
+      ),
+    ).toBe("Secret answer provided");
+  });
+
+  it("shows secret-question option labels in questionnaire answer summaries", () => {
+    const intent = {
+      id: "intent-questionnaire-secret-option",
+      kind: "questionnaire",
+      createdAt: 1000,
+      currentIndex: 0,
+      phase: "answering",
+      answers: [
+        {
+          kind: "option",
+          optionId: "precedence:option:1",
+          value: "Project setting wins",
+        },
+      ],
+      questions: [
+        {
+          id: "precedence",
+          question: "Which setting takes precedence?",
+          options: [
+            {
+              id: "precedence:option:1",
+              label: "Project setting wins",
+            },
+          ],
+          allowFreeform: true,
+          secret: true,
+        },
+      ],
+    } satisfies MessagingQuestionnaireIntent;
+
+    expect(formatMessagingQuestionnaireText(intent)).toContain(
+      "Current answer: Project setting wins",
+    );
+    expect(
+      formatMessagingQuestionnaireText({ ...intent, phase: "review" }),
+    ).toContain("Answer: Project setting wins");
+    const submittedText = formatMessagingQuestionnaireText({
+      ...intent,
+      phase: "submitted",
+    });
+    expect(submittedText).toContain("Submitted answers");
+    expect(submittedText).toContain("Answer: Project setting wins");
+    expect(submittedText).not.toContain("Secret answer provided");
   });
 
   it("does not throw on fuzzed pairing-like payloads", () => {
