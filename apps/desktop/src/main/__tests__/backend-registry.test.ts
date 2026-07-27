@@ -8066,6 +8066,10 @@ name = "Codex Environment"
 
 [setup]
 script = "pnpm install"
+
+[[actions]]
+name = "Codex action"
+command = "pnpm codex"
 `,
       "utf8",
     );
@@ -8074,6 +8078,10 @@ script = "pnpm install"
       `
 version = 1
 name = "Grok Environment"
+
+[[actions]]
+name = "Grok action"
+command = "pnpm grok"
 `,
       "utf8",
     );
@@ -8101,6 +8109,7 @@ name = "Grok Environment"
         patch: {
           codexEnvironmentId: "codex",
           codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "codex-action",
         },
         stickySettingsChanged: true,
       });
@@ -8108,6 +8117,7 @@ name = "Grok Environment"
         backend: "codex",
         codexEnvironmentId: "codex",
         codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentActionId: "codex-action",
       });
 
       const switchedToAcp = await registry.updateDirectoryLaunchpad({
@@ -8138,6 +8148,7 @@ name = "Grok Environment"
         patch: {
           codexEnvironmentId: "grok",
           codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "grok-action",
         },
         stickySettingsChanged: true,
       });
@@ -8145,6 +8156,7 @@ name = "Grok Environment"
         backend: "acp:kimi",
         codexEnvironmentId: "grok",
         codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentActionId: "grok-action",
       });
 
       const restoredCodex = await registry.updateDirectoryLaunchpad({
@@ -8158,6 +8170,7 @@ name = "Grok Environment"
         backend: "codex",
         codexEnvironmentId: "codex",
         codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentActionId: "codex-action",
       });
 
       const restoredAcp = await registry.updateDirectoryLaunchpad({
@@ -8171,6 +8184,7 @@ name = "Grok Environment"
         backend: "acp:kimi",
         codexEnvironmentId: "grok",
         codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentActionId: "grok-action",
       });
       expect(restoredAcp.launchpad.codexEnvironmentOptions).toMatchObject([
         {

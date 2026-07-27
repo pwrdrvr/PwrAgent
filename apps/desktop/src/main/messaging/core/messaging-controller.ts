@@ -4453,10 +4453,6 @@ export class MessagingController {
       );
       await this.updateNewThreadStickySettings(normalizedSession, {
         backend: selectedBackend.kind,
-        fastMode: normalizedSession.preferences?.fastMode,
-        model: normalizedSession.preferences?.model,
-        reasoningEffort: normalizedSession.preferences?.reasoningEffort,
-        serviceTier: normalizedSession.preferences?.serviceTier,
       });
       await this.presentNewThreadPromptGate(
         normalizedSession,
@@ -5689,7 +5685,7 @@ export class MessagingController {
     const options = directory?.launchpad?.codexEnvironmentOptions ?? [];
     const currentEnvironmentId = resolveNewThreadCodexEnvironmentId(
       session,
-      directory,
+      directory?.launchpad,
     );
     if (options.length === 0 && !currentEnvironmentId) {
       await this.presentNewThreadPromptGate(session, event, navigation);
@@ -13268,7 +13264,10 @@ function newThreadOptionsForSession(
       ? "directory-launchpad"
       : "launchpad-defaults";
   const codexEnvironmentOptions = directoryLaunchpad?.codexEnvironmentOptions ?? [];
-  const codexEnvironmentId = resolveNewThreadCodexEnvironmentId(session, directory);
+  const codexEnvironmentId = resolveNewThreadCodexEnvironmentId(
+    session,
+    directoryLaunchpad,
+  );
   const selectedEnvironment = codexEnvironmentOptions.find(
     (environment) => environment.id === codexEnvironmentId,
   );
@@ -13376,14 +13375,14 @@ function newThreadPromptGateBody(
 
 function resolveNewThreadCodexEnvironmentId(
   session: MessagingBrowseSessionRecord,
-  directory: NavigationDirectorySummary | undefined,
+  launchpad: NavigationLaunchpadDraft | undefined,
 ): string | null | undefined {
   if (session.preferences?.codexEnvironmentId === null) {
     return null;
   }
   return (
     session.preferences?.codexEnvironmentId ??
-    directory?.launchpad?.codexEnvironmentId
+    launchpad?.codexEnvironmentId
   );
 }
 

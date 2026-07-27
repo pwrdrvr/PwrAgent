@@ -5160,7 +5160,54 @@ describe("MessagingController", () => {
   });
 
   it("lets a pending new-thread session switch providers before creation", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      launchpad: {
+        ...navigation.directories[0]!.launchpad!,
+        backend: "codex",
+        codexEnvironmentId: "codex-environment",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentActionId: "codex-action",
+        codexEnvironmentOptions: [
+          {
+            id: "codex-environment",
+            name: "Codex Environment",
+            sourcePath: "/repo/pwragent/.codex/environments/codex.toml",
+            actions: [],
+          },
+          {
+            id: "grok-environment",
+            name: "Grok Environment",
+            sourcePath: "/repo/pwragent/.codex/environments/grok.toml",
+            actions: [],
+          },
+        ],
+        providerSettings: {
+          codex: {
+            codexEnvironmentId: "codex-environment",
+            codexEnvironmentExecutionTarget: "local",
+            codexEnvironmentActionId: "codex-action",
+          },
+          grok: {
+            codexEnvironmentId: "grok-environment",
+            codexEnvironmentExecutionTarget: "local",
+            codexEnvironmentActionId: "grok-action",
+          },
+        },
+      },
+    };
     const harness = await createHarness({
+      navigation,
+      // Exercise the controller's fallback projection when the sticky write
+      // fails and the next ensure still returns the outgoing provider.
+      ensureDirectoryLaunchpad: async () => ({
+        defaults: navigation.launchpadDefaults,
+        launchpad: navigation.directories[0]!.launchpad!,
+      }),
+      updateDirectoryLaunchpad: async () => {
+        throw new Error("sticky update unavailable");
+      },
       listBackends: async (): Promise<ListBackendsResponse> => ({
         fetchedAt: 1000,
         backends: [
@@ -5201,7 +5248,9 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Provider: Codex"),
+      body: expect.stringContaining(
+        "Provider: Codex\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Codex Environment",
+      ),
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:backend",
@@ -5241,7 +5290,9 @@ describe("MessagingController", () => {
     expect(grokReadyIntent).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Provider: Grok"),
+      body: expect.stringContaining(
+        "Provider: Grok\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Grok Environment",
+      ),
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:backend",
@@ -5254,12 +5305,12 @@ describe("MessagingController", () => {
         expect.objectContaining({ id: "browse:new:fast" }),
       ]),
     });
-    expect(harness.updateDirectoryLaunchpad).toHaveBeenCalledWith({
+    expect(harness.updateDirectoryLaunchpad).toHaveBeenLastCalledWith({
       directoryKey: "directory:pwragent",
       stickySettingsChanged: true,
-      patch: expect.objectContaining({
+      patch: {
         backend: "grok",
-      }),
+      },
     });
 
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug with Grok"));
@@ -5267,20 +5318,27 @@ describe("MessagingController", () => {
     expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
         directoryKey: expect.stringMatching(/^messaging:browse:/),
+        launchpad: expect.objectContaining({
+          backend: "grok",
+          codexEnvironmentActionId: "grok-action",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentId: "grok-environment",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "grok",
+        threadId: "new-thread-1",
         input: [
           {
             type: "text",
             text: "Fix bug with Grok",
           },
         ],
-        launchpad: expect.objectContaining({
-          backend: "grok",
-          directoryKey: "directory:pwragent",
-        }),
       }),
-      expectMaterializeOptions(),
     );
-    expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
     ).resolves.toMatchObject({
