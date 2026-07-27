@@ -2566,6 +2566,32 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("invalidates ACP discovery without closing shared backend clients", async () => {
+    const codexClient = new MockBackendClient({});
+    const closeSpy = vi.spyOn(codexClient, "close");
+    const discoverLocalAcpAgents = vi.fn(async () => []);
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      discoverLocalAcpAgents,
+    });
+
+    await registry.listBackends({ includeUnavailable: true });
+    await registry.listBackends({ includeUnavailable: true });
+    expect(discoverLocalAcpAgents).toHaveBeenCalledTimes(1);
+
+    registry.invalidateAcpBackendDiscovery();
+
+    expect(closeSpy).not.toHaveBeenCalled();
+    await registry.listBackends({ includeUnavailable: true });
+    expect(discoverLocalAcpAgents).toHaveBeenCalledTimes(2);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
   it("filters disabled ACP agents before default backend discovery", async () => {
     const tempRoot = await mkdtemp(
       path.join(os.tmpdir(), "pwragent-backend-registry-"),

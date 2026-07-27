@@ -10,7 +10,9 @@ const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const tempRoots: string[] = [];
 const disposeDesktopBackendRegistryMock = vi.fn(async () => undefined);
 const listThreadsMock = vi.fn(async () => [] as unknown[]);
+const invalidateAcpBackendDiscoveryMock = vi.fn();
 const getDesktopBackendRegistryMock = vi.fn(() => ({
+  invalidateAcpBackendDiscovery: invalidateAcpBackendDiscoveryMock,
   listThreads: listThreadsMock,
 }));
 const childProcessMocks = vi.hoisted(() => ({
@@ -183,6 +185,7 @@ describe("settings ipc", () => {
   beforeEach(() => {
     handlers.clear();
     disposeDesktopBackendRegistryMock.mockClear();
+    invalidateAcpBackendDiscoveryMock.mockClear();
     listThreadsMock.mockClear();
     listThreadsMock.mockResolvedValue([]);
     getDesktopBackendRegistryMock.mockClear();
@@ -392,7 +395,8 @@ describe("settings ipc", () => {
       },
     );
 
-    expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(3);
+    expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(2);
+    expect(invalidateAcpBackendDiscoveryMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not run the saved Codex path when discovery rejected it", async () => {

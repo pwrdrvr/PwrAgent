@@ -119,10 +119,13 @@ async function refreshModelBackendsIfNeeded(params: {
 }): Promise<void> {
   if (
     params.patch?.models?.codex?.path !== undefined
-    || params.patch?.acpAgents !== undefined
     || params.secret === "grokApiKey"
   ) {
     await disposeDesktopBackendRegistry();
+    return;
+  }
+  if (params.patch?.acpAgents !== undefined) {
+    getDesktopBackendRegistry().invalidateAcpBackendDiscovery();
   }
 }
 

@@ -6204,6 +6204,10 @@ export class DesktopBackendRegistry {
     };
   }
 
+  invalidateAcpBackendDiscovery(): void {
+    this.acpBackend.invalidateLocalAgentDiscovery();
+  }
+
   /**
    * Throw if any method that reads or writes Codex thread data is
    * reached in bootstrap mode. Companion to the silent empty-return

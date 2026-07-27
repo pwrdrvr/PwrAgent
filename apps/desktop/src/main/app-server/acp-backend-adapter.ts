@@ -781,6 +781,10 @@ export class AcpBackendAdapter {
       .map((agent) => describeInstalledAcpBackend(agent));
   }
 
+  invalidateLocalAgentDiscovery(): void {
+    this.localAcpAgentsPromise = undefined;
+  }
+
   listSessions(
     backendId: AcpBackendId,
     options?: { archived?: boolean },
