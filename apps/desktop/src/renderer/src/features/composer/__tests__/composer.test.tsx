@@ -1,16 +1,17 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { StrictMode } from "react";
-import type {
-  BackendSummary,
-  CompactThreadRequest,
-  ComposerDraftRecoveryCandidate,
-  NavigationDirectorySummary,
-  NavigationThreadSummary,
-  NavigationLaunchpadDraft,
-  StartReviewRequest,
-  StartTurnRequest,
-  StartTurnResponse,
+import { StrictMode, useState } from "react";
+import {
+  applyNavigationLaunchpadProviderSettingsPatch,
+  type BackendSummary,
+  type CompactThreadRequest,
+  type ComposerDraftRecoveryCandidate,
+  type NavigationDirectorySummary,
+  type NavigationThreadSummary,
+  type NavigationLaunchpadDraft,
+  type StartReviewRequest,
+  type StartTurnRequest,
+  type StartTurnResponse,
 } from "@pwragent/shared";
 import type { JSONContent } from "@tiptap/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -1621,6 +1622,272 @@ describe("Composer", () => {
 
     expect(screen.getByLabelText("Model")).toHaveValue("grok-4.5");
     expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
+  });
+
+  it("restores provider-specific launchpad settings across repeated OpenAI and Grok flips", async () => {
+    const codexBackend = {
+      ...backendSummary("codex", {
+        models: [
+          {
+            id: "gpt-5.6-sol",
+            label: "GPT-5.6 Sol",
+            current: true,
+            reasoningEfforts: ["medium", "high", "ultra"],
+            supportsFast: true,
+            supportsReasoning: true,
+          },
+          {
+            id: "gpt-5.6-luna",
+            label: "GPT-5.6 Luna",
+            reasoningEfforts: ["medium", "high"],
+            supportsFast: true,
+            supportsReasoning: true,
+          },
+        ],
+        reasoningEfforts: ["medium", "high", "ultra"],
+        supportsFastMode: true,
+      }),
+      label: "OpenAI",
+      executionModes: [
+        {
+          mode: "default" as const,
+          label: "Default Access",
+          available: true,
+          isDefault: true,
+        },
+        {
+          mode: "full-access" as const,
+          label: "Full Access",
+          available: true,
+        },
+      ],
+    } satisfies BackendSummary;
+    const grokBackend = {
+      ...backendSummary("acp:grok", {
+        models: [
+          {
+            id: "grok-4.5",
+            label: "Grok 4.5",
+            current: true,
+            defaultReasoningEffort: "high",
+            reasoningEfforts: ["low", "medium", "high"],
+            supportsReasoning: true,
+          },
+          {
+            id: "grok-4.5-pro",
+            label: "Grok 4.5 Pro",
+            defaultReasoningEffort: "medium",
+            reasoningEfforts: ["low", "medium", "high"],
+            supportsReasoning: true,
+          },
+        ],
+        reasoningEfforts: ["low", "medium", "high"],
+        serviceTiers: ["standard", "priority"],
+      }),
+      label: "Grok CLI",
+      executionModes: [
+        {
+          mode: "default" as const,
+          label: "Default Access",
+          available: true,
+          isDefault: true,
+        },
+        {
+          mode: "full-access" as const,
+          label: "Full Access",
+          available: true,
+        },
+      ],
+      acp: {
+        registryId: "grok",
+        distributionKinds: ["local"],
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        runtime: {
+          schemaVersion: 1,
+          status: "discovered",
+          modes: {
+            availableModes: [
+              { id: "default", label: "Default" },
+              { id: "yolo", label: "YOLO" },
+            ],
+            currentModeId: "default",
+          },
+        },
+      },
+    } satisfies BackendSummary;
+    const initialLaunchpad = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "full-access",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "high",
+      fastMode: true,
+      codexEnvironmentId: "codex-environment",
+      codexEnvironmentExecutionTarget: "local",
+      codexEnvironmentActionId: "codex-action",
+      codexEnvironmentOptions: [
+        {
+          id: "codex-environment",
+          name: "Codex Environment",
+          sourcePath: "/repo/.codex/environments/codex-environment.toml",
+          actions: [],
+        },
+        {
+          id: "grok-environment",
+          name: "Grok Environment",
+          sourcePath: "/repo/.codex/environments/grok-environment.toml",
+          actions: [],
+        },
+      ],
+      providerSettings: {
+        codex: {
+          executionMode: "full-access",
+          model: "gpt-5.6-luna",
+          reasoningEffort: "high",
+          reasoningEffortsByModel: {
+            "gpt-5.6-luna": "high",
+            "gpt-5.6-sol": "ultra",
+          },
+          fastMode: true,
+          codexEnvironmentId: "codex-environment",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "codex-action",
+        },
+        "acp:grok": {
+          executionMode: "full-access",
+          model: "grok-4.5-pro",
+          reasoningEffort: "low",
+          reasoningEffortsByModel: {
+            "grok-4.5-pro": "low",
+          },
+          serviceTier: "priority",
+          acpRuntime: {
+            currentModeId: "yolo",
+          },
+          codexEnvironmentId: "grok-environment",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "grok-action",
+        },
+      },
+      prompt: "",
+      workMode: "worktree",
+      branchName: "feature/provider-memory",
+      createdAt: 1,
+      updatedAt: 1,
+    } as unknown as NavigationLaunchpadDraft;
+    const providerPatches: Array<Partial<NavigationLaunchpadDraft>> = [];
+    let currentLaunchpad = initialLaunchpad;
+
+    function ProviderSwitchHarness(): React.JSX.Element {
+      const [launchpad, setLaunchpad] = useState(initialLaunchpad);
+      currentLaunchpad = launchpad;
+      return (
+        <Composer
+          backends={[codexBackend, grokBackend]}
+          directory={{
+            key: "directory:/repo",
+            kind: "directory",
+            label: "Repo",
+            path: "/repo",
+            threadKeys: [],
+            needsAttentionCount: 0,
+            gitStatus: {
+              currentBranch: "feature/provider-memory",
+              branches: ["feature/provider-memory", "main"],
+              syncState: "in-sync",
+            },
+          }}
+          fullAccessRiskWarningDismissed
+          launchpad={launchpad}
+          onUpdateLaunchpad={async (_directoryKey, patch) => {
+            providerPatches.push(patch);
+            setLaunchpad((current) =>
+              applyNavigationLaunchpadProviderSettingsPatch(current, patch),
+            );
+          }}
+          skills={[]}
+        />
+      );
+    }
+
+    render(<ProviderSwitchHarness />);
+
+    expect(screen.getByLabelText("Access mode")).toHaveValue("full-access");
+    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-luna");
+    expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
+    expect(screen.getByLabelText("Fast mode")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Environment")).toHaveTextContent("Codex Environment");
+
+    chooseDropdownOption("Model", "GPT-5.6 Sol");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-sol");
+      expect(screen.getByLabelText("Reasoning")).toHaveValue("ultra");
+    });
+
+    chooseDropdownOption("Provider", "Grok");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Provider")).toHaveValue("acp:grok");
+    });
+    expect(providerPatches.at(-1)).toEqual({
+      backend: "acp:grok",
+      fileAttachments: undefined,
+      imageAttachments: undefined,
+      prompt: "",
+    });
+    expect(screen.getByLabelText("Access mode")).toHaveValue("full-access");
+    expect(screen.getByLabelText("Agent mode")).toHaveValue("yolo");
+    expect(screen.getByLabelText("Model")).toHaveValue("grok-4.5-pro");
+    expect(screen.getByLabelText("Reasoning")).toHaveValue("low");
+    expect(screen.getByLabelText("Service tier")).toHaveValue("priority");
+    expect(screen.getByLabelText("Environment")).toHaveTextContent("Grok Environment");
+    expect(currentLaunchpad).toMatchObject({
+      codexEnvironmentActionId: "grok-action",
+      codexEnvironmentExecutionTarget: "local",
+      workMode: "worktree",
+      branchName: "feature/provider-memory",
+      prompt: "",
+    });
+
+    chooseDropdownOption("Reasoning", "medium");
+    chooseDropdownOption("Service tier", "standard");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
+      expect(screen.getByLabelText("Service tier")).toHaveValue("standard");
+    });
+
+    chooseDropdownOption("Provider", "OpenAI");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Provider")).toHaveValue("codex");
+    });
+    expect(screen.getByLabelText("Access mode")).toHaveValue("full-access");
+    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-sol");
+    expect(screen.getByLabelText("Reasoning")).toHaveValue("ultra");
+    expect(screen.getByLabelText("Fast mode")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Environment")).toHaveTextContent("Codex Environment");
+    expect(currentLaunchpad).toMatchObject({
+      codexEnvironmentActionId: "codex-action",
+      codexEnvironmentExecutionTarget: "local",
+      workMode: "worktree",
+      branchName: "feature/provider-memory",
+      prompt: "",
+    });
+
+    chooseDropdownOption("Provider", "Grok");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Provider")).toHaveValue("acp:grok");
+      expect(screen.getByLabelText("Model")).toHaveValue("grok-4.5-pro");
+      expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
+      expect(screen.getByLabelText("Service tier")).toHaveValue("standard");
+      expect(screen.getByLabelText("Agent mode")).toHaveValue("yolo");
+      expect(screen.getByLabelText("Environment")).toHaveTextContent(
+        "Grok Environment",
+      );
+    });
   });
 
   it("sends effective model defaults for threads without saved model settings", async () => {

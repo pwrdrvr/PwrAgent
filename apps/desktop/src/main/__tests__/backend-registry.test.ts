@@ -8055,17 +8055,25 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("keeps environment options available after switching a launchpad to ACP", async () => {
+  it("keeps environment selections scoped across repeated Codex and ACP flips", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-env-options-"));
     await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
     await writeFile(
-      path.join(root, ".codex", "environments", "environment.toml"),
+      path.join(root, ".codex", "environments", "codex.toml"),
       `
 version = 1
-name = "Repo Environment"
+name = "Codex Environment"
 
 [setup]
 script = "pnpm install"
+`,
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".codex", "environments", "grok.toml"),
+      `
+version = 1
+name = "Grok Environment"
 `,
       "utf8",
     );
@@ -8088,22 +8096,91 @@ script = "pnpm install"
         directoryPath: root,
       });
 
-      const updated = await registry.updateDirectoryLaunchpad({
+      const codexSelected = await registry.updateDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        patch: {
+          codexEnvironmentId: "codex",
+          codexEnvironmentExecutionTarget: "local",
+        },
+        stickySettingsChanged: true,
+      });
+      expect(codexSelected.launchpad).toMatchObject({
+        backend: "codex",
+        codexEnvironmentId: "codex",
+        codexEnvironmentExecutionTarget: "local",
+      });
+
+      const switchedToAcp = await registry.updateDirectoryLaunchpad({
         directoryKey: `directory:${root}`,
         patch: {
           backend: "acp:kimi" as AcpBackendId,
-          codexEnvironmentId: undefined,
-          codexEnvironmentExecutionTarget: undefined,
-          codexEnvironmentActionId: undefined,
         },
+        stickySettingsChanged: true,
+      });
+      expect(switchedToAcp.launchpad).toMatchObject({
+        backend: "acp:kimi",
+        codexEnvironmentOptions: [
+          {
+            id: "codex",
+            name: "Codex Environment",
+            setupScript: "pnpm install",
+          },
+          {
+            id: "grok",
+            name: "Grok Environment",
+          },
+        ],
+      });
+      expect(switchedToAcp.launchpad.codexEnvironmentId).toBeUndefined();
+
+      const acpSelected = await registry.updateDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        patch: {
+          codexEnvironmentId: "grok",
+          codexEnvironmentExecutionTarget: "local",
+        },
+        stickySettingsChanged: true,
+      });
+      expect(acpSelected.launchpad).toMatchObject({
+        backend: "acp:kimi",
+        codexEnvironmentId: "grok",
+        codexEnvironmentExecutionTarget: "local",
       });
 
-      expect(updated.launchpad.backend).toBe("acp:kimi");
-      expect(updated.launchpad.codexEnvironmentOptions).toMatchObject([
+      const restoredCodex = await registry.updateDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        patch: {
+          backend: "codex",
+        },
+        stickySettingsChanged: true,
+      });
+      expect(restoredCodex.launchpad).toMatchObject({
+        backend: "codex",
+        codexEnvironmentId: "codex",
+        codexEnvironmentExecutionTarget: "local",
+      });
+
+      const restoredAcp = await registry.updateDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        patch: {
+          backend: "acp:kimi" as AcpBackendId,
+        },
+        stickySettingsChanged: true,
+      });
+      expect(restoredAcp.launchpad).toMatchObject({
+        backend: "acp:kimi",
+        codexEnvironmentId: "grok",
+        codexEnvironmentExecutionTarget: "local",
+      });
+      expect(restoredAcp.launchpad.codexEnvironmentOptions).toMatchObject([
         {
-          id: "environment",
-          name: "Repo Environment",
+          id: "codex",
+          name: "Codex Environment",
           setupScript: "pnpm install",
+        },
+        {
+          id: "grok",
+          name: "Grok Environment",
         },
       ]);
     } finally {

@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  applyNavigationLaunchpadProviderSettingsPatch,
+  type NavigationLaunchpadDraft,
+} from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import {
@@ -124,6 +128,116 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
         },
       },
     });
+  });
+
+  it("persists provider-specific launchpad environments across a database reopen", async () => {
+    const { dbPath, tempDir } = createTempStateDb(
+      "pwragent-provider-launchpad-test-",
+    );
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+
+    const initialLaunchpad = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "full-access",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "ultra",
+      fastMode: true,
+      codexEnvironmentId: "codex-environment",
+      codexEnvironmentExecutionTarget: "local",
+      codexEnvironmentActionId: "codex-action",
+      providerSettings: {
+        codex: {
+          executionMode: "full-access",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "ultra",
+          fastMode: true,
+          codexEnvironmentId: "codex-environment",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "codex-action",
+        },
+        "acp:grok": {
+          executionMode: "default",
+          model: "grok-4.5",
+          reasoningEffort: "high",
+          serviceTier: "standard",
+          acpRuntime: {
+            currentModeId: "default",
+          },
+          codexEnvironmentId: "grok-environment",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "grok-action",
+        },
+      },
+      prompt: "Keep the draft",
+      workMode: "worktree",
+      branchName: "feature/provider-memory",
+      createdAt: 1,
+      updatedAt: 1,
+    } as unknown as NavigationLaunchpadDraft;
+
+    try {
+      await store.upsertDirectoryLaunchpad(
+        applyNavigationLaunchpadProviderSettingsPatch(initialLaunchpad, {
+          backend: "acp:grok",
+        }),
+      );
+      stateDb.close();
+
+      const reopenedDb = StateDb.open(dbPath);
+      const reopenedStore = new SqliteOverlayStore(reopenedDb);
+      try {
+        const restoredGrok = await reopenedStore.getDirectoryLaunchpad({
+          directoryKey: "directory:/repo",
+        });
+        expect(restoredGrok).toMatchObject({
+          backend: "acp:grok",
+          executionMode: "default",
+          model: "grok-4.5",
+          reasoningEffort: "high",
+          serviceTier: "standard",
+          acpRuntime: {
+            currentModeId: "default",
+          },
+          codexEnvironmentId: "grok-environment",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "grok-action",
+          prompt: "Keep the draft",
+          workMode: "worktree",
+          branchName: "feature/provider-memory",
+        });
+
+        const restoredCodex = applyNavigationLaunchpadProviderSettingsPatch(
+          restoredGrok!,
+          { backend: "codex" },
+        );
+        expect(restoredCodex).toMatchObject({
+          backend: "codex",
+          executionMode: "full-access",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "ultra",
+          fastMode: true,
+          codexEnvironmentId: "codex-environment",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "codex-action",
+          prompt: "Keep the draft",
+          workMode: "worktree",
+          branchName: "feature/provider-memory",
+        });
+      } finally {
+        reopenedDb.close();
+      }
+    } finally {
+      stateDb.close();
+      removeTempStateDbDir(tempDir);
+      stateDb = openInMemoryStateDb();
+      store = new SqliteOverlayStore(stateDb);
+    }
   });
 
   it("removes stale launchpad default rows when a setting is cleared", async () => {
