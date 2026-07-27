@@ -15220,7 +15220,15 @@ textarea,
 }
 
 .reference-picker__pop {
-  left: 0;
+  /* Anchor to the trigger's right edge so the panel opens leftward, floating
+     over the composer/transcript — the "+" trigger is the LAST control in
+     the setup row, so a left-edge anchor would push the panel past the
+     viewport's right gutter on almost every window width (and the focused
+     search input would then drag overflow-hidden ancestors sideways). A
+     viewport clamp in ReferencePicker nudges it back in on narrow windows,
+     mirroring the branch picker. */
+  right: 0;
+  left: auto;
   width: 440px;
   max-width: calc(100vw - 32px);
   height: 420px;
