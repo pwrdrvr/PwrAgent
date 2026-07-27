@@ -18,6 +18,15 @@ export type {
 } from "./app-server/internal-contract.js";
 export { GrokProvider } from "./providers/grok-provider.js";
 export type { GrokProviderOptions } from "./providers/grok-provider.js";
+export type {
+  AppServerProvider,
+  ProviderActiveTurn,
+  ProviderSteerParams,
+  ProviderTurnEvent,
+  ProviderTurnEventListener,
+  ProviderTurnParams,
+  ProviderTurnResult,
+} from "./providers/provider-contract.js";
 export {
   XaiAiSdkObjectClient,
   type XaiAiSdkObjectClientOptions,

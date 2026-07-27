@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
+  buildNavigationSnapshot,
   buildThreadIdentityKey,
 } from "@pwragent/shared";
 import type {
@@ -37,7 +38,6 @@ import type {
 } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { ThreadSource as CodexThreadSource } from "@pwrdrvr/codex-app-server-protocol/v2";
-import { buildNavigationSnapshot } from "@pwragent/agent-core";
 import {
   buildCodexFastModeMismatchNotificationParams,
   DesktopBackendRegistry,

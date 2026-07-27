@@ -1,0 +1,20 @@
+{
+  "name": "@pwragent/grok-app-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "pwragent-grok-app-server": "dist/index.mjs"
+  },
+  "scripts": {
+    "build": "node ./build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@pwragent/agent-core": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1"
+  },
+  "license": "MIT"
+}

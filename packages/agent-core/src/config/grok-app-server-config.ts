@@ -19,7 +19,9 @@ type StateDirOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-type ResolveConfigOptions = ConfigDirOptions & StateDirOptions;
+type ResolveConfigOptions = ConfigDirOptions & StateDirOptions & {
+  profileStateRoot?: string;
+};
 
 export type GrokAppServerRuntimeConfig = {
   apiKey?: string;
@@ -88,6 +90,7 @@ export function resolveGrokAppServerRuntimeConfig(
     configPath,
     stateRoot:
       readString(parsedConfig.state_root)
+      || options?.profileStateRoot?.trim()
       || defaultGrokAppServerStateDir(options),
   };
 }

@@ -8,33 +8,50 @@ pitch, see [README.md](README.md). For day-to-day development setup, see
 
 ## Process model
 
-PwrAgent is an Electron app with one auxiliary process: the coding-agent
-server. The renderer (React UI) talks to the main process over the
-standard Electron IPC bridge; the main process talks to the agent-core
-server over JSON-RPC on stdio.
+PwrAgent is an Electron app whose coding-agent runtimes execute outside
+Electron main. The renderer (React UI) talks to the main process over the
+standard Electron IPC bridge. Electron main launches each backend's app
+server and speaks bidirectional JSON-RPC over stdio.
 
 ```mermaid
 graph TB
     User[User]
     Renderer["Renderer<br/>React UI"]
     Main["Main process<br/>Electron"]
-    AgentCore["Agent-core<br/>Grok app-server"]
+    GrokProcess["Grok app-server child<br/>Node process"]
+    AgentCore["Agent-core<br/>AI SDK / xAI"]
+    CodexProcess["Codex app-server<br/>managed process"]
     Adapters["Messaging adapters<br/>Telegram / Discord / Mattermost / Slack"]
 
     User --> Renderer
     Renderer <-->|IPC bridge| Main
-    Main <-->|JSON-RPC over stdio| AgentCore
+    Main <-->|JSON-RPC over stdio| GrokProcess
+    GrokProcess --> AgentCore
+    Main <-->|JSON-RPC over stdio| CodexProcess
     Main <-->|long-poll / WS / HTTP| Adapters
 ```
 
 A few invariants worth knowing up front:
 
-- The renderer never speaks to the agent-core server directly. All
-  package access crosses the IPC bridge through the main process.
+- Neither the renderer nor Electron main imports `@pwragent/agent-core`.
+  The Grok child process is its only application host.
 - The renderer may only import `@pwragent/shared` from the workspace.
   Everything else is gated behind IPC.
+- App-server stdout is protocol-only. Child diagnostics go to stderr so
+  they cannot corrupt JSON-RPC framing.
 - One messaging adapter, one controller, one capability profile. See
   [Messaging layer](#messaging-layer) below.
+
+The packaged Grok entrypoint lives inside the signed application archive.
+Electron launches itself with `ELECTRON_RUN_AS_NODE=1` to execute that
+entrypoint on macOS, Windows, and Linux. In development it launches the
+same built entrypoint from the workspace.
+
+Electron may decrypt a profile's xAI API key from `safeStorage`, but passes
+it to the child only through its environment. The key is never included in
+JSON-RPC frames or diagnostic output. The child retains the existing runtime
+precedence: environment variables override Grok config TOML, while desktop
+profile state supplies the default storage root.
 
 ## Storage layers
 
@@ -124,8 +141,8 @@ fixture-derivation workflow.
 |---|---|---|
 | Desktop state | `~/.pwragent/profiles/<name>/state/state.db` | Messaging bindings, thread overlay, encrypted secret blobs |
 | Desktop config | `~/.pwragent/profiles/<name>/config.toml` | Desktop settings (messaging, models, worktrees) |
-| Agent-core threads | `<state_root>/threads/<id>/rollout.jsonl` | Append-only message + replay-item log per thread |
-| Agent-core metadata | `<state_root>/threads/<id>/thread.toml` | Per-thread config (model, cwd, approval policy) |
+| Agent-core threads | `~/.pwragent/profiles/<name>/state/grok-app-server/threads/<id>/rollout.jsonl` | Append-only message + replay-item log per thread |
+| Agent-core metadata | `~/.pwragent/profiles/<name>/state/grok-app-server/threads/<id>/thread.toml` | Per-thread config (model, cwd, approval policy) |
 | Protocol captures | `~/.pwragent/profiles/<name>/state/protocol-captures/` | Dev-only JSON-RPC session recordings |
 
 Override the PwrAgent root with `PWRAGENT_HOME=/path/to/root` (useful for
@@ -183,22 +200,24 @@ For a hands-on walkthrough when adding a new platform, see
 
 PwrAgent enforces a strict layered dependency architecture via
 [`dependency-cruiser`](.dependency-cruiser.cjs). The hierarchy reads
-bottom to top — leaves at the bottom import nothing else internal; the
-desktop app at the top can reach anywhere.
+bottom to top — leaves at the bottom import nothing else internal. The
+Grok process application hosts agent-core; the desktop deliberately does
+not.
 
 ```mermaid
 graph TB
     DesktopApp["apps/desktop"]
+    GrokApp["apps/grok-app-server"]
     AgentCore["packages/agent-core"]
     MsgProviders["packages/messaging/providers/*"]
     MsgInterface["packages/messaging/interface"]
     Shared["packages/shared"]
 
-    DesktopApp --> AgentCore
     DesktopApp --> MsgProviders
     DesktopApp --> MsgInterface
     DesktopApp --> Shared
     DesktopApp --> CodexProto["@pwrdrvr/codex-app-server-protocol"]
+    GrokApp --> AgentCore
     MsgProviders --> MsgInterface
     MsgInterface --> Shared
     AgentCore --> Shared
@@ -213,6 +232,8 @@ the "Dependency Boundary Enforcement" section of
 Additional renderer constraint: code under
 `apps/desktop/src/renderer/` may only import `@pwragent/shared`. All
 other package access crosses the IPC bridge through the main process.
+An additional error-level rule rejects any desktop import of
+`@pwragent/agent-core`, including relative imports into its source tree.
 
 Run `pnpm lint:boundaries` locally before pushing; CI fails the build on
 any violation.
@@ -222,6 +243,7 @@ any violation.
 | Path | What's there |
 |---|---|
 | `apps/desktop` | Electron app — main process, renderer, IPC bridge |
+| `apps/grok-app-server` | Standalone Grok JSON-RPC stdio process and packaged executable |
 | `packages/shared` | Cross-package types: app-server enums, navigation snapshots, thread identifiers |
 | `packages/agent-core` | Agent runtime, Codex App Server protocol implementation, Grok-backed coding agent |
 | `packages/messaging/interface` | Generic messaging types, capability profile, layout helpers |

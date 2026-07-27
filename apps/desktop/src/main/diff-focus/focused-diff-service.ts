@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { XaiAiSdkObjectResult } from "@pwragent/agent-core";
 import type {
   FocusedDiffAnalysisRequest,
   FocusedDiffAnalysisResponse,
@@ -14,6 +13,7 @@ import {
 } from "../../shared/diff-focus";
 import {
   XaiEphemeralObjectCaller,
+  type XaiAiSdkObjectResult,
   type XaiObjectClientLike,
 } from "../app-server/ephemeral-object-call";
 
@@ -72,8 +72,6 @@ const FOCUSED_DIFF_SYSTEM_PROMPT = [
 ].join("\n");
 
 type FocusedDiffServiceOptions = {
-  apiKey?: string;
-  baseUrl?: string;
   client?: XaiObjectClientLike;
   model?: string;
   promptVersion?: string;
@@ -92,10 +90,7 @@ export class FocusedDiffService {
     this.promptVersion = options.promptVersion?.trim() || FOCUSED_DIFF_PROMPT_VERSION;
     this.timeoutMs = options.timeoutMs ?? FOCUSED_DIFF_TIMEOUT_MS;
     this.objectCaller = new XaiEphemeralObjectCaller({
-      apiKey: options.apiKey,
-      baseUrl: options.baseUrl,
       client: options.client,
-      model: this.getModel(),
     });
   }
 

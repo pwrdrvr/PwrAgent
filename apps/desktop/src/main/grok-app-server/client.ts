@@ -1,12 +1,4 @@
 import {
-  AppServerSessionState,
-  CodexAppServer,
-  GrokRolloutStore,
-  GrokProvider,
-  loadLocalEnv,
-  resolveGrokAppServerRuntimeConfig,
-} from "@pwragent/agent-core";
-import {
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type {
@@ -28,9 +20,11 @@ import type {
   BackendModelOption,
   LinkedDirectorySummary,
 } from "@pwragent/shared";
-import type {
-  JsonRpcObserver,
-  JsonRpcObserverDiagnostics,
+import {
+  JsonRpcConnection,
+  type JsonRpcTransport,
+  type JsonRpcObserver,
+  type JsonRpcObserverDiagnostics,
 } from "@pwrdrvr/agent-transport";
 import { summarizeToolActivityItems } from "../app-server/thread-activity";
 import { getMainLogger } from "../log";
@@ -38,8 +32,12 @@ import {
   createThreadDirectoryEnricher,
   type ThreadDirectoryEnrichment,
 } from "../app-server/thread-directory-enricher";
+import { GrokStdioJsonRpcTransport } from "./stdio-transport";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
+const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const GROK_GENERATE_OBJECT_METHOD = "pwragent/xai/generateObject";
+const GROK_SHUTDOWN_METHOD = "shutdown";
 const grokClientLog = getMainLogger("pwragent:grok-client");
 
 type InitializeResult = {
@@ -67,10 +65,14 @@ type GrokServerLike = {
 type GrokClientOptions = {
   apiKey?: string;
   resolveApiKey?: () => string | undefined;
-  baseUrl?: string;
   connectionObserver?: JsonRpcObserver;
-  model?: string;
-  stateRoot?: string;
+  requestTimeoutMs?: number;
+  transport?: JsonRpcTransport;
+  command?: string;
+  args?: string[];
+  entryPath?: string;
+  env?: NodeJS.ProcessEnv;
+  isAvailable?: () => boolean;
   directoryResolver?: (
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
@@ -78,8 +80,22 @@ type GrokClientOptions = {
     projectKey?: string
   ) => Promise<ThreadDirectoryEnrichment>;
   server?: GrokServerLike;
-  threadIdGenerator?: () => string;
-  turnIdGenerator?: () => string;
+};
+
+export type GrokGenerateObjectRequest = {
+  model?: string;
+  promptCacheKey?: string;
+  headers?: Record<string, string>;
+  schema: Record<string, unknown>;
+  schemaName?: string;
+  system: string;
+  prompt: string;
+  timeoutMs?: number;
+};
+
+export type GrokGenerateObjectResult = {
+  object: unknown;
+  cachedTokens?: number;
 };
 
 type RawThreadSummary = {
@@ -832,8 +848,9 @@ export class GrokAppServerClient {
   private readonly threadDirectoryEnricher: (
     projectKey?: string
   ) => Promise<ThreadDirectoryEnrichment>;
+  private readonly connection: JsonRpcConnection | null;
   private requestCounter = 0;
-  private server: GrokServerLike | null;
+  private readonly server: GrokServerLike | null;
   private initialized = false;
   private initializePromise?: Promise<void>;
   private initializeResult: InitializeResult | null = null;
@@ -858,8 +875,51 @@ export class GrokAppServerClient {
         : createThreadDirectoryEnricher());
     this.server = options.server ?? null;
     if (this.server) {
+      this.connection = null;
       this.subscribeToServerNotifications(this.server);
+      return;
     }
+    this.connection = new JsonRpcConnection(
+      options.transport ??
+        new GrokStdioJsonRpcTransport({
+          apiKey: options.apiKey,
+          resolveApiKey: options.resolveApiKey,
+          command: options.command,
+          args: options.args,
+          entryPath: options.entryPath,
+          env: options.env,
+          isAvailable: options.isAvailable,
+        }),
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options.connectionObserver,
+      {
+        logContext: { backend: "grok" },
+        logger: getMainLogger("pwragent:json-rpc"),
+      },
+    );
+    this.connection.setNotificationHandler(async (method, params) => {
+      const notification = {
+        method,
+        params: (params ?? {}) as AppServerNotification["params"],
+      } as AppServerNotification;
+      for (const listener of this.notificationListeners) {
+        await listener(notification);
+      }
+    });
+    this.connection.setRequestHandler(async (method, params) => {
+      const request = {
+        method,
+        params: (params ?? {}) as AppServerPendingRequestNotification["params"],
+      } satisfies AppServerPendingRequestNotification;
+      const listeners = [...this.requestListeners];
+      if (listeners.length === 0) {
+        throw new Error(`No desktop request handler registered for ${method}`);
+      }
+      for (const listener of listeners) {
+        return await listener(request);
+      }
+      throw new Error(`No desktop request handler registered for ${method}`);
+    });
   }
 
   async close(): Promise<void> {
@@ -870,6 +930,14 @@ export class GrokAppServerClient {
     this.initialized = false;
     this.initializePromise = undefined;
     this.initializeResult = null;
+    if (this.connection) {
+      try {
+        await this.connection.request(GROK_SHUTDOWN_METHOD, {}, 2_000);
+      } catch {
+        // A failed or already-closed child still needs transport cleanup.
+      }
+      await this.connection.close();
+    }
   }
 
   onNotification(
@@ -1142,6 +1210,28 @@ export class GrokAppServerClient {
     };
   }
 
+  async generateObject(
+    params: GrokGenerateObjectRequest,
+  ): Promise<GrokGenerateObjectResult> {
+    await this.ensureInitialized();
+    const result = await this.request(
+      GROK_GENERATE_OBJECT_METHOD,
+      params,
+      undefined,
+      params.timeoutMs === undefined ? undefined : params.timeoutMs + 2_000,
+    );
+    const record = asRecord(result);
+    if (!record || !("object" in record)) {
+      throw new Error("grok app server generateObject returned an invalid result");
+    }
+    return {
+      object: record.object,
+      ...(typeof record.cachedTokens === "number"
+        ? { cachedTokens: record.cachedTokens }
+        : {}),
+    };
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
@@ -1165,41 +1255,6 @@ export class GrokAppServerClient {
     });
 
     await this.initializePromise;
-  }
-
-  private getServer(): GrokServerLike {
-    if (this.server) {
-      return this.server;
-    }
-
-    loadLocalEnv({ override: false });
-    const runtimeConfig = resolveGrokAppServerRuntimeConfig();
-    const apiKey =
-      this.options.apiKey?.trim() || this.options.resolveApiKey?.()?.trim();
-    if (!apiKey) {
-      throw new Error("grok app server unavailable: Grok API key is not set");
-    }
-
-    const provider = new GrokProvider({
-      apiKey,
-      baseUrl: this.options.baseUrl?.trim() || runtimeConfig.baseUrl,
-      model: this.options.model?.trim() || runtimeConfig.model,
-    });
-    const sessionState = new AppServerSessionState({
-      store: new GrokRolloutStore(
-        this.options.stateRoot?.trim() || runtimeConfig.stateRoot,
-      ),
-    });
-
-    const server = new CodexAppServer({
-      provider,
-      sessionState,
-      threadIdGenerator: this.options.threadIdGenerator,
-      turnIdGenerator: this.options.turnIdGenerator,
-    });
-    this.server = server;
-    this.subscribeToServerNotifications(server);
-    return server;
   }
 
   private subscribeToServerNotifications(server: GrokServerLike): void {
@@ -1278,9 +1333,18 @@ export class GrokAppServerClient {
     method: string,
     params?: unknown,
     diagnostics?: JsonRpcObserverDiagnostics,
+    timeoutMs?: number,
   ): Promise<unknown> {
+    if (this.connection) {
+      await this.connection.connect();
+      return await this.connection.request(method, params, timeoutMs, diagnostics);
+    }
+
     const id = `rpc-${++this.requestCounter}`;
-    const server = this.getServer();
+    const server = this.server;
+    if (!server) {
+      throw new Error("grok app server transport unavailable");
+    }
 
     await this.observe({
       direction: "outbound",
@@ -1323,7 +1387,11 @@ export class GrokAppServerClient {
   }
 
   private async notify(method: string, params?: unknown): Promise<void> {
-    const server = this.getServer();
+    if (this.connection) {
+      await this.connection.connect();
+      await this.connection.notify(method, params);
+      return;
+    }
 
     await this.observe({
       direction: "outbound",
@@ -1333,6 +1401,10 @@ export class GrokAppServerClient {
         params: params ?? {},
       },
     });
+    const server = this.server;
+    if (!server) {
+      throw new Error("grok app server transport unavailable");
+    }
     await server.notify?.(method, params);
   }
 

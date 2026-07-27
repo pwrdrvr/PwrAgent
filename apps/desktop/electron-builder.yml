@@ -72,7 +72,9 @@ extraResources:
 # Electron fuses — ASAR integrity is NOT on by default in electron-builder.
 # Enable it explicitly so the runtime aborts if the .asar is tampered with.
 electronFuses:
-  runAsNode: false
+  # The packaged Grok app-server is a signed, ASAR-integrity-protected Node
+  # entrypoint launched through the Electron binary with ELECTRON_RUN_AS_NODE.
+  runAsNode: true
   enableCookieEncryption: true
   enableNodeOptionsEnvironmentVariable: false
   enableNodeCliInspectArguments: false

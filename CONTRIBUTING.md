@@ -36,6 +36,8 @@ makes Vitest run the full workspace suite.
 ## Workspace Map
 
 - `apps/desktop` — Electron app shell (main process, renderer, IPC).
+- `apps/grok-app-server` — standalone JSON-RPC stdio host for Agent-Core,
+  bundled into the desktop application for production.
 - `packages/shared` — internal contracts and types.
 - `packages/agent-core` — internal agent runtime and domain services.
 - `packages/messaging/interface` — generic messaging types and helpers.
@@ -69,6 +71,11 @@ The rules in [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs) are
 load-bearing. **Do not loosen them to make a change pass.** Renderer code
 may only import `@pwragent/shared`; other package access crosses the IPC
 bridge through the desktop main process.
+
+The entire desktop app, including Electron main, is prohibited from
+importing `@pwragent/agent-core`. Agent-Core runs only inside
+`apps/grok-app-server`; desktop communicates with it through JSON-RPC
+over a managed child-process transport.
 
 If a rule blocks your change, the change is architecturally wrong —
 redesign it. See [ARCHITECTURE.md](ARCHITECTURE.md#dependency-boundaries)
@@ -226,6 +233,12 @@ frames that need deeper inspection.
 `packages/agent-core` includes the Grok-backed Codex App Server contract,
 consumer-sequence compatibility tests, and provider coverage for the
 OpenClaw-used subset.
+
+Production hosts this package in `apps/grok-app-server`, never in Electron
+main. `pnpm --filter @pwragent/grok-app-server build` produces the standalone
+stdio entrypoint. Desktop's normal `pnpm build` stages it under
+`out/grok-app-server/` and checks that AI SDK/xAI implementation did not leak
+into `out/main/`.
 
 Supported app-server methods today:
 

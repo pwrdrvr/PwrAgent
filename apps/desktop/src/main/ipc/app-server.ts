@@ -807,7 +807,6 @@ function pullRequestStatusFreshness(
 
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
-  private focusedDiffServiceApiKey: string | undefined;
   private focusedDiffServiceModel: string | undefined;
   private prFetcher: GithubPrFetcher | undefined;
   private readonly pendingNavigationSnapshots = new Map<
@@ -4075,7 +4074,6 @@ class DesktopAppServerService {
 
   async close(): Promise<void> {
     this.focusedDiffService = null;
-    this.focusedDiffServiceApiKey = undefined;
     this.focusedDiffServiceModel = undefined;
     this.prFetcher = undefined;
     this.prPollingScheduler?.stop();
@@ -4132,20 +4130,20 @@ class DesktopAppServerService {
   }
 
   private getFocusedDiffService(modelOverride?: string): FocusedDiffService {
-    const apiKey = getDesktopSettingsService().resolveGrokApiKeySync();
     if (
       this.focusedDiffService
-      && this.focusedDiffServiceApiKey === apiKey
       && this.focusedDiffServiceModel === modelOverride
     ) {
       return this.focusedDiffService;
     }
 
     this.focusedDiffService = new FocusedDiffService({
-      apiKey,
+      client: {
+        generateObject: async (request) =>
+          await getDesktopBackendRegistry().generateGrokObject(request),
+      },
       ...(modelOverride ? { model: modelOverride } : {}),
     });
-    this.focusedDiffServiceApiKey = apiKey;
     this.focusedDiffServiceModel = modelOverride;
     return this.focusedDiffService;
   }

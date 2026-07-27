@@ -510,7 +510,6 @@ in your provider's bundling. Edit
    exclude: [
      "@pwragent/shared",
      "@pwrdrvr/codex-app-server-protocol",
-     "@pwragent/agent-core",
      "@pwragent/messaging-interface",
      "@pwragent/messaging-provider-discord",
 +    "@pwragent/messaging-provider-<channel>",
@@ -523,6 +522,10 @@ This list looks duplicative with the workspace dependency declaration in
 `apps/desktop/package.json` but isn't — the `package.json` makes the
 package importable; the `electron.vite.config.ts` `exclude` makes it
 get bundled. Both are required.
+
+`@pwragent/agent-core` is intentionally absent. Dependency Cruiser forbids
+desktop from importing it, and its runtime belongs exclusively in the
+separate Grok app-server process.
 
 ### 8.5 — Settings UI (recommended for parity with the existing providers)
 

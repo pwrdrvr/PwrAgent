@@ -67,8 +67,8 @@ export interface CredentialTesterDependencies {
     request: CredentialValidationRequest,
   ) => Promise<MessagingCredentialValidationResult>;
   /** Override `fetch` for testing. Defaults to `globalThis.fetch`.
-   *  Only used by the Grok probe — there is no `@ai-sdk/xai` smoke
-   *  check API, so the tester falls back to a direct `GET /v1/models`. */
+   *  Only used by the Grok probe — the agent SDK has no smoke-check API,
+   *  so the tester falls back to a direct `GET /v1/models`. */
   fetch?: typeof fetch;
   /** Override the codex `--version` runner. Defaults to spawning the binary. */
   runCodexVersion?: (
@@ -106,10 +106,9 @@ interface GrokModelsResponse {
  *   registry, so subsequent tests reuse the same module without
  *   re-loading.
  * - **Grok**: direct `GET https://api.x.ai/v1/models` via fetch. The
- *   `@ai-sdk/xai` package agent-core uses doesn't expose a smoke-check
- *   API (no `models.list()`), so per the user's "use real library
- *   unless it doesn't have a non-disruptive method" clause, raw fetch
- *   is the right choice here.
+ *   agent SDK hosted by the Grok child process doesn't expose a
+ *   smoke-check API (no `models.list()`), so raw fetch is the right
+ *   choice here.
  * - **Codex**: spawn `<resolved-path> --version`. There's no library
  *   to use; Codex is a binary.
  */
@@ -321,12 +320,10 @@ export class CredentialTester {
     if (!apiKey) {
       return unset("grok", startedAt);
     }
-    // The xAI SDK (`@ai-sdk/xai`) we already use in agent-core does
-    // NOT expose a non-disruptive smoke-check API — it's a model
-    // factory, not a control-plane client. There is no `models.list()`
-    // or equivalent. Per the user's clause "use the real library
-    // unless the real library does not expose a simple non-disruptive
-    // method", a direct `GET /v1/models` is the right call here.
+    // The agent SDK hosted by the Grok child process does not expose a
+    // non-disruptive smoke-check API — it is a model factory, not a
+    // control-plane client. There is no `models.list()` equivalent, so
+    // a direct `GET /v1/models` is the right call here.
     const { json, status, durationMs } = await this.fetchJson<GrokModelsResponse>({
       url: "https://api.x.ai/v1/models",
       method: "GET",

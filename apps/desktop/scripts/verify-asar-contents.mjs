@@ -42,6 +42,17 @@ if (!existsSync(asarPath)) {
 const require = createRequire(import.meta.url);
 const asar = require("@electron/asar");
 const listing = asar.listPackage(asarPath, { isPack: false });
+const required = [
+  "/out/grok-app-server/index.mjs",
+];
+
+const missing = required.filter((entry) => !listing.includes(entry));
+if (missing.length > 0) {
+  console.error(
+    `verify-asar-contents: missing required packaged file(s): ${missing.join(", ")}`,
+  );
+  process.exit(1);
+}
 
 // Each rule: [label, regex]. Anything matching → fail.
 const forbidden = [
@@ -91,4 +102,6 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log(`verify-asar-contents: OK (${listing.length} entries, no forbidden patterns)`);
+console.log(
+  `verify-asar-contents: OK (${listing.length} entries, Grok child present, no forbidden patterns)`,
+);

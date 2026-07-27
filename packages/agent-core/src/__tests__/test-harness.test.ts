@@ -285,6 +285,37 @@ describe("test harness helpers", () => {
     await temp.cleanup();
   });
 
+  it("uses a desktop profile state fallback unless TOML declares state_root", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const profileStateRoot = path.join(temp.path, "profile-state");
+    const configPath = defaultGrokAppServerConfigPath({ homeDir: temp.path });
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+    const fallbackConfig = resolveGrokAppServerRuntimeConfig({
+      homeDir: temp.path,
+      env: {} as NodeJS.ProcessEnv,
+      profileStateRoot,
+    });
+    expect(fallbackConfig.stateRoot).toBe(profileStateRoot);
+
+    await fs.writeFile(
+      configPath,
+      stringifyFlatToml({
+        state_root: path.join(temp.path, "explicit-state"),
+      }),
+    );
+    const explicitConfig = resolveGrokAppServerRuntimeConfig({
+      homeDir: temp.path,
+      env: {} as NodeJS.ProcessEnv,
+      profileStateRoot,
+    });
+    expect(explicitConfig.stateRoot).toBe(
+      path.join(temp.path, "explicit-state"),
+    );
+
+    await temp.cleanup();
+  });
+
   it("ignores inline comments in TOML config values", async () => {
     const temp = await createTemporaryTestDirectory();
     const configPath = defaultGrokAppServerConfigPath({ homeDir: temp.path });

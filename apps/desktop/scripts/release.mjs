@@ -396,9 +396,15 @@ if (win) {
     // electron-builder modifies the Electron binary to set fuses, which
     // invalidates its original code signature. Without re-signing, macOS
     // kills the app with SIGKILL (Code Signature Invalid) on launch.
-    // Ad-hoc signing creates a locally valid signature that satisfies
-    // macOS page validation without requiring a Developer ID certificate.
-    builderArgs.push("--config.mac.identity=-", "--config.mac.notarize=false");
+    // Hardened-runtime library validation rejects an ad-hoc signed Electron
+    // Framework because neither it nor the main executable has a Developer ID
+    // Team ID. Disable hardened runtime only for this disposable dry-run app;
+    // signed release builds retain the electron-builder.yml setting.
+    builderArgs.push(
+      "--config.mac.identity=-",
+      "--config.mac.notarize=false",
+      "--config.mac.hardenedRuntime=false",
+    );
   }
   builderArgs.push(publish ? "--publish" : "--publish=never", publish ? "always" : "");
 }

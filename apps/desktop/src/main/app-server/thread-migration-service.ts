@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { buildDirectorySummaries } from "@pwragent/agent-core";
 import {
+  buildDirectorySummaries,
   buildThreadIdentityKey,
   isToolManagedWorktreePath,
   type AppServerThreadReplay,
