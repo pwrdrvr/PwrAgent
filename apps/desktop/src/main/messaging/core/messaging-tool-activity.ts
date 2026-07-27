@@ -1,5 +1,8 @@
 import path from "node:path";
-import type { AgentEvent } from "@pwragent/shared";
+import {
+  formatSearchCommandActionLabel,
+  type AgentEvent,
+} from "@pwragent/shared";
 import {
   redactCommandText,
   safeCommandTitle as safeRedactedCommandTitle,
@@ -148,20 +151,23 @@ function commandActionTitle(item: Record<string, unknown>): string | undefined {
   for (const action of readCommandActions(item)) {
     const actionType = readString(action, "type");
     const actionPath = readString(action, "path");
+    const actionQuery = readString(action, "query");
     const fallbackName = readString(action, "name");
     const basename = actionPath ? path.basename(actionPath) || actionPath : undefined;
 
     if (actionType === "read" && basename) {
       return `Read ${basename}`;
     }
-    if (actionType === "search" && basename) {
-      return `Searched ${basename}`;
-    }
     if (actionType === "listFiles") {
       return basename ? `Listed ${basename}` : "Listed files";
     }
     if (actionType === "search") {
-      return "Ran search";
+      return truncateTitle(
+        formatSearchCommandActionLabel({
+          path: actionPath,
+          query: actionQuery ? redactCommandText(actionQuery) : undefined,
+        }),
+      );
     }
     if (fallbackName) {
       return truncateTitle(fallbackName);

@@ -13,6 +13,7 @@ import {
   isGenericShellToolTitle,
   readAcpToolCommand,
   readAcpToolContentCommand,
+  readAcpToolInvocation,
 } from "./acp-command-extraction.js";
 
 export type AcpSessionUpdate = {
@@ -47,6 +48,7 @@ export class AcpSessionReplayNormalizer {
   private messages: AppServerThreadMessage[] = [];
   private status: AppServerThreadStatus = "idle";
   private currentTurnId?: string;
+  private currentTurnStartedAt?: number;
   private activeAssistantMessageId?: string;
   private activeAssistantMessagePhase?: AppServerTranscriptPhase;
   private assistantMessageSequence = 0;
@@ -66,6 +68,7 @@ export class AcpSessionReplayNormalizer {
     const id = `user:${params.turnId}`;
     const normalizedPrompt = normalizeUserPrompt(params.prompt, params.parts);
     this.currentTurnId = params.turnId;
+    this.currentTurnStartedAt = createdAt;
     this.activeAssistantMessageId = undefined;
     this.activeAssistantMessagePhase = undefined;
     this.assistantMessageSequence = 0;
@@ -83,14 +86,20 @@ export class AcpSessionReplayNormalizer {
     return this.replay();
   }
 
-  recordTurnFinished(turnId?: string): AppServerThreadReplay {
-    if (turnId) {
-      this.removeAgentWaitingActivity(turnId);
+  recordTurnFinished(
+    turnId?: string,
+    completedAt = Date.now(),
+  ): AppServerThreadReplay {
+    const completedTurnId = turnId ?? this.currentTurnId;
+    if (completedTurnId) {
+      this.removeAgentWaitingActivity(completedTurnId);
+      this.completeTurnEntries(completedTurnId, "completed", completedAt);
     } else {
       this.removeCurrentAgentWaitingActivity();
     }
     if (!turnId || this.currentTurnId === turnId) {
       this.currentTurnId = undefined;
+      this.currentTurnStartedAt = undefined;
     }
     this.activeAssistantMessageId = undefined;
     this.activeAssistantMessagePhase = undefined;
@@ -106,8 +115,10 @@ export class AcpSessionReplayNormalizer {
   }): AppServerThreadReplay {
     const createdAt = params.receivedAt ?? Date.now();
     this.removeAgentWaitingActivity(params.turnId);
+    this.completeTurnEntries(params.turnId, "failed", createdAt);
     if (this.currentTurnId === params.turnId) {
       this.currentTurnId = undefined;
+      this.currentTurnStartedAt = undefined;
     }
     this.activeAssistantMessageId = undefined;
     this.activeAssistantMessagePhase = undefined;
@@ -186,7 +197,7 @@ export class AcpSessionReplayNormalizer {
       // the live session/prompt request resolves. The client defers the live
       // idle transition until prompt resolution so queued work cannot overlap.
       if (!update.deferTurnCompletion) {
-        this.recordTurnFinished();
+        this.recordTurnFinished(undefined, createdAt);
       }
     } else if (readAcpTopicTitle(update.update)) {
       // Topic updates are thread metadata, not transcript entries.
@@ -205,7 +216,7 @@ export class AcpSessionReplayNormalizer {
       } else if (kind === "turn_started") {
         this.status = "active";
       } else if (kind === "turn_finished") {
-        this.recordTurnFinished(readString(update.update, "turnId"));
+        this.recordTurnFinished(readString(update.update, "turnId"), createdAt);
       } else if (kind === "pwragent_turn_failed") {
         this.recordTurnFailed({
           sessionId: update.sessionId,
@@ -359,17 +370,18 @@ export class AcpSessionReplayNormalizer {
   }
 
   private upsertActivity(activity: AppServerThreadActivityEntry): void {
+    const activityWithTurn = this.withCurrentTurn(activity);
     const index = this.entries.findIndex(
       (existing): existing is AppServerThreadActivityEntry =>
-        existing.type === "activity" && existing.id === activity.id,
+        existing.type === "activity" && existing.id === activityWithTurn.id,
     );
     if (index === -1) {
-      this.entries.push(activity);
+      this.entries.push(activityWithTurn);
       return;
     }
     this.entries[index] = mergeActivity(
       this.entries[index] as AppServerThreadActivityEntry,
-      activity,
+      activityWithTurn,
     );
   }
 
@@ -409,12 +421,15 @@ export class AcpSessionReplayNormalizer {
   }
 
   private upsertEntry(entry: AppServerThreadEntry): void {
-    const index = this.entries.findIndex((existing) => existing.id === entry.id);
+    const entryWithTurn = this.withCurrentTurn(entry);
+    const index = this.entries.findIndex(
+      (existing) => existing.id === entryWithTurn.id,
+    );
     if (index === -1) {
-      this.entries.push(entry);
+      this.entries.push(entryWithTurn);
       return;
     }
-    this.entries[index] = entry;
+    this.entries[index] = entryWithTurn;
   }
 
   private upsertMessage(message: AppServerThreadMessage): void {
@@ -465,15 +480,58 @@ export class AcpSessionReplayNormalizer {
     if (existingEntry) {
       existingEntry.text = appendTranscriptChunk(existingEntry.text, params.text);
     } else {
-      this.entries.push({
+      this.entries.push(this.withCurrentTurn({
         type: "message",
         id: params.id,
         phase: params.phase,
         role: params.role,
         text: params.text,
         createdAt: params.createdAt,
-      });
+      }));
     }
+  }
+
+  private withCurrentTurn<T extends AppServerThreadEntry>(entry: T): T {
+    if (!this.currentTurnId) {
+      return entry;
+    }
+    return {
+      ...entry,
+      turn: {
+        id: this.currentTurnId,
+        status: "in_progress",
+        ...(this.currentTurnStartedAt !== undefined
+          ? { startedAt: this.currentTurnStartedAt }
+          : {}),
+      },
+    };
+  }
+
+  private completeTurnEntries(
+    turnId: string,
+    status: "completed" | "failed",
+    completedAt: number,
+  ): void {
+    this.entries = this.entries.map((entry) => {
+      if (entry.turn?.id !== turnId) {
+        return entry;
+      }
+      const startedAt = entry.turn.startedAt ?? this.currentTurnStartedAt;
+      return {
+        ...entry,
+        turn: {
+          ...entry.turn,
+          status,
+          completedAt,
+          ...(startedAt !== undefined
+            ? {
+                startedAt,
+                durationMs: Math.max(0, completedAt - startedAt),
+              }
+            : {}),
+        },
+      };
+    });
   }
 }
 
@@ -758,19 +816,23 @@ function toolActivity(
     readString(update.update, "itemId") ??
     readString(update.update, "item_id") ??
     `${kind}:${update.sessionId}`;
-  const command = readAcpToolCommand(update.update);
+  const rawCommand = readAcpToolCommand(update.update);
+  const invocation = readAcpToolInvocation(update.update);
+  const displayCommand = rawCommand ?? invocation;
   const labelCandidate =
     readString(update.update, "title") ??
     readString(update.update, "name") ??
     readString(update.update, "kind") ??
     kind.replaceAll("_", " ");
   const label =
-    command && isGenericShellToolTitle(labelCandidate) ? command : labelCandidate;
+    displayCommand && isGenericShellToolTitle(labelCandidate)
+      ? displayCommand
+      : labelCandidate;
   const status = readString(update.update, "status");
   const path = readString(update.update, "path") ?? readFirstLocationPath(update.update);
   const output = readToolOutput(update.update);
   const exitCode = readNumber(update.update, "exitCode");
-  const detailKind = command
+  const detailKind = rawCommand
     ? "command"
     : toolDetailKind(readString(update.update, "kind"), path);
 
@@ -796,10 +858,11 @@ function toolActivity(
         label,
         path,
         command:
-          command || output !== undefined || exitCode !== undefined
+          displayCommand || output !== undefined || exitCode !== undefined
             ? {
-                displayCommand: command ?? label,
-                rawCommand: command,
+                displayCommand: displayCommand ?? label,
+                rawCommand,
+                ...(invocation && !rawCommand ? { source: "tool" as const } : {}),
                 output,
                 exitCode,
               }
@@ -842,6 +905,12 @@ function mergeActivity(
                           existingDetail.command?.rawCommand,
                           incomingDetail.command?.rawCommand,
                         ),
+                      source:
+                        incomingDetail.command?.rawCommand &&
+                        existingDetail.command?.source === "tool"
+                          ? "shell"
+                          : incomingDetail.command?.source ??
+                            existingDetail.command?.source,
                       output:
                         incomingDetail.command?.output ??
                         existingDetail.command?.output,

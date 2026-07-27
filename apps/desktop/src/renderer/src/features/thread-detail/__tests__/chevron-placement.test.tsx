@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadActivityEntry } from "@pwragent/shared";
 import { TranscriptActivity } from "../TranscriptActivity";
@@ -49,5 +49,37 @@ describe("transcript disclosure chevron placement", () => {
     // so the element carries no text of its own.
     expect(children[0]?.textContent).toBe("");
     expect((toggle as HTMLElement).textContent).toContain("3 previous messages");
+  });
+
+  it("does not repeat a single tool label before its command output", () => {
+    render(
+      <TranscriptActivity
+        entry={{
+          type: "activity",
+          id: "grep-1",
+          summary: "grep",
+          details: [
+            {
+              id: "grep-1:detail",
+              kind: "command",
+              label: "grep",
+              command: {
+                displayCommand: 'grep(pattern="needle")',
+                source: "tool",
+                output: "found 20 matches",
+              },
+            },
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getAllByText("grep")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "grep" }));
+
+    expect(screen.getAllByText("grep")).toHaveLength(1);
+    expect(screen.getByText('grep(pattern="needle")')).toBeInTheDocument();
+    expect(screen.getByText("found 20 matches")).toBeInTheDocument();
   });
 });

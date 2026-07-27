@@ -58,6 +58,34 @@ describe("TranscriptCommandOutput", () => {
     ).length).toBeGreaterThan(0);
   });
 
+  it("renders structured ACP tool invocations without pretending they are shell commands", () => {
+    render(
+      <TranscriptCommandOutput
+        detail={{
+          id: "grep-1",
+          kind: "read",
+          label: "grep",
+          status: "completed",
+          command: {
+            displayCommand:
+              'grep(pattern="grok", glob="*.{ts,tsx,md,json}", head_limit=20)',
+            source: "tool",
+            output: "found 9 matches",
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("Tool")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'grep(pattern="grok", glob="*.{ts,tsx,md,json}", head_limit=20)',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy invocation" })).toBeInTheDocument();
+    expect(screen.queryByText("tool call update")).not.toBeInTheDocument();
+  });
+
   it("truncates long output and expands on demand", () => {
     const output = Array.from({ length: 15 }, (_, index) => `line ${index + 1}`).join("\n");
 

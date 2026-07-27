@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
+import {
+  acpToolUpdateNotifications,
+  acpTurnCompletedUsageNotification,
+} from "../acp/acp-live-notifications";
 
 describe("acpToolUpdateNotifications", () => {
   it("maps ACP tool calls to live item notifications", () => {
@@ -187,6 +190,43 @@ describe("acpToolUpdateNotifications", () => {
     expect(item?.data).toBeUndefined();
   });
 
+  it("surfaces Grok search arguments as a structured tool invocation", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "grep-1",
+        title: "grep",
+        rawInput: {
+          pattern: "grok",
+          glob: "*.{ts,tsx,md,json}",
+          head_limit: 20,
+        },
+        _meta: {
+          "x.ai/tool": {
+            name: "grep",
+            kind: "search",
+          },
+        },
+      },
+    });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        method: "item/started",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "grep-1",
+            command:
+              'grep(pattern="grok", glob="*.{ts,tsx,md,json}", head_limit=20)',
+            commandSource: "tool",
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("does not render ACP topic updates as live tool activity", () => {
     expect(
       acpToolUpdateNotifications({
@@ -201,5 +241,80 @@ describe("acpToolUpdateNotifications", () => {
         },
       }),
     ).toEqual([]);
+  });
+
+  it("maps Grok turn completion usage to the standard token usage notification", () => {
+    expect(
+      acpTurnCompletedUsageNotification({
+        threadId: "session-1",
+        turnId: "turn-1",
+        update: {
+          sessionUpdate: "turn_completed",
+          prompt_id: "prompt-1",
+          stop_reason: "end_turn",
+          usage: {
+            inputTokens: 348_051,
+            outputTokens: 3_124,
+            totalTokens: 351_175,
+            cachedReadTokens: 335_488,
+            reasoningTokens: 1_808,
+            modelCalls: 5,
+            apiDurationMs: 48_226,
+            costUsdTicks: 1_445_164_000,
+            modelUsage: {
+              "grok-4.5-build": {
+                inputTokens: 348_051,
+                outputTokens: 3_124,
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "session-1",
+        turnId: "turn-1",
+        model: "grok-4.5-build",
+        tokenUsage: {
+          last_token_usage: {
+            input_tokens: 348_051,
+            cached_input_tokens: 335_488,
+            output_tokens: 3_124,
+            reasoning_output_tokens: 1_808,
+            total_tokens: 351_175,
+          },
+        },
+      },
+    });
+  });
+
+  it("ignores replayed turn completion usage without a live turn", () => {
+    expect(
+      acpTurnCompletedUsageNotification({
+        threadId: "session-1",
+        update: {
+          sessionUpdate: "turn_completed",
+          usage: {
+            inputTokens: 348_051,
+            outputTokens: 3_124,
+            totalTokens: 351_175,
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("ignores turn completion notifications without usable token counts", () => {
+    expect(
+      acpTurnCompletedUsageNotification({
+        threadId: "session-1",
+        turnId: "turn-1",
+        update: {
+          sessionUpdate: "turn_completed",
+          stop_reason: "end_turn",
+        },
+      }),
+    ).toBeUndefined();
   });
 });

@@ -8,6 +8,41 @@ export function readAcpToolCommand(
   );
 }
 
+export function readAcpToolInvocation(
+  record: Record<string, unknown>,
+): string | undefined {
+  const rawInput = asRecord(record.rawInput);
+  if (!rawInput) {
+    return undefined;
+  }
+  const metadata = asRecord(asRecord(record._meta)?.["x.ai/tool"]);
+  const variant = readString(rawInput, "variant");
+  const name =
+    readString(metadata ?? {}, "name") ??
+    (variant?.toLowerCase() === "grep" ? "grep" : undefined) ??
+    (/^grep$/i.test(readString(record, "title") ?? "") ? "grep" : undefined);
+  const kind =
+    readString(metadata ?? {}, "kind") ??
+    readString(record, "kind");
+  if (!name || (kind !== "search" && name !== "grep" && variant !== "Grep")) {
+    return undefined;
+  }
+
+  const argumentsText = Object.entries(rawInput)
+    .filter(([key, value]) =>
+      key !== "variant" &&
+      value !== null &&
+      value !== undefined &&
+      value !== false,
+    )
+    .map(([key, value]) => {
+      const displayKey = key === "-i" ? "case_insensitive" : key;
+      return `${displayKey}=${formatInvocationValue(value)}`;
+    })
+    .join(", ");
+  return argumentsText ? `${name}(${argumentsText})` : name;
+}
+
 export function readAcpToolContentCommand(
   record: Record<string, unknown>,
 ): string | undefined {
@@ -127,6 +162,14 @@ function extractCommandFromJsonText(text: string): string | undefined {
     return readDirectCommand(record);
   } catch {
     return undefined;
+  }
+}
+
+function formatInvocationValue(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
   }
 }
 

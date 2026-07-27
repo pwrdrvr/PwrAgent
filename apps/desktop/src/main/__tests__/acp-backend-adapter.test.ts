@@ -423,6 +423,46 @@ describe("AcpBackendAdapter", () => {
       events.filter((event) => event.notification.method === "item/completed"),
     ).toHaveLength(1);
 
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "turn_completed",
+      usage: {
+        inputTokens: 1_200,
+        cachedReadTokens: 1_000,
+        outputTokens: 50,
+        reasoningTokens: 10,
+        totalTokens: 1_250,
+        modelUsage: {
+          "grok-4.5-build": {
+            inputTokens: 1_200,
+            outputTokens: 50,
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        backend: backendId,
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            model: "grok-4.5-build",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_200,
+                cached_input_tokens: 1_000,
+                output_tokens: 50,
+                reasoning_output_tokens: 10,
+                total_tokens: 1_250,
+              },
+            },
+          },
+        },
+      });
+    });
+
     await adapter.close();
   });
 

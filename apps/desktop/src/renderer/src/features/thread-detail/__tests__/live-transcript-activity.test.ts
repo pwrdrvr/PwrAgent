@@ -4,6 +4,7 @@ import {
   buildLiveToolDetails,
   buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
+  mergeCommandDetail,
   summarizeLiveActivity,
 } from "../live-transcript-activity";
 
@@ -53,6 +54,55 @@ describe("buildLiveToolDetails", () => {
         status: "in_progress",
       },
     ]);
+  });
+
+  it("labels Codex command searches with the query instead of the root path", () => {
+    const details = buildLiveToolDetails({
+      type: "commandExecution",
+      id: "command-search",
+      status: "completed",
+      command: "rg -n -i 'grok' .",
+      commandActions: [
+        {
+          type: "search",
+          command: "rg -n -i 'grok' .",
+          query: "grok",
+          path: ".",
+        },
+      ],
+    });
+
+    expect(details).toEqual([
+      {
+        id: "command-search",
+        kind: "read",
+        label: 'Searched "grok"',
+        status: "completed",
+        command: expect.objectContaining({
+          displayCommand: "rg -n -i 'grok' .",
+          rawCommand: "rg -n -i 'grok' .",
+        }),
+      },
+    ]);
+  });
+
+  it("uses a quiet search label when Codex only identifies the root path", () => {
+    const details = buildLiveToolDetails({
+      type: "commandExecution",
+      id: "command-search-root",
+      status: "completed",
+      command: "rg --files .",
+      commandActions: [
+        {
+          type: "search",
+          command: "rg --files .",
+          query: null,
+          path: ".",
+        },
+      ],
+    });
+
+    expect(details[0]?.label).toBe("Searched");
   });
 
   it("surfaces collaboration agent activity from live tool items", () => {
@@ -119,6 +169,49 @@ describe("appendCommandOutputDelta", () => {
     expect(output).toContain("PwrAgent renderer boundary: truncated");
     expect(output).toContain("original length");
     expect(output).not.toContain("x".repeat(60_000));
+  });
+});
+
+describe("mergeCommandDetail", () => {
+  it("keeps a structured invocation when a sparse completion uses a generic command", () => {
+    expect(
+      mergeCommandDetail(
+        {
+          displayCommand:
+            'grep(pattern="grok", glob="*.{ts,tsx,md,json}", head_limit=20)',
+          source: "tool",
+        },
+        {
+          displayCommand: "tool",
+          source: "tool",
+          output: "found 9 matches",
+        },
+      ),
+    ).toEqual({
+      displayCommand:
+        'grep(pattern="grok", glob="*.{ts,tsx,md,json}", head_limit=20)',
+      source: "tool",
+      output: "found 9 matches",
+    });
+  });
+
+  it("promotes a tool invocation to shell when a raw command arrives", () => {
+    expect(
+      mergeCommandDetail(
+        {
+          displayCommand: 'grep(pattern="grok")',
+          source: "tool",
+        },
+        {
+          displayCommand: "rg -n grok .",
+          rawCommand: "rg -n grok .",
+        },
+      ),
+    ).toEqual({
+      displayCommand: "rg -n grok .",
+      rawCommand: "rg -n grok .",
+      source: "shell",
+    });
   });
 });
 

@@ -27,6 +27,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedDetailIds, setExpandedDetailIds] = useState(() => new Set<string>());
   const hasDetails = props.entry.details.length > 0;
+  const directDetail = singleDirectDetail(props.entry);
   const activityCopyText = buildActivityCopyText(props.entry);
   const className =
     props.entry.tone === "warning"
@@ -96,7 +97,11 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
         )}
       </header>
 
-      {hasDetails && isExpanded ? (
+      {directDetail && isExpanded ? (
+        <div id={detailsId} className="transcript-activity__detail-body">
+          <TranscriptCommandOutput detail={directDetail} />
+        </div>
+      ) : hasDetails && isExpanded ? (
         <ul id={detailsId} className="transcript-activity__details">
           {props.entry.details.map((detail) => {
             const nestedId = `${detailsId}-${detail.id}`;
@@ -193,6 +198,22 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
       ) : null}
     </aside>
   );
+}
+
+function singleDirectDetail(
+  entry: AppServerThreadActivityEntry,
+): AppServerThreadActivityEntry["details"][number] | undefined {
+  const detail = entry.details.length === 1 ? entry.details[0] : undefined;
+  if (
+    !detail?.command ||
+    detail.fileDiff ||
+    detail.markdown ||
+    detail.url ||
+    detail.label.trim().toLowerCase() !== entry.summary.trim().toLowerCase()
+  ) {
+    return undefined;
+  }
+  return detail;
 }
 
 function buildActivityCopyText(entry: AppServerThreadActivityEntry): string {

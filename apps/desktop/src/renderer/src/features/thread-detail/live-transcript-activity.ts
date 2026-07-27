@@ -1,5 +1,6 @@
 import {
   estimateOpenAiTokenUsageCost,
+  formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
   formatTokenUsageStandardRateSuffix,
   formatTokenUsageUsd,
@@ -225,13 +226,16 @@ function buildLiveCommandDetail(
   }
 
   const output = readCommandOutputText(item);
+  const source = readString(item, "commandSource");
   const exitCode = readExitCode(item);
   const cwd = readString(item, "cwd") ??
     readString(item, "workingDirectory") ??
     readString(item, "working_directory");
   return {
     displayCommand,
-    rawCommand: command,
+    ...(source === "tool"
+      ? { source: "tool" as const }
+      : { rawCommand: command }),
     ...(cwd ? { cwd } : {}),
     ...(output ? { output } : {}),
     ...(typeof exitCode === "number" ? { exitCode } : {}),
@@ -510,18 +514,19 @@ function readCommandActionLabel(item: Record<string, unknown>): string | undefin
 
     const actionType = readString(record, "type");
     const actionPath = readString(record, "path");
+    const actionQuery = readString(record, "query");
     const fallbackName = readString(record, "name");
     if (actionType === "read" && actionPath) {
       return `Read ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
-    }
-    if (actionType === "search" && actionPath) {
-      return `Searched ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
     }
     if (actionType === "listFiles") {
       return "Listed files";
     }
     if (actionType === "search") {
-      return "Ran search";
+      return formatSearchCommandActionLabel({
+        path: actionPath,
+        query: actionQuery,
+      });
     }
     if (fallbackName) {
       return fallbackName;
@@ -954,13 +959,23 @@ export function mergeCommandDetail(
   existing: AppServerThreadCommandDetail | undefined,
   next: AppServerThreadCommandDetail | undefined
 ): AppServerThreadCommandDetail | undefined {
-  const displayCommand = next?.displayCommand ?? existing?.displayCommand;
+  const incomingDisplayCommand = next?.displayCommand;
+  const displayCommand =
+    incomingDisplayCommand &&
+    (!isGenericCommandLabel(incomingDisplayCommand) || !existing?.displayCommand)
+      ? incomingDisplayCommand
+      : existing?.displayCommand ?? incomingDisplayCommand;
   if (!displayCommand) {
     return undefined;
   }
+  const source =
+    next?.rawCommand && existing?.source === "tool"
+      ? "shell"
+      : next?.source ?? existing?.source;
 
   return {
     displayCommand,
+    ...(source ? { source } : {}),
     ...(existing?.rawCommand || next?.rawCommand
       ? { rawCommand: next?.rawCommand ?? existing?.rawCommand }
       : {}),
@@ -975,6 +990,12 @@ export function mergeCommandDetail(
       ? { durationMs: next?.durationMs ?? existing?.durationMs }
       : {}),
   };
+}
+
+function isGenericCommandLabel(value: string): boolean {
+  return /^(?:ran command|tool|tool call|tool_call|tool call update|tool_call_update)$/i.test(
+    value.trim(),
+  );
 }
 
 export function mergeActivityDetails(

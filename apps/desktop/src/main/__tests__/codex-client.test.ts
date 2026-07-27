@@ -3056,6 +3056,55 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("labels historical Codex searches by query instead of root path", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-search-label", {
+      thread: {
+        turns: [
+          {
+            id: "turn-search",
+            status: "completed",
+            items: [
+              {
+                type: "commandExecution",
+                id: "cmd-search",
+                status: "completed",
+                command: "rg -n -i 'grok' .",
+                commandActions: [
+                  {
+                    type: "search",
+                    command: "rg -n -i 'grok' .",
+                    query: "grok",
+                    path: ".",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-search-label",
+    });
+
+    expect(replay.entries).toMatchObject([
+      {
+        type: "activity",
+        summary: "Explored 1 file",
+        details: [{ label: 'Searched "grok"' }],
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("forwards pagination params when reading older Codex transcript pages", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

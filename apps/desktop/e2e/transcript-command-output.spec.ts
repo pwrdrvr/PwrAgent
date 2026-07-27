@@ -44,8 +44,8 @@ test("captured command output is inspectable from transcript work", async () => 
 
     await app.window.getByRole("button", { name: /Previous work/ }).click();
     const commandActivity = app.window.getByRole("button", { name: /npm view dive \(373ms\)/ });
-    await commandActivity.first().click();
-    await commandActivity.last().click();
+    await expect(commandActivity).toHaveCount(1);
+    await commandActivity.click();
 
     await expect(transcript.getByText("$ npm view dive")).toBeVisible();
     await expect(transcript.getByText(/dive@0\.5\.0 \| Proprietary/)).toBeVisible();
