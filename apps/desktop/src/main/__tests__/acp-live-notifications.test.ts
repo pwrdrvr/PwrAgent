@@ -227,6 +227,100 @@ describe("acpToolUpdateNotifications", () => {
     ]);
   });
 
+  it("maps Grok web search output to a web search item with its query and sources", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "web-search-1",
+        status: "completed",
+        title: "Web search:",
+        rawOutput: {
+          action: {
+            type: "search",
+            query: "Grok 4.5 image support",
+            sources: [
+              { type: "url", url: "https://x.ai/news/grok-4-5" },
+              {
+                type: "url",
+                title: "Models",
+                url: "https://docs.x.ai/developers/models",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: {
+            id: "web-search-1",
+            type: "webSearch",
+            toolName: "search_web",
+            status: "completed",
+            arguments: {
+              query: "Grok 4.5 image support",
+            },
+            sources: [
+              { url: "https://x.ai/news/grok-4-5" },
+              {
+                title: "Models",
+                url: "https://docs.x.ai/developers/models",
+              },
+            ],
+          },
+        }),
+      }),
+    ]);
+  });
+
+  it("maps Grok web fetches to read activity with a tool invocation", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "web-fetch-1",
+        title: "web_fetch",
+        rawInput: {
+          url: "https://docs.x.ai/developers/models",
+        },
+        _meta: {
+          "x.ai/tool": {
+            name: "web_fetch",
+            kind: "web_fetch",
+          },
+        },
+      },
+    });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        method: "item/started",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "web-fetch-1",
+            type: "commandExecution",
+            toolName: "web_fetch",
+            command:
+              'web_fetch(url="https://docs.x.ai/developers/models")',
+            commandSource: "tool",
+            commandActions: [
+              {
+                type: "read",
+                name: "Fetched https://docs.x.ai/developers/models",
+              },
+            ],
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("does not render ACP topic updates as live tool activity", () => {
     expect(
       acpToolUpdateNotifications({

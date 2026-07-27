@@ -5,6 +5,8 @@ import {
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolInvocation,
+  readAcpWebFetchUrl,
+  readAcpWebSearch,
 } from "./acp-command-extraction.js";
 
 export function acpToolUpdateNotifications(params: {
@@ -110,18 +112,37 @@ function liveItemForAcpToolUpdate(
   const path = readString(update, "path") ?? readFirstLocationPath(update);
   const status = normalizeAcpToolStatus(readString(update, "status"));
   const output = readAcpToolOutput(update);
+  const webSearch = readAcpWebSearch(update);
+  if (webSearch) {
+    return {
+      id: id ?? "web-search",
+      type: "webSearch",
+      toolName: "search_web",
+      status,
+      ...(webSearch.query
+        ? { arguments: { query: webSearch.query } }
+        : {}),
+      ...(webSearch.sources.length ? { sources: webSearch.sources } : {}),
+    };
+  }
+
+  const webFetchUrl = readAcpWebFetchUrl(update);
   const rawCommand = readAcpToolCommand(update);
   const invocation = readAcpToolInvocation(update);
   const command = rawCommand ?? invocation ?? title;
   const commandActions = acpCommandActions({
-    kind: toolKind,
+    kind: webFetchUrl ? "read" : toolKind,
     path,
-    title: isGenericShellToolTitle(title) ? command : title,
+    title: webFetchUrl
+      ? `Fetched ${webFetchUrl}`
+      : isGenericShellToolTitle(title)
+        ? command
+        : title,
   });
   const item: Record<string, unknown> = {
     id: id ?? `${toolKind}:${title}`,
     type: "commandExecution",
-    toolName: toolKind,
+    toolName: webFetchUrl ? "web_fetch" : toolKind,
     status,
     command,
     commandSource: rawCommand ? "shell" : "tool",

@@ -717,6 +717,159 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("renders Grok web search query and sources from raw output", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "web-search-1",
+        title: "Web search:",
+        kind: "search",
+        status: "in_progress",
+        rawInput: {
+          variant: "WebSearch",
+          backend: true,
+        },
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "web-search-1",
+        title: "Web search:",
+        status: "completed",
+        rawOutput: {
+          action: {
+            type: "search",
+            query: "Grok 4.5 image support",
+            sources: [
+              { type: "url", url: "https://x.ai/news/grok-4-5" },
+              {
+                type: "url",
+                title: "Models",
+                url: "https://docs.x.ai/developers/models",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "web-search-1",
+        summary: "Searched Web",
+        status: "completed",
+        details: [
+          {
+            id: "web-search-1:detail",
+            kind: "read",
+            label: "Searched Web: Grok 4.5 image support",
+            status: "completed",
+          },
+          {
+            id: "web-search-1:source:1",
+            kind: "read",
+            label: "https://x.ai/news/grok-4-5",
+            url: "https://x.ai/news/grok-4-5",
+            status: "completed",
+          },
+          {
+            id: "web-search-1:source:2",
+            kind: "read",
+            label: "Models",
+            url: "https://docs.x.ai/developers/models",
+            status: "completed",
+          },
+        ],
+      }),
+    ]);
+  });
+
+  it("renders Grok web fetches as tool-backed reads across sparse updates", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const url = "https://docs.x.ai/developers/models";
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "web-fetch-1",
+        title: "web_fetch",
+        rawInput: { url },
+        _meta: {
+          "x.ai/tool": {
+            name: "web_fetch",
+            kind: "web_fetch",
+          },
+        },
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "web-fetch-1",
+        kind: "fetch",
+        title: `Fetch: ${url}`,
+        rawInput: {
+          variant: "WebFetch",
+          url,
+        },
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "web-fetch-1",
+        status: "completed",
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "text",
+              text: "# Models\n\nGrok 4.5 supports image input.",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "web-fetch-1",
+        summary: `Fetched ${url}`,
+        status: "completed",
+        details: [
+          expect.objectContaining({
+            kind: "read",
+            label: `Fetched ${url}`,
+            command: {
+              displayCommand: `web_fetch(url="${url}")`,
+              rawCommand: undefined,
+              source: "tool",
+              output: "# Models\n\nGrok 4.5 supports image input.",
+              exitCode: undefined,
+              durationMs: undefined,
+              cwd: undefined,
+            },
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("extracts nested ACP tool update content as command output", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

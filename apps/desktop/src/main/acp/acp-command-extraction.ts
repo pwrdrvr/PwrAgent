@@ -11,6 +11,17 @@ export function readAcpToolCommand(
 export function readAcpToolInvocation(
   record: Record<string, unknown>,
 ): string | undefined {
+  const webSearch = readAcpWebSearch(record);
+  if (webSearch) {
+    return webSearch.query
+      ? `web_search(query=${formatInvocationValue(webSearch.query)})`
+      : "web_search";
+  }
+  const webFetchUrl = readAcpWebFetchUrl(record);
+  if (webFetchUrl) {
+    return `web_fetch(url=${formatInvocationValue(webFetchUrl)})`;
+  }
+
   const rawInput = asRecord(record.rawInput);
   if (!rawInput) {
     return undefined;
@@ -41,6 +52,87 @@ export function readAcpToolInvocation(
     })
     .join(", ");
   return argumentsText ? `${name}(${argumentsText})` : name;
+}
+
+export type AcpWebSearch = {
+  query?: string;
+  sources: Array<{
+    title?: string;
+    url?: string;
+  }>;
+};
+
+export function readAcpWebSearch(
+  record: Record<string, unknown>,
+): AcpWebSearch | undefined {
+  const rawInput = asRecord(record.rawInput);
+  const rawOutput = asRecord(record.rawOutput);
+  const action = asRecord(rawOutput?.action);
+  const metadata = readAcpToolMetadata(record);
+  const variant = readString(rawInput ?? {}, "variant");
+  const title = readString(record, "title");
+  const isWebSearch =
+    variant?.toLowerCase() === "websearch"
+    || readString(metadata ?? {}, "name") === "web_search"
+    || readString(metadata ?? {}, "kind") === "web_search"
+    || readString(action ?? {}, "type") === "search"
+    || /^web search:?$/i.test(title ?? "");
+  if (!isWebSearch) {
+    return undefined;
+  }
+
+  const query =
+    readString(action ?? {}, "query") ??
+    readString(rawInput ?? {}, "query");
+  const rawSources = Array.isArray(action?.sources) ? action.sources : [];
+  const sources = rawSources.flatMap((value): AcpWebSearch["sources"] => {
+    const source = asRecord(value);
+    if (!source) {
+      return [];
+    }
+    const sourceTitle = readString(source, "title");
+    const url = readString(source, "url");
+    return sourceTitle || url
+      ? [
+          {
+            ...(sourceTitle ? { title: sourceTitle } : {}),
+            ...(url ? { url } : {}),
+          },
+        ]
+      : [];
+  });
+  return {
+    ...(query ? { query } : {}),
+    sources,
+  };
+}
+
+export function readAcpWebFetchUrl(
+  record: Record<string, unknown>,
+): string | undefined {
+  const rawInput = asRecord(record.rawInput);
+  const metadata = readAcpToolMetadata(record);
+  const variant = readString(rawInput ?? {}, "variant");
+  const metadataName = readString(metadata ?? {}, "name");
+  const metadataKind = readString(metadata ?? {}, "kind");
+  const kind = readString(record, "kind");
+  const title = readString(record, "title");
+  const isWebFetch =
+    variant?.toLowerCase() === "webfetch"
+    || metadataName === "web_fetch"
+    || metadataKind === "web_fetch"
+    || kind === "fetch"
+    || /^web_fetch$/i.test(title ?? "")
+    || /^fetch:\s+/i.test(title ?? "");
+  if (!isWebFetch) {
+    return undefined;
+  }
+
+  return (
+    readString(rawInput ?? {}, "url") ??
+    readString(asRecord(metadata?.input) ?? {}, "url") ??
+    /^fetch:\s+(.+)$/i.exec(title ?? "")?.[1]?.trim()
+  );
 }
 
 export function readAcpToolContentCommand(
@@ -153,6 +245,12 @@ function readString(
 ): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readAcpToolMetadata(
+  record: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  return asRecord(asRecord(record._meta)?.["x.ai/tool"]);
 }
 
 function extractCommandFromJsonText(text: string): string | undefined {

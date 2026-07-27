@@ -4,6 +4,7 @@ import {
   buildLiveToolDetails,
   buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
+  mergeActivityDetails,
   mergeCommandDetail,
   summarizeLiveActivity,
 } from "../live-transcript-activity";
@@ -212,6 +213,54 @@ describe("mergeCommandDetail", () => {
       rawCommand: "rg -n grok .",
       source: "shell",
     });
+  });
+});
+
+describe("mergeActivityDetails", () => {
+  it("keeps a web fetch label and read kind across a sparse completion", () => {
+    expect(
+      mergeActivityDetails(
+        [
+          {
+            id: "web-fetch-1",
+            kind: "read",
+            label: "Fetched https://docs.x.ai/developers/models",
+            command: {
+              displayCommand:
+                'web_fetch(url="https://docs.x.ai/developers/models")',
+              source: "tool",
+            },
+            status: "in_progress",
+          },
+        ],
+        [
+          {
+            id: "web-fetch-1",
+            kind: "command",
+            label: "tool",
+            command: {
+              displayCommand: "tool",
+              source: "tool",
+              output: "# Models",
+            },
+            status: "completed",
+          },
+        ],
+      ),
+    ).toEqual([
+      {
+        id: "web-fetch-1",
+        kind: "read",
+        label: "Fetched https://docs.x.ai/developers/models",
+        command: {
+          displayCommand:
+            'web_fetch(url="https://docs.x.ai/developers/models")',
+          source: "tool",
+          output: "# Models",
+        },
+        status: "completed",
+      },
+    ]);
   });
 });
 

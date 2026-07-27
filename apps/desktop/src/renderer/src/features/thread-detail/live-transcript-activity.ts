@@ -1011,6 +1011,12 @@ export function mergeActivityDetails(
       merged[existingIndex] = {
         ...existing,
         ...detail,
+        kind:
+          isGenericActivityDetailLabel(detail.label) &&
+          !isGenericActivityDetailLabel(existing?.label ?? "")
+            ? existing?.kind ?? detail.kind
+            : detail.kind,
+        label: preferSpecificActivityDetailLabel(existing?.label, detail.label),
         ...(command ? { command } : {}),
       };
     } else {
@@ -1018,6 +1024,26 @@ export function mergeActivityDetails(
     }
   }
   return merged;
+}
+
+function preferSpecificActivityDetailLabel(
+  existing: string | undefined,
+  incoming: string
+): string {
+  if (
+    existing &&
+    !isGenericActivityDetailLabel(existing) &&
+    isGenericActivityDetailLabel(incoming)
+  ) {
+    return existing;
+  }
+  return incoming || existing || "Activity";
+}
+
+function isGenericActivityDetailLabel(value: string): boolean {
+  return /^(?:tool|tool call|tool_call|tool call update|tool_call_update)$/i.test(
+    value.trim(),
+  );
 }
 
 export function appendCommandOutputDelta(
