@@ -1649,6 +1649,80 @@ describe("CodexAppServerClient", () => {
     expect(byId.get("gpt-5.4")?.supportsImage).toBe(false);
   });
 
+  it("derives Fast support from Codex model service tiers", async () => {
+    MockTransport.modelListResult = {
+      data: [
+        {
+          id: "gpt-5.6-sol",
+          serviceTiers: [
+            {
+              id: "priority",
+              name: "Fast",
+              description: "1.5x speed, increased usage",
+            },
+          ],
+          additionalSpeedTiers: ["fast"],
+        },
+        {
+          id: "gpt-5.6-terra",
+          service_tiers: [
+            {
+              id: "priority",
+              name: "Fast",
+              description: "1.5x speed, increased usage",
+            },
+          ],
+        },
+        {
+          id: "gpt-5.6-luna",
+          additionalSpeedTiers: ["fast"],
+        },
+        {
+          id: "gpt-5.5",
+          additional_speed_tiers: ["fast"],
+        },
+        {
+          id: "gpt-5.4",
+          serviceTiers: [],
+          supportsFast: true,
+        },
+        {
+          id: "gpt-5.4-mini",
+          serviceTiers: [
+            {
+              id: "flex",
+              name: "Flex",
+              description: "Lower-cost asynchronous processing",
+            },
+          ],
+        },
+        {
+          id: "gpt-5.2",
+          supports_fast: true,
+        },
+      ],
+    };
+
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    const models = await client.listModels();
+    expect(
+      models.map((model) => ({
+        id: model.id,
+        supportsFast: model.supportsFast,
+      })),
+    ).toEqual([
+      { id: "gpt-5.6-sol", supportsFast: true },
+      { id: "gpt-5.6-terra", supportsFast: true },
+      { id: "gpt-5.6-luna", supportsFast: true },
+      { id: "gpt-5.5", supportsFast: true },
+      { id: "gpt-5.4", supportsFast: false },
+      { id: "gpt-5.4-mini", supportsFast: false },
+      { id: "gpt-5.2", supportsFast: true },
+    ]);
+  });
+
   it("normalizes 10080 minute rate-limit windows as weekly limits", async () => {
     MockTransport.rateLimitsResult = {
       rateLimitsByLimitId: {

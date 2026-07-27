@@ -4170,6 +4170,65 @@ function pickStringArray(value: unknown): string[] | undefined {
   return strings.length > 0 ? strings : undefined;
 }
 
+function pickModelServiceTierIds(
+  record: Record<string, unknown>,
+): string[] | undefined {
+  const value = record.serviceTiers ?? record.service_tiers;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return [
+    ...new Set(
+      value
+        .map((item) =>
+          typeof item === "string"
+            ? item
+            : pickString(asRecord(item) ?? {}, ["id"]),
+        )
+        .map((tier) => tier?.trim().toLowerCase())
+        .filter((tier): tier is string => Boolean(tier)),
+    ),
+  ];
+}
+
+function pickModelAdditionalSpeedTiers(
+  record: Record<string, unknown>,
+): string[] | undefined {
+  const value = record.additionalSpeedTiers ?? record.additional_speed_tiers;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return [
+    ...new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((tier) => tier.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function pickModelSupportsFast(
+  record: Record<string, unknown>,
+): boolean | undefined {
+  const serviceTierIds = pickModelServiceTierIds(record);
+  const additionalSpeedTiers = pickModelAdditionalSpeedTiers(record);
+  // Current Codex model/list responses advertise structured service tiers and
+  // retain additionalSpeedTiers for older clients. A present empty array is
+  // authoritative; only app-server versions that omit both fields need the
+  // legacy supportsFast/model-id fallback.
+  if (serviceTierIds !== undefined || additionalSpeedTiers !== undefined) {
+    return Boolean(
+      serviceTierIds?.includes("priority")
+      || additionalSpeedTiers?.includes("fast"),
+    );
+  }
+
+  return pickBoolean(record, ["supportsFast", "supports_fast"]);
+}
+
 function pickReasoningEfforts(record: Record<string, unknown>): string[] | undefined {
   const value =
     record.supportedReasoningEfforts ?? record.supported_reasoning_efforts;
@@ -4229,7 +4288,7 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
           "supportsReasoning",
           "supports_reasoning",
         ]),
-        supportsFast: pickBoolean(modelRecord, ["supportsFast", "supports_fast"]),
+        supportsFast: pickModelSupportsFast(modelRecord),
         supportsSteering: pickBoolean(modelRecord, [
           "supportsSteering",
           "supports_steering",
@@ -4283,7 +4342,10 @@ function summarizeRawModelList(value: unknown): Array<Record<string, unknown>> {
             "defaultReasoningEffort",
             "default_reasoning_effort",
           ]) ?? null,
-        supportsFast: pickBoolean(modelRecord, ["supportsFast", "supports_fast"]) ?? null,
+        additionalSpeedTiers:
+          pickModelAdditionalSpeedTiers(modelRecord) ?? null,
+        serviceTiers: pickModelServiceTierIds(modelRecord) ?? null,
+        supportsFast: pickModelSupportsFast(modelRecord) ?? null,
       },
     ];
   });
