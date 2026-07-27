@@ -8349,6 +8349,18 @@ script = "pnpm install"
       prompt: "Late composer update",
     });
 
+    const trailingWhitespace = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/tmp/repo ",
+      patch: { prompt: "Preserve the exact path" },
+    });
+
+    expect(trailingWhitespace.launchpad).toMatchObject({
+      directoryKind: "directory",
+      directoryLabel: "repo ",
+      directoryPath: "/tmp/repo ",
+      prompt: "Preserve the exact path",
+    });
+
     const workspace = await registry.updateDirectoryLaunchpad({
       directoryKey: "workspace:new-thread",
       patch: { prompt: "Late directory-less update" },

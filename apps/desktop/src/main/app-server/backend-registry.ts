@@ -4245,8 +4245,8 @@ function fallbackLaunchpadIdentity(
   "directoryKind" | "directoryLabel" | "directoryPath"
 > {
   if (directoryKey.startsWith("directory:")) {
-    const directoryPath = directoryKey.slice("directory:".length).trim();
-    if (directoryPath) {
+    const directoryPath = directoryKey.slice("directory:".length);
+    if (directoryPath.length > 0) {
       return {
         directoryKind: "directory",
         directoryLabel: path.basename(directoryPath) || directoryPath,
