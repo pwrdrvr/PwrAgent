@@ -4238,6 +4238,31 @@ function defaultLaunchpadWorkMode(
     : "local";
 }
 
+function fallbackLaunchpadIdentity(
+  directoryKey: string,
+): Pick<
+  EnsureDirectoryLaunchpadRequest,
+  "directoryKind" | "directoryLabel" | "directoryPath"
+> {
+  if (directoryKey.startsWith("directory:")) {
+    const directoryPath = directoryKey.slice("directory:".length).trim();
+    if (directoryPath) {
+      return {
+        directoryKind: "directory",
+        directoryLabel: path.basename(directoryPath) || directoryPath,
+        directoryPath,
+      };
+    }
+  }
+
+  return {
+    directoryKind: directoryKey.startsWith("workspace:") ? "workspace" : "directory",
+    directoryLabel: directoryKey.startsWith("workspace:")
+      ? "Workspaces"
+      : directoryKey,
+  };
+}
+
 function resolveCodexEnvironmentSelection(
   launchpad: NavigationLaunchpadDraft,
   options: CodexEnvironmentOption[],
@@ -10871,8 +10896,7 @@ export class DesktopBackendRegistry {
       })) ??
       (await this.ensureDirectoryLaunchpad({
         directoryKey: request.directoryKey,
-        directoryKind: "directory",
-        directoryLabel: request.directoryKey,
+        ...fallbackLaunchpadIdentity(request.directoryKey),
       })).launchpad;
 
     const patch = {

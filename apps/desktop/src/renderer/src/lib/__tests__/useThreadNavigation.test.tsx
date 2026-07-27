@@ -43,6 +43,72 @@ describe("useThreadNavigation", () => {
     return { promise, resolve, reject };
   }
 
+  it("does not let a late launchpad update replace a directory label with its internal key", async () => {
+    const directoryKey = "directory:/Users/huntharo/github/PwrAgnt";
+    const defaults: NavigationLaunchpadDefaults = {
+      backend: "codex",
+      executionMode: "default",
+    };
+    const malformedLaunchpad: NavigationLaunchpadDraft = {
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: directoryKey,
+      directoryPath: "/Users/huntharo/github/PwrAgnt",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "Late composer update",
+      workMode: "worktree",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/Users/huntharo/github/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: defaults,
+    }));
+    const updateDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: malformedLaunchpad,
+      defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      updateDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.label).toBe("PwrAgnt");
+    });
+
+    await act(async () => {
+      await result.current.updateDirectoryLaunchpad(directoryKey, {
+        prompt: "Late composer update",
+      });
+    });
+
+    expect(result.current.directories[0]).toMatchObject({
+      label: "PwrAgnt",
+      launchpad: {
+        directoryLabel: "PwrAgnt",
+      },
+    });
+  });
+
   it("clears a directory attention count after the selected thread is marked seen", async () => {
     const markThreadSeen = vi.fn(async () => ({
       backend: "codex" as const,

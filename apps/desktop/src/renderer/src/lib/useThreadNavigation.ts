@@ -34,6 +34,7 @@ import {
   sortSubthreadSummaries,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { fileLabelFromPath } from "./directory-references";
 import {
   buildSubthreadLaunchpadKey,
   getParentThreadIdFromSubthreadLaunchpadKey,
@@ -213,6 +214,44 @@ function sortNavigationDirectories(
   return [...directories].sort(compareNavigationDirectoriesByLabel);
 }
 
+function isInternalDirectoryLabel(value?: string): boolean {
+  return Boolean(value?.startsWith("directory:") || value?.startsWith("workspace:"));
+}
+
+function displayLaunchpadDirectoryLabel(
+  launchpad: NavigationLaunchpadDraft,
+  existing?: NavigationDirectorySummary,
+): string {
+  const launchpadLabel = launchpad.directoryLabel.trim();
+  if (launchpadLabel && !isInternalDirectoryLabel(launchpadLabel)) {
+    return launchpadLabel;
+  }
+
+  const existingLabel = existing?.label.trim();
+  if (existingLabel && !isInternalDirectoryLabel(existingLabel)) {
+    return existingLabel;
+  }
+
+  if (launchpad.directoryKind === "workspace") {
+    return ROOT_NEW_THREAD_WORKSPACE_LABEL;
+  }
+
+  const directoryPath =
+    launchpad.directoryPath?.trim()
+    ?? existing?.path?.trim()
+    ?? (
+      launchpad.directoryKey.startsWith("directory:")
+        ? launchpad.directoryKey.slice("directory:".length).trim()
+        : undefined
+    );
+  const normalizedPath = directoryPath?.replace(/[\\/]+$/, "");
+  return (
+    fileLabelFromPath(normalizedPath ?? "")
+    || launchpadLabel
+    || "Directory"
+  );
+}
+
 function findLaunchpadSourceDirectory(
   directories: NavigationSnapshot["directories"],
   launchpad: NavigationLaunchpadDraft,
@@ -251,9 +290,20 @@ function upsertLaunchpadDirectory(
   },
 ): NavigationSnapshot["directories"] {
   let foundDirectory = false;
+  const existingDirectory = directories.find(
+    (directory) => directory.key === launchpad.directoryKey,
+  );
+  const displayLabel = displayLaunchpadDirectoryLabel(
+    launchpad,
+    existingDirectory,
+  );
+  const normalizedLaunchpad =
+    displayLabel === launchpad.directoryLabel
+      ? launchpad
+      : { ...launchpad, directoryLabel: displayLabel };
   const sourceDirectory = findLaunchpadSourceDirectory(
     directories,
-    launchpad,
+    normalizedLaunchpad,
     options?.gitStatusSourcePath,
   );
   const hasGitStatusOverride =
@@ -262,17 +312,17 @@ function upsertLaunchpadDirectory(
     ? options.gitStatus ?? undefined
     : sourceDirectory?.gitStatus;
   const nextDirectories = directories.map((directory) => {
-    if (directory.key !== launchpad.directoryKey) {
+    if (directory.key !== normalizedLaunchpad.directoryKey) {
       return directory;
     }
 
     foundDirectory = true;
     const next: NavigationSnapshot["directories"][number] = {
       ...directory,
-      kind: launchpad.directoryKind,
-      label: launchpad.directoryLabel,
-      path: launchpad.directoryPath ?? directory.path,
-      launchpad,
+      kind: normalizedLaunchpad.directoryKind,
+      label: displayLabel,
+      path: normalizedLaunchpad.directoryPath ?? directory.path,
+      launchpad: normalizedLaunchpad,
     };
     if (hasGitStatusOverride) {
       if (inheritedGitStatus) {
@@ -292,16 +342,16 @@ function upsertLaunchpadDirectory(
       : [
           ...nextDirectories,
           {
-            key: launchpad.directoryKey,
-            kind: launchpad.directoryKind,
-            label: launchpad.directoryLabel,
-            path: launchpad.directoryPath,
+            key: normalizedLaunchpad.directoryKey,
+            kind: normalizedLaunchpad.directoryKind,
+            label: displayLabel,
+            path: normalizedLaunchpad.directoryPath,
             threadKeys: [],
             needsAttentionCount: 0,
             ...(inheritedGitStatus
               ? { gitStatus: inheritedGitStatus }
               : {}),
-            launchpad,
+            launchpad: normalizedLaunchpad,
           },
         ],
   );
