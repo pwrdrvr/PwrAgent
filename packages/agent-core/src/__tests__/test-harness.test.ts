@@ -288,13 +288,18 @@ describe("test harness helpers", () => {
   it("uses a desktop profile state fallback unless TOML declares state_root", async () => {
     const temp = await createTemporaryTestDirectory();
     const profileStateRoot = path.join(temp.path, "profile-state");
-    const configPath = defaultGrokAppServerConfigPath({ homeDir: temp.path });
+    const xdgConfigHome = path.join(temp.path, "xdg-config");
+    const configPath = defaultGrokAppServerConfigPath({
+      homeDir: temp.path,
+      xdgConfigHome,
+    });
     await fs.mkdir(path.dirname(configPath), { recursive: true });
 
     const fallbackConfig = resolveGrokAppServerRuntimeConfig({
       homeDir: temp.path,
       env: {} as NodeJS.ProcessEnv,
       profileStateRoot,
+      xdgConfigHome,
     });
     expect(fallbackConfig.stateRoot).toBe(profileStateRoot);
 
@@ -308,6 +313,7 @@ describe("test harness helpers", () => {
       homeDir: temp.path,
       env: {} as NodeJS.ProcessEnv,
       profileStateRoot,
+      xdgConfigHome,
     });
     expect(explicitConfig.stateRoot).toBe(
       path.join(temp.path, "explicit-state"),
