@@ -34,9 +34,10 @@ import type {
   AcpSessionMetadata,
   AcpSessionStore,
 } from "./acp-session-store.js";
-import type {
-  AcpRolloutRecord,
-  AcpRolloutStoreAppendParams,
+import {
+  isPwrAgentSyntheticAcpUpdate,
+  type AcpRolloutRecord,
+  type AcpRolloutStoreAppendParams,
 } from "./acp-rollout-store.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log.js";
@@ -66,11 +67,26 @@ export type AcpJsonRpcTransport = {
 const ACP_PROTOCOL_VERSION = 1;
 const ACP_PROMPT_REQUEST_TIMEOUT_MS = 60 * 60_000;
 
-export type AcpMcpServerConfig = {
-  name: string;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
+export type AcpMcpServerConfig =
+  | {
+      name: string;
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+    }
+  | {
+      name: string;
+      type: "http" | "sse";
+      url: string;
+      headers: Array<{
+        name: string;
+        value: string;
+      }>;
+    };
+
+export type AcpMcpServerRegistration = {
+  servers: AcpMcpServerConfig[];
+  bindThread?: (threadId: string) => Promise<void> | void;
 };
 
 export type AcpPromptContentBlock =
@@ -148,8 +164,12 @@ export type AcpAgentClientOptions = {
   mcpServers?: (context: {
     backendId: AcpBackendId;
     cwd: string;
+    runtimeCapabilities?: BackendAcpRuntimeCapabilities;
     sessionId?: string;
-  }) => AcpMcpServerConfig[];
+  }) =>
+    | AcpMcpServerConfig[]
+    | AcpMcpServerRegistration
+    | Promise<AcpMcpServerConfig[] | AcpMcpServerRegistration>;
 };
 
 export class AcpAgentClient {
@@ -264,13 +284,13 @@ export class AcpAgentClient {
     hidden?: boolean;
   }): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
-    const mcpServers = this.buildMcpServers({
+    const mcpRegistration = await this.buildMcpServers({
       cwd,
       sessionId: params.sessionId,
     });
     const result = await this.options.transport.request("session/new", {
       cwd,
-      mcpServers,
+      mcpServers: mcpRegistration.servers,
     });
     const now = this.now();
     const record = asRecord(result);
@@ -310,6 +330,7 @@ export class AcpAgentClient {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
     this.loadedSessionCwds.set(sessionId, cwd);
+    await Promise.resolve(mcpRegistration.bindThread?.(appSessionId));
     this.notifyRuntimeCapabilities({
       sessionId: appSessionId,
       runtimeCapabilities,
@@ -825,6 +846,9 @@ export class AcpAgentClient {
       sessionId: metadata.sessionId,
     });
     for (const record of records) {
+      if (isPwrAgentSyntheticAcpUpdate(record.update)) {
+        continue;
+      }
       if (isTranscriptReplayUpdate(record.update)) {
         hasTranscriptHistory = true;
       }
@@ -946,7 +970,7 @@ export class AcpAgentClient {
     }
     const cwd = metadata.cwd ?? process.cwd();
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
-    const mcpServers = this.buildMcpServers({
+    const mcpRegistration = await this.buildMcpServers({
       cwd,
       sessionId: metadata.sessionId,
     });
@@ -957,7 +981,7 @@ export class AcpAgentClient {
     try {
       result = await this.options.transport.request("session/load", {
         cwd,
-        mcpServers,
+        mcpServers: mcpRegistration.servers,
         sessionId: protocolSessionId,
       });
     } finally {
@@ -967,6 +991,7 @@ export class AcpAgentClient {
       source: "session-load",
       result,
     });
+    await Promise.resolve(mcpRegistration.bindThread?.(metadata.sessionId));
     const runtimeState = acpSessionRuntimeStateFromResponse(result, this.now());
     if (runtimeState) {
       this.updateSessionRuntimeState(metadata.sessionId, runtimeState);
@@ -990,17 +1015,19 @@ export class AcpAgentClient {
     return acpRuntimeSupportsSessionLoad(this.runtimeCapabilities);
   }
 
-  private buildMcpServers(params: {
+  private async buildMcpServers(params: {
     cwd: string;
     sessionId?: string;
-  }): AcpMcpServerConfig[] {
-    return (
-      this.options.mcpServers?.({
-        backendId: this.options.backendId,
-        cwd: params.cwd,
-        sessionId: params.sessionId,
-      }) ?? []
-    );
+  }): Promise<AcpMcpServerRegistration> {
+    const registration = await this.options.mcpServers?.({
+      backendId: this.options.backendId,
+      cwd: params.cwd,
+      runtimeCapabilities: this.runtimeCapabilities,
+      sessionId: params.sessionId,
+    });
+    return Array.isArray(registration)
+      ? { servers: registration }
+      : registration ?? { servers: [] };
   }
 
   private startTrackedTurn(sessionId: string, turnId: string): void {
@@ -1397,6 +1424,29 @@ function selectPermissionOptionId(
       options.find((option) => option.kind === "allow_once") ??
       options.find((option) => option.kind === "allow_always") ??
       options.find((option) => option.name?.toLowerCase().includes("allow"))
+    )?.optionId;
+  }
+
+  if (
+    normalizedDecision === "accept_for_session" ||
+    normalizedDecision === "allow_always"
+  ) {
+    return (
+      options.find((option) => option.kind === "allow_always") ??
+      options.find((option) =>
+        option.name?.toLowerCase().includes("always allow"),
+      )
+    )?.optionId;
+  }
+
+  if (normalizedDecision === "accept_with_execpolicy_amendment") {
+    return (
+      options.find(
+        (option) =>
+          option.kind === "allow_always" &&
+          option.optionId.toLowerCase().includes("command"),
+      ) ??
+      options.find((option) => option.kind === "allow_always")
     )?.optionId;
   }
 

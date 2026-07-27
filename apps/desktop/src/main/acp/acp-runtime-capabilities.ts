@@ -430,12 +430,26 @@ function readAgentCapabilities(
             : {}),
         }
       : undefined;
+  const mcpRecord =
+    asRecord(record?.mcpCapabilities) ??
+    asRecord(record?.mcp_capabilities) ??
+    asRecord(record?.mcp);
+  const mcpHttp = readBoolean(mcpRecord, "http");
+  const mcpSse = readBoolean(mcpRecord, "sse");
+  const mcp =
+    mcpHttp !== undefined || mcpSse !== undefined
+      ? {
+          ...(mcpHttp !== undefined ? { http: mcpHttp } : {}),
+          ...(mcpSse !== undefined ? { sse: mcpSse } : {}),
+        }
+      : undefined;
   const hasData =
     loadSession !== undefined ||
     close !== undefined ||
     cancel !== undefined ||
     sessionHistoryReplay !== undefined ||
-    prompt !== undefined;
+    prompt !== undefined ||
+    mcp !== undefined;
   return hasData
     ? {
         ...(loadSession !== undefined ? { loadSession } : {}),
@@ -444,6 +458,7 @@ function readAgentCapabilities(
           ? { session: { ...(close !== undefined ? { close } : {}), ...(cancel !== undefined ? { cancel } : {}) } }
           : {}),
         ...(prompt !== undefined ? { prompt } : {}),
+        ...(mcp !== undefined ? { mcp } : {}),
         raw: record ?? sessionCapabilities,
       }
     : { raw: record ?? sessionCapabilities };

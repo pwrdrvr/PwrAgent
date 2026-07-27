@@ -2,6 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildPendingRequestActions,
+  buildPendingRequestResponse,
+} from "@pwragent/shared";
 import { AcpAgentClient } from "../acp/acp-client";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../acp/acp-session-store";
@@ -400,6 +404,57 @@ describe("AcpAgentClient", () => {
     });
   });
 
+  it("binds a pending HTTP MCP registration after session/new returns", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const bindThread = vi.fn();
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      mcpServers: () => ({
+        servers: [
+          {
+            name: "pwragent",
+            type: "http",
+            url: "http://127.0.0.1:43123/mcp",
+            headers: [
+              {
+                name: "Authorization",
+                value: "Bearer test-token",
+              },
+            ],
+          },
+        ],
+        bindThread,
+      }),
+    });
+
+    await client.initialize();
+    await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    expect(transport.requests[1]?.params).toEqual({
+      cwd: "/repo",
+      mcpServers: [
+        {
+          name: "pwragent",
+          type: "http",
+          url: "http://127.0.0.1:43123/mcp",
+          headers: [
+            {
+              name: "Authorization",
+              value: "Bearer test-token",
+            },
+          ],
+        },
+      ],
+    });
+    expect(bindThread).toHaveBeenCalledWith("session-1");
+  });
+
   it("sends pasted images as ACP image content and keeps structured parts in live replay", async () => {
     const transport = new FakeAcpAgentTransport();
     const imageUrl = "data:image/png;base64,aGVsbG8=";
@@ -454,7 +509,7 @@ describe("AcpAgentClient", () => {
     ).toBeUndefined();
   });
 
-  it("surfaces ACP permission requests and returns the selected option", async () => {
+  it("maps generic session approvals to ACP allow-always options", async () => {
     const transport = new FakeAcpAgentTransport();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const client = new AcpAgentClient({
@@ -465,7 +520,7 @@ describe("AcpAgentClient", () => {
       now: () => 1000,
       onRequest: (request) => {
         requests.push(request);
-        return { decision: "accept" };
+        return { decision: "accept_for_session" };
       },
     });
 
@@ -524,12 +579,135 @@ describe("AcpAgentClient", () => {
         acpMethod: "session/request_permission",
         acpToolCallId: "run_shell_command_1",
         acpToolKind: "execute",
+        acpPermissionOptions: [
+          {
+            optionId: "proceed_always",
+            name: "Allow for this session",
+            kind: "allow_always",
+          },
+          {
+            optionId: "proceed_once",
+            name: "Allow",
+            kind: "allow_once",
+          },
+          {
+            optionId: "cancel",
+            name: "Reject",
+            kind: "reject_once",
+          },
+        ],
       },
     });
     expect(response).toEqual({
       outcome: {
         outcome: "selected",
-        optionId: "proceed_once",
+        optionId: "proceed_always",
+      },
+    });
+  });
+
+  it("round-trips Grok MCP and command-prefix allow-always options", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      agentDisplayName: "Grok",
+      store,
+      transport,
+      now: () => 1000,
+      onRequest: (request) => {
+        const actions = buildPendingRequestActions(request);
+        const action = actions.find(
+          (candidate) =>
+            candidate.decision === "accept_for_session" ||
+            candidate.decision === "accept_with_execpolicy_amendment",
+        );
+        expect(action).toBeDefined();
+        return buildPendingRequestResponse(request, action!);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Search threads, then inspect npm",
+      turnId: "turn-1",
+    });
+
+    const mcpResponse = await transport.emitRequest(
+      "session/request_permission",
+      {
+        sessionId: session.sessionId,
+        toolCall: {
+          toolCallId: "mcp_1",
+          kind: "other",
+          title: "pwragent__search_threads",
+          status: "pending",
+        },
+        options: [
+          {
+            optionId: "allow-once-mcp",
+            name: "Allow once: pwragent__search_threads",
+            kind: "allow_once",
+          },
+          {
+            optionId: "allow-always-mcp",
+            name: "Always allow: pwragent__search_threads",
+            kind: "allow_always",
+          },
+          {
+            optionId: "reject-once-mcp",
+            name: "Reject",
+            kind: "reject_once",
+          },
+        ],
+      },
+      0,
+    );
+    const commandResponse = await transport.emitRequest(
+      "session/request_permission",
+      {
+        sessionId: session.sessionId,
+        toolCall: {
+          toolCallId: "bash_1",
+          kind: "execute",
+          title: "npm view openclaw",
+          status: "pending",
+        },
+        options: [
+          {
+            optionId: "allow-once-command",
+            name: "Allow once",
+            kind: "allow_once",
+          },
+          {
+            optionId: "allow-always-command",
+            name: "Always allow: npm view",
+            kind: "allow_always",
+          },
+          {
+            optionId: "reject-once-command",
+            name: "Reject",
+            kind: "reject_once",
+          },
+        ],
+      },
+      1,
+    );
+
+    expect(mcpResponse).toEqual({
+      outcome: {
+        outcome: "selected",
+        optionId: "allow-always-mcp",
+      },
+    });
+    expect(commandResponse).toEqual({
+      outcome: {
+        outcome: "selected",
+        optionId: "allow-always-command",
       },
     });
   });
@@ -1494,6 +1672,78 @@ describe("AcpAgentClient", () => {
         sessionId: "session-1",
       }),
     ).toHaveLength(1);
+  });
+
+  it("does not let synthetic PwrAgent messages suppress provider session/load history", async () => {
+    const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
+    rolloutStore.appendUpdate({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      receivedAt: 1100,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: "Monitor completed.",
+        },
+        messageId: "monitor-1:message:1100",
+        _meta: {
+          pwragentSynthetic: true,
+          source: "pwragent_task_monitor",
+        },
+      },
+    });
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      rolloutStore,
+      store,
+      transport: {
+        request: async (method, params) => {
+          const result = await transport.request(method, params);
+          if (method === "session/load") {
+            transport.emitSessionUpdate("session-1", {
+              session_update: "user_message_chunk",
+              content: { type: "text", text: "What is the status?" },
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "agent_message_chunk",
+              content: { type: "text", text: "Still running." },
+            });
+          }
+          return result;
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 2000,
+    });
+    store.upsertSession({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      title: "Kimi session",
+      cwd: "/repo",
+      createdAt: 1000,
+      updatedAt: 1100,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    const replay = await client.loadSession(
+      store.getSession("acp:kimi", "session-1")!,
+    );
+
+    expect(transport.requests.map((request) => request.method)).toEqual([
+      "initialize",
+      "session/load",
+    ]);
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "What is the status?",
+      "Still running.",
+    ]);
   });
 
   it("returns empty replay when no provider session/load support is advertised", async () => {

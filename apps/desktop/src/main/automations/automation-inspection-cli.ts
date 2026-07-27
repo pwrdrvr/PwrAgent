@@ -38,6 +38,12 @@ export function acpRuntimeSupportsAutomationInspectionMcp(
   return mcp?.http === true || mcp?.sse === true;
 }
 
+export function acpRuntimeSupportsHttpMcp(
+  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
+): boolean {
+  return runtimeCapabilities?.agentCapabilities?.mcp?.http === true;
+}
+
 export function buildAutomationInspectionAcpMcpServers(params: {
   backend: AppServerBackendKind;
   command?: string;

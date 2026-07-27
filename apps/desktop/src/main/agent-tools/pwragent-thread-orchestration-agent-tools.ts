@@ -111,7 +111,7 @@ function descriptionForOperation(
     case "detach_thread_directory":
       return "Detach a secondary linked directory from the current PwrAgent thread. Use this only for user-requested cleanup of extra directory references. The primary provider/runtime cwd cannot be detached. Pass directoryId when known, or path/worktreePath from get_thread_status linked directory metadata.";
     case "move_thread_workspace":
-      return "Move the current PwrAgent thread runtime workspace after the invoking turn reaches a terminal boundary. Use this when the user asks to continue this same thread from an isolated worktree instead of creating a child handoff thread. The operation is path-keyed: pass sourcePath when the thread has multiple linked directories or when the intended workspace is not obvious. The tool returns a pending workspaceMoveId and stop-and-wait guidance; after the current turn ends, PwrAgent performs the move, updates future-turn cwd metadata, and starts a same-thread continuation with the result. Do not keep editing after a successful call in the invoking turn; wait for the continuation or inspect get_thread_status pendingWorkspaceMoves.";
+      return "Move the current PwrAgent thread runtime workspace after the invoking turn reaches a terminal boundary. Use this when the user asks to continue this same thread from an isolated worktree instead of creating a child handoff thread. The operation is path-keyed: pass sourcePath when the thread has multiple linked directories or when the intended workspace is not obvious. The tool returns a pending workspaceMoveId and stop-and-wait guidance; after the current turn ends, PwrAgent performs the move, updates future-turn cwd metadata, rebinds an ACP session when required, and starts a same-thread continuation with the result. Do not keep editing after a successful call in the invoking turn; wait for the continuation or inspect get_thread_status pendingWorkspaceMoves.";
     case "send_message_to_thread":
       return "Send a follow-up prompt to another existing PwrAgent thread. Use search_threads or read_thread first when the target threadId is unknown. Do not use this for the current thread; reply normally instead. The result includes threadLink, a ready-made markdown link to the target thread. When you mention that thread to the user, include threadLink verbatim instead of the raw threadId so it renders as a clickable chip.";
   }
@@ -253,7 +253,7 @@ function inputSchemaForOperation(
           backend: {
             type: "string",
             description:
-              "Optional backend override. Omitted defaults to the invoking thread backend; the first implementation supports Codex self-move only.",
+              "Optional backend override. Omitted defaults to the invoking thread backend; same-thread moves require the invoking backend.",
           },
           direction: {
             type: "string",

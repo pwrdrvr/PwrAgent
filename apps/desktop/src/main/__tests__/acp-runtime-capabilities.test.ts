@@ -95,6 +95,27 @@ describe("ACP runtime capabilities", () => {
     expect(capabilities?.agentCapabilities?.prompt?.image).toBe(true);
   });
 
+  it("normalizes ACP MCP transport capabilities", () => {
+    const capabilities = normalizeAcpRuntimeCapabilities({
+      now: 1000,
+      source: "initialize",
+      value: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          mcpCapabilities: {
+            http: true,
+            sse: false,
+          },
+        },
+      },
+    });
+
+    expect(capabilities?.agentCapabilities?.mcp).toEqual({
+      http: true,
+      sse: false,
+    });
+  });
+
   it("normalizes model-specific reasoning effort metadata", () => {
     const response = {
       models: {

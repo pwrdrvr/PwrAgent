@@ -32,9 +32,16 @@ import {
 import {
   AcpAgentClient,
   type AcpJsonRpcTransport,
+  type AcpMcpServerRegistration,
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
-import { buildAutomationInspectionAcpMcpServers } from "../automations/automation-inspection-cli.js";
+import {
+  acpRuntimeSupportsHttpMcp,
+  buildAutomationInspectionAcpMcpServers,
+} from "../automations/automation-inspection-cli.js";
+import type {
+  AgentToolMcpServerLike,
+} from "../agent-tools/agent-tool-mcp-server.js";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
   acpAgentEnabledFor,
@@ -45,7 +52,10 @@ import {
   acpToolUpdateNotifications,
   acpTurnCompletedUsageNotification,
 } from "../acp/acp-live-notifications";
-import { AcpRolloutStore } from "../acp/acp-rollout-store";
+import {
+  AcpRolloutStore,
+  isPwrAgentSyntheticAcpUpdate,
+} from "../acp/acp-rollout-store";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import {
   acpRuntimeSupportsSessionHistoryReplay,
@@ -124,6 +134,7 @@ export type AcpBackendAdapterOptions = {
   acpRolloutStore?: Pick<AcpRolloutStore, "appendUpdate" | "readReplay" | "readUpdates"> | null;
   acpSessionStore?: AcpSessionStoreLike | null;
   captureStores: ProtocolCaptureStore[];
+  agentToolMcpServer?: AgentToolMcpServerLike;
   automationInspectionMcpCommand?: string;
   createAcpClient?: AcpClientFactory;
   createAcpTransport?: AcpTransportFactory;
@@ -334,6 +345,20 @@ function normalizeInstalledAcpAgent(
   return runtimeCapabilities === agent.runtimeCapabilities
     ? agent
     : { ...agent, runtimeCapabilities };
+}
+
+function effectiveAcpAgentCapabilities(
+  agent: AcpInstalledAgentRecord,
+): AcpAgentCapabilities {
+  const configured =
+    agent.capabilities ??
+    acpAgentCapabilitiesForRegistryId(agent.registryId);
+  return {
+    ...configured,
+    liveWorkspaceHandoff:
+      configured.liveWorkspaceHandoff ||
+      agent.runtimeCapabilities?.agentCapabilities?.loadSession === true,
+  };
 }
 
 function resolveDefaultAcpRolloutRoot(): string {
@@ -600,6 +625,41 @@ export function acpSessionThreadStatus(
     : "unknown";
 }
 
+function mergeAcpReplayWithSyntheticHistory(
+  replay: AppServerThreadReplay,
+  syntheticReplay: AppServerThreadReplay,
+): AppServerThreadReplay {
+  const entryIds = new Set(replay.entries.map((entry) => entry.id));
+  const messageIds = new Set(replay.messages.map((message) => message.id));
+  const entries = [
+    ...replay.entries,
+    ...syntheticReplay.entries.filter((entry) => !entryIds.has(entry.id)),
+  ].sort(
+    (left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0),
+  );
+  const messages = [
+    ...replay.messages,
+    ...syntheticReplay.messages.filter((message) => !messageIds.has(message.id)),
+  ].sort(
+    (left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0),
+  );
+  return {
+    ...replay,
+    entries,
+    messages,
+    lastUserMessage:
+      [...messages]
+        .reverse()
+        .find((message) => message.role === "user")?.text
+      ?? replay.lastUserMessage,
+    lastAssistantMessage:
+      [...messages]
+        .reverse()
+        .find((message) => message.role === "assistant")?.text
+      ?? replay.lastAssistantMessage,
+  };
+}
+
 export function isAcpSessionMissingForProjectError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
@@ -697,6 +757,7 @@ export class AcpBackendAdapter {
   >;
   private readonly acpSessionStore?: AcpSessionStoreLike;
   private readonly captureStores: ProtocolCaptureStore[];
+  private readonly agentToolMcpServer?: AgentToolMcpServerLike;
   private readonly automationInspectionMcpCommand?: string;
   private readonly createAcpClient: AcpClientFactory;
   private readonly createAcpTransport?: AcpTransportFactory;
@@ -713,6 +774,7 @@ export class AcpBackendAdapter {
 
   constructor(options: AcpBackendAdapterOptions) {
     this.captureStores = options.captureStores;
+    this.agentToolMcpServer = options.agentToolMcpServer;
     this.automationInspectionMcpCommand = options.automationInspectionMcpCommand;
     this.emit = options.emit;
     this.handleServerRequest = options.handleServerRequest;
@@ -803,6 +865,45 @@ export class AcpBackendAdapter {
     this.acpSessionStore?.upsertSession?.(session);
   }
 
+  persistSyntheticAssistantMessage(params: {
+    backend: AcpBackendId;
+    messageId: string;
+    receivedAt: number;
+    sessionId: string;
+    source: string;
+    text: string;
+  }): boolean {
+    if (!this.acpRolloutStore) {
+      return false;
+    }
+    this.acpRolloutStore.appendUpdate({
+      backendId: params.backend,
+      sessionId: params.sessionId,
+      receivedAt: params.receivedAt,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: params.text,
+        },
+        messageId: params.messageId,
+        _meta: {
+          pwragentSynthetic: true,
+          source: params.source,
+        },
+      },
+    });
+    const session = this.getSession(params.backend, params.sessionId);
+    if (session) {
+      this.upsertSession({
+        ...session,
+        hasConversationHistory: true,
+        updatedAt: Math.max(session.updatedAt, params.receivedAt),
+      });
+    }
+    return true;
+  }
+
   getInstalledAgent(backendId: AcpBackendId): AcpInstalledAgentRecord | undefined {
     const agent = this.acpAgentStore?.getInstalledAgent(backendId);
     return agent ? normalizeInstalledAcpAgent(agent) : undefined;
@@ -810,9 +911,9 @@ export class AcpBackendAdapter {
 
   sessionToThreadSummary(session: AcpSessionMetadata): AppServerThreadSummary {
     const agent = this.getInstalledAgent(session.backendId);
-    const capabilities =
-      agent?.capabilities ??
-      (agent ? acpAgentCapabilitiesForRegistryId(agent.registryId) : undefined);
+    const capabilities = agent
+      ? effectiveAcpAgentCapabilities(agent)
+      : undefined;
     return acpSessionToThreadSummary(session, capabilities);
   }
 
@@ -874,14 +975,17 @@ export class AcpBackendAdapter {
       ) {
         return this.readRolloutReplay(session, "rollout-session-load-unsupported");
       }
+      const replayWithSyntheticHistory = session
+        ? this.mergeReplayWithSyntheticHistory(session, replay)
+        : replay;
       this.logSessionReplaySource({
         backend,
-        entries: replay.entries.length,
-        messages: replay.messages.length,
+        entries: replayWithSyntheticHistory.entries.length,
+        messages: replayWithSyntheticHistory.messages.length,
         sessionId,
         source: "memory",
       });
-      return replay;
+      return replayWithSyntheticHistory;
     }
 
     if (!session) {
@@ -975,6 +1079,38 @@ export class AcpBackendAdapter {
     };
   }
 
+  private mergeReplayWithSyntheticHistory(
+    session: AcpSessionMetadata,
+    replay: AppServerThreadReplay,
+  ): AppServerThreadReplay {
+    if (!this.acpRolloutStore) {
+      return replay;
+    }
+    const normalizer = new AcpSessionReplayNormalizer({
+      surfaceThoughtsAsMessages: shouldSurfaceAcpThoughtsAsMessages(
+        session.backendId,
+      ),
+    });
+    let syntheticUpdateCount = 0;
+    for (const record of this.acpRolloutStore.readUpdates({
+      backendId: session.backendId,
+      sessionId: session.sessionId,
+    })) {
+      if (!isPwrAgentSyntheticAcpUpdate(record.update)) {
+        continue;
+      }
+      syntheticUpdateCount += 1;
+      normalizer.apply({
+        sessionId: session.sessionId,
+        receivedAt: record.receivedAt,
+        update: record.update,
+      });
+    }
+    return syntheticUpdateCount > 0
+      ? mergeAcpReplayWithSyntheticHistory(replay, normalizer.replay())
+      : replay;
+  }
+
   private providerReplayOrRolloutFallback(params: {
     backend: AcpBackendId;
     replay: AppServerThreadReplay;
@@ -1038,7 +1174,7 @@ export class AcpBackendAdapter {
             ? "provider-session-load"
             : "provider-session-load-empty",
       });
-      return replay;
+      return this.mergeReplayWithSyntheticHistory(session, replay);
     }
 
     const rolloutReplay =
@@ -1054,7 +1190,7 @@ export class AcpBackendAdapter {
         sessionId: session.sessionId,
         source: "provider-session-load-empty-no-rollout",
       });
-      return replay;
+      return this.mergeReplayWithSyntheticHistory(session, replay);
     }
 
     this.logSessionReplaySource({
@@ -1139,10 +1275,7 @@ export class AcpBackendAdapter {
 
   async supportsLiveWorkspaceHandoff(backend: AcpBackendId): Promise<boolean> {
     const agent = await this.resolveInstalledAgent(backend);
-    return (
-      agent.capabilities ??
-      acpAgentCapabilitiesForRegistryId(agent.registryId)
-    ).liveWorkspaceHandoff;
+    return effectiveAcpAgentCapabilities(agent).liveWorkspaceHandoff;
   }
 
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {
@@ -1178,6 +1311,7 @@ export class AcpBackendAdapter {
         await client?.dispose();
       }),
     );
+    await this.agentToolMcpServer?.close();
   }
 
   private shouldEmitLiveToolNotification(
@@ -1501,13 +1635,42 @@ export class AcpBackendAdapter {
       },
       onRequest: async (request) =>
         await this.handleServerRequest(agent.backendId, request),
-      mcpServers: ({ backendId, sessionId }) =>
-        buildAutomationInspectionAcpMcpServers({
+      mcpServers: async ({
+        backendId,
+        runtimeCapabilities,
+        sessionId,
+      }): Promise<
+        AcpMcpServerRegistration
+        | ReturnType<typeof buildAutomationInspectionAcpMcpServers>
+      > => {
+        if (
+          this.agentToolMcpServer
+          && acpRuntimeSupportsHttpMcp(runtimeCapabilities)
+        ) {
+          try {
+            const registration = await this.agentToolMcpServer.registerClient({
+              backend: backendId,
+              threadId: sessionId,
+            });
+            return {
+              servers: [registration.server],
+              bindThread: registration.bindThread,
+            };
+          } catch (error) {
+            acpBackendAdapterLog.warn("agent_tool_mcp_start_failed", {
+              backend: backendId,
+              error: error instanceof Error ? error.message : String(error),
+              sessionId: sessionId ?? null,
+            });
+          }
+        }
+        return buildAutomationInspectionAcpMcpServers({
           backend: backendId,
           command: this.automationInspectionMcpCommand,
-          runtimeCapabilities: agent.runtimeCapabilities,
+          runtimeCapabilities,
           threadId: sessionId,
-        }),
+        });
+      },
     });
   }
 }

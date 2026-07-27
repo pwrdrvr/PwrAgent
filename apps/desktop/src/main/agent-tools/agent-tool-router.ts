@@ -36,7 +36,7 @@ export type AgentMcpToolCallResponse = {
     type: "text";
     text: string;
   }>;
-  structuredContent?: unknown;
+  structuredContent?: Record<string, unknown>;
   isError?: boolean;
 };
 
@@ -94,6 +94,13 @@ export class AgentToolRouter {
     return Boolean(this.findDefinition(call.namespace, call.tool));
   }
 
+  acceptsMcpToolCall(params: {
+    namespace?: string;
+    tool: string;
+  }): boolean {
+    return Boolean(this.findMcpDefinition(params.namespace, params.tool));
+  }
+
   async handleDynamicToolCall(params: {
     backend: AppServerBackendKind;
     call: DynamicToolCallParams;
@@ -126,6 +133,8 @@ export class AgentToolRouter {
     namespace?: string;
     tool: string;
     args?: unknown;
+    callId?: string;
+    turnId?: string;
   }): Promise<AgentMcpToolCallResponse> {
     const definition = this.findMcpDefinition(params.namespace, params.tool);
     if (!definition) {
@@ -140,7 +149,9 @@ export class AgentToolRouter {
     const context: AgentToolCallContext = {
       backend: params.backend,
       threadId: params.threadId,
-      transport: "acp_mcp",
+      callId: params.callId,
+      turnId: params.turnId,
+      transport: "mcp",
     };
     return toMcpToolResponse(
       await definition.dispatch(normalizeToolArguments(params.args), context),
@@ -224,7 +235,7 @@ export function toMcpToolResponse(
   const payload = result.ok ? result.data : toFailurePayload(result);
   return {
     isError: result.ok ? undefined : true,
-    structuredContent: payload,
+    structuredContent: toStructuredContent(payload),
     content: [
       {
         type: "text",
@@ -232,6 +243,12 @@ export function toMcpToolResponse(
       },
     ],
   };
+}
+
+function toStructuredContent(payload: unknown): Record<string, unknown> {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : { result: payload };
 }
 
 function toFailurePayload(result: AgentToolDispatchFailure): Record<string, unknown> {

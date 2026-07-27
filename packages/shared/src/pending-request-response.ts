@@ -389,6 +389,23 @@ export function buildPendingRequestResponse(
 export function buildPendingRequestActions(
   request: AppServerPendingRequestNotification,
 ): PendingRequestAction[] {
+  const acpActions = buildAcpPermissionActions(
+    request.params.acpPermissionOptions,
+  );
+  if (acpActions.length) {
+    return [
+      ...acpActions,
+      buildAction({
+        decision: "cancel",
+        fallbackText: String(acpActions.length + 1),
+        id: "approval:acp:cancel",
+        label: "Cancel Turn",
+        responseDecision: "cancel",
+        style: "secondary",
+      }),
+    ];
+  }
+
   const availableDecisions =
     readDecisionEntries(request.params.availableDecisions) ??
     readDecisionEntries(request.params.decisions);
@@ -435,6 +452,87 @@ function readDecisionEntries(value: unknown): unknown[] | undefined {
     return undefined;
   }
   return value;
+}
+
+function buildAcpPermissionActions(value: unknown): PendingRequestAction[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const option = entry as Record<string, unknown>;
+    const optionId = readString(option.optionId);
+    const kind = readString(option.kind);
+    if (!optionId || !kind) {
+      return [];
+    }
+    const decision = acpPermissionDecision(kind, optionId);
+    if (!decision) {
+      return [];
+    }
+
+    return [
+      buildAction({
+        decision,
+        fallbackText: String(index + 1),
+        id: `approval:acp:${optionId}:${index}`,
+        label:
+          readString(option.name) ??
+          acpPermissionLabel(kind, decision),
+        responseDecision: optionId,
+        style: defaultStyle(decision),
+      }),
+    ];
+  });
+}
+
+function acpPermissionDecision(
+  kind: string,
+  optionId: string,
+): PendingRequestActionDecision | undefined {
+  switch (normalizeAcpPermissionKind(kind)) {
+    case "allowonce":
+      return "accept";
+    case "allowalways":
+      return optionId.toLowerCase().includes("command")
+        ? "accept_with_execpolicy_amendment"
+        : "accept_for_session";
+    case "rejectonce":
+    case "rejectalways":
+      return "decline";
+    default:
+      return undefined;
+  }
+}
+
+function normalizeAcpPermissionKind(kind: string): string {
+  return kind.trim().toLowerCase().replace(/[-_\s]/g, "");
+}
+
+function acpPermissionLabel(
+  kind: string,
+  decision: PendingRequestActionDecision,
+): string {
+  if (normalizeAcpPermissionKind(kind) === "rejectalways") {
+    return "Always Reject";
+  }
+  switch (decision) {
+    case "accept":
+      return "Approve Once";
+    case "accept_for_session":
+      return "Always Allow";
+    case "accept_with_execpolicy_amendment":
+      return "Always Allow Command Prefix";
+    case "decline":
+      return "Decline";
+    case "apply_network_policy_amendment":
+      return "Apply Network Rule";
+    case "cancel":
+      return "Cancel Turn";
+  }
 }
 
 function actionFromEntry(

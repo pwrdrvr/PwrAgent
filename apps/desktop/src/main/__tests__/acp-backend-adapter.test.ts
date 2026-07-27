@@ -926,6 +926,108 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("registers the agent-tool HTTP MCP from initialize capabilities", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          mcpCapabilities: {
+            http: true,
+          },
+        },
+      },
+    });
+    const sessions: AcpSessionMetadata[] = [];
+    const bindThread = vi.fn();
+    const registerClient = vi.fn(async () => ({
+      server: {
+        name: "pwragent",
+        type: "http" as const,
+        url: "http://127.0.0.1:43210/mcp",
+        headers: [
+          {
+            name: "Authorization",
+            value: "Bearer test-token",
+          },
+        ],
+      },
+      bindThread,
+    }));
+    const closeMcpServer = vi.fn(async () => undefined);
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          sessions.push(metadata);
+        },
+      },
+      agentToolMcpServer: {
+        registerClient,
+        close: closeMcpServer,
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    expect(registerClient).toHaveBeenCalledWith({
+      backend: backendId,
+      threadId: undefined,
+    });
+    expect(
+      transport.requests.find((request) => request.method === "session/new")
+        ?.params,
+    ).toEqual({
+      cwd: "/repo",
+      mcpServers: [
+        {
+          name: "pwragent",
+          type: "http",
+          url: "http://127.0.0.1:43210/mcp",
+          headers: [
+            {
+              name: "Authorization",
+              value: "Bearer test-token",
+            },
+          ],
+        },
+      ],
+    });
+    expect(bindThread).toHaveBeenCalledWith(session.sessionId);
+
+    await adapter.close();
+    expect(closeMcpServer).toHaveBeenCalledOnce();
+  });
+
   it("reads Kimi replay from local rollout history instead of session/load", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const agent: AcpInstalledAgentRecord = {
