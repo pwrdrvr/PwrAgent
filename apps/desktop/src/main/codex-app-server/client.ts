@@ -4217,8 +4217,8 @@ function pickModelSupportsFast(
   const additionalSpeedTiers = pickModelAdditionalSpeedTiers(record);
   // Current Codex model/list responses advertise structured service tiers and
   // retain additionalSpeedTiers for older clients. A present empty array is
-  // authoritative; only app-server versions that omit both fields need the
-  // legacy supportsFast/model-id fallback.
+  // authoritative. When older app-server versions omit both fields, leave the
+  // capability unknown so the backend registry can use its model-id fallback.
   if (serviceTierIds !== undefined || additionalSpeedTiers !== undefined) {
     return Boolean(
       serviceTierIds?.includes("priority")
@@ -4226,7 +4226,7 @@ function pickModelSupportsFast(
     );
   }
 
-  return pickBoolean(record, ["supportsFast", "supports_fast"]);
+  return undefined;
 }
 
 function pickReasoningEfforts(record: Record<string, unknown>): string[] | undefined {

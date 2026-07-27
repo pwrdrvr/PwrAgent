@@ -1684,7 +1684,6 @@ describe("CodexAppServerClient", () => {
         {
           id: "gpt-5.4",
           serviceTiers: [],
-          supportsFast: true,
         },
         {
           id: "gpt-5.4-mini",
@@ -1696,10 +1695,7 @@ describe("CodexAppServerClient", () => {
             },
           ],
         },
-        {
-          id: "gpt-5.2",
-          supports_fast: true,
-        },
+        { id: "gpt-5.2" },
       ],
     };
 
@@ -1719,7 +1715,7 @@ describe("CodexAppServerClient", () => {
       { id: "gpt-5.5", supportsFast: true },
       { id: "gpt-5.4", supportsFast: false },
       { id: "gpt-5.4-mini", supportsFast: false },
-      { id: "gpt-5.2", supportsFast: true },
+      { id: "gpt-5.2", supportsFast: undefined },
     ]);
   });
 
