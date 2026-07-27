@@ -14,6 +14,10 @@
  * that exact name. Add a new env-var field to the 1Password item and it
  * picks up automatically — no script edits needed.
  *
+ * Grok live tests use the separate "PwrAgnt - xAI API Key" API Credential
+ * item. The grok-live mode reads only its concealed credential field and
+ * passes it to the test child as XAI_API_KEY without printing the value.
+ *
  * Auto-enablement: when a provider's required env vars are all present,
  * the corresponding `PWRAGENT_MESSAGING_<PROVIDER>_ENABLED=true` is set
  * automatically (skipped if you've already set ENABLED explicitly to
@@ -21,9 +25,14 @@
  * a new entry to PROVIDER_AUTO_ENABLE below as new providers land.
  */
 import { execFileSync, spawn } from "node:child_process";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const DEFAULT_VAULT_NAME = "Private";
 const DEFAULT_ITEM_NAME = "PwrAgent";
+const DEFAULT_XAI_VAULT_NAME = "Private";
+const DEFAULT_XAI_ITEM_NAME = "PwrAgnt - xAI API Key";
+const DEFAULT_XAI_FIELD_NAME = "credential";
 
 /**
  * Map: provider name → list of env vars that must all be present before
@@ -88,9 +97,13 @@ function fetchOpItem(vaultName, itemName) {
   }
 }
 
-function readSecretReference(reference) {
+function readSecretReference(reference, account) {
   try {
-    const value = execFileSync("op", ["read", reference], {
+    const args = ["read", reference];
+    if (account) {
+      args.push("--account", account);
+    }
+    const value = execFileSync("op", args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
@@ -161,9 +174,49 @@ function loadOpEnv(env = process.env) {
   return nextEnv;
 }
 
-function runWithEnv(command, args, env = process.env) {
+export function loadXaiLiveEnv(
+  env = process.env,
+  readSecret = readSecretReference,
+) {
+  const account = env.PWRAGENT_XAI_OP_ACCOUNT?.trim() || undefined;
+  const vaultName =
+    env.PWRAGENT_XAI_OP_VAULT?.trim() || DEFAULT_XAI_VAULT_NAME;
+  const itemName =
+    env.PWRAGENT_XAI_OP_ITEM?.trim() || DEFAULT_XAI_ITEM_NAME;
+  const fieldName =
+    env.PWRAGENT_XAI_OP_FIELD?.trim() || DEFAULT_XAI_FIELD_NAME;
+  const reference = `op://${vaultName}/${itemName}/${fieldName}`;
+  const apiKey = readSecret(reference, account);
+  if (!apiKey) {
+    throw new Error(
+      [
+        `Failed to load XAI_API_KEY from "${itemName}" in vault "${vaultName}".`,
+        `Confirm the concealed "${fieldName}" field exists and approve the request`,
+        "in the 1Password app.",
+      ].join(" "),
+    );
+  }
+
+  process.stderr.write(
+    `op-run: loaded XAI_API_KEY from "${itemName}" (vault "${vaultName}")\n`,
+  );
+
+  return {
+    ...env,
+    XAI_API_KEY: apiKey,
+    XAI_BASE_URL: env.XAI_BASE_URL?.trim() || "https://api.x.ai/v1",
+    GROK_MODEL: env.GROK_MODEL?.trim() || "grok-4.20-reasoning",
+  };
+}
+
+function runWithEnv(
+  command,
+  args,
+  env = process.env,
+  loadEnv = loadOpEnv,
+) {
   const child = spawn(command, args, {
-    env: loadOpEnv(env),
+    env: loadEnv(env),
     shell: false,
     stdio: "inherit",
   });
@@ -183,6 +236,7 @@ function main(argv = process.argv.slice(2)) {
       [
         "Usage:",
         "  node scripts/op-run.mjs dev",
+        "  node scripts/op-run.mjs grok-live",
         "  node scripts/op-run.mjs run -- <command> [args...]",
         "",
         "Defaults (override via env):",
@@ -191,6 +245,12 @@ function main(argv = process.argv.slice(2)) {
         "",
         "Discovers any field on the 1Password item whose label matches",
         "/^PWRAGENT_[A-Z0-9_]+$/ and exports it into the child env.",
+        "",
+        "The grok-live mode reads the concealed credential field from:",
+        `  PWRAGENT_XAI_OP_VAULT=${DEFAULT_XAI_VAULT_NAME}`,
+        `  PWRAGENT_XAI_OP_ITEM=${DEFAULT_XAI_ITEM_NAME}`,
+        `  PWRAGENT_XAI_OP_FIELD=${DEFAULT_XAI_FIELD_NAME}`,
+        "Override those env vars when the xAI credential is stored elsewhere.",
         "",
         "Auto-enables messaging providers when all required vars are set.",
         "",
@@ -201,6 +261,16 @@ function main(argv = process.argv.slice(2)) {
 
   if (mode === "dev") {
     runWithEnv("pnpm", ["dev"]);
+    return;
+  }
+
+  if (mode === "grok-live") {
+    runWithEnv(
+      "pnpm",
+      ["--filter", "@pwragent/agent-core", "test:live"],
+      process.env,
+      loadXaiLiveEnv,
+    );
     return;
   }
 
@@ -218,11 +288,16 @@ function main(argv = process.argv.slice(2)) {
   throw new Error(`Unknown mode: ${mode}`);
 }
 
-try {
-  main();
-} catch (error) {
-  process.stderr.write(
-    `${error instanceof Error ? error.message : String(error)}\n`,
-  );
-  process.exit(1);
+const invokedPath = process.argv[1]
+  ? pathToFileURL(resolve(process.argv[1])).href
+  : "";
+if (import.meta.url === invokedPath) {
+  try {
+    main();
+  } catch (error) {
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exit(1);
+  }
 }

@@ -292,6 +292,11 @@ CI uses the existing `live-agent-core` workflow job with the
 Live smoke commands:
 
 - `pnpm --filter @pwragent/agent-core test:live`
+- `pnpm test:agent-core:live:op` loads `XAI_API_KEY` from the concealed
+  `credential` field of the `PwrAgnt - xAI API Key` item in the current
+  1Password account's `Private` vault. Override `PWRAGENT_XAI_OP_ACCOUNT`,
+  `PWRAGENT_XAI_OP_VAULT`, `PWRAGENT_XAI_OP_ITEM`, or
+  `PWRAGENT_XAI_OP_FIELD` when the credential lives elsewhere.
 - Covers live thread continuation via `thread/resume`.
 - Covers live context compaction via `thread/compact/start`.
 - Covers live repository-tool usage against a temporary workspace.

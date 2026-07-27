@@ -15,6 +15,7 @@
     "dev:op": "node ./scripts/op-run.mjs dev",
     "op:dev": "node ./scripts/op-run.mjs dev",
     "op:run": "node ./scripts/op-run.mjs run",
+    "test:agent-core:live:op": "node ./scripts/op-run.mjs grok-live",
     "licenses:check": "node ./scripts/check-package-licenses.mjs && node ./scripts/generate-third-party-licenses.mjs --check",
     "licenses:generate": "node ./scripts/generate-third-party-licenses.mjs",
     "lint": "pnpm lint:sql && pnpm lint:codex-storage && pnpm lint:colors && pnpm licenses:check && pnpm lint:eslint && pnpm typecheck && pnpm lint:boundaries",
