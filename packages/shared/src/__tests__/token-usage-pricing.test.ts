@@ -329,7 +329,7 @@ describe("token usage pricing", () => {
   });
 
   it("estimates Fast Codex Credits with model-specific speed multipliers", () => {
-    const credits = estimateOpenAiCodexCreditUsage({
+    const gpt54Credits = estimateOpenAiCodexCreditUsage({
       cachedInputTokens: 1_000,
       fastMode: true,
       model: "gpt-5.4",
@@ -337,10 +337,24 @@ describe("token usage pricing", () => {
       uncachedInputTokens: 3_000,
     });
 
-    expect(credits).toMatchObject({
+    expect(gpt54Credits).toMatchObject({
       rateId: "openai:2026-06-16:codex-credits:gpt-5.4:priority",
       serviceTier: "priority",
       totalCreditMicros: 1_887_500,
+    });
+
+    const gpt55Credits = estimateOpenAiCodexCreditUsage({
+      cachedInputTokens: 1_000,
+      fastMode: true,
+      model: "gpt-5.5",
+      outputTokens: 2_000,
+      uncachedInputTokens: 3_000,
+    });
+
+    expect(gpt55Credits).toMatchObject({
+      rateId: "openai:2026-06-16:codex-credits:gpt-5.5:priority",
+      serviceTier: "priority",
+      totalCreditMicros: 4_718_750,
     });
   });
 
