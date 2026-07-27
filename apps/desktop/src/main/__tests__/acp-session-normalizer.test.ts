@@ -774,6 +774,40 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("strips terminal control sequences from replayed ACP tool output", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "gh-pr-list-1",
+        kind: "execute",
+        title: "Shell",
+        status: "completed",
+        content: {
+          type: "text",
+          text: "\u001b[1;37m{\u001b[0m\u001b[1;34m\"number\"\u001b[0m: 1014}",
+        },
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "gh-pr-list-1",
+        details: [
+          expect.objectContaining({
+            command: expect.objectContaining({
+              output: "{\"number\": 1014}",
+            }),
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("keeps non-shell ACP content with command fields as transcript output", () => {
     const normalizer = new AcpSessionReplayNormalizer();
     const output = "{\"command\":\"npm view pnpm\",\"result\":\"found text\"}";
