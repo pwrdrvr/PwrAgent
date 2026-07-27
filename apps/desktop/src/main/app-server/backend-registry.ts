@@ -4187,6 +4187,22 @@ function shouldEnrichThreadDirectories(
   }
 }
 
+function isCodexMissingRolloutArchiveError(
+  error: unknown,
+  threadId: string,
+): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  const normalizedThreadId = threadId.trim().toLowerCase();
+  if (!normalizedThreadId || !message.includes(normalizedThreadId)) {
+    return false;
+  }
+
+  return (
+    message.includes("no rollout found for thread id")
+    || message.includes("failed to locate rollout for thread")
+  );
+}
+
 function shouldBackfillCodexDirectoryRelationships(
   callerReason?: ThreadListCallerReason,
 ): boolean {
@@ -7400,12 +7416,37 @@ export class DesktopBackendRegistry {
       });
     }
 
-    const result =
-      backend === "codex"
-        ? await this.withCodexThreadClient(request.threadId, async (client) =>
-            await this.archiveWithClient(client, request.threadId),
-          )
-        : await this.archiveWithClient(this.grokClient, request.threadId);
+    let result: { threadId: string };
+    let archivedAt: number;
+    try {
+      result =
+        backend === "codex"
+          ? await this.withCodexThreadClient(request.threadId, async (client) =>
+              await this.archiveWithClient(client, request.threadId),
+            )
+          : await this.archiveWithClient(this.grokClient, request.threadId);
+      archivedAt = Date.now();
+    } catch (error) {
+      if (
+        backend !== "codex"
+        || !isCodexMissingRolloutArchiveError(error, request.threadId)
+      ) {
+        throw error;
+      }
+
+      archivedAt = Date.now();
+      await this.overlayStore.setThreadArchiveTombstone({
+        backend,
+        threadId: request.threadId,
+        archivedAt,
+      });
+      backendRegistryLog.warn("codex archive tombstoned missing rollout", {
+        backend,
+        threadId: request.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      result = { threadId: request.threadId };
+    }
     this.invalidateThreadListCache(backend);
     await this.cleanupMessagingForArchivedThread({
       backend,
@@ -7433,7 +7474,7 @@ export class DesktopBackendRegistry {
     return {
       backend,
       threadId: result.threadId,
-      archivedAt: Date.now(),
+      archivedAt,
       cleanup,
     };
   }
@@ -7485,6 +7526,13 @@ export class DesktopBackendRegistry {
             await this.restoreWithClient(client, request.threadId),
           )
         : await this.restoreWithClient(this.grokClient, request.threadId);
+    if (backend === "codex") {
+      await this.overlayStore.setThreadArchiveTombstone({
+        backend,
+        threadId: result.threadId,
+        archivedAt: undefined,
+      });
+    }
     this.invalidateThreadListCache(backend);
     this.clearArchivedMessagingCleanupCache({
       backend,
@@ -12937,11 +12985,14 @@ export class DesktopBackendRegistry {
       backend: "codex",
       threadIds: threadsWithPending.map((thread) => thread.id),
     });
+    const visibleThreads = threadsWithPending.filter(
+      (thread) => overlaysByThreadId[thread.id]?.archiveTombstonedAt === undefined,
+    );
     const reconciledOverlaysByThreadId =
       await this.reconcileCodexDirectoryRelationshipsFromSource({
         diagnostics,
         overlaysByThreadId,
-        threads: threadsWithPending,
+        threads: visibleThreads,
       });
     Object.assign(overlaysByThreadId, reconciledOverlaysByThreadId);
     if (
@@ -12953,13 +13004,13 @@ export class DesktopBackendRegistry {
         await this.backfillMissingCodexDirectoryRelationships({
           diagnostics,
           overlaysByThreadId,
-          threads: threadsWithPending,
+          threads: visibleThreads,
         });
       Object.assign(overlaysByThreadId, updatedOverlaysByThreadId);
     }
 
     const enrichedThreads = await Promise.all(
-      threadsWithPending.map(async (thread) => {
+      visibleThreads.map(async (thread) => {
         const overlay = overlaysByThreadId[thread.id];
         const cwd = resolveThreadWorkspaceCwd(
           thread,
