@@ -1018,7 +1018,6 @@ describe("GrokAppServerClient", () => {
             kind: "read",
             label: "Matt Van Horn profile",
             url: "https://example.com/matt-van-horn",
-            status: "completed",
           },
         ],
       },

@@ -878,7 +878,6 @@ export function buildLiveToolDetails(
       kind: "read",
       label,
       url: source.url,
-      status,
     });
   }
 

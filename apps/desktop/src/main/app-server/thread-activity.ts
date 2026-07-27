@@ -67,7 +67,6 @@ export function summarizeToolActivityItems(
           kind: "read",
           label,
           url: source.url,
-          status: itemStatus,
         });
       }
       continue;

@@ -849,7 +849,6 @@ function toolActivity(
                         kind: "read" as const,
                         label,
                         url: source.url,
-                        status,
                       },
                     ]
                   : [];

@@ -87,6 +87,39 @@ describe("buildLiveToolDetails", () => {
     ]);
   });
 
+  it("keeps completion status on the web search rather than its result links", () => {
+    const details = buildLiveToolDetails({
+      type: "webSearch",
+      id: "web-search-1",
+      toolName: "search_web",
+      status: "completed",
+      arguments: {
+        query: "Grok 4.5 pricing",
+      },
+      sources: [
+        {
+          title: "Grok 4.5",
+          url: "https://x.ai/news/grok-4-5",
+        },
+      ],
+    });
+
+    expect(details).toEqual([
+      {
+        id: "web-search-1",
+        kind: "read",
+        label: "Searched Web: Grok 4.5 pricing",
+        status: "completed",
+      },
+      {
+        id: "web-search-1-source-1",
+        kind: "read",
+        label: "Grok 4.5",
+        url: "https://x.ai/news/grok-4-5",
+      },
+    ]);
+  });
+
   it("uses a quiet search label when Codex only identifies the root path", () => {
     const details = buildLiveToolDetails({
       type: "commandExecution",
