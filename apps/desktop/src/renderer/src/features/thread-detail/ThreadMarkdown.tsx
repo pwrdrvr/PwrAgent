@@ -37,8 +37,15 @@ import {
 } from "../../lib/pull-request-links";
 import { expandTildePath, tildifyPath } from "../../lib/tildify-path";
 import { SkillChip } from "../composer/SkillChip";
-import { PullRequestLinkChip } from "../pr-status/PullRequestLinkChip";
+import {
+  PullRequestLinkChip,
+  PullRequestNumberLinkChip,
+} from "../pr-status/PullRequestLinkChip";
 import { ThreadChip } from "./ThreadChip";
+import {
+  parsePullRequestNumberHref,
+  remarkPullRequestReferences,
+} from "./remark-pull-request-references";
 import { remarkTableProfile } from "./remark-table-profile";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
@@ -216,6 +223,15 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           // the author's text rather than an anchor that goes nowhere — and
           // never let `pwragent:` reach the external-open path below.
           return <>{anchorProps.children}</>;
+        }
+
+        const pullRequestNumber = parsePullRequestNumberHref(href);
+        if (pullRequestNumber) {
+          return (
+            <PullRequestNumberLinkChip number={pullRequestNumber}>
+              {anchorProps.children}
+            </PullRequestNumberLinkChip>
+          );
         }
 
         const pullRequest = resolvePullRequestHref(href, pullRequestLinks);
@@ -469,7 +485,12 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     >
       <ReactMarkdown
         components={components}
-        remarkPlugins={[remarkBreaks, remarkGfm, remarkTableProfile]}
+        remarkPlugins={[
+          remarkBreaks,
+          remarkGfm,
+          remarkPullRequestReferences,
+          remarkTableProfile,
+        ]}
         urlTransform={normalizeMarkdownUrl}
       >
         {markdownText}
