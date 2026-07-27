@@ -2,6 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildPendingRequestActions,
+  buildPendingRequestResponse,
+} from "@pwragent/shared";
 import { AcpAgentClient } from "../acp/acp-client";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../acp/acp-session-store";
@@ -505,7 +509,7 @@ describe("AcpAgentClient", () => {
     ).toBeUndefined();
   });
 
-  it("surfaces ACP permission requests and returns the selected option", async () => {
+  it("maps generic session approvals to ACP allow-always options", async () => {
     const transport = new FakeAcpAgentTransport();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const client = new AcpAgentClient({
@@ -516,7 +520,7 @@ describe("AcpAgentClient", () => {
       now: () => 1000,
       onRequest: (request) => {
         requests.push(request);
-        return { decision: "accept" };
+        return { decision: "accept_for_session" };
       },
     });
 
@@ -575,12 +579,135 @@ describe("AcpAgentClient", () => {
         acpMethod: "session/request_permission",
         acpToolCallId: "run_shell_command_1",
         acpToolKind: "execute",
+        acpPermissionOptions: [
+          {
+            optionId: "proceed_always",
+            name: "Allow for this session",
+            kind: "allow_always",
+          },
+          {
+            optionId: "proceed_once",
+            name: "Allow",
+            kind: "allow_once",
+          },
+          {
+            optionId: "cancel",
+            name: "Reject",
+            kind: "reject_once",
+          },
+        ],
       },
     });
     expect(response).toEqual({
       outcome: {
         outcome: "selected",
-        optionId: "proceed_once",
+        optionId: "proceed_always",
+      },
+    });
+  });
+
+  it("round-trips Grok MCP and command-prefix allow-always options", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      agentDisplayName: "Grok",
+      store,
+      transport,
+      now: () => 1000,
+      onRequest: (request) => {
+        const actions = buildPendingRequestActions(request);
+        const action = actions.find(
+          (candidate) =>
+            candidate.decision === "accept_for_session" ||
+            candidate.decision === "accept_with_execpolicy_amendment",
+        );
+        expect(action).toBeDefined();
+        return buildPendingRequestResponse(request, action!);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Search threads, then inspect npm",
+      turnId: "turn-1",
+    });
+
+    const mcpResponse = await transport.emitRequest(
+      "session/request_permission",
+      {
+        sessionId: session.sessionId,
+        toolCall: {
+          toolCallId: "mcp_1",
+          kind: "other",
+          title: "pwragent__search_threads",
+          status: "pending",
+        },
+        options: [
+          {
+            optionId: "allow-once-mcp",
+            name: "Allow once: pwragent__search_threads",
+            kind: "allow_once",
+          },
+          {
+            optionId: "allow-always-mcp",
+            name: "Always allow: pwragent__search_threads",
+            kind: "allow_always",
+          },
+          {
+            optionId: "reject-once-mcp",
+            name: "Reject",
+            kind: "reject_once",
+          },
+        ],
+      },
+      0,
+    );
+    const commandResponse = await transport.emitRequest(
+      "session/request_permission",
+      {
+        sessionId: session.sessionId,
+        toolCall: {
+          toolCallId: "bash_1",
+          kind: "execute",
+          title: "npm view openclaw",
+          status: "pending",
+        },
+        options: [
+          {
+            optionId: "allow-once-command",
+            name: "Allow once",
+            kind: "allow_once",
+          },
+          {
+            optionId: "allow-always-command",
+            name: "Always allow: npm view",
+            kind: "allow_always",
+          },
+          {
+            optionId: "reject-once-command",
+            name: "Reject",
+            kind: "reject_once",
+          },
+        ],
+      },
+      1,
+    );
+
+    expect(mcpResponse).toEqual({
+      outcome: {
+        outcome: "selected",
+        optionId: "allow-always-mcp",
+      },
+    });
+    expect(commandResponse).toEqual({
+      outcome: {
+        outcome: "selected",
+        optionId: "allow-always-command",
       },
     });
   });

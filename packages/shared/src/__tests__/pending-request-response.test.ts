@@ -108,6 +108,114 @@ describe("buildPendingRequestResponse", () => {
     ]);
   });
 
+  it("preserves ACP MCP allow-always options and returns their exact ids", () => {
+    const request = createRequest({
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        acpPermissionOptions: [
+          {
+            optionId: "allow-once-mcp",
+            name: "Allow once: pwragent__search_threads",
+            kind: "allow_once",
+          },
+          {
+            optionId: "allow-always-mcp",
+            name: "Always allow: pwragent__search_threads",
+            kind: "allow_always",
+          },
+          {
+            optionId: "reject-once-mcp",
+            name: "Reject",
+            kind: "reject_once",
+          },
+        ],
+      },
+    });
+
+    const actions = buildPendingRequestActions(request);
+
+    expect(actions).toEqual([
+      expect.objectContaining({
+        decision: "accept",
+        label: "Allow once: pwragent__search_threads",
+        response: { decision: "allow-once-mcp" },
+      }),
+      expect.objectContaining({
+        decision: "accept_for_session",
+        label: "Always allow: pwragent__search_threads",
+        response: { decision: "allow-always-mcp" },
+      }),
+      expect.objectContaining({
+        decision: "decline",
+        label: "Reject",
+        response: { decision: "reject-once-mcp" },
+      }),
+      expect.objectContaining({
+        decision: "cancel",
+        label: "Cancel Turn",
+        response: { decision: "cancel" },
+      }),
+    ]);
+    expect(buildPendingRequestResponse(request, actions[1]!)).toEqual({
+      decision: "allow-always-mcp",
+    });
+  });
+
+  it("preserves ACP command-prefix approvals and persistent rejections", () => {
+    const request = createRequest({
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        acpPermissionOptions: [
+          {
+            optionId: "allow-once-command",
+            name: "Allow once",
+            kind: "allow_once",
+          },
+          {
+            optionId: "allow-always-command",
+            name: "Always allow: npm view",
+            kind: "allow_always",
+          },
+          {
+            optionId: "reject-always-command",
+            name: "Always reject: npm view",
+            kind: "reject_always",
+          },
+        ],
+      },
+    });
+
+    const actions = buildPendingRequestActions(request);
+
+    expect(actions).toEqual([
+      expect.objectContaining({
+        decision: "accept",
+        response: { decision: "allow-once-command" },
+      }),
+      expect.objectContaining({
+        decision: "accept_with_execpolicy_amendment",
+        label: "Always allow: npm view",
+        response: { decision: "allow-always-command" },
+      }),
+      expect.objectContaining({
+        decision: "decline",
+        label: "Always reject: npm view",
+        response: { decision: "reject-always-command" },
+      }),
+      expect.objectContaining({
+        decision: "cancel",
+      }),
+    ]);
+    expect(buildPendingRequestResponse(request, actions[1]!)).toEqual({
+      decision: "allow-always-command",
+    });
+    expect(buildPendingRequestResponse(request, actions[2]!)).toEqual({
+      decision: "reject-always-command",
+    });
+  });
+
   it("reads structured decision descriptors", () => {
     const request = createRequest({
       params: {

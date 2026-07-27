@@ -1424,6 +1424,29 @@ function selectPermissionOptionId(
   }
 
   if (
+    normalizedDecision === "accept_for_session" ||
+    normalizedDecision === "allow_always"
+  ) {
+    return (
+      options.find((option) => option.kind === "allow_always") ??
+      options.find((option) =>
+        option.name?.toLowerCase().includes("always allow"),
+      )
+    )?.optionId;
+  }
+
+  if (normalizedDecision === "accept_with_execpolicy_amendment") {
+    return (
+      options.find(
+        (option) =>
+          option.kind === "allow_always" &&
+          option.optionId.toLowerCase().includes("command"),
+      ) ??
+      options.find((option) => option.kind === "allow_always")
+    )?.optionId;
+  }
+
+  if (
     normalizedDecision === "decline" ||
     normalizedDecision === "reject" ||
     normalizedDecision === "deny"
