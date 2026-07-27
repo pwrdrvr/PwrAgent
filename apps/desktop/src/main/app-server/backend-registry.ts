@@ -4238,6 +4238,7 @@ type MessagingArchiveCleaner = {
 };
 
 type MessagingArchiveCleanupResult = {
+  error?: string;
   notifiedCount?: number;
   pendingIntentCount: number;
   revokedCount: number;
@@ -7418,6 +7419,7 @@ export class DesktopBackendRegistry {
 
     let result: { threadId: string };
     let archivedAt: number;
+    let codexRolloutMissing = false;
     try {
       result =
         backend === "codex"
@@ -7435,12 +7437,8 @@ export class DesktopBackendRegistry {
       }
 
       archivedAt = Date.now();
-      await this.overlayStore.setThreadArchiveTombstone({
-        backend,
-        threadId: request.threadId,
-        archivedAt,
-      });
-      backendRegistryLog.warn("codex archive tombstoned missing rollout", {
+      codexRolloutMissing = true;
+      backendRegistryLog.warn("codex archive continuing cleanup for missing rollout", {
         backend,
         threadId: request.threadId,
         error: error instanceof Error ? error.message : String(error),
@@ -7448,16 +7446,26 @@ export class DesktopBackendRegistry {
       result = { threadId: request.threadId };
     }
     this.invalidateThreadListCache(backend);
-    await this.cleanupMessagingForArchivedThread({
+    const messagingCleanup = await this.cleanupMessagingForArchivedThread({
       backend,
       threadId: result.threadId,
       origin: "thread-archive",
     });
-    await this.ungroupChildrenOfArchivedThread({
-      backend,
-      activeThreads: cleanupMetadata?.activeThreads ?? [],
-      parentThreadId: result.threadId,
-    });
+    let ungroupError: string | undefined;
+    try {
+      await this.ungroupChildrenOfArchivedThread({
+        backend,
+        activeThreads: cleanupMetadata?.activeThreads ?? [],
+        parentThreadId: result.threadId,
+      });
+    } catch (error) {
+      ungroupError = error instanceof Error ? error.message : String(error);
+      backendRegistryLog.warn("archive thread child ungrouping failed", {
+        backend,
+        threadId: result.threadId,
+        error: ungroupError,
+      });
+    }
     const cleanup = cleanupMetadata
       ? await this.archiveThreadWorktrees({
           backend,
@@ -7470,6 +7478,44 @@ export class DesktopBackendRegistry {
           threadId: result.threadId,
           error: cleanupMetadataError,
         });
+    if (codexRolloutMissing) {
+      const cleanupFailures = [
+        cleanupMetadataError
+          ? `metadata lookup failed: ${cleanupMetadataError}`
+          : undefined,
+        messagingCleanup.error
+          ? `messaging cleanup failed: ${messagingCleanup.error}`
+          : undefined,
+        ungroupError
+          ? `child ungrouping failed: ${ungroupError}`
+          : undefined,
+        ...cleanup.map((item) => {
+          if (!item.error) {
+            return undefined;
+          }
+          const worktreeContext = item.worktreePath
+            ? ` for ${item.worktreePath}`
+            : "";
+          return `worktree cleanup failed${worktreeContext}: ${item.error}`;
+        }),
+      ].filter((failure): failure is string => Boolean(failure));
+      if (cleanupFailures.length > 0) {
+        throw new Error(
+          `Codex rollout is already missing, but PwrAgent archive cleanup did not complete: ${cleanupFailures.join("; ")}`,
+        );
+      }
+
+      await this.overlayStore.setThreadArchiveTombstone({
+        backend,
+        threadId: result.threadId,
+        archivedAt,
+      });
+      this.invalidateThreadListCache(backend);
+      backendRegistryLog.warn("codex archive tombstoned missing rollout", {
+        backend,
+        threadId: result.threadId,
+      });
+    }
 
     return {
       backend,
@@ -12909,13 +12955,18 @@ export class DesktopBackendRegistry {
         revokedCount: bindings.length,
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       backendRegistryLog.warn("archived thread messaging cleanup failed", {
         backend: params.backend,
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
         origin: params.origin,
         threadId: params.threadId,
       });
-      return { pendingIntentCount: 0, revokedCount: 0 };
+      return {
+        error: message,
+        pendingIntentCount: 0,
+        revokedCount: 0,
+      };
     }
   }
 
