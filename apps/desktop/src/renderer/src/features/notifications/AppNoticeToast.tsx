@@ -12,6 +12,7 @@ export type AppNoticeToastNotice = {
   message: string;
   detail?: string;
   copyText?: string;
+  tone?: "neutral" | "warning";
 };
 
 export function AppNoticeToast(props: {
@@ -67,6 +68,7 @@ export function AppNoticeToast(props: {
   return (
     <aside
       className="app-notice-toast"
+      data-tone={props.notice.tone ?? "neutral"}
       role="status"
       aria-live="polite"
       onMouseEnter={() => setPaused(true)}

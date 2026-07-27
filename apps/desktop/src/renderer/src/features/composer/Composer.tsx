@@ -5842,6 +5842,7 @@ export function Composer(props: ComposerProps) {
     props.onShowNotice?.({
       id: `composer-notice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ...notice,
+      tone: notice.tone ?? "warning",
     });
   };
 

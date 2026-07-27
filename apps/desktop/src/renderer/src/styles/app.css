@@ -4996,6 +4996,11 @@ textarea,
   background: color-mix(in srgb, var(--bg-panel-elevated) 96%, var(--text-muted) 4%);
 }
 
+.app-notice-toast[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--status-warning) 52%, var(--border-subtle));
+  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, var(--status-warning) 8%);
+}
+
 .app-update-banner {
   border: 1px solid var(--accent-border);
   background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
@@ -5019,6 +5024,10 @@ textarea,
 
 .app-notice-toast__eyebrow {
   color: var(--text-secondary);
+}
+
+.app-notice-toast[data-tone="warning"] .app-notice-toast__eyebrow {
+  color: var(--status-warning);
 }
 
 .app-update-banner__eyebrow {
@@ -5090,6 +5099,10 @@ textarea,
   background: color-mix(in srgb, var(--text-muted) 42%, transparent);
   transform-origin: left center;
   animation: app-notice-toast-countdown 9000ms linear forwards;
+}
+
+.app-notice-toast[data-tone="warning"] .app-notice-toast__timer {
+  background: color-mix(in srgb, var(--status-warning) 72%, transparent);
 }
 
 .app-notice-toast__timer[data-paused="true"] {

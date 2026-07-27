@@ -265,6 +265,23 @@ describe("Tangerine Terminal theme contract", () => {
     expect(warningBannerRule).toContain("-webkit-app-region: no-drag;");
   });
 
+  it("keeps warning notices distinct from dark app surfaces", () => {
+    const warningNoticeRule = extractRuleBody(
+      css,
+      '.app-notice-toast[data-tone="warning"]',
+    );
+
+    expect(warningNoticeRule).toContain(
+      "border-color: color-mix(in srgb, var(--status-warning) 52%, var(--border-subtle));",
+    );
+    expect(warningNoticeRule).toContain(
+      "background: color-mix(in srgb, var(--bg-panel-elevated) 92%, var(--status-warning) 8%);",
+    );
+    expect(css).toMatch(
+      /\.app-notice-toast\[data-tone="warning"\] \.app-notice-toast__eyebrow\s*\{[\s\S]*?color:\s*var\(--status-warning\);[\s\S]*?\}/,
+    );
+  });
+
   it("lets transcript scroll restoration own scroll anchoring", () => {
     expect(css).toMatch(
       /\.transcript-list__items\s*\{[\s\S]*?overflow-anchor:\s*none;[\s\S]*?\}/

@@ -41,6 +41,17 @@ describe("AppNoticeToast", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("marks warning notices for high-contrast styling", () => {
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, tone: "warning" }}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveAttribute("data-tone", "warning");
+  });
+
   it("copies an explicit handoff value without rendering it", () => {
     const copyText = vi.fn(async () => undefined);
     const handoff = [
