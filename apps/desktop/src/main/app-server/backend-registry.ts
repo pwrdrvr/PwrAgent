@@ -17628,7 +17628,12 @@ export class DesktopBackendRegistry {
           )
         : undefined) ??
       sourceOverlay.executionMode ??
-      "default";
+      (sourceBackend === "codex"
+        ? await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId)
+        : isAcpBackendId(sourceBackend)
+          ? this.acpBackend.getSession(sourceBackend, sourceThreadId)
+              ?.executionMode ?? "default"
+          : "default");
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
 
     if (
@@ -18501,7 +18506,16 @@ export class DesktopBackendRegistry {
           )
         : undefined) ??
       sourceOverlay?.executionMode ??
-      "default";
+      (params.context.backend === "codex"
+        ? await this.resolveCodexThreadExecutionModeForActiveTurn(
+            params.context.threadId,
+          )
+        : isAcpBackendId(params.context.backend)
+          ? this.acpBackend.getSession(
+              params.context.backend,
+              params.context.threadId,
+            )?.executionMode ?? "default"
+          : "default");
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const cwd =
       params.cwd?.trim() ||
