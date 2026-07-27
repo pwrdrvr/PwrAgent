@@ -4,6 +4,7 @@ import {
   buildLiveToolDetails,
   buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
+  mergeActivityDetails,
   mergeCommandDetail,
   summarizeLiveActivity,
 } from "../live-transcript-activity";
@@ -82,6 +83,39 @@ describe("buildLiveToolDetails", () => {
           displayCommand: "rg -n -i 'grok' .",
           rawCommand: "rg -n -i 'grok' .",
         }),
+      },
+    ]);
+  });
+
+  it("keeps completion status on the web search rather than its result links", () => {
+    const details = buildLiveToolDetails({
+      type: "webSearch",
+      id: "web-search-1",
+      toolName: "search_web",
+      status: "completed",
+      arguments: {
+        query: "Grok 4.5 pricing",
+      },
+      sources: [
+        {
+          title: "Grok 4.5",
+          url: "https://x.ai/news/grok-4-5",
+        },
+      ],
+    });
+
+    expect(details).toEqual([
+      {
+        id: "web-search-1",
+        kind: "read",
+        label: "Searched Web: Grok 4.5 pricing",
+        status: "completed",
+      },
+      {
+        id: "web-search-1-source-1",
+        kind: "read",
+        label: "Grok 4.5",
+        url: "https://x.ai/news/grok-4-5",
       },
     ]);
   });
@@ -212,6 +246,54 @@ describe("mergeCommandDetail", () => {
       rawCommand: "rg -n grok .",
       source: "shell",
     });
+  });
+});
+
+describe("mergeActivityDetails", () => {
+  it("keeps a web fetch label and read kind across a sparse completion", () => {
+    expect(
+      mergeActivityDetails(
+        [
+          {
+            id: "web-fetch-1",
+            kind: "read",
+            label: "Fetched https://docs.x.ai/developers/models",
+            command: {
+              displayCommand:
+                'web_fetch(url="https://docs.x.ai/developers/models")',
+              source: "tool",
+            },
+            status: "in_progress",
+          },
+        ],
+        [
+          {
+            id: "web-fetch-1",
+            kind: "command",
+            label: "tool",
+            command: {
+              displayCommand: "tool",
+              source: "tool",
+              output: "# Models",
+            },
+            status: "completed",
+          },
+        ],
+      ),
+    ).toEqual([
+      {
+        id: "web-fetch-1",
+        kind: "read",
+        label: "Fetched https://docs.x.ai/developers/models",
+        command: {
+          displayCommand:
+            'web_fetch(url="https://docs.x.ai/developers/models")',
+          source: "tool",
+          output: "# Models",
+        },
+        status: "completed",
+      },
+    ]);
   });
 });
 

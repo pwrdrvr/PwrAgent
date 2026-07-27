@@ -14,6 +14,8 @@ import {
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolInvocation,
+  readAcpWebFetchUrl,
+  readAcpWebSearch,
 } from "./acp-command-extraction.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
 
@@ -817,6 +819,47 @@ function toolActivity(
     readString(update.update, "itemId") ??
     readString(update.update, "item_id") ??
     `${kind}:${update.sessionId}`;
+  const webSearch = readAcpWebSearch(update.update);
+  if (webSearch) {
+    const status = normalizeToolActivityStatus(readString(update.update, "status"));
+    const summary = status === "in_progress" ? "Searching Web" : "Searched Web";
+    const detailLabel = webSearch.query
+      ? `${summary}: ${webSearch.query}`
+      : summary;
+    return {
+      type: "activity",
+      id,
+      createdAt,
+      summary,
+      status,
+      details:
+        webSearch.query || webSearch.sources.length
+          ? [
+              {
+                id: `${id}:detail`,
+                kind: "read",
+                label: detailLabel,
+                status,
+              },
+              ...webSearch.sources.slice(0, 5).flatMap((source, index) => {
+                const label = source.title ?? source.url;
+                return label
+                  ? [
+                      {
+                        id: `${id}:source:${index + 1}`,
+                        kind: "read" as const,
+                        label,
+                        url: source.url,
+                      },
+                    ]
+                  : [];
+              }),
+            ]
+          : [],
+    };
+  }
+
+  const webFetchUrl = readAcpWebFetchUrl(update.update);
   const rawCommand = readAcpToolCommand(update.update);
   const invocation = readAcpToolInvocation(update.update);
   const displayCommand = rawCommand ?? invocation;
@@ -825,8 +868,9 @@ function toolActivity(
     readString(update.update, "name") ??
     readString(update.update, "kind") ??
     kind.replaceAll("_", " ");
-  const label =
-    displayCommand && isGenericShellToolTitle(labelCandidate)
+  const label = webFetchUrl
+    ? `Fetched ${webFetchUrl}`
+    : displayCommand && isGenericShellToolTitle(labelCandidate)
       ? displayCommand
       : labelCandidate;
   const status = readString(update.update, "status");
@@ -835,7 +879,9 @@ function toolActivity(
   const exitCode = readNumber(update.update, "exitCode");
   const detailKind = rawCommand
     ? "command"
-    : toolDetailKind(readString(update.update, "kind"), path);
+    : webFetchUrl
+      ? "read"
+      : toolDetailKind(readString(update.update, "kind"), path);
 
   return {
     type: "activity",
@@ -873,70 +919,111 @@ function toolActivity(
   };
 }
 
+function normalizeToolActivityStatus(
+  status: string | undefined,
+): AppServerThreadActivityEntry["status"] {
+  return status === "completed"
+    || status === "failed"
+    || status === "cancelled"
+    || status === "in_progress"
+    ? status
+    : "in_progress";
+}
+
 function mergeActivity(
   existing: AppServerThreadActivityEntry,
   incoming: AppServerThreadActivityEntry,
 ): AppServerThreadActivityEntry {
-  const existingDetail = existing.details[0];
-  const incomingDetail = incoming.details[0];
   return {
     ...existing,
     createdAt: existing.createdAt ?? incoming.createdAt,
     summary: preferSpecificLabel(existing.summary, incoming.summary),
     status: incoming.status ?? existing.status,
-    details:
-      existingDetail && incomingDetail
-        ? [
-            {
-              ...existingDetail,
-              ...incomingDetail,
-              label: preferSpecificLabel(existingDetail.label, incomingDetail.label),
-              path: incomingDetail.path ?? existingDetail.path,
-              command:
-                existingDetail.command || incomingDetail.command
-                  ? {
-                      displayCommand:
-                        preferSpecificCommand(
-                          existingDetail.command?.displayCommand,
-                          incomingDetail.command?.displayCommand,
-                        ) ??
-                        preferSpecificLabel(existingDetail.label, incomingDetail.label),
-                      rawCommand:
-                        preferSpecificCommand(
-                          existingDetail.command?.rawCommand,
-                          incomingDetail.command?.rawCommand,
-                        ),
-                      source:
-                        incomingDetail.command?.rawCommand &&
-                        existingDetail.command?.source === "tool"
-                          ? "shell"
-                          : incomingDetail.command?.source ??
-                            existingDetail.command?.source,
-                      output:
-                        incomingDetail.command?.output ??
-                        existingDetail.command?.output,
-                      exitCode:
-                        incomingDetail.command?.exitCode ??
-                        existingDetail.command?.exitCode,
-                      durationMs:
-                        incomingDetail.command?.durationMs ??
-                        existingDetail.command?.durationMs,
-                      cwd:
-                        incomingDetail.command?.cwd ??
-                        existingDetail.command?.cwd,
-                    }
-                  : undefined,
-              fileDiff: incomingDetail.fileDiff ?? existingDetail.fileDiff,
-            },
-          ]
-        : incoming.details.length > 0
-          ? incoming.details
-          : existing.details,
+    details: mergeActivityEntryDetails(existing.details, incoming.details),
   };
 }
 
+function mergeActivityEntryDetails(
+  existing: AppServerThreadActivityEntry["details"],
+  incoming: AppServerThreadActivityEntry["details"],
+): AppServerThreadActivityEntry["details"] {
+  const merged = [...existing];
+  for (const incomingDetail of incoming) {
+    const existingIndex = merged.findIndex(
+      (detail) => detail.id === incomingDetail.id,
+    );
+    if (existingIndex < 0) {
+      merged.push(incomingDetail);
+      continue;
+    }
+    const existingDetail = merged[existingIndex];
+    if (!existingDetail) {
+      continue;
+    }
+    merged[existingIndex] = {
+      ...existingDetail,
+      ...incomingDetail,
+      kind:
+        isGenericActivityLabel(incomingDetail.label)
+        && !isGenericActivityLabel(existingDetail.label)
+          ? existingDetail.kind
+          : incomingDetail.kind,
+      label: preferSpecificLabel(existingDetail.label, incomingDetail.label),
+      path: incomingDetail.path ?? existingDetail.path,
+      command:
+        existingDetail.command || incomingDetail.command
+          ? {
+              displayCommand:
+                preferSpecificCommand(
+                  existingDetail.command?.displayCommand,
+                  incomingDetail.command?.displayCommand,
+                )
+                ?? preferSpecificLabel(existingDetail.label, incomingDetail.label),
+              rawCommand:
+                preferSpecificCommand(
+                  existingDetail.command?.rawCommand,
+                  incomingDetail.command?.rawCommand,
+                ),
+              source:
+                incomingDetail.command?.rawCommand
+                && existingDetail.command?.source === "tool"
+                  ? "shell"
+                  : incomingDetail.command?.source
+                    ?? existingDetail.command?.source,
+              output:
+                incomingDetail.command?.output
+                ?? existingDetail.command?.output,
+              exitCode:
+                incomingDetail.command?.exitCode
+                ?? existingDetail.command?.exitCode,
+              durationMs:
+                incomingDetail.command?.durationMs
+                ?? existingDetail.command?.durationMs,
+              cwd:
+                incomingDetail.command?.cwd
+                ?? existingDetail.command?.cwd,
+            }
+          : undefined,
+      fileDiff: incomingDetail.fileDiff ?? existingDetail.fileDiff,
+    };
+  }
+  return merged;
+}
+
 function preferSpecificLabel(existing: string, incoming: string): string {
-  const generic = new Set([
+  if (
+    existing.toLowerCase().startsWith("searching web")
+    && incoming.toLowerCase().startsWith("searched web")
+  ) {
+    return incoming;
+  }
+  return isGenericActivityLabel(existing) && incoming
+    ? incoming
+    : existing || incoming;
+}
+
+function isGenericActivityLabel(value: string): boolean {
+  return new Set([
     "bash",
     "shell",
     "sh",
@@ -950,10 +1037,8 @@ function preferSpecificLabel(existing: string, incoming: string): string {
     "tool_call",
     "tool call update",
     "tool_call_update",
-  ]);
-  return generic.has(existing.toLowerCase()) && incoming
-    ? incoming
-    : existing || incoming;
+    "searching web",
+  ]).has(value.toLowerCase());
 }
 
 function preferSpecificCommand(
