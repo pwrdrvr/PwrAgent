@@ -734,13 +734,28 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   async stop(): Promise<void> {
     this.stopping = true;
     this.stopTypingSignals();
-    await this.bot.stop?.();
-    await this.startPromise?.catch(() => undefined);
-    this.startPromise = undefined;
-    this.listener = undefined;
-    this.botUsername = undefined;
-    this.runtimeErrorListeners.clear();
-    this.stopping = false;
+    try {
+      try {
+        await this.bot.stop?.();
+      } catch (error) {
+        // grammy aborts the active long poll before making one final
+        // getUpdates request to save the update offset. That confirmation
+        // request can fail when the network is already disappearing during
+        // app shutdown, but polling is stopped regardless. Cleanup must stay
+        // best-effort instead of turning that expected network failure into
+        // an unhandled rejection in the host process.
+        this.options.logger?.warn?.("telegram bot stop failed", {
+          error: errorMessage(error),
+        });
+      }
+      await this.startPromise?.catch(() => undefined);
+    } finally {
+      this.startPromise = undefined;
+      this.listener = undefined;
+      this.botUsername = undefined;
+      this.runtimeErrorListeners.clear();
+      this.stopping = false;
+    }
   }
 
   async downloadAttachment(

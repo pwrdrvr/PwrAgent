@@ -409,7 +409,11 @@ function disposeMainProcessResourcesSync(): void {
     getExistingRuntimeMessagingLeaseCoordinator() ??
     (isAppStateInitialized() ? getRuntimeMessagingLeaseCoordinator() : null);
   runtimeMessagingLeaseCoordinator?.shutdownSync();
-  void disposeDesktopMessagingRuntime();
+  void disposeDesktopMessagingRuntime().catch((error) => {
+    mainLog.warn("messaging runtime disposal failed during shutdown", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   void disposeAppServerIpcHandlers();
   disposeAppState();
 }

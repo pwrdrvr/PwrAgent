@@ -523,6 +523,7 @@ describe("bootstrapApp", () => {
     listThreadsMock.mockReset();
     listThreadsMock.mockResolvedValue([]);
     disposeDesktopMessagingRuntimeMock.mockReset();
+    disposeDesktopMessagingRuntimeMock.mockResolvedValue(undefined);
     registerMessagingStatusIpcHandlersMock.mockReset();
     disposeMessagingStatusIpcHandlersMock.mockReset();
     setApplicationMenuMock.mockReset();
@@ -1091,6 +1092,24 @@ describe("bootstrapApp", () => {
       disposeAppStateMock.mock.invocationCallOrder[0],
     );
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles messaging runtime disposal failures during shutdown", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    disposeDesktopMessagingRuntimeMock.mockRejectedValueOnce(
+      new Error("adapter stop failed"),
+    );
+
+    await import("../index");
+    await flushMicrotasks();
+
+    appEventHandlers.get("will-quit")?.();
+    await flushMicrotasks();
+
+    expect(mainLogWarnMock).toHaveBeenCalledWith(
+      "messaging runtime disposal failed during shutdown",
+      { error: "adapter stop failed" },
+    );
   });
 
   it("routes closing the last window through the shared quit flow", async () => {

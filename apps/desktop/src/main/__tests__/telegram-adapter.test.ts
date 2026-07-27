@@ -216,6 +216,49 @@ describe("TelegramAdapter", () => {
     expect(reasons).toHaveLength(0);
   });
 
+  it("absorbs a failed final getUpdates request during stop()", async () => {
+    const api = createApi();
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    };
+    let resolveStart: (() => void) | undefined;
+    const startPromise = new Promise<void>((resolve) => {
+      resolveStart = resolve;
+    });
+    const stopError = new Error("Network request for 'getUpdates' failed!");
+    const bot: TelegramBotLike = {
+      api: api as unknown as TelegramBotApi,
+      catch: vi.fn(),
+      on: vi.fn(),
+      start: vi.fn(async () => startPromise),
+      stop: vi.fn(async () => {
+        resolveStart?.();
+        throw stopError;
+      }),
+    };
+    const adapter = new TelegramAdapter({
+      bot,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+      },
+      logger,
+      now: () => 1000,
+    });
+    const reasons: string[] = [];
+    adapter.onRuntimeError((reason) => reasons.push(reason));
+
+    await adapter.start(async () => {});
+    await expect(adapter.stop()).resolves.toBeUndefined();
+
+    expect(reasons).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalledWith("telegram bot stop failed", {
+      error: "Network request for 'getUpdates' failed!",
+    });
+  });
+
   it("normalizes /resume and renders a thread picker with inline keyboard handles", async () => {
     const harness = await createControllerHarness();
 
