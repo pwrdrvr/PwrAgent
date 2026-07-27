@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -80,7 +81,10 @@ function isPickableDirectory(directory: NavigationDirectorySummary): boolean {
 export function ReferencePicker(props: ReferencePickerProps): ReactElement {
   const [tab, setTab] = useState<ReferencePickerTab>("projects");
   const [query, setQuery] = useState("");
+  const [menuShift, setMenuShift] = useState(0);
   const containerRef = useRef<HTMLSpanElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const panelId = useId();
 
   useEffect(() => {
@@ -104,6 +108,58 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [props.open, props.onClose]);
+
+  // The popover is anchored to the trigger, which sits near the right edge of
+  // the composer toolbar — keep it inside the viewport by nudging it back in
+  // when it would overflow either gutter (same clamp as the BranchPicker).
+  // Runs before paint so there's no visible jump, and re-clamps on resize
+  // while open. Keeping the panel in-viewport is what lets it FLOAT over the
+  // transcript: an off-viewport panel would make the focused search input
+  // scroll overflow-hidden ancestors sideways to chase it, shoving the whole
+  // chat surface under the sidebar.
+  useLayoutEffect(() => {
+    if (!props.open) {
+      setMenuShift(0);
+      return;
+    }
+    const clamp = (): void => {
+      const menu = menuRef.current;
+      if (!menu) {
+        return;
+      }
+      const gutter = 12;
+      const rect = menu.getBoundingClientRect();
+      const overflowRight = rect.right - (window.innerWidth - gutter);
+      const overflowLeft = gutter - rect.left;
+      setMenuShift((current) => {
+        if (overflowRight > 0) {
+          return current - overflowRight;
+        }
+        if (overflowLeft > 0) {
+          return current + overflowLeft;
+        }
+        return current;
+      });
+    };
+    clamp();
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+  }, [props.open]);
+
+  // Focus the search input AFTER the clamp above has positioned the panel
+  // (not via `autoFocus`, which fires during commit, before layout effects).
+  // `preventScroll` is belt-and-braces: focus must never scroll ancestor
+  // containers to reveal the input — that's the layout shove this popover
+  // is specifically built to avoid.
+  useEffect(() => {
+    if (!props.open) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() =>
+      inputRef.current?.focus({ preventScroll: true }),
+    );
+    return () => window.cancelAnimationFrame(frame);
+  }, [props.open]);
 
   const trimmedQuery = query.trim().toLowerCase();
 
@@ -148,8 +204,12 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
       {props.open ? (
         <div
           className="reference-picker__pop"
+          ref={menuRef}
           role="dialog"
           aria-label="Add reference"
+          style={
+            menuShift ? { transform: `translateX(${menuShift}px)` } : undefined
+          }
         >
           <div
             className="reference-picker__tabs"
@@ -190,7 +250,7 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
             </span>
             <input
               type="text"
-              autoFocus
+              ref={inputRef}
               placeholder={
                 tab === "projects" ? "Find a directory" : "Find a file"
               }
