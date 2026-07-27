@@ -57,13 +57,14 @@ pnpm dev:no-messaging   # full UI, no live messaging adapters
 pnpm dev                # full UI + live messaging
 ```
 
-Codex App Server credentials live in `~/.config/grok-app-server/config.toml` or the equivalent env vars. Full dev workflow, test strategy, replay fixtures, and diagnostics in **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+Grok app-server credentials live in `~/.config/grok-app-server/config.toml` or the equivalent env vars. Full dev workflow, test strategy, replay fixtures, and diagnostics in **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 ## How it's built
 
 | Layer | Stack | Where it lives |
 |---|---|---|
 | Desktop shell | Electron + TypeScript + React + TipTap composer | `apps/desktop/` |
+| Grok process host | Bidirectional JSON-RPC stdio executable, packaged with desktop | `apps/grok-app-server/` |
 | Codex protocol | Codex App Server protocol contracts | `@pwrdrvr/codex-app-server-protocol` |
 | Agent core | Provider-agnostic coding-agent runtime (currently Grok / xAI) | `packages/agent-core/` |
 | Messaging interface | Capability-profile contract; one shape, six providers | `packages/messaging/interface/` |
@@ -71,7 +72,7 @@ Codex App Server credentials live in `~/.config/grok-app-server/config.toml` or 
 | Shared types | Cross-package contracts and helpers | `packages/shared/` |
 | Local persistence | sqlite WAL via `better-sqlite3`, forward-compatible config TOML | `apps/desktop/src/main/state/`, `packages/agent-core/src/persistence/` |
 
-The dependency graph is **strictly layered and enforced** by `dependency-cruiser`: leaf (`shared`) → mid-tier (`messaging/*`, `agent-core`) → top (`apps/desktop`). The renderer can only import `@pwragent/shared`; everything else crosses the IPC bridge. CI fails any boundary violation — see [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs).
+The dependency graph is **strictly layered and enforced** by `dependency-cruiser`: leaf (`shared`) → mid-tier (`messaging/*`, `agent-core`) → process hosts. The renderer can only import `@pwragent/shared`, and the entire desktop app is forbidden from importing `@pwragent/agent-core`; Grok reaches it only through the separate app-server process. CI fails any boundary violation — see [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs).
 
 Architecture deep-dive: **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 

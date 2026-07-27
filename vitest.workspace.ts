@@ -28,6 +28,15 @@ export default defineConfig({
       },
       {
         test: {
+          name: "grok-app-server",
+          globals: true,
+          testTimeout: process.platform === "win32" ? 60_000 : 20_000,
+          environment: "node",
+          include: ["apps/grok-app-server/src/__tests__/**/*.test.ts"]
+        }
+      },
+      {
+        test: {
           name: "shared",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,

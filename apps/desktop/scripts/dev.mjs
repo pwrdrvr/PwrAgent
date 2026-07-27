@@ -7,6 +7,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const desktopRoot = resolve(__dirname, "..");
+const grokAppServerBuildScript = resolve(
+  desktopRoot,
+  "..",
+  "grok-app-server",
+  "build.mjs"
+);
 
 export const ELECTRON_DEV_ENV_KEYS = [
   "ELECTRON_EXEC_PATH",
@@ -17,6 +23,11 @@ export const ELECTRON_DEV_ENV_KEYS = [
 ];
 
 const TERMINAL_SHUTDOWN_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
+export const DEV_SETUP_SCRIPTS = [
+  "./scripts/ensure-electron-runtime.mjs",
+  "./scripts/rebuild-native-for-electron.mjs",
+  grokAppServerBuildScript
+];
 
 export function sanitizeDevEnv(input = process.env) {
   const env = {};
@@ -46,6 +57,14 @@ function run(command, args, env) {
     return 1;
   }
   return result.status ?? 1;
+}
+
+export function runDevSetup(node, env, runCommand = run) {
+  for (const script of DEV_SETUP_SCRIPTS) {
+    const status = runCommand(node, [script], env);
+    if (status !== 0) return status;
+  }
+  return 0;
 }
 
 function exitCodeForSignal(signal) {
@@ -152,13 +171,8 @@ export async function main(argv = process.argv.slice(2), inputEnv = process.env)
   }
 
   const node = process.execPath;
-  for (const script of [
-    "./scripts/ensure-electron-runtime.mjs",
-    "./scripts/rebuild-native-for-electron.mjs"
-  ]) {
-    const status = run(node, [script], env);
-    if (status !== 0) return status;
-  }
+  const setupStatus = runDevSetup(node, env);
+  if (setupStatus !== 0) return setupStatus;
 
   // Run electron-vite's JS entry directly so the long-running child can be
   // supervised without relying on a platform-specific node_modules/.bin shim.

@@ -38,6 +38,8 @@ import {
   MAX_TURN_FAILURE_LOG_ENTRIES,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  buildNavigationSnapshot,
+  buildNavigationSnapshotHash,
   applyNavigationLaunchpadProviderSettingsPatch,
   estimateOpenAiTokenUsageCost,
   isAcpBackendId,
@@ -45,10 +47,6 @@ import {
   projectNavigationLaunchpadProviderSettings,
   resolveOpenAiPricingServiceTier,
 } from "@pwragent/shared";
-import {
-  buildNavigationSnapshot,
-  buildNavigationSnapshotHash,
-} from "@pwragent/agent-core";
 import type { StateDb } from "./state-db.js";
 
 export type DirectoryGitStatusCacheEntry = {

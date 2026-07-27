@@ -25,7 +25,6 @@ export default defineConfig(({ command }) => {
           exclude: [
             "@pwragent/shared",
             "@pwrdrvr/codex-app-server-protocol",
-            "@pwragent/agent-core",
             "@pwragent/messaging-interface",
             "@pwragent/messaging-provider-discord",
             "@pwragent/messaging-provider-feishu",

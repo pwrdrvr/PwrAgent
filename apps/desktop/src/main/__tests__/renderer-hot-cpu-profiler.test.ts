@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTemporaryTestDirectory } from "@pwragent/agent-core";
+import { createTemporaryTestDirectory } from "../testing/test-harness";
 import type { ProcessMetric } from "electron";
 import { resolveHotCpuProfileConfig } from "../diagnostics/hot-cpu-profile-config";
 import { createHotCpuProfileSession } from "../diagnostics/hot-cpu-profile-session";

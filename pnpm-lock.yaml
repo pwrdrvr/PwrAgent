@@ -62,9 +62,6 @@ importers:
       '@octokit/graphql':
         specifier: ^9.0.3
         version: 9.0.3
-      '@pwragent/agent-core':
-        specifier: workspace:*
-        version: link:../../packages/agent-core
       '@pwragent/messaging-interface':
         specifier: workspace:*
         version: link:../../packages/messaging/interface
@@ -210,6 +207,16 @@ importers:
       vite:
         specifier: ^7.3.2
         version: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)
+
+  apps/grok-app-server:
+    dependencies:
+      '@pwragent/agent-core':
+        specifier: workspace:*
+        version: link:../../packages/agent-core
+    devDependencies:
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
 
   packages/agent-core:
     dependencies:

@@ -47,6 +47,18 @@ module.exports = {
       },
     },
     {
+      name: "desktop-does-not-import-agent-core",
+      severity: "error",
+      comment:
+        "The desktop app must communicate with agent-core through the Grok child app-server process, never import it in-process.",
+      from: {
+        path: "^apps/desktop/",
+      },
+      to: {
+        path: "^(@pwragent/agent-core|packages/agent-core/)",
+      },
+    },
+    {
       name: "messaging-interface-has-no-provider-dependencies",
       severity: "error",
       comment:

@@ -76,7 +76,7 @@ function failed(
  * rest of the system uses `directory:/repo`, producing a duplicate
  * entry in the picker's "Recent directories" list. This mirrors the
  * `repoWorktreeMatch` branch in
- * `packages/agent-core/src/domain/directory-navigation.ts:88`, which
+ * `packages/shared/src/directory-navigation.ts`, which
  * is the read-side of the same normalization. We deliberately do NOT
  * canonicalize `.codex/worktrees/...` paths — those are intentionally
  * tracked as their own directory entries by the directory-navigation

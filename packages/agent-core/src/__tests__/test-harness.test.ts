@@ -121,6 +121,31 @@ describe("test harness helpers", () => {
     await temp.cleanup();
   });
 
+  it("can load values into an isolated child-process environment", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const envPath = path.join(temp.path, ".env.local");
+    const env = {
+      XAI_API_KEY: "exported-key",
+    } as NodeJS.ProcessEnv;
+    await fs.writeFile(
+      envPath,
+      "XAI_API_KEY=project-key\nGROK_MODEL=grok-4.20-reasoning\n",
+    );
+
+    const result = loadLocalEnv({
+      env,
+      envPath,
+      override: false,
+    });
+
+    expect(result.loaded).toBe(true);
+    expect(env.XAI_API_KEY).toBe("exported-key");
+    expect(env.GROK_MODEL).toBe("grok-4.20-reasoning");
+    expect(process.env.GROK_MODEL).toBeUndefined();
+
+    await temp.cleanup();
+  });
+
   it("loads Grok app-server config from the XDG config directory", async () => {
     const temp = await createTemporaryTestDirectory();
     process.env.HOME = temp.path;
@@ -280,6 +305,43 @@ describe("test harness helpers", () => {
     expect(runtimeConfig.configPath).toBe(configPath);
     expect(runtimeConfig.stateRoot).toBe(
       path.join(pwragentHome, "grok-app-server"),
+    );
+
+    await temp.cleanup();
+  });
+
+  it("uses a desktop profile state fallback unless TOML declares state_root", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const profileStateRoot = path.join(temp.path, "profile-state");
+    const xdgConfigHome = path.join(temp.path, "xdg-config");
+    const configPath = defaultGrokAppServerConfigPath({
+      homeDir: temp.path,
+      xdgConfigHome,
+    });
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+    const fallbackConfig = resolveGrokAppServerRuntimeConfig({
+      homeDir: temp.path,
+      env: {} as NodeJS.ProcessEnv,
+      profileStateRoot,
+      xdgConfigHome,
+    });
+    expect(fallbackConfig.stateRoot).toBe(profileStateRoot);
+
+    await fs.writeFile(
+      configPath,
+      stringifyFlatToml({
+        state_root: path.join(temp.path, "explicit-state"),
+      }),
+    );
+    const explicitConfig = resolveGrokAppServerRuntimeConfig({
+      homeDir: temp.path,
+      env: {} as NodeJS.ProcessEnv,
+      profileStateRoot,
+      xdgConfigHome,
+    });
+    expect(explicitConfig.stateRoot).toBe(
+      path.join(temp.path, "explicit-state"),
     );
 
     await temp.cleanup();

@@ -79,7 +79,7 @@ jobs:
         run: |
           pnpm exec depcruise --config .dependency-cruiser.cjs \
             --output-type json --output-to cruise-result.json \
-            packages/ apps/desktop/src/
+            packages/ apps/desktop/src/ apps/grok-app-server/src/
           pnpm exec depcruise-fmt --exit-code cruise-result.json
 
       - name: Boundary violation summary

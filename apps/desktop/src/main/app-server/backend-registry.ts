@@ -228,7 +228,11 @@ import {
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
-import { GrokAppServerClient } from "../grok-app-server/client";
+import {
+  GrokAppServerClient,
+  type GrokGenerateObjectRequest,
+  type GrokGenerateObjectResult,
+} from "../grok-app-server/client";
 import {
   buildAutomationInspectionDynamicToolErrorResponse,
   handleAutomationInspectionDynamicToolCall,
@@ -313,7 +317,6 @@ import {
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
-import { XaiEphemeralObjectCaller } from "./ephemeral-object-call";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
@@ -468,6 +471,9 @@ type BackendClient = {
     isMatch: (record: Record<string, unknown>) => boolean;
     timeoutMs?: number;
   }): ReturnType<ThreadTitleGenerator["generateTitle"]>;
+  generateObject?(
+    params: GrokGenerateObjectRequest,
+  ): Promise<GrokGenerateObjectResult>;
   listSkills(params?: {
     cwd?: string;
     cwds?: string[];
@@ -5568,8 +5574,9 @@ export class DesktopBackendRegistry {
       createDefaultCodexEnvironmentHydrationStore();
     const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
     const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
+    const isLiveGrokAvailable = (): boolean => resolveAgentCoreGrokEnabled();
     const resolveLiveGrokApiKey = (): string | undefined => {
-      if (!resolveAgentCoreGrokEnabled()) {
+      if (!isLiveGrokAvailable()) {
         return undefined;
       }
       return (options?.resolveGrokApiKey ?? resolveGrokApiKeyForLiveClient)();
@@ -5609,6 +5616,7 @@ export class DesktopBackendRegistry {
       new GrokAppServerClient({
         resolveApiKey: resolveLiveGrokApiKey,
         connectionObserver: grokObserver,
+        isAvailable: isLiveGrokAvailable,
       });
     this.acpWorktreeRepositoryResolver =
       options?.acpWorktreeRepositoryResolver ??
@@ -5670,7 +5678,10 @@ export class DesktopBackendRegistry {
                     : undefined,
                   grok: createsLiveGrokClient
                     ? new GrokThreadTitleGenerator({
-                        resolveApiKey: resolveLiveGrokApiKey,
+                        client: {
+                          generateObject: async (request) =>
+                            await this.generateGrokObject(request),
+                        },
                       })
                     : undefined,
                 },
@@ -11851,27 +11862,30 @@ export class DesktopBackendRegistry {
     }
 
     if (backend.kind === "grok") {
-      const apiKey = resolveGrokApiKeyForLiveClient();
-      if (!apiKey) {
-        return { status: "unavailable", reason: "grok_api_key_unavailable" };
+      try {
+        const result = await this.generateGrokObject(params);
+        return { status: "ok", object: result.object };
+      } catch (error) {
+        return {
+          status: "failed",
+          reason: error instanceof Error ? error.message : String(error),
+        };
       }
-      const result = await new XaiEphemeralObjectCaller({ apiKey }).generateObject({
-        schema: params.schema,
-        schemaName: params.schemaName,
-        system: params.system,
-        prompt: params.prompt,
-        timeoutMs: params.timeoutMs,
-      });
-      if (result.status === "ok") {
-        return { status: "ok", object: result.response.object };
-      }
-      return result;
     }
 
     return {
       status: "unavailable",
       reason: `${backend.kind}_structured_generation_unavailable`,
     };
+  }
+
+  async generateGrokObject(
+    params: GrokGenerateObjectRequest,
+  ): Promise<GrokGenerateObjectResult> {
+    if (!this.grokClient.generateObject) {
+      throw new Error("grok structured generation is unavailable");
+    }
+    return await this.grokClient.generateObject(params);
   }
 
   private async resolveLaunchpadBackend(

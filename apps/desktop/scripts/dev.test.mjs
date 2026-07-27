@@ -1,6 +1,12 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { ELECTRON_DEV_ENV_KEYS, runLongLived, sanitizeDevEnv } from "./dev.mjs";
+import {
+  DEV_SETUP_SCRIPTS,
+  ELECTRON_DEV_ENV_KEYS,
+  runDevSetup,
+  runLongLived,
+  sanitizeDevEnv
+} from "./dev.mjs";
 
 function createFakeProcess() {
   const listeners = new Map();
@@ -37,6 +43,37 @@ function createFakeChild(pid = 12345) {
 }
 
 describe("dev launch wrapper", () => {
+  it("builds the Grok child before launching Electron development", () => {
+    const calls = [];
+    const env = { PATH: "/usr/bin" };
+
+    const status = runDevSetup("node", env, (command, args, childEnv) => {
+      calls.push([command, args, childEnv]);
+      return 0;
+    });
+
+    expect(status).toBe(0);
+    expect(DEV_SETUP_SCRIPTS.at(-1)).toMatch(
+      /apps[/\\]grok-app-server[/\\]build\.mjs$/
+    );
+    expect(calls).toEqual(
+      DEV_SETUP_SCRIPTS.map((script) => ["node", [script], env])
+    );
+  });
+
+  it("stops the dev setup when the child build fails", () => {
+    const statuses = [0, 0, 1];
+    const calls = [];
+
+    const status = runDevSetup("node", {}, (_command, args) => {
+      calls.push(args[0]);
+      return statuses.shift();
+    });
+
+    expect(status).toBe(1);
+    expect(calls).toEqual(DEV_SETUP_SCRIPTS);
+  });
+
   it("scrubs inherited Electron and module-resolution variables", () => {
     const inherited = {
       ELECTRON_EXEC_PATH: "/other/repo/Electron",

@@ -14,7 +14,9 @@
     "analyze:codex-thread-protocol": "tsx ./scripts/analyze-codex-thread-protocol.ts",
     "analyze:protocol-capture": "tsx ./scripts/analyze-protocol-capture.ts",
     "analyze:startup-cpu-profile": "tsx ./scripts/analyze-startup-cpu-profile.ts",
+    "prebuild": "pnpm --filter @pwragent/grok-app-server build",
     "build": "electron-vite build",
+    "postbuild": "node ./scripts/stage-grok-app-server.mjs && node ./scripts/check-main-bundle-boundary.mjs",
     "dev": "node ./scripts/dev.mjs --",
     "dev:dev": "node ./scripts/dev.mjs -- --profile dev",
     "dev:no-messaging": "PWRAGENT_DISABLE_MESSAGING=1 node ./scripts/dev.mjs -- --disable-messaging",
@@ -48,7 +50,6 @@
   },
   "dependencies": {
     "@octokit/graphql": "^9.0.3",
-    "@pwragent/agent-core": "workspace:*",
     "@pwragent/messaging-interface": "workspace:*",
     "@pwragent/messaging-provider-discord": "workspace:*",
     "@pwragent/messaging-provider-feishu": "workspace:*",
