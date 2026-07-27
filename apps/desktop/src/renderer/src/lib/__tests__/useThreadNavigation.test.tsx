@@ -3591,6 +3591,125 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad?.prompt).toBe("newer prompt");
   });
 
+  it("restores server-confirmed reasoning when a launchpad model changes", async () => {
+    const defaults: NavigationLaunchpadDefaults = {
+      backend: "codex",
+      executionMode: "default",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/Users/huntharo/github/PwrAgent",
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/huntharo/github/PwrAgent",
+      backend: "codex",
+      executionMode: "default",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      providerSettings: {
+        codex: {
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          reasoningEffortsByModel: {
+            "gpt-5.6-sol": "high",
+            "gpt-5.6-terra": "medium",
+          },
+        },
+      },
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const updateDirectoryLaunchpad = vi
+      .fn()
+      .mockResolvedValueOnce({
+        defaults: {
+          ...defaults,
+          model: "gpt-5.6-terra",
+          reasoningEffort: "medium",
+        },
+        launchpad: {
+          ...launchpad,
+          model: "gpt-5.6-terra",
+          reasoningEffort: "medium",
+          providerSettings: {
+            codex: {
+              ...launchpad.providerSettings?.codex,
+              model: "gpt-5.6-terra",
+              reasoningEffort: "medium",
+            },
+          },
+          updatedAt: 2,
+        },
+      })
+      .mockResolvedValueOnce({
+        defaults,
+        launchpad: {
+          ...launchpad,
+          updatedAt: 3,
+        },
+      });
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: launchpad.directoryKey,
+          kind: "directory" as const,
+          label: launchpad.directoryLabel,
+          path: launchpad.directoryPath,
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad,
+        },
+      ],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      updateDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.reasoningEffort).toBe("high");
+    });
+
+    await act(async () => {
+      await result.current.updateDirectoryLaunchpad(
+        launchpad.directoryKey,
+        { model: "gpt-5.6-terra" },
+        { stickySettingsChanged: true },
+      );
+    });
+
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      model: "gpt-5.6-terra",
+      reasoningEffort: "medium",
+    });
+
+    await act(async () => {
+      await result.current.updateDirectoryLaunchpad(
+        launchpad.directoryKey,
+        { model: "gpt-5.6-sol" },
+        { stickySettingsChanged: true },
+      );
+    });
+
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+  });
+
   it("keeps launchpad environment controls stable after prompt-only update responses", async () => {
     const defaults = {
       backend: "codex" as const,

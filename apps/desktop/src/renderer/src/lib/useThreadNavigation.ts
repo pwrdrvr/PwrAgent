@@ -1792,7 +1792,13 @@ function mergeLaunchpadUpdateResponse(
   const preserveSetting = <Key extends keyof NavigationLaunchpadDraft>(
     key: Key,
   ): void => {
-    if (!backendChanged && !(key in patch)) {
+    const serverResolvesReasoningForModel =
+      key === "reasoningEffort" && "model" in patch;
+    if (
+      !backendChanged
+      && !(key in patch)
+      && !serverResolvesReasoningForModel
+    ) {
       merged[key] = current[key] as NavigationLaunchpadDraft[Key];
     }
   };
