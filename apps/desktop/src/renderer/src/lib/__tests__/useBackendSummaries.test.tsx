@@ -97,7 +97,10 @@ describe("useBackendSummaries", () => {
         expect.objectContaining({ label: "K3" }),
       ]);
     });
-    expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+    expect(listAcpAgents).toHaveBeenCalledWith({
+      refresh: true,
+      force: true,
+    });
     expect(listBackends).toHaveBeenCalledTimes(2);
   });
 

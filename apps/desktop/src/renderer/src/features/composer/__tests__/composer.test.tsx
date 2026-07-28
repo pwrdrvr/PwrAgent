@@ -1619,6 +1619,101 @@ describe("Composer", () => {
     });
   });
 
+  it("preserves a model and reasoning choice made while ACP discovery runs", async () => {
+    const staleKimi = {
+      ...backendSummary("acp:kimi", {
+        models: [
+          {
+            id: "kimi-code/kimi-for-coding",
+            label: "K2.7 Coding",
+            current: true,
+          },
+          {
+            id: "kimi-code/k3",
+            label: "K3",
+            defaultReasoningEffort: "high",
+            reasoningEfforts: ["low", "high", "max"],
+            supportsReasoning: true,
+          },
+        ],
+      }),
+      label: "Kimi",
+    };
+    const refreshedKimi = {
+      ...staleKimi,
+      launchpadOptions: {
+        models: [
+          {
+            id: "kimi-code/kimi-for-coding",
+            label: "K2.7 Coding",
+            current: true,
+          },
+          {
+            id: "kimi-code/k3",
+            label: "K3",
+            defaultReasoningEffort: "high",
+            reasoningEfforts: ["low", "high", "max"],
+            supportsReasoning: true,
+          },
+        ],
+      },
+    };
+    const discovery = createDeferred<BackendSummary | undefined>();
+    const onProviderSelected = vi.fn(() => discovery.promise);
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const composer = (nextLaunchpad: NavigationLaunchpadDraft) => (
+      <Composer
+        backends={[backendSummary("codex"), staleKimi]}
+        launchpad={nextLaunchpad}
+        onProviderSelected={onProviderSelected}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+    const { rerender } = render(composer(launchpad));
+
+    chooseDropdownOption("Provider", "Kimi");
+    rerender(
+      composer({
+        ...launchpad,
+        backend: "acp:kimi",
+        model: "kimi-code/kimi-for-coding",
+      }),
+    );
+    await waitFor(() => {
+      expect(onProviderSelected).toHaveBeenCalledWith("acp:kimi");
+    });
+    onUpdateLaunchpad.mockClear();
+
+    rerender(
+      composer({
+        ...launchpad,
+        backend: "acp:kimi",
+        model: "kimi-code/k3",
+        reasoningEffort: "max",
+      }),
+    );
+    await act(async () => {
+      discovery.resolve(refreshedKimi);
+      await discovery.promise;
+    });
+
+    expect(onUpdateLaunchpad).not.toHaveBeenCalled();
+  });
+
   it("refreshes a persisted ACP launchpad and replaces a removed model", async () => {
     const refreshedKimi = {
       ...backendSummary("acp:kimi", {

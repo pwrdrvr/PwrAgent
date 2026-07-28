@@ -6253,6 +6253,8 @@ export function Composer(props: ComposerProps) {
     activeAcpLaunchpadRefreshKeyRef.current = refreshKey;
     const adoptRefreshedDefault =
       pendingProviderSelectionKeyRef.current === refreshKey;
+    const automaticModel = launchpad.model;
+    const automaticReasoningEffort = launchpad.reasoningEffort;
     if (adoptRefreshedDefault) {
       pendingProviderSelectionKeyRef.current = undefined;
     }
@@ -6271,9 +6273,13 @@ export function Composer(props: ComposerProps) {
           return;
         }
 
+        const shouldAdoptRefreshedDefault =
+          adoptRefreshedDefault
+          && latestLaunchpad.model === automaticModel
+          && latestLaunchpad.reasoningEffort === automaticReasoningEffort;
         const refreshedModels = refreshedBackend.launchpadOptions?.models ?? [];
         const nextModelOption =
-          (adoptRefreshedDefault
+          (shouldAdoptRefreshedDefault
             ? undefined
             : refreshedModels.find(
                 (model) => model.id === latestLaunchpad.model,
@@ -6283,7 +6289,7 @@ export function Composer(props: ComposerProps) {
           return;
         }
         const nextReasoningEffort = nextModelOption.supportsReasoning
-          ? adoptRefreshedDefault
+          ? shouldAdoptRefreshedDefault
             ? getDefaultReasoningEffort(refreshedBackend, nextModelOption)
             : getReasoningEffortValue(
                 refreshedBackend,

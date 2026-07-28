@@ -70,7 +70,10 @@ export function useBackendSummaries(
 
     const refreshPromise = (async () => {
       try {
-        await desktopApi.listAcpAgents?.({ refresh: true });
+        await desktopApi.listAcpAgents?.({
+          refresh: true,
+          force: true,
+        });
         return await refresh();
       } catch {
         // ACP discovery is best-effort. Keep the cached backend summaries
