@@ -126,8 +126,12 @@ async function refreshModelBackendsIfNeeded(params: {
   patch?: WriteDesktopSettingsConfigRequest["patch"];
   secret?: ReplaceDesktopSettingsSecretRequest["secret"];
 }): Promise<void> {
+  const acpCliPathChanged = Object.values(
+    params.patch?.acpAgents ?? {},
+  ).some((agent) => agent?.cliPath !== undefined);
   if (
     params.patch?.models?.codex?.path !== undefined
+    || acpCliPathChanged
   ) {
     await disposeDesktopBackendRegistry();
     return;

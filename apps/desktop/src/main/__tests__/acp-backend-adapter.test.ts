@@ -355,6 +355,150 @@ describe("isAcpSessionMissingForProjectError", () => {
 });
 
 describe("AcpBackendAdapter", () => {
+  it("replaces a stale stored launch descriptor with the actively discovered executable", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const stored: AcpInstalledAgentRecord[] = [
+      {
+        ...buildInstalledAgent(),
+        backendId,
+        registryId: "grok",
+        name: "Grok",
+        version: "0.2.112",
+        launchDescriptor: {
+          backendId,
+          registryId: "grok",
+          distributionKind: "local",
+          command: "/Users/test/.grok/bin/grok",
+          args: ["agent", "stdio"],
+          env: {},
+        },
+        runtimeCapabilities: {
+          schemaVersion: 1,
+          status: "discovered",
+          checkedAt: 1000,
+          agentCapabilities: {
+            prompt: {
+              image: false,
+            },
+          },
+        },
+      },
+    ];
+    const discovered: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      version: "0.2.112-pwragent.dev.4",
+      updatedAt: 2000,
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "/tmp/pwragent-grok-arm64/grok",
+        args: ["agent", "stdio"],
+        env: {},
+      },
+    };
+    const createAcpClient = vi.fn((agent: AcpInstalledAgentRecord) => ({
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      agent,
+    }));
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored[0],
+        listInstalledAgents: () => stored,
+        upsertInstalledAgent: (record) => {
+          stored[0] = record;
+        },
+      },
+      acpSessionStore: null,
+      captureStores: [],
+      createAcpClient: createAcpClient as never,
+      discoverLocalAcpAgents: async () => [discovered],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const [available] = await adapter.listAvailableAgents();
+    expect(available?.launchDescriptor?.command).toBe(
+      "/tmp/pwragent-grok-arm64/grok",
+    );
+    expect(available?.runtimeCapabilities).toBeUndefined();
+
+    await adapter.getClient(backendId);
+    expect(createAcpClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchDescriptor: expect.objectContaining({
+          command: "/tmp/pwragent-grok-arm64/grok",
+        }),
+      }),
+    );
+
+    await adapter.close();
+  });
+
+  it("keeps cached runtime capabilities for the same discovered executable version", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const runtimeCapabilities = {
+      schemaVersion: 1 as const,
+      status: "discovered" as const,
+      checkedAt: 1000,
+      agentCapabilities: {
+        prompt: {
+          image: true,
+        },
+      },
+    };
+    const stored: AcpInstalledAgentRecord[] = [
+      {
+        ...buildInstalledAgent(),
+        backendId,
+        registryId: "grok",
+        name: "Grok",
+        version: "0.2.112-pwragent.dev.4",
+        launchDescriptor: {
+          backendId,
+          registryId: "grok",
+          distributionKind: "local",
+          command: "/tmp/pwragent-grok-arm64/grok",
+          args: ["agent", "stdio"],
+          env: {},
+        },
+        runtimeCapabilities,
+        lastDiscoveredAt: 1000,
+      },
+    ];
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored[0],
+        listInstalledAgents: () => stored,
+        upsertInstalledAgent: (record) => {
+          stored[0] = record;
+        },
+      },
+      acpSessionStore: null,
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [
+        {
+          ...stored[0]!,
+          runtimeCapabilities: undefined,
+          lastDiscoveredAt: undefined,
+          updatedAt: 2000,
+        },
+      ],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const [available] = await adapter.listAvailableAgents();
+    expect(available?.runtimeCapabilities).toEqual(runtimeCapabilities);
+    expect(available?.lastDiscoveredAt).toBe(1000);
+
+    await adapter.close();
+  });
+
   it("passes the installed agent name to ACP approval prompts", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();
