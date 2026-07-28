@@ -1,6 +1,6 @@
 export type TokenUsagePricingServiceTier = "standard" | "priority";
 
-export type TokenUsagePricingProvider = "openai" | "xai";
+export type TokenUsagePricingProvider = "openai" | "qwen" | "xai";
 
 export type TokenUsagePriceStatus = "priced" | "unpriced";
 
@@ -208,10 +208,12 @@ type PricingCatalogEntry = {
   effectiveFrom: number;
   effectiveTo?: number;
   inputUsdPerMillion: number;
+  maximumInputTokens?: number;
   model: string;
   outputUsdPerMillion: number;
   outputTokensIncludeReasoning?: boolean;
   provider: TokenUsagePricingProvider;
+  rateBandId?: string;
   serviceTier: TokenUsagePricingServiceTier;
 };
 
@@ -259,6 +261,13 @@ const OPENAI_CODEX_FAST_RATE_MULTIPLIERS = {
 const XAI_PRICING_CATALOG_ID = "xai-api";
 const XAI_PRICING_CATALOG_VERSION = "2026-07-17";
 const XAI_GROK45_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 8);
+// ModelStudio Standard, Singapore / International list pricing:
+// https://www.alibabacloud.com/help/en/model-studio/model-pricing
+// Implicit-cache hits cost 20% of the normal input-token rate:
+// https://www.alibabacloud.com/help/en/model-studio/context-cache
+const QWEN_PRICING_CATALOG_ID = "qwen-modelstudio-international";
+const QWEN_PRICING_CATALOG_VERSION = "2026-07-15";
+const QWEN37_PLUS_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 4, 26);
 
 const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   {
@@ -441,9 +450,40 @@ const XAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   },
 ];
 
+const QWEN_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
+  {
+    aliases: [
+      "qwen3.7-plus(openai)",
+      "qwen3.7-plus (openai)",
+      "qwen3.7-plus-2026-05-26",
+      "qwen3.7-plus-2026-05-26(openai)",
+      "qwen3.7-plus-2026-05-26 (openai)",
+    ],
+    cachedInputUsdPerMillion: 0.08,
+    catalogId: QWEN_PRICING_CATALOG_ID,
+    catalogVersion: QWEN_PRICING_CATALOG_VERSION,
+    displayModel: "Qwen 3.7 Plus",
+    displayTier: "International (<=256K input)",
+    effectiveFrom: QWEN37_PLUS_PRICING_EFFECTIVE_FROM,
+    inputUsdPerMillion: 0.4,
+    // ModelStudio selects a pricing tier from each request's input count. ACP
+    // usage is persisted as a multi-call turn aggregate, so an aggregate at or
+    // below this boundary proves every call used the first tier. Larger turns
+    // stay unpriced until ACP carries enough per-call detail to price safely.
+    maximumInputTokens: 256_000,
+    model: "qwen3.7-plus",
+    outputTokensIncludeReasoning: true,
+    outputUsdPerMillion: 1.6,
+    provider: "qwen",
+    rateBandId: "input-lte-256k",
+    serviceTier: "standard",
+  },
+];
+
 const TOKEN_USAGE_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   ...OPENAI_PRICING_CATALOG,
   ...XAI_PRICING_CATALOG,
+  ...QWEN_PRICING_CATALOG,
 ];
 
 function buildCodexCreditsCatalogEntries(params: {
@@ -620,12 +660,16 @@ function estimateTokenUsageCostFromCatalog(
   const matchingEntries = catalog.filter(
     (candidate) =>
       pricingEntryMatchesModel(candidate, model)
-      && pricingEntryAppliesAt(candidate, params.at),
+      && pricingEntryAppliesAt(candidate, params.at)
+      && pricingEntryMatchesInputTokens(
+        candidate,
+        params.cachedInputTokens + params.uncachedInputTokens,
+      ),
   );
   const provider = matchingEntries[0]?.provider;
   const serviceTier =
-    provider === "xai"
-      ? resolveXaiPricingServiceTier(params.serviceTier)
+    provider === "xai" || provider === "qwen"
+      ? resolveStandardOnlyPricingServiceTier(params.serviceTier)
       : resolveOpenAiPricingServiceTier({
           fastMode: params.fastMode,
           serviceTier: params.serviceTier,
@@ -643,7 +687,11 @@ function estimateTokenUsageCostFromCatalog(
       candidate.model === entry.model
       && candidate.provider === entry.provider
       && candidate.serviceTier === "standard"
-      && pricingEntryAppliesAt(candidate, params.at),
+      && pricingEntryAppliesAt(candidate, params.at)
+      && pricingEntryMatchesInputTokens(
+        candidate,
+        params.cachedInputTokens + params.uncachedInputTokens,
+      ),
   );
   const uncachedInputCostMicros = calculateTokenCostMicros(
     params.uncachedInputTokens,
@@ -800,7 +848,7 @@ export function resolveOpenAiPricingServiceTier(params: {
   return params.fastMode === true ? "priority" : "standard";
 }
 
-function resolveXaiPricingServiceTier(
+function resolveStandardOnlyPricingServiceTier(
   serviceTier: string | undefined,
 ): TokenUsagePricingServiceTier | undefined {
   const normalized = serviceTier?.trim().toLowerCase();
@@ -917,13 +965,24 @@ function pricingEntryMatchesModel(
   return entry.model === model || entry.aliases?.includes(model) === true;
 }
 
+function pricingEntryMatchesInputTokens(
+  entry: PricingCatalogEntry,
+  inputTokens: number,
+): boolean {
+  return (
+    entry.maximumInputTokens === undefined
+    || inputTokens <= entry.maximumInputTokens
+  );
+}
+
 function buildPricingRateId(entry: PricingCatalogEntry): string {
   return [
     entry.provider,
     entry.catalogVersion,
     entry.model,
     entry.serviceTier,
-  ].join(":");
+    entry.rateBandId,
+  ].filter(Boolean).join(":");
 }
 
 function buildCodexCreditRateId(entry: CodexCreditsCatalogEntry): string {

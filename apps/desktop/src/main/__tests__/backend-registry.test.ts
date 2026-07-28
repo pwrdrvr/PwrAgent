@@ -14201,6 +14201,68 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("persists priced Qwen 3.7 Plus ModelStudio usage", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.publishLocalEvent({
+      backend: "acp:qwen",
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "qwen-thread",
+          turnId: "qwen-turn",
+          model: "qwen3.7-plus(openai)",
+          tokenUsage: {
+            last_token_usage: {
+              input_tokens: 39_286,
+              cached_input_tokens: 0,
+              output_tokens: 90,
+              reasoning_output_tokens: 49,
+              total_tokens: 39_376,
+            },
+          },
+        },
+      },
+    });
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "acp:qwen",
+      threadId: "qwen-thread",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      cachedInputCostMicros: 0,
+      inputTokens: 39_286,
+      model: "qwen3.7-plus(openai)",
+      outputCostMicros: 144,
+      outputTokens: 90,
+      priceStatus: "priced",
+      pricingCatalogId: "qwen-modelstudio-international",
+      pricingCatalogVersion: "2026-07-15",
+      pricingRateId:
+        "qwen:2026-07-15:qwen3.7-plus:standard:input-lte-256k",
+      provider: "qwen",
+      reasoningOutputTokens: 49,
+      totalCostMicros: 15_858,
+      totalTokens: 39_376,
+      turnId: "qwen-turn",
+      turnUsageAttributed: true,
+      uncachedInputCostMicros: 15_714,
+    });
+
+    await registry.close();
+  });
+
   it("marks a whole-thread total with no per-request usage as unattributed", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },

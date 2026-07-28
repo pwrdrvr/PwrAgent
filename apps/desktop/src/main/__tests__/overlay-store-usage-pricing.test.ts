@@ -843,6 +843,53 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("reprices persisted Qwen ACP usage under the Qwen provider", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        backend: "acp:qwen",
+        cachedInputTokens: 0,
+        completedAt: Date.UTC(2026, 6, 28),
+        createdAt: Date.UTC(2026, 6, 28),
+        inputTokens: 39_286,
+        model: "qwen3.7-plus(openai)",
+        outputTokens: 90,
+        priceStatus: "unpriced",
+        priceUnavailableReason: "missing-rate",
+        pricingCatalogId: undefined,
+        pricingCatalogVersion: undefined,
+        pricingRateId: undefined,
+        provider: "qwen",
+        reasoningOutputTokens: 49,
+        totalCostMicros: 0,
+        totalTokens: 39_376,
+        uncachedInputTokens: 39_286,
+        usageLineId: "line-qwen3-7-plus",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "acp:qwen",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      priceStatus: "priced",
+      pricingCatalogId: "qwen-modelstudio-international",
+      pricingCatalogVersion: "2026-07-15",
+      pricingRateId:
+        "qwen:2026-07-15:qwen3.7-plus:standard:input-lte-256k",
+      provider: "qwen",
+      totalCostMicros: 15_858,
+    });
+    expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
+    expect(pricing.summaries[0]).toMatchObject({
+      pricedUsageLineCount: 1,
+      provider: "qwen",
+      totalCostMicros: 15_858,
+      unpricedUsageLineCount: 0,
+    });
+  });
+
   it("records one provider-scoped usage turn for multiple usage lines from the same turn", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({

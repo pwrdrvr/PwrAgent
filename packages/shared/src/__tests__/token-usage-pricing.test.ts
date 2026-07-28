@@ -249,6 +249,67 @@ describe("token usage pricing", () => {
     });
   });
 
+  it("prices Qwen ACP ModelStudio usage with the International list rate", () => {
+    const cost = estimateTokenUsageCost({
+      at: Date.UTC(2026, 6, 28),
+      cachedInputTokens: 0,
+      model: "qwen3.7-plus(openai)",
+      outputTokens: 90,
+      reasoningOutputTokens: 49,
+      uncachedInputTokens: 39_286,
+    });
+
+    expect(cost).toMatchObject({
+      cachedInputCostMicros: 0,
+      cachedInputUsdPerMillion: 0.08,
+      catalogId: "qwen-modelstudio-international",
+      catalogVersion: "2026-07-15",
+      displayName: "Qwen 3.7 Plus International (<=256K input)",
+      inputUsdPerMillion: 0.4,
+      model: "qwen3.7-plus(openai)",
+      outputCostMicros: 144,
+      outputTokensIncludeReasoning: true,
+      outputUsdPerMillion: 1.6,
+      provider: "qwen",
+      rateId:
+        "qwen:2026-07-15:qwen3.7-plus:standard:input-lte-256k",
+      serviceTier: "standard",
+      totalCostMicros: 15_858,
+      totalUsd: 0.015858,
+      uncachedInputCostMicros: 15_714,
+    });
+  });
+
+  it("uses Qwen's 20% implicit-cache rate without double billing reasoning", () => {
+    const cost = estimateTokenUsageCost({
+      at: Date.UTC(2026, 6, 28),
+      cachedInputTokens: 20_000,
+      model: "qwen3.7-plus-2026-05-26",
+      outputTokens: 322,
+      reasoningOutputTokens: 49,
+      uncachedInputTokens: 28_851,
+    });
+
+    expect(cost).toMatchObject({
+      cachedInputCostMicros: 1_600,
+      outputCostMicros: 515,
+      totalCostMicros: 13_655,
+      uncachedInputCostMicros: 11_540,
+    });
+  });
+
+  it("leaves Qwen turns above the safely attributable input tier unpriced", () => {
+    expect(
+      estimateTokenUsageCost({
+        at: Date.UTC(2026, 6, 28),
+        cachedInputTokens: 0,
+        model: "qwen3.7-plus(openai)",
+        outputTokens: 100,
+        uncachedInputTokens: 256_001,
+      }),
+    ).toBeUndefined();
+  });
+
   it("returns undefined for unsupported models or service tiers", () => {
     expect(
       estimateOpenAiTokenUsageCost({
@@ -301,6 +362,20 @@ describe("token usage pricing", () => {
         outputUsdPerMillion: 6,
         provider: "xai",
         rateId: "xai:2026-07-17:grok-4.5:standard",
+      }),
+    );
+    expect(listTokenUsagePricingRates()).toContainEqual(
+      expect.objectContaining({
+        cachedInputUsdPerMillion: 0.08,
+        catalogId: "qwen-modelstudio-international",
+        catalogVersion: "2026-07-15",
+        displayName: "Qwen 3.7 Plus International (<=256K input)",
+        inputUsdPerMillion: 0.4,
+        model: "qwen3.7-plus",
+        outputUsdPerMillion: 1.6,
+        provider: "qwen",
+        rateId:
+          "qwen:2026-07-15:qwen3.7-plus:standard:input-lte-256k",
       }),
     );
   });
