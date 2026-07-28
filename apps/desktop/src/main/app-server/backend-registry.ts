@@ -322,6 +322,7 @@ import {
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
+import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
@@ -387,6 +388,12 @@ const ACTIVE_TURN_HANDOFF_ERROR =
  */
 const MAX_QUEUE_FLUSH_ATTEMPTS = 3;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
+const GROK_TITLE_HELPER_SESSION_POLICY = buildMinimalGrokHelperSessionPolicy({
+  description: "Generate a concise title for a PwrAgent thread.",
+  name: "pwragent-title-helper",
+  systemPrompt:
+    "Generate the requested thread title. Follow the user prompt exactly, do not use tools, and return only the requested JSON object.",
+});
 const ATTENTION_NOTIFICATION_METHODS = new Set([
   "turn/requestApproval",
   "review/requestApproval",
@@ -5778,24 +5785,33 @@ export class DesktopBackendRegistry {
                     : undefined,
                 },
                 generatorResolver: (backend) => {
-                  if (!isAcpBackendId(backend) || backend === "acp:grok") {
-                    // Grok emits its own durable title through ACP. Starting a
-                    // full coding session solely to race that title is redundant.
+                  if (!isAcpBackendId(backend)) {
                     return undefined;
                   }
+                  const helperSession =
+                    backend === "acp:grok"
+                      ? GROK_TITLE_HELPER_SESSION_POLICY
+                      : undefined;
                   return new AcpThreadTitleGenerator({
                     backend,
                     configureHelperSession: async ({
                       client,
                       parentSession,
+                      reasoningEffort,
                       session,
                     }) => {
+                      const runtime = mergeAcpRuntimeState(
+                        parentSession?.acpRuntime ?? {},
+                        session.acpRuntime ?? {},
+                      );
                       await this.applyAcpRuntimeSelection(
                         client,
                         session.sessionId,
-                        session.acpRuntime ?? parentSession?.acpRuntime,
+                        runtime,
+                        reasoningEffort,
                       );
                     },
+                    helperSession,
                     getClient: (acpBackend) =>
                       this.acpBackend.getClient(acpBackend),
                     getSession: (acpBackend, threadId) =>
@@ -16181,12 +16197,14 @@ export class DesktopBackendRegistry {
         ? session.acpRuntime.configValues.model
         : undefined);
     const reasoningEffort =
-      session?.acpRuntime?.reasoningEffort ??
-      (typeof session?.acpRuntime?.configValues?.reasoningEffort === "string"
-        ? session.acpRuntime.configValues.reasoningEffort
-        : typeof session?.acpRuntime?.configValues?.reasoning_effort === "string"
-          ? session.acpRuntime.configValues.reasoning_effort
-          : undefined);
+      params.backend === "acp:grok"
+        ? GROK_TITLE_HELPER_SESSION_POLICY.reasoningEffort
+        : session?.acpRuntime?.reasoningEffort ??
+          (typeof session?.acpRuntime?.configValues?.reasoningEffort === "string"
+            ? session.acpRuntime.configValues.reasoningEffort
+            : typeof session?.acpRuntime?.configValues?.reasoning_effort === "string"
+              ? session.acpRuntime.configValues.reasoning_effort
+              : undefined);
     return {
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),

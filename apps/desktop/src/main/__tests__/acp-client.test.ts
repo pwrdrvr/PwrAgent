@@ -466,6 +466,53 @@ describe("AcpAgentClient", () => {
     });
   });
 
+  it("starts minimal helper sessions without configured MCP servers", async () => {
+    const mcpServers = vi.fn(() => [
+      {
+        name: "pwragent",
+        command: "pwragent-mcp",
+      },
+    ]);
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 1000,
+      mcpServers,
+    });
+
+    await client.initialize();
+    await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      mcpServers: "none",
+      sessionMeta: {
+        agentProfile: {
+          discoverSkills: false,
+          toolConfig: { tools: [] },
+        },
+        systemPromptOverride: "Return only the requested result.",
+      },
+    });
+
+    expect(mcpServers).not.toHaveBeenCalled();
+    expect(transport.requests[1]).toEqual({
+      method: "session/new",
+      params: {
+        cwd: "/repo",
+        mcpServers: [],
+        _meta: {
+          agentProfile: {
+            discoverSkills: false,
+            toolConfig: { tools: [] },
+          },
+          systemPromptOverride: "Return only the requested result.",
+        },
+      },
+    });
+  });
+
   it("binds a pending HTTP MCP registration after session/new returns", async () => {
     const transport = new FakeAcpAgentTransport();
     const bindThread = vi.fn();

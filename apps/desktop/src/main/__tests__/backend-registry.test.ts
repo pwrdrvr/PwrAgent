@@ -13080,8 +13080,23 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("does not start a redundant title helper for Grok ACP sessions", async () => {
+  it("uses a minimal low-reasoning title helper for Grok ACP sessions", async () => {
     const acpBackendId = "acp:grok" as AcpBackendId;
+    const helperSession: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "grok-title-helper",
+      title: "Name this thread",
+      cwd: "/repo/project",
+      createdAt: 1001,
+      updatedAt: 1001,
+      executionMode: "default",
+      acpRuntime: {
+        currentModelId: "grok-4.5",
+        updatedAt: 1001,
+      },
+      hidden: true,
+      status: "idle",
+    };
     const sessions: AcpSessionMetadata[] = [
       {
         backendId: acpBackendId,
@@ -13102,16 +13117,26 @@ command = "pnpm dev"
     const acpClient = {
       initialize: vi.fn(async () => undefined),
       dispose: vi.fn(),
-      startSession: vi.fn(),
+      startSession: vi.fn(async () => helperSession),
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
       cancelSession: vi.fn(),
+      setRuntimeOption: vi.fn(async () => helperSession.acpRuntime),
       startPrompt: vi.fn(() => ({
         sessionId: "grok-session-1",
         turnId: "turn-1",
       })),
-      sendControlPrompt: vi.fn(),
+      sendControlPrompt: vi.fn(async () => ({
+        text: '{ "title": "Favorite cereal" }',
+        model: "grok-4.5-build",
+        tokenUsage: {
+          inputTokens: 200,
+          cachedInputTokens: 40,
+          outputTokens: 10,
+          totalTokens: 210,
+        },
+      })),
       readReplay: vi.fn((): AppServerThreadReplay => ({
         entries: [],
         messages: [],
@@ -13145,11 +13170,42 @@ command = "pnpm dev"
       input: [{ type: "text", text: "What is your favorite cereal?" }],
     });
     await emitCompletedTurn(registry, acpBackendId, "grok-session-1");
-    await flushAsync();
+    await waitForCondition(() => sessions[0]?.title === "Favorite cereal");
 
-    expect(acpClient.startSession).not.toHaveBeenCalled();
-    expect(acpClient.sendControlPrompt).not.toHaveBeenCalled();
-    expect(upsertSubAgentSpy).not.toHaveBeenCalled();
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hidden: true,
+        mcpServers: "none",
+        sessionMeta: {
+          agentProfile: expect.objectContaining({
+            agentsMd: false,
+            discoverSkills: false,
+            injectDefaultTools: false,
+            mcpInheritance: "none",
+            tools: ["read_file"],
+          }),
+          systemPromptOverride: expect.stringContaining(
+            "do not use tools",
+          ),
+        },
+        title: "Name this thread",
+      }),
+    );
+    expect(acpClient.setRuntimeOption).toHaveBeenCalledWith({
+      sessionId: "grok-title-helper",
+      source: "model",
+      optionId: "model",
+      value: "grok-4.5",
+      reasoningEffort: "low",
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: "grok-session-1",
+      subAgent: expect.objectContaining({
+        preferredReasoningEffort: "low",
+        status: "success",
+      }),
+    });
 
     await registry.close();
   });

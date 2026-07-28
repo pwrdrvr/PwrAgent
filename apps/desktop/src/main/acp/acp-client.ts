@@ -290,15 +290,21 @@ export class AcpAgentClient {
     createdAt?: number;
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
+    mcpServers?: "default" | "none";
+    sessionMeta?: Record<string, unknown>;
   }): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
-    const mcpRegistration = await this.buildMcpServers({
-      cwd,
-      sessionId: params.sessionId,
-    });
+    const mcpRegistration =
+      params.mcpServers === "none"
+        ? { servers: [] }
+        : await this.buildMcpServers({
+            cwd,
+            sessionId: params.sessionId,
+          });
     const result = await this.options.transport.request("session/new", {
       cwd,
       mcpServers: mcpRegistration.servers,
+      ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
     });
     const now = this.now();
     const record = asRecord(result);
