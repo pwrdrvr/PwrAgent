@@ -14,8 +14,14 @@ export type AcpThreadTitleGeneratorOptions = {
   configureHelperSession?: (params: {
     client: AcpRuntimeClient;
     parentSession?: AcpSessionMetadata;
+    reasoningEffort?: string;
     session: AcpSessionMetadata;
   }) => Promise<void>;
+  helperSession?: {
+    mcpServers?: "default" | "none";
+    reasoningEffort?: string;
+    sessionMeta?: Record<string, unknown>;
+  };
   getClient: (backend: AcpBackendId) => Promise<AcpRuntimeClient>;
   getSession: (
     backend: AcpBackendId,
@@ -28,8 +34,10 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
   private readonly configureHelperSession?: (params: {
     client: AcpRuntimeClient;
     parentSession?: AcpSessionMetadata;
+    reasoningEffort?: string;
     session: AcpSessionMetadata;
   }) => Promise<void>;
+  private readonly helperSession?: AcpThreadTitleGeneratorOptions["helperSession"];
   private readonly getClient: (backend: AcpBackendId) => Promise<AcpRuntimeClient>;
   private readonly getSession: (
     backend: AcpBackendId,
@@ -39,6 +47,7 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
   constructor(options: AcpThreadTitleGeneratorOptions) {
     this.backend = options.backend;
     this.configureHelperSession = options.configureHelperSession;
+    this.helperSession = options.helperSession;
     this.getClient = options.getClient;
     this.getSession = options.getSession;
   }
@@ -70,10 +79,17 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
         title: "Name this thread",
         acpRuntime: parentSession?.acpRuntime,
         hidden: true,
+        ...(this.helperSession?.mcpServers
+          ? { mcpServers: this.helperSession.mcpServers }
+          : {}),
+        ...(this.helperSession?.sessionMeta
+          ? { sessionMeta: this.helperSession.sessionMeta }
+          : {}),
       });
       await this.configureHelperSession?.({
         client,
         parentSession,
+        reasoningEffort: this.helperSession?.reasoningEffort,
         session: helperSession,
       });
       const response = await client.sendControlPrompt({
@@ -83,11 +99,16 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
       const model = resolveAcpTitleModel(
         helperSession.acpRuntime ?? parentSession?.acpRuntime,
       );
+      const usageModel = response.model ?? model;
       return {
         status: "ok",
         object: parseAcpTitleObject(response.text),
         helperThreadId: helperSession.sessionId,
-        ...(model ? { model } : {}),
+        ...(usageModel ? { model: usageModel } : {}),
+        ...(this.helperSession?.reasoningEffort
+          ? { reasoningEffort: this.helperSession.reasoningEffort }
+          : {}),
+        ...(response.tokenUsage ? { tokenUsage: response.tokenUsage } : {}),
       };
     } catch {
       return {

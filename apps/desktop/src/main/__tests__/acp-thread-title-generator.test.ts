@@ -7,6 +7,13 @@ describe("AcpThreadTitleGenerator", () => {
     const backend = "acp:qwen" as AcpBackendId;
     const sendControlPrompt = vi.fn(async () => ({
       text: '{"title": "\nFavorite cereal question\n"}',
+      model: "qwen3.6-plus",
+      tokenUsage: {
+        inputTokens: 120,
+        cachedInputTokens: 20,
+        outputTokens: 8,
+        totalTokens: 128,
+      },
     }));
     const startSession = vi.fn(async () => ({
       backendId: backend,
@@ -18,8 +25,17 @@ describe("AcpThreadTitleGenerator", () => {
       hidden: true,
       status: "idle" as const,
     }));
+    const configureHelperSession = vi.fn(async () => undefined);
     const generator = new AcpThreadTitleGenerator({
       backend,
+      configureHelperSession,
+      helperSession: {
+        mcpServers: "none",
+        reasoningEffort: "low",
+        sessionMeta: {
+          systemPromptOverride: "Return only the requested result.",
+        },
+      },
       getClient: async () => ({
         cancelSession: vi.fn(),
         dispose: vi.fn(),
@@ -57,12 +73,29 @@ describe("AcpThreadTitleGenerator", () => {
       status: "ok",
       object: { title: " Favorite cereal question " },
       helperThreadId: "qwen-title-helper",
+      model: "qwen3.6-plus",
+      reasoningEffort: "low",
+      tokenUsage: {
+        inputTokens: 120,
+        cachedInputTokens: 20,
+        outputTokens: 8,
+        totalTokens: 128,
+      },
     });
     expect(startSession).toHaveBeenCalledWith(
       expect.objectContaining({
         executionMode: "default",
         hidden: true,
+        mcpServers: "none",
+        sessionMeta: {
+          systemPromptOverride: "Return only the requested result.",
+        },
         title: "Name this thread",
+      }),
+    );
+    expect(configureHelperSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reasoningEffort: "low",
       }),
     );
     expect(sendControlPrompt).toHaveBeenCalledWith({

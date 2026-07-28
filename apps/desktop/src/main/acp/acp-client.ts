@@ -128,6 +128,14 @@ type AcpSessionLoadState = {
 type AcpSuppressedControlPrompt = {
   fallbackOutputText?: string;
   finalTextChunks: string[];
+  model?: string;
+  tokenUsage?: {
+    cachedInputTokens?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    reasoningOutputTokens?: number;
+    totalTokens?: number;
+  };
 };
 
 type AcpHydratedSessionHistory = {
@@ -303,15 +311,21 @@ export class AcpAgentClient {
     createdAt?: number;
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
+    mcpServers?: "default" | "none";
+    sessionMeta?: Record<string, unknown>;
   }): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
-    const mcpRegistration = await this.buildMcpServers({
-      cwd,
-      sessionId: params.sessionId,
-    });
+    const mcpRegistration =
+      params.mcpServers === "none"
+        ? { servers: [] }
+        : await this.buildMcpServers({
+            cwd,
+            sessionId: params.sessionId,
+          });
     const result = await this.options.transport.request("session/new", {
       cwd,
       mcpServers: mcpRegistration.servers,
+      ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
     });
     const now = this.now();
     const record = asRecord(result);
@@ -540,7 +554,11 @@ export class AcpAgentClient {
   async sendControlPrompt(params: {
     sessionId: string;
     prompt: string;
-  }): Promise<{ text: string }> {
+  }): Promise<{
+    text: string;
+    model?: string;
+    tokenUsage?: AcpSuppressedControlPrompt["tokenUsage"];
+  }> {
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const suppression: AcpSuppressedControlPrompt = { finalTextChunks: [] };
     this.suppressedControlPromptSessions.set(protocolSessionId, suppression);
@@ -558,6 +576,10 @@ export class AcpAgentClient {
           suppression.finalTextChunks.join("").trim() ||
           suppression.fallbackOutputText?.trim() ||
           "",
+        ...(suppression.model ? { model: suppression.model } : {}),
+        ...(suppression.tokenUsage
+          ? { tokenUsage: suppression.tokenUsage }
+          : {}),
       };
     } finally {
       this.suppressedControlPromptSessions.delete(protocolSessionId);
@@ -732,6 +754,11 @@ export class AcpAgentClient {
         if (text) {
           suppressedControlPrompt.fallbackOutputText = text;
         }
+      }
+      const usage = readControlPromptUsage(update);
+      if (usage) {
+        suppressedControlPrompt.tokenUsage = usage.tokenUsage;
+        suppressedControlPrompt.model = usage.model;
       }
       return;
     }
@@ -1246,6 +1273,55 @@ function readUpdateKind(update: Record<string, unknown>): string | undefined {
   const kind =
     update.sessionUpdate ?? update.session_update ?? update.kind ?? update.type;
   return typeof kind === "string" ? kind : undefined;
+}
+
+function readControlPromptUsage(
+  update: Record<string, unknown>,
+): Pick<AcpSuppressedControlPrompt, "model" | "tokenUsage"> | undefined {
+  const kind = readUpdateKind(update);
+  const usage =
+    kind === "turn_completed"
+      ? asRecord(update.usage)
+      : kind === "agent_message_chunk"
+        ? asRecord(asRecord(update._meta)?.usage)
+        : undefined;
+  if (!usage) {
+    return undefined;
+  }
+  const inputTokens = readFiniteNumber(usage.inputTokens);
+  const cachedInputTokens = readFiniteNumber(usage.cachedReadTokens);
+  const outputTokens = readFiniteNumber(usage.outputTokens);
+  const reasoningOutputTokens =
+    readFiniteNumber(usage.reasoningTokens) ??
+    readFiniteNumber(usage.thoughtTokens);
+  const totalTokens = readFiniteNumber(usage.totalTokens);
+  if (
+    inputTokens === undefined &&
+    outputTokens === undefined &&
+    totalTokens === undefined
+  ) {
+    return undefined;
+  }
+  const modelUsage = asRecord(usage.modelUsage);
+  const model = modelUsage ? Object.keys(modelUsage)[0] : undefined;
+  return {
+    ...(model ? { model } : {}),
+    tokenUsage: {
+      ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+      ...(inputTokens !== undefined ? { inputTokens } : {}),
+      ...(outputTokens !== undefined ? { outputTokens } : {}),
+      ...(reasoningOutputTokens !== undefined
+        ? { reasoningOutputTokens }
+        : {}),
+      ...(totalTokens !== undefined ? { totalTokens } : {}),
+    },
+  };
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function isConversationHistoryUpdate(update: Record<string, unknown>): boolean {

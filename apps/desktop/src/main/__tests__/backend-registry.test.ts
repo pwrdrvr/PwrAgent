@@ -12486,6 +12486,102 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("persists title helper usage when the generated title is invalid", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "invalid" as const,
+        reason: "title_too_many_words",
+        helperThreadId: "invalid-title-helper-thread",
+        helperTurnId: "invalid-title-helper-turn",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        tokenUsage: {
+          inputTokens: 100,
+          cachedInputTokens: 20,
+          outputTokens: 10,
+          totalTokens: 110,
+        },
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-invalid-title-helper",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-invalid-title-helper",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() =>
+      upsertSubAgentSpy.mock.calls.some(
+        ([call]) => call.subAgent.status === "failed",
+      ),
+    );
+
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-invalid-title-helper",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-invalid-title-helper",
+        status: "failed",
+        outcome: "failure",
+        monitorThreadId: "invalid-title-helper-thread",
+        monitorTurnId: "invalid-title-helper-turn",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        lastMessage: "Title generation failed: title_too_many_words",
+        monitorUsage: expect.objectContaining({
+          model: "gpt-5.4-mini",
+          tokenUsage: {
+            inputTokens: 100,
+            cachedInputTokens: 20,
+            uncachedInputTokens: 80,
+            outputTokens: 10,
+            reasoningOutputTokens: 0,
+            totalTokens: 110,
+          },
+        }),
+      }),
+    });
+    expect(upsertUsageLineSpy).toHaveBeenCalledWith({
+      line: expect.objectContaining({
+        backend: "codex",
+        parentThreadId: "thread-invalid-title-helper",
+        threadId: "invalid-title-helper-thread",
+        turnId: "invalid-title-helper-turn",
+        scope: "monitor",
+        source: "monitor",
+        inputTokens: 100,
+        cachedInputTokens: 20,
+        outputTokens: 10,
+        totalTokens: 110,
+      }),
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("logs title helper sub-agent persistence failures without retrying the same write", async () => {
     mainLoggerMock.warn.mockClear();
     const titleService = {
@@ -13037,6 +13133,13 @@ command = "pnpm dev"
     ];
     const sendControlPrompt = vi.fn(async () => ({
       text: '{ "title": "Favorite cereal" }',
+      model: "kimi-k2-0711-preview",
+      tokenUsage: {
+        inputTokens: 100,
+        cachedInputTokens: 20,
+        outputTokens: 10,
+        totalTokens: 110,
+      },
     }));
     const helperSession: AcpSessionMetadata = {
       backendId: acpBackendId,
@@ -13080,6 +13183,7 @@ command = "pnpm dev"
     };
     const overlayStore = createOverlayStoreMock();
     const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       grokClient: new MockBackendClient({ threads: [] }),
@@ -13138,7 +13242,339 @@ command = "pnpm dev"
         monitorThreadId: "kimi-title-helper",
         lastMessage: "Generated title: Favorite cereal",
         outcome: "success",
+        monitorUsage: expect.objectContaining({
+          model: "kimi-k2-0711-preview",
+          tokenUsage: expect.objectContaining({
+            cachedInputTokens: 20,
+            inputTokens: 100,
+            outputTokens: 10,
+            totalTokens: 110,
+            uncachedInputTokens: 80,
+          }),
+        }),
       }),
+    });
+    expect(upsertUsageLineSpy).toHaveBeenCalledWith({
+      line: expect.objectContaining({
+        backend: acpBackendId,
+        parentThreadId: "kimi-session-1",
+        scope: "monitor",
+        sourceItemId: "system:title-helper:acp:kimi:kimi-session-1",
+        threadId: "kimi-title-helper",
+      }),
+    });
+
+    await registry.close();
+  });
+
+  it("uses a minimal low-reasoning title helper for Grok ACP sessions", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const helperSession: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "grok-title-helper",
+      title: "Name this thread",
+      cwd: "/repo/project",
+      createdAt: 1001,
+      updatedAt: 1001,
+      executionMode: "default",
+      acpRuntime: {
+        currentModelId: "grok-4.5",
+        updatedAt: 1001,
+      },
+      hidden: true,
+      status: "idle",
+    };
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "grok-session-1",
+        title: "What is your favorite cereal?",
+        titleSource: "fallback",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        acpRuntime: {
+          currentModelId: "grok-4.5",
+          updatedAt: 1000,
+        },
+        status: "idle",
+      },
+    ];
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async () => helperSession),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      setRuntimeOption: vi.fn(async () => helperSession.acpRuntime),
+      startPrompt: vi.fn(() => ({
+        sessionId: "grok-session-1",
+        turnId: "turn-1",
+      })),
+      sendControlPrompt: vi.fn(async () => ({
+        text: '{ "title": "Favorite cereal" }',
+        model: "grok-4.5-build",
+        tokenUsage: {
+          inputTokens: 200,
+          cachedInputTokens: 40,
+          outputTokens: 10,
+          totalTokens: 210,
+        },
+      })),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          ...createKimiAgentRecord(acpBackendId),
+          registryId: "grok",
+          name: "Grok",
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "grok-session-1",
+      input: [{ type: "text", text: "What is your favorite cereal?" }],
+    });
+    await emitCompletedTurn(registry, acpBackendId, "grok-session-1");
+    await waitForCondition(() => sessions[0]?.title === "Favorite cereal");
+
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hidden: true,
+        mcpServers: "none",
+        sessionMeta: {
+          agentProfile: expect.objectContaining({
+            agentsMd: false,
+            discoverSkills: false,
+            injectDefaultTools: false,
+            mcpInheritance: "none",
+            tools: ["read_file"],
+          }),
+          systemPromptOverride: expect.stringContaining(
+            "do not use tools",
+          ),
+        },
+        title: "Name this thread",
+      }),
+    );
+    expect(acpClient.setRuntimeOption).toHaveBeenCalledWith({
+      sessionId: "grok-title-helper",
+      source: "model",
+      optionId: "model",
+      value: "grok-4.5",
+      reasoningEffort: "low",
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: "grok-session-1",
+      subAgent: expect.objectContaining({
+        preferredReasoningEffort: "low",
+        status: "success",
+      }),
+    });
+
+    await registry.close();
+  });
+
+  it("reports the generated candidate when an ACP durable title arrives first", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const prompt = "What is your favorite cereal?";
+    const titleGeneration = createDeferred<{
+      status: "generated";
+      title: string;
+      helperThreadId: string;
+      model: string;
+      tokenUsage: {
+        inputTokens: number;
+        cachedInputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+      };
+    }>();
+    const titleService = {
+      generateTitle: vi.fn(async () => await titleGeneration.promise),
+    };
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "grok-session-1",
+        title: prompt,
+        titleSource: "fallback",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        acpRuntime: {
+          currentModelId: "grok-4.5",
+          updatedAt: 1000,
+        },
+        status: "idle",
+      },
+    ];
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async () => sessions[0]!),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      startPrompt: vi.fn(() => ({
+        sessionId: "grok-session-1",
+        turnId: "turn-1",
+      })),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const events: AgentEvent[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          ...createKimiAgentRecord(acpBackendId),
+          registryId: "grok",
+          name: "Grok",
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+      threadTitleGenerationService: titleService,
+    });
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "grok-session-1",
+      input: [{ type: "text", text: prompt }],
+    });
+    await waitForCondition(() => titleService.generateTitle.mock.calls.length === 1);
+
+    sessions[0] = {
+      ...sessions[0]!,
+      title: "Favorite Cereal Preference Personal Question",
+      titleSource: "derived",
+      updatedAt: 2000,
+    };
+    await (
+      registry as unknown as { emit(event: AgentEvent): Promise<void> }
+    ).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "grok-session-1",
+          threadName: "Favorite Cereal Preference Personal Question",
+        },
+      },
+    });
+    titleGeneration.resolve({
+      status: "generated",
+      title: "Favorite Breakfast Cereal",
+      helperThreadId: "grok-title-helper",
+      model: "grok-4.5",
+      tokenUsage: {
+        inputTokens: 100,
+        cachedInputTokens: 20,
+        outputTokens: 10,
+        totalTokens: 110,
+      },
+    });
+    await waitForCondition(() =>
+      upsertSubAgentSpy.mock.calls.some(
+        ([call]) => call.subAgent.status === "success",
+      ),
+    );
+    await waitForCondition(() =>
+      events.some(
+        (event) => event.notification.method === "thread/pricing/updated",
+      ),
+    );
+
+    expect(sessions[0]).toMatchObject({
+      title: "Favorite Cereal Preference Personal Question",
+      titleSource: "derived",
+    });
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: "grok-session-1",
+      subAgent: expect.objectContaining({
+        status: "success",
+        monitorThreadId: "grok-title-helper",
+        preferredModel: "grok-4.5",
+        lastMessage:
+          "Generated title: Favorite Breakfast Cereal. Not applied: ACP provided a durable title first: Favorite Cereal Preference Personal Question.",
+        outcome: "success",
+        completionSource: expect.objectContaining({
+          terminalStatus: "completed",
+        }),
+        monitorUsage: expect.objectContaining({
+          model: "grok-4.5",
+        }),
+      }),
+    });
+    expect(upsertUsageLineSpy).toHaveBeenCalledWith({
+      line: expect.objectContaining({
+        backend: acpBackendId,
+        source: "monitor",
+        sourceItemId: "system:title-helper:acp:grok:grok-session-1",
+        parentThreadId: "grok-session-1",
+        threadId: "grok-title-helper",
+      }),
+    });
+    expect(events).toContainEqual({
+      backend: acpBackendId,
+      notification: {
+        method: "thread/pricing/updated",
+        params: {
+          threadId: "grok-session-1",
+          pricing: expect.objectContaining({
+            lines: expect.arrayContaining([
+              expect.objectContaining({
+                parentThreadId: "grok-session-1",
+                scope: "monitor",
+                sourceItemId:
+                  "system:title-helper:acp:grok:grok-session-1",
+                threadId: "grok-title-helper",
+              }),
+            ]),
+          }),
+        },
+      },
     });
 
     await registry.close();

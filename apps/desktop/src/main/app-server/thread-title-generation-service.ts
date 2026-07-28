@@ -57,21 +57,28 @@ export type ThreadTitleGenerator = {
 };
 
 export type ThreadTitleGenerationResult =
-  | {
+  | ({
       status: "generated";
       title: string;
-      cachedTokens?: number;
-      helperThreadId?: string;
-      helperTurnId?: string;
-      model?: string;
-      reasoningEffort?: string;
-      serviceTier?: string;
-      tokenUsage?: unknown;
-    }
+    } & ThreadTitleGenerationMetadata)
+  | ({
+      status: "invalid";
+      reason: string;
+    } & ThreadTitleGenerationMetadata)
   | {
-      status: "unavailable" | "invalid" | "failed";
+      status: "unavailable" | "failed";
       reason: string;
     };
+
+export type ThreadTitleGenerationMetadata = {
+  cachedTokens?: number;
+  helperThreadId?: string;
+  helperTurnId?: string;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  tokenUsage?: unknown;
+};
 
 export type ThreadTitleGenerationServiceOptions = {
   generators?: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
@@ -141,23 +148,19 @@ export class ThreadTitleGenerationService {
     }
 
     const normalized = normalizeThreadTitleObject(result.object);
+    const metadata = threadTitleGenerationMetadata(result);
     if (!normalized.title) {
       return {
         status: "invalid",
         reason: normalized.reason,
+        ...metadata,
       };
     }
 
     return {
       status: "generated",
       title: normalized.title,
-      ...(result.cachedTokens !== undefined ? { cachedTokens: result.cachedTokens } : {}),
-      ...(result.helperThreadId ? { helperThreadId: result.helperThreadId } : {}),
-      ...(result.helperTurnId ? { helperTurnId: result.helperTurnId } : {}),
-      ...(result.model ? { model: result.model } : {}),
-      ...(result.reasoningEffort ? { reasoningEffort: result.reasoningEffort } : {}),
-      ...(result.serviceTier ? { serviceTier: result.serviceTier } : {}),
-      ...(result.tokenUsage !== undefined ? { tokenUsage: result.tokenUsage } : {}),
+      ...metadata,
     };
   }
 }
@@ -233,6 +236,20 @@ function normalizeThreadTitleObject(
   return {
     title: cleaned,
     reason: "ok",
+  };
+}
+
+function threadTitleGenerationMetadata(
+  result: Extract<ThreadTitleAdapterResult, { status: "ok" }>,
+): ThreadTitleGenerationMetadata {
+  return {
+    ...(result.cachedTokens !== undefined ? { cachedTokens: result.cachedTokens } : {}),
+    ...(result.helperThreadId ? { helperThreadId: result.helperThreadId } : {}),
+    ...(result.helperTurnId ? { helperTurnId: result.helperTurnId } : {}),
+    ...(result.model ? { model: result.model } : {}),
+    ...(result.reasoningEffort ? { reasoningEffort: result.reasoningEffort } : {}),
+    ...(result.serviceTier ? { serviceTier: result.serviceTier } : {}),
+    ...(result.tokenUsage !== undefined ? { tokenUsage: result.tokenUsage } : {}),
   };
 }
 

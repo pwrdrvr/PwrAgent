@@ -324,6 +324,7 @@ import {
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
+import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
@@ -390,6 +391,12 @@ const ACTIVE_TURN_HANDOFF_ERROR =
  */
 const MAX_QUEUE_FLUSH_ATTEMPTS = 3;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
+const GROK_TITLE_HELPER_SESSION_POLICY = buildMinimalGrokHelperSessionPolicy({
+  description: "Generate a concise title for a PwrAgent thread.",
+  name: "pwragent-title-helper",
+  systemPrompt:
+    "Generate the requested thread title. Follow the user prompt exactly, do not use tools, and return only the requested JSON object.",
+});
 const ATTENTION_NOTIFICATION_METHODS = new Set([
   "turn/requestApproval",
   "review/requestApproval",
@@ -1425,6 +1432,11 @@ type ThreadTitleGenerationLogStatus =
   | "applied"
   | "requesting"
   | "skipped";
+
+type ThreadTitleHelperResult = Extract<
+  ThreadTitleGenerationResult,
+  { status: "generated" | "invalid" }
+>;
 
 type WorktreeArchiveCandidate = {
   repositoryPath: string;
@@ -4609,7 +4621,7 @@ function titleHelperSubAgentId(
 }
 
 function titleHelperSubAgentMessage(params: {
-  result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+  result?: ThreadTitleHelperResult;
   status: "pending" | "running" | "success" | "failed" | "cancelled";
   reason?: string;
 }): string {
@@ -4620,11 +4632,23 @@ function titleHelperSubAgentMessage(params: {
     return params.reason ?? "Generating a title.";
   }
   if (params.status === "success") {
-    return params.result?.title
-      ? `Generated title: ${params.result.title}`
-      : "Generated a title.";
+    const title =
+      params.result?.status === "generated" ? params.result.title : undefined;
+    if (title) {
+      return params.reason
+        ? `Generated title: ${title}. Not applied: ${params.reason}`
+        : `Generated title: ${title}`;
+    }
+    return "Generated a title.";
   }
   if (params.status === "cancelled") {
+    const title =
+      params.result?.status === "generated" ? params.result.title : undefined;
+    if (title) {
+      return params.reason
+        ? `Generated title: ${title}. Not applied: ${params.reason}`
+        : `Generated title: ${title}. Not applied.`;
+    }
     return params.reason
       ? `Title generation cancelled: ${params.reason}`
       : "Title generation cancelled.";
@@ -4721,6 +4745,19 @@ function buildTitleEligibilityLogDetails(
       ? isInjectedContextPlaceholderTitle(thread.title)
       : null,
   };
+}
+
+function buildLateTitleCancellationReason(
+  backend: AppServerBackendKind,
+  thread: AppServerThreadSummary,
+): string {
+  if (thread.titleSource === "explicit") {
+    return `The thread was explicitly renamed first: ${thread.title}.`;
+  }
+  if (isAcpBackendId(backend)) {
+    return `ACP provided a durable title first: ${thread.title}.`;
+  }
+  return `A newer thread title was already present: ${thread.title}.`;
 }
 
 function createReplayThreadTitleService(): ThreadTitleService | undefined {
@@ -5762,27 +5799,40 @@ export class DesktopBackendRegistry {
                       })
                     : undefined,
                 },
-                generatorResolver: (backend) =>
-                  isAcpBackendId(backend)
-                    ? new AcpThreadTitleGenerator({
-                        backend,
-                        configureHelperSession: async ({
-                          client,
-                          parentSession,
-                          session,
-                        }) => {
-                          await this.applyAcpRuntimeSelection(
-                            client,
-                            session.sessionId,
-                            session.acpRuntime ?? parentSession?.acpRuntime,
-                          );
-                        },
-                        getClient: (acpBackend) =>
-                          this.acpBackend.getClient(acpBackend),
-                        getSession: (acpBackend, threadId) =>
-                          this.acpBackend.getSession(acpBackend, threadId),
-                      })
-                    : undefined,
+                generatorResolver: (backend) => {
+                  if (!isAcpBackendId(backend)) {
+                    return undefined;
+                  }
+                  const helperSession =
+                    backend === "acp:grok"
+                      ? GROK_TITLE_HELPER_SESSION_POLICY
+                      : undefined;
+                  return new AcpThreadTitleGenerator({
+                    backend,
+                    configureHelperSession: async ({
+                      client,
+                      parentSession,
+                      reasoningEffort,
+                      session,
+                    }) => {
+                      const runtime = mergeAcpRuntimeState(
+                        parentSession?.acpRuntime ?? {},
+                        session.acpRuntime ?? {},
+                      );
+                      await this.applyAcpRuntimeSelection(
+                        client,
+                        session.sessionId,
+                        runtime,
+                        reasoningEffort,
+                      );
+                    },
+                    helperSession,
+                    getClient: (acpBackend) =>
+                      this.acpBackend.getClient(acpBackend),
+                    getSession: (acpBackend, threadId) =>
+                      this.acpBackend.getSession(acpBackend, threadId),
+                  });
+                },
               }));
     this.threadInspectionSearchService =
       options && "threadSearchService" in options
@@ -15860,6 +15910,7 @@ export class DesktopBackendRegistry {
         await this.safePersistExistingTitleHelperSubAgent({
           backend: params.backend,
           threadId: params.threadId,
+          ...(result?.status === "invalid" ? { result } : {}),
           status: "failed",
           reason: result?.reason ?? "title_generation_unavailable",
         });
@@ -15886,7 +15937,8 @@ export class DesktopBackendRegistry {
         await this.safePersistExistingTitleHelperSubAgent({
           backend: params.backend,
           threadId: params.threadId,
-          status: "cancelled",
+          result,
+          status: "success",
           reason: "Title generation became stale.",
         });
         return;
@@ -15907,8 +15959,12 @@ export class DesktopBackendRegistry {
         await this.safePersistExistingTitleHelperSubAgent({
           backend: params.backend,
           threadId: params.threadId,
-          status: "cancelled",
-          reason: "Latest title is no longer eligible.",
+          result,
+          status: "success",
+          reason: buildLateTitleCancellationReason(
+            params.backend,
+            latestThread,
+          ),
         });
         return;
       }
@@ -15961,7 +16017,7 @@ export class DesktopBackendRegistry {
   private async safePersistTitleHelperSubAgent(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+    result?: ThreadTitleHelperResult;
     status: "pending" | "running" | "success" | "failed" | "cancelled";
     model?: string;
     reasoningEffort?: string;
@@ -15983,7 +16039,7 @@ export class DesktopBackendRegistry {
   private async safePersistExistingTitleHelperSubAgent(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+    result?: ThreadTitleHelperResult;
     status: "running" | "success" | "failed" | "cancelled";
     model?: string;
     reasoningEffort?: string;
@@ -16039,7 +16095,7 @@ export class DesktopBackendRegistry {
   private async persistTitleHelperSubAgent(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+    result?: ThreadTitleHelperResult;
     status: "pending" | "running" | "success" | "failed" | "cancelled";
     model?: string;
     reasoningEffort?: string;
@@ -16176,12 +16232,14 @@ export class DesktopBackendRegistry {
         ? session.acpRuntime.configValues.model
         : undefined);
     const reasoningEffort =
-      session?.acpRuntime?.reasoningEffort ??
-      (typeof session?.acpRuntime?.configValues?.reasoningEffort === "string"
-        ? session.acpRuntime.configValues.reasoningEffort
-        : typeof session?.acpRuntime?.configValues?.reasoning_effort === "string"
-          ? session.acpRuntime.configValues.reasoning_effort
-          : undefined);
+      params.backend === "acp:grok"
+        ? GROK_TITLE_HELPER_SESSION_POLICY.reasoningEffort
+        : session?.acpRuntime?.reasoningEffort ??
+          (typeof session?.acpRuntime?.configValues?.reasoningEffort === "string"
+            ? session.acpRuntime.configValues.reasoningEffort
+            : typeof session?.acpRuntime?.configValues?.reasoning_effort === "string"
+              ? session.acpRuntime.configValues.reasoning_effort
+              : undefined);
     return {
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),

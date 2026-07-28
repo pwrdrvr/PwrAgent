@@ -270,6 +270,117 @@ describe("AcpAgentClient", () => {
     expect(client.readReplay("session-1").messages).toEqual([]);
   });
 
+  it("returns suppressed control prompt usage without adding it to the transcript", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const sessionUpdates: string[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ sessionId }) => {
+        sessionUpdates.push(sessionId);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const controlPrompt = client.sendControlPrompt({
+      sessionId: session.sessionId,
+      prompt: "name this thread",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: '{ "title": "Favorite cereal" }' },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "turn_completed",
+      usage: {
+        inputTokens: 120,
+        outputTokens: 8,
+        totalTokens: 128,
+        cachedReadTokens: 20,
+        reasoningTokens: 3,
+        modelUsage: {
+          "grok-4.5-build": {
+            inputTokens: 120,
+            outputTokens: 8,
+          },
+        },
+      },
+    });
+    promptResponse.resolve({ stopReason: "end_turn" });
+
+    await expect(controlPrompt).resolves.toEqual({
+      text: '{ "title": "Favorite cereal" }',
+      model: "grok-4.5-build",
+      tokenUsage: {
+        inputTokens: 120,
+        cachedInputTokens: 20,
+        outputTokens: 8,
+        reasoningOutputTokens: 3,
+        totalTokens: 128,
+      },
+    });
+    expect(client.readReplay(session.sessionId).messages).toEqual([]);
+    expect(sessionUpdates).toEqual([]);
+  });
+
+  it("returns suppressed Qwen usage emitted on an agent message chunk", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:qwen",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const controlPrompt = client.sendControlPrompt({
+      sessionId: session.sessionId,
+      prompt: "name this thread",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: '{ "title": "Favorite cereal" }' },
+      _meta: {
+        usage: {
+          inputTokens: 23_851,
+          outputTokens: 222,
+          totalTokens: 24_073,
+          thoughtTokens: 29,
+          cachedReadTokens: 0,
+        },
+      },
+    });
+    promptResponse.resolve({ stopReason: "end_turn" });
+
+    await expect(controlPrompt).resolves.toEqual({
+      text: '{ "title": "Favorite cereal" }',
+      tokenUsage: {
+        inputTokens: 23_851,
+        cachedInputTokens: 0,
+        outputTokens: 222,
+        reasoningOutputTokens: 29,
+        totalTokens: 24_073,
+      },
+    });
+    expect(client.readReplay(session.sessionId).messages).toEqual([]);
+  });
+
   it("preserves split JSON control prompt chunks without inserted newlines", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({
@@ -401,6 +512,53 @@ describe("AcpAgentClient", () => {
         },
       ],
       sessionId: "loaded-session-1",
+    });
+  });
+
+  it("starts minimal helper sessions without configured MCP servers", async () => {
+    const mcpServers = vi.fn(() => [
+      {
+        name: "pwragent",
+        command: "pwragent-mcp",
+      },
+    ]);
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 1000,
+      mcpServers,
+    });
+
+    await client.initialize();
+    await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      mcpServers: "none",
+      sessionMeta: {
+        agentProfile: {
+          discoverSkills: false,
+          toolConfig: { tools: [] },
+        },
+        systemPromptOverride: "Return only the requested result.",
+      },
+    });
+
+    expect(mcpServers).not.toHaveBeenCalled();
+    expect(transport.requests[1]).toEqual({
+      method: "session/new",
+      params: {
+        cwd: "/repo",
+        mcpServers: [],
+        _meta: {
+          agentProfile: {
+            discoverSkills: false,
+            toolConfig: { tools: [] },
+          },
+          systemPromptOverride: "Return only the requested result.",
+        },
+      },
     });
   });
 
