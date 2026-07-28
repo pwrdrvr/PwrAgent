@@ -28054,6 +28054,64 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("uses a concurrently adopted expected branch when a stale drift check finishes", async () => {
+    const adoptedBranch = "fix/queued-turn-release";
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Moved thread",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      gitBranch: "HEAD",
+      observedGitBranch: adoptedBranch,
+      updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "full-access",
+          gitBranch: "HEAD",
+          observedGitBranch: "HEAD",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    vi.spyOn(overlayStore, "setThreadObservedBranch").mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "full-access",
+      gitBranch: adoptedBranch,
+      observedGitBranch: adoptedBranch,
+      extraLinkedDirectories: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [thread],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    const response = await registry.checkThreadBranchDrift({
+      backend: "codex",
+      expectedBranch: "HEAD",
+      threadId: "thread-1",
+    });
+
+    expect(response).toMatchObject({
+      expectedBranch: adoptedBranch,
+      observedBranch: adoptedBranch,
+      drifted: false,
+    });
+
+    await registry.close();
+  });
+
   it("does not persist branch drift after registry shutdown starts", async () => {
     let releaseListThreads!: () => void;
     const listThreadsDelay = new Promise<void>((resolve) => {

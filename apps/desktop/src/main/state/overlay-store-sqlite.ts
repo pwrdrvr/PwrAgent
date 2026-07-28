@@ -2199,10 +2199,19 @@ export class SqliteOverlayStore {
         ? previousObservedBranch
         : undefined;
     const requestedExpectedBranch = params.expectedBranch?.trim() || undefined;
+    const currentExpectedBranch = current.gitBranch?.trim() || undefined;
+    const shouldApplyRequestedExpectedBranch = Boolean(
+      requestedExpectedBranch &&
+      (
+        !currentExpectedBranch
+        || requestedExpectedBranch === nextObservedBranch
+      ),
+    );
     const nextState: ThreadOverlayState = {
       ...current,
-      gitBranch: requestedExpectedBranch
-        ?? (current.gitBranch?.trim() ? current.gitBranch : fallbackExpectedBranch),
+      gitBranch: shouldApplyRequestedExpectedBranch
+        ? requestedExpectedBranch
+        : currentExpectedBranch ?? fallbackExpectedBranch,
       observedGitBranch: params.branch,
     };
     this.putThread(threadKey, nextState);
