@@ -11,7 +11,8 @@ afterEach(() => {
 
 describe("backend status formatting", () => {
   it("keeps regular and Spark rate limits visible", () => {
-    const backend = {
+    const backend: Pick<BackendSummary, "kind" | "rateLimits"> = {
+      kind: "codex",
       rateLimits: [
         { name: "GPT-5.3-Codex-Spark Weekly limit", usedPercent: 1 },
         { name: "Weekly limit", usedPercent: 39 },
@@ -19,13 +20,28 @@ describe("backend status formatting", () => {
         { name: "5h limit", usedPercent: 26 },
         { name: "other limit", usedPercent: 50 },
       ],
-    } as BackendSummary;
+    };
 
     expect(selectVisibleRateLimits(backend).map((limit) => limit.name)).toEqual([
       "5h limit",
       "Weekly limit",
       "GPT-5.3-Codex-Spark 5h limit",
       "GPT-5.3-Codex-Spark Weekly limit",
+    ]);
+  });
+
+  it("keeps provider-defined Grok rate limits visible", () => {
+    const backend: Pick<BackendSummary, "kind" | "rateLimits"> = {
+      kind: "acp:grok",
+      rateLimits: [
+        { name: "Included credits", usedPercent: 2 },
+        { name: "other limit", usedPercent: 50 },
+      ],
+    };
+
+    expect(selectVisibleRateLimits(backend).map((limit) => limit.name)).toEqual([
+      "Included credits",
+      "other limit",
     ]);
   });
 

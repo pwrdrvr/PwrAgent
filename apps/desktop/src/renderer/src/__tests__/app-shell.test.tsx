@@ -994,9 +994,9 @@ describe("App", () => {
     expect(screen.getByText("Render plan card")).toBeInTheDocument();
     expect(screen.getByText("Explored 2 files, ran 1 command")).toBeInTheDocument();
     const context = screen.getByLabelText("Thread context");
-    fireEvent.click(within(context).getByRole("tab", { name: "Thread info" }));
+    fireEvent.click(within(context).getByRole("tab", { name: "Linked projects" }));
     expect(
-      await screen.findByRole("heading", { level: 3, name: "Linked directories" })
+      await screen.findByRole("heading", { level: 3, name: "Linked projects" })
     ).toBeInTheDocument();
     fireEvent.click(
       within(context).getByRole("button", { name: "Copy path for PwrAgent" })
@@ -1007,9 +1007,10 @@ describe("App", () => {
     expect(copyText).toHaveBeenNthCalledWith(1, "/Users/huntharo/pwrdrvr/PwrAgent");
     expect(copyText).toHaveBeenNthCalledWith(2, "/Users/huntharo/.codex/worktrees/0f38/PwrAgent");
     expect(screen.getAllByText("Codex app server").length).toBeGreaterThan(0);
+    fireEvent.click(within(context).getByRole("tab", { name: "Thread info" }));
     expect(screen.getByText("darwin")).toBeInTheDocument();
     // Provider availability now lives under its own context-rail tab.
-    fireEvent.click(within(context).getByRole("tab", { name: "Provider status" }));
+    fireEvent.click(within(context).getByRole("tab", { name: "AI provider info" }));
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(

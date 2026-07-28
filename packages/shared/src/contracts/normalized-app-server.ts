@@ -1078,6 +1078,12 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "backend/providerStatus/updated";
+      params: {
+        backend: AppServerBackendKind;
+      };
+    }
+  | {
       method: "item/commandExecution/outputDelta";
       params: {
         threadId: string;

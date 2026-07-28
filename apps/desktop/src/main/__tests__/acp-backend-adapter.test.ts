@@ -1046,6 +1046,148 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("adds Grok billing metadata from an active ACP connection", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: {
+          name: "Grok",
+          version: "0.2.113",
+        },
+      },
+      "_x.ai/billing": {
+        config: {
+          creditUsagePercent: 42.5,
+          currentPeriod: {
+            type: "USAGE_PERIOD_TYPE_WEEKLY",
+            end: "2026-08-03T00:00:00Z",
+          },
+        },
+        subscription_tier: "SuperGrok Heavy",
+      },
+    });
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "grok",
+        args: ["agent", "stdio"],
+        env: {},
+      },
+    };
+    const emit = vi.fn(async () => undefined);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => [],
+        getSession: () => undefined,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      discoverLocalAcpAgents: async () => [],
+      emit,
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    await adapter.getClient(backendId);
+    const [initialSummary] = await adapter.describeInstalledBackends();
+    expect(initialSummary?.account).toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledWith({
+        backend: backendId,
+        notification: {
+          method: "backend/providerStatus/updated",
+          params: { backend: backendId },
+        },
+      });
+    });
+    const [summary] = await adapter.describeInstalledBackends();
+
+    expect(summary).toMatchObject({
+      account: {
+        type: "provider",
+        label: "Grok account",
+        planType: "SuperGrok Heavy",
+      },
+      rateLimits: [
+        {
+          name: "Weekly limit",
+          usedPercent: 42.5,
+          resetAt: Date.parse("2026-08-03T00:00:00Z"),
+        },
+      ],
+    });
+    expect(transport.requests).toContainEqual({
+      method: "_x.ai/billing",
+      params: {},
+      timeoutMs: 20_000,
+    });
+    expect(
+      transport.requests.filter((request) => request.method === "_x.ai/billing"),
+    ).toHaveLength(1);
+
+    await adapter.close();
+  });
+
+  it("does not block backend discovery while Grok billing is pending", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+    };
+    const readProviderStatus = vi.fn(
+      async () => await new Promise<never>(() => undefined),
+    );
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => [],
+        getSession: () => undefined,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpClient: () =>
+        ({
+          initialize: vi.fn(async () => undefined),
+          readProviderStatus,
+          dispose: vi.fn(async () => undefined),
+        }) as never,
+      discoverLocalAcpAgents: async () => [],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    await adapter.getClient(backendId);
+    const [summary] = await adapter.describeInstalledBackends();
+    await adapter.describeInstalledBackends();
+
+    expect(summary?.kind).toBe(backendId);
+    expect(summary?.account).toBeUndefined();
+    expect(readProviderStatus).toHaveBeenCalledTimes(1);
+
+    await adapter.close();
+  });
+
   it("registers the agent-tool HTTP MCP from initialize capabilities", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const transport = new FakeAcpAgentTransport({

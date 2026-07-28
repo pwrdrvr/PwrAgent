@@ -1,9 +1,11 @@
+import { useEffect } from "react";
 import type { BackendSummary } from "@pwragent/shared";
 import {
   formatBackendAccountText,
   formatRateLimitLine,
   selectVisibleRateLimits,
 } from "../../../lib/backend-status-format";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
 
 type ProviderStatusPanelProps = {
   backends: BackendSummary[];
@@ -11,14 +13,18 @@ type ProviderStatusPanelProps = {
 };
 
 /**
- * Provider Status tab — availability, account, plan, and rate-limit
- * lines for every configured app server (OpenAI, AgentCore-Grok, …).
+ * AI Provider Info tab — availability, runtime, authentication, account,
+ * plan, and rate-limit lines for every configured agent backend.
  * Moved out of the old single-scroll context panel into its own tab.
  */
 export function ProviderStatusPanel(props: ProviderStatusPanelProps) {
+  useEffect(() => {
+    window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+  }, []);
+
   return (
     <section className="context-panel__section">
-      <h3>App servers</h3>
+      <h3>AI providers</h3>
       {props.backendError ? (
         <p className="context-empty">{props.backendError}</p>
       ) : props.backends.length > 0 ? (
@@ -39,16 +45,29 @@ export function ProviderStatusPanel(props: ProviderStatusPanelProps) {
                   ? "Available"
                   : backend.unavailableReason ?? "Unavailable"}
               </p>
-              {backend.available &&
-              (backend.account || (backend.rateLimits?.length ?? 0) > 0) ? (
+              {backend.available && hasProviderMetadata(backend) ? (
                 <div className="backend-status-list__metadata">
-                  {backend.account ? (
+                  {backendVersion(backend) || backend.acp || backend.account ? (
                     <dl className="backend-status-list__metadata-grid">
-                      <div>
-                        <dt>Account</dt>
-                        <dd>{formatBackendAccountText(backend.account)}</dd>
-                      </div>
-                      {backend.account.planType ? (
+                      {backendVersion(backend) ? (
+                        <div>
+                          <dt>Version</dt>
+                          <dd>{backendVersion(backend)}</dd>
+                        </div>
+                      ) : null}
+                      {backend.acp ? (
+                        <div>
+                          <dt>Authentication</dt>
+                          <dd>{formatAcpAuthStatus(backend.acp.authStatus)}</dd>
+                        </div>
+                      ) : null}
+                      {backend.account ? (
+                        <div>
+                          <dt>Account</dt>
+                          <dd>{formatBackendAccountText(backend.account)}</dd>
+                        </div>
+                      ) : null}
+                      {backend.account?.planType ? (
                         <div>
                           <dt>Plan</dt>
                           <dd>{backend.account.planType}</dd>
@@ -75,4 +94,38 @@ export function ProviderStatusPanel(props: ProviderStatusPanelProps) {
       )}
     </section>
   );
+}
+
+function hasProviderMetadata(backend: BackendSummary): boolean {
+  return Boolean(
+    backendVersion(backend)
+    || backend.acp
+    || backend.account
+    || backend.rateLimits?.length,
+  );
+}
+
+function backendVersion(backend: BackendSummary): string | undefined {
+  return (
+    backend.acp?.runtime?.agentInfo?.version
+    ?? backend.acp?.version
+    ?? backend.serverVersion
+  );
+}
+
+function formatAcpAuthStatus(
+  status: NonNullable<BackendSummary["acp"]>["authStatus"],
+): string {
+  switch (status) {
+    case "authenticated":
+      return "Signed in";
+    case "required":
+      return "Sign-in required";
+    case "in-progress":
+      return "Signing in";
+    case "failed":
+      return "Sign-in failed";
+    case "not-required":
+      return "Managed by provider";
+  }
 }

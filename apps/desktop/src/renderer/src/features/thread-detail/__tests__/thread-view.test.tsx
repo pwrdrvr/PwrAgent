@@ -354,11 +354,10 @@ describe("ThreadView", () => {
     expect(document.querySelector(".thread-header__title")).toBeNull();
     expect(document.querySelector(".thread-header__summary")).toBeNull();
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
-    // The context rail is a tabbed activity bar now; clicking the Thread
-    // info tab reveals its panel (linked directories + execution context).
+    // Thread info stays focused on thread metadata; directories have their
+    // own Linked Projects tab.
     fireEvent.click(screen.getByRole("tab", { name: "Thread info" }));
 
-    expect(screen.getByText("No linked directory")).toBeInTheDocument();
     expect(
       screen.getByText("The desktop client now reads the full transcript.")
     ).toBeInTheDocument();
@@ -367,10 +366,8 @@ describe("ThreadView", () => {
     expect(screen.getByText("Explored 2 files")).toBeInTheDocument();
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 3, name: "Execution context" })).toBeInTheDocument();
-    // Backend availability + account + rate limits now live under their own
-    // Provider status tab (covered in ProviderStatusPanel.test.tsx). Here we
-    // just confirm the tab is present in the rail.
-    expect(screen.getByRole("tab", { name: "Provider status" })).toBeInTheDocument();
+    // Backend availability + account + rate limits live under their own tab.
+    expect(screen.getByRole("tab", { name: "AI provider info" })).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
@@ -1429,7 +1426,7 @@ describe("ThreadView", () => {
     );
   });
 
-  it("shows missing recorded working directory details and copies the thread id", async () => {
+  it("shows and copies missing recorded working directory details", async () => {
     const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragent", {
       configurable: true,
@@ -1440,6 +1437,7 @@ describe("ThreadView", () => {
 
     render(
       <ThreadView
+        activeContextTab="projects"
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[
           {
@@ -1513,14 +1511,16 @@ describe("ThreadView", () => {
       "This thread is linked to a directory that no longer exists: /Users/huntharo/.codex/worktrees/be87/search-product"
     );
 
-    fireEvent.click(screen.getByRole("tab", { name: "Thread info" }));
-
     expect(screen.getByText("Recorded working directory is no longer available.")).toBeInTheDocument();
     expect(screen.getByText("search-product")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy thread id" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy recorded working directory" }),
+    );
 
-    expect(copyText).toHaveBeenCalledWith("019d88a2-0e0b-77f0-bfce-130ae8e37d8f");
+    expect(copyText).toHaveBeenCalledWith(
+      "/Users/huntharo/.codex/worktrees/be87/search-product",
+    );
   });
 
   it("opens transcript image previews in a lightbox and dismisses them with Escape", () => {

@@ -35,6 +35,7 @@ import {
   type AcpMcpServerRegistration,
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
+import type { AcpProviderStatus } from "../acp/acp-provider-status";
 import {
   acpRuntimeSupportsHttpMcp,
   buildAutomationInspectionAcpMcpServers,
@@ -95,6 +96,7 @@ export const ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR =
   "This ACP agent cannot hand off a workspace after the first message in a thread. Start a new thread in the target workspace instead.";
 
 const acpBackendAdapterLog = getMainLogger("pwragent:acp-backend-adapter");
+const ACP_PROVIDER_STATUS_CACHE_TTL_MS = 60_000;
 
 export type AcpRuntimeClient = Pick<
   AcpAgentClient,
@@ -108,7 +110,12 @@ export type AcpRuntimeClient = Pick<
   | "startPrompt"
   | "startSession"
 > &
-  Partial<Pick<AcpAgentClient, "sendControlPrompt" | "setRuntimeOption">>;
+  Partial<
+    Pick<
+      AcpAgentClient,
+      "readProviderStatus" | "sendControlPrompt" | "setRuntimeOption"
+    >
+  >;
 
 export type AcpClientFactory = (agent: AcpInstalledAgentRecord) => AcpRuntimeClient;
 export type AcpTransportFactory = (
@@ -795,6 +802,10 @@ export class AcpBackendAdapter {
   ) => Promise<unknown>;
   private readonly acpClients = new Map<AcpBackendId, Promise<AcpRuntimeClient>>();
   private readonly liveNotificationFingerprints = new Map<string, string>();
+  private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
+  private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
+  private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
+  private closed = false;
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
 
   constructor(options: AcpBackendAdapterOptions) {
@@ -861,13 +872,82 @@ export class AcpBackendAdapter {
   async describeInstalledBackends(): Promise<BackendSummary[]> {
     const config = readDesktopSettingsConfigSafe();
     const installedAgents = await this.listAvailableAgents();
-    return installedAgents
+    const enabledAgents = installedAgents
       .filter((agent) =>
         this.isAcpAgentEnabled
           ? this.isAcpAgentEnabled(agent.registryId)
           : acpAgentEnabledFor(config, agent.registryId),
-      )
-      .map((agent) => describeInstalledAcpBackend(agent));
+      );
+    return enabledAgents.map((agent) => {
+      const summary = describeInstalledAcpBackend(agent);
+      if (agent.registryId !== "grok" || !summary.available) {
+        return summary;
+      }
+      // Backend discovery is also used by launchpad and messaging flows.
+      // Merge only cached decoration here; vendor billing must never delay it.
+      const providerStatus = this.providerStatuses.get(agent.backendId);
+      this.refreshProviderStatusInBackground(agent.backendId);
+      return providerStatus
+        ? {
+            ...summary,
+            account: providerStatus.account,
+            rateLimits: providerStatus.rateLimits,
+          }
+        : summary;
+    });
+  }
+
+  private refreshProviderStatusInBackground(backend: AcpBackendId): void {
+    const clientPromise = this.acpClients.get(backend);
+    if (
+      this.closed
+      || !clientPromise
+      || this.providerStatusRefreshes.has(backend)
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const lastAttempt = this.providerStatusRefreshAttempts.get(backend);
+    if (
+      lastAttempt !== undefined
+      && now - lastAttempt < ACP_PROVIDER_STATUS_CACHE_TTL_MS
+    ) {
+      return;
+    }
+    this.providerStatusRefreshAttempts.set(backend, now);
+    const refreshPromise = this.refreshProviderStatus(backend, clientPromise);
+    this.providerStatusRefreshes.set(backend, refreshPromise);
+    void refreshPromise.finally(() => {
+      if (this.providerStatusRefreshes.get(backend) === refreshPromise) {
+        this.providerStatusRefreshes.delete(backend);
+      }
+    });
+  }
+
+  private async refreshProviderStatus(
+    backend: AcpBackendId,
+    clientPromise: Promise<AcpRuntimeClient>,
+  ): Promise<void> {
+    try {
+      const client = await clientPromise;
+      const providerStatus = await client.readProviderStatus?.();
+      if (!providerStatus || this.closed) {
+        return;
+      }
+      this.providerStatuses.set(backend, providerStatus);
+      await this.emit({
+        backend,
+        notification: {
+          method: "backend/providerStatus/updated",
+          params: { backend },
+        },
+      });
+    } catch (error) {
+      acpBackendAdapterLog.debug("acp_provider_status_unavailable", {
+        backend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   invalidateLocalAgentDiscovery(): void {
@@ -1329,9 +1409,13 @@ export class AcpBackendAdapter {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     const acpClients = [...this.acpClients.values()];
     this.acpClients.clear();
     this.liveNotificationFingerprints.clear();
+    this.providerStatuses.clear();
+    this.providerStatusRefreshAttempts.clear();
+    this.providerStatusRefreshes.clear();
     await Promise.all(
       acpClients.map(async (clientPromise) => {
         const client = await clientPromise.catch(() => undefined);

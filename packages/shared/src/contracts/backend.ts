@@ -181,7 +181,8 @@ export type BackendLaunchpadOptions = {
 };
 
 export type BackendAccountSummary = {
-  type?: "apiKey" | "chatgpt";
+  type?: "apiKey" | "chatgpt" | "provider";
+  label?: string;
   email?: string;
   planType?: string;
   requiresOpenaiAuth?: boolean;

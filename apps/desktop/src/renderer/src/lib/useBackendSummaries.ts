@@ -114,7 +114,8 @@ export function useBackendSummaries(
         (event.backend === "codex" &&
           (event.notification.method === "account/rateLimits/updated" ||
             event.notification.method === "account/updated")) ||
-        event.notification.method === "backend/acpRuntimeCapabilities/updated"
+        event.notification.method === "backend/acpRuntimeCapabilities/updated" ||
+        event.notification.method === "backend/providerStatus/updated"
       ) {
         void refresh();
       }

@@ -5,11 +5,17 @@ export type BackendRateLimitSummary = NonNullable<BackendSummary["rateLimits"]>[
 export function formatBackendAccountText(
   account: NonNullable<BackendSummary["account"]>,
 ): string {
+  if (account.label?.trim()) {
+    return account.label.trim();
+  }
   if (account.type === "chatgpt" && account.email?.trim()) {
     return account.email.trim();
   }
   if (account.type === "apiKey") {
     return "API key";
+  }
+  if (account.type === "provider") {
+    return "Signed in";
   }
   if (account.requiresOpenaiAuth === false) {
     return "Not required";
@@ -21,10 +27,13 @@ export function formatBackendAccountText(
 }
 
 export function selectVisibleRateLimits(
-  backend: BackendSummary,
+  backend: Pick<BackendSummary, "kind" | "rateLimits">,
 ): BackendRateLimitSummary[] {
   return [...(backend.rateLimits ?? [])]
     .filter((limit) => {
+      if (backend.kind !== "codex") {
+        return true;
+      }
       const { label } = splitRateLimitName(limit.name);
       return label === "5h limit" || label === "Weekly limit";
     })

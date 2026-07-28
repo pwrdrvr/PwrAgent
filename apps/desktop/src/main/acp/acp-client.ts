@@ -27,6 +27,10 @@ import {
   normalizeAcpRuntimeCapabilities,
 } from "./acp-runtime-capabilities.js";
 import {
+  normalizeGrokBillingStatus,
+  type AcpProviderStatus,
+} from "./acp-provider-status.js";
+import {
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolText,
@@ -67,6 +71,7 @@ export type AcpJsonRpcTransport = {
 
 const ACP_PROTOCOL_VERSION = 1;
 const ACP_PROMPT_REQUEST_TIMEOUT_MS = 60 * 60_000;
+const ACP_PROVIDER_STATUS_REQUEST_TIMEOUT_MS = 20_000;
 
 export type AcpMcpServerConfig =
   | {
@@ -273,6 +278,21 @@ export class AcpAgentClient {
     this.appSessionIdsByAgentSessionId.clear();
     this.loadedSessionCwds.clear();
     await this.options.transport.close?.();
+  }
+
+  async readProviderStatus(): Promise<AcpProviderStatus | undefined> {
+    if (this.options.backendId !== "acp:grok") {
+      return undefined;
+    }
+    // ACP serializes extension methods with a leading underscore on the wire.
+    // Grok's internal ExtRequest names this `x.ai/billing`, but stdio clients
+    // must send `_x.ai/billing`.
+    const result = await this.options.transport.request(
+      "_x.ai/billing",
+      {},
+      ACP_PROVIDER_STATUS_REQUEST_TIMEOUT_MS,
+    );
+    return normalizeGrokBillingStatus(result);
   }
 
   async startSession(params: {
