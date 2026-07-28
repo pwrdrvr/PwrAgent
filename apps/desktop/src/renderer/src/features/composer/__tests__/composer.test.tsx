@@ -2105,12 +2105,24 @@ describe("Composer", () => {
       updatedAt: 1,
     };
     const providerPatches: Array<Partial<NavigationLaunchpadDraft>> = [];
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1,
+      entries: [],
+    }));
+    const listBackends = vi.fn(async () => ({
+      fetchedAt: 1,
+      backends: [codexBackend, grokBackend],
+    }));
 
     function ProviderSwitchHarness(): React.JSX.Element {
       const [launchpad, setLaunchpad] = useState(initialLaunchpad);
       return (
         <Composer
           backends={[codexBackend, grokBackend]}
+          desktopApi={{
+            listAcpAgents,
+            listBackends,
+          }}
           directory={{
             key: "directory:/repo",
             kind: "directory",
@@ -2157,6 +2169,13 @@ describe("Composer", () => {
     chooseDropdownOption("Provider", "Grok");
     await waitFor(() => {
       expect(screen.getByLabelText("Provider")).toHaveValue("acp:grok");
+    });
+    await waitFor(() => {
+      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+      expect(listBackends).toHaveBeenCalledWith({
+        includeUnavailable: true,
+        refreshModels: "acp:grok",
+      });
     });
     expect(providerPatches.at(-1)).toEqual({
       backend: "acp:grok",

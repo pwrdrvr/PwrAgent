@@ -20,6 +20,7 @@ import type {
   DesktopMessagingSlackDmAccessMode,
   DesktopMessagingSlackGroupDmAccessMode,
   DesktopOnboardingCompletedSource,
+  DesktopProviderModelDefaults,
   DesktopSettingsConfigPatch,
   DesktopUpdateChannel,
   DesktopWorktreeStorageLocation,
@@ -211,6 +212,7 @@ export type DesktopSettingsConfig = {
     };
   };
   models?: {
+    providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     codex?: {
       path?: string;
       profile?: string;
@@ -1201,6 +1203,30 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.codex?.profile !== undefined) {
     set(["models", "codex", "profile"], patch.models.codex.profile);
   }
+  if (patch.models?.providerDefaults !== undefined) {
+    const providerDefaults = normalizeProviderModelDefaults(
+      patch.models.providerDefaults,
+    );
+    const entries = Object.entries(providerDefaults)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([provider, defaults]) => ({
+        provider,
+        ...(defaults.model ? { model: defaults.model } : {}),
+        reasoning_efforts: JSON.stringify(defaults.reasoningEffortsByModel),
+      }));
+    if (entries.length > 0) {
+      edits.push({
+        op: "setTableArray",
+        path: ["models", "provider_defaults"],
+        value: entries,
+      });
+    } else {
+      edits.push({
+        op: "deleteTableArray",
+        path: ["models", "provider_defaults"],
+      });
+    }
+  }
   if (patch.acpAgents?.gemini?.cliPath !== undefined) {
     set(["acp_agents", "gemini", "cli_path"], patch.acpAgents.gemini.cliPath);
   }
@@ -1271,6 +1297,7 @@ function normalizeDesktopConfig(
   const slack = tables["messaging.slack"];
   const feishu = tables["messaging.feishu"];
   const line = tables["messaging.line"];
+  const models = tables["models"];
   const codex = tables["models.codex"];
   const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
@@ -1518,6 +1545,7 @@ function normalizeDesktopConfig(
       },
     },
     models: {
+      providerDefaults: readProviderModelDefaults(models?.provider_defaults),
       codex: {
         path: readString(codex?.path),
         profile: readString(codex?.profile),
@@ -1751,8 +1779,17 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   }
 
   const codex = config.models?.codex;
-  if (codex && hasDefinedValue(codex)) {
-    pruned.models = { codex };
+  const providerDefaults = config.models?.providerDefaults;
+  if (
+    (codex && hasDefinedValue(codex))
+    || (providerDefaults && Object.keys(providerDefaults).length > 0)
+  ) {
+    pruned.models = {
+      ...(providerDefaults && Object.keys(providerDefaults).length > 0
+        ? { providerDefaults }
+        : {}),
+      ...(codex && hasDefinedValue(codex) ? { codex } : {}),
+    };
   }
 
   const acpAgentsGemini = config.acpAgents?.gemini;
@@ -2021,6 +2058,79 @@ function readStringArray(value: TomlScalar | undefined): string[] | undefined {
     return undefined;
   }
   return value.map((item) => item.trim()).filter(Boolean);
+}
+
+function normalizeProviderModelDefaults(
+  value: Record<string, DesktopProviderModelDefaults>,
+): Record<string, DesktopProviderModelDefaults> {
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([provider, defaults]) => {
+      const normalizedProvider = provider.trim();
+      if (!normalizedProvider) return [];
+      const model = defaults.model?.trim() || undefined;
+      const reasoningEffortsByModel = Object.fromEntries(
+        Object.entries(defaults.reasoningEffortsByModel ?? {}).flatMap(
+          ([modelId, effort]) => {
+            const normalizedModel = modelId.trim();
+            const normalizedEffort = effort.trim();
+            return normalizedModel && normalizedEffort
+              ? [[normalizedModel, normalizedEffort]]
+              : [];
+          },
+        ),
+      );
+      if (!model && Object.keys(reasoningEffortsByModel).length === 0) {
+        return [];
+      }
+      return [[
+        normalizedProvider,
+        {
+          ...(model ? { model } : {}),
+          reasoningEffortsByModel,
+        },
+      ]];
+    }),
+  );
+}
+
+function readProviderModelDefaults(
+  value: TomlScalar | undefined,
+): Record<string, DesktopProviderModelDefaults> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const defaults: Record<string, DesktopProviderModelDefaults> = {};
+  for (const item of value) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      continue;
+    }
+    const provider =
+      typeof item.provider === "string" ? item.provider.trim() : "";
+    if (!provider) continue;
+    const model = typeof item.model === "string" ? item.model.trim() : "";
+    let reasoningEffortsByModel: Record<string, string> = {};
+    if (typeof item.reasoning_efforts === "string") {
+      try {
+        const parsed = JSON.parse(item.reasoning_efforts) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          reasoningEffortsByModel = Object.fromEntries(
+            Object.entries(parsed).flatMap(([modelId, effort]) =>
+              typeof effort === "string" && modelId.trim() && effort.trim()
+                ? [[modelId.trim(), effort.trim()]]
+                : [],
+            ),
+          );
+        }
+      } catch {
+        reasoningEffortsByModel = {};
+      }
+    }
+    if (model || Object.keys(reasoningEffortsByModel).length > 0) {
+      defaults[provider] = {
+        ...(model ? { model } : {}),
+        reasoningEffortsByModel,
+      };
+    }
+  }
+  return defaults;
 }
 
 function readAuthorizedContacts(

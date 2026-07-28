@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import type {
+  BackendModelOption,
+  BackendSummary,
   DesktopCodexAuthProfileCandidate,
   DesktopCodexDiscoveryCandidate,
+  DesktopProviderModelDefaults,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -38,6 +42,9 @@ export function ModelsSettings(props: {
   onRefresh: () => Promise<void>;
   onSaveCodexPath: (path: string) => Promise<void>;
   onSaveCodexProfile: (profile: string) => Promise<void>;
+  onSaveProviderDefaults: (
+    defaults: Record<string, DesktopProviderModelDefaults>,
+  ) => Promise<void>;
   /** Persist a per-ACP-agent CLI-path override (also pins a discovered install). */
   onAcpCliPathChange: (registryId: string, cliPath: string) => Promise<void>;
   /** Persist a per-ACP-agent enabled flag (off = hidden from the model picker). */
@@ -48,6 +55,9 @@ export function ModelsSettings(props: {
     props.snapshot.models.codex.path.value.trim() ? "specified" : "auto",
   );
   const [grokKey, setGrokKey] = useState("");
+  const [backends, setBackends] = useState<BackendSummary[]>([]);
+  const [catalogError, setCatalogError] = useState<string | undefined>();
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const codex = props.snapshot.models.codex;
   const grok = props.snapshot.models.grok.apiKey;
   const envForced = codex.path.source === "env";
@@ -71,6 +81,52 @@ export function ModelsSettings(props: {
     setCodexMode(codex.path.value.trim() || envForced ? "specified" : "auto");
   }, [codex.path.value, envForced]);
 
+  const refreshCatalog = async (
+    force = false,
+    refreshModels = false,
+  ): Promise<void> => {
+    if (!props.desktopApi?.listBackends) {
+      setCatalogError("Provider model discovery is unavailable in this build.");
+      return;
+    }
+    setRefreshingCatalog(true);
+    try {
+      if (force && props.desktopApi.listAcpAgents) {
+        await props.desktopApi.listAcpAgents({
+          refresh: true,
+          force: true,
+        });
+      }
+      const response = await props.desktopApi.listBackends({
+        includeUnavailable: true,
+        ...(force || refreshModels ? { refreshModels: true } : {}),
+      });
+      setBackends(response.backends);
+      setCatalogError(undefined);
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRefreshingCatalog(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshCatalog(false, true);
+    // The settings surface is itself a catalog refresh boundary.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.desktopApi]);
+
+  useEffect(() => {
+    const refresh = (): void => {
+      void refreshCatalog(false);
+    };
+    window.addEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, refresh);
+    return () => {
+      window.removeEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, refresh);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.desktopApi]);
+
   const saveCodexPath = (path: string): void => {
     void props.onSaveCodexPath(path.trim());
   };
@@ -79,8 +135,19 @@ export function ModelsSettings(props: {
     <SettingsSectionStack paneId="models" aria-label="Model settings">
       <SettingsPanelHead
         eyebrow="Models"
-        title="Backends & credentials"
-        help="PwrAgent drives Codex and Grok. Use Auto Discovery to track the newest binary on disk, or pin a specific path."
+        title="AI providers"
+        help="Choose profile-wide model baselines, inspect discovered models, and configure provider credentials."
+      />
+
+      <ProviderModelDefaultsSettings
+        backends={backends}
+        desktopApi={props.desktopApi}
+        defaults={props.snapshot.models.providerDefaults ?? {}}
+        error={catalogError}
+        refreshing={refreshingCatalog}
+        saving={props.saving}
+        onRefresh={() => refreshCatalog(true, true)}
+        onSave={props.onSaveProviderDefaults}
       />
 
       <SettingsSection eyebrow="Models" title="Codex">
@@ -307,6 +374,327 @@ export function ModelsSettings(props: {
       />
     </SettingsSectionStack>
   );
+}
+
+function ProviderModelDefaultsSettings(props: {
+  backends: BackendSummary[];
+  desktopApi?: DesktopApi;
+  defaults: Record<string, DesktopProviderModelDefaults>;
+  error?: string;
+  refreshing: boolean;
+  saving: boolean;
+  onRefresh: () => Promise<void>;
+  onSave: (
+    defaults: Record<string, DesktopProviderModelDefaults>,
+  ) => Promise<void>;
+}) {
+  const [pendingApply, setPendingApply] = useState<{
+    backend: BackendSummary;
+    count: number;
+    directoryKeys: string[];
+    model: string;
+    reasoningEffort?: string;
+  }>();
+  const [applying, setApplying] = useState(false);
+  const [status, setStatus] = useState<string | undefined>();
+  const providers = props.backends.filter(
+    (backend) => (backend.launchpadOptions?.models?.length ?? 0) > 0,
+  );
+
+  const saveProvider = (
+    backend: BackendSummary,
+    next: DesktopProviderModelDefaults | undefined,
+  ): void => {
+    const updated = { ...props.defaults };
+    if (next) {
+      updated[backend.kind] = next;
+    } else {
+      delete updated[backend.kind];
+    }
+    void props.onSave(updated);
+  };
+
+  const previewApply = async (
+    backend: BackendSummary,
+    model: string,
+    reasoningEffort?: string,
+  ): Promise<void> => {
+    if (!props.desktopApi?.getNavigationSnapshot) {
+      setStatus("Launchpad updates are unavailable in this build.");
+      return;
+    }
+    const navigation = await props.desktopApi.getNavigationSnapshot();
+    const directoryKeys = navigation.directories
+      .filter((directory) => directory.launchpad?.backend === backend.kind)
+      .map((directory) => directory.key);
+    if (directoryKeys.length === 0) {
+      setStatus(`No ${backend.label} launchpads need updating.`);
+      return;
+    }
+    setStatus(undefined);
+    setPendingApply({
+      backend,
+      count: directoryKeys.length,
+      directoryKeys,
+      model,
+      reasoningEffort,
+    });
+  };
+
+  const applyToLaunchpads = async (): Promise<void> => {
+    if (!pendingApply || !props.desktopApi?.updateDirectoryLaunchpad) return;
+    setApplying(true);
+    try {
+      for (const directoryKey of pendingApply.directoryKeys) {
+        await props.desktopApi.updateDirectoryLaunchpad({
+          directoryKey,
+          patch: {
+            model: pendingApply.model,
+            reasoningEffort: pendingApply.reasoningEffort,
+          },
+          stickySettingsChanged: true,
+        });
+      }
+      setStatus(
+        `Updated ${pendingApply.count} ${pendingApply.backend.label} launchpad${
+          pendingApply.count === 1 ? "" : "s"
+        }. Existing threads were not changed.`,
+      );
+      setPendingApply(undefined);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <SettingsSection
+      eyebrow="Defaults"
+      title="New thread defaults"
+      description="These profile-wide baselines fill new launchpads that do not already have a directory or learned provider choice."
+    >
+      <div className="settings-fields">
+        {providers.map((backend) => (
+          <ProviderModelDefaultField
+            key={backend.kind}
+            backend={backend}
+            defaults={props.defaults[backend.kind]}
+            disabled={props.saving || applying}
+            onApply={(model, reasoningEffort) => {
+              void previewApply(backend, model, reasoningEffort);
+            }}
+            onChange={(next) => saveProvider(backend, next)}
+          />
+        ))}
+        {providers.length === 0 ? (
+          <SettingsField
+            label="Discovered models"
+            sub={props.error ?? "No provider has reported a model catalog yet."}
+            control={
+              <button
+                className="button button--secondary"
+                disabled={props.refreshing}
+                type="button"
+                onClick={() => void props.onRefresh()}
+              >
+                {props.refreshing ? "Refreshing…" : "Refresh models"}
+              </button>
+            }
+          />
+        ) : (
+          <SettingsField
+            label="Model catalog"
+            sub={
+              props.error
+                ? `Last refresh failed: ${props.error}`
+                : "Refresh after installing or upgrading a provider CLI."
+            }
+            control={
+              <button
+                className="button button--secondary"
+                disabled={props.refreshing}
+                type="button"
+                onClick={() => void props.onRefresh()}
+              >
+                {props.refreshing ? "Refreshing…" : "Refresh models"}
+              </button>
+            }
+          />
+        )}
+        {pendingApply ? (
+          <SettingsField
+            label={`Apply to ${pendingApply.count} launchpad${
+              pendingApply.count === 1 ? "" : "s"
+            }?`}
+            sub="Prompts, attachments, work mode, access, Fast/service tier, and Codex Environment will stay unchanged."
+            control={
+              <div className="settings-inline-actions">
+                <button
+                  className="button button--primary"
+                  disabled={applying}
+                  type="button"
+                  onClick={() => void applyToLaunchpads()}
+                >
+                  {applying ? "Applying…" : "Apply"}
+                </button>
+                <button
+                  className="button button--ghost"
+                  disabled={applying}
+                  type="button"
+                  onClick={() => setPendingApply(undefined)}
+                >
+                  Cancel
+                </button>
+              </div>
+            }
+          />
+        ) : null}
+        {status ? <p className="settings-empty">{status}</p> : null}
+      </div>
+    </SettingsSection>
+  );
+}
+
+function ProviderModelDefaultField(props: {
+  backend: BackendSummary;
+  defaults?: DesktopProviderModelDefaults;
+  disabled: boolean;
+  onApply: (model: string, reasoningEffort?: string) => void;
+  onChange: (defaults: DesktopProviderModelDefaults | undefined) => void;
+}) {
+  const models = props.backend.launchpadOptions?.models ?? [];
+  const selectedModel = props.defaults?.model ?? "";
+  const modelOption = models.find((model) => model.id === selectedModel);
+  const reasoningOptions = reasoningOptionsFor(
+    modelOption,
+    props.backend.launchpadOptions?.reasoningEfforts,
+  );
+  const selectedReasoning = selectedModel
+    ? props.defaults?.reasoningEffortsByModel[selectedModel] ?? ""
+    : "";
+  const selectionAvailable =
+    Boolean(modelOption)
+    && (
+      !selectedReasoning
+      || reasoningOptions.includes(selectedReasoning)
+    );
+
+  return (
+    <SettingsField
+      label={props.backend.label}
+      sub={
+        props.backend.available
+          ? `${models.length} discovered model${models.length === 1 ? "" : "s"}`
+          : props.backend.unavailableReason ?? "Provider unavailable"
+      }
+      control={
+        <div className="settings-paths">
+          <select
+            aria-label={`${props.backend.label} default model`}
+            className="settings-select"
+            disabled={props.disabled}
+            value={selectedModel}
+            onChange={(event) => {
+              const model = event.currentTarget.value;
+              if (!model) {
+                props.onChange(undefined);
+                return;
+              }
+              const option = models.find((candidate) => candidate.id === model);
+              const reasoningEffortsByModel = {
+                ...(props.defaults?.reasoningEffortsByModel ?? {}),
+              };
+              if (
+                option?.defaultReasoningEffort
+                && !reasoningEffortsByModel[model]
+              ) {
+                reasoningEffortsByModel[model] = option.defaultReasoningEffort;
+              }
+              props.onChange({ model, reasoningEffortsByModel });
+            }}
+          >
+            <option value="">Provider advertised default</option>
+            {selectedModel && !modelOption ? (
+              <option value={selectedModel}>{selectedModel} (unavailable)</option>
+            ) : null}
+            {models.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.label ?? model.id}
+              </option>
+            ))}
+          </select>
+          {selectedModel && reasoningOptions.length > 0 ? (
+            <select
+              aria-label={`${props.backend.label} default reasoning`}
+              className="settings-select"
+              disabled={props.disabled}
+              value={selectedReasoning}
+              onChange={(event) => {
+                const reasoningEffortsByModel = {
+                  ...(props.defaults?.reasoningEffortsByModel ?? {}),
+                };
+                const effort = event.currentTarget.value;
+                if (effort) {
+                  reasoningEffortsByModel[selectedModel] = effort;
+                } else {
+                  delete reasoningEffortsByModel[selectedModel];
+                }
+                props.onChange({
+                  model: selectedModel,
+                  reasoningEffortsByModel,
+                });
+              }}
+            >
+              <option value="">Provider advertised reasoning</option>
+              {selectedReasoning
+              && !reasoningOptions.includes(selectedReasoning) ? (
+                <option value={selectedReasoning}>
+                  {selectedReasoning} (unavailable)
+                </option>
+              ) : null}
+              {reasoningOptions.map((effort) => (
+                <option key={effort} value={effort}>
+                  {effort}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {selectedModel ? (
+            <div className="settings-inline-actions">
+              <button
+                className="button button--secondary"
+                disabled={props.disabled || !selectionAvailable}
+                type="button"
+                onClick={() => props.onApply(
+                  selectedModel,
+                  selectedReasoning || undefined,
+                )}
+              >
+                Apply to launchpads
+              </button>
+              <button
+                className="button button--ghost"
+                disabled={props.disabled}
+                type="button"
+                onClick={() => props.onChange(undefined)}
+              >
+                Reset
+              </button>
+            </div>
+          ) : null}
+        </div>
+      }
+    />
+  );
+}
+
+function reasoningOptionsFor(
+  model: BackendModelOption | undefined,
+  fallback: string[] | undefined,
+): string[] {
+  if (model?.supportsReasoning === false) return [];
+  return model?.reasoningEfforts ?? fallback ?? [];
 }
 
 function CodexProfileRow(props: {

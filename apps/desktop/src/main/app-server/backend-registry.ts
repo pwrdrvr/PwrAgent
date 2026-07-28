@@ -64,6 +64,7 @@ import {
   type BackendModelOption,
   type BackendRateLimitSummary,
   type BackendSummary,
+  type DesktopProviderModelDefaults,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
   type ForkThreadRequest,
@@ -5632,6 +5633,10 @@ export class DesktopBackendRegistry {
    */
   private readonly isCodexBootstrapDeferredFn: () => boolean;
   private readonly resolveCodexDefaultModeRequestUserInputFn: () => boolean;
+  private readonly resolveProviderModelDefaultsFn: () => Record<
+    string,
+    DesktopProviderModelDefaults
+  >;
   /**
    * Reports whether the registry is running inside the throwaway
    * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
@@ -5671,6 +5676,10 @@ export class DesktopBackendRegistry {
     isCodexBootstrapDeferred?: () => boolean;
     isBootstrapMode?: () => boolean;
     resolveCodexDefaultModeRequestUserInput?: () => boolean;
+    resolveProviderModelDefaults?: () => Record<
+      string,
+      DesktopProviderModelDefaults
+    >;
     resolveGrokApiKey?: () => string | undefined;
     acpWorktreeRepositoryResolver?: (
       cwd: string,
@@ -5731,6 +5740,9 @@ export class DesktopBackendRegistry {
           return false;
         }
       });
+    this.resolveProviderModelDefaultsFn =
+      options?.resolveProviderModelDefaults ??
+      (() => settingsService?.resolveProviderModelDefaults() ?? {});
     const codexCommand = settingsService?.resolveCodexCommandPreference();
     const codexEnv =
       typeof settingsService?.resolveCodexSpawnEnv === "function"
@@ -6359,6 +6371,14 @@ export class DesktopBackendRegistry {
   async listBackends(
     request: ListBackendsRequest = {}
   ): Promise<ListBackendsResponse> {
+    if (request.refreshModels === true) {
+      this.modelCatalog.invalidate();
+      this.invalidateAcpBackendDiscovery();
+    } else if (request.refreshModels === "codex" || request.refreshModels === "grok") {
+      this.modelCatalog.invalidate(request.refreshModels);
+    } else if (request.refreshModels && isAcpBackendId(request.refreshModels)) {
+      this.invalidateAcpBackendDiscovery();
+    }
     const agentCoreGrokEnabled = resolveAgentCoreGrokEnabled();
     // When the experimental agent-core Grok feature is off, omit the backend
     // entirely rather than emitting a disabled placeholder — a turned-off
@@ -12796,10 +12816,42 @@ export class DesktopBackendRegistry {
             fastMode: undefined,
             acpRuntime: undefined,
           });
-    const modelSettings = await this.resolveLaunchpadModelSettings(
+    const configuredDefaults =
+      this.resolveProviderModelDefaultsFn()[backend.kind];
+    const configuredModel = configuredDefaults?.model;
+    const configuredReasoningEffort = configuredModel
+      ? configuredDefaults.reasoningEffortsByModel[configuredModel]
+      : undefined;
+    const appliedConfiguredModel =
+      backendDefaults.model === undefined && configuredModel !== undefined;
+    const appliedConfiguredReasoning =
+      backendDefaults.reasoningEffort === undefined
+      && (
+        configuredDefaults?.reasoningEffortsByModel[
+          backendDefaults.model ?? configuredModel ?? ""
+        ] !== undefined
+      );
+    let modelSettings = await this.resolveLaunchpadModelSettings(
       backend,
-      backendDefaults,
+      {
+        ...backendDefaults,
+        model: backendDefaults.model ?? configuredModel,
+        reasoningEffort:
+          backendDefaults.reasoningEffort ??
+          (backendDefaults.model
+            ? configuredDefaults?.reasoningEffortsByModel[backendDefaults.model]
+            : configuredReasoningEffort),
+      },
     );
+    if (appliedConfiguredModel && modelSettings.model !== configuredModel) {
+      // Do not carry the missing model's reasoning preference onto the
+      // provider fallback merely because the fallback accepts the same effort
+      // label.
+      modelSettings = await this.resolveLaunchpadModelSettings(
+        backend,
+        backendDefaults,
+      );
+    }
     const resolvedDefaults: NavigationLaunchpadDefaults = {
       ...backendDefaults,
       backend: backend.kind,
@@ -12819,6 +12871,23 @@ export class DesktopBackendRegistry {
 
     if (launchpadDefaultsEqual(projectedDefaults, resolvedDefaults)) {
       return projectedDefaults;
+    }
+    if (
+      (appliedConfiguredModel && modelSettings.model !== configuredModel)
+      || (
+        appliedConfiguredReasoning
+        && modelSettings.reasoningEffort !== (
+          configuredDefaults?.reasoningEffortsByModel[
+            backendDefaults.model ?? configuredModel ?? ""
+          ]
+        )
+      )
+    ) {
+      // Keep unavailable profile preferences suspended in config instead of
+      // learning the provider fallback as a new sticky choice. If the model
+      // or effort returns after a provider upgrade, new launchpads can use the
+      // explicit preference again.
+      return resolvedDefaults;
     }
 
     return await this.overlayStore.setLaunchpadDefaults(resolvedDefaults);

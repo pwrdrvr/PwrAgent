@@ -1540,6 +1540,180 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
   });
 
+  it("saves per-model reasoning and explicitly applies defaults to matching launchpads", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.providerDefaults = {
+      codex: {
+        model: "gpt-5.6-sol",
+        reasoningEffortsByModel: {
+          "gpt-5.6-sol": "high",
+        },
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const updateDirectoryLaunchpad = vi.fn(async (request) => ({
+      launchpad: {
+        directoryKey: request.directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "Repo",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        workMode: "local" as const,
+        prompt: "",
+        model: request.patch.model,
+        reasoningEffort: request.patch.reasoningEffort,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        workMode: "local" as const,
+        model: request.patch.model,
+        reasoningEffort: request.patch.reasoningEffort,
+      },
+    }));
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({
+        fetchedAt: 1000,
+        entries: [],
+      })),
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [
+          {
+            kind: "codex" as const,
+            label: "Codex",
+            available: true,
+            methods: [],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: true,
+              transcriptPagination: true,
+              toolUse: true,
+              approvalRequests: true,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [],
+            launchpadOptions: {
+              models: [
+                {
+                  id: "gpt-5.6-sol",
+                  label: "GPT-5.6-Sol",
+                  defaultReasoningEffort: "low",
+                  reasoningEfforts: ["low", "high", "xhigh"],
+                  supportsReasoning: true,
+                },
+              ],
+            },
+          },
+        ],
+      })),
+      getNavigationSnapshot: vi.fn(async () => ({
+        fetchedAt: 1000,
+        browseMode: "inbox" as const,
+        directories: [
+          {
+            key: "directory:/repo-a",
+            kind: "directory" as const,
+            label: "Repo A",
+            threadKeys: [],
+            needsAttentionCount: 0,
+            launchpad: {
+              directoryKey: "directory:/repo-a",
+              directoryKind: "directory" as const,
+              directoryLabel: "Repo A",
+              backend: "codex" as const,
+              executionMode: "default" as const,
+              workMode: "local" as const,
+              prompt: "keep me",
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          },
+          {
+            key: "directory:/repo-b",
+            kind: "directory" as const,
+            label: "Repo B",
+            threadKeys: [],
+            needsAttentionCount: 0,
+            launchpad: {
+              directoryKey: "directory:/repo-b",
+              directoryKind: "directory" as const,
+              directoryLabel: "Repo B",
+              backend: "acp:kimi" as const,
+              executionMode: "default" as const,
+              workMode: "local" as const,
+              prompt: "leave me alone",
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          },
+        ],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          workMode: "local" as const,
+        },
+        threads: [],
+      })),
+      updateDirectoryLaunchpad,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+      />,
+    );
+
+    const reasoning = await screen.findByLabelText("Codex default reasoning");
+    fireEvent.change(reasoning, { target: { value: "xhigh" } });
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          providerDefaults: {
+            codex: {
+              model: "gpt-5.6-sol",
+              reasoningEffortsByModel: {
+                "gpt-5.6-sol": "xhigh",
+              },
+            },
+          },
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to launchpads" }));
+    expect(
+      await screen.findByText("Apply to 1 launchpad?"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => {
+      expect(updateDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+    });
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "directory:/repo-a",
+      patch: {
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+      },
+      stickySettingsChanged: true,
+    });
+    expect(
+      screen.getByText(
+        "Updated 1 Codex launchpad. Existing threads were not changed.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("can restart login for an existing Codex auth profile", async () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.profiles.profiles[1]!.hasAuthFile = false;

@@ -942,6 +942,7 @@ export class DesktopSettingsService {
         },
       },
       models: {
+        providerDefaults: config.models?.providerDefaults ?? {},
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
           profile: this.resolveConfigString(config.models?.codex?.profile),
@@ -1328,6 +1329,10 @@ export class DesktopSettingsService {
       || this.readConfig().config.models?.codex?.path
       || undefined
     );
+  }
+
+  resolveProviderModelDefaults() {
+    return this.readConfig().config.models?.providerDefaults ?? {};
   }
 
   resolveCodexSpawnEnv(): NodeJS.ProcessEnv {

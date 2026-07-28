@@ -7965,6 +7965,40 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("refreshes a selected provider model catalog on request", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start"],
+      },
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          supportsReasoning: true,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.listBackends({ includeUnavailable: true });
+    await registry.listBackends({ includeUnavailable: true });
+    expect(codexClient.listModelsCallCount).toBe(1);
+
+    await registry.listBackends({
+      includeUnavailable: true,
+      refreshModels: "codex",
+    });
+    expect(codexClient.listModelsCallCount).toBe(2);
+
+    await registry.close();
+  });
+
   it("assumes Codex can create threads when initialize omits methods", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
@@ -8025,6 +8059,171 @@ script = "echo setup"
 
     expect(updated.defaults.workMode).toBe("worktree");
     expect(next.launchpad.workMode).toBe("worktree");
+
+    await registry.close();
+  });
+
+  it("seeds empty launchpad defaults from the profile provider baseline", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+        models: [
+          {
+            id: "gpt-5.5",
+            current: true,
+            defaultReasoningEffort: "low",
+            reasoningEfforts: ["low", "high"],
+            supportsReasoning: true,
+          },
+          {
+            id: "gpt-5.6-sol",
+            defaultReasoningEffort: "low",
+            reasoningEfforts: ["low", "high", "xhigh"],
+            supportsReasoning: true,
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      resolveProviderModelDefaults: () => ({
+        codex: {
+          model: "gpt-5.6-sol",
+          reasoningEffortsByModel: {
+            "gpt-5.6-sol": "high",
+          },
+        },
+      }),
+    });
+
+    const opened = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+
+    expect(opened.launchpad).toMatchObject({
+      backend: "codex",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+    expect(opened.defaults.providerSettings?.codex).toMatchObject({
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+
+    await registry.close();
+  });
+
+  it("keeps learned provider choices ahead of the profile baseline", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+        models: [
+          {
+            id: "gpt-5.5",
+            defaultReasoningEffort: "low",
+            reasoningEfforts: ["low", "high"],
+            supportsReasoning: true,
+          },
+          {
+            id: "gpt-5.6-sol",
+            defaultReasoningEffort: "low",
+            reasoningEfforts: ["low", "high", "xhigh"],
+            supportsReasoning: true,
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        launchpadDefaults: {
+          backend: "codex",
+          executionMode: "default",
+          workMode: "local",
+          model: "gpt-5.5",
+          reasoningEffort: "low",
+          providerSettings: {
+            codex: {
+              executionMode: "default",
+              model: "gpt-5.5",
+              reasoningEffort: "low",
+            },
+          },
+        },
+      }),
+      resolveProviderModelDefaults: () => ({
+        codex: {
+          model: "gpt-5.6-sol",
+          reasoningEffortsByModel: {
+            "gpt-5.6-sol": "high",
+          },
+        },
+      }),
+    });
+
+    const opened = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+
+    expect(opened.launchpad).toMatchObject({
+      model: "gpt-5.5",
+      reasoningEffort: "low",
+    });
+
+    await registry.close();
+  });
+
+  it("keeps an unavailable profile model suspended instead of learning the fallback", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+        models: [
+          {
+            id: "gpt-5.5",
+            current: true,
+            defaultReasoningEffort: "low",
+            reasoningEfforts: ["low", "high"],
+            supportsReasoning: true,
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      resolveProviderModelDefaults: () => ({
+        codex: {
+          model: "gpt-5.6-sol",
+          reasoningEffortsByModel: {
+            "gpt-5.6-sol": "high",
+          },
+        },
+      }),
+    });
+
+    const opened = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+
+    expect(opened.launchpad).toMatchObject({
+      model: "gpt-5.5",
+      reasoningEffort: "low",
+    });
+    const learnedDefaults = await overlayStore.getLaunchpadDefaults();
+    expect(learnedDefaults.backend).toBe("codex");
+    expect(learnedDefaults.model).toBeUndefined();
+    expect(learnedDefaults.reasoningEffort).toBeUndefined();
 
     await registry.close();
   });

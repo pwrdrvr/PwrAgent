@@ -109,6 +109,16 @@ export type DesktopSettingsValue<T> = {
   error?: string;
 };
 
+/**
+ * Explicit launchpad baseline for one backend in the active PwrAgent profile.
+ * Reasoning is remembered per model so switching models never overwrites the
+ * operator's preference for another model.
+ */
+export type DesktopProviderModelDefaults = {
+  model?: string;
+  reasoningEffortsByModel: Record<string, string>;
+};
+
 export type DesktopAuthorizedContact = {
   id: string;
   displayName: string;
@@ -657,6 +667,7 @@ export type DesktopSettingsSnapshot = {
     };
   };
   models: {
+    providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     codex: {
       path: DesktopSettingsValue<string>;
       profile: DesktopSettingsValue<string>;
@@ -866,6 +877,7 @@ export type DesktopSettingsConfigPatch = {
     };
   };
   models?: {
+    providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     codex?: {
       path?: string;
       profile?: string;

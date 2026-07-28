@@ -670,6 +670,11 @@ function SettingsSectionBody(props: {
           },
         });
       }}
+      onSaveProviderDefaults={async (providerDefaults) => {
+        await props.settings.writeConfig({
+          models: { providerDefaults },
+        });
+      }}
       onAcpCliPathChange={async (registryId, cliPath) => {
         await props.settings.writeConfig({
           acpAgents: { [registryId]: { cliPath } } as NonNullable<

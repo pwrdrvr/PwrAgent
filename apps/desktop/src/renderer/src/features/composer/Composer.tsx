@@ -15,6 +15,7 @@ import { createPortal, flushSync } from "react-dom";
 import type { JSONContent } from "@tiptap/react";
 import type {
   AppServerAvailableCommandSummary,
+  AppServerBackendKind,
   AppServerCollaborationModeRequest,
   AppServerReviewTarget,
   AppServerSkillSummary,
@@ -59,6 +60,7 @@ import { ImageLightbox } from "../thread-detail/ImageLightbox";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
@@ -272,6 +274,33 @@ type ComposerProps = {
   ) => Promise<void>;
   threadModelSettingsError?: string;
 };
+
+const providerCatalogsRefreshedThisSession = new Set<AppServerBackendKind>();
+
+async function refreshProviderCatalogOnFirstSelection(
+  desktopApi: DesktopApi | undefined,
+  backend: AppServerBackendKind,
+): Promise<void> {
+  if (
+    providerCatalogsRefreshedThisSession.has(backend)
+    || !desktopApi?.listBackends
+  ) {
+    return;
+  }
+  providerCatalogsRefreshedThisSession.add(backend);
+  try {
+    if (backend.startsWith("acp:") && desktopApi.listAcpAgents) {
+      await desktopApi.listAcpAgents({ refresh: true });
+    }
+    await desktopApi.listBackends({
+      includeUnavailable: true,
+      refreshModels: backend,
+    });
+    window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+  } catch {
+    providerCatalogsRefreshedThisSession.delete(backend);
+  }
+}
 
 type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy;
 
@@ -7978,6 +8007,15 @@ export function Composer(props: ComposerProps) {
                     `${props.launchpad.directoryKey}:${nextBackend}`;
                 } else {
                   pendingProviderSelectionKeyRef.current = undefined;
+                }
+                if (
+                  !nextBackend.startsWith("acp:")
+                  || !props.onProviderSelected
+                ) {
+                  void refreshProviderCatalogOnFirstSelection(
+                    props.desktopApi,
+                    nextBackend,
+                  );
                 }
                 handleLaunchpadPatch({
                   backend: nextBackend,
