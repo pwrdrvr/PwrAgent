@@ -29,6 +29,24 @@ import type {
   AcpRegistryAgent,
 } from "./acp-registry-types.js";
 
+// Qwen Code 0.21 still supports `--acp`, but no longer advertises that hidden
+// flag in `qwen --help`. The upstream strategy's `--acp` text match therefore
+// rejects the current CLI and can make discovery fall through to an older
+// installation. Match the stable product identity instead; the version probe
+// and successful help invocation still guard against unrelated `qwen`
+// executables.
+const ACP_DISCOVERY_STRATEGIES = BUILT_IN_ACP_STRATEGIES.map((strategy) =>
+  strategy.id === "qwen"
+    ? {
+        ...strategy,
+        discoveryProbe: {
+          ...strategy.discoveryProbe,
+          helpMatches: /Qwen Code/i,
+        },
+      }
+    : strategy,
+);
+
 export type AcpInstanceDiscovery = {
   /** Every installed instance, in candidate order (override → PATH → fallback). */
   instances: AcpAgentInstance[];
@@ -202,8 +220,8 @@ function strategiesForEnabledRegistryIds(
   enabledRegistryIds: readonly string[] | undefined,
 ): readonly AcpAgentStrategy[] | undefined {
   if (enabledRegistryIds === undefined) {
-    return undefined;
+    return ACP_DISCOVERY_STRATEGIES;
   }
   const enabled = new Set(enabledRegistryIds);
-  return BUILT_IN_ACP_STRATEGIES.filter((strategy) => enabled.has(strategy.id));
+  return ACP_DISCOVERY_STRATEGIES.filter((strategy) => enabled.has(strategy.id));
 }

@@ -141,6 +141,45 @@ describe("discoverAcpAgentInstances", () => {
     ]);
   });
 
+  it("recognizes current Qwen help without requiring the hidden ACP flag", async () => {
+    const discover = vi.fn(
+      async (_options?: LocalAcpDiscoveryOptions) => [],
+    );
+
+    await discoverLocalAcpAgentRecords({
+      discover,
+      enabledRegistryIds: ["qwen"],
+    });
+
+    const qwen = discover.mock.calls[0]?.[0]?.strategies?.[0];
+    expect(qwen?.id).toBe("qwen");
+    expect(qwen?.discoveryProbe.helpMatches).toBeDefined();
+    expect(
+      qwen?.discoveryProbe.helpMatches?.test(
+        "Qwen Code - Launch an interactive CLI, use -p/--prompt",
+      ),
+    ).toBe(true);
+  });
+
+  it("passes a hydrated shell environment to the discovery kit", async () => {
+    const discover = vi.fn(async () => []);
+    const env = {
+      PATH: "/opt/homebrew/bin:/usr/bin",
+    };
+
+    await discoverLocalAcpAgentRecords({
+      discover,
+      enabledRegistryIds: ["qwen"],
+      env,
+    });
+
+    expect(discover).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env,
+      }),
+    );
+  });
+
   it("omits agents with no installed instances", async () => {
     const discover = vi.fn(async () => [group("gemini", [])]);
     const result = await discoverAcpAgentInstances({ discover });

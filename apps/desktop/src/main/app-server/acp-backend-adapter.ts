@@ -139,6 +139,7 @@ export type AcpBackendAdapterOptions = {
   createAcpClient?: AcpClientFactory;
   createAcpTransport?: AcpTransportFactory;
   discoverLocalAcpAgents?: LocalAcpDiscovery;
+  resolveLocalAcpDiscoveryEnv?: () => Promise<NodeJS.ProcessEnv>;
   isAcpAgentEnabled?: (registryId: string) => boolean;
   emit: (event: AgentEvent) => Promise<void>;
   handleServerRequest: (
@@ -843,9 +844,11 @@ export class AcpBackendAdapter {
             preferences[registryId] = { overridePath: override };
           }
         }
+        const env = await options.resolveLocalAcpDiscoveryEnv?.();
         const records = await discoverLocalAcpAgentRecords({
           enabledRegistryIds,
           ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
+          ...(env ? { env } : {}),
         });
         return records;
       });
