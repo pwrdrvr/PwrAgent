@@ -124,8 +124,8 @@ test("OpenAI new-thread selector uses concrete model and reasoning defaults", as
 
     const settings = app.window.getByLabel("New thread settings");
     const providerSelect = settings.getByLabel("Provider");
-    const modelSelect = settings.getByLabel("Model");
-    const reasoningSelect = settings.getByLabel("Reasoning");
+    const modelSelect = settings.getByLabel("Model", { exact: true });
+    const reasoningSelect = settings.getByLabel("Reasoning", { exact: true });
     await expect(providerSelect).toHaveAttribute("data-value", "codex");
     await expect(modelSelect).toHaveAttribute("data-value", "gpt-5.5");
     await expect(reasoningSelect).toHaveAttribute("data-value", "medium");
@@ -164,7 +164,7 @@ test("OpenAI new-thread launchpad wins when sticky Grok defaults are unavailable
 
     const settings = app.window.getByLabel("New thread settings");
     const providerSelect = settings.getByLabel("Provider");
-    const modelSelect = settings.getByLabel("Model");
+    const modelSelect = settings.getByLabel("Model", { exact: true });
     const prompt = app.window.getByRole("textbox", { name: "New thread" });
 
     await expect(providerSelect).toHaveAttribute("data-value", "codex");
@@ -202,10 +202,12 @@ test("Grok new-thread selector hides reasoning for Grok 4.20 models", async () =
 
     const settings = app.window.getByLabel("New thread settings");
     const providerSelect = settings.getByLabel("Provider");
-    const modelSelect = settings.getByLabel("Model");
+    const modelSelect = settings.getByLabel("Model", { exact: true });
     await expect(providerSelect).toHaveAttribute("data-value", "grok");
     await expect(modelSelect).toHaveAttribute("data-value", "grok-4.20-reasoning");
-    await expect(settings.getByLabel("Reasoning")).toHaveCount(0);
+    await expect(
+      settings.getByLabel("Reasoning", { exact: true }),
+    ).toHaveCount(0);
     await expect(settings.getByRole("option", { name: /^Default$/ })).toHaveCount(0);
     await assertTangerineFocusRing(providerSelect);
     await assertTangerineFocusRing(modelSelect);
@@ -215,14 +217,18 @@ test("Grok new-thread selector hides reasoning for Grok 4.20 models", async () =
       window: app.window,
       option: "Grok 4.20 Non-Reasoning",
     });
-    await expect(settings.getByLabel("Reasoning")).toHaveCount(0);
+    await expect(
+      settings.getByLabel("Reasoning", { exact: true }),
+    ).toHaveCount(0);
 
     await selectComposerOption({
       select: modelSelect,
       window: app.window,
       option: "Grok 4.20 Reasoning",
     });
-    await expect(settings.getByLabel("Reasoning")).toHaveCount(0);
+    await expect(
+      settings.getByLabel("Reasoning", { exact: true }),
+    ).toHaveCount(0);
   } finally {
     await app.close();
     await fixture.cleanup();
