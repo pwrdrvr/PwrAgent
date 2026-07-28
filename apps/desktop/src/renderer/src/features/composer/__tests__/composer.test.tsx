@@ -11246,6 +11246,87 @@ describe("Composer", () => {
     });
   });
 
+  it("resets one launchpad to the profile model and reasoning baseline", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.5",
+                label: "GPT-5.5",
+                current: true,
+                defaultReasoningEffort: "low",
+                reasoningEfforts: ["low", "high"],
+                supportsReasoning: true,
+              },
+              {
+                id: "gpt-5.6-sol",
+                label: "GPT-5.6-Sol",
+                defaultReasoningEffort: "low",
+                reasoningEfforts: ["low", "high", "xhigh"],
+                supportsReasoning: true,
+              },
+            ],
+          }),
+        ]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "full-access",
+          model: "gpt-5.5",
+          reasoningEffort: "low",
+          prompt: "keep this prompt",
+          workMode: "worktree",
+          branchName: "feature/defaults",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        providerModelDefaults={{
+          codex: {
+            model: "gpt-5.6-sol",
+            reasoningEffortsByModel: {
+              "gpt-5.6-sol": "high",
+            },
+          },
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Reset model and reasoning to profile default",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          prompt: "keep this prompt",
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
+  });
+
   it("marks ACP privileged launchpad modes as full-access before materialization", async () => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
 

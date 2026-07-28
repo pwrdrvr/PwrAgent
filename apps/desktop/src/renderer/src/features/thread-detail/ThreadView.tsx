@@ -29,6 +29,7 @@ import type {
   CodexEnvironmentActionRun,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
+  DesktopProviderModelDefaults,
   HandoffThreadWorkspaceRequest,
   MarkdownFileViewerContext,
   MessagingChannelKind,
@@ -719,6 +720,7 @@ export type ThreadViewProps = {
   backendError?: string;
   backends: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
+  providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
   composerDraftStore?: ComposerDraftStore;
@@ -2541,6 +2543,7 @@ export function ThreadView(props: ThreadViewProps) {
             <Composer
               backends={props.backends}
               applications={props.applications}
+              providerModelDefaults={props.providerModelDefaults}
               desktopApi={props.desktopApi}
               onShowNotice={props.onShowNotice}
               onProviderSelected={props.onProviderSelected}

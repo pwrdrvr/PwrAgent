@@ -28,6 +28,7 @@ import type {
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
+  DesktopProviderModelDefaults,
   HandoffThreadWorkspaceRequest,
   NavigationDirectorySummary,
   NavigationGitCommitSummary,
@@ -123,6 +124,7 @@ type ComposerProps = {
   ) => string;
   backends?: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
+  providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   desktopApi?: DesktopApi;
   /**
    * Surface a transient app-level toast (image attachment limit reached,
@@ -6383,6 +6385,33 @@ export function Composer(props: ComposerProps) {
         currentSettings?.reasoningEffort,
       )
     : undefined;
+  const profileModelDefaults = backend
+    ? props.providerModelDefaults?.[backend.kind]
+    : undefined;
+  const profileModelOption =
+    modelOptions.find((option) => option.id === profileModelDefaults?.model)
+    ?? getDefaultModelOption(backend);
+  const profileReasoningOptions = getReasoningEffortsForModel(
+    backend,
+    profileModelOption,
+  );
+  const configuredProfileReasoning = profileModelOption
+    ? profileModelDefaults?.reasoningEffortsByModel[profileModelOption.id]
+    : undefined;
+  const profileReasoningEffort =
+    configuredProfileReasoning
+    && profileReasoningOptions.includes(configuredProfileReasoning)
+      ? configuredProfileReasoning
+      : getDefaultReasoningEffort(backend, profileModelOption);
+  const launchpadDiffersFromProfileDefaults =
+    Boolean(props.launchpad && profileModelOption)
+    && (
+      props.launchpad?.model !== profileModelOption?.id
+      || (
+        profileReasoningOptions.length > 0
+        && props.launchpad?.reasoningEffort !== profileReasoningEffort
+      )
+    );
   const supportsFast =
     backend?.kind === "codex"
       ? selectedModelOption?.supportsFast ??
@@ -8337,6 +8366,29 @@ export function Composer(props: ComposerProps) {
                 handleThreadModelSettingsPatch({ reasoningEffort });
               }}
             />
+          ) : null}
+
+          {props.launchpad &&
+          profileModelOption &&
+          launchpadDiffersFromProfileDefaults ? (
+            <button
+              aria-label="Reset model and reasoning to profile default"
+              className="composer__toggle tooltip-target"
+              data-tooltip="Reset model and reasoning to the AI Providers default"
+              disabled={launchpadSubmitting}
+              type="button"
+              onClick={() => {
+                handleLaunchpadPatch({
+                  model: profileModelOption.id,
+                  reasoningEffort:
+                    profileReasoningOptions.length > 0
+                      ? profileReasoningEffort
+                      : undefined,
+                });
+              }}
+            >
+              <span aria-hidden="true">↺</span>
+            </button>
           ) : null}
 
           {(props.launchpad || props.thread) && backend?.launchpadOptions?.serviceTiers?.length ? (

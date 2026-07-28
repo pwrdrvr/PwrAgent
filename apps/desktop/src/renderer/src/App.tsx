@@ -978,6 +978,7 @@ function DesktopAppShell(props: {
     backendError: backendSummaries.error,
     backends: backendSummaries.backends,
     applications: settings.snapshot?.applications,
+    providerModelDefaults: settings.snapshot?.models?.providerDefaults,
     archiveThreadError: navigation.archiveThreadError,
     clearPendingRequest: session.clearPendingRequest,
     composerDisabled:
