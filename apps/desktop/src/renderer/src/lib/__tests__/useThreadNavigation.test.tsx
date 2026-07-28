@@ -3591,7 +3591,7 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad?.prompt).toBe("newer prompt");
   });
 
-  it("restores server-confirmed reasoning when a launchpad model changes", async () => {
+  it("atomically restores remembered reasoning when a launchpad model changes", async () => {
     const defaults: NavigationLaunchpadDefaults = {
       backend: "codex",
       executionMode: "default",
@@ -3623,35 +3623,51 @@ describe("useThreadNavigation", () => {
       createdAt: 1,
       updatedAt: 1,
     };
+    const terraUpdate = createDeferred<{
+      defaults: NavigationLaunchpadDefaults;
+      launchpad: NavigationLaunchpadDraft;
+    }>();
+    const solUpdate = createDeferred<{
+      defaults: NavigationLaunchpadDefaults;
+      launchpad: NavigationLaunchpadDraft;
+    }>();
     const updateDirectoryLaunchpad = vi
       .fn()
-      .mockResolvedValueOnce({
-        defaults: {
-          ...defaults,
-          model: "gpt-5.6-terra",
-          reasoningEffort: "medium",
-        },
-        launchpad: {
-          ...launchpad,
-          model: "gpt-5.6-terra",
-          reasoningEffort: "medium",
-          providerSettings: {
-            codex: {
-              ...launchpad.providerSettings?.codex,
-              model: "gpt-5.6-terra",
-              reasoningEffort: "medium",
-            },
+      .mockReturnValueOnce(terraUpdate.promise)
+      .mockReturnValueOnce(solUpdate.promise);
+    const terraResponse = {
+      defaults: {
+        ...defaults,
+        model: "gpt-5.6-terra",
+        reasoningEffort: "medium",
+      },
+      launchpad: {
+        ...launchpad,
+        model: "gpt-5.6-terra",
+        reasoningEffort: "medium",
+        providerSettings: {
+          codex: {
+            ...launchpad.providerSettings?.codex,
+            model: "gpt-5.6-terra",
+            reasoningEffort: "medium",
           },
-          updatedAt: 2,
         },
-      })
-      .mockResolvedValueOnce({
-        defaults,
-        launchpad: {
-          ...launchpad,
-          updatedAt: 3,
-        },
-      });
+        updatedAt: 2,
+      },
+    } satisfies {
+      defaults: NavigationLaunchpadDefaults;
+      launchpad: NavigationLaunchpadDraft;
+    };
+    const solResponse = {
+      defaults,
+      launchpad: {
+        ...launchpad,
+        updatedAt: 3,
+      },
+    } satisfies {
+      defaults: NavigationLaunchpadDefaults;
+      launchpad: NavigationLaunchpadDraft;
+    };
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -3683,8 +3699,9 @@ describe("useThreadNavigation", () => {
       expect(result.current.selectedLaunchpad?.reasoningEffort).toBe("high");
     });
 
-    await act(async () => {
-      await result.current.updateDirectoryLaunchpad(
+    let firstUpdate: Promise<void> | undefined;
+    act(() => {
+      firstUpdate = result.current.updateDirectoryLaunchpad(
         launchpad.directoryKey,
         { model: "gpt-5.6-terra" },
         { stickySettingsChanged: true },
@@ -3697,7 +3714,13 @@ describe("useThreadNavigation", () => {
     });
 
     await act(async () => {
-      await result.current.updateDirectoryLaunchpad(
+      terraUpdate.resolve(terraResponse);
+      await firstUpdate;
+    });
+
+    let secondUpdate: Promise<void> | undefined;
+    act(() => {
+      secondUpdate = result.current.updateDirectoryLaunchpad(
         launchpad.directoryKey,
         { model: "gpt-5.6-sol" },
         { stickySettingsChanged: true },
@@ -3707,6 +3730,11 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad).toMatchObject({
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
+    });
+
+    await act(async () => {
+      solUpdate.resolve(solResponse);
+      await secondUpdate;
     });
   });
 

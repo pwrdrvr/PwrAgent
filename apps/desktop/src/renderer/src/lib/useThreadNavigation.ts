@@ -23,6 +23,7 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
+  applyNavigationLaunchpadProviderSettingsPatch,
   buildAppendPinRank,
   buildPinnedRanks,
   buildPullRequestStatusKey,
@@ -4498,8 +4499,10 @@ export function useThreadNavigation(
           response: applyLaunchpadUpdate(
             currentResponse,
             {
-              ...currentLaunchpad,
-              ...patch,
+              ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
+                currentLaunchpad,
+                patch,
+              ),
               directoryKey,
               updatedAt: Date.now(),
             },
@@ -4515,8 +4518,10 @@ export function useThreadNavigation(
         return {
           ...current,
           [directoryKey]: {
-            ...currentLaunchpad,
-            ...patch,
+            ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
+              currentLaunchpad,
+              patch,
+            ),
             directoryKey,
             updatedAt: Date.now(),
           },
@@ -4525,8 +4530,10 @@ export function useThreadNavigation(
       const pendingPickedLaunchpad = pendingPickedLaunchpadRef.current.get(directoryKey);
       if (pendingPickedLaunchpad) {
         pendingPickedLaunchpadRef.current.set(directoryKey, {
-          ...pendingPickedLaunchpad,
-          ...patch,
+          ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
+            pendingPickedLaunchpad,
+            patch,
+          ),
           directoryKey,
           updatedAt: Date.now(),
         });
